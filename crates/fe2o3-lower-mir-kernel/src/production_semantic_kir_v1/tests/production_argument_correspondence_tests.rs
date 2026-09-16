@@ -519,10 +519,10 @@ fn exact_argument_correspondence_rejects_path_type_slot_and_owner_substitutions(
                 body.parameters[1] = body.parameters[0];
             }
             11 => {
-                let direct = changed.parameter_bindings[0].kernel_ir_value;
-                changed.parameter_bindings[0].kernel_ir_value =
-                    changed.parameter_component_bindings[0].kernel_ir_value;
-                changed.parameter_component_bindings[0].kernel_ir_value = direct;
+                std::mem::swap(
+                    &mut changed.parameter_bindings[0].kernel_ir_value,
+                    &mut changed.parameter_component_bindings[0].kernel_ir_value,
+                );
             }
             12 => {
                 let mut rows = changed.ignored_parameter_bindings.to_vec();
