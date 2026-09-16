@@ -878,7 +878,11 @@ mod legacy_scope_tests {
         moved: bool,
         alias: bool,
         binary: bool,
-    ) -> (Vec<SemanticTypeDeclV1>, SemanticFunctionDeclV1, Vec<SemanticCallableDeclV1>) {
+    ) -> (
+        Vec<SemanticTypeDeclV1>,
+        SemanticFunctionDeclV1,
+        Vec<SemanticCallableDeclV1>,
+    ) {
         let mut types = assertion_types();
         types[A_BOOL_PTR.index() as usize] = neutral_pointer_type_v1(
             235,
@@ -898,19 +902,34 @@ mod legacy_scope_tests {
             SemanticTypeIdentityV1::from_sha256(bytes(237)),
             SemanticLayoutIdentityV1::from_sha256(bytes(237)),
             SemanticTypeLayoutV1::aggregate_with_backend_repr(
-                Some(8), 8, *types[A_U64.index() as usize].layout().backend_repr(), false,
+                Some(8),
+                8,
+                *types[A_U64.index() as usize].layout().backend_repr(),
+                false,
                 SemanticAggregateLayoutV1::new(vec![0, 0], vec![]).unwrap(),
-            ).unwrap(),
-            SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![A_U64, A_UNIT]).unwrap()),
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Aggregate(
+                SemanticAggregateTypeV1::new(vec![A_U64, A_UNIT]).unwrap(),
+            ),
         ));
-        let dereference = |local| SemanticPlaceV1::new(
-            SemanticLocalIdV1::from_index(local),
-            vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, A_U32).unwrap()],
-            A_U32,
-        ).unwrap();
+        let dereference = |local| {
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(local),
+                vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, A_U32)
+                        .unwrap(),
+                ],
+                A_U32,
+            )
+            .unwrap()
+        };
         let operand = |local| {
-            if moved { SemanticOperandV1::Move(dereference(local)) }
-            else { SemanticOperandV1::Copy(dereference(local)) }
+            if moved {
+                SemanticOperandV1::Move(dereference(local))
+            } else {
+                SemanticOperandV1::Copy(dereference(local))
+            }
         };
         let mut statements = Vec::new();
         if alias {
@@ -918,7 +937,8 @@ mod legacy_scope_tests {
                 3,
                 A_BOOL_PTR,
                 SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
-                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], A_BOOL_PTR).unwrap(),
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], A_BOOL_PTR)
+                        .unwrap(),
                 )),
             ));
         }
@@ -934,13 +954,18 @@ mod legacy_scope_tests {
         } else {
             statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
                 destination,
-                SemanticRvalueV1::new(A_U32, if binary {
-                    SemanticRvalueKindV1::Binary {
-                        operation: SemanticBinaryOpV1::BitXor,
-                        left: operand(1),
-                        right: operand(2),
-                    }
-                } else { SemanticRvalueKindV1::Use(operand(1)) }),
+                SemanticRvalueV1::new(
+                    A_U32,
+                    if binary {
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::BitXor,
+                            left: operand(1),
+                            right: operand(2),
+                        }
+                    } else {
+                        SemanticRvalueKindV1::Use(operand(1))
+                    },
+                ),
             )))
         });
         let original = assertion_root_with_access(
@@ -953,45 +978,78 @@ mod legacy_scope_tests {
             ],
             vec![A_BOOL_PTR, A_BOOL_PTR],
             vec![
-                block(220, vec![], SemanticTerminatorKindV1::Call(
-                    SemanticDirectCallV1::new_callable(
-                        SemanticCallableIdV1::from_index(1), vec![],
-                        Some(SemanticCallDestinationV1::new(
-                            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(4), vec![], witness).unwrap(),
-                            cfg_edge(SemanticEdgeRoleV1::CallReturn, 1),
-                        )),
-                        SemanticUnwindActionV1::Unreachable,
-                    ).unwrap(),
-                )),
+                block(
+                    220,
+                    vec![],
+                    SemanticTerminatorKindV1::Call(
+                        SemanticDirectCallV1::new_callable(
+                            SemanticCallableIdV1::from_index(1),
+                            vec![],
+                            Some(SemanticCallDestinationV1::new(
+                                SemanticPlaceV1::new(
+                                    SemanticLocalIdV1::from_index(4),
+                                    vec![],
+                                    witness,
+                                )
+                                .unwrap(),
+                                cfg_edge(SemanticEdgeRoleV1::CallReturn, 1),
+                            )),
+                            SemanticUnwindActionV1::Unreachable,
+                        )
+                        .unwrap(),
+                    ),
+                ),
                 block(221, statements, SemanticTerminatorKindV1::Return),
             ],
             false,
         );
         let dimensions = SemanticWorkgroupDimensionsV1::new([1, 1, 1]).unwrap();
         let function = SemanticFunctionDeclV1::new(
-            original.identity(), original.role(), original.item_definition_identity(),
-            original.monomorphization_identity(), original.generic_type_arguments_identity(),
-            original.const_generic_arguments_identity(), original.source(),
-            original.abi().clone().with_source_argument_ownership(vec![
+            original.identity(),
+            original.role(),
+            original.item_definition_identity(),
+            original.monomorphization_identity(),
+            original.generic_type_arguments_identity(),
+            original.const_generic_arguments_identity(),
+            original.source(),
+            original
+                .abi()
+                .clone()
+                .with_source_argument_ownership(vec![
                 SemanticSourceArgumentOwnershipV1::ExclusiveOwner;
                 2
-            ]).unwrap(),
-            original.locals().to_vec(), original.entry(), original.blocks().to_vec(),
-        ).unwrap().with_kernel_entry(SemanticKernelEntryV1::new(
+            ])
+                .unwrap(),
+            original.locals().to_vec(),
+            original.entry(),
+            original.blocks().to_vec(),
+        )
+        .unwrap()
+        .with_kernel_entry(SemanticKernelEntryV1::new(
             SemanticLinkSymbolV1::new(A_NAME.as_bytes().to_vec()).unwrap(),
             SemanticKernelBindingIdentityV1::from_sha256(bytes(247)),
             SemanticKernelSourceContractV1::new(
-                Some(SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap()),
+                Some(
+                    SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None)
+                        .unwrap(),
+                ),
                 None,
                 None,
-            ).unwrap(),
+            )
+            .unwrap(),
         ));
         let intrinsic_abi = SemanticFunctionAbiV1::from_rustc(
             SemanticAbiIdentityV1::from_sha256(bytes(248)),
             SemanticLayoutIdentityV1::from_sha256(bytes(250)),
-            SemanticCanonAbiV1::Rust, SemanticExternAbiV1::Rust, false, false, 0, vec![],
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            0,
+            vec![],
             neutral_plain_direct_abi_value_v1(witness),
-        ).unwrap();
+        )
+        .unwrap();
         let callables = vec![
             SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
             SemanticCallableDeclV1::CompilerIntrinsic {
@@ -1001,10 +1059,12 @@ mod legacy_scope_tests {
                     SemanticMonomorphizationIdentityV1::from_sha256(bytes(248)),
                     SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(248)),
                     SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(248)),
-                    SemanticSourceProvenanceV1::unavailable(), intrinsic_abi,
+                    SemanticSourceProvenanceV1::unavailable(),
+                    intrinsic_abi,
                 ),
                 operation: SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
-                    index_witness: witness, raw_index: A_U64,
+                    index_witness: witness,
+                    raw_index: A_U64,
                 },
                 operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(248)),
             },
@@ -1019,15 +1079,27 @@ mod legacy_scope_tests {
     ) -> ProductionSemanticSsaOwnerV1 {
         let admitted = InertSemanticMirRequestV1::new_with_callables(
             SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
-            types, vec![], vec![], vec![], vec![function], callables,
+            types,
+            vec![],
+            vec![],
+            vec![],
+            vec![function],
+            callables,
             vec![SemanticFunctionIdV1::from_index(0)],
-        ).unwrap().admit_current_production(SemanticMirLimitsV1::default()).unwrap();
+        )
+        .unwrap()
+        .admit_current_production(SemanticMirLimitsV1::default())
+        .unwrap();
         let semantic = ProductionSemanticMirOwnerV1::try_new(
-            admitted, fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
-        ).unwrap();
+            admitted,
+            fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+        )
+        .unwrap();
         ProductionSemanticSsaOwnerV1::try_new(
-            semantic, fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
-        ).unwrap()
+            semantic,
+            fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
+        )
+        .unwrap()
     }
 
     fn ordered_effect_attach_v1(
@@ -1037,8 +1109,10 @@ mod legacy_scope_tests {
         binary: bool,
         legacy: bool,
         reverse_rows: bool,
-    ) -> Result<fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
-        fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1> {
+    ) -> Result<
+        fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+        fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1,
+    > {
         use fe2o3_lower_mir_kernel::{
             ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirLimitsV1,
             ProductionSemanticKirOwnerV1,
@@ -1047,7 +1121,11 @@ mod legacy_scope_tests {
         let inputs = [ranked_root_input_1d(A_NAME, 247, 1)];
         let ssa = ordered_effect_ssa_v1(types.clone(), function.clone(), callables.clone());
         let materialized = materialize_ranked_fixture_v1(ssa, &inputs).unwrap();
-        let memory = materialized.executable().module().functions.iter()
+        let memory = materialized
+            .executable()
+            .module()
+            .functions
+            .iter()
             .filter_map(|function| function.body.as_ref())
             .flat_map(|body| &body.blocks)
             .flat_map(|block| &block.operations)
@@ -1055,38 +1133,66 @@ mod legacy_scope_tests {
                 fe2o3_kernel_ir::OperationKind::Load { .. } => Some(AccessKindAttr::Read),
                 fe2o3_kernel_ir::OperationKind::Store { .. } => Some(AccessKindAttr::Write),
                 _ => None,
-            }).collect::<Vec<_>>();
+            })
+            .collect::<Vec<_>>();
         let mut expected = vec![AccessKindAttr::Read; if binary { 2 } else { 1 }];
         expected.push(AccessKindAttr::Write);
         assert_eq!(memory, expected, "actual executable source effect order");
         let program = project_and_verify_ranked_materialized_semantic_mir_v1(
-            materialized, &inputs,
+            materialized,
+            &inputs,
             &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
-        ).unwrap();
-        let ProductionRankedSemanticProgramV1 { materialized, roots } = program;
+        )
+        .unwrap();
+        let ProductionRankedSemanticProgramV1 {
+            materialized,
+            roots,
+        } = program;
         let mut root = roots.into_vec().into_iter().next().unwrap();
         assert!(root.lowering.all_mandatory_reports_are_clean());
         assert_eq!(root.access_sources.len(), expected.len());
         let mut views = Vec::new();
-        for (ordinal, (row, expected_kind)) in root.access_sources.iter().zip(&expected).enumerate() {
-            assert_eq!((row.semantic_block(), row.semantic_statement(), row.semantic_access_ordinal()),
-                (1, Some(u32::from(alias)), ordinal as u32));
+        for (ordinal, (row, expected_kind)) in root.access_sources.iter().zip(&expected).enumerate()
+        {
+            assert_eq!(
+                (
+                    row.semantic_block(),
+                    row.semantic_statement(),
+                    row.semantic_access_ordinal()
+                ),
+                (1, Some(u32::from(alias)), ordinal as u32)
+            );
             let ProductionRankedOperationV1::Access { kind, view, .. } =
-                &root.lowering.kernel().blocks()[row.ranked_block() as usize]
-                    .operations()[row.ranked_operation() as usize]
-                else { panic!("ordinary source effect row"); };
+                &root.lowering.kernel().blocks()[row.ranked_block() as usize].operations()
+                    [row.ranked_operation() as usize]
+            else {
+                panic!("ordinary source effect row");
+            };
             assert_eq!(kind, expected_kind);
             views.push(*view);
         }
         if alias {
-            let origins = views.iter().map(|view| {
-                root.lowering.kernel().blocks().iter().flat_map(|block| block.operations())
-                    .find_map(|operation| match operation {
-                        ProductionRankedOperationV1::ViewInSpace { result, allocation_origin, .. }
-                            if *view == ProductionRankedValueV1::Local(*result) => Some(*allocation_origin),
-                        _ => None,
-                    }).unwrap()
-            }).collect::<Vec<_>>();
+            let origins = views
+                .iter()
+                .map(|view| {
+                    root.lowering
+                        .kernel()
+                        .blocks()
+                        .iter()
+                        .flat_map(|block| block.operations())
+                        .find_map(|operation| match operation {
+                            ProductionRankedOperationV1::ViewInSpace {
+                                result,
+                                allocation_origin,
+                                ..
+                            } if *view == ProductionRankedValueV1::Local(*result) => {
+                                Some(*allocation_origin)
+                            }
+                            _ => None,
+                        })
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
             assert_eq!(origins[0], *origins.last().unwrap(), "actual alias origin");
         }
         if reverse_rows {
@@ -1095,20 +1201,32 @@ mod legacy_scope_tests {
             for (ordinal, row) in root.access_sources.iter_mut().enumerate() {
                 let wrong = old[1 - ordinal];
                 *row = fe2o3_lower_mir_kernel::ProductionRankedAccessSourceV1::new(
-                    row.semantic_block(), row.semantic_statement(), row.semantic_access_ordinal(),
-                    wrong.ranked_block(), wrong.ranked_operation(),
+                    row.semantic_block(),
+                    row.semantic_statement(),
+                    row.semantic_access_ordinal(),
+                    wrong.ranked_block(),
+                    wrong.ranked_operation(),
                 );
             }
         }
         if legacy {
-            let source = ordered_effect_ssa_v1(types, function, callables).into_source_owner().unwrap();
-            assert_eq!(source.semantic().semantic_sha256(),
-                materialized.semantic_ssa().source_semantic().semantic_sha256());
+            let source = ordered_effect_ssa_v1(types, function, callables)
+                .into_source_owner()
+                .unwrap();
+            assert_eq!(
+                source.semantic().semantic_sha256(),
+                materialized
+                    .semantic_ssa()
+                    .source_semantic()
+                    .semantic_sha256()
+            );
             let receipt = ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate_with_generated_effects(
                 source, root.lowering, root.ranked_ir, root.access_sources, root.executable_effect_sources,
             ).unwrap();
             ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
-                receipt, ProductionSemanticKirLimitsV1::default(), 1,
+                receipt,
+                ProductionSemanticKirLimitsV1::default(),
+                1,
             )
         } else {
             ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(
@@ -1123,7 +1241,9 @@ mod legacy_scope_tests {
             for store in [false, true] {
                 for moved in [false, true] {
                     for alias in [false, true] {
-                        let _owner = ordered_effect_attach_v1(store, moved, alias, false, legacy, false).unwrap();
+                        let _owner =
+                            ordered_effect_attach_v1(store, moved, alias, false, legacy, false)
+                                .unwrap();
                     }
                 }
             }
@@ -1133,25 +1253,32 @@ mod legacy_scope_tests {
     #[test]
     fn source_effect_order_binary_rhs_keeps_both_reads_before_destination() {
         for legacy in [false, true] {
-            let _owner = ordered_effect_attach_v1(false, false, false, true, legacy, false).unwrap();
+            let _owner =
+                ordered_effect_attach_v1(false, false, false, true, legacy, false).unwrap();
         }
     }
 
     #[test]
     fn source_effect_order_final_correspondence_rejects_write_first_rows() {
-        use fe2o3_lower_mir_kernel::{ProductionMirPlironTranslationErrorV1, ProductionSemanticKirErrorV1};
+        use fe2o3_lower_mir_kernel::{
+            ProductionMirPlironTranslationErrorV1, ProductionSemanticKirErrorV1,
+        };
         for legacy in [false, true] {
-            assert!(matches!(ordered_effect_attach_v1(false, false, true, false, legacy, true),
+            assert!(matches!(
+                ordered_effect_attach_v1(false, false, true, false, legacy, true),
                 Err(ProductionSemanticKirErrorV1::MirPlironTranslation(
                     ProductionMirPlironTranslationErrorV1::AccessKindMismatch { .. }
-                ))));
+                ))
+            ));
         }
     }
 
     #[test]
     fn source_effect_order_private_uninitialized_rhs_precedes_and_prevents_assignment() {
-        use fe2o3_lower_mir_kernel::{ProductionPreRankedKirOwnerV1, ProductionPreRankedKirErrorV1, ProductionSemanticKirErrorV1,
-            ProductionSemanticKirLimitsV1};
+        use fe2o3_lower_mir_kernel::{
+            ProductionPreRankedKirErrorV1, ProductionPreRankedKirOwnerV1,
+            ProductionSemanticKirErrorV1, ProductionSemanticKirLimitsV1,
+        };
         for store in [false, true] {
             let old = literal_assertion(true, true, false);
             let mut statements = old.blocks()[0].statements().to_vec();
@@ -1162,11 +1289,15 @@ mod legacy_scope_tests {
             let value = SemanticOperandV1::Copy(destination.clone());
             statements[1] = statement(if store {
                 SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
-                    destination, value, SemanticVolatilityV1::NonVolatile, None,
+                    destination,
+                    value,
+                    SemanticVolatilityV1::NonVolatile,
+                    None,
                 ))
             } else {
                 SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
-                    destination, SemanticRvalueV1::new(A_U32, SemanticRvalueKindV1::Use(value)),
+                    destination,
+                    SemanticRvalueV1::new(A_U32, SemanticRvalueKindV1::Use(value)),
                 ))
             });
             let function = private_write_statements_v1(&old, statements);
@@ -1177,41 +1308,89 @@ mod legacy_scope_tests {
             let function = &semantic.functions()[0];
             let constants = constant_locals(function).unwrap();
             let effects = derive_defined_callable_empty_effect_summaries_v1(
-                semantic.types(), semantic.functions(), semantic.callables(),
-            ).unwrap();
+                semantic.types(),
+                semantic.functions(),
+                semantic.callables(),
+            )
+            .unwrap();
             let mut entry_operations = Vec::new();
             let mut next_value = 0;
             let mut text = String::new();
             let intrinsic = project_intrinsic_contracts(
-                semantic.callables(), &effects, semantic.types(), function, Some(64),
-                &constants, &mut entry_operations, &mut next_value, &mut text,
-            ).unwrap();
+                semantic.callables(),
+                &effects,
+                semantic.types(),
+                function,
+                Some(64),
+                &constants,
+                &mut entry_operations,
+                &mut next_value,
+                &mut text,
+            )
+            .unwrap();
             let first_value = next_value;
             let mut operations = Vec::new();
             let mut sources = Vec::new();
             let mut guarded = Vec::new();
             let mut views = vec![None; function.locals().len()];
             project_statement_accesses(
-                semantic.types(), function, 0, &[], &function.blocks()[0].statements()[1],
-                &constants, &intrinsic.local_contracts, &intrinsic.guarded_accesses,
-                &mut guarded, &mut views, &mut operations, &mut sources, &mut next_value, &mut text,
-            ).unwrap();
+                semantic.types(),
+                function,
+                0,
+                &[],
+                &function.blocks()[0].statements()[1],
+                &constants,
+                &intrinsic.local_contracts,
+                &intrinsic.guarded_accesses,
+                &mut guarded,
+                &mut views,
+                &mut operations,
+                &mut sources,
+                &mut next_value,
+                &mut text,
+            )
+            .unwrap();
             assert!(guarded.is_empty());
-            assert_eq!(access_kinds(&operations), vec![AccessKindAttr::Read, AccessKindAttr::Write]);
-            assert_eq!(sources.iter().map(|source| source.access).collect::<Vec<_>>(),
-                vec![AccessKindAttr::Read, AccessKindAttr::Write]);
-            assert!(sources.iter().all(|source| source.memory_space == MemorySpaceAttr::Private));
-            assert_eq!((operations.len(), sources.len(), next_value - first_value), (5, 2, 3));
+            assert_eq!(
+                access_kinds(&operations),
+                vec![AccessKindAttr::Read, AccessKindAttr::Write]
+            );
+            assert_eq!(
+                sources
+                    .iter()
+                    .map(|source| source.access)
+                    .collect::<Vec<_>>(),
+                vec![AccessKindAttr::Read, AccessKindAttr::Write]
+            );
+            assert!(
+                sources
+                    .iter()
+                    .all(|source| source.memory_space == MemorySpaceAttr::Private)
+            );
+            assert_eq!(
+                (operations.len(), sources.len(), next_value - first_value),
+                (5, 2, 3)
+            );
             let inputs = [ranked_root_input_1d(A_NAME, 247, 64)];
             let launch = source_launch_roster_for_ranked_inputs_v1(&ssa, &inputs).unwrap();
             let mut work = Work::new(1_000_000);
             let mut budget = Budget::new(&mut work, 1_000_000);
-            assert!(matches!(ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
-                ssa, launch, ProductionSemanticKirLimitsV1::default(), &mut budget,
-            ), Err(ProductionPreRankedKirErrorV1::Lowering(ProductionSemanticKirErrorV1::Unsupported {
-                function: 0, block: Some(0), statement: Some(1),
-                detail: "retained array read requires whole-array initialization",
-            }))));
+            assert!(matches!(
+                ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+                    ssa,
+                    launch,
+                    ProductionSemanticKirLimitsV1::default(),
+                    &mut budget,
+                ),
+                Err(ProductionPreRankedKirErrorV1::Lowering(
+                    ProductionSemanticKirErrorV1::Unsupported {
+                        function: 0,
+                        block: Some(0),
+                        statement: Some(1),
+                        detail: "retained array read requires whole-array initialization",
+                    }
+                ))
+            ));
         }
     }
 }
