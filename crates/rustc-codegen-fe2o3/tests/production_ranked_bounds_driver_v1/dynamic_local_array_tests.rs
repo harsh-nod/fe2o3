@@ -164,7 +164,10 @@ fn ordinary_source_dynamic_local_array_matches_rust_in_simulation() {
                         input.simulation_limits,
                         &mut observed,
                     );
-                    assert!(observed.output.is_some());
+                    assert!(
+                        observed.output.is_some(),
+                        "{architecture} grid={grid} selector={selector}: no output observation; {result:?}"
+                    );
                     if selector < 3 {
                         let execution = result.unwrap_or_else(|error| {
                             panic!("{architecture} grid={grid} selector={selector}: {error:?}")
