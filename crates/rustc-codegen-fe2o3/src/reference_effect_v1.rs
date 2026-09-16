@@ -2482,9 +2482,11 @@ fn disjoint_slice_element_v1<'tcx>(
     let TyKind::Adt(definition, arguments) = *ty.kind() else {
         return None;
     };
-    if trusted_device_items::classify(tcx, definition.did())
-        != Some(TrustedDeviceItem::DisjointSlice)
-    {
+    // Both wrappers use output-only relations; reference loads still require a shared input.
+    if !matches!(
+        trusted_device_items::classify(tcx, definition.did()),
+        Some(TrustedDeviceItem::DisjointSlice | TrustedDeviceItem::WriteOnlyDisjointSlice)
+    ) {
         return None;
     }
     let element = arguments.first()?.as_type()?;
@@ -4309,6 +4311,61 @@ mod tests {
                 .into_boxed_slice(),
             }
         );
+    }
+
+    #[test]
+    fn target_only_output_relations_preserve_constant_writes() {
+        let coordinate = guarded_point_reference_ir(vec![ReferencePlaceProjectionV1::Dereference]);
+        let mut slice = guarded_point_reference_ir(vec![
+            ReferencePlaceProjectionV1::Dereference,
+            ReferencePlaceProjectionV1::Index(1),
+        ]);
+        slice.relations[2] = ReferenceArgumentRelationV1::DisjointOutputSlice {
+            argument: 1,
+            element: ReferenceScalarTypeV1::U32,
+        };
+        for effect_ir in [coordinate, slice] {
+            let writes = effect_ir.observable_output_writes_v1().unwrap();
+            assert_eq!(writes.len(), 1);
+            assert_eq!(writes[0].argument, 1);
+            assert_eq!(
+                writes[0].rhs,
+                ReferenceEffectExpressionV1::Constant(scalar_constant(17)),
+            );
+        }
+    }
+
+    #[test]
+    fn target_only_output_coordinate_rejects_reference_reads() {
+        let mut effect_ir =
+            guarded_point_reference_ir(vec![ReferencePlaceProjectionV1::Dereference]);
+        effect_ir.blocks[1].assignments[0].value =
+            ReferenceValueV1::Use(ReferenceOperandV1::Copy(ReferencePlaceV1 {
+                local: 3,
+                projection: vec![ReferencePlaceProjectionV1::Dereference].into_boxed_slice(),
+            }));
+        let error = effect_ir.observable_output_writes_v1().unwrap_err();
+        assert!(error.to_string().contains("unsupported place projection"));
+    }
+
+    #[test]
+    fn target_only_output_slice_rejects_reference_reads() {
+        let projection = vec![
+            ReferencePlaceProjectionV1::Dereference,
+            ReferencePlaceProjectionV1::Index(1),
+        ];
+        let mut effect_ir = guarded_point_reference_ir(projection.clone());
+        effect_ir.relations[2] = ReferenceArgumentRelationV1::DisjointOutputSlice {
+            argument: 1,
+            element: ReferenceScalarTypeV1::U32,
+        };
+        effect_ir.blocks[1].assignments[0].value =
+            ReferenceValueV1::Use(ReferenceOperandV1::Copy(ReferencePlaceV1 {
+                local: 3,
+                projection: projection.into_boxed_slice(),
+            }));
+        let error = effect_ir.observable_output_writes_v1().unwrap_err();
+        assert!(error.to_string().contains("not a shared-slice input"));
     }
 
     #[test]
