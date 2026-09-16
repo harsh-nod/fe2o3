@@ -408,7 +408,7 @@ fn type_size_bytes(value: &Type) -> Result<u32, ProductionGeometryErrorV1> {
         Type::Scalar(ScalarType::I64 | ScalarType::U64 | ScalarType::Index | ScalarType::F64)
         | Type::Pointer(_) => Ok(8),
         Type::Scalar(ScalarType::I128 | ScalarType::U128) => Ok(16),
-        Type::Unit | Type::Slice(_) | Type::Vector(_) => {
+        Type::Unit | Type::Slice(_) | Type::Vector(_) | Type::Execution(_) => {
             Err(ProductionGeometryErrorV1::UnsizedWorkgroupType)
         }
     }
@@ -568,6 +568,29 @@ mod tests {
         Terminator, ValueDef, ValueId, WorkgroupMemory, WorkgroupSize,
     };
     use fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1;
+
+    #[test]
+    fn execution_roles_have_no_workgroup_storage_size() {
+        use fe2o3_kernel_ir::ExecutionRoleV15 as Role;
+        assert_eq!(type_size_bytes(&Type::Scalar(ScalarType::U32)), Ok(4));
+        for role in [
+            Role::Context,
+            Role::Workgroup,
+            Role::MaskedTileU32 {
+                lanes: 64,
+                elements: 4,
+            },
+            Role::LaneFragmentU32 {
+                lanes: 64,
+                elements: 4,
+            },
+        ] {
+            assert_eq!(
+                type_size_bytes(&Type::Execution(role)),
+                Err(ProductionGeometryErrorV1::UnsizedWorkgroupType),
+            );
+        }
+    }
 
     fn launch(rank: u8, workgroup: [u32; 3], static_lds: u32, dynamic_lds: u32) -> LaunchContract {
         let max_grid = match rank {

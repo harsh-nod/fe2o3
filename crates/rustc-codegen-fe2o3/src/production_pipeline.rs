@@ -2494,6 +2494,11 @@ fn compiler_semantic_storage_map_v2(
             }
             fe2o3_kernel_ir::Type::Pointer(_) => (8, 8, None),
             fe2o3_kernel_ir::Type::Slice(_) => (8, 8, Some(8)),
+            fe2o3_kernel_ir::Type::Execution(_) => {
+                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "execution KIR parameters have no admitted physical simulator slot",
+                ));
+            }
             fe2o3_kernel_ir::Type::Vector(_) => {
                 return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
                     "vector KIR parameters have no admitted physical simulator slot",
@@ -2720,7 +2725,12 @@ fn compiler_component_storage_v2(
             fe2o3_kernel_ir::SemanticKirComponentRepresentationV2::RegionSlice,
             true,
         ),
-        Some(fe2o3_kernel_ir::Type::Unit | fe2o3_kernel_ir::Type::Vector(_)) | None => {
+        Some(
+            fe2o3_kernel_ir::Type::Unit
+            | fe2o3_kernel_ir::Type::Vector(_)
+            | fe2o3_kernel_ir::Type::Execution(_),
+        )
+        | None => {
             return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
                 MAP_ERROR,
             ));
@@ -3569,6 +3579,47 @@ impl RankedVerifiedProductionCompilation {
 mod tests {
     include!("production_pipeline_pre_ranked_routes_tests.rs");
     use super::*;
+
+    #[test]
+    fn execution_components_have_no_physical_simulator_storage() {
+        use fe2o3_kernel_ir::{
+            ExecutionRoleV15 as Role, FunctionBody, SemanticKernargSlotV2, Type, ValueId,
+        };
+        let body = FunctionBody {
+            parameters: vec![ValueId(0)],
+            blocks: vec![],
+        };
+        let slots = [(SemanticKernargSlotV2::new(0, 8, 8), None)];
+        assert!(
+            compiler_component_storage_v2(vec![], ValueId(0), &body, &[Type::INDEX], &slots,)
+                .is_ok()
+        );
+        for role in [
+            Role::Context,
+            Role::Workgroup,
+            Role::MaskedTileU32 {
+                lanes: 64,
+                elements: 4,
+            },
+            Role::LaneFragmentU32 {
+                lanes: 64,
+                elements: 4,
+            },
+        ] {
+            assert!(matches!(
+                compiler_component_storage_v2(
+                    vec![],
+                    ValueId(0),
+                    &body,
+                    &[Type::Execution(role)],
+                    &slots,
+                ),
+                Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "aggregate component has no exact KIR physical slot"
+                )),
+            ));
+        }
+    }
 
     #[test]
     fn explicit_v2_simulation_export_requires_complete_source_capture() {

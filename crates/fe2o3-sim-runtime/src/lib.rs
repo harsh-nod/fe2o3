@@ -1987,6 +1987,11 @@ fn validate_compiler_packing_plan_v2(
                     "vector KIR parameters have no admitted physical slot".to_owned(),
                 ));
             }
+            Type::Execution(_) => {
+                return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
+                    "execution KIR parameters have no admitted physical slot".to_owned(),
+                ));
+            }
             Type::Unit => {
                 return Err(SimRuntimeBackendErrorV1::UnsupportedBundle(
                     "unit KIR parameters have no exact physical slot".to_owned(),
@@ -4774,6 +4779,24 @@ mod tests {
         );
         let exact = SemanticKernelStorageV2::new(0, 0, 0, 8, 8, vec![projected.clone()]);
         validate_compiler_packing_plan_v2(&exact, &[Type::Scalar(ScalarType::U64)]).unwrap();
+        for role in [
+            fe2o3_kernel_ir::ExecutionRoleV15::Context,
+            fe2o3_kernel_ir::ExecutionRoleV15::Workgroup,
+            fe2o3_kernel_ir::ExecutionRoleV15::MaskedTileU32 {
+                lanes: 3,
+                elements: 2,
+            },
+            fe2o3_kernel_ir::ExecutionRoleV15::LaneFragmentU32 {
+                lanes: 3,
+                elements: 2,
+            },
+        ] {
+            assert!(matches!(
+                validate_compiler_packing_plan_v2(&exact, &[Type::Execution(role)]),
+                Err(SimRuntimeBackendErrorV1::UnsupportedBundle(detail))
+                    if detail == "execution KIR parameters have no admitted physical slot"
+            ));
+        }
 
         let substituted = SemanticArgumentStorageV2::new(
             0,
