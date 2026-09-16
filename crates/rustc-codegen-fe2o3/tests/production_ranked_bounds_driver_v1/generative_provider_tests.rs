@@ -56,7 +56,7 @@ fn staged_generative_providers_reject_without_export_authority() {
     let llvm = target.path().join("provider.ll");
     let mut command = base_command("check", &build_dir);
     command
-        .env("FE2O3_EXTRACT_RANKED_MEMORY_V1", "1")
+        .env_remove("FE2O3_EXTRACT_RANKED_MEMORY_V1")
         .env(
             "RUSTC_WORKSPACE_WRAPPER",
             env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
