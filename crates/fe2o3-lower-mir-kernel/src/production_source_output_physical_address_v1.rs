@@ -885,13 +885,19 @@ fn source_output_address_access_v1(
                     *offset,
                     context.inner.budget,
                 )?;
-                source_output_address_compare_v1(
-                    analysis,
-                    &work.ranked,
-                    *offset,
-                    indices[0],
-                    context,
-                )?;
+                context.inner.budget.charge_work(1).map_err(Error::Resource)?;
+                if analysis.control.candidates[analysis.control_ordinal]
+                    .identity_address
+                    .is_none()
+                {
+                    source_output_address_compare_v1(
+                        analysis,
+                        &work.ranked,
+                        *offset,
+                        indices[0],
+                        context,
+                    )?;
+                }
                 gep = Some((operation, offset_definition.coordinate));
                 current = source_output_address_operand_v1(
                     context.inner.inventory,
@@ -959,7 +965,7 @@ fn source_output_address_access_v1(
                             pointer: own.pointer.definition,
                             pointer_value: Some(own.pointer.value),
                             gep: own.gep,
-                            offset: identity.invocation.output,
+                            offset: identity.selected_offset.definition,
                             allocation: own.allocation,
                         },
                         SourceOutputIdentityPhysicalKeyV1 {
@@ -974,6 +980,16 @@ fn source_output_address_access_v1(
                             allocation: allocation.coordinate,
                         },
                         context.inner.budget,
+                    )?;
+                    // Only this authenticated Some Store may interpret its
+                    // exact selected offset as the getter's raw invocation.
+                    // Select remains outside the public scalar grammar.
+                    source_output_address_compare_v1(
+                        analysis,
+                        &work.ranked,
+                        identity.selected_offset.index,
+                        indices[0],
+                        context,
                     )?;
                 }
                 assert_origin_push_v1(
@@ -1228,5 +1244,28 @@ mod identity_physical_key_components_v1 {
             }
             assert_eq!(budget.storage(), 0);
         }
+    }
+
+    #[test]
+    fn identity_physical_key_does_not_replace_selected_definition_with_raw_index() {
+        let raw = key();
+        let mut selected = raw;
+        let mut operation = raw.gep;
+        operation.operation += 1;
+        selected.offset = SourceOutputAddressDefV1::Result {
+            operation,
+            result: 0,
+        };
+        let mut work = Work::new(32);
+        let mut budget = AssertOriginBudgetV1::new(&mut work, 0);
+        assert!(matches!(
+            source_output_identity_physical_key_v1(selected, raw, &mut budget),
+            Err(ProductionSourceOutputErrorV1::Invalid(
+                "physical identity getter own address differs"
+            ))
+        ));
+        source_output_identity_physical_key_v1(selected, selected, &mut budget).unwrap();
+        assert_eq!(budget.work(), 32);
+        assert_eq!(budget.storage(), 0);
     }
 }

@@ -4288,6 +4288,18 @@ struct SourceOutputIdentitySourceFactsV1 {
     payload_site: (u32, u32),
 }
 
+// Private descriptor retained only after the actual O select-zero recipe and
+// its getter predicate are checked. Equality is meaningful only at own Stores.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SourceOutputIdentitySelectedOffsetV1 {
+    definition: fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1,
+    value: ValueId,
+    condition_definition: fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1,
+    condition: ValueId,
+    index_definition: fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1,
+    index: ValueId,
+}
+
 struct SourceOutputIdentityAddressV1 {
     invocation: SourceOutputProjectionInvocationV1,
     source_facts: SourceOutputIdentitySourceFactsV1,
@@ -4297,6 +4309,7 @@ struct SourceOutputIdentityAddressV1 {
     output_slice: ValueId,
     ranked_index: ProductionRankedValueV1,
     ranked_extent: ProductionRankedValueV1,
+    selected_offset: SourceOutputIdentitySelectedOffsetV1,
     stores: Vec<SourceOutputIdentityStoreV1>,
 }
 
@@ -4329,6 +4342,7 @@ struct SourceOutputIdentityGetterV1 {
     ranked_index: ProductionRankedValueV1,
     ranked_extent: ProductionRankedValueV1,
     source_argument: u32,
+    selected_offset: Option<SourceOutputIdentitySelectedOffsetV1>,
 }
 
 fn source_output_identity_address_move_v1(
@@ -4336,9 +4350,9 @@ fn source_output_identity_address_move_v1(
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> Result<SourceOutputIdentityAddressV1, ProductionSourceOutputErrorV1> {
     use ProductionSourceOutputErrorV1 as Error;
-    // Existing transfer15 plus twelve for the retained fixed source facts.
+    // Existing transfer27 plus twelve for six fixed selected-offset fields.
     // No source/Store scan is repeated and the Store allocation is moved.
-    budget.charge_work(27).map_err(Error::Resource)?;
+    budget.charge_work(39).map_err(Error::Resource)?;
     budget
         .reserve_storage(std::mem::size_of::<Option<SourceOutputIdentityAddressV1>>())
         .map_err(Error::Resource)?;
@@ -4359,6 +4373,7 @@ fn source_output_identity_address_move_v1(
         output_slice,
         ranked_index,
         ranked_extent,
+        selected_offset,
         ..
     } = identity;
     let SourceOutputIdentitySourceV1 {
@@ -4377,6 +4392,9 @@ fn source_output_identity_address_move_v1(
         output_slice,
         ranked_index,
         ranked_extent,
+        selected_offset: selected_offset.ok_or(Error::Invalid(
+            "identity address selected offset seal absent",
+        ))?,
         stores,
     };
     drop(some_region);
@@ -4396,7 +4414,7 @@ mod identity_address_transfer_components_v1 {
 
     // Unauthenticated private data for ownership/accounting tests only. This
     // never constructs a public control, completed analysis or address owner.
-    fn descriptor() -> SourceOutputIdentityGetterV1 {
+    pub(super) fn descriptor() -> SourceOutputIdentityGetterV1 {
         let operation = fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1 {
             block: Block {
                 function: Function(2),
@@ -4471,6 +4489,14 @@ mod identity_address_transfer_components_v1 {
             ranked_index: ProductionRankedValueV1::Argument(0),
             ranked_extent: ProductionRankedValueV1::Argument(1),
             source_argument: 0,
+            selected_offset: Some(SourceOutputIdentitySelectedOffsetV1 {
+                definition,
+                value: ValueId(12),
+                condition_definition: definition,
+                condition: ValueId(9),
+                index_definition: definition,
+                index: ValueId(10),
+            }),
         }
     }
 
@@ -4488,22 +4514,24 @@ mod identity_address_transfer_components_v1 {
     fn identity_address_transfer_moves_store_allocation_and_releases_exact_old_owners() {
         let value = descriptor();
         let facts = value.source.facts;
+        let selected = value.selected_offset.unwrap();
         let (old, new, stores) = charges(&value);
         let pointer = value.source.stores.as_ptr();
         let capacity = value.source.stores.capacity();
-        let mut work = Work::new(27);
+        let mut work = Work::new(39);
         let mut budget = AssertOriginBudgetV1::new(&mut work, PREFIX + old + new);
         budget.reserve_storage(PREFIX).unwrap();
         source_output_global_scratch_scope_v1(&mut budget, |budget| {
             budget.reserve_storage(old).unwrap();
             let result = source_output_identity_address_move_v1(value, budget)?;
-            assert_eq!(budget.work(), 27);
+            assert_eq!(budget.work(), 39);
             assert_eq!(budget.storage(), PREFIX + new + stores);
             assert_eq!(budget.peak_storage(), PREFIX + old + new);
             assert_eq!(result.stores.as_ptr(), pointer);
             assert_eq!(result.stores.capacity(), capacity);
             assert_eq!(result.stores.len(), 3);
             assert_eq!(result.source_facts, facts);
+            assert_eq!(result.selected_offset, selected);
             assert_eq!(result.witness, SemanticLocalIdV1::from_index(2));
             assert_eq!(result.slice, SemanticLocalIdV1::from_index(1));
             assert_eq!(result.original_pointer, ValueId(8));
@@ -4521,7 +4549,7 @@ mod identity_address_transfer_components_v1 {
     fn identity_address_transfer_new_header_denial_drops_input_then_restores_floor() {
         let value = descriptor();
         let (old, new, _) = charges(&value);
-        let mut work = Work::new(27);
+        let mut work = Work::new(39);
         let mut budget = AssertOriginBudgetV1::new(&mut work, PREFIX + old + new - 1);
         budget.reserve_storage(PREFIX).unwrap();
         let mut completed = false;
@@ -4539,7 +4567,7 @@ mod identity_address_transfer_components_v1 {
             AssertOriginResourceV1::Storage(error)))
             if error.actual() == PREFIX + old + new && error.limit() == PREFIX + old + new - 1)
         );
-        assert_eq!(budget.work(), 27);
+        assert_eq!(budget.work(), 39);
         assert_eq!(budget.storage(), PREFIX);
         assert_eq!(budget.failed_storage(), Some(PREFIX + old + new));
     }
@@ -4548,8 +4576,8 @@ mod identity_address_transfer_components_v1 {
     fn identity_address_transfer_post_allocation_push_denial_restores_outer_floor() {
         let value = descriptor();
         let (old, new, stores) = charges(&value);
-        // Move27; growth of an empty destination vector1; push1 is denied.
-        let mut work = Work::new(28);
+        // Move39; growth of an empty destination vector1; push1 is denied.
+        let mut work = Work::new(40);
         let mut budget = AssertOriginBudgetV1::new(&mut work, 1_000_000);
         budget.reserve_storage(PREFIX).unwrap();
         let mut reached_allocation = false;
@@ -4580,10 +4608,145 @@ mod identity_address_transfer_components_v1 {
         assert!(
             matches!(result, Err(ProductionSourceOutputErrorV1::SourceOrigin(
             SemanticKirAssertOriginErrorV1::Resource(AssertOriginResourceV1::Work(error))))
-            if error.actual() == 29 && error.limit() == 28)
+            if error.actual() == 41 && error.limit() == 40)
         );
-        assert_eq!(budget.work(), 28);
+        assert_eq!(budget.work(), 40);
         assert_eq!(budget.storage(), PREFIX);
+    }
+}
+
+#[cfg(test)]
+mod identity_selected_transfer_components_v1 {
+    use super::*;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+
+    #[test]
+    fn identity_selected_transfer_prepays_expanded_header_work() {
+        for limit in [38, 39] {
+            let value = identity_address_transfer_components_v1::descriptor();
+            let old = std::mem::size_of::<Option<SourceOutputIdentityGetterV1>>()
+                + value.source.stores.capacity()
+                    * std::mem::size_of::<SourceOutputIdentityStoreV1>()
+                + value.source.some_region.capacity() * std::mem::size_of::<bool>();
+            let mut work = Work::new(limit);
+            let mut budget = AssertOriginBudgetV1::new(&mut work, 1_000_000);
+            budget.reserve_storage(17).unwrap();
+            let result = source_output_global_scratch_scope_v1(&mut budget, |budget| {
+                budget.reserve_storage(old).unwrap();
+                let moved = source_output_identity_address_move_v1(value, budget)?;
+                assert_eq!(moved.selected_offset.index, ValueId(10));
+                drop(moved);
+                Ok(())
+            });
+            if limit == 39 {
+                result.unwrap();
+                assert_eq!(budget.work(), 39);
+            } else {
+                assert!(
+                    matches!(result, Err(ProductionSourceOutputErrorV1::Resource(
+                    AssertOriginResourceV1::Work(error))) if error.actual() == 39 && error.limit() == 38)
+                );
+                assert_eq!(budget.work(), 0);
+            }
+            assert_eq!(budget.storage(), 17);
+        }
+    }
+
+    #[test]
+    fn identity_selected_transfer_retains_header_until_exact_panic_cleanup() {
+        let value = identity_address_transfer_components_v1::descriptor();
+        let stores =
+            value.source.stores.capacity() * std::mem::size_of::<SourceOutputIdentityStoreV1>();
+        let old = std::mem::size_of::<Option<SourceOutputIdentityGetterV1>>()
+            + stores
+            + value.source.some_region.capacity() * std::mem::size_of::<bool>();
+        let new = std::mem::size_of::<Option<SourceOutputIdentityAddressV1>>();
+        let pointer = value.source.stores.as_ptr();
+        let mut work = Work::new(39);
+        let mut budget = AssertOriginBudgetV1::new(&mut work, 17 + old + new);
+        budget.reserve_storage(17).unwrap();
+        let mut entered = false;
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<(), ProductionSourceOutputErrorV1> =
+                source_output_global_scratch_scope_v1(&mut budget, |budget| {
+                    budget.reserve_storage(old).unwrap();
+                    let moved = source_output_identity_address_move_v1(value, budget)?;
+                    assert_eq!(moved.stores.as_ptr(), pointer);
+                    assert_eq!(budget.storage(), 17 + new + stores);
+                    entered = true;
+                    std::panic::panic_any(715_u32);
+                });
+        }))
+        .unwrap_err();
+        assert!(entered);
+        assert_eq!(panic.downcast_ref::<u32>(), Some(&715));
+        assert_eq!(budget.storage(), 17);
+        assert_eq!(budget.work(), 39);
+        source_output_global_scratch_scope_v1(&mut budget, |_| Ok(())).unwrap();
+    }
+
+    #[test]
+    fn identity_selected_context_rejects_unrelated_getter_and_prepays() {
+        // Private inert descriptors, not public Control or Store capabilities.
+        let identity = identity_address_transfer_components_v1::descriptor();
+        let selected = identity.selected_offset.unwrap();
+        for axis in 0..5 {
+            let mut changed = selected;
+            match axis {
+                0 => changed.value = ValueId(99),
+                1 => changed.condition = ValueId(99),
+                2 => {
+                    changed.condition_definition =
+                        fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1::FunctionArgument {
+                            function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(9),
+                            argument: 0,
+                        }
+                }
+                3 => changed.index = ValueId(99),
+                4 => {
+                    changed.index_definition =
+                        fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1::FunctionArgument {
+                            function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(9),
+                            argument: 0,
+                        }
+                }
+                _ => unreachable!(),
+            }
+            let mut work = Work::new(8);
+            let mut budget = AssertOriginBudgetV1::new(&mut work, 0);
+            assert!(matches!(
+                source_output_identity_selected_context_v1(
+                    changed,
+                    &identity,
+                    selected.value,
+                    &mut budget
+                ),
+                Err(ProductionSourceOutputErrorV1::Invalid(
+                    "identity selected offset getter context differs"
+                ))
+            ));
+            assert_eq!(budget.work(), 8);
+        }
+        for limit in [7, 8] {
+            let mut work = Work::new(limit);
+            let mut budget = AssertOriginBudgetV1::new(&mut work, 0);
+            let result = source_output_identity_selected_context_v1(
+                selected,
+                &identity,
+                selected.value,
+                &mut budget,
+            );
+            if limit == 8 {
+                result.unwrap();
+            } else {
+                assert!(
+                    matches!(result, Err(ProductionSourceOutputErrorV1::Resource(
+                    AssertOriginResourceV1::Work(error))) if error.actual() == 8 && error.limit() == 7)
+                );
+                assert_eq!(budget.work(), 0);
+            }
+            assert_eq!(budget.storage(), 0);
+        }
     }
 }
 
@@ -5632,6 +5795,189 @@ fn source_output_identity_normal_return_v1(
     Ok(())
 }
 
+fn source_output_identity_original_recipe_v1(
+    operations: &[Operation],
+    slice: ValueId,
+    index: ValueId,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<ValueId, ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    // Existing24 plus16: two result arities/types, zero, Select's three
+    // operands/result and the selected GEP linkage, before any inspection.
+    budget.charge_work(40).map_err(Error::Resource)?;
+    let [length, compare, zero, selected, data, gep] = operations else {
+        return Err(Error::Invalid(
+            "identity original getter is not the exact six-operation recipe",
+        ));
+    };
+    if operations
+        .iter()
+        .any(|operation| operation.results.len() != 1)
+        || length.results[0].ty != Type::INDEX
+        || compare.results[0].ty != Type::BOOL
+        || zero.results[0].ty != Type::INDEX
+        || selected.results[0].ty != Type::INDEX
+        || !matches!(length.kind, OperationKind::SliceLength { slice: actual } if actual == slice)
+        || !matches!(compare.kind, OperationKind::Compare { predicate: ComparePredicate::LessThan, lhs, rhs }
+            if lhs == index && rhs == length.results[0].id)
+        || !matches!(zero.kind, OperationKind::Constant(Constant::Index(0)))
+        || !matches!(selected.kind, OperationKind::Select { condition, true_value, false_value }
+            if condition == compare.results[0].id && true_value == index && false_value == zero.results[0].id)
+        || !matches!(data.kind, OperationKind::SliceData { slice: actual } if actual == slice)
+        || !matches!(gep.kind, OperationKind::GetElementPointer { base, offset }
+            if base == data.results[0].id && offset == selected.results[0].id)
+        || data.results[0].ty != gep.results[0].ty
+        || !matches!(&gep.results[0].ty, Type::Pointer(pointer)
+            if matches!(pointer.pointee.as_ref(), Type::Scalar(_))
+                && pointer.address_space == fe2o3_kernel_ir::AddressSpace::Global)
+    {
+        return Err(Error::Invalid("identity original getter components differ"));
+    }
+    Ok(gep.results[0].id)
+}
+
+fn source_output_identity_select_recipe_v1(
+    selected: &Operation,
+    zero: &Operation,
+    candidate: SourceOutputIdentitySelectedOffsetV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<SourceOutputIdentitySelectedOffsetV1, ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    use fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1 as Def;
+    // Two result arities/types/values, zero kind, Select's three operands,
+    // three exact result coordinates and six retained scalar/coordinate fields.
+    budget.charge_work(24).map_err(Error::Resource)?;
+    let (
+        Def::Result {
+            operation: selected_at,
+            result: 0,
+        },
+        Def::Result {
+            operation: condition_at,
+            result: 0,
+        },
+        Def::Result {
+            operation: index_at,
+            result: 0,
+        },
+    ) = (
+        candidate.definition,
+        candidate.condition_definition,
+        candidate.index_definition,
+    )
+    else {
+        return Err(Error::Invalid(
+            "identity selected offset definition differs",
+        ));
+    };
+    if selected_at.block.function != condition_at.block.function
+        || selected_at.block.function != index_at.block.function
+        || selected.results.len() != 1
+        || zero.results.len() != 1
+        || selected.results[0].ty != Type::INDEX
+        || zero.results[0].ty != Type::INDEX
+        || selected.results[0].id != candidate.value
+        || !matches!(zero.kind, OperationKind::Constant(Constant::Index(0)))
+        || !matches!(selected.kind, OperationKind::Select { condition, true_value, false_value }
+            if condition == candidate.condition && true_value == candidate.index
+                && false_value == zero.results[0].id)
+    {
+        return Err(Error::Invalid(
+            "identity output selected offset recipe differs",
+        ));
+    }
+    Ok(candidate)
+}
+
+fn source_output_identity_selected_offset_v1(
+    inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV1<'_>,
+    function: &fe2o3_kernel_analysis::CanonicalKirFunctionRefV1<'_>,
+    identity: &SourceOutputIdentityGetterV1,
+    value: ValueId,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<SourceOutputIdentitySelectedOffsetV1, ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    use fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1 as Def;
+    // Six-field descriptor construction plus fixed result/Select dispatch;
+    // indexed lookups retain their independent payments. The recipe's24 is
+    // charged by its checker, after this prepaid descriptor construction.
+    budget.charge_work(16).map_err(Error::Resource)?;
+    let definition = inventory
+        .definition_for_value(function.coordinate, value, budget)
+        .map_err(Error::Inventory)?
+        .ok_or(Error::Invalid("identity output selected offset absent"))?;
+    let Def::Result {
+        operation,
+        result: 0,
+    } = definition.coordinate
+    else {
+        return Err(Error::Invalid(
+            "identity output offset is not direct Select",
+        ));
+    };
+    let selected = source_output_address_operation_v1(inventory, function, operation, budget)?;
+    let OperationKind::Select { false_value, .. } = selected.operation.kind else {
+        return Err(Error::Invalid(
+            "identity output offset is not direct Select",
+        ));
+    };
+    let zero = inventory
+        .definition_for_value(function.coordinate, false_value, budget)
+        .map_err(Error::Inventory)?
+        .ok_or(Error::Invalid("identity output zero definition absent"))?;
+    let Def::Result {
+        operation,
+        result: 0,
+    } = zero.coordinate
+    else {
+        return Err(Error::Invalid(
+            "identity output fallback is not direct zero",
+        ));
+    };
+    let zero = source_output_address_operation_v1(inventory, function, operation, budget)?;
+    source_output_identity_select_recipe_v1(
+        selected.operation,
+        zero.operation,
+        SourceOutputIdentitySelectedOffsetV1 {
+            definition: definition.coordinate,
+            value,
+            condition_definition: Def::Result {
+                operation: identity.output_compare,
+                result: 0,
+            },
+            condition: identity.output_condition,
+            index_definition: identity.invocation.output,
+            index: identity.output_index,
+        },
+        budget,
+    )
+}
+
+fn source_output_identity_selected_context_v1(
+    selected: SourceOutputIdentitySelectedOffsetV1,
+    identity: &SourceOutputIdentityGetterV1,
+    offset: ValueId,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    budget.charge_work(8).map_err(Error::Resource)?;
+    if selected.value != offset
+        || selected.condition != identity.output_condition
+        || selected.condition_definition
+            != (fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1::Result {
+                operation: identity.output_compare,
+                result: 0,
+            })
+        || selected.index != identity.output_index
+        || selected.index_definition != identity.invocation.output
+    {
+        return Err(Error::Invalid(
+            "identity selected offset getter context differs",
+        ));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn source_output_identity_getter_v1(
     view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
@@ -5762,36 +6108,18 @@ fn source_output_identity_getter_v1(
         getter_block,
         budget,
     )?;
-    let [length, compare, data, gep] = body.blocks[getter_block.block as usize]
+    let getter_operations = body.blocks[getter_block.block as usize]
         .operations
         .get(getter_span.clone())
         .ok_or(Error::Invalid(
             "identity original getter span outside block",
-        ))?
-    else {
-        return Err(Error::Invalid(
-            "identity original getter is not the exact four-operation recipe",
-        ));
-    };
-    budget.charge_work(24).map_err(Error::Resource)?;
-    if [length, compare, data, gep]
-        .iter()
-        .any(|operation| operation.results.len() != 1)
-        || length.results[0].ty != Type::INDEX
-        || compare.results[0].ty != Type::BOOL
-        || !matches!(length.kind, OperationKind::SliceLength { slice: actual } if actual == slice)
-        || !matches!(compare.kind, OperationKind::Compare { predicate: ComparePredicate::LessThan, lhs, rhs }
-            if lhs == original_index && rhs == length.results[0].id)
-        || !matches!(data.kind, OperationKind::SliceData { slice: actual } if actual == slice)
-        || !matches!(gep.kind, OperationKind::GetElementPointer { base, offset }
-            if base == data.results[0].id && offset == original_index)
-        || data.results[0].ty != gep.results[0].ty
-        || !matches!(&gep.results[0].ty, Type::Pointer(pointer)
-            if matches!(pointer.pointee.as_ref(), Type::Scalar(_))
-                && pointer.address_space == fe2o3_kernel_ir::AddressSpace::Global)
-    {
-        return Err(Error::Invalid("identity original getter components differ"));
-    }
+        ))?;
+    let original_pointer = source_output_identity_original_recipe_v1(
+        getter_operations,
+        slice,
+        original_index,
+        budget,
+    )?;
     let original_compare = Op {
         block: getter_block,
         operation: getter_span.start as u32 + 1,
@@ -5918,7 +6246,7 @@ fn source_output_identity_getter_v1(
             invocation,
             witness: claim.source_local,
             original_compare,
-            original_pointer: gep.results[0].id,
+            original_pointer,
             output_compare,
             output_condition,
             output_index,
@@ -5927,6 +6255,7 @@ fn source_output_identity_getter_v1(
             ranked_index: claim.ranked_value,
             ranked_extent: extent_claim.ranked_value,
             source_argument,
+            selected_offset: None,
         },
     ))
 }
@@ -6415,8 +6744,7 @@ fn source_output_identity_stores_v1(
                 "identity output Store does not use direct getter GEP",
             ));
         };
-        if offset != identity.output_index
-            || gep.operation.results.len() != 1
+        if gep.operation.results.len() != 1
             || gep.operation.results[0].id != actual.value
             || !matches!(&gep.operation.results[0].ty, Type::Pointer(pointer)
                 if pointer.address_space == fe2o3_kernel_ir::AddressSpace::Global
@@ -6426,6 +6754,17 @@ fn source_output_identity_stores_v1(
                 "identity output GEP index or pointer type differs",
             ));
         }
+        let selected = match identity.selected_offset {
+            Some(selected) => selected,
+            None => {
+                let selected = source_output_identity_selected_offset_v1(
+                    inventory, function, identity, offset, budget,
+                )?;
+                identity.selected_offset = Some(selected);
+                selected
+            }
+        };
+        source_output_identity_selected_context_v1(selected, identity, offset, budget)?;
         let definition = inventory
             .definition_for_value(function.coordinate, base, budget)
             .map_err(Error::Inventory)?

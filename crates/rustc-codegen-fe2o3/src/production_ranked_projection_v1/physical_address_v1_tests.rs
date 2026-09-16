@@ -105,9 +105,34 @@ mod identity_getter_physical_tests {
     }
 
     fn with_admitted_source_inputs_fixture<I: AsRef<[ProductionRankedRootInputV1]>>(
+        ssa: ProductionSemanticSsaOwnerV1,
+        profile: Profile,
+        make_inputs: impl FnOnce() -> I,
+        body: impl FnOnce(
+            &ProductionPreRankedKirOwnerV1,
+            &ProductionSourceOutputOccurrencesV1<'_, '_>,
+            &[ProductionRankedRootInputV1],
+            &mut Budget<'_>,
+        ) -> Result<(), ProductionRankedProjectionErrorV1>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        with_admitted_source_inputs_and_checked_fixture(
+            ssa,
+            profile,
+            make_inputs,
+            |_, _, _| {},
+            body,
+        )
+    }
+
+    fn with_admitted_source_inputs_and_checked_fixture<I: AsRef<[ProductionRankedRootInputV1]>>(
         mut ssa: ProductionSemanticSsaOwnerV1,
         profile: Profile,
         make_inputs: impl FnOnce() -> I,
+        inspect: impl FnOnce(
+            &Owner,
+            &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+            &mut Budget<'_>,
+        ),
         body: impl FnOnce(
             &ProductionPreRankedKirOwnerV1,
             &ProductionSourceOutputOccurrencesV1<'_, '_>,
@@ -155,6 +180,9 @@ mod identity_getter_physical_tests {
             let checked = observed.try_check_and_finish_v1(&mut budget).unwrap();
             let output_bytes = checked.storage().retained_storage();
             budget.reserve_storage(output_bytes).unwrap();
+            let inspection_floor = budget.storage();
+            inspect(&input, &checked, &mut budget);
+            assert_eq!(budget.storage(), inspection_floor);
             let coordinate_bytes;
             {
                 let (coordinates, storage) =
@@ -510,7 +538,7 @@ mod identity_getter_physical_tests {
                                         assert_eq!(premises.source_argument(), 0);
                                         assert_eq!(premises.neutral_argument(), 0);
                                         assert!(premises.requires_valid_exclusive_global_u32_slice());
-                                        assert!(premises.requires_representable_invocation_address());
+                                        assert!(!premises.requires_representable_invocation_address());
                                         let function = &source.executable().module().functions[root.neutral_function().0 as usize];
                                         let body = function.body.as_ref().unwrap();
                                         assert_eq!(premises.neutral_subject().0, body.parameters[0]);
@@ -1548,6 +1576,402 @@ mod identity_getter_physical_tests {
             Claims {
                 blocks: claims.blocks.clone(),
                 arguments: claims.arguments.clone(),
+            }
+        }
+
+        #[test]
+        fn selected_zero_source_r1_d_p_r2_composition_keeps_each_own_some_store() {
+            use fe2o3_kernel_ir::{
+                CanonicalKirDefinitionCoordinateV1 as Def, CanonicalKirUseCoordinateV1 as Use,
+                CastKind, OperationKind as Op, Terminator as Term,
+            };
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                for mode in [false, true] {
+                    for stores in [1, 2] {
+                        let mut source_entered = false;
+                        let mut r2_completed = false;
+                        with_join(profile, mode, stores, |analysis, original, claims, budget| {
+                            let floor = budget.storage();
+                            original.with_source_preservation_v1(budget, |proof, budget| {
+                                source_entered = true;
+                                proof.require_original_v1(original, budget)?;
+                                assert_eq!(proof.roots().len(), 1);
+                                let root = &proof.roots()[0];
+                                let premises = root.preconditions();
+                                assert!(premises.requires_valid_exclusive_global_u32_slice());
+                                assert!(!premises.requires_representable_invocation_address());
+                                let n = original.materialized().executable().module().functions
+                                    [root.neutral_function().0 as usize].body.as_ref().unwrap();
+                                let mut getters = 0;
+                                let mut source_stores = 0;
+                                for ordinal in 0..root.checked_rule_count() {
+                                    let (_, _, block, span, rule) =
+                                        root.checked_rule_v1(ordinal, budget)?.unwrap();
+                                    if rule == "getter" {
+                                        getters += 1;
+                                        assert_eq!(span.len(), 6);
+                                        let operations = &n.blocks[block as usize].operations[span];
+                                        let Op::GetElementPointer { offset, .. } = operations[5].kind else {
+                                            panic!("exact source/N getter GEP")
+                                        };
+                                        assert_eq!(offset, operations[3].results[0].id);
+                                        identity_getter_shape_tests::selected_offset_shape(n, offset);
+                                    }
+                                    source_stores += usize::from(rule == "store");
+                                }
+                                assert_eq!((getters, source_stores), (1, stores));
+                                let held = budget.storage();
+                                analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                                    assert_eq!(relation.global_access_count(), stores);
+                                    assert_eq!(relation.private_access_count(), 0);
+                                    let mut previous_store = None;
+                                    let mut shared_offset = None;
+                                    let mut shared_condition = None;
+                                    for ordinal in 0..stores {
+                                        let address = relation.access(ordinal, budget)?.unwrap();
+                                        let own = analysis.access(ordinal, budget)?.unwrap();
+                                        assert_eq!(address.operation(), own.operation());
+                                        assert_eq!(own.source().semantic_block(), 3);
+                                        assert_eq!(own.source().semantic_statement(), Some(1 + ordinal as u32));
+                                        assert_eq!(own.source().semantic_access_ordinal(), 0);
+                                        assert_ne!(previous_store, Some(address.operation()));
+                                        previous_store = Some(address.operation());
+                                        let body = relation.output().module().functions
+                                            [address.gep().block.function.0 as usize].body.as_ref().unwrap();
+                                        let gep = &body.blocks[address.gep().block.block as usize]
+                                            .operations[address.gep().operation as usize];
+                                        let Op::GetElementPointer { base, offset } = gep.kind else {
+                                            panic!("own physical GEP")
+                                        };
+                                        assert_eq!(address.offset_use(), Use::OperationOperand {
+                                            operation: address.gep(), operand: 1,
+                                        });
+                                        let Def::Result { operation: selected_at, result: 0 } =
+                                            address.offset_definition() else { panic!("actual selected definition") };
+                                        assert_eq!(selected_at.block.function, address.gep().block.function);
+                                        let selected = &body.blocks[selected_at.block.block as usize]
+                                            .operations[selected_at.operation as usize];
+                                        assert_eq!(selected.results[0].id, offset);
+                                        let (condition, raw) =
+                                            identity_getter_shape_tests::selected_offset_shape(body, offset);
+                                        assert_ne!(offset, raw);
+                                        if let Some(previous) = shared_offset {
+                                            assert_eq!(previous, address.offset_definition());
+                                        }
+                                        shared_offset = Some(address.offset_definition());
+                                        if let Some(previous) = shared_condition {
+                                            assert_eq!(previous, condition);
+                                        }
+                                        shared_condition = Some(condition);
+                                        let data = body.blocks.iter().flat_map(|block| &block.operations)
+                                            .find(|operation| operation.results.iter().any(|value| value.id == base))
+                                            .unwrap();
+                                        assert!(matches!(data.kind, Op::SliceData { slice } if slice == body.parameters[0]));
+                                        let store = &body.blocks[address.operation().block.block as usize]
+                                            .operations[address.operation().operation as usize];
+                                        assert!(matches!(store.kind, Op::Store { pointer, .. } if pointer == gep.results[0].id));
+                                    }
+                                    let condition = shared_condition.unwrap();
+                                    let body = relation.output().module().functions[0].body.as_ref().unwrap();
+                                    let mut selections = 0;
+                                    for block in &body.blocks {
+                                        let (some, none) = match block.terminator.as_ref().unwrap() {
+                                            Term::ConditionalBranch { condition: actual, then_target, else_target, .. } => {
+                                                assert_eq!(*actual, condition);
+                                                (*then_target, *else_target)
+                                            }
+                                            Term::Switch { selector, cases, default_target, .. } => {
+                                                assert_eq!(cases.iter().map(|case| case.value).collect::<Vec<_>>(), vec![0, 1]);
+                                                let cast = body.blocks.iter().flat_map(|block| &block.operations).find(|operation|
+                                                    operation.results.iter().any(|value| value.id == *selector)).unwrap();
+                                                assert!(matches!(cast.kind, Op::Cast { kind: CastKind::ZeroExtend, value, .. }
+                                                    if value == condition));
+                                                assert_eq!(identity_getter_shape_tests::branch_path_shape(body, *default_target), (0, true));
+                                                (cases[1].target, cases[0].target)
+                                            }
+                                            _ => continue,
+                                        };
+                                        selections += 1;
+                                        assert_eq!(identity_getter_shape_tests::branch_path_shape(body, some), (stores, false));
+                                        assert_eq!(identity_getter_shape_tests::branch_path_shape(body, none), (0, false));
+                                    }
+                                    assert_eq!(selections, 1);
+                                    let live = budget.storage();
+                                    relation.check_borrowed_ranked_addresses_v1(original, 0, claims, budget)?;
+                                    assert_eq!(budget.storage(), live);
+                                    r2_completed = true;
+                                    Ok(())
+                                })?;
+                                assert_eq!(budget.storage(), held);
+                                proof.require_original_v1(original, budget)
+                            })?;
+                            assert_eq!(budget.storage(), floor);
+                            Ok(())
+                        }).expect("real source/N, full Expression/R1, D/P/R2 composition without formal discharge");
+                        assert!(source_entered && r2_completed);
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn selected_zero_hostile_outputs_stop_at_the_checked_transition_not_address_seals() {
+            use fe2o3_kernel_analysis::{
+                CanonicalKirInventoryV1 as Inventory,
+                CanonicalKirTransitionErrorV1 as TransitionError,
+                check_canonical_kir_transition_v1 as check,
+            };
+            use fe2o3_kernel_ir::{
+                ComparePredicate, Constant, Operation, OperationKind as Op, Terminator as Term,
+                Type, ValueDef, ValueId,
+            };
+            for profile in [Profile::Gfx942, Profile::Gfx950] {
+                for mode in [false, true] {
+                    let ssa = identity_getter_shape_tests::source_ssa_options(29, mode, 2);
+                    let mut inspected = false;
+                    let mut unchanged_view_entered = false;
+                    with_admitted_source_inputs_and_checked_fixture(
+                        ssa,
+                        profile,
+                        || {
+                            [ranked_root_input_1d(
+                                if mode { "other_identity_entry" } else { A_NAME },
+                                if mode { 246 } else { 247 },
+                                64,
+                            )]
+                        },
+                        |input, checked, budget| {
+                            let floor = budget.storage();
+                            let (input_inventory, input_storage) =
+                                Inventory::derive(input, budget).unwrap();
+                            budget
+                                .reserve_storage(input_storage.retained_storage())
+                                .unwrap();
+                            let (baseline, baseline_storage) =
+                                Inventory::derive(checked.owner(), budget).unwrap();
+                            budget
+                                .reserve_storage(baseline_storage.retained_storage())
+                                .unwrap();
+                            let (accepted, receipt) = check(
+                                &input_inventory,
+                                &baseline,
+                                checked.occurrences().candidate(),
+                                budget,
+                            )
+                            .unwrap();
+                            budget.reserve_storage(receipt.retained_storage()).unwrap();
+                            assert!(!accepted.grants_authority());
+                            drop(accepted);
+                            budget.release_storage(receipt.retained_storage()).unwrap();
+                            drop(baseline);
+                            budget
+                                .release_storage(baseline_storage.retained_storage())
+                                .unwrap();
+                            let held = budget.storage();
+                            for case in 0..5 {
+                                // Bounded fixture-owned proposals are verified as graphs,
+                                // never adopted as checked O or fabricated D/P/R2 owners.
+                                let mut proposed = checked.owner().module().clone();
+                                let body = proposed.functions[0].body.as_mut().unwrap();
+                                assert!(
+                                    body.blocks.iter().all(|block| block.parameters.is_empty())
+                                );
+                                let coordinates = body
+                                    .blocks
+                                    .iter()
+                                    .enumerate()
+                                    .flat_map(|(b, block)| {
+                                        block.operations.iter().enumerate().filter_map(
+                                            move |(o, operation)| {
+                                                matches!(operation.kind, Op::Select { .. })
+                                                    .then_some((b, o))
+                                            },
+                                        )
+                                    })
+                                    .collect::<Vec<_>>();
+                                assert_eq!(coordinates.len(), 1);
+                                let (selected_block, selected_operation) = coordinates[0];
+                                let selected =
+                                    &body.blocks[selected_block].operations[selected_operation];
+                                let Op::Select {
+                                    condition,
+                                    true_value: raw,
+                                    false_value: zero,
+                                } = selected.kind
+                                else {
+                                    unreachable!()
+                                };
+                                let selected_value = selected.results[0].id;
+                                let mut changed = 0;
+                                let expected = match case {
+                                    0 => {
+                                        for block in &mut body.blocks {
+                                            match block.terminator.as_mut().unwrap() {
+                                                Term::Switch { cases, .. } => {
+                                                    assert_eq!(
+                                                        cases
+                                                            .iter()
+                                                            .map(|case| case.value)
+                                                            .collect::<Vec<_>>(),
+                                                        vec![0, 1]
+                                                    );
+                                                    let some = cases[1].target;
+                                                    cases[1].target = cases[0].target;
+                                                    cases[0].target = some;
+                                                    changed += 1;
+                                                }
+                                                Term::ConditionalBranch {
+                                                    then_target,
+                                                    else_target,
+                                                    ..
+                                                } => {
+                                                    std::mem::swap(then_target, else_target);
+                                                    changed += 1;
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        TransitionError::Rule("outgoing edge origin or destination")
+                                    }
+                                    1 => {
+                                        body.blocks[selected_block].operations
+                                            [selected_operation]
+                                            .kind = Op::Select {
+                                            condition,
+                                            true_value: zero,
+                                            false_value: raw,
+                                        };
+                                        changed = 1;
+                                        TransitionError::Rule(
+                                            "final operand has no exact descendant",
+                                        )
+                                    }
+                                    2 => {
+                                        for operation in body
+                                            .blocks
+                                            .iter_mut()
+                                            .flat_map(|block| &mut block.operations)
+                                        {
+                                            if let Op::GetElementPointer { offset, .. } =
+                                                &mut operation.kind
+                                            {
+                                                assert_eq!(*offset, selected_value);
+                                                *offset = raw;
+                                                changed += 1;
+                                            }
+                                        }
+                                        TransitionError::Rule(
+                                            "final operand has no exact descendant",
+                                        )
+                                    }
+                                    3 => {
+                                        let compare = body
+                                            .blocks
+                                            .iter_mut()
+                                            .flat_map(|block| &mut block.operations)
+                                            .find(|operation| {
+                                                operation
+                                                    .results
+                                                    .iter()
+                                                    .any(|value| value.id == condition)
+                                            })
+                                            .unwrap();
+                                        let Op::Compare { predicate, .. } = &mut compare.kind
+                                        else {
+                                            panic!("own getter comparison")
+                                        };
+                                        assert_eq!(*predicate, ComparePredicate::LessThan);
+                                        *predicate = ComparePredicate::Equal;
+                                        changed = 1;
+                                        TransitionError::Rule("retained operation payload")
+                                    }
+                                    4 => {
+                                        let next = body
+                                            .blocks
+                                            .iter()
+                                            .flat_map(|block| &block.operations)
+                                            .flat_map(|operation| &operation.results)
+                                            .map(|value| value.id.0)
+                                            .chain(body.parameters.iter().map(|value| value.0))
+                                            .max()
+                                            .unwrap()
+                                            .checked_add(1)
+                                            .unwrap();
+                                        let foreign = ValueId(next);
+                                        body.blocks[selected_block].operations
+                                            [selected_operation]
+                                            .kind = Op::Select {
+                                            condition: foreign,
+                                            true_value: raw,
+                                            false_value: zero,
+                                        };
+                                        body.blocks[selected_block].operations.insert(
+                                            selected_operation,
+                                            Operation::effect_free(
+                                                ValueDef::new(foreign, Type::BOOL),
+                                                Op::Constant(Constant::Bool(true)),
+                                            ),
+                                        );
+                                        changed = 1;
+                                        // Adding a foreign predicate already violates the
+                                        // unchanged actual policy3 occurrence roster.
+                                        TransitionError::IncompleteRows
+                                    }
+                                    _ => unreachable!(),
+                                };
+                                assert_eq!(changed, 1, "one intended mutation, case {case}");
+                                let (proposed, storage) =
+                                    Owner::from_module_ref_with_verification_budget_v12(
+                                        &proposed, budget,
+                                    )
+                                    .expect("hostile output remains well-typed verified KIR");
+                                budget.reserve_storage(storage.retained_storage()).unwrap();
+                                let (inventory, inventory_storage) =
+                                    Inventory::derive(&proposed, budget).unwrap();
+                                budget
+                                    .reserve_storage(inventory_storage.retained_storage())
+                                    .unwrap();
+                                if case == 4 {
+                                    assert_eq!(
+                                        inventory.operations().len(),
+                                        checked.occurrences().candidate().operations.len() + 1
+                                    );
+                                }
+                                let query_floor = budget.storage();
+                                let result = check(
+                                    &input_inventory,
+                                    &inventory,
+                                    checked.occurrences().candidate(),
+                                    budget,
+                                );
+                                assert!(
+                                    matches!(result, Err(actual) if actual == expected),
+                                    "case {case}"
+                                );
+                                assert_eq!(budget.storage(), query_floor);
+                                drop(inventory);
+                                budget
+                                    .release_storage(inventory_storage.retained_storage())
+                                    .unwrap();
+                                drop(proposed);
+                                budget.release_storage(storage.retained_storage()).unwrap();
+                                assert_eq!(budget.storage(), held);
+                            }
+                            drop(input_inventory);
+                            budget
+                                .release_storage(input_storage.retained_storage())
+                                .unwrap();
+                            assert_eq!(budget.storage(), floor);
+                            inspected = true;
+                        },
+                        |_, _, _, _| {
+                            unchanged_view_entered = true;
+                            Ok(())
+                        },
+                    )
+                    .expect("only unchanged policy3 O enters the source/output view");
+                    assert!(inspected && unchanged_view_entered);
+                }
             }
         }
 
@@ -2948,7 +3372,7 @@ mod identity_getter_physical_tests {
                                                 let gep = op(address.gep());
                                                 assert_eq!(gep.results[0].id, pointer);
                                                 assert_eq!(address.pointer_definition(), Def::Result { operation: address.gep(), result: 0 });
-                                                let Op::GetElementPointer { base, .. } = gep.kind else { panic!("own GEP") };
+                                                let Op::GetElementPointer { base, offset } = gep.kind else { panic!("own GEP") };
                                                 let Def::FunctionArgument { function, argument } = address.allocation() else { panic!("own Slice formal") };
                                                 assert_eq!(function, address.operation().block.function);
                                                 let body = relation.output().module().functions[function.0 as usize].body.as_ref().unwrap();
@@ -2958,9 +3382,10 @@ mod identity_getter_physical_tests {
                                                 assert!(definitions.next().is_none());
                                                 let Op::SliceData { slice } = data.kind else { panic!("own SliceData") };
                                                 assert_eq!(slice, body.parameters[argument as usize]);
-                                                let Def::Result { operation: index, result: 0 } = address.offset_definition() else { panic!("own coordinate") };
-                                                assert!(matches!(&op(index).kind, Op::Intrinsic(intrinsic)
-                                                    if *intrinsic == fe2o3_kernel_ir::IntrinsicOperation::global_id_1d()));
+                                                let Def::Result { operation: selected, result: 0 } = address.offset_definition() else { panic!("own selected coordinate") };
+                                                assert_eq!(op(selected).results[0].id, offset);
+                                                let (_, raw) = identity_getter_shape_tests::selected_offset_shape(body, offset);
+                                                assert_ne!(raw, offset);
                                             }
                                             assert!(relation.access(stores, budget)?.is_none());
                                             Ok(())

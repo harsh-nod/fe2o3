@@ -19629,6 +19629,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         } else {
             extent_present
         };
+        let zero = self.emit_index_constant(operations, 0)?;
+        let guarded_index = self.emit_select_index(operations, present, index, zero)?;
         let pointer_ty = Type::pointer(
             (*slice_type.element).clone(),
             slice_type.address_space,
@@ -19648,7 +19650,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 pointer_ty.clone(),
                 OperationKind::GetElementPointer {
                     base,
-                    offset: index,
+                    offset: guarded_index,
                 },
             )?
             .value()

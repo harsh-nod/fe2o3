@@ -637,6 +637,285 @@ fn check(
     result
 }
 
+fn imported_getter_recipe(
+    owner: &ProductionPreRankedKirOwnerV1,
+) -> (&[Operation], ValueId, ValueId) {
+    let body = owner.executable().module().functions[0]
+        .body
+        .as_ref()
+        .unwrap();
+    let mut recipes = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.operations.windows(6))
+        .filter(|operations| matches!(operations[0].kind, OperationKind::SliceLength { .. }));
+    let operations = recipes.next().expect("actual imported getter recipe");
+    assert!(recipes.next().is_none());
+    let OperationKind::SliceLength { slice } = operations[0].kind else {
+        unreachable!()
+    };
+    let OperationKind::Compare { lhs: index, .. } = operations[1].kind else {
+        unreachable!()
+    };
+    (operations, slice, index)
+}
+
+#[test]
+fn imported_getter_selects_zero_before_gep_and_has_no_inactive_address_premise() {
+    for signed in [false, true] {
+        with_fixture(29, signed, true, 2, |owner, budget| {
+            let floor = budget.storage();
+            {
+                let row =
+                    source_preservation_root_v1(owner, owner.executable().module(), ROOT, budget)
+                        .unwrap();
+                let (operations, slice, index) = imported_getter_recipe(owner);
+                let [length, compare, zero, select, data, gep] = operations else {
+                    unreachable!()
+                };
+                assert_eq!(zero.results[0].ty, Type::INDEX);
+                assert_eq!(select.results[0].ty, Type::INDEX);
+                assert!(matches!(
+                    zero.kind,
+                    OperationKind::Constant(Constant::Index(0))
+                ));
+                assert!(
+                    matches!(select.kind, OperationKind::Select { condition, true_value, false_value }
+                    if condition == compare.results[0].id && true_value == index && false_value == zero.results[0].id)
+                );
+                assert!(
+                    matches!(gep.kind, OperationKind::GetElementPointer { base, offset }
+                    if base == data.results[0].id && offset == select.results[0].id)
+                );
+                assert_eq!(
+                    row.preconditions().neutral_subject(),
+                    (slice, index, length.results[0].id, compare.results[0].id)
+                );
+                assert_eq!(row.preconditions.pointer, gep.results[0].id);
+                assert!(
+                    row.preconditions()
+                        .requires_valid_exclusive_global_u32_slice()
+                );
+                assert!(
+                    !row.preconditions()
+                        .requires_representable_invocation_address()
+                );
+                let mut getter_rules = 0;
+                for ordinal in 0..row.checked_rule_count() {
+                    let (_, _, _, span, name) =
+                        row.checked_rule_v1(ordinal, budget).unwrap().unwrap();
+                    if name == "getter" {
+                        getter_rules += 1;
+                        assert_eq!(span.len(), 6);
+                    }
+                }
+                assert_eq!(getter_rules, 1);
+            }
+            budget.release_storage(budget.storage() - floor).unwrap();
+            assert_eq!(budget.storage(), floor);
+        });
+    }
+}
+
+#[test]
+fn admitted_unsafe_getter_offsets_reach_the_exact_source_n_rule() {
+    for signed in [false, true] {
+        with_fixture(17, signed, false, 1, |owner, budget| {
+            assert_eq!(check(owner, owner.executable(), budget).unwrap(), 10);
+            for case in 0..7 {
+                let mut proposed = owner.executable().module().clone();
+                let body = proposed.functions[0].body.as_mut().unwrap();
+                let (block, first) = body
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .find_map(|(block, body)| {
+                        body.operations
+                            .iter()
+                            .position(|operation| {
+                                matches!(operation.kind, OperationKind::SliceLength { .. })
+                            })
+                            .map(|first| (block, first))
+                    })
+                    .unwrap();
+                let OperationKind::Compare { lhs: index, .. } =
+                    body.blocks[block].operations[first + 1].kind
+                else {
+                    unreachable!()
+                };
+                let length = body.blocks[block].operations[first].results[0].id;
+                let zero = body.blocks[block].operations[first + 2].results[0].id;
+                match case {
+                    0 => {
+                        body.blocks[block].operations[first + 2].kind =
+                            OperationKind::Constant(Constant::Index(1))
+                    }
+                    1 => {
+                        let OperationKind::Select {
+                            true_value,
+                            false_value,
+                            ..
+                        } = &mut body.blocks[block].operations[first + 3].kind
+                        else {
+                            unreachable!()
+                        };
+                        std::mem::swap(true_value, false_value);
+                    }
+                    2 => {
+                        let OperationKind::Select { true_value, .. } =
+                            &mut body.blocks[block].operations[first + 3].kind
+                        else {
+                            unreachable!()
+                        };
+                        *true_value = length;
+                    }
+                    3 => {
+                        let OperationKind::Select { false_value, .. } =
+                            &mut body.blocks[block].operations[first + 3].kind
+                        else {
+                            unreachable!()
+                        };
+                        *false_value = index;
+                    }
+                    4 => {
+                        let OperationKind::GetElementPointer { offset, .. } =
+                            &mut body.blocks[block].operations[first + 5].kind
+                        else {
+                            unreachable!()
+                        };
+                        *offset = index;
+                    }
+                    5 => {
+                        body.blocks[block].operations[first + 3].kind = OperationKind::Binary {
+                            op: BinaryOp::Add,
+                            lhs: index,
+                            rhs: zero,
+                        }
+                    }
+                    6 => {
+                        // This additional valid definition also violates the later
+                        // complete census; the exact getter error must occur first.
+                        let foreign = ValueId(
+                            body.blocks
+                                .iter()
+                                .flat_map(|block| &block.operations)
+                                .flat_map(|operation| &operation.results)
+                                .map(|value| value.id.0)
+                                .max()
+                                .unwrap()
+                                .checked_add(1)
+                                .unwrap(),
+                        );
+                        let producer = body
+                            .blocks
+                            .iter_mut()
+                            .find(|block| {
+                                block.operations.iter().any(|operation| {
+                                    matches!(operation.kind, OperationKind::Intrinsic(_))
+                                })
+                            })
+                            .unwrap();
+                        producer.operations.push(Operation::new(
+                            vec![ValueDef::new(foreign, Type::BOOL)],
+                            OperationKind::Constant(Constant::Bool(true)),
+                        ));
+                        let OperationKind::Select { condition, .. } =
+                            &mut body.blocks[block].operations[first + 3].kind
+                        else {
+                            unreachable!()
+                        };
+                        *condition = foreign;
+                    }
+                    _ => unreachable!(),
+                }
+                let floor = budget.storage();
+                {
+                    let (candidate, receipt) =
+                        Native::from_module_ref_with_verification_budget_v12(&proposed, budget)
+                            .unwrap_or_else(|error| {
+                                panic!("candidate admission case={case} signed={signed}: {error:?}")
+                            });
+                    budget.reserve_storage(receipt.retained_storage()).unwrap();
+                    assert_ne!(
+                        candidate.canonical().identity(),
+                        owner.executable().canonical().identity()
+                    );
+                    let result = check(owner, &candidate, budget);
+                    assert!(
+                        matches!(
+                            result,
+                            Err(ProductionSourceOutputErrorV1::Invalid(
+                                "source preservation getter rule differs"
+                            ))
+                        ),
+                        "exact getter rule case={case} signed={signed}: {result:?}"
+                    );
+                }
+                budget.release_storage(budget.storage() - floor).unwrap();
+                assert_eq!(budget.storage(), floor);
+                check(owner, owner.executable(), budget).unwrap();
+            }
+        });
+    }
+}
+
+#[test]
+fn actual_getter_matcher_has_exact_paid_prefix_and_preserves_component_floor() {
+    with_fixture(17, false, false, 1, |owner, outer| {
+        check(owner, owner.executable(), outer).unwrap();
+        let (operations, slice, index) = imported_getter_recipe(owner);
+        // Separate matcher-only ledger over genuine borrowed N. It is not an
+        // alternate source owner or a whole-transaction work-cap measurement.
+        for malformed in [false, true] {
+            let mut candidate = operations.to_vec();
+            if malformed {
+                candidate[2].kind = OperationKind::Constant(Constant::Index(1));
+            }
+            for available in [
+                SOURCE_PRESERVATION_GETTER_WORK_V1 - 1,
+                SOURCE_PRESERVATION_GETTER_WORK_V1,
+            ] {
+                let mut work = Work::new(7 + available);
+                let mut budget = Budget::new(&mut work, PREFIX);
+                budget.charge_work(7).unwrap();
+                budget.reserve_storage(PREFIX).unwrap();
+                let result =
+                    source_preservation_getter_recipe_v1(&candidate, slice, index, &mut budget);
+                if available < SOURCE_PRESERVATION_GETTER_WORK_V1 {
+                    assert!(
+                        matches!(result, Err(ProductionSourceOutputErrorV1::Resource(AssertOriginResourceV1::Work(limit)))
+                        if limit.actual() == 7 + SOURCE_PRESERVATION_GETTER_WORK_V1 && limit.limit() == 7 + available)
+                    );
+                    assert_eq!(budget.work(), 7);
+                } else {
+                    if malformed {
+                        assert!(matches!(
+                            result,
+                            Err(ProductionSourceOutputErrorV1::Invalid(
+                                "source preservation getter rule differs"
+                            ))
+                        ));
+                    } else {
+                        assert_eq!(
+                            result.unwrap(),
+                            (
+                                candidate[0].results[0].id,
+                                candidate[1].results[0].id,
+                                candidate[5].results[0].id
+                            )
+                        );
+                    }
+                    assert_eq!(budget.work(), 7 + SOURCE_PRESERVATION_GETTER_WORK_V1);
+                }
+                assert_eq!(budget.storage(), PREFIX);
+                assert_eq!(budget.peak_storage(), PREFIX);
+                assert_eq!(budget.failed_storage(), None);
+                budget.release_storage(PREFIX).unwrap();
+            }
+        }
+    });
+}
+
 #[test]
 fn independently_checked_source_n_rules_cover_values_copies_signedness_and_multiple_stores() {
     for value in [17, 29] {
@@ -657,6 +936,52 @@ fn independently_checked_source_n_rules_cover_values_copies_signedness_and_multi
             }
         }
     }
+}
+
+#[test]
+fn getter_matcher_type_and_arity_components_refuse_without_a_proof_owner() {
+    with_fixture(17, false, false, 1, |owner, outer| {
+        check(owner, owner.executable(), outer).unwrap();
+        let (operations, slice, index) = imported_getter_recipe(owner);
+        // These intentionally malformed operation slices are matcher components,
+        // not independently admitted N or public source-preservation capabilities.
+        for case in 0..6 {
+            let mut candidate = operations.to_vec();
+            match case {
+                0 => candidate[2].results[0].ty = Type::Scalar(ScalarType::U64),
+                1 => candidate[3].results[0].ty = Type::Scalar(ScalarType::U64),
+                2 => candidate[2].results.clear(),
+                3 => {
+                    let result = candidate[3].results[0].clone();
+                    candidate[3].results.push(result);
+                }
+                4 => {
+                    candidate.remove(3);
+                }
+                5 => {
+                    let zero = candidate[2].results[0].id;
+                    let OperationKind::Select { condition, .. } = &mut candidate[3].kind else {
+                        unreachable!()
+                    };
+                    *condition = zero;
+                }
+                _ => unreachable!(),
+            }
+            let mut work = Work::new(SOURCE_PRESERVATION_GETTER_WORK_V1);
+            let mut budget = Budget::new(&mut work, PREFIX);
+            budget.reserve_storage(PREFIX).unwrap();
+            assert!(matches!(
+                source_preservation_getter_recipe_v1(&candidate, slice, index, &mut budget),
+                Err(ProductionSourceOutputErrorV1::Invalid(
+                    "source preservation getter rule differs"
+                ))
+            ));
+            assert_eq!(budget.work(), SOURCE_PRESERVATION_GETTER_WORK_V1);
+            assert_eq!(budget.storage(), PREFIX);
+            assert_eq!(budget.peak_storage(), PREFIX);
+            budget.release_storage(PREFIX).unwrap();
+        }
+    });
 }
 
 #[test]
@@ -1099,7 +1424,7 @@ fn private_checked_row_retains_exact_capacity_bytes_and_named_rule_census() {
                     .requires_valid_exclusive_global_u32_slice()
             );
             assert!(
-                row.preconditions()
+                !row.preconditions()
                     .requires_representable_invocation_address()
             );
             let mut names = Vec::new();

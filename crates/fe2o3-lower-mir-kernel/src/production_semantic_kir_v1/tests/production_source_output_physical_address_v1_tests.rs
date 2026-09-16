@@ -1,4 +1,159 @@
 #[cfg(test)]
+mod identity_selected_offset_inventory_components_v1 {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrWorkBudgetV1 as Work, CanonicalKirBlockCoordinateV1 as Block,
+        CanonicalKirFunctionCoordinateV1 as Function, Function as KirFunction,
+        VerifiedCanonicalKernelIrModuleV12 as Owner,
+    };
+
+    #[test]
+    fn identity_selected_offset_uses_actual_inventory_and_rejects_other_predicates() {
+        // Verified KIR inventories plus inert expected getter descriptors only;
+        // this does not construct source/Control/P/R2 capabilities.
+        for case in 0..5 {
+            let scalar = Type::Scalar(ScalarType::U32);
+            let slice = Type::slice(scalar.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+            let pointer = Type::pointer(scalar, AddressSpace::Global, AccessMode::ReadWrite);
+            let mut block = BasicBlock::new(BlockId(0));
+            block.operations = vec![
+                Operation::effect_free(
+                    ValueDef::new(ValueId(1), Type::INDEX),
+                    OperationKind::Intrinsic(fe2o3_kernel_ir::IntrinsicOperation::global_id_1d()),
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(2), Type::INDEX),
+                    OperationKind::SliceLength { slice: ValueId(0) },
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(3), Type::BOOL),
+                    OperationKind::Compare {
+                        predicate: ComparePredicate::LessThan,
+                        lhs: ValueId(1),
+                        rhs: ValueId(2),
+                    },
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(8), Type::BOOL),
+                    OperationKind::Constant(Constant::Bool(true)),
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(4), Type::INDEX),
+                    OperationKind::Constant(Constant::Index(if case == 1 { 1 } else { 0 })),
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(5), Type::INDEX),
+                    OperationKind::Select {
+                        condition: if case == 3 { ValueId(8) } else { ValueId(3) },
+                        true_value: if case == 2 { ValueId(4) } else { ValueId(1) },
+                        false_value: if case == 2 { ValueId(1) } else { ValueId(4) },
+                    },
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(6), pointer.clone()),
+                    OperationKind::SliceData { slice: ValueId(0) },
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(7), pointer),
+                    OperationKind::GetElementPointer {
+                        base: ValueId(6),
+                        offset: ValueId(5),
+                    },
+                ),
+            ];
+            block.terminator = Some(Terminator::Return { values: vec![] });
+            let mut module = Module::new("selected-offset-component");
+            module.functions.push(KirFunction::kernel_entry(
+                "entry",
+                Signature::new(vec![slice], vec![]),
+                vec![ValueId(0)],
+                vec![block],
+            ));
+            module.kernels.push(Kernel::new(
+                "selected-offset-component",
+                "entry",
+                LaunchDomain::D1 {
+                    x: LaunchExtent::Static(4),
+                },
+            ));
+            let mut work = Work::new(1_000_000);
+            let mut budget = AssertOriginBudgetV1::new(&mut work, 1_000_000);
+            budget.reserve_storage(19).unwrap();
+            let (owner, owner_storage) =
+                Owner::from_module_ref_with_verification_budget_v12(&module, &mut budget).unwrap();
+            budget
+                .reserve_storage(owner_storage.retained_storage())
+                .unwrap();
+            let (inventory, inventory_storage) =
+                fe2o3_kernel_analysis::CanonicalKirInventoryV1::derive(&owner, &mut budget)
+                    .unwrap();
+            budget
+                .reserve_storage(inventory_storage.retained_storage())
+                .unwrap();
+            let floor = budget.storage();
+            let at = |operation| SourceOutputAddressOpV1 {
+                block: Block {
+                    function: Function(0),
+                    block: 0,
+                },
+                operation,
+            };
+            let mut identity = identity_address_transfer_components_v1::descriptor();
+            identity.output_compare = at(2);
+            identity.output_condition = ValueId(3);
+            identity.output_index = ValueId(1);
+            identity.invocation.output = SourceOutputAddressDefV1::Result {
+                operation: at(0),
+                result: 0,
+            };
+            let result = source_output_identity_selected_offset_v1(
+                &inventory,
+                &inventory.functions()[0],
+                &identity,
+                if case == 4 { ValueId(1) } else { ValueId(5) },
+                &mut budget,
+            );
+            if case == 0 {
+                let selected = result.unwrap();
+                assert_eq!(
+                    selected.definition,
+                    SourceOutputAddressDefV1::Result {
+                        operation: at(5),
+                        result: 0
+                    }
+                );
+                assert_eq!(selected.index_definition, identity.invocation.output);
+                assert_ne!(selected.definition, selected.index_definition);
+                assert_eq!(
+                    (selected.value, selected.index, selected.condition),
+                    (ValueId(5), ValueId(1), ValueId(3))
+                );
+            } else {
+                let expected = if case == 4 {
+                    "identity output offset is not direct Select"
+                } else {
+                    "identity output selected offset recipe differs"
+                };
+                assert!(
+                    matches!(result, Err(ProductionSourceOutputErrorV1::Invalid(message)) if message == expected)
+                );
+            }
+            assert_eq!(budget.storage(), floor);
+            drop(identity);
+            drop(inventory);
+            budget
+                .release_storage(inventory_storage.retained_storage())
+                .unwrap();
+            drop(owner);
+            budget
+                .release_storage(owner_storage.retained_storage())
+                .unwrap();
+            assert_eq!(budget.storage(), 19);
+        }
+    }
+}
+
+#[cfg(test)]
 mod physical_address_components_v1 {
     use super::*;
     use fe2o3_kernel_ir::{

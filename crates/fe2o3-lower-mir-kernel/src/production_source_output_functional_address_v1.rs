@@ -1,6 +1,67 @@
 type SourceOutputFullAddressSiteV1 = (u32, Option<u32>, u32);
 type SourceOutputFullAddressEventKeyV1 = (u32, u32, u32, u32, u32, u32);
 
+#[cfg(test)]
+mod full_identity_selected_context_components_v1 {
+    use super::*;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+
+    #[test]
+    fn full_identity_selected_context_prepays_and_rejects_every_seal_axis() {
+        // Inert data, not full ranked/source/control capabilities.
+        let original = identity_address_transfer_components_v1::descriptor()
+            .selected_offset
+            .unwrap();
+        for case in 0..7 {
+            let mut actual = original;
+            let mut physical = original.definition;
+            let foreign = SourceOutputAddressDefV1::FunctionArgument {
+                function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(99),
+                argument: 0,
+            };
+            match case {
+                0 => actual.definition = foreign,
+                1 => actual.value = ValueId(99),
+                2 => actual.condition_definition = foreign,
+                3 => actual.condition = ValueId(99),
+                4 => actual.index_definition = foreign,
+                5 => actual.index = ValueId(99),
+                6 => physical = foreign,
+                _ => unreachable!(),
+            }
+            let mut work = Work::new(10);
+            let mut budget = AssertOriginBudgetV1::new(&mut work, 0);
+            assert!(matches!(
+                source_output_full_identity_selected_v1(original, actual, physical, &mut budget),
+                Err(ProductionSourceOutputErrorV1::Invalid(
+                    "full identity selected offset context differs"
+                ))
+            ));
+            assert_eq!(budget.work(), 10);
+        }
+        for limit in [9, 10] {
+            let mut work = Work::new(limit);
+            let mut budget = AssertOriginBudgetV1::new(&mut work, 0);
+            let result = source_output_full_identity_selected_v1(
+                original,
+                original,
+                original.definition,
+                &mut budget,
+            );
+            if limit == 10 {
+                result.unwrap();
+            } else {
+                assert!(
+                    matches!(result, Err(ProductionSourceOutputErrorV1::Resource(
+                    AssertOriginResourceV1::Work(error))) if error.actual() == 10 && error.limit() == 9)
+                );
+                assert_eq!(budget.work(), 0);
+            }
+            assert_eq!(budget.storage(), 0);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct SourceOutputFullAddressAnchorV1 {
     local: SemanticLocalIdV1,
@@ -24,6 +85,24 @@ struct SourceOutputFullIdentityAnchorsV1 {
     extent: SourceOutputFullAddressAnchorV1,
     index_symbol: u32,
     extent_symbol: u32,
+    selected_offset: SourceOutputIdentitySelectedOffsetV1,
+}
+
+fn source_output_full_identity_selected_v1(
+    prepared: SourceOutputIdentitySelectedOffsetV1,
+    current: SourceOutputIdentitySelectedOffsetV1,
+    physical: SourceOutputAddressDefV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    // Six retained fields plus the actual P offset and fixed association work.
+    budget.charge_work(10).map_err(Error::Resource)?;
+    if prepared != current || physical != prepared.definition {
+        return Err(Error::Invalid(
+            "full identity selected offset context differs",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -506,7 +585,9 @@ fn source_output_full_identity_anchors_v1(
     else {
         return Ok(None);
     };
-    budget.charge_work(32).map_err(Error::Resource)?;
+    // Existing32 plus twelve for the six-field selected-offset copy retained
+    // in this query's already size_of-charged workspace header.
+    budget.charge_work(44).map_err(Error::Resource)?;
     analysis.control.require_candidate_at_v1(
         analysis.view,
         analysis.candidate,
@@ -709,6 +790,7 @@ fn source_output_full_identity_anchors_v1(
         extent: extent_anchor,
         index_symbol,
         extent_symbol,
+        selected_offset: identity.selected_offset,
     }))
 }
 
@@ -921,12 +1003,17 @@ fn source_output_full_address_access_v1(
             || own.pointer.definition != physical.pointer
             || own.gep != physical.gep
             || own.allocation != physical.allocation
-            || identity.invocation.output != physical.offset
             || memory_index != identity.ranked_index
             || memory_extent != identity.ranked_extent
         {
             return Err(Error::Invalid("full identity own physical Store differs"));
         }
+        source_output_full_identity_selected_v1(
+            prepared.selected_offset,
+            identity.selected_offset,
+            physical.offset,
+            budget,
+        )?;
         let statement = key.1.ok_or(Error::Invalid(
             "full identity source Store statement absent",
         ))?;

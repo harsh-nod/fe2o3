@@ -70,10 +70,11 @@ impl ProductionSourcePreservationPreconditionsV1 {
     pub const fn requires_valid_exclusive_global_u32_slice(&self) -> bool {
         true
     }
-    /// The caller must discharge representability of base + 4 * Global-X,
-    /// including inactive lanes where N computes but does not dereference it.
+    /// The exact checked getter selects a zero offset on inactive lanes, so
+    /// no additional representability premise for their Global-X address is
+    /// required. Active accesses retain the valid-slice premise above.
     pub const fn requires_representable_invocation_address(&self) -> bool {
-        true
+        false
     }
 }
 
@@ -782,31 +783,63 @@ fn source_preservation_intrinsics_v1(
         None,
         budget,
     )?;
-    budget.charge_work(30).map_err(Error::Resource)?;
-    let [length, compare, data, gep] = body
+    let operations = body
         .blocks
         .get(block.block as usize)
         .and_then(|block| block.operations.get(span))
-        .ok_or(Error::Invalid("source preservation getter span outside N"))?
-    else {
+        .ok_or(Error::Invalid("source preservation getter span outside N"))?;
+    let (extent, condition, pointer) = source_preservation_getter_recipe_v1(
+        operations,
+        row.preconditions.neutral_slice,
+        index,
+        budget,
+    )?;
+    row.preconditions.invocation = index;
+    row.preconditions.extent = extent;
+    row.preconditions.condition = condition;
+    row.preconditions.pointer = pointer;
+    Ok(())
+}
+
+// The old four-operation inspection cost is 30. Sixteen additional units cover
+// zero/select result arities/types, literal, operands and the selected GEP link.
+const SOURCE_PRESERVATION_GETTER_WORK_V1: usize = 46;
+
+fn source_preservation_getter_recipe_v1(
+    operations: &[Operation],
+    slice: ValueId,
+    index: ValueId,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(ValueId, ValueId, ValueId), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    budget
+        .charge_work(SOURCE_PRESERVATION_GETTER_WORK_V1)
+        .map_err(Error::Resource)?;
+    let [length, compare, zero, select, data, gep] = operations else {
         return Err(Error::Invalid("source preservation getter rule differs"));
     };
-    let slice = row.preconditions.neutral_slice;
-    if [length, compare, data, gep].iter().any(|op| op.results.len() != 1)
-        || length.results[0].ty != Type::INDEX || compare.results[0].ty != Type::BOOL
+    if operations.iter().any(|op| op.results.len() != 1)
+        || length.results[0].ty != Type::INDEX
+        || compare.results[0].ty != Type::BOOL
+        || zero.results[0].ty != Type::INDEX
+        || select.results[0].ty != Type::INDEX
         || !matches!(length.kind, OperationKind::SliceLength { slice: actual } if actual == slice)
         || !matches!(compare.kind, OperationKind::Compare { predicate: ComparePredicate::LessThan, lhs, rhs } if lhs == index && rhs == length.results[0].id)
+        || !matches!(zero.kind, OperationKind::Constant(Constant::Index(0)))
+        || !matches!(select.kind, OperationKind::Select { condition, true_value, false_value }
+            if condition == compare.results[0].id && true_value == index && false_value == zero.results[0].id)
         || !matches!(data.kind, OperationKind::SliceData { slice: actual } if actual == slice)
-        || !matches!(gep.kind, OperationKind::GetElementPointer { base, offset } if base == data.results[0].id && offset == index)
+        || !matches!(gep.kind, OperationKind::GetElementPointer { base, offset }
+            if base == data.results[0].id && offset == select.results[0].id)
         || [data, gep].iter().any(|operation| !matches!(&operation.results[0].ty, Type::Pointer(pointer)
             if pointer.pointee.as_ref() == &Type::Scalar(ScalarType::U32)
                 && pointer.address_space == AddressSpace::Global && pointer.access == AccessMode::ReadWrite))
     { return Err(Error::Invalid("source preservation getter rule differs")); }
-    row.preconditions.invocation = index;
-    row.preconditions.extent = length.results[0].id;
-    row.preconditions.condition = compare.results[0].id;
-    row.preconditions.pointer = gep.results[0].id;
-    Ok(())
+    Ok((
+        length.results[0].id,
+        compare.results[0].id,
+        gep.results[0].id,
+    ))
 }
 
 fn source_preservation_constant_v1(
@@ -1302,7 +1335,7 @@ fn source_preservation_terminator_v1(
                 }
                 SourcePreservationRuleV1::Invocation
             } else if source_block == row.source_facts.anchor.get.source().get() {
-                if operations.len() != 4 {
+                if operations.len() != 6 {
                     return Err(Error::Invalid("source preservation getter census differs"));
                 }
                 SourcePreservationRuleV1::Getter

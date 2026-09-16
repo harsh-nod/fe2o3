@@ -2441,7 +2441,7 @@ mod identity_getter_shape_tests {
         origin(body, incoming[0], depth + 1)
     }
 
-    fn branch_path_shape(
+    pub(super) fn branch_path_shape(
         body: &fe2o3_kernel_ir::FunctionBody,
         mut target: fe2o3_kernel_ir::BlockId,
     ) -> (usize, bool) {
@@ -2461,6 +2461,56 @@ mod identity_getter_shape_tests {
             }
         }
         panic!("fixture continuation is cyclic");
+    }
+
+    pub(super) fn selected_offset_shape(
+        body: &fe2o3_kernel_ir::FunctionBody,
+        offset: ValueId,
+    ) -> (ValueId, ValueId) {
+        let selected = defining(body, offset);
+        assert_eq!(selected.results.len(), 1);
+        assert_eq!(selected.results[0].id, offset);
+        assert_eq!(selected.results[0].ty, Type::INDEX);
+        let Op::Select {
+            condition,
+            true_value,
+            false_value,
+        } = selected.kind
+        else {
+            panic!("own GEP offset must be the preserved Select")
+        };
+        assert_ne!(offset, true_value);
+        assert_ne!(true_value, false_value);
+        let zero = defining(body, false_value);
+        assert_eq!(zero.results.len(), 1);
+        assert_eq!(zero.results[0].id, false_value);
+        assert_eq!(zero.results[0].ty, Type::INDEX);
+        assert!(matches!(
+            zero.kind,
+            Op::Constant(fe2o3_kernel_ir::Constant::Index(0))
+        ));
+        let raw = defining(body, true_value);
+        assert_eq!(raw.results.len(), 1);
+        assert_eq!(raw.results[0].ty, Type::INDEX);
+        assert!(matches!(&raw.kind, Op::Intrinsic(intrinsic)
+            if *intrinsic == fe2o3_kernel_ir::IntrinsicOperation::global_id_1d()));
+        let compare = defining(body, condition);
+        assert_eq!(compare.results.len(), 1);
+        assert_eq!(compare.results[0].ty, Type::BOOL);
+        let Op::Compare {
+            predicate: fe2o3_kernel_ir::ComparePredicate::LessThan,
+            lhs,
+            rhs,
+        } = compare.kind
+        else {
+            panic!("selected offset must use its exact getter bound")
+        };
+        assert_eq!(lhs, true_value);
+        let length = defining(body, rhs);
+        assert_eq!(length.results.len(), 1);
+        assert_eq!(length.results[0].ty, Type::INDEX);
+        assert!(matches!(length.kind, Op::SliceLength { slice } if slice == body.parameters[0]));
+        (condition, true_value)
     }
 
     fn graph_shape(owner: &Owner, value: u32, label: &str) -> (ValueId, ValueId) {
@@ -2533,7 +2583,11 @@ mod identity_getter_shape_tests {
             unreachable!()
         };
         assert_eq!(origin(body, base, 0), data.results[0].id);
-        assert_eq!(origin(body, offset, 0), global.results[0].id);
+        let selected = single(|op| matches!(op, Op::Select { .. }));
+        assert_eq!(offset, selected.results[0].id);
+        let (condition, true_value) = selected_offset_shape(body, offset);
+        assert_eq!(condition, compare.results[0].id);
+        assert_eq!(true_value, global.results[0].id);
         assert!(matches!(&gep.results[0].ty, Type::Pointer(pointer)
             if pointer.pointee.as_ref() == &Type::Scalar(fe2o3_kernel_ir::ScalarType::U32)
             && pointer.address_space == fe2o3_kernel_ir::AddressSpace::Global));

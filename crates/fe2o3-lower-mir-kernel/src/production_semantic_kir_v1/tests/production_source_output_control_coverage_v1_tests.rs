@@ -1,4 +1,234 @@
 #[cfg(test)]
+mod identity_selected_offset_recipe_components_v1 {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrWorkBudgetV1 as Work, CanonicalKirDefinitionCoordinateV1 as Def,
+    };
+
+    fn operations() -> Vec<Operation> {
+        let pointer = Type::pointer(
+            Type::Scalar(ScalarType::U32),
+            AddressSpace::Global,
+            AccessMode::ReadWrite,
+        );
+        vec![
+            Operation::effect_free(
+                ValueDef::new(ValueId(2), Type::INDEX),
+                OperationKind::SliceLength { slice: ValueId(0) },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(3), Type::BOOL),
+                OperationKind::Compare {
+                    predicate: ComparePredicate::LessThan,
+                    lhs: ValueId(1),
+                    rhs: ValueId(2),
+                },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(4), Type::INDEX),
+                OperationKind::Constant(Constant::Index(0)),
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(5), Type::INDEX),
+                OperationKind::Select {
+                    condition: ValueId(3),
+                    true_value: ValueId(1),
+                    false_value: ValueId(4),
+                },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(6), pointer.clone()),
+                OperationKind::SliceData { slice: ValueId(0) },
+            ),
+            Operation::effect_free(
+                ValueDef::new(ValueId(7), pointer),
+                OperationKind::GetElementPointer {
+                    base: ValueId(6),
+                    offset: ValueId(5),
+                },
+            ),
+        ]
+    }
+
+    fn selected() -> SourceOutputIdentitySelectedOffsetV1 {
+        let at = |operation| Def::Result {
+            operation: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1 {
+                block: fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1 {
+                    function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(0),
+                    block: 2,
+                },
+                operation,
+            },
+            result: 0,
+        };
+        SourceOutputIdentitySelectedOffsetV1 {
+            definition: at(3),
+            value: ValueId(5),
+            condition_definition: at(1),
+            condition: ValueId(3),
+            index_definition: at(0),
+            index: ValueId(1),
+        }
+    }
+
+    #[test]
+    fn identity_original_selected_recipe_prepays_and_preserves_active_index() {
+        let operations = operations();
+        for limit in [39, 40] {
+            let mut work = Work::new(limit);
+            let mut budget = AssertOriginBudgetV1::new(&mut work, 0);
+            let result = source_output_identity_original_recipe_v1(
+                &operations,
+                ValueId(0),
+                ValueId(1),
+                &mut budget,
+            );
+            if limit == 40 {
+                assert_eq!(result.unwrap(), ValueId(7));
+                assert_eq!(budget.work(), 40);
+            } else {
+                assert!(
+                    matches!(result, Err(ProductionSourceOutputErrorV1::Resource(
+                    AssertOriginResourceV1::Work(error))) if error.actual() == 40 && error.limit() == 39)
+                );
+                assert_eq!(budget.work(), 0);
+            }
+            assert_eq!(budget.storage(), 0);
+        }
+    }
+
+    #[test]
+    fn identity_original_selected_recipe_rejects_each_component_substitution() {
+        for case in 0..10 {
+            let mut operations = operations();
+            match case {
+                0 => operations[2].kind = OperationKind::Constant(Constant::Index(1)),
+                1 => {
+                    operations[3].kind = OperationKind::Select {
+                        condition: ValueId(3),
+                        true_value: ValueId(4),
+                        false_value: ValueId(1),
+                    }
+                }
+                2 => {
+                    operations[3].kind = OperationKind::Select {
+                        condition: ValueId(9),
+                        true_value: ValueId(1),
+                        false_value: ValueId(4),
+                    }
+                }
+                3 => operations[3].results[0].ty = Type::Scalar(ScalarType::U64),
+                4 => operations[2].results[0].ty = Type::Scalar(ScalarType::U64),
+                5 => {
+                    operations[5].kind = OperationKind::GetElementPointer {
+                        base: ValueId(6),
+                        offset: ValueId(1),
+                    }
+                }
+                6 => operations[4].kind = OperationKind::SliceData { slice: ValueId(9) },
+                7 => operations[1].results[0].ty = Type::INDEX,
+                8 => operations[3].results.clear(),
+                9 => {
+                    operations.remove(2);
+                }
+                _ => unreachable!(),
+            }
+            let mut work = Work::new(40);
+            let mut budget = AssertOriginBudgetV1::new(&mut work, 0);
+            let result = source_output_identity_original_recipe_v1(
+                &operations,
+                ValueId(0),
+                ValueId(1),
+                &mut budget,
+            );
+            let expected = if case == 9 {
+                "identity original getter is not the exact six-operation recipe"
+            } else {
+                "identity original getter components differ"
+            };
+            assert!(
+                matches!(result, Err(ProductionSourceOutputErrorV1::Invalid(message)) if message == expected)
+            );
+            assert_eq!(budget.work(), 40);
+        }
+    }
+
+    #[test]
+    fn identity_output_selected_recipe_has_exact_fixed_prefix() {
+        let operations = operations();
+        for limit in [23, 24] {
+            let mut work = Work::new(limit);
+            let mut budget = AssertOriginBudgetV1::new(&mut work, 0);
+            let result = source_output_identity_select_recipe_v1(
+                &operations[3],
+                &operations[2],
+                selected(),
+                &mut budget,
+            );
+            if limit == 24 {
+                assert_eq!(result.unwrap(), selected());
+            } else {
+                assert!(
+                    matches!(result, Err(ProductionSourceOutputErrorV1::Resource(
+                    AssertOriginResourceV1::Work(error))) if error.actual() == 24 && error.limit() == 23)
+                );
+                assert_eq!(budget.work(), 0);
+            }
+            assert_eq!(budget.storage(), 0);
+        }
+    }
+
+    #[test]
+    fn identity_output_selected_recipe_rejects_foreign_context_and_nonzero_fallback() {
+        for case in 0..7 {
+            let mut operations = operations();
+            let mut candidate = selected();
+            match case {
+                0 => operations[2].kind = OperationKind::Constant(Constant::Index(1)),
+                1 => candidate.condition = ValueId(99),
+                2 => candidate.index = ValueId(99),
+                3 => candidate.value = ValueId(99),
+                4 => {
+                    candidate.condition_definition = Def::Result {
+                        operation: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1 {
+                            block: fe2o3_kernel_ir::CanonicalKirBlockCoordinateV1 {
+                                function: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(9),
+                                block: 2,
+                            },
+                            operation: 1,
+                        },
+                        result: 0,
+                    }
+                }
+                5 => operations[3].results[0].ty = Type::Scalar(ScalarType::U32),
+                6 => {
+                    operations[3].kind = OperationKind::Select {
+                        condition: ValueId(3),
+                        true_value: ValueId(4),
+                        false_value: ValueId(1),
+                    }
+                }
+                _ => unreachable!(),
+            }
+            let mut work = Work::new(24);
+            let mut budget = AssertOriginBudgetV1::new(&mut work, 0);
+            assert!(matches!(
+                source_output_identity_select_recipe_v1(
+                    &operations[3],
+                    &operations[2],
+                    candidate,
+                    &mut budget
+                ),
+                Err(ProductionSourceOutputErrorV1::Invalid(
+                    "identity output selected offset recipe differs"
+                ))
+            ));
+            assert_eq!(budget.work(), 24);
+        }
+    }
+}
+
+#[cfg(test)]
 mod conditional_memory_control_component_tests_v1 {
     use super::*;
     use fe2o3_kernel_ir::{

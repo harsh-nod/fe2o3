@@ -1,8 +1,9 @@
-# Issue 271 Conditional Preservation Checkpoint
+# Issue 271 Guarded Getter Integration Checkpoint
 
-Reviewable WIP, not production activation or tutorial qualification. Do not
-merge this historical tree wholesale over current main. M5/M7 remain active;
-no acceptance milestone is newly complete. M8 remains incomplete.
+Reviewable WIP with five known failing formal-consumer tests, not production
+activation or tutorial qualification. Do not merge this historical tree wholesale
+over current main. M5/M7 remain active; no acceptance milestone is newly complete.
+M8 remains incomplete.
 
 ## Exact Source
 
@@ -10,97 +11,87 @@ no acceptance milestone is newly complete. M8 remains incomplete.
 - Checkout: /home/harsh/work/fe2o3-issue271-canonical-inventory-v257-20260913.
 - Checkout HEAD: 10b190b8267c0c4011b4ef6bbb52680a3c44b391.
 - Source: 5,071 files, manifest SHA256
-  b6f09470c4608931899ff9ad5ebd24f29d5d53de2d4ad9a2a779acdf25af7db9.
-- Previous published WIP: 30c6620e39b8acb6850aa730a11e52219cadc3de.
+  f9d0117a61d3e8e18133dadd19d14713bf15e1b2443d2061bf45ed487df2d408.
+- Previous published WIP: fde5bd5ec2749ce9f26f76b626c808eebab3a0d0.
 
-The source checkout HEAD/index are preserved. Snapshot construction verifies
-every source Git blob; this status is outside the source manifest. Six source
-paths change from the previous WIP, plus this status file.
+Snapshot construction checks every source Git blob and preserves the source
+checkout HEAD/index. This status file is outside the source manifest. Ten source
+paths change from the previous WIP, plus this status.
 
 ## Implemented
 
-The existing extraction-only collected-address diagnostic now calls the scoped
-all-root source-preservation consumer. It composes the independently checked
-source-to-original-neutral-IR relation, original Expression/R1, N/B binding,
-checked B/O, actual output D/P/R2, and fresh Complete formal-memory analyses.
-It reports checked root counts, actual relation access counts, and Complete
-root counts only after the corresponding checks. Counts are not proof inputs.
+Checked slice access lowering now selects zero for the inactive index before
+forming its element pointer. The source-to-original-IR checker requires that
+exact recipe before removing the old inactive-address representability premise.
+It does not make arbitrary Select operations affine or erase dereference bounds.
 
-A paid private result slot preserves callback errors through the native
-unit-returning API. Exact live storage, original references, scoped lifetimes,
-postflights, Accounting precedence over callback errors/panics, and successful
-reentry are tested. The bounded report labels source preservation conditional
-and runtime premises undischarged. Empty references remain genuine functional
-None and aggregate absence; original nonempty-reference refusals remain.
+The output-control, physical-address and functional-address relations retain an
+exact private selected-offset description. Each actual Some-branch Store joins
+its own source/output occurrence, predicate, raw index and selected definition.
+The physical relation describes the actual selected offset, not the raw index.
+All components use the existing resource ledger and retained live-storage floor.
 
-No new selector, fixture source, Some/aggregate evidence, protected lineage,
-artifact authority or launch authority is introduced. Production artifact and
-launch routes are not activated. The source checker still accepts its closed
-direct-Unit-root Global U32 getter/Option/Store subset, not arbitrary Rust.
+New backend tests compose the genuine source/original relation, Expression/R1,
+control and physical/functional address relations for both gfx942 and gfx950,
+both discriminator encodings, and one or two distinct Stores. Independently
+verified hostile output mutations are rejected at the real checked-transition
+boundary. Those refusals are not mislabeled as address-relation coverage.
 
-The simulator integration child also adds four pointer-characterization tests:
-inactive direct GEP arithmetic, zero-selected inactive offsets, active stores,
-and rejected dereference on the inactive path. These characterize current
-semantics and a candidate lowering; they do not change the importer or establish
-a shared canonical pointer contract.
+The existing final formal-memory Complete gate is unchanged. Its five genuine
+positive tests remain failing, not ignored, inverted or replaced with weaker
+component tests. Source-preservation and address-relation success alone does
+not establish end-to-end memory safety or compiler correctness.
 
-## Exact-Source Qualification
+## Exact Test Results
 
-On the exact b6f09470 source, all tests passed with zero failures or ignores:
+The latest exact-source focused run passed 44 tests and failed five, with zero
+ignored and 846 filtered out. The new composition tests and updated importer/
+physical-shape oracles pass. All five failures occur because the unchanged formal
+engine rejects the selected index as UnsupportedIndexExpression before the final
+consumer callback. Logs:
+v257-clean-v356-getmut-backend-relations-imports.vCdx2egG.
+Source and helper guards passed. Test execution took 25.90 seconds after a
+1m37s build.
 
-- 411 lowerer library tests, 9.78 seconds.
-- 893 backend library tests, 145.21 seconds.
-- Two simulation-export binary tests, 0.00 seconds.
-- 20 extractor binary tests, 0.02 seconds.
+On preceding composed source
+37933a05e508df0650442cc907690bf06f64d38e14dfdee342b142ad88b4c91b,
+425 lowerer tests passed, with zero failures or ignores. The full backend run on
+that source passed 886 and failed seven: two stale shape oracles subsequently
+corrected here, plus the same five formal-consumer failures. Logs:
+v257-clean-v356-getmut-composed-lowerer.A6wjgMwS and
+v257-clean-v356-getmut-composed-backend.kGpZSGXu. All input guards passed.
 
-That is 1,326 ordinary tests, not the entire workspace or all tutorial kernels.
-Source and helper checks passed before and after the run. Retained log:
-v257-clean-v351-collected-preservation-full.23EbbeDv.
-
-The pointer tests separately passed four focused and all 113 simulation
-integration tests on preceding source
-a7a4e8f08b33bf4e3723a8e995784cd2f49b46aff7078e9427c776220c34ff03.
-Logs: v257-clean-v350-inactive-getter-sim-focused.kVug1NVb and
-v257-clean-v350-inactive-getter-sim-full.Zsn7qWXU. Both passed source/helper
-checks. That simulator child is unchanged here; this is not a rerun on b6.
-
-Two selected compile-fail documentation tests passed on preceding published
-source da475ae4, not rerun for this checkpoint. No actual-collector integration
-was run on the new conjunction yet. New callback tests use genuinely admitted
-semantic factories, not actual rustc collection or runtime premise discharge.
-
-The prior v344 actual-collector tests/direct transcript used fresh rustc
-collection with fixed synthetic fixture metadata/binding IDs. They do not prove
-normal managed cargo-fe2o3 metadata custody or artifact/launch qualification.
-Their successful result also predates this source-preservation conjunction.
+The first test-successor build failed on two missing test imports; ROOT added
+Type and ValueId. That failed compile remains recorded at
+v257-clean-v356-getmut-backend-relations.ocMwfcic. The full lowerer/backend suites
+and binary targets have not been rerun on this final source. No tutorial, actual
+collector, hardware, site or Verus qualification is claimed.
 
 ## Remaining Work
 
-Standard slice validity, exclusivity, lifetime, alignment and extent premises
-remain conditional. The source rule also retains an inactive-address
-representability premise because the importer emits GEP unconditionally. That
-stronger premise does not follow from valid safe Rust get_mut on short or empty
-slices and must not become an extra user obligation. Importer/operational
-semantics and matching source/output/formal rules require a coherent correction.
+The formal engine needs use-specific guarded access domains. It must prove the
+selected offset equals the raw index only for a matching active access, retain
+the domain [0, launch_extent) intersected with index < slice_length, and handle
+empty/short slices without inventing a launch-sized minimum slice obligation.
+Bounds, every alias/conflict pair, resource limits and final-output subject
+binding remain mandatory. Existing legacy receipt formats must refuse evidence
+they cannot represent. That implementation is being developed separately and
+is not included in this snapshot.
 
-Defined entry wrappers, broader source rules, exact runtime ABI/launch binding,
-optional reference refinement, production custody/lineage wiring, and legacy
-retirement remain open. Fresh actual collection of the new conjunction and
-normal managed metadata binding remain separate end-to-end gates.
+Standard Rust slice validity, exclusivity, lifetime, alignment and extent
+premises remain conditional. Defined entry wrappers, broader source rules,
+normal managed metadata custody, runtime/target binding, optional reference
+refinement, production activation and legacy retirement remain open.
 
-Both main refs were independently read at
-2d3ffbedd6dc2dd51d777ede70e26329370bcf77. A separate main-bound private indexed
-write batch passed 952 library tests on its old-base candidate62c13e81d; four
-additional general effect-order tests passed on successor8c71952bf. Neither
-result qualifies their composition with newer main. Main already contains
-RHS-first Assign/Store and AtomicRmw traversal; preserve those changes and its
-new checked-slice API. Private-write retention, required test adapters and
-slice-ordinal composition coverage remain unpublished. General whole-array
-initialization is being implemented separately and is not included here.
+Both public main branches were independently read at
+17ad92bea81ab7f6f60e74b1b97076c29007451b. Their independently tested bounds fixes
+and formatting follow-up are not folded into this historical WIP tree. The
+separate initializer WIP remains based on
+8a7b98fd73de314e2f0208e82e449852e680e5bd, with further local-frame work under test
+in its own checkout. Neither its helper admission failure nor general nonliteral
+initializer semantics is solved by this snapshot.
 
-Earlier attention observations still ended in compiler refusals and did not
-produce LLVM or a success binding; no fresh observation is claimed here. Full
-tutorial compilation, deterministic simulation, target-matched hardware and
-website qualification remain open. Approved Verus runtime qualification is
-deferred, not passed. No SSH/GPU work or shared-machine cleanup occurred in
-this checkpoint. Separate issue 272 WIP was not modified by this work.
+M8 all-tutorial compilation, simulation, target-matched hardware and website
+qualification remain open. Approved Verus runtime qualification is deferred,
+not passed. No SSH/GPU work or shared-machine cleanup occurred here. Separate
+issue 272 WIP is unchanged by this checkpoint.
