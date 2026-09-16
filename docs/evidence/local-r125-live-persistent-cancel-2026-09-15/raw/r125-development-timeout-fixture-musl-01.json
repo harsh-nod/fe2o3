@@ -1,0 +1,93 @@
+{
+  "source_head": "c171d915047daa5153c1f77253e15260e55da8c5",
+  "source_map_sha256": "6486eaa2d52d9a4035db5d137fa216dcef9f853f8df6518c0aa47905534be72e",
+  "started_at": "2026-09-16T00:27:26.977Z",
+  "finished_at": "2026-09-16T00:32:40.018Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "--all-features",
+    "-p",
+    "fe2o3-kfd",
+    "--lib",
+    "--target",
+    "x86_64-unknown-linux-musl",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::retained_control_cases::retained_control_retake_error_precedes_lower_error_but_never_lower_panic",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r125-development-timeout-fixture-musl-01.log",
+  "source": "/home/harsh/.codex-tmp/r125-development-timeout-fixture-musl-01-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r125-development-timeout-fixture-musl-01-source-after.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "child_returncode": 0,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r125-development-run-v3.js",
+    "sha256": "f1c68f7542ed8b467b877a0c0d521a04af492f45822948946daaef5e2ad0359d"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 1130664,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789518760033,
+        "monotonic_ns": "21774935086700",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 313.041893942,
+  "verification_elapsed_seconds": 0.904652093,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r125-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r125-development-timeout-fixture-gnu-01.json",
+      "sha256": "412defd2449e508f3052a1703d51d10dadd60d8f800d77ca704ac33fa2368f9f",
+      "observation": {
+        "utc_ms": 1789518420346,
+        "monotonic_ns": "21435247824879",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789518446977,
+      "monotonic_ns": "21461878770807",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789518760018,
+      "monotonic_ns": "21774920664749",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789518760923,
+      "monotonic_ns": "21775825316842",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

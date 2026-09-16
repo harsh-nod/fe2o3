@@ -1,0 +1,91 @@
+{
+  "source_head": "c171d915047daa5153c1f77253e15260e55da8c5",
+  "source_map_sha256": "ae83b5cc509dd398765fed8affe678ebc54ee720510b47c03a9aaeb4217eaa1d",
+  "started_at": "2026-09-16T02:04:54.651Z",
+  "finished_at": "2026-09-16T02:06:10.603Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "--all-features",
+    "-p",
+    "fe2o3-kfd",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_shape_rejection_precedes_native_restore_and_ledger",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r125-development-negative-08-returned-identity-v1.log",
+  "source": "/home/harsh/.codex-tmp/r125-development-negative-08-returned-identity-v1-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r125-development-negative-08-returned-identity-v1-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r125-development-run-v4.js",
+    "sha256": "52a8f0b4413a875757e943a9276b9cb832312ac0fd07a457305660065fdcb1e9"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 1400070,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789524370612,
+        "monotonic_ns": "27385514015649",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 75.952267882,
+  "verification_elapsed_seconds": 0.521104392,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r125-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r125-development-restored-07-returned-generation-v1.json",
+      "sha256": "0922ef0e640d751739230fccfb7a6157fa098df6fc8105341622883a6fa46489",
+      "observation": {
+        "utc_ms": 1789524290755,
+        "monotonic_ns": "27305657716596",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789524294651,
+      "monotonic_ns": "27309553390956",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789524370603,
+      "monotonic_ns": "27385505658838",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789524371125,
+      "monotonic_ns": "27386026763230",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

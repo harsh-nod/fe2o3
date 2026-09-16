@@ -276,6 +276,18 @@ pub struct Gfx942PersistentUseLeaseV1<S: Gfx942PersistentUseStateV1> {
 }
 
 impl<S: Gfx942PersistentUseStateV1> Gfx942PersistentUseLeaseV1<S> {
+    #[cfg(test)]
+    pub(crate) fn cancellation_identity_for_test(&self) -> PersistentUseIdentityForTestV1 {
+        PersistentUseIdentityForTestV1 {
+            incarnation: Rc::as_ptr(&self.incarnation) as usize,
+            binding: self.binding,
+            slot: self.slot,
+            generation: self.generation,
+            sequence: self.sequence,
+            request: self.request,
+        }
+    }
+
     pub const fn request(&self) -> Gfx942PersistentUseRequestV1 {
         self.request
     }
@@ -296,6 +308,17 @@ impl<S: Gfx942PersistentUseStateV1> Gfx942PersistentUseLeaseV1<S> {
             thread_affinity: PhantomData,
         }
     }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PersistentUseIdentityForTestV1 {
+    incarnation: usize,
+    binding: Gfx942DeviceMemoryIdentityV1,
+    slot: u8,
+    generation: u64,
+    sequence: u64,
+    request: Gfx942PersistentUseRequestV1,
 }
 
 #[allow(dead_code)]
@@ -453,7 +476,8 @@ pub struct Gfx942PersistentDeviceAllocationV1 {
     binding: Gfx942DeviceMemoryIdentityV1,
     mapping: Gfx942PersistentMappingFormV1,
     byte_len: u64,
-    ledger: [Option<LedgerRecordV1>; GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1],
+    // Allocate fixed storage once so bounded custody does not multiply inline ledgers.
+    ledger: Box<[Option<LedgerRecordV1>; GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1]>,
     next_generation: u64,
     next_sequence: u64,
     frontier_generation: u64,
@@ -525,7 +549,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
             binding,
             mapping,
             byte_len,
-            ledger: [None; GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1],
+            ledger: Box::new([None; GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1]),
             next_generation: 1,
             next_sequence: 1,
             frontier_generation: 0,
@@ -822,7 +846,7 @@ impl Gfx942PersistentDeviceAllocationV1 {
         if !current || has_active || self.quarantine.is_some() {
             return Err(frontier);
         }
-        for slot in &mut self.ledger {
+        for slot in self.ledger.iter_mut() {
             if slot
                 .as_ref()
                 .is_some_and(|record| record.state == LedgerStateV1::Settled)
@@ -1491,7 +1515,7 @@ pub(crate) fn retire_settled_local_sdma_pair_v1(
     if !current(source_owner, &source) || !current(destination_owner, &destination) {
         return Err((source, destination));
     }
-    for slot in &mut source_owner.ledger {
+    for slot in source_owner.ledger.iter_mut() {
         if slot
             .as_ref()
             .is_some_and(|record| record.state == LedgerStateV1::Settled)
@@ -1499,7 +1523,7 @@ pub(crate) fn retire_settled_local_sdma_pair_v1(
             *slot = None;
         }
     }
-    for slot in &mut destination_owner.ledger {
+    for slot in destination_owner.ledger.iter_mut() {
         if slot
             .as_ref()
             .is_some_and(|record| record.state == LedgerStateV1::Settled)
@@ -1515,6 +1539,9 @@ pub(crate) fn retire_settled_local_sdma_pair_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::persistent_compute::{
+        BoundedPersistentComputeAttachmentV1, PersistentComputeCancellationCustodyV1,
+    };
     use crate::shared_memory::{
         local_mapping_for_persistent_sdma_test, xgmi_mapping_for_sdma_test,
     };
@@ -1544,6 +1571,58 @@ mod tests {
         let lease = owner.publish(lease).unwrap();
         let lease = owner.complete(lease).unwrap();
         owner.settle(lease).unwrap()
+    }
+
+    #[test]
+    fn persistent_owner_and_queue_layouts_keep_ledgers_out_of_inline_custody() {
+        assert!(std::mem::size_of::<Gfx942PersistentDeviceAllocationV1>() <= 512);
+        assert!(std::mem::size_of::<PersistentComputeCancellationCustodyV1>() <= 8 * 1024);
+        assert!(std::mem::size_of::<BoundedPersistentComputeAttachmentV1>() <= 32 * 1024);
+        assert!(std::mem::size_of::<crate::ComputeAqlQueueSessionV1>() <= 40 * 1024);
+    }
+
+    #[test]
+    fn ledger_storage_survives_owner_moves_and_transitions() {
+        for mut allocation in [
+            Gfx942PersistentDeviceAllocationV1::from_local_mapping(
+                local_mapping_for_persistent_sdma_test(31),
+            ),
+            owner(32),
+        ] {
+            let binding = allocation.binding;
+            let ledger = allocation.ledger.as_ptr();
+            assert_eq!(
+                allocation.ledger.len(),
+                GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1
+            );
+            let read = request(Gfx942PersistentOperationV1::ComputeRead, 0, 8);
+            let reserved = allocation.reserve(read, None).unwrap();
+            allocation = std::hint::black_box(allocation);
+            assert_eq!(allocation.ledger.as_ptr(), ledger);
+            assert_eq!(allocation.live_use_count(), 1);
+            let (error, recovered) = allocation.try_into_native().unwrap_err();
+            assert_eq!(error, Gfx942PersistentUseErrorV1::OutstandingUses);
+            allocation = recovered;
+            assert_eq!(allocation.ledger.as_ptr(), ledger);
+            let prepared = allocation.prepare(reserved).unwrap();
+            allocation.cancel_prepared(prepared).unwrap();
+
+            let write = request(Gfx942PersistentOperationV1::ComputeReadWrite, 0, 8);
+            let reserved = allocation.reserve(write, None).unwrap();
+            let frontier = settle(&mut allocation, reserved);
+            assert_eq!(allocation.retained_settled_use_count(), 1);
+            allocation = std::hint::black_box(allocation);
+            allocation.retire_settled_frontier(frontier).unwrap();
+            assert_eq!(allocation.ledger.as_ptr(), ledger);
+            assert!(allocation.ledger.iter().all(Option::is_none));
+            let native_binding = match allocation.try_into_native().unwrap() {
+                Gfx942PersistentNativeAllocationV1::Local(lease) => lease.storage_identity(),
+                Gfx942PersistentNativeAllocationV1::ExactTwoDevicePeer(mapping) => {
+                    mapping.lease().storage_identity()
+                }
+            };
+            assert_eq!(native_binding, binding);
+        }
     }
 
     #[test]

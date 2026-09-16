@@ -1,0 +1,592 @@
+{
+  "accepted": false,
+  "scope": "Eighteen predeclared R125 CPU behavioral negatives; compile failures, aborts and unrelated assertions do not qualify.",
+  "source_plan": "r125-development-full-plan-v3.json",
+  "source_plan_sha256": "a5df79bc041fa305a23b640aaa962d7a0d1804a32ada2b81a2814fbbd5063b2c",
+  "checker": "r125-development-check-v2.js",
+  "checker_sha256": "8de74c2bbd0bf464654692614754aea48eeefb29a74314a8223acd30234fb1c4",
+  "inventory": "r125-development-mutation-inventory-v2.js",
+  "inventory_sha256": "85c296b24347243a9c3d07cb234e7b12d8e7bb0a88157eeb7b7cd85baa88e82c",
+  "source_parent": "c171d915047daa5153c1f77253e15260e55da8c5",
+  "source_map_sha256": "6486eaa2d52d9a4035db5d137fa216dcef9f853f8df6518c0aa47905534be72e",
+  "source_count": 5709,
+  "runner": "r125-development-run-v3.js",
+  "runner_sha256": "f1c68f7542ed8b467b877a0c0d521a04af492f45822948946daaef5e2ad0359d",
+  "test_command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "--all-features",
+    "-p",
+    "fe2o3-kfd",
+    "--lib"
+  ],
+  "test_count": 1243,
+  "allowed_tests": [
+    "persistent_allocation::tests::ledger_storage_survives_owner_moves_and_transitions",
+    "persistent_allocation::tests::persistent_owner_and_queue_layouts_keep_ledgers_out_of_inline_custody",
+    "queue::dispatch_binding::control_release::tests::persistent::persistent_cancellation_inherits_detached_continuation_without_minting_recycle_history",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_lower_cleanup_retains_data_and_primary_panic",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_model_errors_and_panics_retain_complete_roster",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_native_cleanup_preserves_exact_control_prefix_and_data",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_output_and_ledger_panics_keep_all_restored_owners",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_restore_and_cancel_prefixes_retain_failed_leases",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_restores_exact_initialized_cold_and_digest_free_inputs",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_retake_error_or_panic_overrides_normal_lower_error",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_shape_rejection_precedes_native_restore_and_ledger",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_single_returned_initialization_is_not_downgraded",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_three_preflights_reject_before_changing_any_prefix",
+    "queue::live::rebind_tests::persistent_cancel::persistent_cancel_public_terminal_ingress_preserves_preexisting_detached_custody",
+    "queue::live::rebind_tests::persistent_cancel::persistent_cancel_public_terminal_reentry_preserves_complete_cancellation_custody",
+    "queue::live::rebind_tests::persistent_cancel::persistent_cancel_public_terminal_wrong_shape_or_generation_returns_exact_receipt",
+    "queue::live::rebind_tests::persistent_cancel::persistent_cancel_public_wrong_state_preserves_exact_published_lease",
+    "queue::live::tests::prepared_persistent_compute_cancellation_restores_initialized_rebind_input"
+  ],
+  "preserved_tests": [
+    "queue::live::tests::prepared_persistent_compute_cancellation_restores_initialized_rebind_input"
+  ],
+  "preserved_public_test_sha256": "88aed7add7e76a256a4ad2870c023243ed88e3b1f3f64e9e1382d97060b6139a",
+  "diagnostic_path_aliases": {
+    "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_persistent_cancel_tests.rs": "crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_persistent_cancel_tests.rs"
+  },
+  "exclusions": [
+    "These are CPU fixture behavioral negatives, not native GPU execution or formal production refinement.",
+    "The eighteen rows mutate cancellation and generation logic; their eligibility roster does not establish mutation coverage of the new boxed-ledger layout or owner-move tests.",
+    "01 establishes restoration after an unopened loan, not independent skipped-callback custody coverage.",
+    "10 requires the debug output-constructor invariant followed by the outer unexpected-unwind assertion; it does not claim the borrowed preflight assertion fired.",
+    "Deleting detached count/identity clears is equivalent under the admitted empty-roster invariant and is excluded; 15/16 corrupt the final postconditions instead."
+  ],
+  "mutations": [
+    {
+      "id": "01-unopened-original",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_model_errors_and_panics_retain_complete_roster",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/persistent_cancel.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_persistent_cancel_v1(",
+          "end": "\nimpl PersistentCancelContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "*context.dispatch() = original;",
+            "*context.dispatch() = None;"
+          ]
+        ]
+      },
+      "expected_file_sha256": "57992a254b670f15a068d04c81bb03463937f92e6a908a8b23867d417bcfcb51",
+      "expected_source_map_sha256": "33df979ed674f68cdde92faaee9774f64af4a64cb6a445e40d5c29b753be898d",
+      "predecessor": "r125-development-gate-check-all-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_persistent_cancel_tests.rs:543:21",
+        "fragments": [
+          "assertion failed: case.dispatch.is_some()"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "02-native-retention",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_native_cleanup_preserves_exact_control_prefix_and_data",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/persistent_cancel.rs",
+        "scope": {
+          "start": "    fn retain(&mut self, mut root: PersistentCancelRootV1) {",
+          "end": "\n    fn poison(&mut self, process: bool) {"
+        },
+        "edits": [
+          [
+            "attachment.terminal_custody = Some(\n                PersistentComputeTerminalNativeCustodyV1::Cancellation(root.native),\n            );",
+            "attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Attached);"
+          ]
+        ]
+      },
+      "expected_file_sha256": "4d2bbefb8d578cea62bb8795928254c841ee6af80d0bafce0ac412307d662011",
+      "expected_source_map_sha256": "2903e3cdff15e7968b7c09224d636c3823e8f88714e62ed37a11c9789879aaf5",
+      "predecessor": "r125-development-restored-01-unopened-original-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/rebind_tests/persistent_cancel.rs:197:9",
+        "fragments": [
+          "production retention lost constructed cancellation custody"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "03-single-terminal",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_native_cleanup_preserves_exact_control_prefix_and_data",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs",
+        "scope": {
+          "start": "    pub(super) fn absorb_terminal_prepared_persistent_compute_v1(",
+          "end": "\n    pub(super) fn absorb_terminal_published_persistent_compute_v1("
+        },
+        "edits": [
+          [
+            "        }) {\n            return true;\n        }\n        let Some(mut attachment) = self.take_single_persistent_compute_attachment_v1() else {",
+            "        }) {\n            self.persistent_compute.as_mut().unwrap().terminal_custody =\n                Some(PersistentComputeTerminalNativeCustodyV1::Attached);\n            return true;\n        }\n        let Some(mut attachment) = self.take_single_persistent_compute_attachment_v1() else {"
+          ]
+        ]
+      },
+      "expected_file_sha256": "b7e4075009a1f03a8fd489727289bc019b85648467dc74c02156de97060acfbc",
+      "expected_source_map_sha256": "b5cc047e9bf02f2f970cb60e481f37767333f3262f4a29bb5f6d3b3df77b5496",
+      "predecessor": "r125-development-restored-02-native-retention-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/rebind_tests/persistent_cancel.rs:204:9",
+        "fragments": [
+          "assertion `left == right` failed",
+          "Some(Attached)",
+          "PersistentBeforePublication"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "04-three-terminal",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_native_cleanup_preserves_exact_control_prefix_and_data",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs",
+        "scope": {
+          "start": "    pub fn cancel_prepared_three_binding_directional_persistent_fixed_dispatch_v1(",
+          "end": "\n    #[allow(clippy::result_large_err)]\n    pub(super) fn poll_directional_persistent_fixed_dispatch_inner_v1"
+        },
+        "edits": [
+          [
+            "if attachment.terminal_custody.is_none() {",
+            "if true {"
+          ]
+        ]
+      },
+      "expected_file_sha256": "fcc3856195a36382ceab18e8359ec7da7eed32010e058cf1687f59c2171415aa",
+      "expected_source_map_sha256": "ac59a9f0f742ad626b127d9bfe131346d9fcea48b34fcdca198a091dd3abf6cf",
+      "predecessor": "r125-development-restored-03-single-terminal-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/rebind_tests/persistent_cancel.rs:204:9",
+        "fragments": [
+          "assertion `left == right` failed",
+          "Some(Attached)",
+          "PersistentBeforePublication"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "05-retake-precedence",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_retake_error_or_panic_overrides_normal_lower_error",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/persistent_cancel.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_persistent_cancel_v1(",
+          "end": "\nimpl PersistentCancelContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "            retake?;\n            match lower.take() {",
+            "            match lower.take() {"
+          ],
+          [
+            "            }\n        }\n        #[cfg(test)]\n        context.checkpoint(CancelPointV1::Returned, &mut root)?;",
+            "            }\n            retake?;\n        }\n        #[cfg(test)]\n        context.checkpoint(CancelPointV1::Returned, &mut root)?;"
+          ]
+        ]
+      },
+      "expected_file_sha256": "1d36f43013cf73871dda811f5964be6f4b37daa9d1b158e6160bc4ca46fa4ab5",
+      "expected_source_map_sha256": "f9b6f424577a59298ff5e55ffd57c27dcca91c7804b214c961e233ce07cc8126",
+      "predecessor": "r125-development-restored-04-three-terminal-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_persistent_cancel_tests.rs:714:17",
+        "fragments": [
+          "assertion failed:",
+          "result.unwrap()",
+          "auxiliary-retake-complete"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "06-lower-panic",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_lower_cleanup_retains_data_and_primary_panic",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/persistent_cancel.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_persistent_cancel_v1(",
+          "end": "\nimpl PersistentCancelContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "    let mut result = match lower {\n        Some(Err(payload)) => {\n            core::mem::forget(result);\n            Err(payload)\n        }\n        _ => result,\n    };",
+            "    let mut result = result;"
+          ]
+        ]
+      },
+      "expected_file_sha256": "1fb1f5de30570e88ca7082ffca4523e0f8ca05eeee223584a0d46b285177bac2",
+      "expected_source_map_sha256": "8381896d00465a601af3deb17a9f544dc71596aad0d59b81904f375030561f83",
+      "predecessor": "r125-development-restored-05-retake-precedence-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_persistent_cancel_tests.rs:756:21",
+        "fragments": [
+          "assertion `left == right` failed",
+          "left: None",
+          "right: Some((\"control cleanup projection\", ReleaseCommit))"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "07-returned-generation",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_shape_rejection_precedes_native_restore_and_ledger",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/persistent_cancel.rs",
+        "scope": {
+          "start": "    fn validate_returned(&self, shape: CancelShapeV1) -> Result<(), ComputeAqlQueueSessionErrorV1> {",
+          "end": "\n    fn map_returned("
+        },
+        "edits": [
+          [
+            "        let exact = self.native.generation\n            == Some(attachment.predecessor_dispatch_generation.unwrap_or(0))",
+            "        let exact = true"
+          ]
+        ]
+      },
+      "expected_file_sha256": "42452983f0e28902b755c0c1c7ce5c6a078ed65b73cc3d47abca116c5217f7ba",
+      "expected_source_map_sha256": "4553dcf638dcbad5a23a95cfaa0b35a8fe844e1a17a1d23e781ad331418edcf1",
+      "predecessor": "r125-development-restored-06-lower-panic-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_persistent_cancel_tests.rs:576:13",
+        "fragments": [
+          "assertion failed: result.is_err()"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "08-returned-identity",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_shape_rejection_precedes_native_restore_and_ledger",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/persistent_cancel.rs",
+        "scope": {
+          "start": "    fn validate_returned(&self, shape: CancelShapeV1) -> Result<(), ComputeAqlQueueSessionErrorV1> {",
+          "end": "\n    fn map_returned("
+        },
+        "edits": [
+          [
+            "entry.storage_identity.is_some_and(|identity| {\n                        data.sdma_storage_identity()\n                            == Gfx942SdmaBufferStorageIdentityV1::Device(identity)\n                    })",
+            "true"
+          ]
+        ]
+      },
+      "expected_file_sha256": "ded5709ff4721a73fdb26429c77a4a693c564206ace93bda0ca2510b38e26d37",
+      "expected_source_map_sha256": "843fce61d6dedcf9afbe72e0776a979afa87fd87bc043065fc74dfab692bc3b2",
+      "predecessor": "r125-development-restored-07-returned-generation-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_persistent_cancel_tests.rs:576:13",
+        "fragments": [
+          "assertion failed: result.is_err()"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "09-returned-initialization",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_shape_rejection_precedes_native_restore_and_ledger",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/persistent_cancel.rs",
+        "scope": {
+          "start": "    fn validate_returned(&self, shape: CancelShapeV1) -> Result<(), ComputeAqlQueueSessionErrorV1> {",
+          "end": "\n    fn map_returned("
+        },
+        "edits": [
+          [
+            "(shape == CancelShapeV1::Single\n                        || data.is_fully_initialized() == entry.fully_initialized)",
+            "true"
+          ]
+        ]
+      },
+      "expected_file_sha256": "d93e81ebabe72528f546aebae7ab2260b37fc2c58daf751d55094ae26d03b216",
+      "expected_source_map_sha256": "23b54c029331b3bbd8af39567225b60c7d1f1a373fe043fa06f06b92960cf793",
+      "predecessor": "r125-development-restored-08-returned-identity-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_persistent_cancel_tests.rs:576:13",
+        "fragments": [
+          "assertion failed: result.is_err()"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "10-digest-on-cold",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_shape_rejection_precedes_native_restore_and_ledger",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/persistent_cancel.rs",
+        "scope": {
+          "start": "    fn validate_returned(&self, shape: CancelShapeV1) -> Result<(), ComputeAqlQueueSessionErrorV1> {",
+          "end": "\n    fn map_returned("
+        },
+        "edits": [
+          [
+            "(entry.authenticated_sha256.is_none() || data.is_fully_initialized())",
+            "true"
+          ]
+        ]
+      },
+      "expected_file_sha256": "8adbcb9ab3ea26d6febc731c1f984ee6db669db6876da7570e704ea8636328b1",
+      "expected_source_map_sha256": "fc55b0eaa3d31bb5d7eb8a234d52f7c29cd44e1d847fe73b9c9a5aeff4525632",
+      "predecessor": "r125-development-restored-09-returned-initialization-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/persistent_compute.rs:319:17",
+        "fragments": [
+          "authenticated persistent input must be initialized"
+        ]
+      },
+      "final_panic": "caught_then_unwrap",
+      "following_panic": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_persistent_cancel_tests.rs:566:37",
+        "fragments": [
+          "called `Result::unwrap()` on an `Err` value: Any { .. }"
+        ]
+      }
+    },
+    {
+      "id": "11-failed-native-lease",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_restore_and_cancel_prefixes_retain_failed_leases",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/persistent_cancel.rs",
+        "scope": {
+          "start": "    fn restore(\n",
+          "end": "\n    fn cancel_preflight("
+        },
+        "edits": [
+          [
+            "            self.native.mapped[index] = Some(lease);\n            return Err(shape.error(\n                \"persistent compute cancellation native restore\",",
+            "            drop(lease);\n            return Err(shape.error(\n                \"persistent compute cancellation native restore\","
+          ]
+        ]
+      },
+      "expected_file_sha256": "4039a0e93993670bffb29ecbf0183a61c622e2073bbfc706c74bcdf5d1899fed",
+      "expected_source_map_sha256": "a318ffeda61e53a07ff5d38062af7b98a1bd52de6c3dd7d8c412c7bacb3aa2f8",
+      "predecessor": "r125-development-restored-10-digest-on-cold-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_persistent_cancel_tests.rs:658:38",
+        "fragments": [
+          "called `Option::unwrap()` on a `None` value"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "12-failed-prepared-lease",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_restore_and_cancel_prefixes_retain_failed_leases",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/persistent_cancel.rs",
+        "scope": {
+          "start": "    fn cancel(\n",
+          "end": "\n}\n\npub(in crate::queue) fn settle_persistent_cancel_v1("
+        },
+        "edits": [
+          [
+            "        if !cancel_persistent_compute_prepublication_entries_v1([entry]) {\n            return Err(shape.error(",
+            "        if !cancel_persistent_compute_prepublication_entries_v1([&mut *entry]) {\n            entry.state = PersistentComputeUseStateV1::Quarantined;\n            return Err(shape.error("
+          ]
+        ]
+      },
+      "expected_file_sha256": "f0375ceb0d554e206f82024780d0c65a7254743f068a902f46cc2f239d3bec91",
+      "expected_source_map_sha256": "09ba14a636998b0b156c4a9d10c9f54cd15c192c3d50b5d62922161a33f79f15",
+      "predecessor": "r125-development-restored-11-failed-native-lease-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_persistent_cancel_tests.rs:668:33",
+        "fragments": [
+          "failed/suffix Prepared lease lost"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "13-preserve-started-prefix",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_restore_and_cancel_prefixes_retain_failed_leases",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/persistent_cancel.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_persistent_cancel_v1(",
+          "end": "\nimpl PersistentCancelContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "            if !root.native.restore_started\n                && let Some(attachment) = &mut root.attachment\n            {",
+            "            if let Some(attachment) = &mut root.attachment {"
+          ]
+        ]
+      },
+      "expected_file_sha256": "12f39b9e5f33055c06769d2ad03464a6bd58dad37efcf93144bfaffc2c9ef965",
+      "expected_source_map_sha256": "0bb8cc6fe16e17a5b6b723bc4ee139499ab54c3d8bb91ee715a89db214a78229",
+      "predecessor": "r125-development-restored-12-failed-prepared-lease-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_persistent_cancel_tests.rs:668:33",
+        "fragments": [
+          "failed/suffix Prepared lease lost"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "14-output-before-ledger",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_output_and_ledger_panics_keep_all_restored_owners",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/persistent_cancel.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_persistent_cancel_v1(",
+          "end": "\nimpl PersistentCancelContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "        #[cfg(test)]\n        context.checkpoint(CancelPointV1::Output, &mut root)?;",
+            "        {\n            let ledger = context.ledger();\n            *ledger.generation = root.native.generation;\n            *ledger.next = Some(0);\n            *ledger.count = 0;\n            ledger.identities.clear();\n        }\n        #[cfg(test)]\n        context.checkpoint(CancelPointV1::Output, &mut root)?;"
+          ]
+        ]
+      },
+      "expected_file_sha256": "0f817035855df1bfa9bdc2a379ea0bae55a5b5622da21d33e4808129a0f1d07d",
+      "expected_source_map_sha256": "be62909e8f3a9f251fc18f6c841fabe3f4697718581cb66e3a72c6fd2c5d4e3c",
+      "predecessor": "r125-development-restored-13-preserve-started-prefix-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_persistent_cancel_tests.rs:262:9",
+        "fragments": [
+          "failure must not commit any ledger field"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "15-detached-count",
+      "kind": "kfd",
+      "test": "queue::live::tests::prepared_persistent_compute_cancellation_restores_initialized_rebind_input",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/persistent_cancel.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_persistent_cancel_v1(",
+          "end": "\nimpl PersistentCancelContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "        *ledger.count = 0;",
+            "        *ledger.count = 1;"
+          ]
+        ]
+      },
+      "expected_file_sha256": "1ef274079c728996b60983aaeba2aabec9f63328ccd93a7baf7a044afe6789a3",
+      "expected_source_map_sha256": "4fd84915f30f200e786e8bc39213efbe68bf0c2ca5ee8dfde425026502eb32a9",
+      "predecessor": "r125-development-restored-14-output-before-ledger-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live.rs:18283:9",
+        "fragments": [
+          "assertion `left == right` failed",
+          "left: 1",
+          "right: 0"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "16-detached-identities",
+      "kind": "kfd",
+      "test": "queue::live::tests::prepared_persistent_compute_cancellation_restores_initialized_rebind_input",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_live/persistent_cancel.rs",
+        "scope": {
+          "start": "pub(in crate::queue) fn settle_persistent_cancel_v1(",
+          "end": "\nimpl PersistentCancelContextV1 for ComputeAqlQueueSessionV1 {"
+        },
+        "edits": [
+          [
+            "        let ledger = context.ledger();\n        for (index, entry) in root",
+            "        let first_storage_identity = root.attachment.as_ref().unwrap().entries[0].storage_identity.unwrap();\n        let ledger = context.ledger();\n        for (index, entry) in root"
+          ],
+          [
+            "        ledger.identities.clear();",
+            "        ledger.identities.push(Gfx942FixedDispatchStorageIdentityV1::DeviceUninitialized(first_storage_identity));"
+          ]
+        ]
+      },
+      "expected_file_sha256": "bb18841de1f783cdd76e190e9c8599a6a992ea5f49c18030f1203924fea56dd6",
+      "expected_source_map_sha256": "5c892dde970cbce81972471264ef9aaf868c16d2b9a9bec50cc4c405ffc5ba50",
+      "predecessor": "r125-development-restored-15-detached-count-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live.rs:18284:9",
+        "fragments": [
+          "assertion failed: session.detached_data_identities.is_empty()"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "17-inherited-cancellation",
+      "kind": "kfd",
+      "test": "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_restores_exact_initialized_cold_and_digest_free_inputs",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release.rs",
+        "scope": {
+          "start": "    fn release_control_phase(",
+          "end": "\n    fn release_controls("
+        },
+        "edits": [
+          [
+            "            ReturningControlModeV1::PersistentBeforePublication => {\n                Some(self.generation.persistent_cancellation_generation()?)\n            }",
+            "            ReturningControlModeV1::PersistentBeforePublication => {\n                Some(self.generation.returning_destroy_generation()?)\n            }"
+          ]
+        ]
+      },
+      "expected_file_sha256": "5137e8316d416017882b2239f1dd9e8a9574145e50de8291ca4713b0ee664191",
+      "expected_source_map_sha256": "cce46787a098047230b652bf99b928127db8e0a1fd236f3b2aa9dcb7b21703a8",
+      "predecessor": "r125-development-restored-16-detached-identities-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_persistent_cancel_tests.rs:484:50",
+        "fragments": [
+          "called `Result::unwrap()` on an `Err` value",
+          "persistent compute cancellation returned substituted storage"
+        ]
+      },
+      "final_panic": "primary"
+    },
+    {
+      "id": "18-no-fabricated-recycle",
+      "kind": "kfd",
+      "test": "queue::dispatch_binding::control_release::tests::persistent::persistent_cancellation_inherits_detached_continuation_without_minting_recycle_history",
+      "patch": {
+        "path": "crates/fe2o3-kfd/src/queue_dispatch_binding.rs",
+        "scope": {
+          "start": "    fn persistent_after_detached(",
+          "end": "\n    fn reserve("
+        },
+        "edits": [
+          [
+            "        owner.predecessor_detached_generation = predecessor;",
+            "        owner.predecessor_detached_generation = predecessor;\n        owner.recycled_generation = predecessor;"
+          ]
+        ]
+      },
+      "expected_file_sha256": "8ce756b09d35f40a7105f3ef19a998ada136534b7c1873ba3f823403f4189d21",
+      "expected_source_map_sha256": "88824bde33af215a548cd6e59fbab6838abd1a4e9558ebf00933f30a4f4eac98",
+      "predecessor": "r125-development-restored-17-inherited-cancellation-v1.json",
+      "oracle": {
+        "location": "crates/fe2o3-kfd/src/queue_dispatch_binding/control_release/persistent_tests.rs:15:9",
+        "fragments": [
+          "assertion failed: generation.returned_generation().is_err()"
+        ]
+      },
+      "final_panic": "primary"
+    }
+  ]
+}

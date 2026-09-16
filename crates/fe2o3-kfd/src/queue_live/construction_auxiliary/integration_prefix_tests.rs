@@ -24,6 +24,9 @@ mod retained_control_cases;
 #[path = "integration_recycled_detach_tests.rs"]
 mod recycled_detach_cases;
 
+#[path = "integration_persistent_cancel_tests.rs"]
+mod persistent_cancel_cases;
+
 type PrefixCaseResult = (
     Box<Scope>,
     Result<(), Box<dyn std::any::Any + Send>>,

@@ -1,0 +1,22 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 57.93s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_model_errors_and_panics_retain_complete_roster ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_model_errors_and_panics_retain_complete_roster stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_model_errors_and_panics_retain_complete_roster' (1378230) panicked at crates/fe2o3-kfd/src/queue_live/construction_primary/../construction_auxiliary/integration_persistent_cancel_tests.rs:543:21:
+assertion failed: case.dispatch.is_some()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_model_errors_and_panics_retain_complete_roster
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1243 filtered out; finished in 0.42s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

@@ -1,0 +1,91 @@
+{
+  "source_head": "c171d915047daa5153c1f77253e15260e55da8c5",
+  "source_map_sha256": "cd75b14f202dbaf1ed6841c2b59ae1cf36548d7c48c4e6a3f2e0c7694ecfc0a5",
+  "started_at": "2026-09-16T02:15:48.041Z",
+  "finished_at": "2026-09-16T02:16:50.389Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "--all-features",
+    "-p",
+    "fe2o3-kfd",
+    "--lib",
+    "queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_restores_exact_initialized_cold_and_digest_free_inputs",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r125-development-negative-17-inherited-cancellation-v1.log",
+  "source": "/home/harsh/.codex-tmp/r125-development-negative-17-inherited-cancellation-v1-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r125-development-negative-17-inherited-cancellation-v1-source-after.json",
+  "source_unchanged": true,
+  "returncode": 101,
+  "child_returncode": 101,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r125-development-run-v4.js",
+    "sha256": "52a8f0b4413a875757e943a9276b9cb832312ac0fd07a457305660065fdcb1e9"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 1430133,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789525010399,
+        "monotonic_ns": "28025301313560",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 62.347840763,
+  "verification_elapsed_seconds": 0.439060143,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r125-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r125-development-restored-16-detached-identities-v1.json",
+      "sha256": "914d4a37e5deab6e5499433db9785cb157a1d3623a705fb3db6ec7635a5ed8e4",
+      "observation": {
+        "utc_ms": 1789524944681,
+        "monotonic_ns": "27959582753189",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789524948041,
+      "monotonic_ns": "27962942963602",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789525010389,
+      "monotonic_ns": "28025290804365",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789525010828,
+      "monotonic_ns": "28025729864508",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

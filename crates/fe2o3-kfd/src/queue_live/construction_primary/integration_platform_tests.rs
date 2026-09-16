@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn context_zero_check_preserves_every_byte_including_unaligned_partial_pages() {
+    for offset in [0, 1] {
+        for len in [0, 1, 4095, 4096, 4097, 8192, 8193] {
+            let mut backing = vec![0xa5; offset + len + 1];
+            let bytes = &mut backing[offset..offset + len];
+            bytes.fill(0);
+            assert!(context_is_zeroed(bytes));
+            for index in 0..len {
+                bytes[index] = 0x80;
+                assert!(
+                    !context_is_zeroed(bytes),
+                    "offset={offset} len={len} index={index}"
+                );
+                bytes[index] = 0;
+            }
+            assert!(context_is_zeroed(bytes));
+            assert!(backing[..offset].iter().all(|&b| b == 0xa5));
+            assert_eq!(backing[offset + len], 0xa5);
+        }
+    }
+}
+
+#[test]
 fn local_linux_shadow_and_gate_helpers_compose_with_primary_custody_and_dispose_owned_mappings() {
     for external_runtime in [false, true] {
         for (boundary, panic) in [

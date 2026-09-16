@@ -1,0 +1,92 @@
+{
+  "source_head": "c171d915047daa5153c1f77253e15260e55da8c5",
+  "source_map_sha256": "6486eaa2d52d9a4035db5d137fa216dcef9f853f8df6518c0aa47905534be72e",
+  "started_at": "2026-09-15T21:31:32.022Z",
+  "finished_at": "2026-09-15T21:33:28.013Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "fe2o3-kfd",
+    "--all-features",
+    "--lib",
+    "--",
+    "persistent_cancel",
+    "persistent_allocation::tests",
+    "queue::dispatch_binding::control_release::tests::persistent::"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r125-development-stack-repair-kfd-01.log",
+  "source": "/home/harsh/.codex-tmp/r125-development-stack-repair-kfd-01-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r125-development-stack-repair-kfd-01-source-after.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "child_returncode": 0,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r125-development-run-v3.js",
+    "sha256": "f1c68f7542ed8b467b877a0c0d521a04af492f45822948946daaef5e2ad0359d"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 812875,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789508008021,
+        "monotonic_ns": "14589793763648",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 115.991002432,
+  "verification_elapsed_seconds": 0.311769064,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r125-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r125-development-stack-repair-runtime-01.json",
+      "sha256": "1e95b0a42f3daab82c5ed30f2884c43b72a5302e8bbaddfd398531cb8a9a5142",
+      "observation": {
+        "utc_ms": 1789507870192,
+        "monotonic_ns": "14451964640609",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789507892022,
+      "monotonic_ns": "14473794837834",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789508008013,
+      "monotonic_ns": "14589785840266",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789508008325,
+      "monotonic_ns": "14590097609330",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

@@ -184,13 +184,20 @@ impl ComputeAqlQueueSessionV1 {
         self.persistent_compute
             .as_ref()?
             .terminal_custody()
-            .map(PersistentComputeTerminalNativeCustodyV1::stage)
+            .and_then(PersistentComputeTerminalNativeCustodyV1::stage)
     }
 
     pub(super) fn absorb_terminal_prepared_persistent_compute_v1(
         &mut self,
         binding: PersistentComputeBindingKeyV1,
     ) -> bool {
+        if self.persistent_compute.as_ref().is_some_and(|attachment| {
+            attachment.binding == binding
+                && attachment.is_single()
+                && attachment.terminal_custody.is_some()
+        }) {
+            return true;
+        }
         let Some(mut attachment) = self.take_single_persistent_compute_attachment_v1() else {
             return false;
         };
@@ -2320,125 +2327,16 @@ impl ComputeAqlQueueSessionV1 {
                 retained: None,
             });
         }
-        let mut attachment = self
-            .take_single_persistent_compute_attachment_v1()
-            .expect("validated persistent compute attachment");
-        let state = core::mem::replace(
-            &mut attachment.state,
-            PersistentComputeUseStateV1::Quarantined,
-        );
-        let PersistentComputeUseStateV1::Prepared(prepared) = state else {
-            self.set_single_persistent_compute_attachment_v1(attachment);
-            self.poison_terminal();
-            return Err(Gfx942PersistentComputeCancelFailureV1 {
-                error: Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
-                recovered: None,
-                retained: None,
-            });
-        };
-        let returned = self.release_persistent_dispatch_data(false);
-        let (generation, mut data) = match returned {
-            Ok(returned) => returned,
-            Err((error, data)) => {
-                attachment.state = quarantine_persistent_compute_prepared_v1(
-                    &mut attachment.allocation.owner,
-                    prepared,
-                    Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
-                );
-                attachment.terminal_custody = Some(if data.is_empty() && self.dispatch.is_some() {
-                    PersistentComputeTerminalNativeCustodyV1::Attached
-                } else {
-                    PersistentComputeTerminalNativeCustodyV1::Data(
-                        PersistentComputeTerminalDataV1::from_vec(data),
-                    )
-                });
-                self.set_single_persistent_compute_attachment_v1(attachment);
-                self.poison_terminal();
-                return Err(Gfx942PersistentComputeCancelFailureV1 {
-                    error,
-                    recovered: None,
-                    retained: None,
-                });
-            }
-        };
-        let expected_generation = attachment.predecessor_dispatch_generation.unwrap_or(0);
-        let exact = generation == expected_generation
-            && data.len() == 1
-            && data[0].sdma_storage_identity()
-                == Gfx942SdmaBufferStorageIdentityV1::Device(attachment.storage_identity);
-        if !exact {
-            attachment.state = quarantine_persistent_compute_prepared_v1(
-                &mut attachment.allocation.owner,
-                prepared,
-                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
-            );
-            attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Data(
-                PersistentComputeTerminalDataV1::from_vec(data),
-            ));
-            self.set_single_persistent_compute_attachment_v1(attachment);
-            self.poison_terminal();
-            return Err(Gfx942PersistentComputeCancelFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract(
-                    "persistent compute cancellation returned substituted storage",
-                ),
-                recovered: None,
-                retained: None,
-            });
-        }
-        let data = data.pop().expect("validated one returned data authority");
-        let fully_initialized = data.is_fully_initialized();
-        let Gfx942SdmaBufferStorageV1::Device(lease) = data.into_sdma_storage() else {
-            unreachable!("validated device storage identity")
-        };
-        if let Err((_error, lease)) = attachment
-            .allocation
-            .owner
-            .restore_local_native_from_cancelled_compute(&prepared, lease)
-        {
-            attachment.state = quarantine_persistent_compute_prepared_v1(
-                &mut attachment.allocation.owner,
-                prepared,
-                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
-            );
-            attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Storage(
-                Gfx942SdmaBufferStorageV1::Device(lease),
-            ));
-            self.set_single_persistent_compute_attachment_v1(attachment);
-            self.poison_terminal();
-            return Err(Gfx942PersistentComputeCancelFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract(
-                    "persistent compute cancellation native restore",
-                ),
-                recovered: None,
-                retained: None,
-            });
-        }
-        if attachment
-            .allocation
-            .owner
-            .cancel_prepared(prepared)
-            .is_err()
-        {
-            attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Restored);
-            self.set_single_persistent_compute_attachment_v1(attachment);
-            self.poison_terminal();
-            return Err(Gfx942PersistentComputeCancelFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract(
-                    "persistent compute cancellation ledger transition",
-                ),
-                recovered: None,
-                retained: None,
-            });
-        }
-        self.detached_dispatch_generation = Some(expected_generation);
-        self.detached_next_insertion_index = Some(0);
-        self.detached_data_count = 0;
-        self.detached_data_identities.clear();
-        Ok(Gfx942PersistentComputeInputV1::from_parts(
-            attachment.allocation,
-            attachment.authenticated_sha256,
-            fully_initialized,
-        ))
+        let mut inputs = persistent_cancel::settle_persistent_cancel_v1(
+            self,
+            persistent_cancel::CancelShapeV1::Single,
+        )
+        .map_err(|error| Gfx942PersistentComputeCancelFailureV1 {
+            error,
+            recovered: None,
+            retained: None,
+        })?;
+        Ok(inputs.pop().expect("settled one-input cancellation"))
     }
 
     /// Cancels the exact prepared three-binding attachment before publication
@@ -2477,21 +2375,21 @@ impl ComputeAqlQueueSessionV1 {
                 recovered: Some(prepared_receipt),
             });
         }
-        let mut attachment = self
-            .take_three_binding_persistent_compute_attachment_v1()
-            .expect("validated three-binding prepared attachment");
-        if self.terminal_poisoned
-            || attachment
-                .entries
-                .iter()
-                .any(|entry| !matches!(entry.state, PersistentComputeUseStateV1::Prepared(_)))
-        {
-            quarantine_persistent_compute_entries_v1(
-                attachment.entries.each_mut(),
-                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
-            );
-            attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Attached);
-            self.set_three_binding_persistent_compute_attachment_v1(attachment);
+        if self.terminal_poisoned {
+            let attachment = self
+                .persistent_compute
+                .as_mut()
+                .expect("validated attachment");
+            if attachment.terminal_custody.is_none() {
+                for entry in &mut attachment.entries {
+                    quarantine_persistent_compute_entries_v1(
+                        [entry],
+                        Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
+                    );
+                }
+                attachment.terminal_custody =
+                    Some(PersistentComputeTerminalNativeCustodyV1::Attached);
+            }
             self.poison_terminal();
             poison_process_global_after_dispatch_terminal_v1();
             return Err(Gfx942ThreeBindingPersistentComputeTransitionFailureV1 {
@@ -2499,161 +2397,21 @@ impl ComputeAqlQueueSessionV1 {
                 recovered: None,
             });
         }
-
-        let (generation, data) = match self.release_persistent_dispatch_data(false) {
-            Ok(returned) => returned,
-            Err((error, data)) => {
-                quarantine_persistent_compute_entries_v1(
-                    attachment.entries.each_mut(),
-                    Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
-                );
-                attachment.terminal_custody = Some(if data.is_empty() && self.dispatch.is_some() {
-                    PersistentComputeTerminalNativeCustodyV1::Attached
-                } else {
-                    PersistentComputeTerminalNativeCustodyV1::Data(
-                        PersistentComputeTerminalDataV1::from_vec(data),
-                    )
-                });
-                self.set_three_binding_persistent_compute_attachment_v1(attachment);
-                self.poison_terminal();
-                poison_process_global_after_dispatch_terminal_v1();
-                return Err(Gfx942ThreeBindingPersistentComputeTransitionFailureV1 {
-                    error,
-                    recovered: None,
-                });
-            }
-        };
-        let expected_generation = attachment.predecessor_dispatch_generation.unwrap_or(0);
-        let exact = generation == expected_generation
-            && data.len() == 3
-            && data.iter().zip(&attachment.entries).all(|(data, entry)| {
-                entry.storage_identity.is_some_and(|identity| {
-                    data.sdma_storage_identity()
-                        == Gfx942SdmaBufferStorageIdentityV1::Device(identity)
-                }) && data.is_fully_initialized() == entry.fully_initialized
-            });
-        if !exact {
-            quarantine_persistent_compute_entries_v1(
-                attachment.entries.each_mut(),
-                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
-            );
-            attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Data(
-                PersistentComputeTerminalDataV1::from_vec(data),
-            ));
-            self.set_three_binding_persistent_compute_attachment_v1(attachment);
-            self.poison_terminal();
-            poison_process_global_after_dispatch_terminal_v1();
-            return Err(Gfx942ThreeBindingPersistentComputeTransitionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract(
-                    "three-binding persistent cancellation returned substituted storage",
-                ),
+        let inputs = persistent_cancel::settle_persistent_cancel_v1(
+            self,
+            persistent_cancel::CancelShapeV1::Three,
+        )
+        .map_err(
+            |error| Gfx942ThreeBindingPersistentComputeTransitionFailureV1 {
+                error,
                 recovered: None,
-            });
-        }
-        let data: [Gfx942FixedDispatchDataV1; 3] = data
-            .try_into()
-            .unwrap_or_else(|_| unreachable!("validated three-binding cancellation cardinality"));
-        let fully_initialized = std::array::from_fn(|index| data[index].is_fully_initialized());
-        let leases = data.map(|data| {
-            let Gfx942SdmaBufferStorageV1::Device(lease) = data.into_sdma_storage() else {
-                unreachable!("validated three-binding cancellation device storage")
-            };
-            lease
-        });
-        let restore_preflight =
-            attachment
-                .entries
-                .iter()
-                .zip(&leases)
-                .try_for_each(|(entry, lease)| {
-                    let PersistentComputeUseStateV1::Prepared(prepared) = &entry.state else {
-                        return Err(Gfx942PersistentUseErrorV1::WrongState);
-                    };
-                    entry
-                        .allocation
-                        .owner
-                        .preflight_restore_local_native_from_cancelled_compute(prepared, lease)
-                });
-        if restore_preflight.is_err() {
-            let [lease0, lease1, lease2] = leases;
-            let [initialized0, initialized1, initialized2] = fully_initialized;
-            let restore_data = |lease, initialized| {
-                if initialized {
-                    Gfx942FixedDispatchDataV1::initialized_after_dispatch(lease)
-                } else {
-                    Gfx942FixedDispatchDataV1::uninitialized(lease)
-                }
-            };
-            let retained = [
-                restore_data(lease0, initialized0),
-                restore_data(lease1, initialized1),
-                restore_data(lease2, initialized2),
-            ];
-            quarantine_persistent_compute_entries_v1(
-                attachment.entries.each_mut(),
-                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
-            );
-            attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Data(
-                PersistentComputeTerminalDataV1::from_three(retained),
-            ));
-            self.set_three_binding_persistent_compute_attachment_v1(attachment);
-            self.poison_terminal();
-            poison_process_global_after_dispatch_terminal_v1();
-            return Err(Gfx942ThreeBindingPersistentComputeTransitionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract(
-                    "three-binding persistent cancellation native restore preflight",
-                ),
-                recovered: None,
-            });
-        }
-        for (entry, lease) in attachment.entries.iter_mut().zip(leases) {
-            let PersistentComputeUseStateV1::Prepared(prepared) = &entry.state else {
-                unreachable!("preflighted three-binding cancellation state")
-            };
-            entry
-                .allocation
-                .owner
-                .restore_local_native_from_cancelled_compute(prepared, lease)
-                .unwrap_or_else(|_| {
-                    unreachable!("preflighted three-binding cancellation native restore")
-                });
-        }
-        if attachment.entries.iter().any(|entry| {
-            let PersistentComputeUseStateV1::Prepared(prepared) = &entry.state else {
-                return true;
-            };
-            entry
-                .allocation
-                .owner
-                .preflight_cancel_prepared(prepared)
-                .is_err()
-        }) {
-            quarantine_persistent_compute_entries_v1(
-                attachment.entries.each_mut(),
-                Gfx942PersistentQuarantineReasonV1::CallerReportedCurrentnessLoss,
-            );
-            attachment.terminal_custody = Some(PersistentComputeTerminalNativeCustodyV1::Restored);
-            self.set_three_binding_persistent_compute_attachment_v1(attachment);
-            self.poison_terminal();
-            poison_process_global_after_dispatch_terminal_v1();
-            return Err(Gfx942ThreeBindingPersistentComputeTransitionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract(
-                    "three-binding persistent cancellation ledger preflight",
-                ),
-                recovered: None,
-            });
-        }
-        if !cancel_persistent_compute_prepublication_entries_v1(attachment.entries.each_mut()) {
-            unreachable!("preflighted three-binding cancellation ledger transition")
-        }
-        for (entry, initialized) in attachment.entries.iter_mut().zip(fully_initialized) {
-            entry.fully_initialized = initialized;
-        }
-        self.detached_dispatch_generation = Some(expected_generation);
-        self.detached_next_insertion_index = Some(0);
-        self.detached_data_count = 0;
-        self.detached_data_identities.clear();
-        Ok(three_binding_entries_into_inputs_v1(attachment.entries))
+            },
+        )?;
+        Ok(Gfx942ThreeBindingPersistentComputeInputsV1::new(
+            inputs
+                .into_inner()
+                .unwrap_or_else(|_| unreachable!("settled three-input cancellation")),
+        ))
     }
 
     #[allow(clippy::result_large_err)]

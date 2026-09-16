@@ -1,0 +1,93 @@
+{
+  "source_head": "c171d915047daa5153c1f77253e15260e55da8c5",
+  "source_map_sha256": "29b127dd3e2f1eaa9cbc3e8bd7bfd7fb26bb8879e58bdf0ab801c291f188dd80",
+  "started_at": "2026-09-16T00:38:53.862Z",
+  "finished_at": "2026-09-16T00:40:59.140Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "--all-features",
+    "-p",
+    "fe2o3-kfd",
+    "--lib",
+    "--target",
+    "x86_64-unknown-linux-musl",
+    "queue::live::construction_primary::integration_tests::platform::tests::context_zero_check_preserves_every_byte_including_unaligned_partial_pages",
+    "--",
+    "--exact"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r125-development-zero-scan-unit-musl-01.log",
+  "source": "/home/harsh/.codex-tmp/r125-development-zero-scan-unit-musl-01-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r125-development-zero-scan-unit-musl-01-source-after.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "child_returncode": 0,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r125-development-run-v3.js",
+    "sha256": "f1c68f7542ed8b467b877a0c0d521a04af492f45822948946daaef5e2ad0359d"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 1165660,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789519259156,
+        "monotonic_ns": "22274058018340",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 125.278550647,
+  "verification_elapsed_seconds": 0.843292335,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r125-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r125-development-zero-scan-fixture-gnu-01.json",
+      "sha256": "b5124eb06946ecefaa58b220e3f0b3804a7caa180add01a29588426cf2f7ffda",
+      "observation": {
+        "utc_ms": 1789519069639,
+        "monotonic_ns": "22084540924311",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789519133862,
+      "monotonic_ns": "22148763781235",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789519259140,
+      "monotonic_ns": "22274042331882",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789519259983,
+      "monotonic_ns": "22274885624217",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

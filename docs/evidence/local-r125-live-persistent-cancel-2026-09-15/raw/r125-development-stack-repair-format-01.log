@@ -1,0 +1,11 @@
+Diff in /home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd/src/persistent_allocation.rs:1574:
+     fn persistent_owner_and_queue_layouts_keep_ledgers_out_of_inline_custody() {
+         assert!(std::mem::size_of::<Gfx942PersistentDeviceAllocationV1>() <= 512);
+         assert!(
+-            std::mem::size_of::<crate::persistent_compute::PersistentComputeCancellationCustodyV1>()
+-                <= 8 * 1024
++            std::mem::size_of::<crate::persistent_compute::PersistentComputeCancellationCustodyV1>(
++            ) <= 8 * 1024
+         );
+         assert!(
+             std::mem::size_of::<crate::persistent_compute::BoundedPersistentComputeAttachmentV1>()

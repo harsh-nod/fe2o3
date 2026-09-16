@@ -10,7 +10,18 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Current accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
+Current accepted Native checkpoint: [R125 live prepared persistent cancellation](runtime-live-persistent-cancel-v1.md),
+above [R124 ordinary recycled detach](runtime-live-recycled-detach-v1.md).
+GNU/musl each pass 2,901 tests with five ignored; 25 leaf gates, 18 compiled
+negatives on 18 maps, restored 47/744 suites and 207 calibrations pass.
+Two independent reviews verify all 5,709 source identities and the
+[576-artifact archive](evidence/local-r125-live-persistent-cancel-2026-09-15/README.md).
+Next is retained ordinary primary-queue Release custody, followed by generated
+DATA-ADOPT, ISSUE, completion/readback and Stop/drain/graph integration.
+Acceptance is CPU/test only; native, formal, aggregate-memory and performance
+qualification remain open. A1/A2 and issue #182 remain incomplete.
+
+Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,865 tests with
 five ignored; seventeen source gates, ten auxiliary checks, restored 128/17

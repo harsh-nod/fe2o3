@@ -1,6 +1,25 @@
 # Runtime Swarm Dispatch After R114
 
-Current Native checkpoint: [R124 ordinary recycled detach is locally accepted](runtime-live-recycled-detach-v1.md),
+Current Native checkpoint: [R125 live prepared persistent cancellation](runtime-live-persistent-cancel-v1.md),
+with [576 raw artifacts](evidence/local-r125-live-persistent-cancel-2026-09-15/README.md)
+and two passing independent archive reviews. GNU/musl each pass 2,901 tests with
+five ignored; all 25 source/auxiliary leaves, 18 compiled behavioral negatives
+across 18 maps, restored 47/744 suites and 207 checker calibrations pass.
+All 5,709 source identities match and all 126 recorded owned groups are absent.
+This accepts cancellation custody, inherited-generation handling and the boxed
+fixed ledger at the CPU/test boundary. Native, formal, aggregate-memory and
+HIP/HSA performance acceptance remain open; A1/A2 and issue #182 are incomplete.
+
+Next Native packet: retained ordinary primary-queue Release custody (R126).
+The root must retain the parent plus exact event/payload/runtime/doorbell,
+resource, dispatch and signal cleanup prefixes before fallible native effects.
+Preserve all-four-unmap, then all-four-release, then shadow completion; keep
+process-gate custody until dispatch and signals are also conclusively released.
+This is proposed work, not an implemented checkpoint. Then connect N5
+DATA-ADOPT, actual I2 ISSUE, C4/C5 completion/readback/typed replies and C6
+Stop/drain/graphs. Other queue modes and cold-output profiles remain required.
+
+Preceding Native checkpoint: [R124 ordinary recycled detach is locally accepted](runtime-live-recycled-detach-v1.md),
 with [476 raw artifacts](evidence/local-r124-live-recycled-detach-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,882 tests with
 five ignored; all 25 source/auxiliary leaves, their exact transcript checker,
@@ -23,14 +42,9 @@ pass. All 5,703 source identities matched and all 76 recorded owned process
 groups were observed absent at acceptance. This accepts live retained
 persistent-control release at the CPU/test boundary.
 
-The next identified live cleanup gap is prepared persistent cancellation.
-Both single- and three-binding callers remove their attachment before cleanup,
-and `release_persistent_dispatch_data(false)` sends returned data through the
-model driver's generic result. A closing panic can unwind that data and the
-caller's removed owners. The next packet must root the complete cancellation
-through cleanup, retake, native restore and allocation-ledger cancellation,
-while preserving existing receipt recovery and terminal-state observations.
-This is a source-reviewed handoff, not an implemented or qualified fix.
+R124's identified prepared persistent-cancellation gap is now addressed by
+R125 at the CPU/test boundary. Returned data and removed owners stay rooted
+through cleanup, retake, native restoration and allocation-ledger cancellation.
 
 Preceding Native checkpoint: [R122 live detached-data release is locally accepted](runtime-live-data-release-v1.md),
 with [402 raw artifacts](evidence/local-r122-live-data-release-2026-09-15/README.md)

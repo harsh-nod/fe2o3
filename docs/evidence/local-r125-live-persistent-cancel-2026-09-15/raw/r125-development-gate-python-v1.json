@@ -1,0 +1,98 @@
+{
+  "source_head": "c171d915047daa5153c1f77253e15260e55da8c5",
+  "source_map_sha256": "29b127dd3e2f1eaa9cbc3e8bd7bfd7fb26bb8879e58bdf0ab801c291f188dd80",
+  "started_at": "2026-09-16T01:52:02.975Z",
+  "finished_at": "2026-09-16T01:52:16.338Z",
+  "command": [
+    "env",
+    "--chdir=/home/harsh/.codex-tmp/fe2o3-r61-execution/benchmarks/runtime_gfx942",
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "test_run_r26_inplace_runner",
+    "test_check_r40_striped",
+    "test_run_r40_striped_runner",
+    "test_run_r60_pipeline",
+    "test_check_r60_pipeline",
+    "test_run_r61_owner",
+    "test_run_r62_control",
+    "test_run_r63_graph",
+    "test_run_r65_drain_versions",
+    "test_run_r66_coexistence",
+    "test_check_scale3_protocol",
+    "test_check_drain_capture",
+    "test_run_drain_capture"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r125-development-gate-python-v1.log",
+  "source": "/home/harsh/.codex-tmp/r125-development-gate-python-v1-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r125-development-gate-python-v1-source-after.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "child_returncode": 0,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r125-development-run-v4.js",
+    "sha256": "52a8f0b4413a875757e943a9276b9cb832312ac0fd07a457305660065fdcb1e9"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 1364859,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789523536348,
+        "monotonic_ns": "26551249830083",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 13.362631652,
+  "verification_elapsed_seconds": 0.527892634,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r125-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r125-development-gate-clippy-production-v1.json",
+      "sha256": "bc0651e29ae0033c0fa50a2c57647a3ad2f82ece8327bb0a9b2c66a95fcb1632",
+      "observation": {
+        "utc_ms": 1789523521385,
+        "monotonic_ns": "26536287723800",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789523522975,
+      "monotonic_ns": "26537877176379",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789523536338,
+      "monotonic_ns": "26551239808031",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789523536865,
+      "monotonic_ns": "26551767700665",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

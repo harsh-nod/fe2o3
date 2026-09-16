@@ -1,0 +1,54 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 47.07s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 45 tests
+test persistent_allocation::tests::exact_peer_form_and_operation_access_are_checked ... ok
+test persistent_allocation::tests::caller_reported_currentness_loss_quarantines_without_claiming_observation ... ok
+test persistent_allocation::tests::capacity_and_allocation_bounds_are_preflighted ... ok
+test persistent_allocation::tests::compute_detach_cancel_and_completion_restore_the_exact_mapping ... ok
+test persistent_allocation::tests::indeterminate_publication_quarantines_and_blocks_release ... ok
+test persistent_allocation::tests::overlapping_writer_requires_exact_current_successful_frontier ... ok
+test persistent_allocation::tests::ledger_storage_survives_owner_moves_and_transitions ... ok
+test persistent_allocation::tests::owner_and_generation_substitution_recover_move_only_custody ... ok
+test persistent_allocation::tests::persistent_owner_and_queue_layouts_keep_ledgers_out_of_inline_custody ... ok
+test persistent_allocation::tests::prepared_indeterminate_use_is_quarantined_without_fake_publication ... ok
+test persistent_allocation::tests::prepublication_cancel_reclaims_slots ... ok
+test persistent_allocation::tests::reads_coexist_writers_conflict_and_disjoint_writers_coexist ... ok
+test persistent_allocation::tests::release_requires_settlement_and_returns_exact_native_owner ... ok
+test persistent_allocation::tests::sdma_detach_restore_requires_exact_local_native_identity ... ok
+test persistent_allocation::tests::timeout_retains_exact_published_custody ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_cancellation_inherits_detached_continuation_without_minting_recycle_history ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_consuming_methods_route_full_owner_before_validation ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_cardinality_and_capacity_reject_before_disposal ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_cancelled_history_and_exhausted_next_generation_preserve_admission ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_generation_errors_precede_cardinality_and_capacity ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_incomplete_callbacks_return_data_but_never_claim_control_completion ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_output_capacity_survives_success_and_error_extraction ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_panic_root_rejects_extraction_without_mutating_retained_custody ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_partial_unmap_returns_data_without_losing_original_control ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_native_errors_return_data_while_panics_retain_it_at_every_control ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_success_preserves_exact_mixed_data_and_forward_cleanup ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_wrong_wrappers_and_repeated_extraction_reject_before_effects ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_currentness_failures_preserve_all_eighteen_control_boundaries ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_zero_data_uses_explicit_readiness_and_one_shot_transfer ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_projection_and_actual_commit_failures_preserve_receipts_and_output_split ... ok
+test queue::dispatch_binding::control_release::tests::persistent::persistent_genuine_single_and_three_binding_preparation_preserve_metadata_and_data ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_output_and_ledger_panics_keep_all_restored_owners ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_lower_cleanup_retains_data_and_primary_panic ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_model_errors_and_panics_retain_complete_roster ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_restores_exact_initialized_cold_and_digest_free_inputs ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_retake_error_or_panic_overrides_normal_lower_error ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_single_returned_initialization_is_not_downgraded ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_restore_and_cancel_prefixes_retain_failed_leases ... ok
+test queue::live::rebind_tests::persistent_cancel::persistent_cancel_public_terminal_ingress_preserves_preexisting_detached_custody ... ok
+test queue::live::rebind_tests::persistent_cancel::persistent_cancel_public_terminal_reentry_preserves_complete_cancellation_custody ... ok
+test queue::live::rebind_tests::persistent_cancel::persistent_cancel_public_terminal_wrong_shape_or_generation_returns_exact_receipt ... ok
+test queue::live::rebind_tests::persistent_cancel::persistent_cancel_public_wrong_state_preserves_exact_published_lease ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_native_cleanup_preserves_exact_control_prefix_and_data has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_three_preflights_reject_before_changing_any_prefix ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_shape_rejection_precedes_native_restore_and_ledger ... ok
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_native_cleanup_preserves_exact_control_prefix_and_data ... ok
+
+test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 1198 filtered out; finished in 68.85s
+

@@ -1,6 +1,16 @@
 # Remaining A1/A2 Work: Swarm Plan
 
-Current local acceptance: R96's production-used auxiliary phase composition
+Current local Native acceptance is [R125 live prepared persistent cancellation](runtime-live-persistent-cancel-v1.md),
+above R124, with two independent reviews of its
+[CPU/test evidence](evidence/local-r125-live-persistent-cancel-2026-09-15/README.md).
+GNU/musl each pass 2,901 tests with five ignored; 25 leaf gates, 18 compiled
+negatives, restored 47/744 suites and 207 calibrations pass. The
+[current dispatch](runtime-swarm-dispatch-r114.md) next assigns retained ordinary
+primary queue teardown, then generated adoption, submission and completion.
+A1/A2, native/formal/memory/performance acceptance and broader parity remain open.
+The earlier checkpoint contracts below are retained as historical context.
+
+Historical local acceptance: R96's production-used auxiliary phase composition
 (NATIVE-2B.5A), above signed planning checkpoint
 `10902ca32a853448f79b59cfcf22072e3cdd9325`. Its
 [local evidence](evidence/local-r96-auxiliary-shared-engine-2026-09-11/README.md)

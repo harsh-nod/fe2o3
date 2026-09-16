@@ -1,6 +1,16 @@
 # Runtime Swarm: Remaining Packets
 
-Current Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
+Current Native checkpoint: [R125 live prepared persistent cancellation](runtime-live-persistent-cancel-v1.md),
+above [R124 ordinary recycled detach](runtime-live-recycled-detach-v1.md).
+GNU/musl each pass 2,901 tests with five ignored; 25 leaf gates, 18 compiled
+negatives, restored 47/744 suites and 207 calibrations pass. Two independent
+reviews verify the [576-artifact archive](evidence/local-r125-live-persistent-cancel-2026-09-15/README.md)
+and all 5,709 source identities. The next packet is retained ordinary primary
+queue teardown, then generated DATA-ADOPT, ISSUE, completion/readback and
+Stop/drain/graphs. Other teardown profiles remain required. Acceptance is local
+CPU/test only; A1/A2, issue #182 and HIP/HSA parity remain incomplete.
+
+Preceding Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 above [R122 live data release](runtime-live-data-release-v1.md). GNU/musl each
 pass 2,865 tests with five ignored; seventeen source gates, ten auxiliary checks,
 restored 128/17 suites, ten compiled negatives across ten maps and 134 checker

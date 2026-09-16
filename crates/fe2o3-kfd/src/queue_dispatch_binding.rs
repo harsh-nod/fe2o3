@@ -1370,6 +1370,7 @@ struct DispatchGenerationOwnerV1 {
     recipe_queue: Option<QueueKeyV1>,
     slots: Box<[DispatchEpochSlotV1; GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1]>,
     recycled_generation: Option<u64>,
+    predecessor_detached_generation: Option<u64>,
     poisoned: bool,
 }
 
@@ -1396,6 +1397,7 @@ impl DispatchGenerationOwnerV1 {
             recipe_queue: None,
             slots: Box::new([DispatchEpochSlotV1::VACANT; GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1]),
             recycled_generation: None,
+            predecessor_detached_generation: None,
             poisoned: false,
         })
     }
@@ -1411,6 +1413,17 @@ impl DispatchGenerationOwnerV1 {
         } else {
             Self::after_recycled(predecessor)
         }
+    }
+
+    fn persistent_after_detached(
+        predecessor: Option<u64>,
+    ) -> Result<Self, Gfx942DispatchBindingErrorV1> {
+        let mut owner = match predecessor {
+            Some(predecessor) => Self::after_detached(predecessor),
+            None => Self::new(),
+        }?;
+        owner.predecessor_detached_generation = predecessor;
+        Ok(owner)
     }
 
     fn reserve(
@@ -1588,6 +1601,15 @@ impl DispatchGenerationOwnerV1 {
     fn returning_destroy_generation(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
         self.ensure_prepared()?;
         Ok(self.recycled_generation.unwrap_or(0))
+    }
+
+    fn persistent_cancellation_generation(&self) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+        self.ensure_prepared()?;
+        // Cancellation preserves a detached continuation, not a completion on this owner.
+        Ok(self
+            .recycled_generation
+            .or(self.predecessor_detached_generation)
+            .unwrap_or(0))
     }
 
     fn poison(&mut self) {
@@ -3842,10 +3864,7 @@ pub(super) fn prepare_persistent_fixed_dispatch_resources_v1(
     predecessor_generation: Option<u64>,
     control_identity: PersistentFixedDispatchControlIdentityV1,
 ) -> Result<(), Gfx942DispatchBindingErrorV1> {
-    let generation = match predecessor_generation {
-        Some(predecessor) => DispatchGenerationOwnerV1::after_recycled(predecessor),
-        None => DispatchGenerationOwnerV1::new(),
-    };
+    let generation = DispatchGenerationOwnerV1::persistent_after_detached(predecessor_generation);
     custody.prepare_in_place(
         memory,
         programs,
@@ -3863,10 +3882,7 @@ pub(super) fn prepare_three_binding_persistent_fixed_dispatch_resources_v1(
     predecessor_generation: Option<u64>,
     control_identity: ThreeBindingPersistentFixedDispatchControlIdentityV1,
 ) -> Result<(), Gfx942DispatchBindingErrorV1> {
-    let generation = match predecessor_generation {
-        Some(predecessor) => DispatchGenerationOwnerV1::after_recycled(predecessor),
-        None => DispatchGenerationOwnerV1::new(),
-    };
+    let generation = DispatchGenerationOwnerV1::persistent_after_detached(predecessor_generation);
     custody.prepare_in_place(
         memory,
         programs,

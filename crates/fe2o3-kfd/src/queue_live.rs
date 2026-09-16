@@ -255,6 +255,8 @@ use model_loan::execute_live_model_custody_v1;
 #[path = "queue_live/persistent_bind.rs"]
 pub(in crate::queue) mod persistent_bind;
 use persistent_bind::{settle_persistent_bind_preparation_v1, validate_persistent_bind_inputs_v1};
+#[path = "queue_live/persistent_cancel.rs"]
+pub(in crate::queue) mod persistent_cancel;
 #[path = "queue_live/pristine_abort.rs"]
 mod pristine_abort;
 use pristine_abort::UnpublishedDispatchStateV1;
@@ -13662,68 +13664,6 @@ impl ComputeAqlQueueSessionV1 {
         }
     }
 
-    fn release_persistent_dispatch_data(
-        &mut self,
-        after_recycle: bool,
-    ) -> Result<
-        (u64, Vec<Gfx942FixedDispatchDataV1>),
-        (
-            ComputeAqlQueueSessionErrorV1,
-            Vec<Gfx942FixedDispatchDataV1>,
-        ),
-    > {
-        #[cfg(test)]
-        if !after_recycle && let Some(returned) = self.persistent_compute_test_release.take() {
-            return Ok(returned);
-        }
-        let Some(dispatch) = self.dispatch.take() else {
-            return Err((
-                Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
-                Vec::new(),
-            ));
-        };
-        let mut dispatch = Some(dispatch);
-        let envelope = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.with_live_queue_memory_model_custody(|memory| {
-                let dispatch = dispatch
-                    .take()
-                    .expect("custody operation executes at most once");
-                if after_recycle {
-                    dispatch.release_persistent_data_after_recycle(memory)
-                } else {
-                    dispatch.release_persistent_data_before_publication(memory)
-                }
-                .map_err(|(error, data)| (error.into(), data))
-            })
-        }));
-        let envelope = match envelope {
-            Ok(envelope) => envelope,
-            Err(payload) => {
-                // A consuming callee may already have dropped the owner while
-                // unwinding. Restore it only when it remains in this frame;
-                // otherwise only terminal/process-poison disposition is known;
-                // no retained owner or native-resource custody is claimed.
-                self.dispatch = dispatch;
-                self.poison_terminal();
-                permanently_poison_process_global_kfd_runtime_gate_v1();
-                std::panic::resume_unwind(payload)
-            }
-        };
-        match envelope {
-            Ok((result, Ok(()))) => result,
-            Ok((result, Err(error))) => {
-                let data = match result {
-                    Ok((_, data)) | Err((_, data)) => data,
-                };
-                Err((error, data))
-            }
-            Err(error) => {
-                self.dispatch = dispatch;
-                Err((error, Vec::new()))
-            }
-        }
-    }
-
     fn detach_persistent_dispatch_data_retaining_control_v1(
         &mut self,
     ) -> Result<
@@ -17208,7 +17148,7 @@ mod tests {
         )
     }
 
-    fn prepared_three_binding_persistent_compute_cancellation_fixture_v1(
+    pub(super) fn prepared_three_binding_persistent_compute_cancellation_fixture_v1(
         queue: QueueKeyV1,
     ) -> (
         ComputeAqlQueueSessionV1,
@@ -17355,8 +17295,12 @@ mod tests {
         }));
         assert!(matches!(
             attachment.terminal_custody,
-            Some(PersistentComputeTerminalNativeCustodyV1::Data(_))
+            Some(PersistentComputeTerminalNativeCustodyV1::Cancellation(_))
         ));
+        assert_eq!(
+            session.persistent_compute_terminal_stage_v1(),
+            Some(crate::Gfx942PersistentComputeTerminalStageV1::DataDetached)
+        );
     }
 
     #[test]
@@ -20217,7 +20161,7 @@ mod tests {
         );
         assert_eq!(
             custody.stage(),
-            crate::Gfx942PersistentComputeTerminalStageV1::StorageDetached
+            Some(crate::Gfx942PersistentComputeTerminalStageV1::StorageDetached)
         );
         let PersistentComputeTerminalNativeCustodyV1::Storage(Gfx942SdmaBufferStorageV1::Device(
             storage,
@@ -20245,7 +20189,7 @@ mod tests {
         );
         assert_eq!(
             custody.stage(),
-            crate::Gfx942PersistentComputeTerminalStageV1::DataDetached
+            Some(crate::Gfx942PersistentComputeTerminalStageV1::DataDetached)
         );
         let PersistentComputeTerminalNativeCustodyV1::Data(data) = custody else {
             unreachable!()
@@ -20258,7 +20202,7 @@ mod tests {
 
         assert_eq!(
             PersistentComputeTerminalNativeCustodyV1::Attached.stage(),
-            crate::Gfx942PersistentComputeTerminalStageV1::Attached
+            Some(crate::Gfx942PersistentComputeTerminalStageV1::Attached)
         );
     }
 

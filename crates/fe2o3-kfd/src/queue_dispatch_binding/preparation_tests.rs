@@ -157,6 +157,19 @@ fn three_binding_inputs(
     [Gfx942FixedDispatchPacketV1; 1],
     Vec<Gfx942FixedDispatchDataV1>,
 ) {
+    let (program, packets) = three_binding_recipe();
+    let data = vec![
+        memory.device(true),
+        memory.device(true),
+        memory.device(true),
+    ];
+    (program, packets, data)
+}
+
+fn three_binding_recipe() -> (
+    ValidatedKernelEnvelope<'static>,
+    [Gfx942FixedDispatchPacketV1; 1],
+) {
     use fe2o3_amdhsa_loader::{AdmittedProfile, KernelGlobalBufferAbiV1, validate};
     let image =
         include_bytes!("../../../fe2o3-runtime/fixtures/trusted-gfx942-vecadd-v1/vecadd.hsaco");
@@ -189,12 +202,74 @@ fn three_binding_inputs(
         ]
         .into_boxed_slice(),
     )];
-    let data = vec![
-        memory.device(true),
-        memory.device(true),
-        memory.device(true),
-    ];
-    (program, packets, data)
+    (program, packets)
+}
+
+pub(in crate::queue) fn persistent_cancel_control_in_memory_v1(
+    memory: &mut Memory,
+    queue: QueueKeyV1,
+    data: Vec<Gfx942FixedDispatchDataV1>,
+    predecessor: Option<u64>,
+) -> DispatchResourceOwnerV1 {
+    if data.len() == 3 {
+        let (program, packets) = three_binding_recipe();
+        let identity = three_binding_persistent_fixed_dispatch_control_identity_v1(
+            queue,
+            core::slice::from_ref(&program),
+            &packets,
+            core::array::from_fn(|i| data[i].layout()),
+            core::array::from_fn(|i| data[i].is_fully_initialized()),
+            core::array::from_fn(|i| Gfx942DeviceContentRoleV1::new([0x62; 32], i as u32).unwrap()),
+            core::array::from_fn(|i| data[i].sdma_storage_identity()),
+        )
+        .unwrap();
+        let mut preparation = FixedDispatchPreparationCustodyV1::new(packets, data);
+        prepare_three_binding_persistent_fixed_dispatch_resources_v1(
+            memory,
+            &[program],
+            &mut preparation,
+            predecessor,
+            identity,
+        )
+        .unwrap();
+        return preparation.take_completed().unwrap();
+    }
+    assert_eq!(data.len(), 1);
+    use fe2o3_amdhsa_loader::{AdmittedProfile, KernelGlobalBufferAbiV1, validate};
+    let program = validate(
+        include_bytes!("../../../fe2o3-runtime/fixtures/trusted-gfx942-active-checkpoint-v1/active-checkpoint.hsaco"),
+        AdmittedProfile::Gfx942XnackOffCov6,
+    ).unwrap().bind_kernel("active_checkpoint_liveness").unwrap().reconcile_dispatch_abi(
+        [0x61; 32], &[KernelGlobalBufferAbiV1::new(0, "output", 0, 4, ArgumentAccess::WriteOnly)],
+    ).unwrap();
+    let packets = [Gfx942FixedDispatchPacketV1::new(
+        0,
+        AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+        0,
+        vec![0; usize::try_from(program.selected_kernel().kernarg_segment_size()).unwrap()]
+            .into_boxed_slice(),
+        vec![Gfx942DispatchBufferBindingV1::new(0, 0, 0, 4096)].into_boxed_slice(),
+    )];
+    let identity = persistent_fixed_dispatch_control_identity_v1(
+        queue,
+        core::slice::from_ref(&program),
+        &packets,
+        data[0].layout(),
+        data[0].is_fully_initialized(),
+        Gfx942DeviceContentRoleV1::new([0x61; 32], 0).unwrap(),
+        data[0].sdma_storage_identity(),
+    )
+    .unwrap();
+    let mut preparation = FixedDispatchPreparationCustodyV1::new(packets, data);
+    prepare_persistent_fixed_dispatch_resources_v1(
+        memory,
+        &[program],
+        &mut preparation,
+        predecessor,
+        identity,
+    )
+    .unwrap();
+    preparation.take_completed().unwrap()
 }
 
 pub(in crate::queue) fn recycle_and_detach_persistent_fixture_v1(
@@ -1465,7 +1540,7 @@ fn preparation_terminal_variant_retains_actual_completed_owner() {
         crate::persistent_compute::PersistentComputeTerminalNativeCustodyV1::Preparation(owner);
     assert_eq!(
         terminal.stage(),
-        crate::persistent_compute::Gfx942PersistentComputeTerminalStageV1::Preparing
+        Some(crate::persistent_compute::Gfx942PersistentComputeTerminalStageV1::Preparing)
     );
     let crate::persistent_compute::PersistentComputeTerminalNativeCustodyV1::Preparation(owner) =
         terminal

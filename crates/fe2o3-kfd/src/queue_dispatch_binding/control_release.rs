@@ -32,7 +32,7 @@ enum PersistentOutputStateV1 {
 
 /// Completion stays in this root until the caller explicitly transfers it.
 /// Live callers must separately retain the root across their model loan.
-pub(in crate::queue) struct ReturningControlCleanupCustodyV1 {
+pub(crate) struct ReturningControlCleanupCustodyV1 {
     mode: ReturningControlModeV1,
     kernarg: Option<KernargAuthority>,
     code: std::vec::IntoIter<CodeAuthority>,
@@ -139,9 +139,11 @@ impl ReturningControlCleanupCustodyV1 {
             | ReturningControlModeV1::PersistentAfterRecycle => {
                 Some(self.generation.returned_generation()?)
             }
-            ReturningControlModeV1::ReturningDestroy
-            | ReturningControlModeV1::PersistentBeforePublication => {
+            ReturningControlModeV1::ReturningDestroy => {
                 Some(self.generation.returning_destroy_generation()?)
+            }
+            ReturningControlModeV1::PersistentBeforePublication => {
+                Some(self.generation.persistent_cancellation_generation()?)
             }
             ReturningControlModeV1::DetachedPersistent {
                 expected_generation,

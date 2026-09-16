@@ -1,0 +1,99 @@
+{
+  "source_head": "c171d915047daa5153c1f77253e15260e55da8c5",
+  "source_map_sha256": "29b127dd3e2f1eaa9cbc3e8bd7bfd7fb26bb8879e58bdf0ab801c291f188dd80",
+  "started_at": "2026-09-16T01:46:15.274Z",
+  "finished_at": "2026-09-16T01:47:10.657Z",
+  "command": [
+    "cargo",
+    "+nightly-2026-04-03",
+    "test",
+    "--locked",
+    "--offline",
+    "--no-fail-fast",
+    "-p",
+    "fe2o3-completion",
+    "-p",
+    "fe2o3-runtime-model",
+    "-p",
+    "fe2o3-resource-accounting",
+    "-p",
+    "fe2o3-kfd",
+    "-p",
+    "fe2o3-runtime",
+    "--all-features",
+    "-p",
+    "fe2o3-host",
+    "--doc"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r61-execution",
+  "log": "/home/harsh/.codex-tmp/r125-development-gate-gnu-docs-v1.log",
+  "source": "/home/harsh/.codex-tmp/r125-development-gate-gnu-docs-v1-source.json",
+  "source_after": "/home/harsh/.codex-tmp/r125-development-gate-gnu-docs-v1-source-after.json",
+  "source_unchanged": true,
+  "returncode": 0,
+  "child_returncode": 0,
+  "child_closed": true,
+  "spawn_error": null,
+  "signal": null,
+  "timed_out": false,
+  "deadline_ms": 1800000,
+  "runner": {
+    "name": "r125-development-run-v4.js",
+    "sha256": "52a8f0b4413a875757e943a9276b9cb832312ac0fd07a457305660065fdcb1e9"
+  },
+  "process_group_cleanup": {
+    "timeout": null,
+    "close": {
+      "status": "absent",
+      "pgid": 1348066,
+      "error": "Error: kill ESRCH",
+      "live_members": [],
+      "observation": {
+        "utc_ms": 1789523230666,
+        "monotonic_ns": "26245567749381",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    }
+  },
+  "elapsed_seconds": 55.383017844,
+  "verification_elapsed_seconds": 0.443765935,
+  "environment": {
+    "CARGO_BUILD_JOBS": "4",
+    "CARGO_INCREMENTAL": "0",
+    "RUST_TEST_THREADS": "4",
+    "XDG_RUNTIME_DIR": null
+  },
+  "clock": {
+    "contract": "r125-development-raw-utc-boot-monotonic-v1",
+    "predecessor": {
+      "name": "r125-development-full-check-v3.json",
+      "sha256": "4eb9a9ed8194f25d68a9dd00b73fef614eb27613d8f2855f48d2a231fa128890",
+      "observation": {
+        "utc_ms": 1789523164326,
+        "monotonic_ns": "26179228244380",
+        "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+        "clock_source": "node-process-hrtime-linux-monotonic"
+      }
+    },
+    "start": {
+      "utc_ms": 1789523175274,
+      "monotonic_ns": "26190176457474",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "finish": {
+      "utc_ms": 1789523230657,
+      "monotonic_ns": "26245559475318",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "source_verified": {
+      "utc_ms": 1789523231101,
+      "monotonic_ns": "26246003241253",
+      "boot_id": "74856d82-79a2-4377-b6c4-aaf01159fd19",
+      "clock_source": "node-process-hrtime-linux-monotonic"
+    },
+    "error": null
+  }
+}

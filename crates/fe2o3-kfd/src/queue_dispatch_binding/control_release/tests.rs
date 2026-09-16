@@ -291,6 +291,76 @@ impl Snapshot {
         owner_snapshot(owner, Mode::AfterRecycle)
     }
 
+    pub(in crate::queue) fn persistent_cancel_owner_v1(owner: &DispatchResourceOwnerV1) -> Self {
+        owner_snapshot(owner, Mode::PersistentBeforePublication)
+    }
+
+    pub(in crate::queue) fn assert_persistent_cancel_prefix_v1(
+        &self,
+        root: &Root,
+        completed: usize,
+        step: usize,
+        panicked: bool,
+        returned: &[Gfx942FixedDispatchDataV1],
+    ) {
+        let after = snapshot(root);
+        assert_eq!(self.mode, Mode::PersistentBeforePublication);
+        persistent::assert_control(
+            root,
+            self,
+            completed,
+            if step == 0 { "Mapped" } else { "Unmapped" },
+        );
+        assert_eq!(after.mode, self.mode);
+        assert_eq!(after.code_identity, self.code_identity);
+        assert_eq!(after.packets, self.packets);
+        assert_eq!(after.generation, self.generation);
+        assert_eq!(after.slots_pointer, self.slots_pointer);
+        assert_eq!(after.persistent, self.persistent);
+        assert_eq!(after.premises, self.premises);
+        assert_eq!(after.storage[..5], self.storage[..5]);
+        assert!(after.started && !after.complete);
+        assert!(after.kernarg.is_none());
+        assert_eq!(after.code, self.code[completed..]);
+        assert_eq!(
+            after.code_pointer,
+            self.code_pointer + completed * size_of::<CodeAuthority>()
+        );
+        assert_eq!(
+            after.active.as_ref().unwrap().identity,
+            self.order_v1()[completed]
+        );
+        assert!(after.returned.is_empty() && after.persistent_returned.is_empty());
+        assert_eq!(after.returned_generation, None);
+        if panicked {
+            assert!(root.persistent_returned.capacity() >= self.data.len());
+            assert_eq!(after.data, self.data);
+            assert!(returned.is_empty());
+            assert_eq!(
+                after.persistent_output,
+                PersistentOutputStateV1::Prepared(
+                    self.generation
+                        .persistent_cancellation_generation()
+                        .unwrap()
+                )
+            );
+        } else {
+            persistent::assert_output(returned, self);
+            assert_eq!(root.persistent_returned.capacity(), 0);
+            assert!(after.data.is_empty());
+            assert_eq!(after.persistent_output, PersistentOutputStateV1::Taken);
+            assert_eq!(returned.len(), self.data.len());
+            for ((returned, data), premise) in returned.iter().zip(&self.data).zip(&self.premises) {
+                assert_eq!(returned.sdma_storage_identity(), data.identity);
+                assert_eq!(returned.layout(), premise.value.layout);
+                assert_eq!(
+                    returned.is_fully_initialized(),
+                    premise.value.fully_initialized
+                );
+            }
+        }
+    }
+
     pub(in crate::queue) fn assert_recycled_prefix_v1(
         &self,
         root: &Root,

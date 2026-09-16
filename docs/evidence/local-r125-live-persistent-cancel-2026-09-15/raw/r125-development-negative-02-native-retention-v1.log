@@ -1,0 +1,34 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+warning: variant `Cancellation` is never constructed
+   --> crates/fe2o3-kfd/src/persistent_compute.rs:709:5
+    |
+700 | pub(crate) enum PersistentComputeTerminalNativeCustodyV1 {
+    |                 ---------------------------------------- variant in this enum
+...
+709 |     Cancellation(PersistentComputeCancellationCustodyV1),
+    |     ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fe2o3-kfd` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 55.48s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_native_cleanup_preserves_exact_control_prefix_and_data ... FAILED
+
+failures:
+
+---- queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_native_cleanup_preserves_exact_control_prefix_and_data stdout ----
+
+thread 'queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_native_cleanup_preserves_exact_control_prefix_and_data' (1380758) panicked at crates/fe2o3-kfd/src/queue_live/rebind_tests/persistent_cancel.rs:197:9:
+production retention lost constructed cancellation custody
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    queue::live::construction_primary::integration_tests::auxiliary_cases::prefix_cases::persistent_cancel_cases::persistent_cancel_constructed_native_cleanup_preserves_exact_control_prefix_and_data
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1243 filtered out; finished in 0.51s
+
+error: test failed, to rerun pass `-p fe2o3-kfd --lib`

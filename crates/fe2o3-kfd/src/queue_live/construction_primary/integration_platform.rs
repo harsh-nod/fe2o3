@@ -150,6 +150,14 @@ impl Drop for Owner {
 
 pub(super) struct Fixture;
 
+fn context_is_zeroed(bytes: &[u8]) -> bool {
+    const ZERO_PAGE: [u8; 4096] = [0; 4096];
+    // Compare every byte, including the final partial page, without a debug byte loop.
+    bytes
+        .chunks(ZERO_PAGE.len())
+        .all(|chunk| chunk == &ZERO_PAGE[..chunk.len()])
+}
+
 fn observe(name: &'static str) {
     let occurrence = record(name);
     if let Some((at, nth, true)) = trace().borrow().fault
@@ -241,7 +249,7 @@ impl PrimaryEnvironmentV1 for Fixture {
         assert_eq!(identity, context.storage_identity());
         memory
             .primary_write(context, |bytes| {
-                assert!(bytes.iter().all(|&b| b == 0));
+                assert!(context_is_zeroed(bytes));
                 if let Some(local) = &shadows.local_unpublished {
                     local.initialize(bytes)
                 } else {

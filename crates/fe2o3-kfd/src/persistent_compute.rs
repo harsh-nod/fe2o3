@@ -22,6 +22,7 @@ use crate::persistent_directional_sdma::{
     Gfx942DirectionalPersistentSdmaFrontierRetirementFailureV1,
     Gfx942DirectionalPersistentSdmaWindowCompletedV1, Gfx942DirectionalQueuePersistentAllocationV1,
 };
+use crate::queue::dispatch_binding::control_release::ReturningControlCleanupCustodyV1;
 use crate::queue::dispatch_binding::{
     FixedDispatchPreparationCustodyV1, MAX_DISPATCH_DATA_LEASES_V1,
 };
@@ -30,7 +31,9 @@ use crate::queue::{
     Gfx942CompletionRecycleObservationV1, Gfx942DispatchBatchV1, Gfx942FixedDispatchDataV1,
 };
 use crate::sdma::{Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferV1};
-use crate::shared_memory::Gfx942DeviceMemoryIdentityV1;
+use crate::shared_memory::{
+    Gfx942DeviceMemoryIdentityV1, Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1,
+};
 
 /// Historical R52 claim boundary for the first persistent SDMA/compute bridge.
 ///
@@ -703,6 +706,22 @@ pub(crate) enum PersistentComputeTerminalNativeCustodyV1 {
     Data(PersistentComputeTerminalDataV1),
     Storage(Gfx942SdmaBufferStorageV1),
     Restored,
+    Cancellation(PersistentComputeCancellationCustodyV1),
+}
+
+// Native suffix only: the enclosing attachment retains the allocation ledgers.
+pub(crate) struct PersistentComputeCancellationCustodyV1 {
+    pub(crate) cleanup: Option<ReturningControlCleanupCustodyV1>,
+    pub(crate) returned: Vec<Gfx942FixedDispatchDataV1>,
+    pub(crate) generation: Option<u64>,
+    pub(crate) mapped: [Option<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>>; 3],
+    pub(crate) initialized: [bool; 3],
+    pub(crate) count: usize,
+    pub(crate) original_attached: bool,
+    pub(crate) restore_started: bool,
+    pub(crate) restored: usize,
+    pub(crate) cancelled: usize,
+    pub(crate) output: ArrayVec<Gfx942PersistentComputeInputV1, 3>,
 }
 
 pub(crate) struct PersistentComputeTerminalDataV1 {
@@ -762,8 +781,8 @@ pub enum Gfx942PersistentComputeTerminalStageV1 {
 }
 
 impl PersistentComputeTerminalNativeCustodyV1 {
-    pub(crate) const fn stage(&self) -> Gfx942PersistentComputeTerminalStageV1 {
-        match self {
+    pub(crate) fn stage(&self) -> Option<Gfx942PersistentComputeTerminalStageV1> {
+        Some(match self {
             Self::Preparation(preparation) => {
                 let _ = core::mem::size_of_val(preparation);
                 Gfx942PersistentComputeTerminalStageV1::Preparing
@@ -790,7 +809,8 @@ impl PersistentComputeTerminalNativeCustodyV1 {
                 Gfx942PersistentComputeTerminalStageV1::StorageDetached
             }
             Self::Restored => Gfx942PersistentComputeTerminalStageV1::Restored,
-        }
+            Self::Cancellation(custody) => return custody.stage(),
+        })
     }
 }
 
@@ -1151,7 +1171,7 @@ impl Gfx942PersistentComputeTerminalCustodyV1 {
     pub fn stage(&self) -> Option<Gfx942PersistentComputeTerminalStageV1> {
         self.native
             .as_ref()
-            .map(PersistentComputeTerminalNativeCustodyV1::stage)
+            .and_then(PersistentComputeTerminalNativeCustodyV1::stage)
     }
 }
 
@@ -1200,7 +1220,7 @@ impl<T> Gfx942PersistentComputeTransitionFailureV1<T> {
     pub fn retained_stage(&self) -> Option<Gfx942PersistentComputeTerminalStageV1> {
         self.retained
             .as_ref()
-            .map(PersistentComputeTerminalNativeCustodyV1::stage)
+            .and_then(PersistentComputeTerminalNativeCustodyV1::stage)
     }
 }
 
@@ -1273,18 +1293,18 @@ mod tests {
     fn terminal_custody_observation_is_address_free_and_stage_exact() {
         assert_eq!(
             PersistentComputeTerminalNativeCustodyV1::Attached.stage(),
-            Gfx942PersistentComputeTerminalStageV1::Attached
+            Some(Gfx942PersistentComputeTerminalStageV1::Attached)
         );
         assert_eq!(
             PersistentComputeTerminalNativeCustodyV1::Data(
                 PersistentComputeTerminalDataV1::from_vec(Vec::new()),
             )
             .stage(),
-            Gfx942PersistentComputeTerminalStageV1::DataDetached
+            Some(Gfx942PersistentComputeTerminalStageV1::DataDetached)
         );
         assert_eq!(
             PersistentComputeTerminalNativeCustodyV1::Restored.stage(),
-            Gfx942PersistentComputeTerminalStageV1::Restored
+            Some(Gfx942PersistentComputeTerminalStageV1::Restored)
         );
     }
 

@@ -1,5 +1,54 @@
 use super::*;
 
+#[test]
+fn persistent_cancellation_inherits_detached_continuation_without_minting_recycle_history() {
+    let initial = DispatchGenerationOwnerV1::new().unwrap();
+    assert_eq!(initial.persistent_cancellation_generation().unwrap(), 0);
+    for predecessor in [0, 1, 7, u64::MAX - 2] {
+        let mut generation =
+            DispatchGenerationOwnerV1::persistent_after_detached(Some(predecessor)).unwrap();
+        assert_eq!(
+            generation.persistent_cancellation_generation().unwrap(),
+            predecessor
+        );
+        assert_eq!(generation.returning_destroy_generation().unwrap(), 0);
+        assert!(generation.returned_generation().is_err());
+        assert_eq!(generation.recycled_generation, None);
+        let mut cancelled = generation.clone();
+        let next = cancelled.next_generation;
+        let epoch = cancelled
+            .reserve(test_dispatch_queue_v1(), test_completion_roster_v1(next))
+            .unwrap();
+        assert!(cancelled.persistent_cancellation_generation().is_err());
+        cancelled.cancel_epoch(epoch).unwrap();
+        assert_eq!(
+            cancelled.persistent_cancellation_generation().unwrap(),
+            predecessor
+        );
+        assert_eq!(cancelled.returning_destroy_generation().unwrap(), 0);
+        assert!(cancelled.returned_generation().is_err());
+        cancelled.poison();
+        assert!(cancelled.persistent_cancellation_generation().is_err());
+        if predecessor == 7 {
+            let actual = recycle(&mut generation);
+            assert_eq!(actual, 8);
+            assert_eq!(
+                generation.persistent_cancellation_generation().unwrap(),
+                actual
+            );
+            assert_eq!(generation.returned_generation().unwrap(), actual);
+            let (epoch, completion) = publish(&mut generation);
+            assert!(generation.persistent_cancellation_generation().is_err());
+            generation.complete_epoch(epoch, completion).unwrap();
+            generation.recycle_epoch(epoch, completion).unwrap();
+            assert_eq!(generation.persistent_cancellation_generation().unwrap(), 9);
+        }
+    }
+    assert!(DispatchGenerationOwnerV1::after_recycled(0).is_err());
+    assert!(DispatchGenerationOwnerV1::persistent_after_detached(Some(u64::MAX - 1)).is_err());
+    assert!(DispatchGenerationOwnerV1::persistent_after_detached(Some(u64::MAX)).is_err());
+}
+
 const MODES: [Mode; 2] = [
     Mode::PersistentBeforePublication,
     Mode::PersistentAfterRecycle,
@@ -44,7 +93,7 @@ fn generation(mode: Mode) -> u64 {
     }
 }
 
-fn assert_output(output: &[Gfx942FixedDispatchDataV1], before: &Snapshot) {
+pub(super) fn assert_output(output: &[Gfx942FixedDispatchDataV1], before: &Snapshot) {
     let expected: Vec<_> = before
         .data
         .iter()
@@ -127,7 +176,7 @@ fn assert_split(failed: &mut Failed, before: &Snapshot, expected_generation: u64
     assert_no_take(&mut failed.root);
 }
 
-fn assert_control(root: &Root, before: &Snapshot, index: usize, owner: &str) {
+pub(super) fn assert_control(root: &Root, before: &Snapshot, index: usize, owner: &str) {
     let after = snapshot(root);
     let active = after
         .active
@@ -792,6 +841,8 @@ fn prepared(count: usize, mode: Mode) -> (Memory, Root, u64) {
         3 => preparation::three_persistent_control_fixture_v1(),
         _ => unreachable!(),
     };
+    assert_eq!(owner.generation.predecessor_detached_generation, Some(7));
+    assert_eq!(owner.generation.recycled_generation, None);
     let expected = if mode == Mode::PersistentAfterRecycle {
         let PersistentFixedDispatchControlStateV1::Attached(identity) = owner.persistent_control
         else {
@@ -811,7 +862,7 @@ fn prepared(count: usize, mode: Mode) -> (Memory, Root, u64) {
         owner.generation.recycle_epoch(epoch, completion).unwrap();
         generation
     } else {
-        0
+        7
     };
     let root = new_root(owner, mode);
     assert_eq!(root.data.len(), count);

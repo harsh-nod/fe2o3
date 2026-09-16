@@ -852,6 +852,11 @@ mod tests {
     }
 
     #[test]
+    fn backend_layout_keeps_persistent_ledgers_out_of_inline_custody() {
+        assert!(std::mem::size_of::<KfdRuntimeBackendV1>() <= 64 * 1024);
+    }
+
+    #[test]
     fn caller_authority_and_missing_history_cannot_enter_copy_only_observation() {
         for backend in [
             KfdRuntimeBackendV1::mock(),
