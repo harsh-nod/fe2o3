@@ -1,0 +1,13 @@
+
+running 8 tests
+test kfd_backend::tests::scripted_sdma_promotion_retry_and_teardown_preserve_exact_custody ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_diagnostic_panic_roots_retryable_and_terminal_owners ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_driver_selection_panic_keeps_untransferred_runtime_root ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_lower_panic_seals_backend_without_losing_driver_root ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_native_diagnostic_stays_typed_until_rooted_formatting ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_ordinary_rejection_keeps_neighbors_and_exact_error ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_public_context_handles_configured_and_unconfigured_panic ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_terminal_drop_aborts_with_runtime_or_lower_custody ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 777 filtered out; finished in 5.67s
+

@@ -480,15 +480,31 @@ pub(super) enum SdmaTerminalCustodyV1 {
     Scripted(ScriptedTerminalCustodyV1),
 }
 
-pub(super) enum SdmaTransitionFailureV1<R> {
+pub(super) enum SdmaTransitionFailureV1<R, D = String> {
     Retryable {
-        detail: String,
+        detail: D,
         custody: R,
     },
     ProcessTeardown {
-        detail: String,
+        detail: D,
         custody: SdmaTerminalCustodyV1,
     },
+}
+
+pub(super) enum SdmaPromotionDiagnosticV1 {
+    Native(ComputeAqlQueueSessionErrorV1),
+    #[cfg(test)]
+    Scripted(String),
+}
+
+impl core::fmt::Display for SdmaPromotionDiagnosticV1 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Native(error) => core::fmt::Display::fmt(error, f),
+            #[cfg(test)]
+            Self::Scripted(detail) => f.write_str(detail),
+        }
+    }
 }
 
 pub(super) enum DirectionalSdmaExecutionFailureV1 {
@@ -769,7 +785,10 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
     pub(super) fn promote(
         &mut self,
         buffer: SdmaBufferOwnerV1,
-    ) -> Result<DirectionalSdmaDeviceOwnerV1, SdmaTransitionFailureV1<SdmaBufferOwnerV1>> {
+    ) -> Result<
+        DirectionalSdmaDeviceOwnerV1,
+        SdmaTransitionFailureV1<SdmaBufferOwnerV1, SdmaPromotionDiagnosticV1>,
+    > {
         match (self, buffer) {
             (Self::Native(queue), SdmaBufferOwnerV1::Native(buffer)) => queue
                 .promote_sdma_device_buffer_to_directional_persistent_allocation_v1(buffer)
@@ -779,14 +798,14 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                     match custody {
                         Gfx942DirectionalPersistentSdmaPromotionCustodyV1::Retryable(buffer) => {
                             SdmaTransitionFailureV1::Retryable {
-                                detail: error.to_string(),
+                                detail: SdmaPromotionDiagnosticV1::Native(error),
                                 custody: SdmaBufferOwnerV1::Native(buffer),
                             }
                         }
                         Gfx942DirectionalPersistentSdmaPromotionCustodyV1::ProcessTeardown(
                             custody,
                         ) => SdmaTransitionFailureV1::ProcessTeardown {
-                            detail: error.to_string(),
+                            detail: SdmaPromotionDiagnosticV1::Native(error),
                             custody: SdmaTerminalCustodyV1::Native(
                                 NativeDirectionalSdmaTerminalCustodyV1::Promotion(custody),
                             ),
@@ -794,10 +813,27 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                     }
                 }),
             #[cfg(test)]
-            (Self::Scripted(driver), SdmaBufferOwnerV1::Scripted(buffer)) => driver.promote(buffer),
+            (Self::Scripted(driver), SdmaBufferOwnerV1::Scripted(buffer)) => {
+                driver.promote(buffer).map_err(|failure| match failure {
+                    SdmaTransitionFailureV1::Retryable { detail, custody } => {
+                        SdmaTransitionFailureV1::Retryable {
+                            detail: SdmaPromotionDiagnosticV1::Scripted(detail),
+                            custody,
+                        }
+                    }
+                    SdmaTransitionFailureV1::ProcessTeardown { detail, custody } => {
+                        SdmaTransitionFailureV1::ProcessTeardown {
+                            detail: SdmaPromotionDiagnosticV1::Scripted(detail),
+                            custody,
+                        }
+                    }
+                })
+            }
             #[cfg(test)]
             (_, buffer) => Err(SdmaTransitionFailureV1::ProcessTeardown {
-                detail: "directional SDMA owner/driver mismatch during promotion".to_owned(),
+                detail: SdmaPromotionDiagnosticV1::Scripted(
+                    "directional SDMA owner/driver mismatch during promotion".to_owned(),
+                ),
                 custody: scripted_mismatch_buffer(buffer, "promotion"),
             }),
         }
@@ -2030,6 +2066,7 @@ mod scripted {
             byte_len: u64,
         },
         Promote(ScriptedFailureModeV1),
+        PromotePanic,
         PromoteComputeReady(ScriptedFailureModeV1),
         PromoteComputeReadyForeignQueue,
         PromoteComputeReadyForeignQueueTerminal,
@@ -2225,6 +2262,7 @@ mod scripted {
     pub(crate) struct ScriptedSdmaDriverV1 {
         steps: VecDeque<ScriptedSdmaStepV1>,
         ledger: Rc<RefCell<ScriptedCustodyLedgerV1>>,
+        promotion_custody: Option<ScriptedBufferOwnerV1>,
     }
 
     impl core::fmt::Debug for ScriptedSdmaDriverV1 {
@@ -2243,6 +2281,7 @@ mod scripted {
             Self {
                 steps: steps.into_iter().collect(),
                 ledger: Rc::new(RefCell::new(ScriptedCustodyLedgerV1::default())),
+                promotion_custody: None,
             }
         }
 
@@ -2258,6 +2297,10 @@ mod scripted {
 
         pub(crate) fn remaining_steps(&self) -> usize {
             self.steps.len()
+        }
+
+        pub(crate) fn promotion_custody(&self) -> Option<&ScriptedBufferOwnerV1> {
+            self.promotion_custody.as_ref()
         }
 
         pub(crate) fn live_owner_count(&self) -> usize {
@@ -2509,6 +2552,11 @@ mod scripted {
             }
             let outcome = match self.pop() {
                 Ok(ScriptedSdmaStepV1::Promote(outcome)) => outcome,
+                Ok(ScriptedSdmaStepV1::PromotePanic) => {
+                    assert!(self.promotion_custody.is_none());
+                    self.promotion_custody = Some(buffer);
+                    std::panic::panic_any("scripted SDMA promotion panic");
+                }
                 Ok(step) => {
                     return Err(scripted_buffer_mismatch(
                         buffer,

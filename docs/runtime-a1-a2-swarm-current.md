@@ -62,8 +62,11 @@ Runtime host initialization/upload-staging retention and indexed host-write
 panic settlement are now implemented, with nine focused tests, GNU/musl runtime
 regressions and six MI300X regression probes. See the
 [host-write receipt](evidence/dev-r126-host-write-2026-09-16/README.md).
-Next are consuming promotion and synchronous-copy custody plus typed capacity
-rejection. Allocation during pending compute is still disabled. These are
+Directional promotion now retains input through model validation/retake and
+runtime diagnostic unwind, with constructed and scripted failure matrices. See
+the [promotion receipt](evidence/dev-r126-sdma-promotion-2026-09-16/README.md).
+Next are synchronous-copy/recycle custody plus typed capacity rejection.
+Allocation during pending compute is still disabled. These are
 development packets, not R126 or A1/A2 acceptance; R125 remains the accepted
 CPU/test checkpoint.
 

@@ -1,0 +1,13 @@
+
+running 8 tests
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_loan_failure_retains_and_does_not_validate ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_preflight_preserves_buffer_without_loan ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_rejects_real_foreign_mapping_after_retake ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_retry_reuses_exact_returned_mapping_then_refunds ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_public_guards_are_inert_and_drop_aborts ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_success_preserves_exact_mapping_pair_and_debit ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_zero_debit_is_terminal_only_after_validation_and_retake ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_validation_retake_matrix_retains_exact_owner ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1326 filtered out; finished in 34.54s
+

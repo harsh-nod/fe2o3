@@ -1930,6 +1930,27 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
             .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)
     }
 
+    fn mapped_device_memory_facts_v1(
+        &self,
+        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+        device: DeviceKeyV1,
+        vm: VmKeyV1,
+    ) -> Result<Gfx942DeviceMemoryDispatchFactsV1, MemorySessionError> {
+        let index = self.device_memory_index(lease, DeviceMemoryPhaseV1::Mapped)?;
+        let record = &self.device_memory[index];
+        if record.device != device || record.vm != vm {
+            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
+        }
+        Ok(Gfx942DeviceMemoryDispatchFactsV1 {
+            id: record.id,
+            generation: record.generation,
+            device: record.device,
+            vm: record.vm,
+            gpu_va: record.gpu_va,
+            layout: record.layout,
+        })
+    }
+
     fn device_pool_backing_bytes_v1(
         &self,
         lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
@@ -5980,21 +6001,8 @@ impl SharedGttMemorySessionV1 {
         &self,
         lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
     ) -> Result<Gfx942DeviceMemoryDispatchFactsV1, MemorySessionError> {
-        let index = self
-            .engine
-            .device_memory_index(lease, DeviceMemoryPhaseV1::Mapped)?;
-        let record = &self.engine.device_memory[index];
-        if record.device != self.model_device.model_key() || record.vm != self.vm {
-            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
-        }
-        Ok(Gfx942DeviceMemoryDispatchFactsV1 {
-            id: record.id,
-            generation: record.generation,
-            device: record.device,
-            vm: record.vm,
-            gpu_va: record.gpu_va,
-            layout: record.layout,
-        })
+        self.engine
+            .mapped_device_memory_facts_v1(lease, self.model_device.model_key(), self.vm)
     }
 
     pub(crate) fn retain_persistent_replay_data_in_place_v1(

@@ -326,6 +326,120 @@ fn native_runtime_allocation_shutdown_selects_retained_directional_release() {
     );
 }
 
+#[test]
+#[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+fn native_runtime_device_promotion_roundtrip_and_retained_shutdown() {
+    let device = native_device();
+    let mut backend = KfdRuntimeBackendV1::open_default(device, TestPanickingAuthorityV1).unwrap();
+    backend
+        .configure_host_visible_backing_budget_v1(
+            Gfx942HostVisibleBackingBudgetV1::new(16 * 1024 * 1024, 32).unwrap(),
+        )
+        .unwrap();
+    backend
+        .configure_device_backing_budget_v1(
+            Gfx942DeviceBackingBudgetV1::new(1024 * 1024, 8).unwrap(),
+        )
+        .unwrap();
+    backend
+        .enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([0x84; 32], 128).unwrap())
+        .unwrap();
+    let mut allocations = Vec::new();
+    for bytes in [17_usize, 4097] {
+        let allocation = backend
+            .allocate_v1(device, RuntimeMemoryKindV1::DeviceLocal, bytes as u64, 4096)
+            .unwrap();
+        let KfdRuntimeSdmaStorageV1::Device(owner) = &backend.allocations[&allocation].sdma_storage
+        else {
+            panic!("promoted device allocation required");
+        };
+        let DirectionalSdmaDeviceOwnerV1::Native(owner) = &**owner else {
+            panic!("native promotion required");
+        };
+        assert_eq!(owner.byte_len(), bytes as u64);
+        assert_eq!(
+            owner.physical_byte_len(),
+            (bytes as u64).next_multiple_of(4096)
+        );
+        let mut readback = vec![0xa5; bytes];
+        backend
+            .read_allocation_v1(allocation, 0, &mut readback)
+            .unwrap();
+        assert_eq!(readback, vec![0; bytes]);
+        let expected = (0..bytes)
+            .map(|index| ((index * 17 + 3) % 251) as u8)
+            .collect::<Vec<_>>();
+        backend
+            .write_allocation_v1(allocation, 0, &expected)
+            .unwrap();
+        readback.fill(0xa5);
+        // The direct download oracle requires the native path to report that it handled the read.
+        assert!(
+            backend
+                .download_sdma_range_v1(allocation, 0, &mut readback)
+                .unwrap()
+        );
+        assert_eq!(readback, expected);
+        println!(
+            "native_device_promotion logical_bytes={bytes} physical_bytes={} readback_sha256={}",
+            (bytes as u64).next_multiple_of(4096),
+            Sha256::digest(&readback)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
+        allocations.push(allocation);
+    }
+    let allocated = backend.device_backing_usage_v1().unwrap();
+    assert_eq!(
+        (
+            allocated.used_backing_bytes,
+            allocated.used_allocation_records
+        ),
+        (12288, 2)
+    );
+    for allocation in allocations {
+        backend.release_allocation_v1(allocation).unwrap();
+    }
+    let queue = backend.queue.as_mut().unwrap();
+    assert_eq!(
+        queue
+            .sdma_memory_pool_observation()
+            .unwrap()
+            .checked_out_buffers,
+        0
+    );
+    queue.trim_sdma_memory_pool().unwrap();
+    let refunded = backend.device_backing_usage_v1().unwrap();
+    assert_eq!(
+        (
+            refunded.used_backing_bytes,
+            refunded.used_allocation_records
+        ),
+        (0, 0)
+    );
+    assert_eq!(
+        (
+            refunded.reserved_records,
+            refunded.retained_records,
+            refunded.quarantined_records
+        ),
+        (0, 0, 0)
+    );
+    assert!(!refunded.poisoned);
+    let host_usage = observe_shutdown(&mut backend);
+    assert_retired_shutdown_is_inert(&mut backend);
+    let profile = backend.finish_profiler_v1().unwrap();
+    profile.validate().unwrap();
+    assert_eq!(profile.coverage.dropped_events, 0);
+    assert!(profile.coverage.complete_runtime_operation_history);
+    drop(backend);
+    println!(
+        "native_device_promotion=complete device_before={allocated:?} device_after={refunded:?} host_usage={host_usage:?} profile_events={}",
+        profile.events.len()
+    );
+}
+
 #[cfg(feature = "hardware-qualification")]
 #[test]
 #[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]

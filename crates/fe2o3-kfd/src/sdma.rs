@@ -590,13 +590,26 @@ impl Gfx942SdmaBufferV1 {
         &self,
         memory: &SharedGttMemorySessionV1,
     ) -> Result<(), Gfx942SdmaErrorV1> {
+        self.validate_physical_device_mapping_with_v1(|lease| {
+            memory.mapped_gfx942_device_memory_facts(lease)
+        })
+    }
+
+    pub(crate) fn validate_physical_device_mapping_with_v1(
+        &self,
+        facts: impl FnOnce(
+            &crate::Gfx942DeviceMemoryLeaseV1<crate::Gfx942DeviceMemoryMappedV1>,
+        ) -> Result<
+            crate::shared_memory::Gfx942DeviceMemoryDispatchFactsV1,
+            crate::MemorySessionError,
+        >,
+    ) -> Result<(), Gfx942SdmaErrorV1> {
         let Gfx942SdmaBufferStorageV1::Device(lease) = &self.storage else {
             return Err(Gfx942SdmaErrorV1::Contract(
                 "physical device mapping requires device-local storage",
             ));
         };
-        memory
-            .mapped_gfx942_device_memory_facts(lease)?
+        facts(lease)?
             .checked_gpu_subrange(0, self.physical_bytes(), 1)
             .map(|_| ())
             .ok_or(Gfx942SdmaErrorV1::Contract(

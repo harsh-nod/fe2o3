@@ -98,6 +98,19 @@ fn device_allocator_partition_does_not_invent_pending_custody_after_extraction()
 }
 
 impl PreparationMemoryFixtureV1 {
+    pub(crate) fn primary_validate_sdma_device_mapping_v1(
+        &self,
+        buffer: &crate::Gfx942SdmaBufferV1,
+    ) -> Result<(), crate::Gfx942SdmaErrorV1> {
+        buffer.validate_physical_device_mapping_with_v1(|lease| {
+            self.fixture.engine.mapped_device_memory_facts_v1(
+                lease,
+                self.fixture.device.model_key(),
+                self.fixture.vm,
+            )
+        })
+    }
+
     pub(crate) fn insertion_release_device_v1(
         &mut self,
         data: crate::Gfx942FixedDispatchDataV1,

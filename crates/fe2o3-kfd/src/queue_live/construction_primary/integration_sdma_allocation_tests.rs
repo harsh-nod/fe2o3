@@ -1,6 +1,8 @@
 //! The fresh allocation driver runs on the original constructed primary and SDMA owners.
 
 use super::*;
+#[path = "integration_sdma_promotion_tests.rs"]
+mod promotion;
 use crate::queue::live::sdma_allocation::{
     SdmaAllocationContextV1, SdmaAllocationCustodyV1, SdmaAllocationMemoryV1,
     SdmaAllocationPartsV1, SdmaAllocationRequestV1, allocate_in_place,

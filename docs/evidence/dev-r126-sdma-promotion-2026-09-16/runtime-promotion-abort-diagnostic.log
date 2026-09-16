@@ -1,0 +1,8 @@
+
+running 8 tests
+test kfd_backend::tests::scripted_sdma_promotion_retry_and_teardown_preserve_exact_custody ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_diagnostic_panic_roots_retryable_and_terminal_owners ... ok
+test kfd_backend::tests::sdma_promotion_tests::sdma_promotion_driver_selection_panic_keeps_untransferred_runtime_root ... 
+thread 'kfd_backend::tests::sdma_promotion_tests::sdma_promotion_driver_selection_panic_keeps_untransferred_runtime_root' (3079601) panicked at crates/fe2o3-runtime/src/kfd_backend/sdma_promotion.rs:23:66:
+promotion retains queue
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

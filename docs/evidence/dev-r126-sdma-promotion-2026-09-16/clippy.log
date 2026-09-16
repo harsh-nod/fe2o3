@@ -1,0 +1,57 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-runtime/src/kfd_backend/sdma_promotion.rs:17:52
+    |
+ 17 |           let result = catch_unwind(AssertUnwindSafe(|| {
+    |  ____________________________________________________^
+ 18 | |             // Select the driver before transferring custody; a missing queue cannot lose it.
+ 19 | |             #[cfg(test)]
+ 20 | |             let mut ops = if let Some(driver) = self.scripted_sdma.as_mut() {
+...   |
+ 33 | |             ops.promote(buffer)
+ 34 | |         }));
+    | |_________^
+    |
+   ::: crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs:484:5
+    |
+484 | /     Retryable {
+485 | |         detail: D,
+486 | |         custody: R,
+487 | |     },
+    | |_____- the variant `Retryable` contains at least 248 bytes
+488 | /     ProcessTeardown {
+489 | |         detail: D,
+490 | |         custody: SdmaTerminalCustodyV1,
+491 | |     },
+    | |_____- the largest variant contains at least 1288 bytes
+    |
+    = help: try reducing the size of `kfd_backend::kfd_backend_sdma_seam::SdmaTransitionFailureV1<kfd_backend::kfd_backend_sdma_seam::SdmaBufferOwnerV1, kfd_backend::kfd_backend_sdma_seam::SdmaPromotionDiagnosticV1>`, for example by boxing large elements or replacing it with `Box<kfd_backend::kfd_backend_sdma_seam::SdmaTransitionFailureV1<kfd_backend::kfd_backend_sdma_seam::SdmaBufferOwnerV1, kfd_backend::kfd_backend_sdma_seam::SdmaPromotionDiagnosticV1>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: could not compile `fe2o3-runtime` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_promotion_tests.rs:209:60
+    |
+209 |                 let result = catch_unwind(AssertUnwindSafe(|| promote_in_place(&mut f, buffer)));
+    |                                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 256 bytes
+    |
+    = help: try reducing the size of `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaPromotionFailureV1`, for example by boxing large elements or replacing it with `Box<persistent_directional_sdma::Gfx942DirectionalPersistentSdmaPromotionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_promotion_tests.rs:313:52
+    |
+313 |         let result = catch_unwind(AssertUnwindSafe(|| promote_in_place(&mut f, buffer)));
+    |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 256 bytes
+    |
+    = help: try reducing the size of `persistent_directional_sdma::Gfx942DirectionalPersistentSdmaPromotionFailureV1`, for example by boxing large elements or replacing it with `Box<persistent_directional_sdma::Gfx942DirectionalPersistentSdmaPromotionFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: could not compile `fe2o3-kfd` (lib test) due to 2 previous errors
+error: could not compile `fe2o3-runtime` (lib test) due to 1 previous error

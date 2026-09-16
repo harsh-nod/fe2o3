@@ -1,0 +1,25 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 45.01s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-6457f2b90c780e5d)
+
+running 8 tests
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_loan_failure_retains_and_does_not_validate ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_preflight_preserves_buffer_without_loan ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_rejects_real_foreign_mapping_after_retake ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_retry_reuses_exact_returned_mapping_then_refunds ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_success_preserves_exact_mapping_pair_and_debit ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_public_guards_are_inert_and_drop_aborts ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_zero_debit_is_terminal_only_after_validation_and_retake ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_validation_retake_matrix_retains_exact_owner ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1326 filtered out; finished in 23.64s
+
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-6da97149b4b59494)
+
+running 8 tests
+test kfd_backend::tests::scripted_sdma_promotion_retry_and_teardown_preserve_exact_custody ... ok
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`
+
+Caused by:
+  process didn't exit successfully: `/home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/fe2o3_runtime-6da97149b4b59494 sdma_promotion --test-threads=2` (signal: 6, SIGABRT: process abort signal)

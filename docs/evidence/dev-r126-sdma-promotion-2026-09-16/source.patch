@@ -1,0 +1,2052 @@
+diff --git a/crates/fe2o3-kfd/src/persistent_directional_sdma.rs b/crates/fe2o3-kfd/src/persistent_directional_sdma.rs
+index fd18bdbdb..ef23e5ada 100644
+--- a/crates/fe2o3-kfd/src/persistent_directional_sdma.rs
++++ b/crates/fe2o3-kfd/src/persistent_directional_sdma.rs
+@@ -2969,7 +2969,10 @@ mod tests {
+             .split("pub fn demote_directional_persistent_allocation_to_sdma_device_buffer_v1")
+             .next()
+             .unwrap();
+-        assert!(promotion.contains("validate_physical_device_mapping"));
++        assert!(promotion.contains("sdma_promotion::promote_in_place(self, buffer)"));
++        let promotion_driver = include_str!("queue_live/sdma_promotion.rs");
++        assert!(promotion_driver.contains("validate_physical_device_mapping"));
++        assert!(!promotion_driver.contains("checked_gpu_subrange"));
+         assert!(!promotion.contains("checked_gpu_subrange"));
+ 
+         let request_preparation = live
+diff --git a/crates/fe2o3-kfd/src/queue_live.rs b/crates/fe2o3-kfd/src/queue_live.rs
+index 6b9a69500..62b56fc48 100644
+--- a/crates/fe2o3-kfd/src/queue_live.rs
++++ b/crates/fe2o3-kfd/src/queue_live.rs
+@@ -262,6 +262,8 @@ pub(in crate::queue) mod persistent_bind;
+ mod pool_trim;
+ #[path = "queue_live/sdma_allocation.rs"]
+ mod sdma_allocation;
++#[path = "queue_live/sdma_promotion.rs"]
++mod sdma_promotion;
+ use persistent_bind::{settle_persistent_bind_preparation_v1, validate_persistent_bind_inputs_v1};
+ #[path = "queue_live/persistent_cancel.rs"]
+ pub(in crate::queue) mod persistent_cancel;
+@@ -3753,6 +3755,7 @@ pub struct ComputeAqlQueueSessionV1 {
+     sdma_pool_free: Vec<Gfx942SdmaBufferV1>,
+     sdma_pool_trim: Option<pool_trim::SdmaPoolTrimCustodyV1>,
+     sdma_allocation: Option<sdma_allocation::SdmaAllocationCustodyV1>,
++    sdma_promotion: Option<crate::persistent_directional_sdma::Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1>,
+     sdma_pool_reuse_count: u64,
+     sdma_device_pool: SdmaDevicePoolConfigurationV1,
+     // Both policies share sdma_device_pool's irreversible activity latch.
+@@ -6646,6 +6649,7 @@ impl ComputeAqlQueueSessionV1 {
+         &mut self,
+         bytes: usize,
+     ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
++        self.require_no_sdma_promotion_v1()?;
+         self.sdma_device_pool.begin_activity();
+         let requested = u64::try_from(bytes).map_err(|_| {
+             ComputeAqlQueueSessionErrorV1::Contract("pooled host-buffer size conversion")
+@@ -6664,6 +6668,7 @@ impl ComputeAqlQueueSessionV1 {
+         bytes: u64,
+         alignment: u64,
+     ) -> Result<Gfx942SdmaBufferV1, ComputeAqlQueueSessionErrorV1> {
++        self.require_no_sdma_promotion_v1()?;
+         self.sdma_device_pool.begin_activity();
+         if alignment == 0 || !alignment.is_power_of_two() {
+             return Err(ComputeAqlQueueSessionErrorV1::Contract(
+@@ -7480,92 +7485,7 @@ impl ComputeAqlQueueSessionV1 {
+         Gfx942DirectionalQueuePersistentAllocationV1,
+         Gfx942DirectionalPersistentSdmaPromotionFailureV1,
+     > {
+-        let recover = |error, buffer| {
+-            classify_directional_persistent_sdma_promotion_failure_v1(error, buffer, false)
+-        };
+-        let terminal = |error, buffer| {
+-            classify_directional_persistent_sdma_promotion_failure_v1(error, buffer, true)
+-        };
+-        if !buffer.belongs_to(self.key) {
+-            return Err(recover(
+-                ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
+-                buffer,
+-            ));
+-        }
+-        if let Err(error) = self.require_sdma_enabled() {
+-            return Err(if self.terminal_poisoned {
+-                terminal(error, buffer)
+-            } else {
+-                recover(error, buffer)
+-            });
+-        }
+-        let logical_bytes = buffer.requested_bytes();
+-        let physical_bytes = buffer.physical_bytes();
+-        if buffer.kind() != Gfx942SdmaBufferKindV1::DeviceLocal
+-            || !directional_persistent_sdma_extents_are_admitted_v1(
+-                logical_bytes,
+-                physical_bytes,
+-                buffer.pool_generation(),
+-            )
+-        {
+-            return Err(recover(
+-                ComputeAqlQueueSessionErrorV1::Contract(
+-                    "directional persistent SDMA promotion requires 0 < logical <= page-rounded physical <= 256 MiB",
+-                ),
+-                buffer,
+-            ));
+-        }
+-        let Some(observation) = self
+-            .sdma
+-            .as_ref()
+-            .and_then(Gfx942SdmaQueueSetV1::directional_observation)
+-        else {
+-            return Err(recover(
+-                ComputeAqlQueueSessionErrorV1::Contract(
+-                    "directional persistent SDMA promotion requires one directional queue pair",
+-                ),
+-                buffer,
+-            ));
+-        };
+-        let pair = match admit_persistent_directional_sdma_pair_v1(observation) {
+-            Ok(pair) => pair,
+-            Err(detail) => {
+-                return Err(recover(
+-                    ComputeAqlQueueSessionErrorV1::Contract(detail),
+-                    buffer,
+-                ));
+-            }
+-        };
+-        let validation = self.with_live_queue_memory_model(|memory| {
+-            buffer
+-                .validate_physical_device_mapping(memory)
+-                .map_err(Into::into)
+-        });
+-        if let Err(error) = validation {
+-            if self.terminal_poisoned {
+-                return Err(terminal(error, buffer));
+-            }
+-            return Err(recover(error, buffer));
+-        }
+-        match promote_directional_persistent_sdma_custody_v1(
+-            buffer,
+-            pair,
+-            self.sdma_outstanding_buffers,
+-        ) {
+-            Ok((allocation, outstanding_buffers)) => {
+-                self.sdma_outstanding_buffers = outstanding_buffers;
+-                Ok(allocation)
+-            }
+-            Err(buffer) => {
+-                self.poison_terminal();
+-                Err(terminal(
+-                    ComputeAqlQueueSessionErrorV1::Contract(
+-                        "directional persistent SDMA promotion custody mismatch",
+-                    ),
+-                    buffer,
+-                ))
+-            }
+-        }
++        sdma_promotion::promote_in_place(self, buffer)
+     }
+ 
+     /// Demotes only quiescent, non-quarantined directional custody and advances
+@@ -10094,6 +10014,7 @@ impl ComputeAqlQueueSessionV1 {
+     }
+ 
+     pub fn trim_sdma_memory_pool(&mut self) -> Result<usize, ComputeAqlQueueSessionErrorV1> {
++        self.require_no_sdma_promotion_v1()?;
+         if self.sdma_allocation.is_some() {
+             return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                 "unfinished SDMA allocation",
+@@ -12257,6 +12178,7 @@ impl ComputeAqlQueueSessionV1 {
+         &mut self,
+         mode: QueueDestroyModeV1,
+     ) -> Result<QueueAfterEventDestroyedV1, ComputeAqlQueueSessionErrorV1> {
++        self.require_no_sdma_promotion_v1()?;
+         if self.sdma_allocation.is_some() {
+             return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                 "unfinished SDMA allocation",
+@@ -12560,7 +12482,17 @@ impl ComputeAqlQueueSessionV1 {
+         engine.prepare_operation().map_err(map_native)
+     }
+ 
++    fn require_no_sdma_promotion_v1(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        if self.sdma_promotion.is_some() {
++            return Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "unfinished SDMA promotion",
++            ));
++        }
++        Ok(())
++    }
++
+     fn require_sdma_enabled(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        self.require_no_sdma_promotion_v1()?;
+         if self.sdma_allocation.is_some() {
+             return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                 "unfinished SDMA allocation",
+@@ -13434,6 +13366,7 @@ impl ComputeAqlQueueSessionV1 {
+         requested_bytes: u64,
+         required_alignment: u64,
+     ) -> Result<Option<Gfx942SdmaBufferV1>, ComputeAqlQueueSessionErrorV1> {
++        self.require_no_sdma_promotion_v1()?;
+         self.sdma_device_pool.begin_activity();
+         self.require_sdma_enabled()?;
+         if requested_bytes == 0 {
+@@ -13785,7 +13718,10 @@ fn validate_barrier_probe_success_snapshot(
+ 
+ impl Drop for ComputeAqlQueueSessionV1 {
+     fn drop(&mut self) {
+-        if self.sdma_pool_trim.is_some() || self.sdma_allocation.is_some() {
++        if self.sdma_pool_trim.is_some()
++            || self.sdma_allocation.is_some()
++            || self.sdma_promotion.is_some()
++        {
+             // Failed mutation retains native owners or disposed-but-unsettled receipts.
+             std::process::abort();
+         }
+@@ -16377,6 +16313,7 @@ mod tests {
+             sdma_pool_free: Vec::new(),
+             sdma_pool_trim: None,
+             sdma_allocation: None,
++            sdma_promotion: None,
+             sdma_pool_reuse_count: 0,
+             sdma_device_pool: SdmaDevicePoolConfigurationV1::default(),
+             sdma_host_pool_limits: None,
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs
+index 11f4e44e9..0ec5aa1a3 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs
+@@ -95,6 +95,7 @@ impl ComputeAqlQueueSessionV1 {
+             sdma_pool_free: Vec::new(),
+             sdma_pool_trim: None,
+             sdma_allocation: None,
++            sdma_promotion: None,
+             sdma_pool_reuse_count: 0,
+             sdma_device_pool: SdmaDevicePoolConfigurationV1 {
+                 limits: self.sdma_device_pool.limits,
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs
+index c5560f389..e3cff4e5d 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs
+@@ -264,6 +264,7 @@ impl CompletedPrimaryV1<LinuxPrimaryEnvironmentV1> {
+             sdma_pool_free: Vec::new(),
+             sdma_pool_trim: None,
+             sdma_allocation: None,
++            sdma_promotion: None,
+             sdma_pool_reuse_count: 0,
+             sdma_device_pool: SdmaDevicePoolConfigurationV1::default(),
+             sdma_host_pool_limits: None,
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_allocation_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_allocation_tests.rs
+index cee1304d7..0b6ab67f0 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_allocation_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_allocation_tests.rs
+@@ -1,6 +1,8 @@
+ //! The fresh allocation driver runs on the original constructed primary and SDMA owners.
+ 
+ use super::*;
++#[path = "integration_sdma_promotion_tests.rs"]
++mod promotion;
+ use crate::queue::live::sdma_allocation::{
+     SdmaAllocationContextV1, SdmaAllocationCustodyV1, SdmaAllocationMemoryV1,
+     SdmaAllocationPartsV1, SdmaAllocationRequestV1, allocate_in_place,
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_promotion_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_promotion_tests.rs
+new file mode 100644
+index 000000000..70be1b44b
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_promotion_tests.rs
+@@ -0,0 +1,545 @@
++//! Promotion uses original constructed queues, fresh mapped leases and real model loans.
++
++use super::*;
++use crate::persistent_directional_sdma::{
++    Gfx942DirectionalPersistentSdmaPromotionCustodyV1 as Custody,
++    Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1 as Root,
++    Gfx942PersistentDirectionalSdmaPairV1, demote_directional_persistent_sdma_custody_v1,
++};
++use crate::queue::live::sdma_promotion::{SdmaPromotionContextV1, admit_buffer, promote_in_place};
++
++struct PromotionParent {
++    base: AllocationParent,
++    root: Option<Root>,
++    validation: Fault,
++    validation_calls: std::cell::Cell<usize>,
++}
++
++impl PromotionParent {
++    fn new() -> Self {
++        Self {
++            base: AllocationParent::new(),
++            root: None,
++            validation: Fault::None,
++            validation_calls: std::cell::Cell::new(0),
++        }
++    }
++    fn buffer(&mut self, bytes: usize) -> Gfx942SdmaBufferV1 {
++        let buffer = self.base.allocate(false, bytes).unwrap();
++        self.base.calls.clear();
++        buffer
++    }
++}
++
++impl SdmaPromotionContextV1 for PromotionParent {
++    fn owner(&self) -> QueueKeyV1 {
++        self.base.parent.key
++    }
++    fn preflight(
++        &self,
++        buffer: &Gfx942SdmaBufferV1,
++    ) -> Result<Gfx942PersistentDirectionalSdmaPairV1, ComputeAqlQueueSessionErrorV1> {
++        if self.root.is_some() || self.base.parent.poisoned {
++            return Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "unfinished SDMA promotion",
++            ));
++        }
++        admit_buffer(
++            buffer,
++            self.base
++                .parent
++                .sdma
++                .as_ref()
++                .and_then(Gfx942SdmaQueueSetV1::directional_observation),
++        )
++    }
++    fn roots(&mut self) -> (&mut Option<Root>, &mut usize) {
++        (&mut self.root, &mut self.base.outstanding)
++    }
++    fn loan(&mut self) -> Result<LiveQueueModelFoundationLoanV1, ComputeAqlQueueSessionErrorV1> {
++        SdmaAllocationContextV1::loan(&mut self.base)
++    }
++    fn validate(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        self.validation_calls.set(self.validation_calls.get() + 1);
++        self.base
++            .parent
++            .engine
++            .backend
++            .session
++            .primary_validate_sdma_device_mapping_v1(&self.root.as_ref().unwrap().buffer)?;
++        match self.validation {
++            Fault::Error => Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "promotion validation",
++            )),
++            Fault::Panic => std::panic::panic_any("promotion validation"),
++            _ => Ok(()),
++        }
++    }
++    fn retake(
++        &mut self,
++        loan: LiveQueueModelFoundationLoanV1,
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        SdmaAllocationContextV1::retake(&mut self.base, loan)
++    }
++    fn is_terminal(&self) -> bool {
++        self.base.parent.poisoned
++    }
++    fn poison(&mut self) {
++        SdmaAllocationContextV1::poison(&mut self.base);
++    }
++}
++
++fn buffer_observation(
++    buffer: &Gfx942SdmaBufferV1,
++) -> (
++    crate::sdma::Gfx942SdmaBufferStorageIdentityV1,
++    u64,
++    u64,
++    u64,
++) {
++    (
++        buffer.storage_identity(),
++        buffer.pool_generation(),
++        buffer.requested_bytes(),
++        buffer.physical_bytes(),
++    )
++}
++
++fn returned_buffer(
++    failure: Gfx942DirectionalPersistentSdmaPromotionFailureV1,
++    terminal: bool,
++) -> Gfx942SdmaBufferV1 {
++    match failure.into_parts().1 {
++        Custody::Retryable(buffer) if !terminal => buffer,
++        Custody::ProcessTeardown(root) if terminal => root.buffer,
++        _ => panic!("wrong promotion failure class"),
++    }
++}
++
++#[test]
++fn constructed_sdma_promotion_success_preserves_exact_mapping_pair_and_debit() {
++    for (physical_request, logical) in [(17, 17), (4097, 4097), (8192, 17)] {
++        let mut f = PromotionParent::new();
++        let mut buffer = f.buffer(physical_request);
++        buffer.set_logical_bytes(logical);
++        let before = buffer_observation(&buffer);
++        let pair = f.preflight(&buffer).unwrap();
++        let e = &f.base.parent.engine;
++        let memory = e.backend.session.insertion_memory_snapshot_v1();
++        let loan = e.backend.session.primary_loan_state_v1(&e.foundation);
++        let resources = original_resource_ids(&f.base.parent);
++        let allocation = promote_in_place(&mut f, buffer)
++            .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
++        assert!(f.root.is_none() && !f.is_terminal());
++        assert_eq!(f.base.outstanding, 1);
++        assert_eq!(f.base.calls, ["loan", "retake"]);
++        assert_eq!(f.validation_calls.get(), 1);
++        assert_eq!(allocation.attachment.storage_identity, before.0);
++        assert_eq!(allocation.attachment.pool_generation, before.1);
++        assert_eq!(allocation.attachment.logical_bytes, before.2);
++        assert_eq!(allocation.attachment.physical_bytes, before.3);
++        assert_eq!(allocation.attachment.queue, f.owner());
++        assert_eq!(allocation.attachment.pair, pair);
++        assert_eq!(allocation.owner.byte_len(), before.3);
++        assert_eq!(allocation.owner.live_use_count(), 0);
++        let e = &f.base.parent.engine;
++        assert_eq!(e.backend.session.insertion_memory_snapshot_v1(), memory);
++        assert_eq!(
++            e.backend.session.primary_loan_state_v1(&e.foundation),
++            (loan.0, None, loan.2 + 1)
++        );
++        e.backend
++            .session
++            .primary_authenticate(&e.foundation)
++            .unwrap();
++        assert_eq!(original_resource_ids(&f.base.parent), resources);
++        let (buffer, debit) =
++            demote_directional_persistent_sdma_custody_v1(allocation, f.base.outstanding).unwrap();
++        assert_eq!(debit, 1);
++        assert_eq!(
++            buffer_observation(&buffer),
++            (before.0, before.1 + 1, before.2, before.3)
++        );
++        f.base
++            .parent
++            .engine
++            .backend
++            .session
++            .primary_validate_sdma_device_mapping_v1(&buffer)
++            .unwrap();
++        f.base.release(buffer);
++        f.base.shutdown();
++    }
++}
++
++#[test]
++#[allow(clippy::result_large_err)]
++fn constructed_sdma_promotion_validation_retake_matrix_retains_exact_owner() {
++    for validation in [Fault::None, Fault::Error, Fault::Panic] {
++        for closing in [
++            Fault::None,
++            Fault::Error,
++            Fault::Panic,
++            Fault::AfterError,
++            Fault::AfterPanic,
++            Fault::Regression,
++        ] {
++            for poison_panics in [false, true] {
++                let mut f = PromotionParent::new();
++                let buffer = f.buffer(17);
++                let retry = f.buffer(4097);
++                let before = buffer_observation(&buffer);
++                let retry_before = buffer_observation(&retry);
++                let e = &f.base.parent.engine;
++                let memory = e.backend.session.insertion_memory_snapshot_v1();
++                let host = e.backend.session.coherent_insertion_snapshot_v1();
++                let loan = e.backend.session.primary_loan_state_v1(&e.foundation);
++                let resources = original_resource_ids(&f.base.parent);
++                let signals =
++                    Memory::primary_token_identity(f.base.parent.signals.as_ref().unwrap());
++                let sdma = f
++                    .base
++                    .parent
++                    .sdma
++                    .as_ref()
++                    .unwrap()
++                    .directional_observation();
++                f.validation = validation;
++                f.base.closing = closing;
++                f.base.poison_panics = poison_panics;
++                let result = catch_unwind(AssertUnwindSafe(|| promote_in_place(&mut f, buffer)));
++                let terminal = validation == Fault::Panic || closing != Fault::None;
++                let panics = validation == Fault::Panic
++                    || matches!(closing, Fault::Panic | Fault::AfterPanic);
++                assert_eq!(f.is_terminal(), terminal);
++                assert_eq!(f.base.outstanding, 2);
++                assert_eq!(f.validation_calls.get(), 1);
++                assert_eq!(f.base.calls, ["loan", "retake"]);
++                if panics {
++                    let expected = if validation == Fault::Panic {
++                        "promotion validation"
++                    } else if closing == Fault::Panic {
++                        "allocation retake"
++                    } else {
++                        "allocation retake after"
++                    };
++                    assert_eq!(
++                        result.err().unwrap().downcast_ref::<&str>(),
++                        Some(&expected)
++                    );
++                    assert_eq!(buffer_observation(&f.root.as_ref().unwrap().buffer), before);
++                    let failed_retry = promote_in_place(&mut f, retry).unwrap_err();
++                    assert_eq!(
++                        buffer_observation(&returned_buffer(failed_retry, true)),
++                        retry_before
++                    );
++                    assert_eq!(buffer_observation(&f.root.as_ref().unwrap().buffer), before);
++                    assert_eq!(f.base.calls, ["loan", "retake"]);
++                    assert_eq!(f.validation_calls.get(), 1);
++                } else if validation == Fault::None && closing == Fault::None {
++                    let allocation = result
++                        .unwrap()
++                        .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
++                    assert_eq!(allocation.attachment.storage_identity, before.0);
++                    assert!(f.root.is_none());
++                } else {
++                    let failure = result.unwrap().unwrap_err();
++                    match closing {
++                        Fault::Error => assert!(matches!(
++                            failure.error(),
++                            ComputeAqlQueueSessionErrorV1::Contract("allocation retake")
++                        )),
++                        Fault::AfterError => assert!(matches!(
++                            failure.error(),
++                            ComputeAqlQueueSessionErrorV1::Contract("allocation retake after")
++                        )),
++                        Fault::Regression => assert!(matches!(
++                            failure.error(),
++                            ComputeAqlQueueSessionErrorV1::Memory(MemorySessionError::Model(
++                                "fixture live foundation reclaim"
++                            ))
++                        )),
++                        Fault::None => assert!(matches!(
++                            failure.error(),
++                            ComputeAqlQueueSessionErrorV1::Contract("promotion validation")
++                        )),
++                        _ => unreachable!(),
++                    }
++                    assert_eq!(
++                        buffer_observation(&returned_buffer(failure, terminal)),
++                        before
++                    );
++                    assert!(f.root.is_none());
++                }
++                let e = &f.base.parent.engine;
++                assert_eq!(e.backend.session.insertion_memory_snapshot_v1(), memory);
++                assert!(e.backend.session.coherent_insertion_snapshot_v1() == host);
++                assert_eq!(original_resource_ids(&f.base.parent), resources);
++                assert_eq!(
++                    Memory::primary_token_identity(f.base.parent.signals.as_ref().unwrap()),
++                    signals
++                );
++                assert_eq!(
++                    f.base
++                        .parent
++                        .sdma
++                        .as_ref()
++                        .unwrap()
++                        .directional_observation(),
++                    sdma
++                );
++                let reclaimed =
++                    matches!(closing, Fault::None | Fault::AfterError | Fault::AfterPanic);
++                assert_eq!(e.backend.foundation_in_engine, reclaimed);
++                assert_eq!(
++                    e.backend.session.primary_loan_state_v1(&e.foundation),
++                    (loan.0, (!reclaimed).then_some(loan.2), loan.2 + 1)
++                );
++            }
++        }
++    }
++}
++
++#[test]
++#[allow(clippy::result_large_err)]
++fn constructed_sdma_promotion_loan_failure_retains_and_does_not_validate() {
++    for opening in [Fault::Error, Fault::Panic] {
++        let mut f = PromotionParent::new();
++        let buffer = f.buffer(17);
++        let before = buffer_observation(&buffer);
++        let e = &f.base.parent.engine;
++        let memory = e.backend.session.insertion_memory_snapshot_v1();
++        let loan = e.backend.session.primary_loan_state_v1(&e.foundation);
++        f.base.opening = opening;
++        f.base.poison_panics = true;
++        let result = catch_unwind(AssertUnwindSafe(|| promote_in_place(&mut f, buffer)));
++        if opening == Fault::Error {
++            assert_eq!(
++                buffer_observation(&returned_buffer(result.unwrap().unwrap_err(), false)),
++                before
++            );
++            assert!(!f.is_terminal() && f.root.is_none());
++        } else {
++            assert_eq!(
++                result.err().unwrap().downcast_ref::<&str>(),
++                Some(&"allocation loan")
++            );
++            assert_eq!(buffer_observation(&f.root.as_ref().unwrap().buffer), before);
++            assert!(f.is_terminal());
++        }
++        assert_eq!(f.base.calls, ["loan"]);
++        assert_eq!(f.validation_calls.get(), 0);
++        assert_eq!(f.base.outstanding, 1);
++        let e = &f.base.parent.engine;
++        assert_eq!(e.backend.session.insertion_memory_snapshot_v1(), memory);
++        assert_eq!(e.backend.session.primary_loan_state_v1(&e.foundation), loan);
++    }
++}
++
++#[test]
++fn constructed_sdma_promotion_retry_reuses_exact_returned_mapping_then_refunds() {
++    for opening in [false, true] {
++        let mut f = PromotionParent::new();
++        let buffer = f.buffer(4097);
++        let before = buffer_observation(&buffer);
++        if opening {
++            f.base.opening = Fault::Error;
++        } else {
++            f.validation = Fault::Error;
++        }
++        let failure = promote_in_place(&mut f, buffer).unwrap_err();
++        let buffer = returned_buffer(failure, false);
++        assert_eq!(buffer_observation(&buffer), before);
++        assert!(!f.is_terminal() && f.root.is_none());
++        f.base.opening = Fault::None;
++        f.validation = Fault::None;
++        let allocation = promote_in_place(&mut f, buffer)
++            .unwrap_or_else(|failure| panic!("{:?}", failure.error()));
++        assert_eq!(allocation.attachment.storage_identity, before.0);
++        assert_eq!(f.base.outstanding, 1);
++        let (buffer, debit) =
++            demote_directional_persistent_sdma_custody_v1(allocation, f.base.outstanding).unwrap();
++        assert_eq!(debit, 1);
++        assert_eq!(
++            buffer_observation(&buffer),
++            (before.0, before.1 + 1, before.2, before.3)
++        );
++        f.base.release(buffer);
++        f.base.shutdown();
++    }
++}
++
++#[test]
++fn constructed_sdma_promotion_rejects_real_foreign_mapping_after_retake() {
++    let mut owner = PromotionParent::new();
++    let owner_trace = trace();
++    let buffer = owner.buffer(17);
++    let mut f = PromotionParent::new();
++    let receiver_trace = trace();
++    let (storage, _, generation, logical) = buffer.into_bridge_parts();
++    let buffer = Gfx942SdmaBufferV1::from_bridge_parts(storage, f.owner(), generation, logical);
++    let before = buffer_observation(&buffer);
++    let failure = promote_in_place(&mut f, buffer).unwrap_err();
++    assert!(matches!(
++        failure.error(),
++        ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Memory(
++            MemorySessionError::InvalidDeviceMemoryAuthority
++        ))
++    ));
++    let buffer = returned_buffer(failure, false);
++    assert_eq!(buffer_observation(&buffer), before);
++    assert_eq!(f.base.calls, ["loan", "retake"]);
++    assert!(!f.is_terminal() && f.root.is_none());
++    assert_eq!(f.base.outstanding, 0);
++    let (storage, _, generation, logical) = buffer.into_bridge_parts();
++    ACTIVE.with(|active| *active.borrow_mut() = Some(owner_trace));
++    owner.base.release(Gfx942SdmaBufferV1::from_bridge_parts(
++        storage,
++        owner.owner(),
++        generation,
++        logical,
++    ));
++    owner.base.shutdown();
++    ACTIVE.with(|active| *active.borrow_mut() = Some(receiver_trace));
++    f.base.shutdown();
++}
++
++#[test]
++fn constructed_sdma_promotion_preflight_preserves_buffer_without_loan() {
++    for case in 0..6 {
++        let mut f = PromotionParent::new();
++        let buffer = f.base.allocate(case == 0, 17).unwrap();
++        f.base.calls.clear();
++        let (storage, owner, generation, logical) = buffer.into_bridge_parts();
++        let buffer = Gfx942SdmaBufferV1::from_bridge_parts(
++            storage,
++            if case == 1 {
++                crate::queue::live::tests::test_queue_key(91, 1)
++            } else {
++                owner
++            },
++            if case == 2 { 0 } else { generation },
++            if case == 3 { 8193 } else { logical },
++        );
++        let before = buffer_observation(&buffer);
++        let sdma = if case == 4 {
++            f.base.parent.sdma.take()
++        } else {
++            None
++        };
++        if case == 5 {
++            f.base.parent.poisoned = true;
++        }
++        let failure = promote_in_place(&mut f, buffer).unwrap_err();
++        assert_eq!(
++            buffer_observation(&returned_buffer(failure, case == 5)),
++            before
++        );
++        assert!(f.base.calls.is_empty() && f.root.is_none());
++        assert_eq!(f.base.outstanding, 1);
++        if let Some(sdma) = sdma {
++            f.base.parent.sdma = Some(sdma);
++        }
++    }
++}
++
++#[test]
++fn constructed_sdma_promotion_zero_debit_is_terminal_only_after_validation_and_retake() {
++    let mut f = PromotionParent::new();
++    let buffer = f.buffer(17);
++    let before = buffer_observation(&buffer);
++    f.base.outstanding = 0;
++    f.base.poison_panics = true;
++    let failure = promote_in_place(&mut f, buffer).unwrap_err();
++    assert!(matches!(
++        failure.error(),
++        ComputeAqlQueueSessionErrorV1::Contract(
++            "directional persistent SDMA promotion custody mismatch"
++        )
++    ));
++    assert_eq!(buffer_observation(&returned_buffer(failure, true)), before);
++    assert_eq!(f.base.outstanding, 0);
++    assert_eq!(f.base.calls, ["loan", "retake"]);
++    assert_eq!(f.validation_calls.get(), 1);
++    assert!(f.is_terminal() && f.root.is_none());
++}
++
++#[test]
++fn constructed_sdma_promotion_public_guards_are_inert_and_drop_aborts() {
++    use std::os::unix::process::ExitStatusExt;
++    const CHILD: &str = "FE2O3_TEST_SDMA_PROMOTION_DROP";
++    const TEST: &str = "queue::live::construction_primary::integration_tests::release_cases::sdma_allocation_cases::promotion::constructed_sdma_promotion_public_guards_are_inert_and_drop_aborts";
++    if std::env::var_os(CHILD).is_none() {
++        let output = std::process::Command::new(std::env::current_exe().unwrap())
++            .args(["--exact", TEST, "--nocapture"])
++            .env(CHILD, "1")
++            .output()
++            .unwrap();
++        let stderr = String::from_utf8_lossy(&output.stderr);
++        assert_eq!(output.status.signal(), Some(6), "{stderr}");
++        assert!(stderr.contains("promotion guards checked; dropping retained root"));
++        assert!(!stderr.contains("panicked at"));
++        return;
++    }
++    rustix::process::setrlimit(
++        rustix::process::Resource::Core,
++        rustix::process::Rlimit {
++            current: Some(0),
++            maximum: Some(0),
++        },
++    )
++    .unwrap();
++    let mut f = PromotionParent::new();
++    let buffer = f.buffer(17);
++    let before = buffer_observation(&buffer);
++    // An engine-less public root exercises guard ordering, not native teardown.
++    let mut session = core::mem::ManuallyDrop::new(
++        crate::queue::live::tests::persistent_compute_cancellation_test_session(
++            f.owner(),
++            None,
++            None,
++        ),
++    );
++    session.sdma_promotion = Some(Root { buffer });
++    let ledger = (
++        session.sdma_device_pool.activity_started,
++        session.sdma_outstanding_buffers,
++        session.sdma_pool_reuse_count,
++    );
++    for result in [
++        session.allocate_sdma_host_buffer(17).map(|_| ()),
++        session.allocate_sdma_device_buffer(17, 4096).map(|_| ()),
++        session.allocate_sdma_pooled_host_buffer(17).map(|_| ()),
++        session
++            .allocate_sdma_pooled_device_buffer(17, 4096)
++            .map(|_| ()),
++        session.trim_sdma_memory_pool().map(|_| ()),
++        session.supports_retained_primary_release_v1().map(|_| ()),
++        session.preflight_primary_release_v1(),
++        session
++            .destroy_queue_and_event(QueueDestroyModeV1::Release)
++            .map(|_| ()),
++    ] {
++        assert!(matches!(
++            result,
++            Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "unfinished SDMA promotion"
++            ))
++        ));
++    }
++    assert_eq!(
++        (
++            session.sdma_device_pool.activity_started,
++            session.sdma_outstanding_buffers,
++            session.sdma_pool_reuse_count
++        ),
++        ledger
++    );
++    assert_eq!(
++        buffer_observation(&session.sdma_promotion.as_ref().unwrap().buffer),
++        before
++    );
++    eprintln!("promotion guards checked; dropping retained root");
++    drop(core::mem::ManuallyDrop::into_inner(session));
++    panic!("unfinished promotion Drop returned");
++}
+diff --git a/crates/fe2o3-kfd/src/queue_live/initial_bind.rs b/crates/fe2o3-kfd/src/queue_live/initial_bind.rs
+index d2662b598..cbf872785 100644
+--- a/crates/fe2o3-kfd/src/queue_live/initial_bind.rs
++++ b/crates/fe2o3-kfd/src/queue_live/initial_bind.rs
+@@ -177,6 +177,7 @@ impl InitialBindingParentV1 for &mut ComputeAqlQueueSessionV1 {
+             || self.terminal_dependency.is_some()
+             || self.sdma_pool_trim.is_some()
+             || self.sdma_allocation.is_some()
++            || self.sdma_promotion.is_some()
+             || !initial_dispatch_state_admitted_v1(
+                 &self.unpublished_dispatch,
+                 self.dispatch.is_some(),
+diff --git a/crates/fe2o3-kfd/src/queue_live/primary_release.rs b/crates/fe2o3-kfd/src/queue_live/primary_release.rs
+index cf4313419..1072e7f6c 100644
+--- a/crates/fe2o3-kfd/src/queue_live/primary_release.rs
++++ b/crates/fe2o3-kfd/src/queue_live/primary_release.rs
+@@ -49,6 +49,7 @@ impl ComputeAqlQueueSessionV1 {
+     pub fn supports_retained_primary_release_v1(
+         &self,
+     ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
++        self.require_no_sdma_promotion_v1()?;
+         if self.sdma_allocation.is_some() {
+             return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                 "unfinished SDMA allocation",
+diff --git a/crates/fe2o3-kfd/src/queue_live/sdma_allocation.rs b/crates/fe2o3-kfd/src/queue_live/sdma_allocation.rs
+index cf8ffd035..1e1257aed 100644
+--- a/crates/fe2o3-kfd/src/queue_live/sdma_allocation.rs
++++ b/crates/fe2o3-kfd/src/queue_live/sdma_allocation.rs
+@@ -247,6 +247,7 @@ impl SdmaAllocationMemoryV1 for SharedGttMemorySessionV1 {
+ impl SdmaAllocationContextV1 for ComputeAqlQueueSessionV1 {
+     type Memory = SharedGttMemorySessionV1;
+     fn preflight(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        self.require_no_sdma_promotion_v1()?;
+         if self.sdma_allocation.is_some() {
+             return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                 "unfinished SDMA allocation",
+diff --git a/crates/fe2o3-kfd/src/queue_live/sdma_promotion.rs b/crates/fe2o3-kfd/src/queue_live/sdma_promotion.rs
+new file mode 100644
+index 000000000..a28758eb7
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_live/sdma_promotion.rs
+@@ -0,0 +1,197 @@
++//! Retain the original buffer until borrowed validation and model retake settle.
++
++#![forbid(unsafe_code)]
++
++use super::*;
++use crate::persistent_directional_sdma::{
++    Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1,
++    Gfx942PersistentDirectionalSdmaPairV1,
++};
++use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
++
++pub(super) trait SdmaPromotionContextV1 {
++    fn owner(&self) -> QueueKeyV1;
++    fn preflight(
++        &self,
++        buffer: &Gfx942SdmaBufferV1,
++    ) -> Result<Gfx942PersistentDirectionalSdmaPairV1, ComputeAqlQueueSessionErrorV1>;
++    // Root access must survive missing engines and failed model restoration.
++    fn roots(
++        &mut self,
++    ) -> (
++        &mut Option<Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1>,
++        &mut usize,
++    );
++    fn loan(&mut self) -> Result<LiveQueueModelFoundationLoanV1, ComputeAqlQueueSessionErrorV1>;
++    fn validate(&self) -> Result<(), ComputeAqlQueueSessionErrorV1>;
++    fn retake(
++        &mut self,
++        loan: LiveQueueModelFoundationLoanV1,
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1>;
++    fn is_terminal(&self) -> bool;
++    fn poison(&mut self);
++}
++
++fn poison_without_replacing_failure<C: SdmaPromotionContextV1>(context: &mut C) {
++    core::mem::forget(catch_unwind(AssertUnwindSafe(|| context.poison())));
++}
++
++#[allow(clippy::result_large_err)]
++pub(super) fn promote_in_place<C: SdmaPromotionContextV1>(
++    context: &mut C,
++    buffer: Gfx942SdmaBufferV1,
++) -> Result<
++    Gfx942DirectionalQueuePersistentAllocationV1,
++    Gfx942DirectionalPersistentSdmaPromotionFailureV1,
++> {
++    if !buffer.belongs_to(context.owner()) {
++        return Err(classify_directional_persistent_sdma_promotion_failure_v1(
++            ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
++            buffer,
++            false,
++        ));
++    }
++    // Preflight is borrowed, non-mutating admission. Preserve its original error order.
++    let pair = match context.preflight(&buffer) {
++        Ok(pair) => pair,
++        Err(error) => {
++            return Err(classify_directional_persistent_sdma_promotion_failure_v1(
++                error,
++                buffer,
++                context.is_terminal(),
++            ));
++        }
++    };
++    let (root, _) = context.roots();
++    if root.is_some() {
++        return Err(classify_directional_persistent_sdma_promotion_failure_v1(
++            ComputeAqlQueueSessionErrorV1::Contract("unfinished SDMA promotion"),
++            buffer,
++            context.is_terminal(),
++        ));
++    }
++    *root = Some(Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1 { buffer });
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        let (validation, retake) = execute_live_model_custody_v1(
++            context,
++            C::loan,
++            |context| context.validate(),
++            C::retake,
++            poison_without_replacing_failure,
++        )?;
++        retake?;
++        validation?;
++        let (root, outstanding) = context.roots();
++        let buffer = root.take().expect("settled promotion custody").buffer;
++        match promote_directional_persistent_sdma_custody_v1(buffer, pair, *outstanding) {
++            Ok((allocation, debit)) => {
++                *outstanding = debit;
++                Ok(allocation)
++            }
++            Err(buffer) => {
++                *root = Some(Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1 { buffer });
++                poison_without_replacing_failure(context);
++                Err(ComputeAqlQueueSessionErrorV1::Contract(
++                    "directional persistent SDMA promotion custody mismatch",
++                ))
++            }
++        }
++    }));
++    match result {
++        Ok(Ok(allocation)) => Ok(allocation),
++        Ok(Err(error)) => {
++            let terminal = context.is_terminal();
++            let buffer = context
++                .roots()
++                .0
++                .take()
++                .expect("failed promotion custody")
++                .buffer;
++            Err(classify_directional_persistent_sdma_promotion_failure_v1(
++                error, buffer, terminal,
++            ))
++        }
++        Err(payload) => {
++            poison_without_replacing_failure(context);
++            resume_unwind(payload)
++        }
++    }
++}
++
++impl SdmaPromotionContextV1 for ComputeAqlQueueSessionV1 {
++    fn owner(&self) -> QueueKeyV1 {
++        self.key
++    }
++    fn preflight(
++        &self,
++        buffer: &Gfx942SdmaBufferV1,
++    ) -> Result<Gfx942PersistentDirectionalSdmaPairV1, ComputeAqlQueueSessionErrorV1> {
++        self.require_sdma_enabled()?;
++        admit_buffer(
++            buffer,
++            self.sdma
++                .as_ref()
++                .and_then(Gfx942SdmaQueueSetV1::directional_observation),
++        )
++    }
++    fn roots(
++        &mut self,
++    ) -> (
++        &mut Option<Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1>,
++        &mut usize,
++    ) {
++        (&mut self.sdma_promotion, &mut self.sdma_outstanding_buffers)
++    }
++    fn loan(&mut self) -> Result<LiveQueueModelFoundationLoanV1, ComputeAqlQueueSessionErrorV1> {
++        self.restore_model_ownership_for_live_mutation()
++    }
++    fn validate(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        let engine = self
++            .engine
++            .as_ref()
++            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
++                "missing queue engine",
++            ))?;
++        self.sdma_promotion
++            .as_ref()
++            .expect("installed promotion custody")
++            .buffer
++            .validate_physical_device_mapping(&engine.backend.session)
++            .map_err(Into::into)
++    }
++    fn retake(
++        &mut self,
++        loan: LiveQueueModelFoundationLoanV1,
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        self.retake_model_ownership_after_live_mutation(loan)
++    }
++    fn is_terminal(&self) -> bool {
++        self.terminal_poisoned
++    }
++    fn poison(&mut self) {
++        self.poison_terminal();
++        permanently_poison_process_global_kfd_runtime_gate_v1();
++    }
++}
++
++pub(super) fn admit_buffer(
++    buffer: &Gfx942SdmaBufferV1,
++    observation: Option<crate::sdma::Gfx942DirectionalSdmaQueueObservationV1>,
++) -> Result<Gfx942PersistentDirectionalSdmaPairV1, ComputeAqlQueueSessionErrorV1> {
++    if buffer.kind() != Gfx942SdmaBufferKindV1::DeviceLocal
++        || !directional_persistent_sdma_extents_are_admitted_v1(
++            buffer.requested_bytes(),
++            buffer.physical_bytes(),
++            buffer.pool_generation(),
++        )
++    {
++        return Err(ComputeAqlQueueSessionErrorV1::Contract(
++            "directional persistent SDMA promotion requires 0 < logical <= page-rounded physical <= 256 MiB",
++        ));
++    }
++    let observation = observation.ok_or(ComputeAqlQueueSessionErrorV1::Contract(
++        "directional persistent SDMA promotion requires one directional queue pair",
++    ))?;
++    admit_persistent_directional_sdma_pair_v1(observation)
++        .map_err(ComputeAqlQueueSessionErrorV1::Contract)
++}
+diff --git a/crates/fe2o3-kfd/src/sdma.rs b/crates/fe2o3-kfd/src/sdma.rs
+index 49295c1a0..9eddc3d3c 100644
+--- a/crates/fe2o3-kfd/src/sdma.rs
++++ b/crates/fe2o3-kfd/src/sdma.rs
+@@ -589,14 +589,27 @@ impl Gfx942SdmaBufferV1 {
+     pub(crate) fn validate_physical_device_mapping(
+         &self,
+         memory: &SharedGttMemorySessionV1,
++    ) -> Result<(), Gfx942SdmaErrorV1> {
++        self.validate_physical_device_mapping_with_v1(|lease| {
++            memory.mapped_gfx942_device_memory_facts(lease)
++        })
++    }
++
++    pub(crate) fn validate_physical_device_mapping_with_v1(
++        &self,
++        facts: impl FnOnce(
++            &crate::Gfx942DeviceMemoryLeaseV1<crate::Gfx942DeviceMemoryMappedV1>,
++        ) -> Result<
++            crate::shared_memory::Gfx942DeviceMemoryDispatchFactsV1,
++            crate::MemorySessionError,
++        >,
+     ) -> Result<(), Gfx942SdmaErrorV1> {
+         let Gfx942SdmaBufferStorageV1::Device(lease) = &self.storage else {
+             return Err(Gfx942SdmaErrorV1::Contract(
+                 "physical device mapping requires device-local storage",
+             ));
+         };
+-        memory
+-            .mapped_gfx942_device_memory_facts(lease)?
++        facts(lease)?
+             .checked_gpu_subrange(0, self.physical_bytes(), 1)
+             .map(|_| ())
+             .ok_or(Gfx942SdmaErrorV1::Contract(
+diff --git a/crates/fe2o3-kfd/src/shared_memory.rs b/crates/fe2o3-kfd/src/shared_memory.rs
+index 3466ff8ab..4436a8fd0 100644
+--- a/crates/fe2o3-kfd/src/shared_memory.rs
++++ b/crates/fe2o3-kfd/src/shared_memory.rs
+@@ -1930,6 +1930,27 @@ impl<B: MemoryBackend> SharedMemoryEngine<B> {
+             .ok_or(MemorySessionError::InvalidDeviceMemoryAuthority)
+     }
+ 
++    fn mapped_device_memory_facts_v1(
++        &self,
++        lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
++        device: DeviceKeyV1,
++        vm: VmKeyV1,
++    ) -> Result<Gfx942DeviceMemoryDispatchFactsV1, MemorySessionError> {
++        let index = self.device_memory_index(lease, DeviceMemoryPhaseV1::Mapped)?;
++        let record = &self.device_memory[index];
++        if record.device != device || record.vm != vm {
++            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
++        }
++        Ok(Gfx942DeviceMemoryDispatchFactsV1 {
++            id: record.id,
++            generation: record.generation,
++            device: record.device,
++            vm: record.vm,
++            gpu_va: record.gpu_va,
++            layout: record.layout,
++        })
++    }
++
+     fn device_pool_backing_bytes_v1(
+         &self,
+         lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+@@ -5980,21 +6001,8 @@ impl SharedGttMemorySessionV1 {
+         &self,
+         lease: &Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>,
+     ) -> Result<Gfx942DeviceMemoryDispatchFactsV1, MemorySessionError> {
+-        let index = self
+-            .engine
+-            .device_memory_index(lease, DeviceMemoryPhaseV1::Mapped)?;
+-        let record = &self.engine.device_memory[index];
+-        if record.device != self.model_device.model_key() || record.vm != self.vm {
+-            return Err(MemorySessionError::InvalidDeviceMemoryAuthority);
+-        }
+-        Ok(Gfx942DeviceMemoryDispatchFactsV1 {
+-            id: record.id,
+-            generation: record.generation,
+-            device: record.device,
+-            vm: record.vm,
+-            gpu_va: record.gpu_va,
+-            layout: record.layout,
+-        })
++        self.engine
++            .mapped_device_memory_facts_v1(lease, self.model_device.model_key(), self.vm)
+     }
+ 
+     pub(crate) fn retain_persistent_replay_data_in_place_v1(
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/live_insertion.rs b/crates/fe2o3-kfd/src/shared_memory/tests/live_insertion.rs
+index c8e33ce62..9dd9abc7a 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/tests/live_insertion.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/live_insertion.rs
+@@ -98,6 +98,19 @@ fn device_allocator_partition_does_not_invent_pending_custody_after_extraction()
+ }
+ 
+ impl PreparationMemoryFixtureV1 {
++    pub(crate) fn primary_validate_sdma_device_mapping_v1(
++        &self,
++        buffer: &crate::Gfx942SdmaBufferV1,
++    ) -> Result<(), crate::Gfx942SdmaErrorV1> {
++        buffer.validate_physical_device_mapping_with_v1(|lease| {
++            self.fixture.engine.mapped_device_memory_facts_v1(
++                lease,
++                self.fixture.device.model_key(),
++                self.fixture.vm,
++            )
++        })
++    }
++
+     pub(crate) fn insertion_release_device_v1(
+         &mut self,
+         data: crate::Gfx942FixedDispatchDataV1,
+diff --git a/crates/fe2o3-runtime/src/kfd_backend.rs b/crates/fe2o3-runtime/src/kfd_backend.rs
+index 452b0eb76..c32413560 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend.rs
+@@ -111,6 +111,7 @@ pub use qualification_drain_capture::{
+ };
+ mod kfd_backend_sdma_seam;
+ mod sdma_host_write;
++mod sdma_promotion;
+ use compute_dispatch::*;
+ use compute_state::*;
+ #[cfg(test)]
+@@ -6047,29 +6048,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
+                     KfdRuntimeSdmaStorageV1::Host(buffer)
+                 }
+                 RuntimeMemoryKindV1::DeviceLocal => {
+-                    match self.directional_sdma_ops_v1().promote(buffer) {
+-                        Ok(allocation) => KfdRuntimeSdmaStorageV1::Device(Box::new(allocation)),
+-                        Err(failure) => {
+-                            return match failure {
+-                                SdmaTransitionFailureV1::Retryable {
+-                                    detail,
+-                                    custody: buffer,
+-                                } => {
+-                                    self.recycle_transient_sdma_buffer_v1(buffer, "promotion")?;
+-                                    Err(Self::rejected(
+-                                        KfdRuntimeBackendErrorKindV1::Native,
+-                                        format!("KFD persistent device promotion: {detail}"),
+-                                    ))
+-                                }
+-                                SdmaTransitionFailureV1::ProcessTeardown { detail, custody } => {
+-                                    self.retain_sdma_seam_terminal_v1(custody);
+-                                    Err(self.terminal_error(format!(
+-                                        "KFD persistent device promotion: {detail}"
+-                                    )))
+-                                }
+-                            };
+-                        }
+-                    }
++                    KfdRuntimeSdmaStorageV1::Device(Box::new(self.promote_sdma_buffer_v1(buffer)?))
+                 }
+             }
+         } else {
+@@ -12827,6 +12806,7 @@ mod retained_release_tests;
+ #[cfg(test)]
+ mod tests {
+     mod sdma_host_write_tests;
++    mod sdma_promotion_tests;
+ 
+     use super::kfd_backend_sdma_seam::{
+         DirectionalSdmaOpsV1, DirectionalSdmaPairOwnerV1, ScriptedBufferKindV1,
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs b/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs
+index 03c517a42..ab784d407 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/kfd_backend_sdma_seam.rs
+@@ -480,17 +480,33 @@ pub(super) enum SdmaTerminalCustodyV1 {
+     Scripted(ScriptedTerminalCustodyV1),
+ }
+ 
+-pub(super) enum SdmaTransitionFailureV1<R> {
++pub(super) enum SdmaTransitionFailureV1<R, D = String> {
+     Retryable {
+-        detail: String,
++        detail: D,
+         custody: R,
+     },
+     ProcessTeardown {
+-        detail: String,
++        detail: D,
+         custody: SdmaTerminalCustodyV1,
+     },
+ }
+ 
++pub(super) enum SdmaPromotionDiagnosticV1 {
++    Native(ComputeAqlQueueSessionErrorV1),
++    #[cfg(test)]
++    Scripted(String),
++}
++
++impl core::fmt::Display for SdmaPromotionDiagnosticV1 {
++    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        match self {
++            Self::Native(error) => core::fmt::Display::fmt(error, f),
++            #[cfg(test)]
++            Self::Scripted(detail) => f.write_str(detail),
++        }
++    }
++}
++
+ pub(super) enum DirectionalSdmaExecutionFailureV1 {
+     Retryable {
+         detail: String,
+@@ -769,7 +785,10 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+     pub(super) fn promote(
+         &mut self,
+         buffer: SdmaBufferOwnerV1,
+-    ) -> Result<DirectionalSdmaDeviceOwnerV1, SdmaTransitionFailureV1<SdmaBufferOwnerV1>> {
++    ) -> Result<
++        DirectionalSdmaDeviceOwnerV1,
++        SdmaTransitionFailureV1<SdmaBufferOwnerV1, SdmaPromotionDiagnosticV1>,
++    > {
+         match (self, buffer) {
+             (Self::Native(queue), SdmaBufferOwnerV1::Native(buffer)) => queue
+                 .promote_sdma_device_buffer_to_directional_persistent_allocation_v1(buffer)
+@@ -779,14 +798,14 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+                     match custody {
+                         Gfx942DirectionalPersistentSdmaPromotionCustodyV1::Retryable(buffer) => {
+                             SdmaTransitionFailureV1::Retryable {
+-                                detail: error.to_string(),
++                                detail: SdmaPromotionDiagnosticV1::Native(error),
+                                 custody: SdmaBufferOwnerV1::Native(buffer),
+                             }
+                         }
+                         Gfx942DirectionalPersistentSdmaPromotionCustodyV1::ProcessTeardown(
+                             custody,
+                         ) => SdmaTransitionFailureV1::ProcessTeardown {
+-                            detail: error.to_string(),
++                            detail: SdmaPromotionDiagnosticV1::Native(error),
+                             custody: SdmaTerminalCustodyV1::Native(
+                                 NativeDirectionalSdmaTerminalCustodyV1::Promotion(custody),
+                             ),
+@@ -794,10 +813,27 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
+                     }
+                 }),
+             #[cfg(test)]
+-            (Self::Scripted(driver), SdmaBufferOwnerV1::Scripted(buffer)) => driver.promote(buffer),
++            (Self::Scripted(driver), SdmaBufferOwnerV1::Scripted(buffer)) => {
++                driver.promote(buffer).map_err(|failure| match failure {
++                    SdmaTransitionFailureV1::Retryable { detail, custody } => {
++                        SdmaTransitionFailureV1::Retryable {
++                            detail: SdmaPromotionDiagnosticV1::Scripted(detail),
++                            custody,
++                        }
++                    }
++                    SdmaTransitionFailureV1::ProcessTeardown { detail, custody } => {
++                        SdmaTransitionFailureV1::ProcessTeardown {
++                            detail: SdmaPromotionDiagnosticV1::Scripted(detail),
++                            custody,
++                        }
++                    }
++                })
++            }
+             #[cfg(test)]
+             (_, buffer) => Err(SdmaTransitionFailureV1::ProcessTeardown {
+-                detail: "directional SDMA owner/driver mismatch during promotion".to_owned(),
++                detail: SdmaPromotionDiagnosticV1::Scripted(
++                    "directional SDMA owner/driver mismatch during promotion".to_owned(),
++                ),
+                 custody: scripted_mismatch_buffer(buffer, "promotion"),
+             }),
+         }
+@@ -2030,6 +2066,7 @@ mod scripted {
+             byte_len: u64,
+         },
+         Promote(ScriptedFailureModeV1),
++        PromotePanic,
+         PromoteComputeReady(ScriptedFailureModeV1),
+         PromoteComputeReadyForeignQueue,
+         PromoteComputeReadyForeignQueueTerminal,
+@@ -2225,6 +2262,7 @@ mod scripted {
+     pub(crate) struct ScriptedSdmaDriverV1 {
+         steps: VecDeque<ScriptedSdmaStepV1>,
+         ledger: Rc<RefCell<ScriptedCustodyLedgerV1>>,
++        promotion_custody: Option<ScriptedBufferOwnerV1>,
+     }
+ 
+     impl core::fmt::Debug for ScriptedSdmaDriverV1 {
+@@ -2243,6 +2281,7 @@ mod scripted {
+             Self {
+                 steps: steps.into_iter().collect(),
+                 ledger: Rc::new(RefCell::new(ScriptedCustodyLedgerV1::default())),
++                promotion_custody: None,
+             }
+         }
+ 
+@@ -2260,6 +2299,10 @@ mod scripted {
+             self.steps.len()
+         }
+ 
++        pub(crate) fn promotion_custody(&self) -> Option<&ScriptedBufferOwnerV1> {
++            self.promotion_custody.as_ref()
++        }
++
+         pub(crate) fn live_owner_count(&self) -> usize {
+             self.ledger.borrow().owners.len()
+         }
+@@ -2509,6 +2552,11 @@ mod scripted {
+             }
+             let outcome = match self.pop() {
+                 Ok(ScriptedSdmaStepV1::Promote(outcome)) => outcome,
++                Ok(ScriptedSdmaStepV1::PromotePanic) => {
++                    assert!(self.promotion_custody.is_none());
++                    self.promotion_custody = Some(buffer);
++                    std::panic::panic_any("scripted SDMA promotion panic");
++                }
+                 Ok(step) => {
+                     return Err(scripted_buffer_mismatch(
+                         buffer,
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
+index d43285f62..e7ae56f93 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
+@@ -326,6 +326,120 @@ fn native_runtime_allocation_shutdown_selects_retained_directional_release() {
+     );
+ }
+ 
++#[test]
++#[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
++fn native_runtime_device_promotion_roundtrip_and_retained_shutdown() {
++    let device = native_device();
++    let mut backend = KfdRuntimeBackendV1::open_default(device, TestPanickingAuthorityV1).unwrap();
++    backend
++        .configure_host_visible_backing_budget_v1(
++            Gfx942HostVisibleBackingBudgetV1::new(16 * 1024 * 1024, 32).unwrap(),
++        )
++        .unwrap();
++    backend
++        .configure_device_backing_budget_v1(
++            Gfx942DeviceBackingBudgetV1::new(1024 * 1024, 8).unwrap(),
++        )
++        .unwrap();
++    backend
++        .enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([0x84; 32], 128).unwrap())
++        .unwrap();
++    let mut allocations = Vec::new();
++    for bytes in [17_usize, 4097] {
++        let allocation = backend
++            .allocate_v1(device, RuntimeMemoryKindV1::DeviceLocal, bytes as u64, 4096)
++            .unwrap();
++        let KfdRuntimeSdmaStorageV1::Device(owner) = &backend.allocations[&allocation].sdma_storage
++        else {
++            panic!("promoted device allocation required");
++        };
++        let DirectionalSdmaDeviceOwnerV1::Native(owner) = &**owner else {
++            panic!("native promotion required");
++        };
++        assert_eq!(owner.byte_len(), bytes as u64);
++        assert_eq!(
++            owner.physical_byte_len(),
++            (bytes as u64).next_multiple_of(4096)
++        );
++        let mut readback = vec![0xa5; bytes];
++        backend
++            .read_allocation_v1(allocation, 0, &mut readback)
++            .unwrap();
++        assert_eq!(readback, vec![0; bytes]);
++        let expected = (0..bytes)
++            .map(|index| ((index * 17 + 3) % 251) as u8)
++            .collect::<Vec<_>>();
++        backend
++            .write_allocation_v1(allocation, 0, &expected)
++            .unwrap();
++        readback.fill(0xa5);
++        // The direct download oracle requires the native path to report that it handled the read.
++        assert!(
++            backend
++                .download_sdma_range_v1(allocation, 0, &mut readback)
++                .unwrap()
++        );
++        assert_eq!(readback, expected);
++        println!(
++            "native_device_promotion logical_bytes={bytes} physical_bytes={} readback_sha256={}",
++            (bytes as u64).next_multiple_of(4096),
++            Sha256::digest(&readback)
++                .iter()
++                .map(|byte| format!("{byte:02x}"))
++                .collect::<String>()
++        );
++        allocations.push(allocation);
++    }
++    let allocated = backend.device_backing_usage_v1().unwrap();
++    assert_eq!(
++        (
++            allocated.used_backing_bytes,
++            allocated.used_allocation_records
++        ),
++        (12288, 2)
++    );
++    for allocation in allocations {
++        backend.release_allocation_v1(allocation).unwrap();
++    }
++    let queue = backend.queue.as_mut().unwrap();
++    assert_eq!(
++        queue
++            .sdma_memory_pool_observation()
++            .unwrap()
++            .checked_out_buffers,
++        0
++    );
++    queue.trim_sdma_memory_pool().unwrap();
++    let refunded = backend.device_backing_usage_v1().unwrap();
++    assert_eq!(
++        (
++            refunded.used_backing_bytes,
++            refunded.used_allocation_records
++        ),
++        (0, 0)
++    );
++    assert_eq!(
++        (
++            refunded.reserved_records,
++            refunded.retained_records,
++            refunded.quarantined_records
++        ),
++        (0, 0, 0)
++    );
++    assert!(!refunded.poisoned);
++    let host_usage = observe_shutdown(&mut backend);
++    assert_retired_shutdown_is_inert(&mut backend);
++    let profile = backend.finish_profiler_v1().unwrap();
++    profile.validate().unwrap();
++    assert_eq!(profile.coverage.dropped_events, 0);
++    assert!(profile.coverage.complete_runtime_operation_history);
++    drop(backend);
++    println!(
++        "native_device_promotion=complete device_before={allocated:?} device_after={refunded:?} host_usage={host_usage:?} profile_events={}",
++        profile.events.len()
++    );
++}
++
+ #[cfg(feature = "hardware-qualification")]
+ #[test]
+ #[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/sdma_host_write.rs b/crates/fe2o3-runtime/src/kfd_backend/sdma_host_write.rs
+index 77038a4c7..c257f5e21 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/sdma_host_write.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/sdma_host_write.rs
+@@ -6,7 +6,10 @@ use super::kfd_backend_sdma_seam::DirectionalSdmaOpsV1;
+ use super::*;
+ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+ 
+-fn resume_host_write_panic_v1(payload: Box<dyn std::any::Any + Send>, poison: impl FnOnce()) -> ! {
++pub(super) fn resume_sdma_owner_panic_v1(
++    payload: Box<dyn std::any::Any + Send>,
++    poison: impl FnOnce(),
++) -> ! {
+     // Even a secondary payload destructor must not replace the original panic.
+     core::mem::forget(catch_unwind(AssertUnwindSafe(poison)));
+     resume_unwind(payload)
+@@ -29,7 +32,7 @@ impl KfdRuntimeBackendV1 {
+                     ),
+                 ))
+             }
+-            Err(payload) => resume_host_write_panic_v1(payload, || self.poison_terminal_v1()),
++            Err(payload) => resume_sdma_owner_panic_v1(payload, || self.poison_terminal_v1()),
+         }
+     }
+ 
+@@ -100,7 +103,7 @@ mod tests {
+         let address = &*original as *const u64;
+         let poison_calls = std::cell::Cell::new(0);
+         let payload = catch_unwind(AssertUnwindSafe(|| {
+-            resume_host_write_panic_v1(original, || {
++            resume_sdma_owner_panic_v1(original, || {
+                 poison_calls.set(poison_calls.get() + 1);
+                 std::panic::panic_any(Secondary)
+             })
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/sdma_promotion.rs b/crates/fe2o3-runtime/src/kfd_backend/sdma_promotion.rs
+new file mode 100644
+index 000000000..928d88460
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/sdma_promotion.rs
+@@ -0,0 +1,89 @@
++//! Promotion errors retain typed diagnostics until their owner is rooted.
++
++#![forbid(unsafe_code)]
++
++use super::kfd_backend_sdma_seam::{DirectionalSdmaOpsV1, SdmaPromotionDiagnosticV1};
++use super::sdma_host_write::resume_sdma_owner_panic_v1;
++use super::*;
++use std::panic::{AssertUnwindSafe, catch_unwind};
++
++impl KfdRuntimeBackendV1 {
++    // Failure custody stays inline; allocating a box on the failure path is not required.
++    #[allow(clippy::result_large_err)]
++    pub(super) fn promote_sdma_buffer_v1(
++        &mut self,
++        buffer: SdmaBufferOwnerV1,
++    ) -> Result<DirectionalSdmaDeviceOwnerV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
++    {
++        self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Buffer(buffer));
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            // Select the driver before transferring custody; a missing queue cannot lose it.
++            #[cfg(test)]
++            let mut ops = if let Some(driver) = self.scripted_sdma.as_mut() {
++                DirectionalSdmaOpsV1::Scripted(driver)
++            } else {
++                DirectionalSdmaOpsV1::Native(self.queue.as_mut().expect("promotion retains queue"))
++            };
++            #[cfg(not(test))]
++            let mut ops =
++                DirectionalSdmaOpsV1::Native(self.queue.as_mut().expect("promotion retains queue"));
++            let Some(KfdRuntimeTerminalSdmaCustodyV1::Buffer(buffer)) =
++                self.terminal_sdma_custody.take()
++            else {
++                unreachable!("installed promotion input");
++            };
++            ops.promote(buffer)
++        }));
++        match result {
++            Ok(Ok(allocation)) => Ok(allocation),
++            Ok(Err(failure)) => Err(self.settle_sdma_promotion_failure_v1(failure, |detail| {
++                format!("KFD persistent device promotion: {detail}")
++            })),
++            Err(payload) => resume_sdma_owner_panic_v1(payload, || self.poison_terminal_v1()),
++        }
++    }
++
++    pub(super) fn settle_sdma_promotion_failure_v1(
++        &mut self,
++        failure: SdmaTransitionFailureV1<SdmaBufferOwnerV1, SdmaPromotionDiagnosticV1>,
++        format: impl FnOnce(&SdmaPromotionDiagnosticV1) -> String,
++    ) -> RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1> {
++        let (detail, terminal) = match failure {
++            SdmaTransitionFailureV1::Retryable { detail, custody } => {
++                self.retain_terminal_sdma_custody_v1(KfdRuntimeTerminalSdmaCustodyV1::Buffer(
++                    custody,
++                ));
++                (detail, false)
++            }
++            SdmaTransitionFailureV1::ProcessTeardown { detail, custody } => {
++                self.retain_sdma_seam_terminal_v1(custody);
++                (detail, true)
++            }
++        };
++        let formatted = catch_unwind(AssertUnwindSafe(|| {
++            if terminal {
++                self.poison_terminal_v1();
++            }
++            format(&detail)
++        }));
++        let message = match formatted {
++            Ok(message) => message,
++            Err(payload) => resume_sdma_owner_panic_v1(payload, || self.poison_terminal_v1()),
++        };
++        if terminal {
++            return RuntimeBackendFailureV1::Terminal(KfdRuntimeBackendErrorV1::new(
++                KfdRuntimeBackendErrorKindV1::Terminal,
++                message,
++            ));
++        }
++        let Some(KfdRuntimeTerminalSdmaCustodyV1::Buffer(buffer)) =
++            self.terminal_sdma_custody.take()
++        else {
++            unreachable!("retryable promotion retains buffer until diagnostics settle");
++        };
++        match self.recycle_transient_sdma_buffer_v1(buffer, "promotion") {
++            Ok(()) => Self::rejected(KfdRuntimeBackendErrorKindV1::Native, message),
++            Err(failure) => failure,
++        }
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_write_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_write_tests.rs
+index c7db82ca9..c82ee309e 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_write_tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_write_tests.rs
+@@ -1,8 +1,9 @@
+ use super::*;
++use crate::kfd_backend::kfd_backend_sdma_seam::ScriptedTerminalCustodyV1;
+ use std::mem::ManuallyDrop;
+ use std::panic::{AssertUnwindSafe, catch_unwind};
+ 
+-fn host_observation(buffer: &SdmaBufferOwnerV1) -> (u64, Vec<u8>, Option<[u8; 32]>) {
++pub(super) fn host_observation(buffer: &SdmaBufferOwnerV1) -> (u64, Vec<u8>, Option<[u8; 32]>) {
+     let SdmaBufferOwnerV1::Scripted(buffer) = buffer else {
+         panic!("expected scripted host owner");
+     };
+@@ -17,28 +18,32 @@ fn indexed_host(backend: &KfdRuntimeBackendV1, host: u64) -> &SdmaBufferOwnerV1
+     buffer
+ }
+ 
+-fn retained_host(backend: &KfdRuntimeBackendV1) -> &SdmaBufferOwnerV1 {
+-    let Some(KfdRuntimeTerminalSdmaCustodyV1::Buffer(buffer)) = &backend.terminal_sdma_custody
+-    else {
+-        panic!("failed write must retain its buffer");
+-    };
+-    buffer
++pub(super) fn retained_host(backend: &KfdRuntimeBackendV1) -> &SdmaBufferOwnerV1 {
++    match &backend.terminal_sdma_custody {
++        Some(KfdRuntimeTerminalSdmaCustodyV1::Buffer(buffer))
++        | Some(KfdRuntimeTerminalSdmaCustodyV1::Scripted(ScriptedTerminalCustodyV1::Buffer(
++            buffer,
++        ))) => buffer,
++        _ => panic!("failed operation must retain its buffer"),
++    }
+ }
+ 
+ #[derive(Debug, PartialEq)]
+-struct Snapshot {
+-    next_handle: u64,
++pub(super) struct Snapshot {
++    pub(super) next_handle: u64,
+     staged_bytes: u64,
+     allocations: usize,
+     host: (u64, Vec<u8>, Option<[u8; 32]>),
+     device: (u64, Vec<u8>),
+     host_shadow: Arc<[u8]>,
+     device_shadow: Arc<[u8]>,
++    host_shadow_address: usize,
++    device_shadow_address: usize,
+     host_digest: Option<[u8; 32]>,
+     events: usize,
+ }
+ 
+-fn snapshot(backend: &KfdRuntimeBackendV1, host: u64, device: u64) -> Snapshot {
++pub(super) fn snapshot(backend: &KfdRuntimeBackendV1, host: u64, device: u64) -> Snapshot {
+     let KfdRuntimeSdmaStorageV1::Device(owner) = &backend.allocations[&device].sdma_storage else {
+         panic!("original device owner must remain indexed, not InFlight");
+     };
+@@ -53,6 +58,9 @@ fn snapshot(backend: &KfdRuntimeBackendV1, host: u64, device: u64) -> Snapshot {
+         ),
+         host_shadow: Arc::clone(&backend.allocations[&host].bytes),
+         device_shadow: Arc::clone(&backend.allocations[&device].bytes),
++        host_shadow_address: Arc::as_ptr(&backend.allocations[&host].bytes) as *const u8 as usize,
++        device_shadow_address: Arc::as_ptr(&backend.allocations[&device].bytes) as *const u8
++            as usize,
+         host_digest: backend.allocations[&host].content_sha256,
+         events: backend
+             .profiler
+@@ -63,7 +71,7 @@ fn snapshot(backend: &KfdRuntimeBackendV1, host: u64, device: u64) -> Snapshot {
+     }
+ }
+ 
+-fn fixture(
++pub(super) fn fixture(
+     len: usize,
+     steps: impl IntoIterator<Item = ScriptedSdmaStepV1>,
+ ) -> (KfdRuntimeBackendV1, u64, u64, u64) {
+@@ -98,7 +106,11 @@ fn assert_failure<T: fmt::Debug>(
+     }
+ }
+ 
+-fn assert_terminal_retries_inert(backend: &mut KfdRuntimeBackendV1, host: u64, device: u64) {
++pub(super) fn assert_terminal_retries_inert(
++    backend: &mut KfdRuntimeBackendV1,
++    host: u64,
++    device: u64,
++) {
+     assert!(backend.terminal);
+     let before = snapshot(backend, host, device);
+     let driver = backend.scripted_sdma.as_ref().unwrap();
+@@ -155,7 +167,7 @@ fn assert_terminal_retries_inert(backend: &mut KfdRuntimeBackendV1, host: u64, d
+     );
+ }
+ 
+-fn discard_scripted_fixture(mut backend: ManuallyDrop<KfdRuntimeBackendV1>) {
++pub(super) fn discard_scripted_fixture(mut backend: ManuallyDrop<KfdRuntimeBackendV1>) {
+     // Observation ends here; this is not native cleanup or terminal refund evidence.
+     disarm_scripted_drop_after_inspection_v1(&mut backend);
+     drop(ManuallyDrop::into_inner(backend));
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_promotion_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_promotion_tests.rs
+new file mode 100644
+index 000000000..004cc5a6b
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_promotion_tests.rs
+@@ -0,0 +1,346 @@
++use super::sdma_host_write_tests::{
++    assert_terminal_retries_inert, discard_scripted_fixture, fixture, host_observation,
++    retained_host, snapshot,
++};
++use super::*;
++use fe2o3_kfd::ComputeAqlQueueSessionErrorV1;
++use std::mem::ManuallyDrop;
++use std::panic::{AssertUnwindSafe, catch_unwind};
++
++fn allocate_step() -> ScriptedSdmaStepV1 {
++    ScriptedSdmaStepV1::Allocate {
++        kind: ScriptedBufferKindV1::Device,
++        byte_len: 8,
++    }
++}
++
++#[test]
++fn sdma_promotion_diagnostic_panic_roots_retryable_and_terminal_owners() {
++    for mode in [
++        ScriptedFailureModeV1::Retryable,
++        ScriptedFailureModeV1::ProcessTeardown,
++    ] {
++        let (backend, _, host, device) = fixture(
++            16,
++            [
++                allocate_step(),
++                ScriptedSdmaStepV1::Promote(mode),
++                ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++            ],
++        );
++        let mut backend = ManuallyDrop::new(backend);
++        let before = snapshot(&backend, host, device);
++        let buffer = backend
++            .directional_sdma_ops_v1()
++            .allocate_device_buffer(8, 8)
++            .unwrap();
++        let observation = host_observation(&buffer);
++        assert_eq!(observation, (3, vec![0; 8], None));
++        let failure = backend
++            .directional_sdma_ops_v1()
++            .promote(buffer)
++            .unwrap_err();
++        let original = Box::new(173_u64);
++        let address = &*original as *const u64;
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            backend
++                .settle_sdma_promotion_failure_v1(failure, |_| std::panic::resume_unwind(original))
++        }));
++        let recovered = result.unwrap_err().downcast::<u64>().unwrap();
++        assert_eq!(&*recovered as *const u64, address);
++        assert_eq!(snapshot(&backend, host, device), before);
++        assert_eq!(host_observation(retained_host(&backend)), observation);
++        let driver = backend.scripted_sdma.as_ref().unwrap();
++        assert_eq!(driver.remaining_steps(), 1);
++        assert_eq!(driver.live_owner_count(), 3);
++        assert_eq!(driver.unexpected_drops(), 0);
++        assert_terminal_retries_inert(&mut backend, host, device);
++        discard_scripted_fixture(backend);
++    }
++}
++
++#[test]
++fn sdma_promotion_lower_panic_seals_backend_without_losing_driver_root() {
++    let (backend, _, host, device) = fixture(
++        16,
++        [
++            allocate_step(),
++            ScriptedSdmaStepV1::PromotePanic,
++            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++        ],
++    );
++    let mut backend = ManuallyDrop::new(backend);
++    let mut expected = snapshot(&backend, host, device);
++    expected.next_handle += 1;
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        backend.allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
++    }));
++    assert_eq!(
++        result.unwrap_err().downcast_ref::<&str>(),
++        Some(&"scripted SDMA promotion panic")
++    );
++    assert_eq!(snapshot(&backend, host, device), expected);
++    assert!(backend.terminal_sdma_custody.is_none());
++    assert_terminal_retries_inert(&mut backend, host, device);
++    let driver = backend.scripted_sdma.as_ref().unwrap();
++    assert_eq!(driver.remaining_steps(), 1);
++    assert_eq!(driver.live_owner_count(), 3);
++    assert_eq!(driver.unexpected_drops(), 0);
++    assert_eq!(
++        driver.promotion_custody().unwrap().observation(),
++        (3, [0; 8].as_slice(), None)
++    );
++    discard_scripted_fixture(backend);
++}
++
++#[test]
++fn sdma_promotion_driver_selection_panic_keeps_untransferred_runtime_root() {
++    let mut backend = ManuallyDrop::new(KfdRuntimeBackendV1::mock());
++    let driver = ScriptedSdmaDriverV1::new([]);
++    let buffer = driver.test_host_owner(8);
++    let before = host_observation(&buffer);
++    let result = catch_unwind(AssertUnwindSafe(|| backend.promote_sdma_buffer_v1(buffer)));
++    assert!(result.is_err() && backend.terminal);
++    assert_eq!(host_observation(retained_host(&backend)), before);
++    assert_eq!(driver.live_owner_count(), 1);
++    assert_eq!(driver.unexpected_drops(), 0);
++    // Install the observed fixture driver only to enable its test-only Drop disarm.
++    backend.scripted_sdma = Some(driver);
++    discard_scripted_fixture(backend);
++}
++
++#[test]
++fn sdma_promotion_ordinary_rejection_keeps_neighbors_and_exact_error() {
++    for terminal in [false, true] {
++        let mode = if terminal {
++            ScriptedFailureModeV1::ProcessTeardown
++        } else {
++            ScriptedFailureModeV1::Retryable
++        };
++        let (backend, _, host, device) = fixture(
++            16,
++            [
++                allocate_step(),
++                ScriptedSdmaStepV1::Promote(mode),
++                ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++            ],
++        );
++        let mut backend = ManuallyDrop::new(backend);
++        let mut expected = snapshot(&backend, host, device);
++        expected.next_handle += 1;
++        let failure = backend
++            .allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
++            .unwrap_err();
++        match failure {
++            RuntimeBackendFailureV1::Terminal(error) if terminal => {
++                assert_eq!(
++                    error.detail(),
++                    "KFD persistent device promotion: scripted promotion teardown"
++                );
++                assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Terminal);
++            }
++            RuntimeBackendFailureV1::Rejected(error) if !terminal => {
++                assert_eq!(
++                    error.detail(),
++                    "KFD persistent device promotion: scripted promotion retryable"
++                );
++                assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Native);
++            }
++            _ => panic!("wrong failure class"),
++        }
++        assert_eq!(snapshot(&backend, host, device), expected);
++        assert_eq!(backend.terminal, terminal);
++        let driver = backend.scripted_sdma.as_ref().unwrap();
++        assert_eq!(driver.remaining_steps(), usize::from(terminal));
++        assert_eq!(driver.live_owner_count(), 2 + usize::from(terminal));
++        assert_eq!(driver.unexpected_drops(), 0);
++        if terminal {
++            assert_eq!(
++                host_observation(retained_host(&backend)),
++                (3, vec![0; 8], None)
++            );
++            assert_terminal_retries_inert(&mut backend, host, device);
++        } else {
++            assert!(backend.terminal_sdma_custody.is_none());
++        }
++        discard_scripted_fixture(backend);
++    }
++}
++
++#[test]
++fn sdma_promotion_public_context_handles_configured_and_unconfigured_panic() {
++    for configured in [false, true] {
++        let mut backend = KfdRuntimeBackendV1::mock();
++        backend.native_available = true;
++        backend.scripted_sdma = Some(ScriptedSdmaDriverV1::new([
++            allocate_step(),
++            ScriptedSdmaStepV1::PromotePanic,
++            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
++        ]));
++        let mut context = ManuallyDrop::new(crate::RuntimeContextV1::open(backend).unwrap());
++        let device = context.devices()[0].id();
++        if configured {
++            context
++                .configure_allocation_admission_v1(device, 8, 1)
++                .unwrap();
++        }
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            context.allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
++        }));
++        assert_eq!(
++            result.unwrap_err().downcast_ref::<&str>(),
++            Some(&"scripted SDMA promotion panic")
++        );
++        assert_eq!(context.is_terminal(), configured);
++        if configured {
++            let usage = context
++                .allocation_admission_usage_v1(device)
++                .unwrap()
++                .unwrap();
++            assert_eq!(
++                usage
++                    .used
++                    .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
++                8
++            );
++            assert_eq!(
++                usage
++                    .used
++                    .get(crate::RuntimeResourceKindV1::AllocationRecords),
++                1
++            );
++            assert_eq!(usage.quarantined_records, 1);
++        }
++        assert!(context.backend_mut_for_test_v1().terminal);
++        assert!(
++            context
++                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
++                .is_err()
++        );
++        assert!(context.is_terminal());
++        if configured {
++            let usage = context
++                .allocation_admission_usage_v1(device)
++                .unwrap()
++                .unwrap();
++            assert_eq!(
++                usage
++                    .used
++                    .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
++                8
++            );
++            assert_eq!(
++                usage
++                    .used
++                    .get(crate::RuntimeResourceKindV1::AllocationRecords),
++                1
++            );
++            assert_eq!(usage.quarantined_records, 1);
++        }
++        let backend = context.backend_mut_for_test_v1();
++        assert!(backend.allocations.is_empty() && backend.staged_context_bytes == 0);
++        let driver = backend.scripted_sdma.as_ref().unwrap();
++        assert_eq!(driver.remaining_steps(), 1);
++        assert_eq!(driver.live_owner_count(), 1);
++        assert_eq!(driver.unexpected_drops(), 0);
++        assert!(driver.promotion_custody().is_some());
++        disarm_scripted_drop_after_inspection_v1(backend);
++        drop(ManuallyDrop::into_inner(context));
++    }
++}
++
++#[test]
++fn sdma_promotion_native_diagnostic_stays_typed_until_rooted_formatting() {
++    use crate::kfd_backend::kfd_backend_sdma_seam::SdmaPromotionDiagnosticV1;
++    let (backend, _, host, device) = fixture(16, [allocate_step()]);
++    let mut backend = ManuallyDrop::new(backend);
++    let before = snapshot(&backend, host, device);
++    let buffer = backend
++        .directional_sdma_ops_v1()
++        .allocate_device_buffer(8, 8)
++        .unwrap();
++    let failure = SdmaTransitionFailureV1::Retryable {
++        detail: SdmaPromotionDiagnosticV1::Native(ComputeAqlQueueSessionErrorV1::Contract(
++            "typed promotion cause",
++        )),
++        custody: buffer,
++    };
++    let caught = catch_unwind(AssertUnwindSafe(|| {
++        backend.settle_sdma_promotion_failure_v1(failure, |detail| {
++            assert!(matches!(
++                detail,
++                SdmaPromotionDiagnosticV1::Native(ComputeAqlQueueSessionErrorV1::Contract(
++                    "typed promotion cause"
++                ))
++            ));
++            std::panic::panic_any("typed diagnostic panic")
++        })
++    }));
++    assert_eq!(
++        caught.unwrap_err().downcast_ref::<&str>(),
++        Some(&"typed diagnostic panic")
++    );
++    assert_eq!(snapshot(&backend, host, device), before);
++    assert_eq!(
++        host_observation(retained_host(&backend)),
++        (3, vec![0; 8], None)
++    );
++    assert_terminal_retries_inert(&mut backend, host, device);
++    discard_scripted_fixture(backend);
++}
++
++#[test]
++fn sdma_promotion_terminal_drop_aborts_with_runtime_or_lower_custody() {
++    use std::os::unix::process::ExitStatusExt;
++    const CHILD: &str = "FE2O3_TEST_RUNTIME_PROMOTION_DROP";
++    const TEST: &str = "kfd_backend::tests::sdma_promotion_tests::sdma_promotion_terminal_drop_aborts_with_runtime_or_lower_custody";
++    if let Some(mode) = std::env::var_os(CHILD) {
++        rustix::process::setrlimit(
++            rustix::process::Resource::Core,
++            rustix::process::Rlimit {
++                current: Some(0),
++                maximum: Some(0),
++            },
++        )
++        .unwrap();
++        let mut backend = KfdRuntimeBackendV1::mock();
++        backend.native_available = true;
++        backend.scripted_sdma = Some(ScriptedSdmaDriverV1::new([
++            allocate_step(),
++            if mode == "lower" {
++                ScriptedSdmaStepV1::PromotePanic
++            } else {
++                ScriptedSdmaStepV1::Promote(ScriptedFailureModeV1::ProcessTeardown)
++            },
++        ]));
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            backend.allocate_v1(7, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
++        }));
++        if mode == "lower" {
++            assert!(result.is_err());
++        } else {
++            assert!(matches!(
++                result.unwrap(),
++                Err(RuntimeBackendFailureV1::Terminal(_))
++            ));
++        }
++        assert!(backend.terminal);
++        let driver = backend.scripted_sdma.as_ref().unwrap();
++        assert_eq!(driver.live_owner_count(), 1);
++        assert_eq!(driver.unexpected_drops(), 0);
++        eprintln!("promotion retained; dropping terminal backend");
++        drop(backend);
++        panic!("terminal Drop returned");
++    }
++    for mode in ["runtime", "lower"] {
++        let output = std::process::Command::new(std::env::current_exe().unwrap())
++            .args(["--exact", TEST, "--nocapture"])
++            .env(CHILD, mode)
++            .output()
++            .unwrap();
++        let stderr = String::from_utf8_lossy(&output.stderr);
++        assert_eq!(output.status.signal(), Some(6), "{stderr}");
++        assert!(stderr.contains("promotion retained; dropping terminal backend"));
++        assert!(!stderr.contains("terminal Drop returned"));
++    }
++}

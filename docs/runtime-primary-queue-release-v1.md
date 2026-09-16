@@ -537,7 +537,7 @@ checks do not replace the remaining full R126 qualification campaign.
 
 Pending-compute allocation remains disabled. Runtime HostVisible initialization
 and upload staging now retain across borrowed-write failure as described below;
-consuming promotion needs rooted input through live-model validation and unwind. Device
+directional promotion now roots its input through validation and unwind. Device
 initialization additionally needs retained synchronous submit/wait/retire/recycle
 boundaries. Runtime allocation error conversion also still terminalizes healthy
 backing-credit rejection; a typed disposition must preserve the lower contract.
@@ -571,16 +571,47 @@ after a caller catches a backend panic; the backend is already terminal and the
 next valid backend call seals the Context without native work. This packet does
 not change that facade policy, admit pending-compute allocation, qualify native
 partial writes, add executable/formal correspondence or establish performance.
-Consuming promotion, synchronous copy/recycle and typed capacity disposition
-remain open, followed by owner-roster preflight and pending-compute qualification.
+Directional promotion is now covered below. Synchronous copy/recycle and typed
+capacity disposition remain open, followed by owner-roster preflight and
+pending-compute qualification.
+
+## Directional Promotion Custody
+
+Promotion installs the original device buffer in the queue before borrowing the
+live model. Validation uses the same mapped-record, domain and physical-extent
+checks as before; only unit crosses model retake. Healthy rejection returns the
+exact retryable buffer, terminal returned errors carry process-teardown custody,
+and panic leaves the buffer rooted in the poisoned queue. Retake errors retain
+precedence over ordinary validation errors; the first panic survives later
+retake/poison panics. Conversion preserves the outstanding debit and pool
+generation. Its existing persistent-owner `Rc` and ledger allocations remain;
+allocator failure is not qualified by this change.
+
+The runtime roots input before driver selection and seals itself on lower
+promotion unwind. Native failures cross the adapter as typed errors without
+formatting. Returned custody is installed before the complete diagnostic is
+formatted; diagnostic panic retains it and seals the backend. A healthy retryable
+failure still follows existing recycling and rejection semantics after formatting.
+The consuming recycler itself, demotion and other copy transitions remain separate
+unfixed unwind boundaries.
+
+Constructed tests use actual fresh mapped leases, the original directional pair,
+shared production mapping checks and real foundation loan/reclaim. Coverage
+includes healthy retry/refund, padded physical extents, foreign mapping, model
+revision regression, validation/retake/poison failure combinations, inert retries
+and process-isolated Drop. Scripted runtime tests additionally check original
+owner/neighbor identities, shadow allocation identity, typed diagnostic unwind,
+credit quarantine and public-context terminal behavior. These are not native
+failure injection or formal implementation correspondence. Validation is recorded
+in the [promotion receipt](evidence/dev-r126-sdma-promotion-2026-09-16/README.md).
 
 ## Remaining Qualification
 
 1. Extend the successful allocation, primary and two-stream dispatch native
    probes beyond the now-qualified AUX host-budget rejection. Qualify integrated
    NEW, REBOUND and resident-overwrite native failure paths, and allocation/SDMA
-   ownership changes with pending compute after completing promotion and
-   synchronous-copy custody. Lower fresh-allocation outputs now
+   ownership changes with pending compute after completing synchronous-copy and
+   recycling custody. Lower fresh-allocation outputs now
    remain rooted through model retake; that alone does not admit pending work.
    Corrupted-observation model rejection, scripted native errors and actual
    hardware outcomes retain distinct evidence scopes.

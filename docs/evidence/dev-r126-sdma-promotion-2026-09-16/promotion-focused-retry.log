@@ -1,0 +1,42 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error[E0599]: no method named `logical_bytes` found for reference `&Gfx942DirectionalQueuePersistentAllocationV1` in the current scope
+   --> crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs:346:26
+    |
+346 |         assert_eq!(owner.logical_bytes(), bytes as u64);
+    |                          ^^^^^^^^^^^^^ method not found in `&Gfx942DirectionalQueuePersistentAllocationV1`
+
+error[E0599]: no method named `physical_bytes` found for reference `&Gfx942DirectionalQueuePersistentAllocationV1` in the current scope
+   --> crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs:347:26
+    |
+347 |         assert_eq!(owner.physical_bytes(), (bytes as u64).next_multiple_of(4096));
+    |                          ^^^^^^^^^^^^^^
+    |
+help: there is a method `physical_byte_len` with a similar name
+    |
+347 -         assert_eq!(owner.physical_bytes(), (bytes as u64).next_multiple_of(4096));
+347 +         assert_eq!(owner.physical_byte_len(), (bytes as u64).next_multiple_of(4096));
+    |
+
+error[E0277]: the trait bound `Array<u8, UInt<UInt<UInt<UInt<..., ...>, ...>, ...>, ...>>: LowerHex` is not satisfied
+   --> crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs:357:145
+    |
+357 | ...tes={} readback_sha256={:x}", (bytes as u64).next_multiple_of(4096), Sha256::digest(&readback));
+    |                           ---- required by this formatting parameter    ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `LowerHex` is not implemented for `Array<u8, UInt<UInt<UInt<UInt<UInt<..., ...>, ...>, ...>, ...>, ...>>`
+    |
+    = help: the following other types implement trait `LowerHex`:
+              &T
+              &mut T
+              Access
+              AtFlags
+              CapabilitiesSecureBits
+              CapabilitySet
+              DupFlags
+              EventFlags
+            and 145 others
+    = note: the full name for the type has been written to '/home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/fe2o3_runtime-6da97149b4b59494.long-type-2026691916347427969.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+Some errors have detailed explanations: E0277, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `fe2o3-runtime` (lib test) due to 3 previous errors

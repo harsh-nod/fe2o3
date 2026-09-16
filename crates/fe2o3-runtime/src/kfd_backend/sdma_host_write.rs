@@ -6,7 +6,10 @@ use super::kfd_backend_sdma_seam::DirectionalSdmaOpsV1;
 use super::*;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
-fn resume_host_write_panic_v1(payload: Box<dyn std::any::Any + Send>, poison: impl FnOnce()) -> ! {
+pub(super) fn resume_sdma_owner_panic_v1(
+    payload: Box<dyn std::any::Any + Send>,
+    poison: impl FnOnce(),
+) -> ! {
     // Even a secondary payload destructor must not replace the original panic.
     core::mem::forget(catch_unwind(AssertUnwindSafe(poison)));
     resume_unwind(payload)
@@ -29,7 +32,7 @@ impl KfdRuntimeBackendV1 {
                     ),
                 ))
             }
-            Err(payload) => resume_host_write_panic_v1(payload, || self.poison_terminal_v1()),
+            Err(payload) => resume_sdma_owner_panic_v1(payload, || self.poison_terminal_v1()),
         }
     }
 
@@ -100,7 +103,7 @@ mod tests {
         let address = &*original as *const u64;
         let poison_calls = std::cell::Cell::new(0);
         let payload = catch_unwind(AssertUnwindSafe(|| {
-            resume_host_write_panic_v1(original, || {
+            resume_sdma_owner_panic_v1(original, || {
                 poison_calls.set(poison_calls.get() + 1);
                 std::panic::panic_any(Secondary)
             })

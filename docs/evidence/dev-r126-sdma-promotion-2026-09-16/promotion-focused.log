@@ -1,0 +1,39 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error[E0433]: cannot find type `ComputeAqlQueueSessionErrorV1` in this scope
+   --> crates/fe2o3-runtime/src/kfd_backend/tests/sdma_promotion_tests.rs:222:51
+    |
+222 |         detail: SdmaPromotionDiagnosticV1::Native(ComputeAqlQueueSessionErrorV1::Contract("typed promotion cause")),
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of undeclared type `ComputeAqlQueueSessionErrorV1`
+    |
+    = note: enum `crate::kfd_backend::kfd_backend_sdma_seam::window_tests::ComputeAqlQueueSessionErrorV1` exists but is inaccessible
+help: a struct with a similar name exists
+    |
+222 -         detail: SdmaPromotionDiagnosticV1::Native(ComputeAqlQueueSessionErrorV1::Contract("typed promotion cause")),
+222 +         detail: SdmaPromotionDiagnosticV1::Native(ComputeAqlQueueSessionV1::Contract("typed promotion cause")),
+    |
+help: consider importing this enum
+    |
+  1 + use fe2o3_kfd::ComputeAqlQueueSessionErrorV1;
+    |
+
+error[E0433]: cannot find type `ComputeAqlQueueSessionErrorV1` in this scope
+   --> crates/fe2o3-runtime/src/kfd_backend/tests/sdma_promotion_tests.rs:226:68
+    |
+226 | ...nDiagnosticV1::Native(ComputeAqlQueueSessionErrorV1::Contract("typed promotion cause"))));
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of undeclared type `ComputeAqlQueueSessionErrorV1`
+    |
+    = note: enum `crate::kfd_backend::kfd_backend_sdma_seam::window_tests::ComputeAqlQueueSessionErrorV1` exists but is inaccessible
+help: a struct with a similar name exists
+    |
+226 -         assert!(matches!(detail, SdmaPromotionDiagnosticV1::Native(ComputeAqlQueueSessionErrorV1::Contract("typed promotion cause"))));
+226 +         assert!(matches!(detail, SdmaPromotionDiagnosticV1::Native(ComputeAqlQueueSessionV1::Contract("typed promotion cause"))));
+    |
+help: consider importing this enum
+    |
+  1 + use fe2o3_kfd::ComputeAqlQueueSessionErrorV1;
+    |
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `fe2o3-runtime` (lib test) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

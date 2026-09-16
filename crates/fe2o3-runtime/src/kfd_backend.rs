@@ -111,6 +111,7 @@ pub use qualification_drain_capture::{
 };
 mod kfd_backend_sdma_seam;
 mod sdma_host_write;
+mod sdma_promotion;
 use compute_dispatch::*;
 use compute_state::*;
 #[cfg(test)]
@@ -6047,29 +6048,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                     KfdRuntimeSdmaStorageV1::Host(buffer)
                 }
                 RuntimeMemoryKindV1::DeviceLocal => {
-                    match self.directional_sdma_ops_v1().promote(buffer) {
-                        Ok(allocation) => KfdRuntimeSdmaStorageV1::Device(Box::new(allocation)),
-                        Err(failure) => {
-                            return match failure {
-                                SdmaTransitionFailureV1::Retryable {
-                                    detail,
-                                    custody: buffer,
-                                } => {
-                                    self.recycle_transient_sdma_buffer_v1(buffer, "promotion")?;
-                                    Err(Self::rejected(
-                                        KfdRuntimeBackendErrorKindV1::Native,
-                                        format!("KFD persistent device promotion: {detail}"),
-                                    ))
-                                }
-                                SdmaTransitionFailureV1::ProcessTeardown { detail, custody } => {
-                                    self.retain_sdma_seam_terminal_v1(custody);
-                                    Err(self.terminal_error(format!(
-                                        "KFD persistent device promotion: {detail}"
-                                    )))
-                                }
-                            };
-                        }
-                    }
+                    KfdRuntimeSdmaStorageV1::Device(Box::new(self.promote_sdma_buffer_v1(buffer)?))
                 }
             }
         } else {
@@ -12827,6 +12806,7 @@ mod retained_release_tests;
 #[cfg(test)]
 mod tests {
     mod sdma_host_write_tests;
+    mod sdma_promotion_tests;
 
     use super::kfd_backend_sdma_seam::{
         DirectionalSdmaOpsV1, DirectionalSdmaPairOwnerV1, ScriptedBufferKindV1,

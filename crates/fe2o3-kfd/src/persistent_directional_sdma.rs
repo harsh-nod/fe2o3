@@ -2969,7 +2969,10 @@ mod tests {
             .split("pub fn demote_directional_persistent_allocation_to_sdma_device_buffer_v1")
             .next()
             .unwrap();
-        assert!(promotion.contains("validate_physical_device_mapping"));
+        assert!(promotion.contains("sdma_promotion::promote_in_place(self, buffer)"));
+        let promotion_driver = include_str!("queue_live/sdma_promotion.rs");
+        assert!(promotion_driver.contains("validate_physical_device_mapping"));
+        assert!(!promotion_driver.contains("checked_gpu_subrange"));
         assert!(!promotion.contains("checked_gpu_subrange"));
 
         let request_preparation = live

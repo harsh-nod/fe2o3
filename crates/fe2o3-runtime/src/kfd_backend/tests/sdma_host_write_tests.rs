@@ -1,8 +1,9 @@
 use super::*;
+use crate::kfd_backend::kfd_backend_sdma_seam::ScriptedTerminalCustodyV1;
 use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-fn host_observation(buffer: &SdmaBufferOwnerV1) -> (u64, Vec<u8>, Option<[u8; 32]>) {
+pub(super) fn host_observation(buffer: &SdmaBufferOwnerV1) -> (u64, Vec<u8>, Option<[u8; 32]>) {
     let SdmaBufferOwnerV1::Scripted(buffer) = buffer else {
         panic!("expected scripted host owner");
     };
@@ -17,28 +18,32 @@ fn indexed_host(backend: &KfdRuntimeBackendV1, host: u64) -> &SdmaBufferOwnerV1 
     buffer
 }
 
-fn retained_host(backend: &KfdRuntimeBackendV1) -> &SdmaBufferOwnerV1 {
-    let Some(KfdRuntimeTerminalSdmaCustodyV1::Buffer(buffer)) = &backend.terminal_sdma_custody
-    else {
-        panic!("failed write must retain its buffer");
-    };
-    buffer
+pub(super) fn retained_host(backend: &KfdRuntimeBackendV1) -> &SdmaBufferOwnerV1 {
+    match &backend.terminal_sdma_custody {
+        Some(KfdRuntimeTerminalSdmaCustodyV1::Buffer(buffer))
+        | Some(KfdRuntimeTerminalSdmaCustodyV1::Scripted(ScriptedTerminalCustodyV1::Buffer(
+            buffer,
+        ))) => buffer,
+        _ => panic!("failed operation must retain its buffer"),
+    }
 }
 
 #[derive(Debug, PartialEq)]
-struct Snapshot {
-    next_handle: u64,
+pub(super) struct Snapshot {
+    pub(super) next_handle: u64,
     staged_bytes: u64,
     allocations: usize,
     host: (u64, Vec<u8>, Option<[u8; 32]>),
     device: (u64, Vec<u8>),
     host_shadow: Arc<[u8]>,
     device_shadow: Arc<[u8]>,
+    host_shadow_address: usize,
+    device_shadow_address: usize,
     host_digest: Option<[u8; 32]>,
     events: usize,
 }
 
-fn snapshot(backend: &KfdRuntimeBackendV1, host: u64, device: u64) -> Snapshot {
+pub(super) fn snapshot(backend: &KfdRuntimeBackendV1, host: u64, device: u64) -> Snapshot {
     let KfdRuntimeSdmaStorageV1::Device(owner) = &backend.allocations[&device].sdma_storage else {
         panic!("original device owner must remain indexed, not InFlight");
     };
@@ -53,6 +58,9 @@ fn snapshot(backend: &KfdRuntimeBackendV1, host: u64, device: u64) -> Snapshot {
         ),
         host_shadow: Arc::clone(&backend.allocations[&host].bytes),
         device_shadow: Arc::clone(&backend.allocations[&device].bytes),
+        host_shadow_address: Arc::as_ptr(&backend.allocations[&host].bytes) as *const u8 as usize,
+        device_shadow_address: Arc::as_ptr(&backend.allocations[&device].bytes) as *const u8
+            as usize,
         host_digest: backend.allocations[&host].content_sha256,
         events: backend
             .profiler
@@ -63,7 +71,7 @@ fn snapshot(backend: &KfdRuntimeBackendV1, host: u64, device: u64) -> Snapshot {
     }
 }
 
-fn fixture(
+pub(super) fn fixture(
     len: usize,
     steps: impl IntoIterator<Item = ScriptedSdmaStepV1>,
 ) -> (KfdRuntimeBackendV1, u64, u64, u64) {
@@ -98,7 +106,11 @@ fn assert_failure<T: fmt::Debug>(
     }
 }
 
-fn assert_terminal_retries_inert(backend: &mut KfdRuntimeBackendV1, host: u64, device: u64) {
+pub(super) fn assert_terminal_retries_inert(
+    backend: &mut KfdRuntimeBackendV1,
+    host: u64,
+    device: u64,
+) {
     assert!(backend.terminal);
     let before = snapshot(backend, host, device);
     let driver = backend.scripted_sdma.as_ref().unwrap();
@@ -155,7 +167,7 @@ fn assert_terminal_retries_inert(backend: &mut KfdRuntimeBackendV1, host: u64, d
     );
 }
 
-fn discard_scripted_fixture(mut backend: ManuallyDrop<KfdRuntimeBackendV1>) {
+pub(super) fn discard_scripted_fixture(mut backend: ManuallyDrop<KfdRuntimeBackendV1>) {
     // Observation ends here; this is not native cleanup or terminal refund evidence.
     disarm_scripted_drop_after_inspection_v1(&mut backend);
     drop(ManuallyDrop::into_inner(backend));
