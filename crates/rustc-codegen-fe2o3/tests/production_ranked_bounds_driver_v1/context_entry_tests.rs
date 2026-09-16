@@ -21,6 +21,9 @@ fn check_kernel_context_source_protocol() {
         "wrong_abi",
         "foreign_helper",
         "foreign_marker",
+        "rebound_marker",
+        "cross_kernel_marker",
+        "shared_marker",
         "module_marker",
         "foreign_root",
         "orphan",
@@ -41,6 +44,7 @@ fn check_kernel_context_source_protocol() {
         let mut extra = "";
         let mut logical = "context_probe";
         let mut marker = "__fe2o3_kernel_marker_context_probe";
+        let mut marker_type = marker;
         let mut root = "fe2o3_kernel_context_probe";
         let expected = match case {
             "valid_zst" => "without production expansion: KernelContextIssue",
@@ -93,10 +97,16 @@ fn check_kernel_context_source_protocol() {
                 extra = "mod foreign { pub enum Marker {} }";
                 "logical context kernel/target/launch brands differ"
             }
-            "module_marker" => {
-                marker = "not_a_marker";
-                extra = "mod not_a_marker {}";
-                "nominal marker is not a nongeneric enum"
+            "module_marker" => "nominal marker is not a nongeneric enum",
+            "rebound_marker" => {
+                marker = "ForgedMarker";
+                marker_type = marker;
+                extra = "enum ForgedMarker {}";
+                "nominal marker does not belong to the declared logical kernel"
+            }
+            "shared_marker" => "nominal kernel marker is shared by distinct physical roots",
+            "cross_kernel_marker" => {
+                "nominal marker does not belong to the declared logical kernel"
             }
             "foreign_root" => {
                 root = "foreign_root";
@@ -106,6 +116,9 @@ fn check_kernel_context_source_protocol() {
             }
             "orphan" => {
                 logical = "orphan";
+                marker = "__fe2o3_kernel_marker_orphan";
+                marker_type = marker;
+                extra = "enum __fe2o3_kernel_marker_orphan {}";
                 "orphan kernel-context declaration has no registered root"
             }
             "duplicate" => "duplicate declared context root",
@@ -142,10 +155,53 @@ static __fe2o3_kernel_context_contract_v1_{logical}:
         } else {
             String::new()
         };
-        let source = format!(
+        let shared_bytes_path = target.path().join("shared-marker.bin");
+        let shared = if matches!(case, "shared_marker" | "cross_kernel_marker") {
+            let shared_label = if case == "cross_kernel_marker" {
+                "other_probe"
+            } else {
+                "context_probe"
+            };
+            std::fs::write(
+                &shared_bytes_path,
+                encode_generated_kernel_context_frontend_contract_v1(
+                    "fe2o3_kernel_other_probe",
+                    "other_probe_body",
+                    marker,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            format!(
+                r#"
+#[inline(never)]
+fn other_probe_body(context: Context<'_>, a: u32, b: u32, tag: Tag) {{
+    let _ = (context, a, b, tag);
+}}
+#[kernel(launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn other_probe(a: u32, b: u32, tag: Tag) {{
+    other_probe_body(KernelContext::<'_, Marker>::__compiler_issue(), a, b, tag);
+}}
+mod shared {{
+    use super::*;
+    const BYTES: &[u8] = include_bytes!(env!("FE2O3_CONTEXT_SHARED_BYTES"));
+    #[used]
+    static __fe2o3_kernel_context_contract_v1_{shared_label}:
+        (u64, u16, u16, &str, &[u8], fn(u32, u32, Tag)) =
+        ({magic}, {version}, {kind}, "{shared_label}", BYTES, fe2o3_kernel_other_probe);
+}}
+"#,
+                magic = KERNEL_CONTEXT_FRONTEND_REGISTRATION_MAGIC_V1,
+                version = KERNEL_CONTEXT_FRONTEND_REGISTRATION_VERSION_V1,
+                kind = KERNEL_CONTEXT_FRONTEND_REGISTRATION_KIND_V1,
+            )
+        } else {
+            String::new()
+        };
+        let mut source = format!(
             r#"
 use fe2o3_device::{{kernel, KernelContext}};
-type Marker = __fe2o3_kernel_marker_context_probe;
+type Marker = {marker_type};
 type Context<'a> = KernelContext<'a, Marker>;
 type Tag = core::marker::PhantomData<&'static u32>;
 {helper_prefix}
@@ -158,8 +214,30 @@ pub fn context_probe({parameters}) {{ {body} }}
 const CONTEXT_BYTES: &[u8] = include_bytes!(env!("FE2O3_CONTEXT_PROTOCOL_BYTES"));
 {registration}
 {duplicate}
+{shared}
 "#,
         );
+        if case == "module_marker" {
+            source = format!(
+                r#"
+type Tag = core::marker::PhantomData<&'static u32>;
+mod __fe2o3_kernel_marker_context_probe {{}}
+#[inline(never)]
+fn context_probe_body(_: (), _: u32, _: u32, _: Tag) {{}}
+#[unsafe(no_mangle)]
+pub fn fe2o3_kernel_context_probe(a: u32, b: u32, tag: Tag) {{ let _ = (a, b, tag); }}
+#[used]
+static __fe2o3_kernel_registration_context_probe:
+    (u64, u16, u16, &str, &str, fn(u32, u32, Tag)) =
+    ({magic}, {version}, {kind}, "context_probe", "context_probe", fe2o3_kernel_context_probe);
+const CONTEXT_BYTES: &[u8] = include_bytes!(env!("FE2O3_CONTEXT_PROTOCOL_BYTES"));
+{registration}
+"#,
+                magic = reserved_fe2o3_symbols::KERNEL_REGISTRATION_MAGIC,
+                version = reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V1,
+                kind = reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_KERNEL,
+            );
+        }
         let source_path = target.path().join(format!("{case}.rs"));
         let bytes_path = target.path().join(format!("{case}.bin"));
         let bundle = target.path().join(format!("{case}.fe2sim"));
@@ -174,6 +252,7 @@ const CONTEXT_BYTES: &[u8] = include_bytes!(env!("FE2O3_CONTEXT_PROTOCOL_BYTES")
         );
         command
             .env("FE2O3_CONTEXT_PROTOCOL_SOURCE", &source_path)
+            .env("FE2O3_CONTEXT_SHARED_BYTES", &shared_bytes_path)
             .env("FE2O3_CONTEXT_PROTOCOL_BYTES", &bytes_path);
         let result = output(
             command,

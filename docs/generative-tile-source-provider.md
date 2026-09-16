@@ -72,7 +72,10 @@ attribute/control-flow/assembly combinations receive source diagnostics.
 
 The bounded FE2O3KC V1 sidecar is an inert declaration. The collector binds its
 exact physical root, sibling helper and nominal enum, authenticates the provider
-and brands, and compares the source and adjusted rustc ABIs. It then checks the
+and brands, and compares the source and adjusted rustc ABIs. The nominal enum
+must have the declared kernel's generated marker name and cannot be shared by
+distinct physical roots. Rehashing a sidecar does not establish marker ownership.
+The collector then checks the
 generated root's actual pre-optimization MIR value flow: one issuer, a moved
 issuer result at helper argument zero, unchanged physical argument ordering,
 and a closed return path without branching, cycles or root re-entry. Both

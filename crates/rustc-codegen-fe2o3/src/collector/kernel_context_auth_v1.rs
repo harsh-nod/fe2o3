@@ -45,6 +45,13 @@ pub(crate) fn capture_context_producers_v1<'tcx>(
                 "context producer requires an ordinary local function body",
             ));
         }
+        if declaration.bound.contract.nominal_kernel_marker().name()
+            != format!("__fe2o3_kernel_marker_{}", declaration.logical_name)
+        {
+            return Err(error(
+                "nominal marker does not belong to the declared logical kernel",
+            ));
+        }
         let helper_def = sibling_definition(
             tcx,
             root.def_id(),
@@ -61,6 +68,11 @@ pub(crate) fn capture_context_producers_v1<'tcx>(
             root.def_id(),
             declaration.bound.contract.nominal_kernel_marker().name(),
         )?;
+        if proofs.iter().any(|proof| proof.marker == marker) {
+            return Err(error(
+                "nominal kernel marker is shared by distinct physical roots",
+            ));
+        }
         let context = authenticate_signature(tcx, root, helper, marker_ty)?;
         // This query is borrowed before monomorphization can steal it. No
         // optimized-MIR query or body-hashing helper may run under this borrow.
