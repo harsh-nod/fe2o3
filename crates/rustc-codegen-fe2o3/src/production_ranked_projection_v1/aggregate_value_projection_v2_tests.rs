@@ -287,6 +287,7 @@ fn aggregate_projected_writes_v2(
     projected_reference_gpu_writes_v2(
         types,
         function,
+        &[],
         &[ProductionRankedBlockV1::new(
             operations,
             ProductionRankedTerminatorV1::Return,
@@ -1020,7 +1021,8 @@ fn gpu_aggregate_load_retains_ranked_read_identity_v2() {
             }),
         })
         .collect::<Vec<_>>();
-    let writes = projected_reference_gpu_writes_v2(&types, &function, &blocks, &sources).unwrap();
+    let writes =
+        projected_reference_gpu_writes_v2(&types, &function, &[], &blocks, &sources).unwrap();
     assert_eq!(
         writes[0].value,
         Ok(ProductionSemanticExpressionV2::Load(

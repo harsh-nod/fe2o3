@@ -18,6 +18,12 @@ use fe2o3_device::atomic::Ordering;
 use fe2o3_device::memory;
 use fe2o3_device::{DisjointSlice, kernel, thread};
 
+#[cfg(any(
+    feature = "reference-write-only-positive",
+    feature = "reference-write-only-coordinate-read",
+))]
+mod write_only_reference;
+
 #[cfg(not(any(
     feature = "atomic-rmw",
     feature = "atomic-load-store",
@@ -37,6 +43,8 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "reference-dynamic-loop",
     feature = "reference-nested-call",
     feature = "reference-slice-read",
+    feature = "reference-write-only-positive",
+    feature = "reference-write-only-coordinate-read",
     feature = "reference-helper-memory",
     feature = "reference-helper-unsafe",
     feature = "reference-helper-recursive",

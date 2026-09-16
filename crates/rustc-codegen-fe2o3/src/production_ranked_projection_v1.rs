@@ -3571,8 +3571,13 @@ fn project_and_verify_ranked_root_v1(
         projected_blocks,
         assertion_facts,
     )?;
-    let reference_writes =
-        projected_reference_gpu_writes_v2(semantic.types(), function, &blocks, &sources)?;
+    let reference_writes = projected_reference_gpu_writes_v2(
+        semantic.types(),
+        function,
+        semantic.callables(),
+        &blocks,
+        &sources,
+    )?;
     let access_sources = production_access_sources(&blocks, &sources)?;
     let system_coherent_allocations = intrinsic
         .local_contracts
@@ -3647,6 +3652,7 @@ fn project_and_verify_ranked_root_v1(
 fn projected_reference_gpu_writes_v2(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
     blocks: &[ProductionRankedBlockV1],
     sources: &[ProjectedAccessSourceV1],
 ) -> Result<
@@ -3715,20 +3721,44 @@ fn projected_reference_gpu_writes_v2(
                 "a projected write view has no exact allocation origin",
             ),
         )?;
-        let value = source
-            .semantic_site
-            .and_then(|site| site.statement.map(|statement| (site.block, statement)))
-            .and_then(|(block, statement)| {
-                function
-                    .blocks()
-                    .get(block)
-                    .and_then(|block| block.statements().get(statement))
-                    .map(|value| (value, ScalarAssignmentSiteV1 { block, statement }))
-            })
-            .map_or(
-                Err("GPU write has no authenticated semantic MIR statement"),
-                |(statement, site)| expressions.resolve_store_v2(statement.kind(), site),
-            );
+        let value = match source.semantic_site {
+            Some(
+                site @ ProjectedSemanticAccessSiteV1 {
+                    statement: None, ..
+                },
+            ) if source.access == AccessKindAttr::Write
+                && source.memory_space == MemorySpaceAttr::Global
+                && matches!(
+                    operation,
+                    ProductionRankedOperationV1::Access {
+                        kind: AccessKindAttr::Write,
+                        ..
+                    } | ProductionRankedOperationV1::PredicatedAccess {
+                        kind: AccessKindAttr::Write,
+                        ..
+                    }
+                ) =>
+            {
+                expressions.resolve_thread_write_v2(callables, site, source.source)
+            }
+            Some(ProjectedSemanticAccessSiteV1 {
+                block,
+                statement: Some(statement),
+            }) => function
+                .blocks()
+                .get(block)
+                .and_then(|block| block.statements().get(statement))
+                .map_or(
+                    Err("GPU write has no authenticated semantic MIR statement"),
+                    |value| {
+                        expressions.resolve_store_v2(
+                            value.kind(),
+                            ScalarAssignmentSiteV1 { block, statement },
+                        )
+                    },
+                ),
+            _ => Err("GPU write has no authenticated semantic MIR statement"),
+        };
         writes.push(
             crate::production_reference_effect_join_v2::RankedGpuWriteV2 {
                 block: source.block,
@@ -4002,6 +4032,61 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             SemanticStatementKindV1::Store(store) => self.resolve_operand_v2(store.value(), 0),
             _ => Err("GPU write semantic site is not a scalar assignment or store"),
         };
+        self.use_site = previous;
+        result
+    }
+
+    fn resolve_thread_write_v2(
+        &mut self,
+        callables: &[SemanticCallableDeclV1],
+        site: ProjectedSemanticAccessSiteV1,
+        source: SemanticSourceProvenanceV1,
+    ) -> Result<ProductionSemanticExpressionV2, &'static str> {
+        let block = self
+            .function
+            .blocks()
+            .get(site.block)
+            .ok_or("GPU write call site is outside the exact semantic function")?;
+        if site.statement.is_some() || block.terminator().source() != source {
+            return Err("GPU write call site does not identify the exact semantic terminator");
+        }
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            return Err("GPU write semantic terminator is not a direct call");
+        };
+        // Receiver and full callable ABI validation belong to the semantic importer.
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation:
+                SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceWrite {
+                    element,
+                    witness,
+                    kind: SemanticWriteOnlyDisjointWriteKindV1::Thread { .. },
+                    ..
+                },
+            ..
+        }) = callables.get(call.callee().index() as usize)
+        else {
+            return Err("GPU write call is not an authenticated write-only Thread intrinsic");
+        };
+        let [_, index, value] = call.arguments() else {
+            return Err("GPU write-only Thread call argument count changed");
+        };
+        if index.ty() != *witness || value.ty() != *element {
+            return Err("GPU write-only Thread call operand type changed");
+        }
+        let scalar = self.scalar_v2(*element)?;
+        // The ranked projector already binds this call's guarded index and allocation.
+        // Resolve its value at the terminator, after every statement in that block.
+        let previous = self.use_site.replace(ScalarAssignmentSiteV1 {
+            block: site.block,
+            statement: block.statements().len(),
+        });
+        let result = self.resolve_operand_v2(value, 0).and_then(|value| {
+            if value.scalar() == scalar {
+                Ok(value)
+            } else {
+                Err("GPU write-only Thread value scalar type changed")
+            }
+        });
         self.use_site = previous;
         result
     }
@@ -24180,6 +24265,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_02_tests.rs");
     include!("production_ranked_projection_v1/projection_03_tests.rs");
     include!("production_ranked_projection_v1/aggregate_value_projection_v2_tests.rs");
+    include!("production_ranked_projection_v1/write_only_value_projection_v2_tests.rs");
     include!("production_ranked_projection_v1/projection_04_tests.rs");
     include!("production_ranked_projection_v1/constant_slice_index_v1_tests.rs");
     include!("production_ranked_projection_v1/dynamic_local_array_tests.rs");
