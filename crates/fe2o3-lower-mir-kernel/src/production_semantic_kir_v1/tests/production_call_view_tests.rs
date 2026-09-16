@@ -6,6 +6,9 @@ mod transport_tests;
 #[path = "production_call_result_tests.rs"]
 mod result_tests;
 
+#[path = "production_canonical_calls_tests.rs"]
+mod canonical_calls_tests;
+
 #[test]
 fn call_result_store_substitution_rejects_even_when_kir_types_still_verify() {
     for result in [ArgumentCallResult::Retained, ArgumentCallResult::Projected] {

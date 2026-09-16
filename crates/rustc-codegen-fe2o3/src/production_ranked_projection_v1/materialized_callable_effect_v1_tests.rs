@@ -85,6 +85,94 @@ fn materialized_helper_v1(
     assertion_materialized_functions(assertion_types(), vec![root, helper])
 }
 
+fn materialized_helper_shared_roots_v1() -> fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1 {
+    let original = materialized_aggregate_helper_v1();
+    let semantic = original.semantic_ssa().source_semantic();
+    let root = &semantic.functions()[0];
+    let second = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(249)),
+        root.role(),
+        root.item_definition_identity(),
+        root.monomorphization_identity(),
+        root.generic_type_arguments_identity(),
+        root.const_generic_arguments_identity(),
+        root.source(),
+        root.abi().clone(),
+        root.locals().to_vec(),
+        root.entry(),
+        root.blocks().to_vec(),
+    )
+    .unwrap()
+    .with_kernel_entry(SemanticKernelEntryV1::new(
+        SemanticLinkSymbolV1::new(b"shared_helper_second".to_vec()).unwrap(),
+        SemanticKernelBindingIdentityV1::from_sha256(bytes(246)),
+        root.kernel_entry().unwrap().source_contract(),
+    ));
+    let mut functions = semantic.functions().to_vec();
+    functions.push(second);
+    let callables = (0..functions.len())
+        .map(|index| {
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(index as u32))
+        })
+        .collect();
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        semantic.target(),
+        semantic.types().to_vec(),
+        vec![],
+        vec![],
+        vec![],
+        functions,
+        callables,
+        vec![
+            SemanticFunctionIdV1::from_index(0),
+            SemanticFunctionIdV1::from_index(2),
+        ],
+    )
+    .unwrap()
+    .admit_current_production(SemanticMirLimitsV1::default())
+    .unwrap();
+    let ssa = ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(
+            admitted,
+            fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+        )
+        .unwrap(),
+        fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap();
+    materialize_ranked_fixture_v1(
+        ssa,
+        &[
+            ranked_root_input_1d(A_NAME, 247, 64),
+            ranked_root_input_1d("shared_helper_second", 246, 64),
+        ],
+    )
+    .unwrap()
+}
+
+#[test]
+fn materialized_helper_effects_use_canonical_not_semantic_function_ordinals() {
+    let owner = materialized_helper_shared_roots_v1();
+    let helper = owner.empty_effect_helpers().iter().next().unwrap();
+    assert_eq!(helper.semantic_function().index(), 1);
+    let actual_ordinal = owner
+        .executable()
+        .module()
+        .functions
+        .iter()
+        .position(|function| &function.id == helper.kernel_ir_function())
+        .unwrap();
+    assert_ne!(actual_ordinal, helper.semantic_function().index() as usize);
+    let source = RankedProjectionSourceV1::from_legacy(&owner).unwrap();
+    canonical_assertion_facts_v1::with_canonical_assertions_v1(&owner, |session| {
+        let effects = session.callable_effect_summaries(&source)?;
+        assert!(effects.is_exact_empty(helper.semantic_function()));
+        assert!(!effects.is_exact_empty_deterministic_scalar(helper.semantic_function()));
+        Ok(())
+    })
+    .unwrap();
+}
+
 #[test]
 fn materialized_empty_effects_do_not_substitute_for_call_result_control() {
     for aggregate in [false, true] {
@@ -152,7 +240,7 @@ fn materialized_aggregate_helper_effects_do_not_grant_scalar_value_equivalence()
     )
     .unwrap();
     assert!(!old.is_exact_empty(helper));
-    assert_eq!(source.empty_effect_helpers().iter().count(), 1);
+    assert_eq!(source.owner().empty_effect_helpers().iter().count(), 1);
 
     canonical_assertion_facts_v1::with_canonical_assertions_v1(&owner, |session| {
         let floor = session.retained_floor_for_test_v1();

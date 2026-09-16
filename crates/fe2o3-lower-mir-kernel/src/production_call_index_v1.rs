@@ -2,7 +2,7 @@
 // numeric; physical symbol lookup reuses the existing metered heapsort/search.
 struct CallTargetIndexV1<'a> {
     physical: Vec<&'a Function>,
-    source: Vec<&'a SemanticKirFunctionCorrespondenceV1>,
+    source: Vec<(usize, &'a SemanticKirFunctionCorrespondenceV1)>,
 }
 
 fn call_source_key_v1(root: SemanticFunctionIdV1, function: SemanticFunctionIdV1) -> u64 {
@@ -30,7 +30,7 @@ impl<'a> CallTargetIndexV1<'a> {
             argument_product_v1(module.functions.len(), std::mem::size_of::<&Function>())?,
             argument_product_v1(
                 functions.len(),
-                std::mem::size_of::<&SemanticKirFunctionCorrespondenceV1>(),
+                std::mem::size_of::<(usize, &SemanticKirFunctionCorrespondenceV1)>(),
             )?,
         ])?)?;
         let mut physical = argument_vec_v1(module.functions.len())?;
@@ -53,13 +53,13 @@ impl<'a> CallTargetIndexV1<'a> {
             }
         }
         let mut source = argument_vec_v1(functions.len())?;
-        source.extend(functions);
+        source.extend(functions.iter().enumerate());
         sort_correspondence_keys_v1(&mut source, 63, &|row| {
-            call_source_key_v1(row.correspondence_owner, row.semantic_function)
+            call_source_key_v1(row.1.correspondence_owner, row.1.semantic_function)
         });
         if source.windows(2).any(|pair| {
-            call_source_key_v1(pair[0].correspondence_owner, pair[0].semantic_function)
-                == call_source_key_v1(pair[1].correspondence_owner, pair[1].semantic_function)
+            call_source_key_v1(pair[0].1.correspondence_owner, pair[0].1.semantic_function)
+                == call_source_key_v1(pair[1].1.correspondence_owner, pair[1].1.semantic_function)
         }) {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
@@ -90,18 +90,28 @@ impl<'a> CallTargetIndexV1<'a> {
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<(&'a SemanticKirFunctionCorrespondenceV1, &'a Function), ProductionSemanticKirErrorV1>
     {
+        let (_, instance) = self.source_row(root, function, budget)?;
+        Ok((
+            instance,
+            self.physical(&instance.kernel_ir_function, budget)?,
+        ))
+    }
+
+    fn source_row(
+        &self,
+        root: SemanticFunctionIdV1,
+        function: SemanticFunctionIdV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(usize, &'a SemanticKirFunctionCorrespondenceV1), ProductionSemanticKirErrorV1>
+    {
         budget.charge_work(72)?;
         let key = call_source_key_v1(root, function);
         let index = self
             .source
             .binary_search_by_key(&key, |row| {
-                call_source_key_v1(row.correspondence_owner, row.semantic_function)
+                call_source_key_v1(row.1.correspondence_owner, row.1.semantic_function)
             })
             .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let instance = self.source[index];
-        Ok((
-            instance,
-            self.physical(&instance.kernel_ir_function, budget)?,
-        ))
+        Ok(self.source[index])
     }
 }

@@ -512,7 +512,6 @@ fn with_call_view_v1<'w, R>(
         &mut ProductionCallViewV1<'s, 'w>,
     ) -> Result<R, ProductionSemanticKirErrorV1>,
 ) -> Result<R, ProductionSemanticKirErrorV1> {
-    use fe2o3_mir_model::{SsaBlockIdV1, SsaEdgeIdV1};
     let mismatch = || ProductionSemanticKirErrorV1::CorrespondenceMismatch;
     let semantic = owner.source_semantic();
     let index_floor = budget.storage();
@@ -553,16 +552,9 @@ fn with_call_view_v1<'w, R>(
     let row = &caller_rows[caller_rows
         .binary_search_by_key(&selected.2, |row| row.semantic_block)
         .map_err(|_| mismatch())?];
-    let SemanticKirCallReturnKindV1::Call {
-        arguments_first,
-        call_operation,
-        destination_end,
-        destination,
-        transport,
-    } = row.kind
-    else {
+    if !matches!(row.kind, SemanticKirCallReturnKindV1::Call { .. }) {
         return Err(mismatch());
-    };
+    }
     let source_function = &semantic.functions()[selected.1.index() as usize];
     let SemanticTerminatorKindV1::Call(source) = source_function.blocks()
         [selected.2.index() as usize]
@@ -600,37 +592,8 @@ fn with_call_view_v1<'w, R>(
         .iter()
         .find(|span| span.semantic_block == selected.2)
         .ok_or_else(mismatch)?;
-    let operation = &block.operations[call_operation as usize];
-    let destination = match destination {
-        SemanticKirCallDestinationV1::Local => ProductionCallDestinationV1::Local,
-        SemanticKirCallDestinationV1::Retained { .. } => {
-            ProductionCallDestinationV1::Retained(&block.operations[destination_end as usize - 1])
-        }
-        SemanticKirCallDestinationV1::Projected { .. } => ProductionCallDestinationV1::Projected {
-            preparation: &block.operations
-                [span.first_operation_ordinal as usize..arguments_first as usize],
-            store: &block.operations[destination_end as usize - 1],
-        },
-    };
-    let transport = call_components_v1(&rows.call_result_components, transport)?;
-    let plan = owner
-        .plan_for_function(selected.1)
-        .ok_or_else(mismatch)?
-        .plan();
-    let edge = SsaEdgeIdV1::new(SsaBlockIdV1::new(selected.2.index()), 0);
-    let definitions = plan.edge_definitions(edge).ok_or_else(mismatch)?;
-    let arguments = plan.edge_arguments(edge).ok_or_else(mismatch)?;
     drop(targets);
     budget.release_storage(budget.storage() - index_floor)?;
-    let result_function = &semantic.functions()[callee.index() as usize];
-    budget.charge_work(result_function.locals().len())?;
-    prepay_typed_shape_v1(
-        semantic.types(),
-        result_function.abi().source_output_type(),
-        0,
-        budget,
-    )?;
-    let result_shape = helper_result_components_v1(semantic.types(), result_function, *callee)?;
     budget.charge_work(argument_sum_v1(&[
         rows.parameter_bindings.len(),
         rows.parameter_component_bindings.len(),
@@ -638,10 +601,19 @@ fn with_call_view_v1<'w, R>(
         3,
     ])?)?;
     let same = |root, function| root == selected.0 && function == *callee;
-    with_parameter_correspondence_v1(
-        semantic,
-        callee_instance,
-        callee_target,
+    with_checked_call_site_v1(
+        owner,
+        &rows.call_result_components,
+        CheckedCallSiteV1 {
+            caller,
+            source,
+            callee: callee_instance,
+            callee_target,
+            block,
+            span,
+            anchor: row,
+            returns,
+        },
         ArgumentTraceV1 {
             direct: argument_group_v1(&rows.parameter_bindings, |row| {
                 same(row.correspondence_owner, row.semantic_function)
@@ -654,25 +626,6 @@ fn with_call_view_v1<'w, R>(
             }),
         },
         budget,
-        |entry| {
-            let mut view = ProductionCallViewV1 {
-                entry: ProductionArgumentViewV1 {
-                    data: entry.data,
-                    budget: &mut *entry.budget,
-                },
-                caller,
-                source,
-                block,
-                operation,
-                destination,
-                transport,
-                result_shape: &result_shape,
-                definitions,
-                arguments,
-                returns,
-                components: &rows.call_result_components,
-            };
-            use_view(&mut view)
-        },
+        use_view,
     )
 }

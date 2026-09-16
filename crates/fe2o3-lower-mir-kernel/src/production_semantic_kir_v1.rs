@@ -97,6 +97,8 @@ include!("production_call_storage_v1.rs");
 include!("production_call_validation_v1.rs");
 include!("production_call_index_v1.rs");
 include!("production_call_view_v1.rs");
+include!("production_call_assembly_v1.rs");
+include!("production_canonical_calls_v1.rs");
 
 const DEFAULT_MAX_FUNCTIONS_V1: usize = 1_024;
 const DEFAULT_MAX_BLOCKS_V1: usize = 16_384;
