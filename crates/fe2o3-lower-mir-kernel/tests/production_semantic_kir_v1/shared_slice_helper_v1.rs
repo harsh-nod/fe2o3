@@ -418,11 +418,19 @@ fn owner(shape: Shape, f32_element: bool) -> ProductionSemanticMirOwnerV1 {
                 },
             ),
             assign(
-                local_place(0, ty(4)),
+                local_place(2, ty(4)),
                 SemanticRvalueKindV1::Binary {
                     operation: SemanticBinaryOpV1::Add,
                     left: SemanticOperandV1::Copy(local_place(2, ty(4))),
                     right: scalar_constant(ty(4), 2, 8),
+                },
+            ),
+            assign(
+                local_place(0, ty(4)),
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Add,
+                    left: SemanticOperandV1::Copy(local_place(2, ty(4))),
+                    right: scalar_constant(ty(4), 3, 8),
                 },
             ),
         ]
@@ -665,8 +673,8 @@ fn slice_metadata_call_arguments_preserve_component_order_and_operation_limits()
                 .flat_map(|function| &function.body.as_ref().unwrap().blocks)
                 .map(|block| block.operations.len())
                 .sum::<usize>();
-            // Keep helper analysis below the emitted-operation boundary under test.
-            assert_eq!(operation_count, conversions + 6);
+            // Six helper operations exceed its five analysis work/storage units.
+            assert_eq!(operation_count, conversions + 8);
             let limits =
                 |cap| ProductionSemanticKirLimitsV1::new_with_max_operations(16, 64, 64, cap);
             let exact = ProductionSemanticKirOwnerV1::try_lower(
@@ -682,13 +690,16 @@ fn slice_metadata_call_arguments_preserve_component_order_and_operation_limits()
                 limits(operation_count - 1),
             )
             .unwrap_err();
-            assert!(matches!(
-                error,
-                ProductionSemanticKirErrorV1::ResourceLimit {
-                    resource: ProductionSemanticKirResourceV1::Operations,
-                    ..
-                }
-            ));
+            assert!(
+                matches!(
+                    error,
+                    ProductionSemanticKirErrorV1::ResourceLimit {
+                        resource: ProductionSemanticKirResourceV1::Operations,
+                        ..
+                    }
+                ),
+                "{error:?}"
+            );
         }
     }
 }
