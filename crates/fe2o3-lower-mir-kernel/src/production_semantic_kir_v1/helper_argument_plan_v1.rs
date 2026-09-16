@@ -25,23 +25,12 @@ fn direct_scalar_helper_plan_v1(
         })?;
     let function = &semantic.functions()[function_id.index() as usize];
     let types = semantic.types();
-    if function.role() != SemanticFunctionRoleV1::InternalHelper || function.export().is_some() {
-        return Err(unsupported(
-            function_id.index(),
-            None,
-            None,
-            "reachable helper has an exported or non-helper semantic role",
-        ));
-    }
+    check_argument_function_abi_v1(
+        function,
+        function_id,
+        SemanticKirFunctionRoleV1::InternalHelper,
+    )?;
     let abi = function.abi();
-    if abi.can_unwind() || abi.c_variadic() || !abi.hidden_arguments().is_empty() {
-        return Err(unsupported(
-            function_id.index(),
-            None,
-            None,
-            "helper does not have an exact non-unwinding direct scalar ABI",
-        ));
-    }
     for argument in arguments.source_arguments() {
         if matches!(
             argument.binding(),
@@ -86,67 +75,9 @@ fn direct_scalar_helper_plan_v1(
         )
     })?;
     for mapped in arguments.adjusted_arguments() {
-        let argument = mapped.abi();
         let local = mapped.local().index() as usize;
-        if argument.value().adjusted().is_some() || argument.value().pointee_override().is_some() {
-            return Err(unsupported(
-                function_id.index(),
-                None,
-                None,
-                "helper parameter has an adjusted ABI type",
-            ));
-        }
-        let shared_slice = mapped.tuple_field().is_none()
-            && shared_slice_helper_parameter_v1(
-                types,
-                function,
-                mapped.source_argument(),
-                argument.ty(),
-            );
-        let components = if shared_slice {
-            vec![(
-                Vec::new(),
-                argument.ty(),
-                lower_parameter_type(types, &[], argument.ty())?,
-            )]
-        } else if matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_))
-            && let Ok(scalar) = lower_scalar_type(types, argument.ty())
-        {
-            vec![(Vec::new(), argument.ty(), scalar)]
-        } else {
-            if mapped.source_ownership() != SemanticSourceArgumentOwnershipV1::ByValue
-                || matches!(
-                    types[argument.ty().index() as usize].shape(),
-                    SemanticTypeShapeV1::Pointer(_)
-                )
-                || !matches!(
-                    argument.mode(),
-                    SemanticAbiPassModeV1::Ignore
-                        | SemanticAbiPassModeV1::Direct(_)
-                        | SemanticAbiPassModeV1::Pair { .. }
-                )
-            {
-                return Err(unsupported(
-                    function_id.index(),
-                    None,
-                    None,
-                    "helper parameter is not an exact by-value scalar aggregate or shared slice",
-                ));
-            }
-            lower_by_value_parameter_components_v1(types, function, argument)
-                .map_err(|error| match error {
-                    ProductionSemanticKirErrorV1::Unsupported {
-                        block,
-                        statement,
-                        detail,
-                        ..
-                    } => unsupported(function_id.index(), block, statement, detail),
-                    other => other,
-                })?
-                .into_iter()
-                .map(|(path, ty, kir, _, _)| (path, ty, kir))
-                .collect()
-        };
+        let (shared_slice, components) =
+            helper_parameter_shape_v1(types, function, function_id, mapped)?;
         closure_budget.charge_parameter_expansion(
             logical_argument_rows_v1(function),
             parameter_types.len(),
@@ -268,52 +199,11 @@ fn direct_scalar_helper_plan_v1(
         parameter_local_bindings.push(binding);
     }
 
-    let return_locals = function
-        .locals()
-        .iter()
-        .enumerate()
-        .filter(|(_, local)| local.role() == SemanticLocalRoleV1::Return)
-        .collect::<Vec<_>>();
-    let [(_, return_declaration)] = return_locals.as_slice() else {
-        return Err(unsupported(
-            function_id.index(),
-            None,
-            None,
-            "helper must have one return local",
-        ));
-    };
-    if return_declaration.ty() != abi.source_output_type()
-        || abi.return_value().ty() != abi.source_output_type()
-        || abi.return_value().adjusted().is_some()
-    {
-        return Err(unsupported(
-            function_id.index(),
-            None,
-            None,
-            "helper return ABI type changed",
-        ));
-    }
-    let result_types = match abi.return_value().mode() {
-        SemanticAbiPassModeV1::Ignore
-            if types[abi.source_output_type().index() as usize]
-                .layout()
-                .size_bytes()
-                == Some(0) =>
-        {
-            Vec::new()
-        }
-        SemanticAbiPassModeV1::Direct(_) => {
-            vec![lower_scalar_type(types, abi.source_output_type())?]
-        }
-        _ => {
-            return Err(unsupported(
-                function_id.index(),
-                None,
-                None,
-                "helper return is not one ignored zero-sized value or one direct scalar",
-            ));
-        }
-    };
+    let result_types = helper_result_components_v1(types, function, function_id)?
+        .components
+        .into_iter()
+        .map(|(_, _, ty, _, _)| ty)
+        .collect();
     Ok(LoweredFunctionPlanV1 {
         correspondence_owner,
         semantic_function: function_id,

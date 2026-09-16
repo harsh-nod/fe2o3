@@ -306,6 +306,10 @@ pub(crate) struct AdtLayoutFacts {
 pub(crate) enum TypeLayoutKind {
     Scalar(SourceScalarKind),
     Pointer(PointerLayoutFacts),
+    /// Sized data/length carrier; the unsized pointee is not an owned value.
+    SharedSliceReference {
+        element: Box<TypeLayoutFacts>,
+    },
     Array(ArrayLayoutFacts),
     Tuple(Vec<FieldLayoutFacts>),
     Closure {
@@ -345,6 +349,22 @@ pub(crate) fn extract_general_layout_with_limits<'tcx>(
     ty: Ty<'tcx>,
     limits: ExtractionLimits,
 ) -> Result<TypeLayoutFacts, GeneralLayoutExtractError> {
+    extract_layout_with_policy(tcx, ty, limits, false)
+}
+
+pub(crate) fn extract_capture_layout<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Result<TypeLayoutFacts, GeneralLayoutExtractError> {
+    extract_layout_with_policy(tcx, ty, ExtractionLimits::default(), true)
+}
+
+fn extract_layout_with_policy<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    limits: ExtractionLimits,
+    shared_slice_captures: bool,
+) -> Result<TypeLayoutFacts, GeneralLayoutExtractError> {
     require_monomorphized_input(ty)?;
     let typing_env = TypingEnv::fully_monomorphized();
     let normalized = tcx
@@ -362,6 +382,7 @@ pub(crate) fn extract_general_layout_with_limits<'tcx>(
         limits,
         nodes: 0,
         active: Vec::new(),
+        shared_slice_captures,
     };
     extractor.extract_type(normalized, "root".to_owned(), 0)
 }
@@ -395,7 +416,10 @@ struct Extractor<'tcx> {
     limits: ExtractionLimits,
     nodes: usize,
     active: Vec<Ty<'tcx>>,
+    shared_slice_captures: bool,
 }
+
+include!("rust_type_layout_general/shared_slice_capture.rs");
 
 impl<'tcx> Extractor<'tcx> {
     fn extract_type(
@@ -477,6 +501,11 @@ impl<'tcx> Extractor<'tcx> {
             TyKind::Float(float) => TypeLayoutKind::Scalar(SourceScalarKind::Float {
                 bits: float_bits(float),
             }),
+            TyKind::Ref(_, pointee, Mutability::Not)
+                if self.shared_slice_captures && matches!(pointee.kind(), TyKind::Slice(_)) =>
+            {
+                self.shared_slice_capture(ty, pointee, &backend_representation, &path, depth)?
+            }
             TyKind::Ref(_, pointee, mutability) => TypeLayoutKind::Pointer(self.pointer_facts(
                 pointee,
                 mutability,

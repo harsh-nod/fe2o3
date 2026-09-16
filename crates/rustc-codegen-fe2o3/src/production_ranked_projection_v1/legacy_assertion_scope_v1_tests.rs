@@ -1332,7 +1332,7 @@ mod legacy_scope_tests {
             let mut operations = Vec::new();
             let mut sources = Vec::new();
             let mut guarded = Vec::new();
-            let mut views = vec![None; function.locals().len()];
+            let mut views = ProjectedViewsV1::new(function.locals().len(), None);
             project_statement_accesses(
                 semantic.types(),
                 function,

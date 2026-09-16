@@ -242,6 +242,7 @@ pub(crate) struct AuthenticatedCollectedKernelClosureV1<'tcx> {
     target: crate::production_target_v1::RetainedProductionTargetV1,
     collection: CollectionResult<'tcx>,
     roots: Box<[AuthenticatedProductionRootV1<'tcx>]>,
+    context_entries: kernel_context_auth_v1::AuthenticatedContextEntriesV1<'tcx>,
 }
 
 impl<'tcx> AuthenticatedCollectedKernelClosureV1<'tcx> {
@@ -318,7 +319,7 @@ pub(crate) fn collect_authenticated_kernel_closure_v1<'tcx>(
     target: crate::production_target_v1::RetainedProductionTargetV1,
     context_producers: CapturedContextProducersV1<'tcx>,
 ) -> Result<AuthenticatedCollectedKernelClosureV1<'tcx>, CollectError> {
-    let collection = collect_device_functions(
+    let (collection, context_entries) = collect_device_functions(
         tcx,
         cgus,
         verbose,
@@ -350,6 +351,7 @@ pub(crate) fn collect_authenticated_kernel_closure_v1<'tcx>(
         target,
         collection,
         roots: roots.into_boxed_slice(),
+        context_entries,
     })
 }
 
@@ -359,7 +361,13 @@ fn collect_device_functions<'tcx>(
     verbose: bool,
     target: String,
     context_producers: CapturedContextProducersV1<'tcx>,
-) -> Result<CollectionResult<'tcx>, CollectError> {
+) -> Result<
+    (
+        CollectionResult<'tcx>,
+        kernel_context_auth_v1::AuthenticatedContextEntriesV1<'tcx>,
+    ),
+    CollectError,
+> {
     let ffi_declarations =
         crate::device_ffi::collect_declarations(tcx, cgus).map_err(|error| CollectError {
             message: error.to_string(),
@@ -2486,7 +2494,15 @@ impl<'tcx> DeviceCollector<'tcx> {
         Ok(())
     }
 
-    fn collect(mut self) -> Result<CollectionResult<'tcx>, CollectError> {
+    fn collect(
+        mut self,
+    ) -> Result<
+        (
+            CollectionResult<'tcx>,
+            kernel_context_auth_v1::AuthenticatedContextEntriesV1<'tcx>,
+        ),
+        CollectError,
+    > {
         while let Some(mut function) = self.worklist.pop_front() {
             let def_id = function.instance.def_id();
 
@@ -2562,7 +2578,7 @@ impl<'tcx> DeviceCollector<'tcx> {
 
         self.authenticate_production_kernel_source_safety()?;
         self.authenticate_reachable_frontend_contracts()?;
-        kernel_context_auth_v1::authenticate_v1(&mut self)?;
+        let context_entries = kernel_context_auth_v1::authenticate_v1(&mut self)?;
 
         let device_ffi = crate::device_ffi::validate_local_closure(
             self.tcx,
@@ -2597,7 +2613,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     message: format!("compiler FFI envelope construction failed: {error}"),
                 },
             )?;
-        Ok(collection)
+        Ok((collection, context_entries))
     }
 
     fn process_terminator(

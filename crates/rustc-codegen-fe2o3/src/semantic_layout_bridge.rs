@@ -709,6 +709,12 @@ fn bridge_type(
     }
     let layout = MirLayout::sized(facts.size_bytes, facts.abi_alignment_bytes);
     let kind = match &facts.kind {
+        TypeLayoutKind::SharedSliceReference { .. } => {
+            return Err(SemanticLayoutBridgeError::Unsupported {
+                path: path.to_owned(),
+                detail: "capture-only shared slice layout requires the production semantic importer",
+            });
+        }
         TypeLayoutKind::Scalar(source) => {
             verify_source_scalar(facts, *source, path)?;
             MirTypeKind::Scalar(source_scalar(*source, path)?)

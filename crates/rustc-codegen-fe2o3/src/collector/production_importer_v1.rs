@@ -87,6 +87,7 @@ enum TerminalIdentitySchemaV1 {
 pub(crate) enum ProductionSemanticImportErrorV1 {
     Target(ProductionTargetErrorV1),
     RootCustodyMismatch,
+    ContextCustody(super::CollectError),
     ClosureAdmission(crate::closure_profile_v1::ClosureProfileErrorV1),
     LimitExceeded {
         resource: SemanticMirResourceV1,
@@ -121,6 +122,7 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
             Self::RootCustodyMismatch => formatter.write_str(
                 "semantic importer rejected collector root custody before MIR construction",
             ),
+            Self::ContextCustody(error) => write!(formatter, "semantic import context custody rejected: {error}"),
             Self::ClosureAdmission(error) => write!(
                 formatter, "semantic import closure admission rejected: {error}"
             ),
@@ -181,6 +183,7 @@ impl std::error::Error for ProductionSemanticImportErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Target(error) => Some(error),
+            Self::ContextCustody(error) => Some(error),
             Self::Preflight(error) => Some(error.as_ref()),
             Self::TypeConstruction(error) => Some(error.as_ref()),
             Self::FunctionAbiConstruction(error) => Some(error.as_ref()),
@@ -271,6 +274,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         target,
         collection,
         roots,
+        context_entries,
     } = closure;
     let target = match target.authenticate_import_session(tcx) {
         Ok(target) => target,
@@ -299,6 +303,9 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     if !exact_ordered_axes_match(retained_roots, independently_observed_roots) {
         return Err(ProductionSemanticImportErrorV1::RootCustodyMismatch);
     }
+    context_entries
+        .validate_for_import_v1(tcx, &collection)
+        .map_err(ProductionSemanticImportErrorV1::ContextCustody)?;
     let reference_effect_bindings =
         crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::new(
             collection

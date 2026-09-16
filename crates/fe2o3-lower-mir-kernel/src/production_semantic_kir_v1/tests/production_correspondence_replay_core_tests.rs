@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone, Copy)]
-enum Expected {
+pub(super) enum Expected {
     Accepted,
     CorrespondenceMismatch,
 }
@@ -31,7 +31,7 @@ fn source_and_output() -> (
     (source, module, correspondence)
 }
 
-fn check_both(
+pub(super) fn check_both(
     source: &ProductionSemanticSsaOwnerV1,
     module: &Module,
     roots: &[SemanticFunctionIdV1],
@@ -42,15 +42,19 @@ fn check_both(
     // The private core's precondition is established by a real replay on the
     // same immutable owner. No fabricated proof token or skip mode is exposed.
     source.verify_replay().unwrap();
+    let limits = ProductionSemanticKirLimitsV1 {
+        max_blocks,
+        ..ProductionSemanticKirLimitsV1::default()
+    };
     let core = validate_semantic_kir_correspondence_after_source_replay_v1(
         source,
         module,
         roots,
-        max_blocks,
+        limits,
         correspondence,
     );
     let wrapper =
-        validate_semantic_kir_correspondence(source, module, roots, max_blocks, correspondence);
+        validate_semantic_kir_correspondence(source, module, roots, limits, correspondence);
     for result in [core, wrapper] {
         match expected {
             Expected::Accepted => result.unwrap(),

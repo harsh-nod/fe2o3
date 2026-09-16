@@ -5,7 +5,7 @@
 //! The observation checks collection/import continuity, not closure transport,
 //! semantic equivalence, or authorization to lower the body.
 
-use crate::rust_type_layout_general::{TypeLayoutFacts, TypeLayoutKind, extract_general_layout};
+use crate::rust_type_layout_general::{TypeLayoutFacts, TypeLayoutKind, extract_capture_layout};
 use crate::rustc_semantic_adapter_v1::{
     canonical_function_identities_v1, canonical_target_layout_v1, rustc_mir_body_sha256_v1,
 };
@@ -297,7 +297,7 @@ pub(crate) fn analyze_bounded_closures_v2<'tcx>(
                     "host closure references require an eligible allocation/completion token; none is present in V1",
                 ));
             }
-            let facts = extract_general_layout(tcx, capture_ty).map_err(|error| {
+            let facts = extract_capture_layout(tcx, capture_ty).map_err(|error| {
                 ClosureProfileErrorV1::new(format!(
                     "capture {source_index} has unsupported physical layout: {error}"
                 ))
@@ -522,6 +522,14 @@ fn validate_capture_layout_v1(
             "nested closure captures are outside the bounded profile",
         )),
         TypeLayoutKind::Scalar(_) => Ok(()),
+        TypeLayoutKind::SharedSliceReference { element } => {
+            if origin == ClosureOriginV1::HostArgument {
+                return Err(ClosureProfileErrorV1::new(
+                    "host closure references require an eligible allocation/completion token; none is present in V1",
+                ));
+            }
+            validate_capture_layout_v1(element, origin)
+        }
         TypeLayoutKind::Pointer(pointer) => {
             match pointer.kind {
                 PointerKind::ConstRaw | PointerKind::MutRaw => {

@@ -6,19 +6,18 @@ use fe2o3_kernel_ir::{
     VerifiedCanonicalKernelIrModuleV12,
 };
 use fe2o3_lower_mir_kernel::{
-    ProductionEmptyEffectHelpersV1, ProductionPreRankedKirOwnerV1, ProductionSourceLaunchRosterV1,
-    SemanticKirAssertOriginsV1,
+    ProductionPreRankedKirOwnerV1, ProductionSourceLaunchRosterV1, SemanticKirAssertOriginsV1,
 };
 use fe2o3_pliron::ProductionSemanticSsaOwnerV1;
 
 use super::{CanonicalAssertionErrorV1, ProductionRankedProjectionErrorV1 as Error};
 
 pub(super) struct RankedProjectionSourceV1<'s> {
+    owner: &'s ProductionPreRankedKirOwnerV1,
     semantic_ssa: &'s ProductionSemanticSsaOwnerV1,
     source_launch: &'s ProductionSourceLaunchRosterV1,
     executable: &'s VerifiedCanonicalKernelIrModuleV12,
     origins: SemanticKirAssertOriginsV1<'s>,
-    empty_effect_helpers: ProductionEmptyEffectHelpersV1<'s>,
     minimum_storage: usize,
 }
 
@@ -30,17 +29,21 @@ impl<'s> RankedProjectionSourceV1<'s> {
             .checked_add(owner.assert_origin_storage().payload_storage())
             .ok_or_else(|| resource(Resource::Arithmetic))?;
         Ok(Self {
+            owner,
             semantic_ssa: owner.semantic_ssa(),
             source_launch: owner.source_launch(),
             executable: owner.executable(),
             origins: owner.assert_origins(),
-            empty_effect_helpers: owner.empty_effect_helpers(),
             minimum_storage,
         })
     }
 
     pub(super) const fn semantic_ssa(&self) -> &'s ProductionSemanticSsaOwnerV1 {
         self.semantic_ssa
+    }
+
+    pub(super) const fn owner(&self) -> &'s ProductionPreRankedKirOwnerV1 {
+        self.owner
     }
 
     pub(super) const fn source_launch(&self) -> &'s ProductionSourceLaunchRosterV1 {
@@ -53,10 +56,6 @@ impl<'s> RankedProjectionSourceV1<'s> {
 
     pub(super) const fn origins(&self) -> SemanticKirAssertOriginsV1<'s> {
         self.origins
-    }
-
-    pub(super) const fn empty_effect_helpers(&self) -> ProductionEmptyEffectHelpersV1<'s> {
-        self.empty_effect_helpers
     }
 
     pub(super) fn require_floor(&self, budget: &Budget<'_>) -> Result<(), Error> {

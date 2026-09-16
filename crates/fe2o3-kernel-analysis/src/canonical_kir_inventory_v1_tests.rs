@@ -23,6 +23,64 @@ fn admit(module: &Module) -> (VerifiedCanonicalKernelIrModuleV12, usize) {
     (owner, storage.retained_storage())
 }
 
+#[test]
+fn definition_index_and_reference_queries_have_identical_lookup_budgets() {
+    let (owner, owner_storage) = admit(&mixed_module());
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(10_000_000);
+    let mut budget = Budget::new(&mut work, 10_000_000);
+    budget.reserve_storage(owner_storage).unwrap();
+    let (inventory, storage) = CanonicalKirInventoryV1::derive(&owner, &mut budget).unwrap();
+    budget.reserve_storage(storage.retained_storage()).unwrap();
+    let mut cases = vec![
+        (FunctionCoordinate(u32::MAX), ValueId(4_000_000_000)),
+        (FunctionCoordinate(2), ValueId(u32::MAX)),
+    ];
+    let mut kinds = std::collections::BTreeSet::new();
+    for function in inventory.functions() {
+        for row in &inventory.definitions()[function.definitions.clone()] {
+            if let Some(value) = row.value {
+                cases.push((function.coordinate, value));
+                kinds.insert(match row.coordinate {
+                    Definition::FunctionArgument { .. } => 0,
+                    Definition::BlockArgument { .. } => 1,
+                    Definition::Result { .. } => 2,
+                });
+            }
+        }
+    }
+    assert_eq!(kinds.len(), 3);
+    for (function, value) in cases {
+        let lookup = |indexed, limit| {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
+            let mut budget = Budget::new(&mut work, 0);
+            let result = if indexed {
+                inventory
+                    .definition_index_for_value(function, value, &mut budget)
+                    .map(|index| index.map(|index| inventory.definitions()[index].coordinate))
+            } else {
+                inventory
+                    .definition_for_value(function, value, &mut budget)
+                    .map(|row| row.map(|row| row.coordinate))
+            };
+            assert_eq!(budget.storage(), 0);
+            (result, budget.work())
+        };
+        let measured = lookup(false, 10_000);
+        assert_eq!(lookup(true, 10_000), measured);
+        assert_eq!(lookup(true, measured.1), measured);
+        assert!(matches!(
+            lookup(true, measured.1 - 1).0,
+            Err(CanonicalKirInventoryErrorV1::Resource(Resource::Work(_)))
+        ));
+        assert_eq!(lookup(false, measured.1 - 1), lookup(true, measured.1 - 1));
+    }
+    drop(inventory);
+    budget.release_storage(storage.retained_storage()).unwrap();
+    drop(owner);
+    budget.release_storage(owner_storage).unwrap();
+    assert_eq!(budget.storage(), 0);
+}
+
 fn mixed_module() -> Module {
     let scalar = Type::Scalar(ScalarType::U32);
     let pointer = Type::pointer(scalar.clone(), AddressSpace::Private, AccessMode::ReadWrite);
@@ -251,6 +309,14 @@ fn mixed_ssa_inventory_borrows_exact_definitions_and_preserves_every_occurrence(
         .definition_for_value(FunctionCoordinate(2), ValueId(4_000_000_000), &mut budget)
         .unwrap()
         .unwrap();
+    let parameter_index = inventory
+        .definition_index_for_value(FunctionCoordinate(2), ValueId(4_000_000_000), &mut budget)
+        .unwrap()
+        .unwrap();
+    assert!(std::ptr::eq(
+        parameter,
+        &inventory.definitions()[parameter_index]
+    ));
     assert_eq!(
         parameter.coordinate,
         Definition::FunctionArgument {
@@ -260,7 +326,7 @@ fn mixed_ssa_inventory_borrows_exact_definitions_and_preserves_every_occurrence(
     );
     assert!(
         inventory
-            .definition_for_value(FunctionCoordinate(1), ValueId(4_000_000_000), &mut budget)
+            .definition_index_for_value(FunctionCoordinate(1), ValueId(4_000_000_000), &mut budget)
             .unwrap()
             .is_none()
     );

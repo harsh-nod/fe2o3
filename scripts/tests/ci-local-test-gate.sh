@@ -1233,6 +1233,9 @@ for production_step in \
   rocm-production-simulation-bundle-v3-typed-layouts \
   rocm-production-simulation-bundle-v4-aggregate-components \
   rocm-production-simulation-bundle-v5-recursive-aggregates \
+  rocm-production-simulation-bundle-v4-recursive-refusals \
+  rocm-production-simulation-bundle-v5-wave-debugger \
+  rocm-production-simulation-bundle-v5-workgroup-cpu \
   rocm-production-simulation-bundle-v6-nested-control-flow; do
   assert_step_count "${production_step}" 1 \
     "ROCm compile did not run ${production_step} exactly once"
@@ -1308,6 +1311,18 @@ assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_recursive_aggregates_export_and_execute_bundle_v5 -- --ignored --exact' \
   "$(step_command rocm-production-simulation-bundle-v5-recursive-aggregates)" \
   'ROCm compile omitted the exact V5 recursive aggregate and CPU runtime regression'
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed -- --ignored --exact' \
+  "$(step_command rocm-production-simulation-bundle-v4-recursive-refusals)" \
+  'ROCm compile omitted the exact V4 recursive exports and typed refusals'
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_rust_v9_wave_collective_exports_v5_and_runs_in_public_debugger -- --ignored --exact' \
+  "$(step_command rocm-production-simulation-bundle-v5-wave-debugger)" \
+  'ROCm compile omitted the exact V5 wave source and debugger regression'
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_ranked_bounds_driver_v1 ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path -- --ignored --exact' \
+  "$(step_command rocm-production-simulation-bundle-v5-workgroup-cpu)" \
+  'ROCm compile omitted the exact V5 workgroup source and CPU paths regression'
 assert_equals \
   'env cargo test --locked -p rustc-codegen-fe2o3 --test production_semantic_conformance_v3 ordinary_rust_nested_control_flow_executes_after_production_ssa_lowering -- --ignored --exact' \
   "$(step_command rocm-production-simulation-bundle-v6-nested-control-flow)" \

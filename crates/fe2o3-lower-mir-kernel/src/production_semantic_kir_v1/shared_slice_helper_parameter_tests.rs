@@ -1,6 +1,9 @@
 use super::*;
 use fe2o3_mir_model::semantic_mir_v1::*;
 
+#[path = "shared_slice_aggregate_parameter_tests.rs"]
+mod aggregate_leaves;
+
 // Descriptor-selection component fixtures only. No source admission or owner
 // is claimed for hostile combinations of shape, layout and ABI below.
 #[allow(clippy::too_many_arguments)]
@@ -47,13 +50,32 @@ fn descriptors(
             SemanticTypeDeclV1::new(
                 SemanticTypeIdentityV1::from_sha256([index as u8 + 1; 32]),
                 SemanticLayoutIdentityV1::from_sha256([index as u8 + 1; 32]),
-                SemanticTypeLayoutV1::new_with_backend_repr(
-                    Some(4),
-                    4,
-                    SemanticBackendReprV1::memory(true),
-                    false,
-                )
-                .unwrap(),
+                if index == 2 {
+                    SemanticTypeLayoutV1::new_with_backend_repr(
+                        Some(16),
+                        8,
+                        SemanticBackendReprV1::scalar_pair(
+                            SemanticBackendScalarV1::initialized(
+                                SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                                SemanticScalarValidityRangeV1::new(1, u64::MAX.into()),
+                            ),
+                            SemanticBackendScalarV1::initialized(
+                                SemanticBackendPrimitiveV1::integer(false, 64, 8),
+                                SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+                            ),
+                        ),
+                        false,
+                    )
+                    .unwrap()
+                } else {
+                    SemanticTypeLayoutV1::new_with_backend_repr(
+                        Some(4),
+                        4,
+                        SemanticBackendReprV1::memory(true),
+                        false,
+                    )
+                    .unwrap()
+                },
                 shape,
             )
         })

@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 include!("production_ranked_bounds_driver_v1/dynamic_local_array_tests.rs");
 include!("production_ranked_bounds_driver_v1/generative_provider_tests.rs");
 include!("production_ranked_bounds_driver_v1/context_entry_tests.rs");
+include!("production_ranked_bounds_driver_v1/tutorial_source_contract.rs");
 
 fn run_typed_layout_runtime_fixture(
     target: &ScratchTarget,
@@ -967,11 +968,69 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
             "export ordinary Rust FnOnce closures",
         );
         assert!(exported.status.success(), "{}", exported.stderr);
-        for (seed, lhs, rhs) in [
-            (13_u32, 29_u32, 11_u32),
-            (0, 0, 0),
-            (u32::MAX, 1, 2),
-            (0, 1, u32::MAX),
+        let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV1::from_canonical_bytes(
+            std::fs::read(&bundle_path).unwrap(),
+        )
+        .unwrap();
+        let module = fe2o3_kernel_ir::decode_module_v7(bundle.canonical_kir_v7()).unwrap();
+        let pair = vec![fe2o3_kernel_ir::Type::Scalar(fe2o3_kernel_ir::ScalarType::U32); 2];
+        let mut calls = 0;
+        for operation in module
+            .functions
+            .iter()
+            .filter_map(|function| function.body.as_ref())
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+        {
+            let fe2o3_kernel_ir::OperationKind::Call { callee, .. } = &operation.kind else {
+                continue;
+            };
+            if operation.results.len() != 2 {
+                continue;
+            }
+            let helper = module
+                .function(callee)
+                .expect("defined aggregate-result helper");
+            assert_eq!(helper.role, fe2o3_kernel_ir::FunctionRole::InternalHelper);
+            assert_eq!(helper.signature.results, pair);
+            assert!(
+                operation
+                    .results
+                    .iter()
+                    .zip(&pair)
+                    .all(|(value, ty)| &value.ty == ty)
+            );
+            let returns = helper
+                .body
+                .as_ref()
+                .unwrap()
+                .blocks
+                .iter()
+                .filter_map(|block| match &block.terminator {
+                    Some(fe2o3_kernel_ir::Terminator::Return { values }) => Some(values),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!returns.is_empty());
+            assert!(returns.iter().all(|values| values.len() == 2));
+            calls += 1;
+        }
+        assert!(
+            calls > 0,
+            "ordinary tuple-result Call must survive optimization"
+        );
+        assert_shared_slice_call_chain_v1(&module);
+        let (typed_bundle_path, indexed_bundle_path) =
+            assert_shared_slice_source_v1(architecture, &target);
+        for (seed, lhs, rhs, input_length, other_length) in [
+            (13_u32, 0_u32, 1_u32, 3_usize, 5_usize),
+            (0, 0, 0, 0, 0),
+            (u32::MAX, 1, 0, 1, 4),
+            (0, 64, 2, 65, 1),
+            (7, 2, 64, 3, 65),
+            (u32::MAX, u32::MAX, 11, 3, 129),
+            (u32::MAX, 0, u32::MAX, 1, 1),
+            (3, 64, 7, 65, 8),
         ] {
             let expected = [
                 (seed ^ lhs).wrapping_sub(rhs).wrapping_add(lhs),
@@ -994,6 +1053,34 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
                         "alignment": 4, "bytes": format!("0x{}", hex(&initial)),
                     }));
                 }
+                let input_values = (0..input_length)
+                    .map(|index| seed.wrapping_add((index as u32).wrapping_mul(0x9e37_79b9)))
+                    .collect::<Vec<_>>();
+                let input_bytes = input_values
+                    .iter()
+                    .flat_map(|value| value.to_le_bytes())
+                    .collect::<Vec<_>>();
+                let other_values = (0..other_length)
+                    .map(|index| {
+                        (seed ^ 0xf00d_1234).wrapping_add((index as u32).wrapping_mul(0x85eb_ca6b))
+                    })
+                    .collect::<Vec<_>>();
+                let other_bytes = other_values
+                    .iter()
+                    .flat_map(|value| value.to_le_bytes())
+                    .collect::<Vec<_>>();
+                arguments.push(json!({
+                    "kind": "buffer", "element": "u32", "access": "read_only",
+                    "alignment": 4, "bytes": format!("0x{}", hex(&input_bytes)),
+                }));
+                arguments.push(json!({
+                    "kind": "buffer", "element": "u32", "access": "read_only",
+                    "alignment": 4, "bytes": format!("0x{}", hex(&other_bytes)),
+                }));
+                arguments.push(json!({
+                    "kind": "buffer", "element": "u32", "access": "read_write",
+                    "alignment": 4, "bytes": format!("0x{}", hex(&initial)),
+                }));
                 let request_path = target.path().join("rust-call-request.json");
                 std::fs::write(
                     &request_path,
@@ -1004,34 +1091,66 @@ fn ordinary_source_rust_call_closures_match_rust_in_simulation() {
                     .unwrap(),
                 )
                 .unwrap();
-                let admitted =
-                    fe2o3_kir_sim_cli::load_debug_simulation_bundle_v1(&bundle_path, &request_path)
-                        .unwrap();
-                let execution = admitted
-                    .input()
-                    .module
-                    .simulate(
-                        &admitted.input().request,
-                        admitted.input().simulation_target(),
-                        admitted.input().simulation_limits,
-                    )
-                    .unwrap_or_else(|error| {
-                        panic!("{architecture} {seed:#x} {lhs:#x} {rhs:#x}: {error:?}")
-                    });
-                assert_eq!(execution.invocations_executed(), grid as u64);
-                for (index, value) in expected.into_iter().enumerate() {
-                    let mut expected_bytes = value.to_le_bytes().repeat(grid);
-                    expected_bytes.extend_from_slice(&CANARY.to_le_bytes().repeat(3));
+                for (path, indexed) in [(&typed_bundle_path, false), (&indexed_bundle_path, true)] {
+                    let admitted =
+                        fe2o3_kir_sim_cli::load_debug_simulation_bundle_v5(path, &request_path)
+                            .unwrap();
+                    let execution = admitted
+                        .input()
+                        .module
+                        .simulate(
+                            &admitted.input().request,
+                            admitted.input().simulation_target(),
+                            admitted.input().simulation_limits,
+                        )
+                        .unwrap_or_else(|error| {
+                            panic!("{architecture} {seed:#x} {lhs:#x} {rhs:#x}: {error:?}")
+                        });
+                    assert_eq!(execution.invocations_executed(), grid as u64);
+                    assert_eq!(execution.buffer(6).unwrap().bytes(), input_bytes);
+                    assert_eq!(execution.buffer(7).unwrap().bytes(), other_bytes);
+                    let n = if indexed {
+                        (input_length as u32)
+                            .wrapping_add(
+                                input_values
+                                    .get(lhs as usize)
+                                    .copied()
+                                    .unwrap_or(0)
+                                    .wrapping_mul(4),
+                            )
+                            .wrapping_add(
+                                other_values
+                                    .get(rhs as usize)
+                                    .copied()
+                                    .unwrap_or(0)
+                                    .wrapping_mul(5),
+                            )
+                    } else {
+                        input_length as u32
+                    };
+                    let mut expected_length = n.to_le_bytes().repeat(grid);
+                    expected_length.extend_from_slice(&CANARY.to_le_bytes().repeat(3));
                     assert_eq!(
-                        execution.buffer(index + 3).unwrap().bytes(),
-                        expected_bytes,
-                        "{architecture} {seed:#x} {lhs:#x} {rhs:#x} output {index}",
+                        execution.buffer(8).unwrap().bytes(),
+                        expected_length,
+                        "{architecture} indexed={indexed} {seed:#x} {lhs:#x} {rhs:#x}"
                     );
+                    for (index, value) in expected.into_iter().enumerate() {
+                        let mut expected_bytes = value.to_le_bytes().repeat(grid);
+                        expected_bytes.extend_from_slice(&CANARY.to_le_bytes().repeat(3));
+                        assert_eq!(
+                            execution.buffer(index + 3).unwrap().bytes(),
+                            expected_bytes,
+                            "{architecture} {seed:#x} {lhs:#x} {rhs:#x} output {index}",
+                        );
+                    }
                 }
             }
         }
     }
 }
+
+include!("production_ranked_bounds_driver_v1/shared_slice_call_assertions.rs");
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
@@ -1228,10 +1347,19 @@ fn ordinary_source_sqrt_executes_exact_binary32_in_simulation() {
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle() {
+    let case = TutorialSourceCaseV1 {
+        test_function: "ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle",
+        feature: "barrier_before_access",
+        kernel_symbol: "barrier_before_access",
+        target: "gfx942",
+        bundle_version: 1,
+        displayed_fragment: 0,
+        refusal: None,
+    };
     let target = ScratchTarget::new();
     let bundle_path = target.path().join("copy-static.fe2sim");
     let result = output(
-        simulation_export_command("gfx942", &bundle_path, target.path()),
+        case.export_command(&bundle_path, target.path()),
         "run production simulation-bundle extraction",
     );
 
@@ -1266,6 +1394,7 @@ fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle(
     assert_eq!(bundle.kernel_count(), 1);
     let module = fe2o3_kernel_ir::decode_module_v7(bundle.canonical_kir_v7())
         .expect("decode compiler-produced launch geometry");
+    case.assert_kernel(bundle.target(), &module);
     assert_eq!(module.kernels.len(), 1);
     assert_eq!(
         module.kernels[0].domain.extents().next(),
@@ -1566,16 +1695,20 @@ fn ordinary_kernel_source_exports_the_exact_gfx950_simulation_target() {
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_rust_v9_wave_collective_exports_v5_and_runs_in_public_debugger() {
+    let case = TutorialSourceCaseV1 {
+        test_function: "ordinary_rust_v9_wave_collective_exports_v5_and_runs_in_public_debugger",
+        feature: "wave_reduce_f32",
+        kernel_symbol: "wave_reduce_f32",
+        target: "gfx950",
+        bundle_version: 5,
+        displayed_fragment: 3,
+        refusal: None,
+    };
     let target = ScratchTarget::new();
+    let export_target = ScratchTarget::in_directory(target.path());
     let bundle_path = target.path().join("wave-reduce-f32-v5.fe2sim");
     let result = output(
-        simulation_export_command_for_feature(
-            "gfx950",
-            &bundle_path,
-            &target.path().join("wave-reduce-export-target"),
-            Some(5),
-            "wave_reduce_f32",
-        ),
+        case.export_command(&bundle_path, export_target.path()),
         "export ordinary attributed Rust KIR V9 wave reduction as bundle V5",
     );
     assert!(
@@ -1613,6 +1746,8 @@ fn ordinary_rust_v9_wave_collective_exports_v5_and_runs_in_public_debugger() {
             bundle.canonical_kir_v10().to_vec(),
         )
         .expect("decode the exact V10 executable body");
+    case.assert_kernel(bundle.target(), &module);
+    drop(export_target);
     assert!(module.functions.iter().any(|function| {
         function.body.as_ref().is_some_and(|body| {
             body.blocks.iter().any(|block| {
@@ -1971,14 +2106,20 @@ fn ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path() {
     for (case_index, (feature, scalar_name, scalar_bits, expected_bits)) in
         cases.into_iter().enumerate()
     {
+        let case = TutorialSourceCaseV1 {
+            test_function: "ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path",
+            feature,
+            kernel_symbol: feature,
+            target: "gfx942",
+            bundle_version: 5,
+            displayed_fragment: 4,
+            refusal: None,
+        };
         let bundle_path = target.path().join(format!("{feature}-v5.fe2sim"));
         let result = output(
-            simulation_export_command_for_feature(
-                "gfx942",
+            case.export_command(
                 &bundle_path,
-                &target.path().join(format!("{feature}-export-target")),
-                Some(5),
-                feature,
+                &target.path().join("workgroup-reduce-export-target"),
             ),
             "export ordinary attributed Rust workgroup reduction as Bundle V5",
         );
@@ -2026,6 +2167,7 @@ fn ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path() {
                 bundle.canonical_kir_v10().to_vec(),
             )
             .unwrap();
+        case.assert_kernel(bundle.target(), &module);
         let kernel = module
             .kernels
             .iter()
@@ -3158,15 +3300,21 @@ fn check_typed_layout_export(target: &ScratchTarget, exporter: &Path, bundle_pat
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_rust_struct_argument_exports_exact_v4_components() {
+    let case = TutorialSourceCaseV1 {
+        test_function: "ordinary_rust_struct_argument_exports_exact_v4_components",
+        feature: "aggregate_pair_struct",
+        kernel_symbol: "aggregate_pair_struct",
+        target: "gfx942",
+        bundle_version: 4,
+        displayed_fragment: 1,
+        refusal: None,
+    };
     let target = ScratchTarget::new();
     let bundle_path = target.path().join("aggregate-pair-struct-v4.fe2sim");
     let result = output(
-        simulation_export_command_for_feature(
-            "gfx942",
+        case.export_command(
             &bundle_path,
             &target.path().join("aggregate-pair-struct-target"),
-            Some(4),
-            "aggregate_pair_struct",
         ),
         "export ordinary attributed Rust aggregate V4 bundle",
     );
@@ -3179,6 +3327,10 @@ fn ordinary_rust_struct_argument_exports_exact_v4_components() {
         std::fs::read(&bundle_path).unwrap(),
     )
     .unwrap();
+    case.assert_kernel(
+        bundle.target(),
+        &fe2o3_kernel_ir::decode_module_v7(bundle.canonical_kir_v7()).unwrap(),
+    );
     let map =
         fe2o3_kernel_ir::SemanticStorageMapV2::from_canonical_json_bytes(bundle.storage_map())
             .unwrap();
@@ -3398,14 +3550,17 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
     use fe2o3_kernel_ir::SemanticStorageProjectionV2::{ArrayElement, Field};
 
     let target = ScratchTarget::new();
-    for (feature, expected_paths) in [
+    let export_target = target.path().join("aggregate-export-target");
+    for (feature, fragment, expected_paths) in [
         (
             "aggregate_pair_tuple",
+            1,
             vec![vec![Field { index: 0 }], vec![Field { index: 1 }]],
         ),
-        ("aggregate_zst", vec![]),
+        ("aggregate_zst", 2, vec![]),
         (
             "aggregate_pair_array",
+            1,
             vec![
                 vec![ArrayElement { index: 0 }],
                 vec![ArrayElement { index: 1 }],
@@ -3413,6 +3568,7 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
         ),
         (
             "aggregate_nested",
+            2,
             vec![
                 vec![Field { index: 0 }, Field { index: 0 }],
                 vec![Field { index: 0 }, Field { index: 1 }],
@@ -3421,15 +3577,18 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
             ],
         ),
     ] {
+        let case = TutorialSourceCaseV1 {
+            test_function: "ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed",
+            feature,
+            kernel_symbol: feature,
+            target: "gfx942",
+            bundle_version: 4,
+            displayed_fragment: fragment,
+            refusal: None,
+        };
         let bundle_path = target.path().join(format!("{feature}-v4.fe2sim"));
         let result = output(
-            simulation_export_command_for_feature(
-                "gfx942",
-                &bundle_path,
-                &target.path().join(format!("{feature}-target")),
-                Some(4),
-                feature,
-            ),
+            case.export_command(&bundle_path, &export_target),
             "export ordinary attributed Rust aggregate V4 bundle",
         );
         assert!(
@@ -3441,6 +3600,10 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
             std::fs::read(&bundle_path).unwrap(),
         )
         .unwrap();
+        case.assert_kernel(
+            bundle.target(),
+            &fe2o3_kernel_ir::decode_module_v7(bundle.canonical_kir_v7()).unwrap(),
+        );
         let map =
             fe2o3_kernel_ir::SemanticStorageMapV2::from_canonical_json_bytes(bundle.storage_map())
                 .unwrap();
@@ -3481,6 +3644,57 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
             }
             _ => {}
         }
+        let kernel = &map.kernels()[0];
+        let output_slot: u32 = match feature {
+            "aggregate_pair_tuple" | "aggregate_pair_array" => 16,
+            "aggregate_zst" => 0,
+            "aggregate_nested" => 24,
+            _ => unreachable!(),
+        };
+        let offset = output_slot as usize;
+        let mut explicit_kernarg = vec![0xa5; offset + 24];
+        let expected = match feature {
+            "aggregate_zst" => 3,
+            "aggregate_pair_array" => {
+                explicit_kernarg[0..8].copy_from_slice(&0x1122_3344_5566_7788_u64.to_le_bytes());
+                explicit_kernarg[8..16].copy_from_slice(&0x0102_0304_0506_0708_u64.to_le_bytes());
+                0x0102_0304_0506_0708
+            }
+            "aggregate_pair_tuple" | "aggregate_nested" => {
+                explicit_kernarg[0..4].copy_from_slice(&0x1122_3344_u32.to_le_bytes());
+                explicit_kernarg[8..16].copy_from_slice(&0x0102_0304_0506_0708_u64.to_le_bytes());
+                if feature == "aggregate_nested" {
+                    explicit_kernarg[16..18].copy_from_slice(&0x1234_u16.to_le_bytes());
+                    explicit_kernarg[18..20].copy_from_slice(&0x5678_u16.to_le_bytes());
+                }
+                0x0102_0304_0506_0708
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(kernel.explicit_kernarg_bytes(), output_slot + 24);
+        assert_eq!(kernel.explicit_kernarg_alignment(), 8);
+        let output = &kernel.arguments()[1].storage().components().unwrap()[0];
+        assert_eq!(output.value_slot().byte_offset(), output_slot);
+        assert_eq!(
+            output.metadata_slot().unwrap().byte_offset(),
+            output_slot + 8
+        );
+        let scale = &kernel.arguments()[2].storage().components().unwrap()[0];
+        assert_eq!(scale.value_slot().byte_offset(), output_slot + 16);
+        explicit_kernarg[offset..offset + 8].fill(0);
+        explicit_kernarg[offset + 8..offset + 16].copy_from_slice(&64_u64.to_le_bytes());
+        explicit_kernarg[offset + 16..offset + 24].copy_from_slice(&3_u64.to_le_bytes());
+        execute_aggregate_bundle_through_sim_runtime(
+            bundle.canonical_bytes(),
+            feature,
+            *semantic.functions()[kernel.semantic_root() as usize]
+                .abi()
+                .identity()
+                .as_bytes(),
+            &explicit_kernarg,
+            output_slot,
+            expected,
+        );
     }
 
     let nested_request = target.path().join("aggregate-nested-request.json");
@@ -3567,59 +3781,37 @@ fn ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed() {
     assert_eq!(response["session"]["simulated"], true);
     assert_eq!(response["session"]["hardware_observed"], false);
 
-    for feature in ["aggregate_pair_array", "aggregate_nested"] {
-        let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV4::from_canonical_bytes(
-            std::fs::read(target.path().join(format!("{feature}-v4.fe2sim"))).unwrap(),
-        )
-        .unwrap();
-        let map =
-            fe2o3_kernel_ir::SemanticStorageMapV2::from_canonical_json_bytes(bundle.storage_map())
-                .unwrap();
-        let semantic = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
-            bundle.semantic_mir(),
-            fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
-        )
-        .unwrap();
-        let abi_identity = *semantic.functions()[map.kernels()[0].semantic_root() as usize]
-            .abi()
-            .identity()
-            .as_bytes();
-        let mut backend = fe2o3_sim_runtime::SimRuntimeBackendV1::gfx942([0xb6; 32]).unwrap();
-        let module = fe2o3_runtime::RuntimeBackendV1::load_module_v1(
-            &mut backend,
-            1,
-            bundle.canonical_bytes(),
-        )
-        .unwrap();
-        fe2o3_runtime::RuntimeBackendV1::resolve_kernel_v1(
-            &mut backend,
-            module,
-            feature,
-            abi_identity,
-        )
-        .unwrap();
-        fe2o3_runtime::RuntimeBackendV1::unload_module_v1(&mut backend, module).unwrap();
-    }
-
     for (feature, typed_reason) in [
         ("aggregate_enum", "variant-aware packing evidence"),
         ("aggregate_pointer", "contains a pointer or reference"),
         ("aggregate_drop", "Drop requiring drop glue"),
     ] {
+        let case = TutorialSourceCaseV1 {
+            test_function: "ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed",
+            feature,
+            kernel_symbol: feature,
+            target: "gfx942",
+            bundle_version: 4,
+            displayed_fragment: 2,
+            refusal: Some(typed_reason),
+        };
+        let bundle_path = target.path().join(format!("{feature}-v4.fe2sim"));
+        assert!(
+            matches!(std::fs::symlink_metadata(&bundle_path), Err(error) if error.kind() == std::io::ErrorKind::NotFound),
+            "{feature} output path was not initially absent"
+        );
         let result = output(
-            simulation_export_command_for_feature(
-                "gfx942",
-                &target.path().join(format!("{feature}-v4.fe2sim")),
-                &target.path().join(format!("{feature}-target")),
-                Some(4),
-                feature,
-            ),
+            case.export_command(&bundle_path, &export_target),
             "reject unsupported ordinary attributed Rust aggregate ABI",
         );
         assert!(
             !result.status.success() && result.stderr.contains(typed_reason),
             "{feature} did not fail at the typed ABI boundary:\n{}",
             result.stderr
+        );
+        assert!(
+            matches!(std::fs::symlink_metadata(&bundle_path), Err(error) if error.kind() == std::io::ErrorKind::NotFound),
+            "{feature} left an output artifact after rejection"
         );
     }
 }
@@ -3634,21 +3826,26 @@ fn execute_aggregate_bundle_through_sim_runtime(
 ) {
     use fe2o3_runtime::RuntimeBackendV1 as _;
 
+    const GUARD: usize = 8;
+    const OUTPUT_BYTES: usize = 64 * 8;
+
     let mut backend = fe2o3_sim_runtime::SimRuntimeBackendV1::gfx942([0xc2; 32]).unwrap();
     assert!(!backend.uses_gpu());
     assert!(!backend.evidence().hardware);
     assert!(!backend.evidence().performance_prediction);
     let stream = backend.create_stream_v1(1).unwrap();
+    let mut initial = vec![0xa5; OUTPUT_BYTES + 2 * GUARD];
+    initial[GUARD..GUARD + OUTPUT_BYTES].fill(0);
     let allocation = backend
         .allocate_v1(
             1,
             fe2o3_runtime::RuntimeMemoryKindV1::HostVisible,
-            64 * 8,
+            initial.len() as u64,
             8,
         )
         .unwrap();
     backend
-        .write_allocation_v1(allocation, 0, &[0; 64 * 8])
+        .write_allocation_v1(allocation, 0, &initial)
         .unwrap();
     let module = backend.load_module_v1(1, bundle).unwrap();
     let mut wrong_signature = signature;
@@ -3666,8 +3863,8 @@ fn execute_aggregate_bundle_through_sim_runtime(
         region: fe2o3_runtime::BackendMemoryRegionV1 {
             allocation,
             access: fe2o3_runtime::RuntimeAccessV1::ReadWrite,
-            byte_offset: 0,
-            byte_len: 64 * 8,
+            byte_offset: GUARD as u64,
+            byte_len: OUTPUT_BYTES as u64,
         },
         kernarg_byte_offset: output_pointer_slot,
     }];
@@ -3695,13 +3892,22 @@ fn execute_aggregate_bundle_through_sim_runtime(
             .unwrap(),
         fe2o3_runtime::BackendPollV1::Succeeded
     );
-    let mut output = vec![0; 64 * 8];
+    let mut output = vec![0; initial.len()];
     backend
         .read_allocation_v1(allocation, 0, &mut output)
         .unwrap();
-    assert!(output.chunks_exact(8).all(|bytes| {
-        u64::from_le_bytes(bytes.try_into().expect("one complete u64 output")) == expected
-    }));
+    assert_eq!(&output[..GUARD], &initial[..GUARD]);
+    assert_eq!(
+        &output[GUARD + OUTPUT_BYTES..],
+        &initial[GUARD + OUTPUT_BYTES..]
+    );
+    assert!(
+        output[GUARD..GUARD + OUTPUT_BYTES]
+            .chunks_exact(8)
+            .all(|bytes| {
+                u64::from_le_bytes(bytes.try_into().expect("one complete u64 output")) == expected
+            })
+    );
     backend.release_submission_v1(submission).unwrap();
     backend.destroy_stream_v1(stream).unwrap();
     backend.unload_module_v1(module).unwrap();
@@ -3717,6 +3923,7 @@ fn ordinary_recursive_aggregates_export_and_execute_bundle_v5() {
     };
 
     let target = ScratchTarget::new();
+    let export_target = target.path().join("aggregate-v5-export-target");
     let debug_target = target.path().join("aggregate-v5-debug-target");
     let build_debugger = Command::new(env!("CARGO"))
         .current_dir(workspace())
@@ -3745,7 +3952,7 @@ fn ordinary_recursive_aggregates_export_and_execute_bundle_v5() {
             simulation_export_command_for_feature(
                 "gfx942",
                 &bundle_path,
-                &target.path().join(format!("{feature}-v5-target")),
+                &export_target,
                 Some(5),
                 feature,
             ),
@@ -4026,7 +4233,7 @@ fn ordinary_recursive_aggregates_export_and_execute_bundle_v5() {
             simulation_export_command_for_feature(
                 "gfx942",
                 &target.path().join(format!("{feature}-v5.fe2sim")),
-                &target.path().join(format!("{feature}-v5-target")),
+                &export_target,
                 Some(5),
                 feature,
             ),

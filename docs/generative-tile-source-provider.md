@@ -127,6 +127,10 @@ layout checks and exact semantic identity comparison remain unchanged.
 
 ## Required Integration
 
+The [unified SIMT/tile integration ADR](unified-simt-tile-integration.md) records
+the proposed shared graph, schedule, scratch and acceptance boundaries. It is
+not an approved schema allocation or evidence that the staged operations execute.
+
 The unified capability owner must connect the authenticated frontend producer
 to the canonical semantic schema, preserving registration, nominal kernel,
 logical helper, target/launch brands and physical-root-only issuance. Frontend

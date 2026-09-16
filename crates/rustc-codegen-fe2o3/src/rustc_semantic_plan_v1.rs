@@ -33,6 +33,9 @@ use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc
 use crate::production_rustc_intrinsic_v1::{
     ProductionRustcIntrinsicOperationV1, atomic_ordering_tag_v1, atomic_scope_tag_v1,
 };
+use crate::production_rustc_slice_metadata_v1::{
+    SliceMetadataErrorV1, SliceMetadataPlanV1, SliceMetadataRewriteV1,
+};
 use crate::production_semantic_terminal_v1::{
     ProductionSemanticTerminalRuleV1, ProductionTerminalExpansionV1,
 };
@@ -1066,6 +1069,28 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
 
 impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
     fn inspect_body(&mut self) -> Result<(), PendingRejectionV1> {
+        let metadata = SliceMetadataPlanV1::derive(self.tcx, self.instance, self.body, |amount| {
+            self.charge(SemanticMirResourceV1::ValidationWork, amount)
+        })
+        .map_err(|error| match error {
+            SliceMetadataErrorV1::Resource(error) => error,
+            SliceMetadataErrorV1::Allocation => {
+                PendingRejectionV1::Fatal(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)
+            }
+            SliceMetadataErrorV1::Unsupported(location) => reject(
+                "fake raw pointer outside the exact shared-slice metadata pair",
+                RejectionSiteV1 {
+                    function: self.function,
+                    block: Some(location.block.index() as u32),
+                    statement: Some(location.statement_index as u32),
+                    local: None,
+                    span: self.body.basic_blocks[location.block]
+                        .statements
+                        .get(location.statement_index)
+                        .map_or(self.body.span, |row| row.source_info.span),
+                },
+            ),
+        })?;
         for (local, declaration) in self.body.local_decls.iter_enumerated() {
             let site = RejectionSiteV1 {
                 function: self.function,
@@ -1085,7 +1110,27 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                     local: None,
                     span: statement.source_info.span,
                 };
-                self.inspect_statement(&statement.kind, site)?;
+                self.charge(
+                    SemanticMirResourceV1::ValidationWork,
+                    metadata.lookup_work(),
+                )?;
+                if metadata.at(rustc_middle::mir::Location {
+                    block,
+                    statement_index,
+                }) == Some(SliceMetadataRewriteV1::ElideTemporary)
+                {
+                    self.work()?;
+                    let StatementKind::Assign(assignment) = &statement.kind else {
+                        unreachable!()
+                    };
+                    let Rvalue::RawPtr(_, place) = assignment.1 else {
+                        unreachable!()
+                    };
+                    self.inspect_place(assignment.0, site)?;
+                    self.inspect_place(place, site)?;
+                } else {
+                    self.inspect_statement(&statement.kind, site)?;
+                }
             }
             let terminator = data.terminator.as_ref().ok_or_else(|| {
                 reject(

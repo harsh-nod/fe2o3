@@ -15,10 +15,10 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource, ScalarType,
 };
-#[cfg(test)]
-use fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1;
 use fe2o3_lower_mir_kernel::{
-    SemanticKirAssertConditionOutcomeV1, SemanticKirAssertOriginErrorV1, SemanticKirAssertOriginsV1,
+    ProductionArgumentCoverageV1, ProductionPreRankedKirOwnerV1, ProductionSliceAccessSiteV1,
+    SemanticKirAssertConditionOutcomeV1, SemanticKirAssertOriginErrorV1,
+    SemanticKirAssertOriginsV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{SemanticBlockIdV1, SemanticFunctionIdV1};
 use fe2o3_pliron::{CanonicalAnalysisScopeErrorV1, with_canonical_analysis_scope_v1};
@@ -30,6 +30,7 @@ pub(crate) enum CanonicalAssertionErrorV1 {
     Inventory(CanonicalKirInventoryErrorV1),
     Sparse(CanonicalKirSparseErrorV1),
     Origin(SemanticKirAssertOriginErrorV1),
+    CallEffects(fe2o3_kernel_analysis::CanonicalKirCallEffectErrorV1),
     Binding(&'static str),
 }
 impl fmt::Display for CanonicalAssertionErrorV1 {
@@ -39,6 +40,7 @@ impl fmt::Display for CanonicalAssertionErrorV1 {
             Self::Inventory(error) => error.fmt(f),
             Self::Sparse(error) => error.fmt(f),
             Self::Origin(error) => error.fmt(f),
+            Self::CallEffects(error) => error.fmt(f),
             Self::Binding(detail) => f.write_str(detail),
         }
     }
@@ -50,6 +52,7 @@ impl Error for CanonicalAssertionErrorV1 {
             Self::Inventory(error) => Some(error),
             Self::Sparse(error) => Some(error),
             Self::Origin(error) => Some(error),
+            Self::CallEffects(error) => Some(error),
             Self::Binding(_) => None,
         }
     }
@@ -92,6 +95,18 @@ pub(super) enum ProjectedAssertionConditionV1 {
 pub(super) trait ProjectedAssertionFactsV1 {
     fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError>;
 
+    fn slice_access(
+        &mut self,
+        site: super::ProjectedSemanticAccessSiteV1,
+        ordinal: u32,
+        assertion: u32,
+    ) -> Result<super::slice_projection_v1::ProjectedSliceInputV1, ProjectionError> {
+        let _ = (site, ordinal, assertion);
+        Err(ProjectionError::Incomplete(
+            "slice access requires live canonical correspondence",
+        ))
+    }
+
     fn is_materialized_block(&mut self, block: usize) -> Result<bool, ProjectionError>;
 
     fn condition(
@@ -117,11 +132,36 @@ pub(super) fn projected_assertion_is_proved_v1(
 }
 
 pub(super) struct CanonicalAssertionSessionV1<'r, 'i, 'g, 'b, 'w> {
+    owner: &'g ProductionPreRankedKirOwnerV1,
     origins: SemanticKirAssertOriginsV1<'g>,
     report: &'r CanonicalKirSparseV1<'i, 'g>,
     budget: &'b mut Budget<'w>,
 }
 impl CanonicalAssertionSessionV1<'_, '_, '_, '_, '_> {
+    #[cfg(test)]
+    pub(super) fn callable_effect_summaries_with_query_budget_v1(
+        &self,
+        source: &RankedProjectionSourceV1<'_>,
+        budget: &mut Budget<'_>,
+    ) -> Result<super::DefinedCallableEmptyEffectSummariesV1, ProjectionError> {
+        super::derive_materialized_callable_effect_summaries_v1(
+            source,
+            self.report.inventory(),
+            budget,
+        )
+    }
+
+    pub(super) fn callable_effect_summaries(
+        &mut self,
+        source: &RankedProjectionSourceV1<'_>,
+    ) -> Result<super::DefinedCallableEmptyEffectSummariesV1, ProjectionError> {
+        super::derive_materialized_callable_effect_summaries_v1(
+            source,
+            self.report.inventory(),
+            self.budget,
+        )
+    }
+
     #[cfg(test)]
     pub(super) fn retained_floor_for_test_v1(&self) -> usize {
         self.budget.storage()
@@ -135,6 +175,7 @@ impl CanonicalAssertionSessionV1<'_, '_, '_, '_, '_> {
         semantic_function: SemanticFunctionIdV1,
     ) -> impl ProjectedAssertionFactsV1 + 'a {
         CanonicalSourceAssertionFactsV1 {
+            owner: self.owner,
             origins: self.origins,
             report: self.report,
             budget,
@@ -149,6 +190,7 @@ impl CanonicalAssertionSessionV1<'_, '_, '_, '_, '_> {
         semantic_function: SemanticFunctionIdV1,
     ) -> impl ProjectedAssertionFactsV1 + '_ {
         CanonicalSourceAssertionFactsV1 {
+            owner: self.owner,
             origins: self.origins,
             report: self.report,
             budget: &mut *self.budget,
@@ -159,6 +201,7 @@ impl CanonicalAssertionSessionV1<'_, '_, '_, '_, '_> {
 }
 
 struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
+    owner: &'g ProductionPreRankedKirOwnerV1,
     origins: SemanticKirAssertOriginsV1<'g>,
     report: &'r CanonicalKirSparseV1<'i, 'g>,
     budget: &'b mut Budget<'w>,
@@ -168,6 +211,64 @@ struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
 impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
     fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError> {
         self.budget.charge_work(amount).map_err(resource)
+    }
+
+    fn slice_access(
+        &mut self,
+        site: super::ProjectedSemanticAccessSiteV1,
+        ordinal: u32,
+        assertion: u32,
+    ) -> Result<super::slice_projection_v1::ProjectedSliceInputV1, ProjectionError> {
+        use fe2o3_kernel_ir::{AccessMode, AddressSpace, Type};
+        let block = u32::try_from(site.block).map_err(|_| resource(Resource::Arithmetic))?;
+        let statement = site
+            .statement
+            .map(u32::try_from)
+            .transpose()
+            .map_err(|_| resource(Resource::Arithmetic))?;
+        let site = ProductionSliceAccessSiteV1::new(
+            self.correspondence_owner,
+            self.semantic_function,
+            SemanticBlockIdV1::from_index(block),
+            statement,
+            ordinal,
+            SemanticBlockIdV1::from_index(assertion),
+        );
+        self.owner
+            .with_checked_slice_access_v1(self.report.inventory(), site, self.budget, |view| {
+                let mismatch =
+                    || fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::CorrespondenceMismatch;
+                let ProductionArgumentCoverageV1::Parameter(parameter) = view.source().coverage()
+                else {
+                    return Err(mismatch());
+                };
+                let Type::Slice(slice) = parameter.ty() else {
+                    return Err(mismatch());
+                };
+                if slice.address_space != AddressSpace::Global
+                    || slice.access != AccessMode::ReadOnly
+                    || slice.element.as_ref() != view.loaded_type()
+                {
+                    return Err(mismatch());
+                }
+                let element_width = view
+                    .loaded_type()
+                    .as_scalar()
+                    .and_then(|scalar| scalar.bit_width())
+                    .map(|bits| u32::from(bits).max(8))
+                    .ok_or_else(mismatch)?;
+                let direct_local = view
+                    .source()
+                    .local_binding()
+                    .filter(|(_, path)| path.is_empty() && view.source().source_path().is_empty())
+                    .map(|(local, _)| local);
+                Ok(super::slice_projection_v1::ProjectedSliceInputV1 {
+                    source_argument: view.source().source_argument(),
+                    direct_local,
+                    element_width,
+                })
+            })
+            .map_err(ProjectionError::StructuralValidation)
     }
 
     fn is_materialized_block(&mut self, block: usize) -> Result<bool, ProjectionError> {
@@ -264,6 +365,7 @@ pub(super) fn with_canonical_assertions_source_budget_v1<T>(
         with_canonical_analysis_scope_v1(source.executable(), budget, |scope| {
             scope.with_sparse_v1(|report, budget| {
                 body(&mut CanonicalAssertionSessionV1 {
+                    owner: source.owner(),
                     origins: source.origins(),
                     report,
                     budget,

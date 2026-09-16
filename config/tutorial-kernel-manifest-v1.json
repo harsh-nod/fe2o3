@@ -1,11 +1,11 @@
 {
   "schema": "fe2o3-tutorial-kernel-source-contract-v1",
   "curriculum": {
-    "schema": "fe2o3-tutorial-curriculum-obligations-v1",
+    "schema": "fe2o3-tutorial-curriculum-obligations-v2",
     "site": {
-      "commit": "510e39f34226ccd3226199b179d8fd36e6c0d9cb",
       "repository": "harsh-nod/fe2o3-kernels",
-      "tree": "f73c1c56e81b40b8a2fbd64e18f4e06dcc13dfb1"
+      "commit": "fae8e0fd2d297f7e1b7603d5a4b90611f15c74ca",
+      "tree": "79cba5abe41395a94dbad17c8841298ffbb38d0c"
     },
     "status": "pending",
     "lessons": [
@@ -392,7 +392,7 @@
         "sourceEntryIds": [
           "cpu-semantic-simulation"
         ],
-        "sourceBindingGap": "The displayed production-ranked-bounds-device debugger source needs its own selected feature/symbol/fixture association beyond the existing fill obligation; source-item custody remains pending.",
+        "sourceBindingGap": null,
         "variants": [
           {
             "kind": "simt",
@@ -413,23 +413,246 @@
             "kind": "kernel",
             "label": "Kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 5860,
-            "displayedSha256": "ed4273d0b9eda1e04e916773886f2442e0404d7ba489b25ddf94d2e7d5fc61d1",
+            "displayedUtf8Bytes": 5882,
+            "displayedSha256": "61643f24e119d7353b4bf046d616b999b4e5e017f6e642fd07b287dbf91dd4f4",
             "sourcePath": "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs",
-            "sourceCommit": "2df6130c5f897b5120cdf6ade44d53030690fa8b",
-            "sourceSha256": "ed4273d0b9eda1e04e916773886f2442e0404d7ba489b25ddf94d2e7d5fc61d1",
+            "sourceCommit": "1e36889321e371756efcfc3ce9555703a2793209",
+            "sourceSha256": "61643f24e119d7353b4bf046d616b999b4e5e017f6e642fd07b287dbf91dd4f4",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "699c1c0c40812788386e60152baf7d6803a0f0d5435f906838911b219456ee32",
+              "18d1f747af79465934935e074dc8c496360ddc13d192a77ea82b2ceb35cbe515",
               "761f23b0d2595036777ffc729eb6bcf069d22a56b61655f57cd5fd1d28ce5a68",
               "4c68c4a4dc8e5d8b9b3a3f87981369ccd75400a453c27254ed1e3bcac5bdfdc0",
               "8ff95b4264c342145974deb7a7c479f81fbafd5cb1bd777a97ed37182cfaabf9",
               "d6d7cdb7af94f03ee96428f535a3e5e70b96aefa501a1a508483f34a6cc3a018"
             ],
-            "sourceItem": null,
-            "sourceItemStatus": "pending"
+            "sourceItem": {
+              "kind": "source-driver",
+              "compilerInput": {
+                "packageManifest": "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/Cargo.toml",
+                "packageManifestSha256": "81eae63f1091d3c9e42e8e4f2a7e506b84ca12111ab087da55c0d4d3a35483dd",
+                "cargoLockPath": "Cargo.lock",
+                "cargoLockSha256": "caf0f1e15b77fafef15ca3709749e56e3c88d53dac5f19d7a15942e94a6e0f2f",
+                "sourcePaths": [
+                  "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs"
+                ],
+                "sourceClosureSha256": "9a0afce4b5e2a63657ca2d8529a9d735faa63b4da262e230b5b480a91a42d209",
+                "cargoTarget": {
+                  "kind": "lib",
+                  "name": "fe2o3_production_ranked_bounds_fixture",
+                  "sourcePath": "src/lib.rs"
+                },
+                "defaultFeatures": true
+              },
+              "driver": {
+                "package": "rustc-codegen-fe2o3",
+                "target": "production_ranked_bounds_driver_v1",
+                "path": "crates/rustc-codegen-fe2o3/tests/production_ranked_bounds_driver_v1.rs"
+              },
+              "sourceRanges": [
+                {
+                  "byteOffset": 27402,
+                  "byteLength": 427
+                },
+                {
+                  "byteOffset": 10066,
+                  "byteLength": 1148
+                },
+                {
+                  "byteOffset": 11216,
+                  "byteLength": 2099
+                },
+                {
+                  "byteOffset": 15231,
+                  "byteLength": 404
+                },
+                {
+                  "byteOffset": 15637,
+                  "byteLength": 1796
+                }
+              ],
+              "cases": [
+                {
+                  "features": [
+                    "barrier_before_access"
+                  ],
+                  "kernelSymbol": "barrier_before_access",
+                  "target": "gfx942",
+                  "displayedFragmentOrdinal": 0,
+                  "testFunction": "ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle",
+                  "expectation": {
+                    "kind": "verified-bundle-export",
+                    "bundleVersion": 1
+                  }
+                },
+                {
+                  "features": [
+                    "aggregate_pair_struct"
+                  ],
+                  "kernelSymbol": "aggregate_pair_struct",
+                  "target": "gfx942",
+                  "displayedFragmentOrdinal": 1,
+                  "testFunction": "ordinary_rust_struct_argument_exports_exact_v4_components",
+                  "expectation": {
+                    "kind": "verified-bundle-export",
+                    "bundleVersion": 4
+                  }
+                },
+                {
+                  "features": [
+                    "aggregate_pair_tuple"
+                  ],
+                  "kernelSymbol": "aggregate_pair_tuple",
+                  "target": "gfx942",
+                  "displayedFragmentOrdinal": 1,
+                  "testFunction": "ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed",
+                  "expectation": {
+                    "kind": "verified-bundle-export",
+                    "bundleVersion": 4
+                  }
+                },
+                {
+                  "features": [
+                    "aggregate_pair_array"
+                  ],
+                  "kernelSymbol": "aggregate_pair_array",
+                  "target": "gfx942",
+                  "displayedFragmentOrdinal": 1,
+                  "testFunction": "ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed",
+                  "expectation": {
+                    "kind": "verified-bundle-export",
+                    "bundleVersion": 4
+                  }
+                },
+                {
+                  "features": [
+                    "aggregate_zst"
+                  ],
+                  "kernelSymbol": "aggregate_zst",
+                  "target": "gfx942",
+                  "displayedFragmentOrdinal": 2,
+                  "testFunction": "ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed",
+                  "expectation": {
+                    "kind": "verified-bundle-export",
+                    "bundleVersion": 4
+                  }
+                },
+                {
+                  "features": [
+                    "aggregate_nested"
+                  ],
+                  "kernelSymbol": "aggregate_nested",
+                  "target": "gfx942",
+                  "displayedFragmentOrdinal": 2,
+                  "testFunction": "ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed",
+                  "expectation": {
+                    "kind": "verified-bundle-export",
+                    "bundleVersion": 4
+                  }
+                },
+                {
+                  "features": [
+                    "aggregate_enum"
+                  ],
+                  "kernelSymbol": "aggregate_enum",
+                  "target": "gfx942",
+                  "displayedFragmentOrdinal": 2,
+                  "testFunction": "ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed",
+                  "expectation": {
+                    "kind": "rejected",
+                    "bundleVersion": 4,
+                    "diagnosticContains": "variant-aware packing evidence",
+                    "outputArtifact": "absent"
+                  }
+                },
+                {
+                  "features": [
+                    "aggregate_pointer"
+                  ],
+                  "kernelSymbol": "aggregate_pointer",
+                  "target": "gfx942",
+                  "displayedFragmentOrdinal": 2,
+                  "testFunction": "ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed",
+                  "expectation": {
+                    "kind": "rejected",
+                    "bundleVersion": 4,
+                    "diagnosticContains": "contains a pointer or reference",
+                    "outputArtifact": "absent"
+                  }
+                },
+                {
+                  "features": [
+                    "aggregate_drop"
+                  ],
+                  "kernelSymbol": "aggregate_drop",
+                  "target": "gfx942",
+                  "displayedFragmentOrdinal": 2,
+                  "testFunction": "ordinary_recursive_aggregates_export_and_unsafe_shapes_fail_typed",
+                  "expectation": {
+                    "kind": "rejected",
+                    "bundleVersion": 4,
+                    "diagnosticContains": "Drop requiring drop glue",
+                    "outputArtifact": "absent"
+                  }
+                },
+                {
+                  "features": [
+                    "wave_reduce_f32"
+                  ],
+                  "kernelSymbol": "wave_reduce_f32",
+                  "target": "gfx950",
+                  "displayedFragmentOrdinal": 3,
+                  "testFunction": "ordinary_rust_v9_wave_collective_exports_v5_and_runs_in_public_debugger",
+                  "expectation": {
+                    "kind": "verified-bundle-export",
+                    "bundleVersion": 5
+                  }
+                },
+                {
+                  "features": [
+                    "workgroup_reduce_u32"
+                  ],
+                  "kernelSymbol": "workgroup_reduce_u32",
+                  "target": "gfx942",
+                  "displayedFragmentOrdinal": 4,
+                  "testFunction": "ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path",
+                  "expectation": {
+                    "kind": "verified-bundle-export",
+                    "bundleVersion": 5
+                  }
+                },
+                {
+                  "features": [
+                    "workgroup_reduce_i32"
+                  ],
+                  "kernelSymbol": "workgroup_reduce_i32",
+                  "target": "gfx942",
+                  "displayedFragmentOrdinal": 4,
+                  "testFunction": "ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path",
+                  "expectation": {
+                    "kind": "verified-bundle-export",
+                    "bundleVersion": 5
+                  }
+                },
+                {
+                  "features": [
+                    "workgroup_reduce_f32"
+                  ],
+                  "kernelSymbol": "workgroup_reduce_f32",
+                  "target": "gfx942",
+                  "displayedFragmentOrdinal": 4,
+                  "testFunction": "ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path",
+                  "expectation": {
+                    "kind": "verified-bundle-export",
+                    "bundleVersion": 5
+                  }
+                }
+              ],
+              "contractSha256": "e896772d375dc1f236761dde95967de9ac124a589e78c482f15779d63700e92f"
+            },
+            "sourceItemStatus": "contract-bound"
           },
           {
             "ordinal": 1,

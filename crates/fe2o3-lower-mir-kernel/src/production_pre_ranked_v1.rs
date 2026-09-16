@@ -108,6 +108,8 @@ impl ProductionPreRankedKirOwnerV1 {
     /// sealing scratch, and retained payload, including their coexistence.
     /// Retained source MIR, SSA plans, launch rows, legacy correspondence/bytes
     /// and other lowering scratch keep their existing limits and are excluded.
+    /// Entry-argument replay uses the independent limits in `limits`; its
+    /// transient logical payload is not transferred to this canonical ledger.
     /// The incoming live floor is restored after failure drops or success transfer.
     /// Before another allocation, reserve BOTH `executable_storage()` and
     /// `assert_origin_storage()` while this owner or its attached successor lives.

@@ -2101,17 +2101,7 @@ fn compiler_debug_source_map_v2(
 ) -> Result<fe2o3_kernel_ir::DebugSourceMapDocumentV2, ProductionPipelineError> {
     let base = compiler_debug_source_map_v1(lowered, captured_files, binding)?;
     let function_layouts = exact_debug_map_functions_v1(lowered)?;
-    let mut function_by_semantic = BTreeMap::new();
-    for ((_, semantic_function), layout) in &function_layouts {
-        if let Some(previous) =
-            function_by_semantic.insert(*semantic_function, layout.function_ordinal)
-            && previous != layout.function_ordinal
-        {
-            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "one semantic function maps to different physical KIR functions",
-            ));
-        }
-    }
+    let function_by_semantic = exact_debug_function_ordinals_v1(&function_layouts)?;
 
     let mut parameter_by_local = BTreeMap::new();
     for binding in lowered.correspondence().parameter_bindings() {
@@ -2317,14 +2307,14 @@ struct SemanticStorageMapBindingInputV1 {
     canonical_kir_bytes: u64,
 }
 
+include!("production_debug_variable_storage_v1.rs");
+
 fn compiler_semantic_storage_map_v1(
     lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
     captured_variables: &[crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableV2],
     binding: SemanticStorageMapBindingInputV1,
 ) -> Result<fe2o3_kernel_ir::SemanticStorageMapV1, ProductionPipelineError> {
-    use fe2o3_mir_model::semantic_mir_v1::{
-        SemanticAbiPassModeV1, SemanticLocalRoleV1, SemanticSourceArgumentOwnershipV1,
-    };
+    use fe2o3_mir_model::semantic_mir_v1::{SemanticAbiPassModeV1, SemanticLocalRoleV1};
 
     let semantic = lowered.semantic().semantic();
     let selection = semantic.select_kernel_body_v1().ok_or(
@@ -2420,75 +2410,7 @@ fn compiler_semantic_storage_map_v1(
         ));
     }
 
-    let mut variables = Vec::new();
-    let selected_variable_count = captured_variables
-        .iter()
-        .filter(|variable| variable.function == selection.body())
-        .count();
-    variables
-        .try_reserve_exact(selected_variable_count)
-        .map_err(|_| {
-            ProductionPipelineError::SimulationDebugMapCorrespondence(
-                "typed storage variable allocation failed",
-            )
-        })?;
-    for variable in captured_variables
-        .iter()
-        .filter(|variable| variable.function == selection.body())
-    {
-        let (semantic_local, semantic_type, storage) = match variable.class {
-            crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableClassV2::Local(local) => {
-                let declaration = function.locals().get(local.index() as usize).ok_or(
-                    ProductionPipelineError::SimulationDebugMapCorrespondence(
-                        "typed source variable references an absent semantic local",
-                    ),
-                )?;
-                let variable_ownership = match declaration.role() {
-                    SemanticLocalRoleV1::Argument(source_ordinal)
-                    | SemanticLocalRoleV1::RustCallTupleField { argument: source_ordinal, .. } => ownership
-                        .get(source_ordinal as usize)
-                        .copied()
-                        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
-                            "typed source variable argument ownership is absent",
-                        ))?,
-                    SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => {
-                        SemanticSourceArgumentOwnershipV1::ByValue
-                    }
-                };
-                let storage = if variable.entry_value_preserved {
-                    compiler_parameter_storage_v1(
-                        local.index(),
-                        declaration.ty().index(),
-                        variable_ownership,
-                        false,
-                        &parameter_bindings,
-                        kir_body,
-                        &kir_function.signature.parameters,
-                        semantic.types(),
-                    )?
-                } else {
-                    fe2o3_kernel_ir::SemanticStorageBindingV1::Unavailable {
-                        reason: fe2o3_kernel_ir::SemanticStorageUnavailableReasonV1::OptimizedOut,
-                    }
-                };
-                (Some(local.index()), Some(declaration.ty().index()), storage)
-            }
-            crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableClassV2::Unrepresented => (
-                None,
-                None,
-                fe2o3_kernel_ir::SemanticStorageBindingV1::Unavailable {
-                    reason: fe2o3_kernel_ir::SemanticStorageUnavailableReasonV1::UnrepresentedSourceVariable,
-                },
-            ),
-        };
-        variables.push(fe2o3_kernel_ir::SemanticVariableStorageV1::new(
-            variable.identity,
-            variable.function.index(),
-            semantic_local,
-            semantic_type,
-            storage,
-        ));
-    }
+    let variables = compiler_debug_variable_storage_v1(lowered, captured_variables)?;
 
     fe2o3_kernel_ir::SemanticStorageMapV1::new(
         binding.container_identity,
@@ -2885,6 +2807,11 @@ fn compiler_parameter_storage_v1(
             fe2o3_kernel_ir::Type::Scalar(_),
             _,
         ) => fe2o3_kernel_ir::SemanticKirStorageRepresentationV1::Scalar,
+        (
+            fe2o3_mir_model::semantic_mir_v1::SemanticTypeShapeV1::Pointer(_),
+            fe2o3_kernel_ir::Type::Slice(_),
+            _,
+        ) => fe2o3_kernel_ir::SemanticKirStorageRepresentationV1::RegionSlice,
         (_, fe2o3_kernel_ir::Type::Slice(_), ownership)
             if ownership
                 != fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1::ByValue =>

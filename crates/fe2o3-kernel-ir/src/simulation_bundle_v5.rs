@@ -425,7 +425,9 @@ impl PreparedSimulationBundleV5 {
         {
             return Err(SimulationBundleErrorV5::StorageMapBindingMismatch);
         }
-        validate_source_variable_storage_v5(&storage_map, &source_map)?;
+        let module = crate::decode_module_v10(&self.canonical_kir_v10)
+            .map_err(|_| SimulationBundleErrorV5::StorageMapBindingMismatch)?;
+        validate_source_variable_storage_v5(&storage_map, &source_map, &module)?;
         validate_aggregate_correspondence_v5(&storage_map, &aggregate_storage_map)?;
         let source_map = source_map
             .to_canonical_json_bytes()
@@ -621,7 +623,7 @@ impl VerifiedSimulationBundleV5 {
         {
             return Err(SimulationBundleErrorV5::StorageMapBindingMismatch);
         }
-        validate_source_variable_storage_v5(&storage_map, &source_map)?;
+        validate_source_variable_storage_v5(&storage_map, &source_map, &module)?;
         validate_aggregate_correspondence_v5(&storage_map, &aggregate_map)?;
         Ok(Self {
             identity: SimulationBundleIdentityV5(domain_hash(BUNDLE_IDENTITY_DOMAIN_V5, &bytes)),
@@ -886,40 +888,15 @@ fn validate_production_bridge_v5(
 fn validate_source_variable_storage_v5(
     map: &SemanticStorageMapV5,
     source_map: &DebugSourceMapDocumentV2,
+    module: &crate::Module,
 ) -> Result<(), SimulationBundleErrorV5> {
-    if source_map.variables().len() != map.variables.len() {
-        return Err(SimulationBundleErrorV5::StorageMapBindingMismatch);
-    }
-    for binding in &map.variables {
-        let source = source_map
-            .variables()
-            .iter()
-            .find(|source| source.identity() == binding.variable_identity())
-            .ok_or(SimulationBundleErrorV5::StorageMapBindingMismatch)?;
-        let function_ordinal = map
-            .kernels
-            .iter()
-            .find(|kernel| kernel.semantic_body() == binding.semantic_function())
-            .map(|kernel| u64::from(kernel.kir_function_ordinal()))
-            .ok_or(SimulationBundleErrorV5::StorageMapBindingMismatch)?;
-        if source.function_ordinal() != function_ordinal {
-            return Err(SimulationBundleErrorV5::StorageMapBindingMismatch);
-        }
-        match (binding.storage(), source.function_binding()) {
-            (
-                crate::SemanticStorageBindingV1::ExactKirParameter {
-                    kir_value_ordinal, ..
-                },
-                Some(source_binding),
-            ) if source_binding.generation() == 1
-                && source_binding.value_ordinal() == u64::from(*kir_value_ordinal) => {}
-            (crate::SemanticStorageBindingV1::ExactKirParameter { .. }, _) | (_, Some(_)) => {
-                return Err(SimulationBundleErrorV5::StorageMapBindingMismatch);
-            }
-            (_, None) => {}
-        }
-    }
-    Ok(())
+    crate::simulation_variable_storage::validate_variable_storage(
+        &map.kernels,
+        &map.variables,
+        source_map,
+        module,
+    )
+    .map_err(|_| SimulationBundleErrorV5::StorageMapBindingMismatch)
 }
 
 fn validate_aggregate_correspondence_v5(

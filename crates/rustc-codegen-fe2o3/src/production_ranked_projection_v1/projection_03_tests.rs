@@ -897,7 +897,7 @@
         let constants = constant_locals(function)?;
         let mut operations = Vec::new();
         let mut sources = Vec::new();
-        let mut projected_views = vec![None; function.locals().len()];
+        let mut projected_views = ProjectedViewsV1::new(function.locals().len(), None);
         let mut guarded_sites = Vec::new();
         let mut next_value = 0;
         let mut ranked_ir = String::new();

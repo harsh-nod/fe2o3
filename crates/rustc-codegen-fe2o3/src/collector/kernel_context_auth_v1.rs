@@ -23,6 +23,107 @@ struct CapturedProducerV1<'tcx> {
     flow: flow::SourceFlowV1<'tcx>,
 }
 
+/// Move-only, same-session custody; cloneable collection metadata is not evidence.
+pub(super) struct AuthenticatedContextEntriesV1<'tcx> {
+    entries: Vec<AuthenticatedContextEntryV1<'tcx>>,
+}
+
+struct AuthenticatedContextEntryV1<'tcx> {
+    function_index: usize,
+    source: CapturedProducerV1<'tcx>,
+    optimized: flow::AuthenticatedFlowV1<'tcx>,
+    declaration: kernel_context_frontend_v1::BoundContextEntryV1,
+    export_name: String,
+    logical_name: Option<String>,
+    kernel_binding: Option<KernelBindingIdV1>,
+    host_contract: Option<GeneratedHostContractIdV3>,
+    frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
+}
+
+impl<'tcx> AuthenticatedContextEntriesV1<'tcx> {
+    pub(super) fn validate_for_import_v1(
+        self,
+        tcx: TyCtxt<'tcx>,
+        collection: &CollectionResult<'tcx>,
+    ) -> Result<(), CollectError> {
+        let roots = collection
+            .functions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, function)| {
+                function
+                    .kernel_context_contract
+                    .as_ref()
+                    .map(|bound| (index, function, bound))
+            });
+        require_context_receipt_roster_v1(
+            self.entries
+                .iter()
+                .map(|entry| (entry.function_index, entry.source.root)),
+            roots
+                .clone()
+                .map(|(index, function, _)| (index, function.instance)),
+        )?;
+        for (entry, (_, function, bound)) in self.entries.into_iter().zip(roots) {
+            if function.role != CollectedFunctionRole::KernelEntry
+                || function.instance != entry.source.root
+                || function.export_name != entry.export_name
+                || function.logical_name != entry.logical_name
+                || function.kernel_binding != entry.kernel_binding
+                || function.generated_host_contract_identity != entry.host_contract
+                || function.frontend_contract != entry.frontend_contract
+                || bound.registration_path != entry.declaration.registration_path
+                || bound.canonical_bytes != entry.declaration.canonical_bytes
+                || bound.contract != entry.declaration.contract
+                || bound.authenticated_items != entry.declaration.authenticated_items
+            {
+                return Err(error(
+                    "semantic import changed the authenticated context root binding",
+                ));
+            }
+            if !collection.functions.iter().any(|helper| {
+                helper.instance == entry.source.helper
+                    && helper.role == CollectedFunctionRole::InternalHelper
+            }) {
+                return Err(error(
+                    "semantic import lost the authenticated logical helper",
+                ));
+            }
+            let (marker, marker_ty) = marker_definition(
+                tcx,
+                function.instance.def_id(),
+                bound.contract.nominal_kernel_marker().name(),
+            )?;
+            if marker != entry.source.marker
+                || authenticate_signature(tcx, function.instance, entry.source.helper, marker_ty)?
+                    != entry.source.context
+            {
+                return Err(error(
+                    "semantic import changed the authenticated context signature",
+                ));
+            }
+            if flow::authenticate_optimized(tcx, &entry.source.flow)? != entry.optimized {
+                return Err(error(
+                    "semantic import changed the authenticated optimized entry occurrences",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn require_context_receipt_roster_v1<T: Eq>(
+    retained: impl Iterator<Item = T>,
+    observed: impl Iterator<Item = T>,
+) -> Result<(), CollectError> {
+    if !retained.eq(observed) {
+        return Err(error(
+            "semantic import context source receipt roster differs",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn capture_context_producers_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
 ) -> Result<CapturedContextProducersV1<'tcx>, CollectError> {
@@ -104,7 +205,9 @@ pub(super) fn error(detail: impl fmt::Display) -> CollectError {
     }
 }
 
-pub(super) fn authenticate_v1(collector: &mut DeviceCollector<'_>) -> Result<(), CollectError> {
+pub(super) fn authenticate_v1<'tcx>(
+    collector: &mut DeviceCollector<'tcx>,
+) -> Result<AuthenticatedContextEntriesV1<'tcx>, CollectError> {
     let tcx = collector.tcx;
     let mut authenticated = Vec::new();
     for (index, function) in collector.result.iter().enumerate() {
@@ -162,17 +265,18 @@ pub(super) fn authenticate_v1(collector: &mut DeviceCollector<'_>) -> Result<(),
             bound.contract.nominal_kernel_marker().name(),
         )?;
         let context = authenticate_signature(tcx, root, helper.instance, marker_ty)?;
-        let source = collector
+        let (source_index, source) = collector
             .context_producers
             .proofs
             .iter()
-            .find(|source| source.root == root)
+            .enumerate()
+            .find(|(_, source)| source.root == root)
             .ok_or_else(|| error("context producer has no retained source-flow evidence"))?;
         if source.helper != helper.instance || source.marker != marker || source.context != context
         {
             return Err(error("retained source-flow item or type identity changed"));
         }
-        let issuer = flow::authenticate_optimized(tcx, &source.flow)?;
+        let optimized = flow::authenticate_optimized(tcx, &source.flow)?;
         // A helper must not call back into a physical root and acquire a second context.
         let identity = collector.instance_identity(root);
         if collector
@@ -188,21 +292,43 @@ pub(super) fn authenticate_v1(collector: &mut DeviceCollector<'_>) -> Result<(),
                 root.def_id(),
                 helper.instance.def_id(),
                 marker,
-                issuer.def_id(),
+                optimized.issuer().def_id(),
             ],
+            source_index,
+            optimized,
         ));
     }
     if authenticated.len() != collector.context_producers.proofs.len() {
         return Err(error("retained source-flow evidence has unmatched roots"));
     }
-    for (index, items) in authenticated {
-        collector.result[index]
+    let mut sources = std::mem::take(&mut collector.context_producers.proofs)
+        .into_iter()
+        .map(Some)
+        .collect::<Vec<_>>();
+    let mut entries = Vec::with_capacity(authenticated.len());
+    for (index, items, source_index, optimized) in authenticated {
+        let source = sources[source_index]
+            .take()
+            .ok_or_else(|| error("context source receipt was consumed more than once"))?;
+        let function = &mut collector.result[index];
+        let declaration = function
             .kernel_context_contract
             .as_mut()
-            .ok_or_else(|| error("authenticated declaration disappeared"))?
-            .authenticated_items = Some(items);
+            .ok_or_else(|| error("authenticated declaration disappeared"))?;
+        declaration.authenticated_items = Some(items);
+        entries.push(AuthenticatedContextEntryV1 {
+            function_index: index,
+            source,
+            optimized,
+            declaration: declaration.clone(),
+            export_name: function.export_name.clone(),
+            logical_name: function.logical_name.clone(),
+            kernel_binding: function.kernel_binding,
+            host_contract: function.generated_host_contract_identity,
+            frontend_contract: function.frontend_contract.clone(),
+        });
     }
-    Ok(())
+    Ok(AuthenticatedContextEntriesV1 { entries })
 }
 
 fn sibling(tcx: TyCtxt<'_>, owner: DefId, candidate: DefId, name: &str) -> bool {
@@ -392,4 +518,36 @@ pub(super) fn resolve_call<'tcx>(
     Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), *def, arguments)
         .map_err(|_| error("entry callee resolution failed"))?
         .ok_or_else(|| error("entry callee has no concrete instance"))
+}
+
+#[cfg(test)]
+mod custody_tests {
+    use super::require_context_receipt_roster_v1;
+
+    #[test]
+    fn context_receipts_require_the_complete_ordered_root_roster() {
+        let roots = [(1, 11), (3, 22)];
+        assert!(require_context_receipt_roster_v1(roots.into_iter(), roots.into_iter()).is_ok());
+        assert!(
+            require_context_receipt_roster_v1(
+                std::iter::empty::<(usize, u32)>(),
+                std::iter::empty()
+            )
+            .is_ok()
+        );
+        for retained in [
+            vec![],
+            vec![(1, 11)],
+            vec![(1, 11), (1, 11)],
+            vec![(3, 22), (1, 11)],
+            vec![(1, 11), (3, 99)],
+            vec![(1, 11), (2, 22)],
+            vec![(1, 11), (3, 22), (4, 33)],
+        ] {
+            assert!(
+                require_context_receipt_roster_v1(retained.into_iter(), roots.into_iter()).is_err()
+            );
+        }
+        assert!(require_context_receipt_roster_v1(roots.into_iter(), std::iter::empty()).is_err());
+    }
 }
