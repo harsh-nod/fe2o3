@@ -151,7 +151,7 @@ fn ordinary_source_dynamic_local_array_matches_rust_in_simulation() {
                         .unwrap(),
                     )
                     .unwrap();
-                    let admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v1(
+                    let admitted = fe2o3_kir_sim_cli::load_debug_simulation_bundle_v3(
                         &bundle_path,
                         &request_path,
                     )
