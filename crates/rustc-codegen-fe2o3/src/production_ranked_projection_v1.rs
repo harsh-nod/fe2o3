@@ -3261,25 +3261,38 @@ fn project_and_verify_ranked_root_v1(
                 source_start,
                 guarded_start,
             );
-            retain_incomplete(
-                project_statement_accesses(
-                    semantic.types(),
-                    function,
-                    block_index,
-                    &bounds_checks.checks,
-                    statement,
-                    &constants,
-                    &intrinsic.local_contracts,
-                    &intrinsic.guarded_accesses,
-                    &mut guarded_sites,
-                    &mut projected_views,
-                    &mut operations,
-                    &mut local_sources,
-                    &mut next_value,
-                    &mut discarded_ir,
-                ),
-                &mut incomplete,
+            let initializer = project_private_array_initializer_v1(
+                semantic.types(),
+                function,
+                statement,
+                block_index,
+                statement_index,
+                &mut projected_views,
+                &mut operations,
+                &mut local_sources,
+                &mut next_value,
             )?;
+            if !initializer {
+                retain_incomplete(
+                    project_statement_accesses(
+                        semantic.types(),
+                        function,
+                        block_index,
+                        &bounds_checks.checks,
+                        statement,
+                        &constants,
+                        &intrinsic.local_contracts,
+                        &intrinsic.guarded_accesses,
+                        &mut guarded_sites,
+                        &mut projected_views,
+                        &mut operations,
+                        &mut local_sources,
+                        &mut next_value,
+                        &mut discarded_ir,
+                    ),
+                    &mut incomplete,
+                )?;
+            }
             bind_projected_access_site(
                 &mut local_sources[source_start..],
                 &mut guarded_sites[guarded_start..],
@@ -4343,10 +4356,157 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
     }
 }
 
-fn private_indexed_write_source_v1(
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Expand a checked initializer into the existing ranked block and source vectors"
+)]
+fn project_private_array_initializer_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    statement: &fe2o3_mir_model::semantic_mir_v1::SemanticStatementV1,
+    block: usize,
+    statement_index: usize,
+    projected_views: &mut ProjectedViewsV1<'_>,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    sources: &mut Vec<ProjectedAccessSourceV1>,
+    next_value: &mut u32,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    // Statement/rvalue/tag, whole place, local key/lookup/role, and dispatch.
+    projected_views.charge_private_array_work(8)?;
+    let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+        return Ok(false);
+    };
+    let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind() else {
+        return Ok(false);
+    };
+    if aggregate.kind() != &SemanticAggregateKindV1::Array
+        || !assignment.destination().projections().is_empty()
+    {
+        return Ok(false);
+    }
+    if function
+        .locals()
+        .get(assignment.destination().local().index() as usize)
+        .is_none_or(|local| local.role().is_entry_argument())
+    {
+        return Ok(false);
+    }
+    let Some(length) = projected_views.private_array_initializer_count(block, statement_index)?
+    else {
+        // Only the destination is promoted. Preserve ordinary RHS projection,
+        // including any independently supported memory reads in its operands.
+        return Ok(false);
+    };
+    projected_views.charge_private_array_work(24)?;
+    let place = assignment.destination();
+    let Some(SemanticTypeShapeV1::Array {
+        element,
+        length: declared_length,
+    }) = types.get(place.ty().index() as usize).map(|ty| ty.shape())
+    else {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "checked initializer source type changed",
+        ));
+    };
+    if length != *declared_length || length == 0 {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "checked initializer extent changed",
+        ));
+    }
+    let count = usize::try_from(length).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported("initializer extent does not fit host")
+    })?;
+    let additional = count
+        .checked_mul(2)
+        .and_then(|count| count.checked_add(1))
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "initializer ranked expansion overflows",
+        ))?;
+    reserve_projected_access(operations, sources, additional)?;
+    sources.try_reserve(count).map_err(|_| {
+        ProductionRankedProjectionErrorV1::Unsupported("initializer source rows cannot be reserved")
+    })?;
+    let width = type_width(types, *element)?;
+    let origin = PRIVATE_ALLOCATION_ORIGIN_TAG_V1
+        .checked_add(u64::from(place.local().index()))
+        .and_then(|value| value.checked_add(1))
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "private initializer origin overflows",
+        ))?;
+    projected_views.charge_private_array_work(12)?;
+    let view_slot = projected_views
+        .get_mut(place.local().index() as usize)
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "private initializer view slot is absent",
+        ))?;
+    let view = if let Some(view) = view_slot {
+        if view.element_width != width
+            || !view.writable
+            || view.shape.as_slice() != [length]
+            || !view.dynamic_extents.is_empty()
+            || view.memory_space != MemorySpaceAttr::Private
+            || view.allocation_origin != origin
+            || view.noalias_class != origin
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "one semantic allocation used through inconsistent ranked views",
+            ));
+        }
+        view.result
+    } else {
+        let result = next_value_id(next_value)?;
+        operations.push(ProductionRankedOperationV1::ViewInSpace {
+            result,
+            element_width: width,
+            writable: true,
+            shape: vec![length],
+            dynamic_extents: Vec::new(),
+            memory_space: MemorySpaceAttr::Private,
+            allocation_origin: origin,
+            noalias_class: origin,
+        });
+        *view_slot = Some(ProjectedViewV1 {
+            result,
+            element_width: width,
+            writable: true,
+            shape: vec![length],
+            dynamic_extents: Vec::new(),
+            memory_space: MemorySpaceAttr::Private,
+            allocation_origin: origin,
+            noalias_class: origin,
+        });
+        result
+    };
+    for component in 0..length {
+        projected_views.charge_private_array_work(16)?;
+        let index = next_value_id(next_value)?;
+        operations.push(ProductionRankedOperationV1::IndexConstant {
+            result: index,
+            value: component,
+        });
+        let operation = operations.len();
+        operations.push(ProductionRankedOperationV1::Access {
+            kind: AccessKindAttr::Write,
+            view: ProductionRankedValueV1::Local(view),
+            indices: vec![ProductionRankedValueV1::Local(index)],
+        });
+        sources.push(ProjectedAccessSourceV1 {
+            block: 0,
+            operation,
+            access: AccessKindAttr::Write,
+            memory_space: MemorySpaceAttr::Private,
+            source: statement.source(),
+            semantic_site: None,
+        });
+    }
+    Ok(true)
+}
+
+fn private_array_write_source_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     source: &ProjectedAccessSourceV1,
+    component: u32,
 ) -> bool {
     let Some(site) = source.semantic_site else {
         return false;
@@ -4360,6 +4520,37 @@ fn private_indexed_write_source_v1(
     }) else {
         return false;
     };
+    if let SemanticStatementKindV1::Assign(assignment) = statement.kind()
+        && let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind()
+    {
+        let place = assignment.destination();
+        let Some(local) = function.locals().get(place.local().index() as usize) else {
+            return false;
+        };
+        let Some(SemanticTypeShapeV1::Array { element, length }) =
+            types.get(local.ty().index() as usize).map(|ty| ty.shape())
+        else {
+            return false;
+        };
+        let Some(SemanticOperandV1::Constant(constant)) =
+            aggregate.operands().get(component as usize)
+        else {
+            return false;
+        };
+        return !local.role().is_entry_argument()
+            && place.projections().is_empty()
+            && place.ty() == local.ty()
+            && assignment.value().result_type() == local.ty()
+            && aggregate.kind() == &SemanticAggregateKindV1::Array
+            && u64::try_from(aggregate.operands().len()).ok() == Some(*length)
+            && constant.ty() == *element
+            && matches!(constant.value(), SemanticConstantValueV1::Scalar(_))
+            && matches!(
+                types.get(element.index() as usize).map(|ty| ty.shape()),
+                Some(SemanticTypeShapeV1::Scalar(_))
+            )
+            && source.access == AccessKindAttr::Write;
+    }
     let (destination, value) = match statement.kind() {
         SemanticStatementKindV1::Assign(assignment) => {
             let SemanticRvalueKindV1::Use(value) = assignment.value().kind() else {
@@ -4375,8 +4566,8 @@ fn private_indexed_write_source_v1(
         }
         _ => return false,
     };
-    // Private-array reads and whole initialization still lack an exact
-    // attachment recipe. Keep this metadata subset closed independently of
+    // Private-array reads still lack an exact attachment recipe. Keep this
+    // scalar destination subset closed independently of
     // the general RHS-before-destination projection order.
     let value_type = match value {
         SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
@@ -4461,8 +4652,9 @@ fn production_access_sources(
                 "ranked access correspondence is outside the projected graph",
             ))?;
         if !retained_ranked_access_source_v1(source.memory_space, operation) {
-            // Only a final scalar-valued indexed destination is added here.
-            // It cannot precede an RHS slice query using the shared census.
+            // Scalar indexed writes are final effects. Literal initializer
+            // components contain no RHS slice queries; later sites reset the
+            // shared cursor. Keep ordinary private reads excluded.
             if source.memory_space != MemorySpaceAttr::Private
                 || !matches!(
                     operation,
@@ -4476,8 +4668,15 @@ fn production_access_sources(
             }
             // Fixed source/statement/local/type/projection checks only;
             // no projection, ancestry or value-definition walk.
-            facts.charge_private_array_work(40)?;
-            if !private_indexed_write_source_v1(types, function, source) {
+            // Existing indexed predicate40 + initializer-dispatch4 + exact
+            // source-site component-counter lookup4 also covers the literal case.
+            facts.charge_private_array_work(48)?;
+            let component = source
+                .semantic_site
+                .and_then(|site| ordinals.get(&(site.block, site.statement)))
+                .copied()
+                .unwrap_or(0);
+            if !private_array_write_source_v1(types, function, source, component) {
                 continue;
             }
         }
@@ -24358,6 +24557,14 @@ mod tests {
     struct ComponentDynamicAssertionFactsV1;
 
     impl ProjectedAssertionFactsV1 for ComponentDynamicAssertionFactsV1 {
+        fn private_array_initializer_count(
+            &mut self,
+            _: usize,
+            _: usize,
+        ) -> Result<Option<u64>, ProductionRankedProjectionErrorV1> {
+            Ok(None)
+        }
+
         fn charge_private_array_work(
             &mut self,
             _: usize,
@@ -24387,6 +24594,14 @@ mod tests {
     }
 
     impl ProjectedAssertionFactsV1 for canonical_assertion_facts_v1::ProjectedAssertionConditionV1 {
+        fn private_array_initializer_count(
+            &mut self,
+            _: usize,
+            _: usize,
+        ) -> Result<Option<u64>, ProductionRankedProjectionErrorV1> {
+            Ok(None)
+        }
+
         fn charge_private_array_work(
             &mut self,
             _: usize,

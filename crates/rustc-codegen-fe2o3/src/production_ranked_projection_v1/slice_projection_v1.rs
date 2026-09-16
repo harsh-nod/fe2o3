@@ -57,6 +57,31 @@ impl<'a> ProjectedViewsV1<'a> {
         self.locals.get_mut(local)
     }
 
+    pub(super) fn charge_private_array_work(
+        &mut self,
+        amount: usize,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        self.facts
+            .as_deref_mut()
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "private array projection requires canonical facts",
+            ))?
+            .charge_private_array_work(amount)
+    }
+
+    pub(super) fn private_array_initializer_count(
+        &mut self,
+        block: usize,
+        statement: usize,
+    ) -> Result<Option<u64>, ProductionRankedProjectionErrorV1> {
+        self.facts
+            .as_deref_mut()
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "private array projection requires canonical facts",
+            ))?
+            .private_array_initializer_count(block, statement)
+    }
+
     pub(super) fn slice_input(
         &mut self,
         check: ProjectedBoundsCheckV1,

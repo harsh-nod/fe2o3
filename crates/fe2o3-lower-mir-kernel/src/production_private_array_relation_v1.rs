@@ -393,6 +393,110 @@ fn private_array_check_memory_operation_v1<W: PrivateArrayChargeV1>(
     Ok(())
 }
 
+fn private_array_initializer_value_v1<W: PrivateArrayChargeV1>(
+    statement: &SemanticStatementKindV1,
+    body: &FunctionBody,
+    slot: &PrivateArraySlotV1,
+    effect: &PrivateArrayEffectV1,
+    component: u32,
+    binding: PrivateArrayInitializerValueV1,
+    work: &mut W,
+) -> Result<u64, PrivateArrayRelationErrorV1<W::Error>> {
+    use PrivateArrayRelationErrorV1::{Incomplete, InvalidSource, Mismatch};
+    work.charge_private_array_work(12)?;
+    let SemanticStatementKindV1::Assign(assignment) = statement else {
+        return Err(InvalidSource(
+            "private initializer is not an array assignment",
+        ));
+    };
+    let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind() else {
+        return Err(Incomplete(
+            "private initializer requires an exact Array Aggregate",
+        ));
+    };
+    if aggregate.kind() != &SemanticAggregateKindV1::Array
+        || assignment.value().result_type() != slot.semantic_type
+        || !assignment.destination().projections().is_empty()
+        || effect.role != fe2o3_pliron::ProductionSemanticSsaOperandRoleV1::Destination
+        || effect.access != PrivateArrayAccessV1::Write
+        || effect.semantic_type != slot.semantic_type
+        || u64::try_from(aggregate.operands().len()).ok() != Some(slot.length)
+        || u64::from(component) >= slot.length
+    {
+        return Err(Mismatch(
+            "private initializer source shape or component changed",
+        ));
+    }
+    work.charge_private_array_work(6)?;
+    let Some(SemanticOperandV1::Constant(constant)) = aggregate.operands().get(component as usize)
+    else {
+        return Err(Incomplete(
+            "private initializer value requires a separate SSA operand relation",
+        ));
+    };
+    let SemanticConstantValueV1::Scalar(bits) = constant.value() else {
+        return Err(Incomplete(
+            "private initializer constant is not a literal scalar",
+        ));
+    };
+    let PrivateRetainedElementFactsV1::Scalar(scalar) = slot.element_facts.element else {
+        return Err(Incomplete(
+            "private initializer element requires a separate value relation",
+        ));
+    };
+    if constant.ty() != slot.element_type || u64::from(bits.size_bytes()) != slot.element_facts.size
+    {
+        return Err(Mismatch(
+            "private initializer source scalar type or width changed",
+        ));
+    }
+    let PrivateArrayInitializerValueV1::LiteralScalar { value, definition } = binding;
+    // Scalar decoding has fixed bounded width; use the existing exact bit conversion.
+    work.charge_private_array_work(12)?;
+    let expected = lower_constant(Type::Scalar(scalar), *bits)
+        .map_err(|_| Incomplete("private initializer scalar representation is unsupported"))?;
+    if definition.block != effect.memory_location.block
+        || definition.block_ordinal != effect.memory_location.block_ordinal
+        || definition.operation
+            != effect
+                .source_first_operation
+                .checked_add(component as usize)
+                .ok_or(Mismatch(
+                    "private initializer definition coordinate overflows",
+                ))?
+        || definition.operation >= effect.memory_location.operation
+        || effect
+            .source_first_operation
+            .checked_add(aggregate.operands().len())
+            .is_none_or(|end| end > effect.gep_location.operation)
+    {
+        return Err(Mismatch(
+            "private initializer definition is outside its exact source recipe",
+        ));
+    }
+    let actual = private_array_operation_v1(body, definition, work)?
+        .ok_or(Mismatch("private initializer value definition is absent"))?;
+    work.charge_private_array_work(5)?;
+    let [result] = actual.results.as_slice() else {
+        return Err(Mismatch("private initializer value result count changed"));
+    };
+    if result.id != value
+        || result.ty != Type::Scalar(scalar)
+        || !matches!(&actual.kind, OperationKind::Constant(actual) if *actual == expected)
+    {
+        return Err(Mismatch(
+            "private initializer value differs from its exact source literal",
+        ));
+    }
+    let memory = private_array_operation_v1(body, effect.memory_location, work)?
+        .ok_or(Mismatch("private initializer Store is absent"))?;
+    work.charge_private_array_work(2)?;
+    if !matches!(memory.kind, OperationKind::Store { value: actual, .. } if actual == value) {
+        return Err(Mismatch("private initializer Store uses a different value"));
+    }
+    Ok(u64::from(component))
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "Compare source, physical body, and retained rows under the caller's shared budget"
@@ -450,24 +554,44 @@ fn private_array_exact_relation_v1<W: PrivateArrayChargeV1>(
         .ok_or(Incomplete(
             "private array has no supported exact fixed layout",
         ))?;
-    // Three scalar checks and the following single-projection shape check.
+    // Existing indexed shape or explicit initializer component, never a fake projection.
     work.charge_private_array_work(4)?;
+    let initializer = matches!(
+        effect.original_index,
+        PrivateArrayIndexV1::InitializerElement { .. }
+    );
     if facts.element_type != slot.element_type
         || facts.length != slot.length
-        || effect.semantic_type != slot.element_type
+        || effect.semantic_type
+            != if initializer {
+                slot.semantic_type
+            } else {
+                slot.element_type
+            }
         || !private_array_slot_facts_equal_v1(facts.element, slot.element_facts, work)?
     {
         return Err(Mismatch("private array layout facts changed"));
     }
-    let [projection] = access.place.projections() else {
-        return Err(Incomplete(
-            "private array requires one exact index projection",
-        ));
+    let projection = if initializer {
+        work.charge_private_array_work(2)?;
+        if !access.place.projections().is_empty() || local.role().is_entry_argument() {
+            return Err(Mismatch(
+                "private initializer is not one whole nonargument array",
+            ));
+        }
+        None
+    } else {
+        let [projection] = access.place.projections() else {
+            return Err(Incomplete(
+                "private array requires one exact index projection",
+            ));
+        };
+        work.charge_private_array_work(1)?;
+        if projection.result_type() != slot.element_type {
+            return Err(Mismatch("private array projection element type changed"));
+        }
+        Some(projection.kind())
     };
-    work.charge_private_array_work(1)?;
-    if projection.result_type() != slot.element_type {
-        return Err(Mismatch("private array projection element type changed"));
-    }
 
     work.charge_private_array_work(6)?;
     if slot.count_location.block_ordinal != 0
@@ -499,13 +623,15 @@ fn private_array_exact_relation_v1<W: PrivateArrayChargeV1>(
         work,
     )?;
 
-    let expected_index = match (projection.kind(), effect.original_index) {
+    let expected_index = match (projection, effect.original_index) {
+        (None, PrivateArrayIndexV1::InitializerElement { component, value }) =>
+            private_array_initializer_value_v1(source.kind(), body, slot, effect, component, value, work)?,
         (
-            SemanticProjectionKindV1::ConstantIndex {
+            Some(SemanticProjectionKindV1::ConstantIndex {
                 offset,
                 minimum_length,
                 from_end,
-            },
+            }),
             PrivateArrayIndexV1::ConstantIndex {
                 offset: recorded_offset,
                 min_length,
@@ -529,7 +655,7 @@ fn private_array_exact_relation_v1<W: PrivateArrayChargeV1>(
             }
         }
         (
-            SemanticProjectionKindV1::Index(local),
+            Some(SemanticProjectionKindV1::Index(local)),
             PrivateArrayIndexV1::Local {
                 local: recorded_local,
                 semantic_type,
@@ -738,8 +864,391 @@ fn private_array_absent_query_v1(
     Ok(false)
 }
 
+struct PrivateArrayQueryContextV1<'a> {
+    root: usize,
+    function_id: SemanticFunctionIdV1,
+    body: &'a FunctionBody,
+    semantic: &'a AdmittedInertSemanticMirV1,
+    function: &'a SemanticFunctionDeclV1,
+}
+
 impl ProductionPreRankedKirOwnerV1 {
-    /// Checks one original indexed private-array access against this owner's
+    fn private_array_query_context_v1<'a>(
+        &'a self,
+        selected_root: SemanticFunctionIdV1,
+        expected_body: SemanticFunctionIdV1,
+        work: &mut PrivateArrayQueryWorkV1<'_, '_>,
+    ) -> Result<PrivateArrayQueryContextV1<'a>, SemanticKirPrivateArrayQueryErrorV1> {
+        use SemanticKirPrivateArrayQueryErrorV1::{InvalidSource, Mismatch};
+        let root = private_array_binary_search_v1(
+            &self.launch_roots,
+            |row| [row.selected_root.index() as usize],
+            [selected_root.index() as usize],
+            work,
+        )?
+        .map_err(|_| InvalidSource("selected root is absent from this owner"))?;
+        work.charge_private_array_work(5)?;
+        let entry = self
+            .correspondence
+            .lowered_functions
+            .get(root)
+            .ok_or(Mismatch("selected root entry row is absent"))?;
+        if entry.correspondence_owner != selected_root
+            || entry.role != SemanticKirFunctionRoleV1::KernelEntry
+        {
+            return Err(Mismatch("selected root entry prefix changed"));
+        }
+        work.charge_private_array_work(1)?;
+        if entry.semantic_function != expected_body {
+            return Err(InvalidSource(
+                "requested body differs from the constructor-selected entry",
+            ));
+        }
+        let module = self.executable.module();
+        let kernel = module
+            .kernels
+            .get(root)
+            .ok_or(Mismatch("selected root physical kernel is absent"))?;
+        let lowered = module
+            .functions
+            .get(root)
+            .ok_or(Mismatch("selected root physical function is absent"))?;
+        if !private_array_equal_bytes_v1(
+            entry.kernel_ir_function.as_str().as_bytes(),
+            lowered.id.as_str().as_bytes(),
+            work,
+        )? || !private_array_equal_bytes_v1(
+            kernel.entry.as_str().as_bytes(),
+            lowered.id.as_str().as_bytes(),
+            work,
+        )? {
+            return Err(Mismatch("selected root physical function identity changed"));
+        }
+        work.charge_private_array_work(3)?;
+        let body = lowered
+            .body
+            .as_ref()
+            .ok_or(Mismatch("selected root physical body is absent"))?;
+        let semantic = self.semantic_ssa.source_semantic();
+        let function = semantic
+            .functions()
+            .get(entry.semantic_function.index() as usize)
+            .ok_or(Mismatch("selected source body is absent"))?;
+        Ok(PrivateArrayQueryContextV1 {
+            root,
+            function_id: entry.semantic_function,
+            body,
+            semantic,
+            function,
+        })
+    }
+
+    fn private_array_initializer_context_v1<'a>(
+        &'a self,
+        selected_root: SemanticFunctionIdV1,
+        expected_body: SemanticFunctionIdV1,
+        work: &mut PrivateArrayQueryWorkV1<'_, '_>,
+    ) -> Result<PrivateArrayQueryContextV1<'a>, SemanticKirPrivateArrayQueryErrorV1> {
+        use SemanticKirPrivateArrayQueryErrorV1::{InvalidSource, Mismatch};
+        private_array_binary_search_v1(
+            &self.launch_roots,
+            |row| [row.selected_root.index() as usize],
+            [selected_root.index() as usize],
+            work,
+        )?
+        .map_err(|_| InvalidSource("selected root is absent from this owner"))?;
+        // This existing sealed, sorted/unique roster includes exact entry and
+        // helper instances. It is not the entry-only indexed-access facade.
+        let index = private_array_binary_search_v1(
+            &self.assert_origins.functions,
+            |row| [row.owner.index() as usize, row.function.index() as usize],
+            [
+                selected_root.index() as usize,
+                expected_body.index() as usize,
+            ],
+            work,
+        )?
+        .map_err(|_| InvalidSource("initializer body is absent from this owner"))?;
+        work.charge_private_array_work(12)?;
+        let row = self.assert_origins.functions[index];
+        let root = row.canonical.0 as usize;
+        let lowered = self
+            .executable
+            .module()
+            .functions
+            .get(root)
+            .ok_or(Mismatch("initializer physical function is absent"))?;
+        let body = lowered
+            .body
+            .as_ref()
+            .ok_or(Mismatch("initializer physical body is absent"))?;
+        let semantic = self.semantic_ssa.source_semantic();
+        let function = semantic
+            .functions()
+            .get(expected_body.index() as usize)
+            .ok_or(Mismatch("initializer source body is absent"))?;
+        let plan = self
+            .semantic_ssa
+            .plan_for_function(expected_body)
+            .ok_or(Mismatch("initializer source SSA body is absent"))?;
+        if row.owner != selected_root
+            || row.function != expected_body
+            || plan.function_identity() != function.identity()
+            || plan.plan().reverse_postorder().len() != row.reachable_blocks
+        {
+            return Err(Mismatch(
+                "initializer sealed function or SSA association changed",
+            ));
+        }
+        Ok(PrivateArrayQueryContextV1 {
+            root,
+            function_id: expected_body,
+            body,
+            semantic,
+            function,
+        })
+    }
+
+    /// Checks every element of one retained literal-scalar Array Aggregate.
+    /// The inert count grants no functional, artifact or launch authority.
+    /// `None` is restricted to the sealed promoted-local case; a retained but
+    /// unsupported, missing or malformed initializer remains an error. Keep
+    /// this owner's complete graph and assertion-origin floor in `budget`.
+    pub fn materialized_private_array_initializer_count(
+        &self,
+        selected_root: SemanticFunctionIdV1,
+        expected_body: SemanticFunctionIdV1,
+        site: fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1,
+        budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<Option<u64>, SemanticKirPrivateArrayQueryErrorV1> {
+        use SemanticKirPrivateArrayQueryErrorV1::{Incomplete, InvalidSource, Mismatch, Resource};
+        use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as ResourceError;
+        budget.charge_work(3).map_err(Resource)?;
+        let floor = self
+            .executable_storage
+            .retained_storage()
+            .checked_add(self.assert_origins.storage.payload_storage())
+            .ok_or(Resource(ResourceError::Arithmetic))?;
+        if budget.storage() < floor {
+            return Err(Resource(ResourceError::Accounting));
+        }
+        let mut work = PrivateArrayQueryWorkV1 { budget };
+        let context =
+            self.private_array_initializer_context_v1(selected_root, expected_body, &mut work)?;
+        // Statement/local/type/count/role checks before any element walk.
+        work.charge_private_array_work(16)?;
+        let fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1::Statement { block, statement } =
+            site
+        else {
+            return Err(Incomplete(
+                "private initializer is not a statement occurrence",
+            ));
+        };
+        let source = context
+            .function
+            .blocks()
+            .get(block.get() as usize)
+            .and_then(|block| block.statements().get(statement as usize))
+            .ok_or(InvalidSource(
+                "private initializer source coordinate is absent",
+            ))?;
+        let SemanticStatementKindV1::Assign(assignment) = source.kind() else {
+            return Err(InvalidSource(
+                "private initializer source is not an assignment",
+            ));
+        };
+        let place = assignment.destination();
+        let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind() else {
+            return Err(Incomplete(
+                "private initializer requires an Array Aggregate",
+            ));
+        };
+        let local = context
+            .function
+            .locals()
+            .get(place.local().index() as usize)
+            .ok_or(InvalidSource("private initializer local is absent"))?;
+        if !place.projections().is_empty()
+            || local.role().is_entry_argument()
+            || place.ty() != local.ty()
+            || assignment.value().result_type() != local.ty()
+            || aggregate.kind() != &SemanticAggregateKindV1::Array
+        {
+            return Err(Incomplete(
+                "private initializer is not one whole nonargument Array Aggregate",
+            ));
+        }
+        work.charge_private_array_work(2)?;
+        let plan = self
+            .semantic_ssa
+            .plan_for_function(context.function_id)
+            .ok_or(Mismatch("selected source SSA plan is absent"))?;
+        let promoted = private_array_binary_search_v1(
+            plan.plan().promoted_variables(),
+            |value| [value.get() as usize],
+            [place.local().index() as usize],
+            &mut work,
+        )?
+        .is_ok();
+        let rows = &self.correspondence.private_arrays;
+        let instance =
+            private_array_instance_v1(rows, selected_root, context.function_id, &mut work)?;
+        let Some(instance) = instance else {
+            return if promoted {
+                Ok(None)
+            } else {
+                Err(Mismatch("retained initializer instance is absent"))
+            };
+        };
+        work.charge_private_array_work(12)?;
+        let lowered = self
+            .correspondence
+            .lowered_functions
+            .get(instance.lowered_function_ordinal)
+            .ok_or(Mismatch(
+                "private initializer correspondence function is absent",
+            ))?;
+        if instance.owner != selected_root
+            || instance.function != expected_body
+            || instance.module_function_ordinal != context.root
+            || lowered.correspondence_owner != selected_root
+            || lowered.semantic_function != expected_body
+            || !private_array_equal_bytes_v1(
+                lowered.kernel_ir_function.as_str().as_bytes(),
+                self.executable.module().functions[context.root]
+                    .id
+                    .as_str()
+                    .as_bytes(),
+                &mut work,
+            )?
+        {
+            return Err(Mismatch("private initializer instance coordinates changed"));
+        }
+        let slots = rows
+            .slots
+            .get(instance.slot_start..instance.slot_end)
+            .ok_or(Mismatch("private initializer slot range changed"))?;
+        let effects = rows
+            .effects
+            .get(instance.effect_start..instance.effect_end)
+            .ok_or(Mismatch("private initializer effect range changed"))?;
+        let slot_index = private_array_binary_search_v1(
+            slots,
+            |row| [row.local as usize],
+            [place.local().index() as usize],
+            &mut work,
+        )?;
+        let Ok(slot_index) = slot_index else {
+            return if promoted {
+                Ok(None)
+            } else {
+                Err(Mismatch("retained initializer slot is absent"))
+            };
+        };
+        work.charge_private_array_work(2)?;
+        if promoted {
+            return Err(Mismatch(
+                "retained initializer contradicts sealed SSA promotion",
+            ));
+        }
+        let slot = &slots[slot_index];
+        let facts = private_retained_array_facts_v1(
+            context.semantic.types(),
+            local.ty(),
+            self.limits.max_operations,
+            &mut work,
+        )?
+        .ok_or(Incomplete(
+            "private initializer has no exact supported fixed layout",
+        ))?;
+        work.charge_private_array_work(2)?;
+        if u64::try_from(aggregate.operands().len()).ok() != Some(facts.length)
+            || !matches!(
+                facts.element.element,
+                PrivateRetainedElementFactsV1::Scalar(_)
+            )
+        {
+            return Err(Incomplete(
+                "private initializer element or count is unsupported",
+            ));
+        }
+        for operand in aggregate.operands() {
+            work.charge_private_array_work(5)?;
+            let SemanticOperandV1::Constant(constant) = operand else {
+                return Err(Incomplete(
+                    "private initializer value requires a separate SSA operand relation",
+                ));
+            };
+            let SemanticConstantValueV1::Scalar(bits) = constant.value() else {
+                return Err(Incomplete(
+                    "private initializer constant is not a literal scalar",
+                ));
+            };
+            if constant.ty() != facts.element_type
+                || u64::from(bits.size_bytes()) != facts.element.size
+            {
+                return Err(Mismatch("private initializer scalar type or width changed"));
+            }
+        }
+        let key = [block.get() as usize, statement as usize];
+        let start = private_array_partition_v1(
+            effects,
+            |row| [row.semantic_block as usize, row.semantic_statement as usize],
+            key,
+            false,
+            &mut work,
+        )?;
+        let end = private_array_partition_v1(
+            effects,
+            |row| [row.semantic_block as usize, row.semantic_statement as usize],
+            key,
+            true,
+            &mut work,
+        )?;
+        work.charge_private_array_work(3)?;
+        let effects = effects
+            .get(start..end)
+            .ok_or(Mismatch("private initializer occurrence range changed"))?;
+        if u64::try_from(effects.len()).ok() != Some(facts.length) {
+            return Err(Mismatch(
+                "private initializer component census is incomplete",
+            ));
+        }
+        let mut previous = None;
+        for (component, effect) in effects.iter().enumerate() {
+            work.charge_private_array_work(7)?;
+            if !matches!(effect.original_index, PrivateArrayIndexV1::InitializerElement { component: actual, .. } if actual as usize == component)
+                || effect.local != place.local().index()
+                || effect.semantic_block != block.get()
+                || effect.semantic_statement != statement
+                || previous.is_some_and(|previous| previous >= effect.memory_location.operation)
+            {
+                return Err(Mismatch(
+                    "private initializer components are not exact and ordered",
+                ));
+            }
+            let actual = private_array_exact_relation_v1(
+                context.semantic.types(),
+                context.function,
+                context.body,
+                selected_root,
+                context.function_id,
+                slot,
+                effect,
+                self.limits.max_operations,
+                &mut work,
+            )
+            .map_err(private_array_query_error_v1)?;
+            work.charge_private_array_work(2)?;
+            if actual != component as u64 {
+                return Err(Mismatch("private initializer component offset changed"));
+            }
+            previous = Some(effect.memory_location.operation);
+        }
+        Ok(Some(facts.length))
+    }
+
+/// Checks one original indexed private-array access against this owner's
     /// actual counted allocation, source index, GEP and ordinary memory effect.
     ///
     /// `false` means this supported source occurrence has no retained fixed-array
@@ -805,60 +1314,15 @@ impl ProductionPreRankedKirOwnerV1 {
             return Err(Resource(ResourceError::Accounting));
         }
         let mut work = PrivateArrayQueryWorkV1 { budget };
-        let root = private_array_binary_search_v1(
-            &self.launch_roots,
-            |row| [row.selected_root.index() as usize],
-            [selected_root.index() as usize],
-            &mut work,
-        )?
-        .map_err(|_| InvalidSource("selected root is absent from this owner"))?;
-        work.charge_private_array_work(5)?;
-        let entry = self
-            .correspondence
-            .lowered_functions
-            .get(root)
-            .ok_or(Mismatch("selected root entry row is absent"))?;
-        if entry.correspondence_owner != selected_root
-            || entry.role != SemanticKirFunctionRoleV1::KernelEntry
-        {
-            return Err(Mismatch("selected root entry prefix changed"));
-        }
-        work.charge_private_array_work(1)?;
-        if entry.semantic_function != expected_body {
-            return Err(InvalidSource(
-                "requested body differs from the constructor-selected entry",
-            ));
-        }
-        let module = self.executable.module();
-        let kernel = module
-            .kernels
-            .get(root)
-            .ok_or(Mismatch("selected root physical kernel is absent"))?;
-        let lowered = module
-            .functions
-            .get(root)
-            .ok_or(Mismatch("selected root physical function is absent"))?;
-        if !private_array_equal_bytes_v1(
-            entry.kernel_ir_function.as_str().as_bytes(),
-            lowered.id.as_str().as_bytes(),
-            &mut work,
-        )? || !private_array_equal_bytes_v1(
-            kernel.entry.as_str().as_bytes(),
-            lowered.id.as_str().as_bytes(),
-            &mut work,
-        )? {
-            return Err(Mismatch("selected root physical function identity changed"));
-        }
-        work.charge_private_array_work(3)?;
-        let body = lowered
-            .body
-            .as_ref()
-            .ok_or(Mismatch("selected root physical body is absent"))?;
-        let semantic = self.semantic_ssa.source_semantic();
-        let function = semantic
-            .functions()
-            .get(entry.semantic_function.index() as usize)
-            .ok_or(Mismatch("selected source body is absent"))?;
+        let context =
+            self.private_array_query_context_v1(selected_root, expected_body, &mut work)?;
+        let PrivateArrayQueryContextV1 {
+            root,
+            function_id,
+            body,
+            semantic,
+            function,
+        } = context;
         let fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1::Statement { block, statement } =
             site
         else {
@@ -918,10 +1382,10 @@ impl ProductionPreRankedKirOwnerV1 {
         work.charge_private_array_work(2)?;
         let plan = self
             .semantic_ssa
-            .plan_for_function(entry.semantic_function)
+            .plan_for_function(function_id)
             .ok_or(Mismatch("selected source SSA plan is absent"))?;
         let variable = access.place.local().index() as usize;
-        // Both sealed lists are unique, ascending filters of dense source variable order.
+// Both sealed lists are unique, ascending filters of dense source variable order.
         // Reuse those constructor invariants without a query-time scan or new planner.
         let promoted = private_array_binary_search_v1(
             plan.plan().promoted_variables(),
@@ -949,7 +1413,7 @@ impl ProductionPreRankedKirOwnerV1 {
                 ));
         let rows = &self.correspondence.private_arrays;
         let Some(instance) =
-            private_array_instance_v1(rows, selected_root, entry.semantic_function, &mut work)?
+            private_array_instance_v1(rows, selected_root, function_id, &mut work)?
         else {
             return private_array_absent_query_v1(
                 promoted,
@@ -1007,6 +1471,7 @@ impl ProductionPreRankedKirOwnerV1 {
             statement as usize,
             role_key.0 as usize,
             role_key.1 as usize,
+            0,
         ];
         let effect_index = private_array_binary_search_v1(
             effects,
@@ -1017,6 +1482,7 @@ impl ProductionPreRankedKirOwnerV1 {
                     row.semantic_statement as usize,
                     role.0 as usize,
                     role.1 as usize,
+                    row.original_index.component() as usize,
                 ]
             },
             key,
@@ -1031,7 +1497,7 @@ impl ProductionPreRankedKirOwnerV1 {
             function,
             body,
             selected_root,
-            entry.semantic_function,
+            function_id,
             slot,
             &effects[effect_index],
             self.limits.max_operations,

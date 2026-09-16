@@ -455,8 +455,100 @@ impl<'a> PrivateArrayFunctionRecorderV1<'a> {
         }
         self.admit_payload(0, 0, 0, 1)?;
         self.expected.reserve(1, self.limit, &mut self.work)?;
+        self.expected.push(
+            PrivateArrayExpectedPlaceV1 {
+                place,
+                role,
+                initializer_component: None,
+            },
+            &mut self.work,
+        )
+    }
+
+    fn expected_initializer(
+        &mut self,
+        function: &SemanticFunctionDeclV1,
+        assignment: &'a fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1,
+    ) -> Result<bool, ProductionSemanticKirErrorV1> {
+        // Shape, slot lookup key, aggregate count and scalar layout predicates.
+        self.work.charge_private_array_work(20)?;
+        let place = assignment.destination();
+        if !place.projections().is_empty() {
+            return Ok(false);
+        }
+        let SemanticRvalueKindV1::Aggregate(aggregate) = assignment.value().kind() else {
+            return Ok(false);
+        };
+        if aggregate.kind() != &SemanticAggregateKindV1::Array {
+            return Ok(false);
+        }
+        let Some(local) = function.locals().get(place.local().index() as usize) else {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        };
+        if local.role().is_entry_argument() {
+            return Ok(false);
+        }
+        let Ok(slot_index) = private_array_binary_search_v1(
+            &self.slots.rows,
+            |slot| [slot.local as usize],
+            [place.local().index() as usize],
+            &mut self.work,
+        )?
+        else {
+            return Ok(false);
+        };
+        let slot = self.slots.rows[slot_index];
+        if place.ty() != slot.semantic_type
+            || assignment.value().result_type() != slot.semantic_type
+            || u64::try_from(aggregate.operands().len()).ok() != Some(slot.length)
+            || !matches!(
+                slot.element_facts.element,
+                PrivateRetainedElementFactsV1::Scalar(_)
+            )
+        {
+            return Ok(false);
+        }
+        let minimum_operations = aggregate
+            .operands()
+            .len()
+            .checked_mul(4)
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        enforce_limit(
+            ProductionSemanticKirResourceV1::Operations,
+            minimum_operations,
+            self.limit,
+        )?;
+        for operand in aggregate.operands() {
+            self.work.charge_private_array_work(5)?;
+            let SemanticOperandV1::Constant(constant) = operand else {
+                return Ok(false);
+            };
+            let SemanticConstantValueV1::Scalar(value) = constant.value() else {
+                return Ok(false);
+            };
+            if constant.ty() != slot.element_type
+                || u64::from(value.size_bytes()) != slot.element_facts.size
+            {
+                return Ok(false);
+            }
+        }
+        self.admit_payload(0, 0, 0, aggregate.operands().len())?;
         self.expected
-            .push(PrivateArrayExpectedPlaceV1 { place, role }, &mut self.work)
+            .reserve(aggregate.operands().len(), self.limit, &mut self.work)?;
+        for component in 0..aggregate.operands().len() {
+            self.work.charge_private_array_work(1)?;
+            let component = u32::try_from(component)
+                .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            self.expected.push(
+                PrivateArrayExpectedPlaceV1 {
+                    place,
+                    role: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1::Destination,
+                    initializer_component: Some(component),
+                },
+                &mut self.work,
+            )?;
+        }
+        Ok(true)
     }
 
     fn expected_operand(
@@ -524,7 +616,9 @@ impl<'a> PrivateArrayFunctionRecorderV1<'a> {
                 if let SemanticRvalueKindV1::Load(load) = assignment.value().kind() {
                     self.expected_place(load.source(), Role::RvaluePlace)?;
                 }
-                self.expected_place(assignment.destination(), Role::Destination)?;
+                if !self.expected_initializer(function, assignment)? {
+                    self.expected_place(assignment.destination(), Role::Destination)?;
+                }
             }
             SemanticStatementKindV1::Store(store) => {
                 self.expected_operand(store.value(), Role::StoreValue)?;
@@ -674,6 +768,58 @@ impl<'a> PrivateArrayFunctionRecorderV1<'a> {
         self.effects.reserve(1, next, &mut self.work)
     }
 
+    fn prepare_initializer_address(
+        &mut self,
+        place: &SemanticPlaceV1,
+        component: usize,
+        value: ValueId,
+        offset: ValueId,
+        gep: ValueId,
+        gep_operation: usize,
+    ) -> Result<bool, ProductionSemanticKirErrorV1> {
+        if !self.enabled {
+            return Ok(false);
+        }
+        self.work.charge_private_array_work(3)?;
+        let Some(frame) = self.frame else {
+            return Ok(false);
+        };
+        let Some(expected) = self.expected.rows.get(self.cursor).copied() else {
+            return Ok(false);
+        };
+        let Some(recorded_component) = expected.initializer_component else {
+            return Ok(false);
+        };
+        self.work.charge_private_array_work(8)?;
+        if !std::ptr::eq(expected.place, place)
+            || u32::try_from(component).ok() != Some(recorded_component)
+            || self.pending.is_some()
+        {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+        }
+        let definition = frame
+            .first_operation
+            .checked_add(component)
+            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let offset_location = self
+            .direct_definition(offset, ScalarType::Index)?
+            .map(|row| row.location);
+        self.pending = Some(PrivateArrayPendingAddressV1 {
+            original_index: PrivateArrayIndexV1::InitializerElement {
+                component: recorded_component,
+                value: PrivateArrayInitializerValueV1::LiteralScalar {
+                    value,
+                    definition: self.location(definition)?,
+                },
+            },
+            offset_location,
+            gep_location: self.location(gep_operation)?,
+            offset,
+            gep,
+        });
+        Ok(true)
+    }
+
     fn commit_effect(
         &mut self,
         owner: SemanticFunctionIdV1,
@@ -718,8 +864,8 @@ impl<'a> PrivateArrayFunctionRecorderV1<'a> {
             let previous_key = private_array_role_key_v1(previous.role)
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
             let order = private_array_compare_keys_v1(
-                [previous_key.0 as usize, previous_key.1 as usize],
-                [role_key.0 as usize, role_key.1 as usize],
+                [previous_key.0 as usize, previous_key.1 as usize, previous.original_index.component() as usize],
+                [role_key.0 as usize, role_key.1 as usize, pending.original_index.component() as usize],
                 &mut self.work,
             )?;
             self.work.charge_private_array_work(1)?;
@@ -1084,7 +1230,7 @@ fn private_array_heapsort_v1<T, const N: usize, W: PrivateArrayChargeV1>(
     Ok(())
 }
 
-fn private_array_effect_key_v1(row: &PrivateArrayEffectV1) -> [usize; 6] {
+fn private_array_effect_key_v1(row: &PrivateArrayEffectV1) -> [usize; 7] {
     let role = private_array_role_key_v1(row.role).unwrap_or((u8::MAX, u32::MAX));
     [
         row.owner.index() as usize,
@@ -1093,6 +1239,7 @@ fn private_array_effect_key_v1(row: &PrivateArrayEffectV1) -> [usize; 6] {
         row.semantic_statement as usize,
         role.0 as usize,
         role.1 as usize,
+        row.original_index.component() as usize,
     ]
 }
 
