@@ -5,8 +5,10 @@ fn forged_capability_markers_cannot_gain_nominal_authority() {
     const SPOOF: &str = "reserved-capability-spoof";
     const CONTROL: &str = "reserved-capability-control";
     const REFUSAL: &str = "unauthenticated reserved device type provider";
-    const PENDING: &str =
-        "target-neutral lowering remains pending; no fallback or artifact emission was entered";
+    // The legacy control reaches body export only after type and FnAbi import.
+    // Its V1 registration intentionally supplies no V3 kernel binding.
+    const CONTROL_BOUNDARY: &str =
+        "semantic body construction rejected inconsistent kernel binding identity";
 
     let target = ScratchTarget::new();
     for feature in [CONTROL, SPOOF] {
@@ -58,14 +60,19 @@ fn forged_capability_markers_cannot_gain_nominal_authority() {
             !result.status.success(),
             "{feature} unexpectedly acquired production authority"
         );
-        let expected = if feature == CONTROL { PENDING } else { REFUSAL };
+        let expected = if feature == CONTROL {
+            CONTROL_BOUNDARY
+        } else {
+            REFUSAL
+        };
         assert!(
             stderr.contains(expected),
             "{feature} omitted {expected:?}:\n{stderr}"
         );
         if feature == SPOOF {
             for forbidden in [
-                PENDING,
+                CONTROL_BOUNDARY,
+                "target-neutral lowering remains pending",
                 "duplicate diagnostic item",
                 "unknown kernel registration",
                 "containing a user-provided unsafe block",

@@ -65,6 +65,11 @@ as ordinary structural values.
 The existing production source lane explicitly tests named refusal and absence
 of requested bundle/LLVM output. Compile-time dependency rlibs are not kernel
 artifacts and are not required to disappear from Cargo's target directory.
+The full borrowed tile callback currently stops at the earlier closure-layout
+guard; it is not counted as nominal-type importer coverage. The forged-provider
+control passes type and FnAbi construction, then stops because its legacy V1
+registration has no typed kernel binding. Ordinary and phantom-only ZST controls
+separately require successful inert bundle export.
 
 ## Required Integration
 

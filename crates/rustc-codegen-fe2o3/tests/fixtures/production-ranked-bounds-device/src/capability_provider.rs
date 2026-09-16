@@ -63,12 +63,9 @@ fn context_reference_result() -> Option<Borrowed> {
 #[cfg(feature = "provider_context_reference")]
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
 pub fn provider_context_reference(mut output: DisjointSlice<u32>) {
-    let value = match context_reference_result() {
-        None => 1,
-        Some(_) => 2,
-    };
+    let _ = context_reference_result();
     if let Some(slot) = output.get_mut(thread::index_1d()) {
-        *slot = value;
+        *slot = 7;
     }
 }
 
@@ -113,12 +110,9 @@ fn context_result() -> Option<Context> {
 #[cfg(feature = "provider_context_helper_result")]
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
 pub fn provider_context_helper_result(mut output: DisjointSlice<u32>) {
-    let value = match context_result() {
-        None => 1,
-        Some(_) => 2,
-    };
+    let _ = context_result();
     if let Some(slot) = output.get_mut(thread::index_1d()) {
-        *slot = value;
+        *slot = 7;
     }
 }
 

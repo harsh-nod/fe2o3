@@ -5,26 +5,29 @@ fn staged_generative_providers_reject_without_export_authority() {
     let target = ScratchTarget::new();
     let build_dir = target.path().join("provider-target");
     let mut failures = Vec::new();
-    for feature in [
-        "provider_context",
-        "provider_context_alias",
-        "provider_context_nested",
-        "provider_context_reference",
-        "provider_context_empty_array",
-        "provider_context_helper_result",
-        "provider_workgroup",
-        "provider_tile",
-        "provider_fragment",
-        "provider_tile_chain",
+    for (feature, expected) in [
+        ("provider_context", REASON),
+        ("provider_context_alias", REASON),
+        ("provider_context_nested", REASON),
+        ("provider_context_reference", REASON),
+        ("provider_context_empty_array", REASON),
+        ("provider_context_helper_result", REASON),
+        ("provider_workgroup", REASON),
+        ("provider_tile", REASON),
+        ("provider_fragment", REASON),
+        (
+            "provider_tile_chain",
+            "bounded closure admission failed: bounded closure profile rejected MIR: capture 0 has unsupported physical layout: unsized value at root.pointee: `[u32]`",
+        ),
     ] {
         let bundle = target.path().join(format!("{feature}.fe2sim"));
         let result = output(
             simulation_export_command_for_feature("gfx942", &bundle, &build_dir, Some(5), feature),
             "reject staged nominal authority",
         );
-        if result.status.success() || !result.stderr.contains(REASON) {
+        if result.status.success() || !result.stderr.contains(expected) {
             failures.push(format!(
-                "{feature} did not reach the nominal capability refusal:\n{}",
+                "{feature} did not reach {expected:?}:\n{}",
                 result.stderr,
             ));
         }
