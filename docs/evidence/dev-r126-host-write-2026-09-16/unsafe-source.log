@@ -1,0 +1,16 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+   Compiling fe2o3-semantic-query v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-semantic-query)
+   Compiling cargo-fe2o3 v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/cargo-fe2o3)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.64s
+     Running tests/unsafe_source_policy.rs (target/debug/deps/unsafe_source_policy-9b4218cdd9dccd15)
+
+running 6 tests
+test additions_removals_and_moves_require_baseline_review ... ok
+test refresh_reviewed_unsafe_inventory ... ignored, explicit maintenance command; review the resulting baseline diff
+test all_constructs_and_macro_templates_are_counted ... ok
+test comments_literals_and_documentation_do_not_count ... ok
+test malformed_tokens_fail_closed ... ok
+test unsafe_source_matches_reviewed_inventory ... ok
+
+test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 16.25s
+

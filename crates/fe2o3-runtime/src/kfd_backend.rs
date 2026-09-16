@@ -110,6 +110,7 @@ pub use qualification_drain_capture::{
     KfdDrainCaptureCustodyObservationV1, KfdDrainCaptureObservationFailureV1,
 };
 mod kfd_backend_sdma_seam;
+mod sdma_host_write;
 use compute_dispatch::*;
 use compute_state::*;
 #[cfg(test)]
@@ -1851,10 +1852,7 @@ impl KfdRuntimeBackendV1 {
         }
     }
 
-    fn terminal_error(
-        &mut self,
-        detail: impl Into<String>,
-    ) -> RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1> {
+    fn poison_terminal_v1(&mut self) {
         self.terminal = true;
         if let Some(queue) = self.queue.as_mut() {
             queue.poison_after_runtime_owner_failure_v1();
@@ -1866,6 +1864,13 @@ impl KfdRuntimeBackendV1 {
         for lane in &mut self.auxiliary_compute_lanes {
             lane.pipeline.quarantine_all();
         }
+    }
+
+    fn terminal_error(
+        &mut self,
+        detail: impl Into<String>,
+    ) -> RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1> {
+        self.poison_terminal_v1();
         RuntimeBackendFailureV1::Terminal(KfdRuntimeBackendErrorV1::new(
             KfdRuntimeBackendErrorKindV1::Terminal,
             detail,
@@ -4907,39 +4912,11 @@ impl KfdRuntimeBackendV1 {
             .get(&allocation)
             .is_some_and(|record| matches!(record.sdma_storage, KfdRuntimeSdmaStorageV1::Host(_)));
         if is_host {
-            let buffer = match &mut self
-                .allocations
-                .get_mut(&allocation)
-                .expect("admitted host allocation remains indexed")
-                .sdma_storage
-            {
-                KfdRuntimeSdmaStorageV1::Host(buffer) => buffer,
-                _ => unreachable!("checked host storage"),
-            };
-            let result = {
-                #[cfg(test)]
-                let scripted = self.scripted_sdma.as_mut();
-                #[cfg(test)]
-                let mut ops = if let Some(driver) = scripted {
-                    kfd_backend_sdma_seam::DirectionalSdmaOpsV1::Scripted(driver)
-                } else {
-                    kfd_backend_sdma_seam::DirectionalSdmaOpsV1::Native(
-                        self.queue
-                            .as_mut()
-                            .expect("persistent SDMA allocation retains queue"),
-                    )
-                };
-                #[cfg(not(test))]
-                let mut ops = kfd_backend_sdma_seam::DirectionalSdmaOpsV1::Native(
-                    self.queue
-                        .as_mut()
-                        .expect("persistent SDMA allocation retains queue"),
-                );
-                ops.write_host(buffer, byte_offset, bytes)
-            };
-            return result.map_err(|error| {
-                self.terminal_error(format!("KFD persistent host write: {error}"))
-            });
+            return self.write_indexed_sdma_host_v1(
+                allocation,
+                "KFD persistent host write",
+                |ops, buffer| ops.write_host(buffer, byte_offset, bytes),
+            );
         }
 
         let copy_bytes = u32::try_from(bytes.len()).map_err(|_| {
@@ -4948,17 +4925,11 @@ impl KfdRuntimeBackendV1 {
                 "SDMA upload exceeds one admitted linear packet",
             )
         })?;
-        let mut staging = self
+        let staging = self
             .directional_sdma_ops_v1()
             .allocate_host(bytes.len())
             .map_err(|error| self.terminal_error(format!("KFD upload staging: {error}")))?;
-        if let Err(error) = self
-            .directional_sdma_ops_v1()
-            .write_host(&mut staging, 0, bytes)
-        {
-            self.recycle_transient_sdma_buffer_v1(staging, "upload")?;
-            return Err(self.terminal_error(format!("KFD upload staging write: {error}")));
-        }
+        let staging = self.initialize_sdma_host_v1(staging, bytes, "KFD upload staging write")?;
         let staging = self.execute_synchronous_directional_sdma_v1(
             allocation,
             Gfx942PersistentSdmaDirectionV1::HostToDevice,
@@ -4984,39 +4955,11 @@ impl KfdRuntimeBackendV1 {
             self.upload_sdma_range_v1(allocation, 0, bytes)?;
             return Ok(None);
         }
-        let buffer = match &mut self
-            .allocations
-            .get_mut(&allocation)
-            .expect("admitted host allocation remains indexed")
-            .sdma_storage
-        {
-            KfdRuntimeSdmaStorageV1::Host(buffer) => buffer,
-            _ => unreachable!("checked host storage"),
-        };
-        let result = {
-            #[cfg(test)]
-            let scripted = self.scripted_sdma.as_mut();
-            #[cfg(test)]
-            let mut ops = if let Some(driver) = scripted {
-                kfd_backend_sdma_seam::DirectionalSdmaOpsV1::Scripted(driver)
-            } else {
-                kfd_backend_sdma_seam::DirectionalSdmaOpsV1::Native(
-                    self.queue
-                        .as_mut()
-                        .expect("persistent SDMA allocation retains queue"),
-                )
-            };
-            #[cfg(not(test))]
-            let mut ops = kfd_backend_sdma_seam::DirectionalSdmaOpsV1::Native(
-                self.queue
-                    .as_mut()
-                    .expect("persistent SDMA allocation retains queue"),
-            );
-            ops.write_full_host_authenticated(buffer, bytes)
-        };
-        result.map_err(|error| {
-            self.terminal_error(format!("KFD persistent authenticated host write: {error}"))
-        })
+        self.write_indexed_sdma_host_v1(
+            allocation,
+            "KFD persistent authenticated host write",
+            |ops, buffer| ops.write_full_host_authenticated(buffer, bytes),
+        )
     }
 
     fn zero_sdma_range_v1(
@@ -6091,22 +6034,16 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                     self.directional_sdma_ops_v1().allocate_host(len)
                 }
             };
-            let mut buffer = result.map_err(|error| {
+            let buffer = result.map_err(|error| {
                 self.terminal_error(format!("KFD persistent SDMA allocation: {error}"))
             })?;
             match kind {
                 RuntimeMemoryKindV1::HostVisible => {
-                    let initialized =
-                        self.directional_sdma_ops_v1()
-                            .write_host(&mut buffer, 0, &bytes);
-                    if let Err(error) = initialized {
-                        self.retain_terminal_sdma_custody_v1(
-                            KfdRuntimeTerminalSdmaCustodyV1::Buffer(buffer),
-                        );
-                        return Err(self.terminal_error(format!(
-                            "KFD persistent host allocation initialization: {error}"
-                        )));
-                    }
+                    let buffer = self.initialize_sdma_host_v1(
+                        buffer,
+                        &bytes,
+                        "KFD persistent host allocation initialization",
+                    )?;
                     KfdRuntimeSdmaStorageV1::Host(buffer)
                 }
                 RuntimeMemoryKindV1::DeviceLocal => {
@@ -12889,6 +12826,8 @@ mod retained_release_tests;
 
 #[cfg(test)]
 mod tests {
+    mod sdma_host_write_tests;
+
     use super::kfd_backend_sdma_seam::{
         DirectionalSdmaOpsV1, DirectionalSdmaPairOwnerV1, ScriptedBufferKindV1,
         ScriptedExecutionOutcomeV1, ScriptedFailureModeV1, ScriptedRecycleOutcomeV1,

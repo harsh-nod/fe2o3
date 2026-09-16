@@ -58,10 +58,14 @@ primary, retains NEW/AUX/REBOUND materialization and resident-overwrite owners o
 failure, and roots fresh SDMA allocations through native mapping and model
 retake. See the [current release status](runtime-primary-queue-release-v1.md#fresh-sdma-allocation-custody)
 and [allocation evidence](evidence/dev-r126-sdma-allocation-2026-09-16/README.md).
-The next prerequisite is runtime host initialization/upload-staging retention,
-followed by consuming promotion and synchronous-copy custody. Allocation during
-pending compute is still disabled. These are development packets, not R126 or
-A1/A2 acceptance; R125 remains the accepted CPU/test checkpoint.
+Runtime host initialization/upload-staging retention and indexed host-write
+panic settlement are now implemented, with nine focused tests, GNU/musl runtime
+regressions and six MI300X regression probes. See the
+[host-write receipt](evidence/dev-r126-host-write-2026-09-16/README.md).
+Next are consuming promotion and synchronous-copy custody plus typed capacity
+rejection. Allocation during pending compute is still disabled. These are
+development packets, not R126 or A1/A2 acceptance; R125 remains the accepted
+CPU/test checkpoint.
 
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)

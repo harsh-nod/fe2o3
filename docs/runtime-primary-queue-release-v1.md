@@ -536,8 +536,8 @@ no-default-feature compilation and unsafe-source checks pass. These crate-level
 checks do not replace the remaining full R126 qualification campaign.
 
 Pending-compute allocation remains disabled. Runtime HostVisible initialization
-and upload staging still need retention across borrowed-write panic; consuming
-promotion needs rooted input through live-model validation and unwind. Device
+and upload staging now retain across borrowed-write failure as described below;
+consuming promotion needs rooted input through live-model validation and unwind. Device
 initialization additionally needs retained synchronous submit/wait/retire/recycle
 boundaries. Runtime allocation error conversion also still terminalizes healthy
 backing-credit rejection; a typed disposition must preserve the lower contract.
@@ -545,13 +545,42 @@ Only after those prerequisites should borrowed owner-roster preflight
 separate reuse of existing directional SDMA from idle-only queue creation. R125
 remains accepted; R126/A1/A2/#182 and HIP/HSA parity remain incomplete.
 
+## Runtime Host Write Retention
+
+Fresh HostVisible initialization and transient upload staging keep their owner
+outside the borrowed-write unwind boundary, including the lower error-to-string
+conversion. On error or panic the original buffer moves into the existing
+terminal SDMA slot before poison or diagnostics; failed staging is never passed
+to consuming recycle. Indexed ordinary and authenticated host writes retain their
+buffer in the allocation record and now seal the backend on panic as well as error.
+Non-formatting terminalization is shared with existing error paths. A secondary
+poison panic or panic-payload destructor cannot replace the first write panic.
+
+Nine focused tests cover errors/panics before any copy, after a partial prefix and
+after the whole write, distinguishable fresh-allocation bytes, exact owner IDs,
+unchanged allocation/shadow/accounting commits, certificate invalidation, later
+upload and indexed/authenticated chunks, inert terminal retries, public-context
+behavior, successful cleanup and process-isolated terminal Drop. GNU/musl runtime
+regressions each pass 773 tests with four hardware tests ignored locally. The six
+unchanged MI300X allocation/primary/AUX regressions pass on the new binary.
+The [host-write receipt](evidence/dev-r126-host-write-2026-09-16/README.md) separates
+scripted partial-write faults from native regression success.
+
+An unconfigured public Context does not immediately set its own terminal marker
+after a caller catches a backend panic; the backend is already terminal and the
+next valid backend call seals the Context without native work. This packet does
+not change that facade policy, admit pending-compute allocation, qualify native
+partial writes, add executable/formal correspondence or establish performance.
+Consuming promotion, synchronous copy/recycle and typed capacity disposition
+remain open, followed by owner-roster preflight and pending-compute qualification.
+
 ## Remaining Qualification
 
 1. Extend the successful allocation, primary and two-stream dispatch native
    probes beyond the now-qualified AUX host-budget rejection. Qualify integrated
    NEW, REBOUND and resident-overwrite native failure paths, and allocation/SDMA
-   ownership changes with pending compute after completing runtime initialization,
-   promotion and synchronous-copy custody. Lower fresh-allocation outputs now
+   ownership changes with pending compute after completing promotion and
+   synchronous-copy custody. Lower fresh-allocation outputs now
    remain rooted through model retake; that alone does not admit pending work.
    Corrupted-observation model rejection, scripted native errors and actual
    hardware outcomes retain distinct evidence scopes.

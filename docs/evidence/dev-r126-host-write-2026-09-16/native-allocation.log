@@ -1,0 +1,8 @@
+
+running 1 test
+test kfd_backend::retained_release_tests::native_runtime_allocation_shutdown_selects_retained_directional_release ... primary_host_usage=PrimaryHostUsage { before: Some(Gfx942HostVisibleBackingUsageV1 { budget: Gfx942HostVisibleBackingBudgetV1 { max_backing_bytes: 16777216, max_allocations: 32 }, used_backing_bytes: 532480, used_allocation_records: 3, reserved_records: 0, retained_records: 3, quarantined_records: 0, poisoned: false }), completed: Some(Gfx942HostVisibleBackingUsageV1 { budget: Gfx942HostVisibleBackingBudgetV1 { max_backing_bytes: 16777216, max_allocations: 32 }, used_backing_bytes: 0, used_allocation_records: 0, reserved_records: 0, retained_records: 0, quarantined_records: 0, poisoned: false }), observations: [1, 1] }
+native_runtime_retained_directional_release=complete allocation_workflow=public pooled_buffers=1 pooled_bytes=4096 selector=retained completed_root_drop=confirmed backend_drop=completed packets=0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 776 filtered out; finished in 1.94s
+

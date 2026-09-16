@@ -1,0 +1,17 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.69s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-5617a78400e220da)
+
+running 9 tests
+test kfd_backend::sdma_host_write::tests::host_write_original_panic_survives_secondary_poison_and_payload_drop_panics ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_fresh_initialization_retains_exact_prefix_before_any_commit ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_indexed_partial_and_authenticated_faults_keep_owner_and_old_shadow ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_public_context_seals_on_error_or_following_caught_backend_panic ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_second_upload_chunk_failure_retains_new_staging_and_completed_device_prefix ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_success_initializes_and_uploads_then_releases_original_owners ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_terminal_backend_drop_aborts_without_discarding_retained_owner ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_upload_staging_failure_never_consumes_device_or_recycles ... ok
+test kfd_backend::tests::sdma_host_write_tests::host_write_second_indexed_chunk_failure_never_certifies_or_commits_partial_image ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 768 filtered out; finished in 1.41s
+

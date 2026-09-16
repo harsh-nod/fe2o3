@@ -2011,9 +2011,19 @@ mod scripted {
             kind: ScriptedBufferKindV1,
             byte_len: usize,
         },
+        AllocateHostFilled {
+            byte_len: usize,
+            fill: u8,
+        },
         Write {
             offset: u64,
             byte_len: usize,
+        },
+        WriteFault {
+            offset: u64,
+            byte_len: usize,
+            written_prefix: usize,
+            panic: bool,
         },
         Read {
             offset: u64,
@@ -2129,6 +2139,18 @@ mod scripted {
         owner_id: u64,
         byte_len: usize,
         sha256: [u8; 32],
+    }
+
+    impl ScriptedBufferOwnerV1 {
+        pub(crate) fn observation(&self) -> (u64, &[u8], Option<[u8; 32]>) {
+            (
+                self.token.id,
+                &self.bytes,
+                self.full_content_certificate
+                    .as_ref()
+                    .map(|certificate| certificate.sha256),
+            )
+        }
     }
 
     #[derive(Debug)]
@@ -2341,20 +2363,24 @@ mod scripted {
             byte_len: usize,
             kind: ScriptedBufferKindV1,
         ) -> Result<SdmaBufferOwnerV1, String> {
-            match self.pop()? {
+            let fill = match self.pop()? {
                 ScriptedSdmaStepV1::Allocate {
                     kind: expected_kind,
                     byte_len: expected_len,
-                } if expected_kind == kind && expected_len == byte_len => {}
+                } if expected_kind == kind && expected_len == byte_len => 0,
+                ScriptedSdmaStepV1::AllocateHostFilled {
+                    byte_len: expected_len,
+                    fill,
+                } if kind == ScriptedBufferKindV1::Host && expected_len == byte_len => fill,
                 step => return Err(format!("scripted SDMA allocation mismatch: {step:?}")),
-            }
+            };
             Ok(SdmaBufferOwnerV1::Scripted(ScriptedBufferOwnerV1 {
                 token: ScriptedOwnerTokenV1::new(
                     ScriptedOwnerRoleV1::Buffer(kind),
                     Rc::clone(&self.ledger),
                 ),
                 kind,
-                bytes: vec![0; byte_len],
+                bytes: vec![fill; byte_len],
                 full_content_certificate: None,
             }))
         }
@@ -2368,13 +2394,22 @@ mod scripted {
             if !self.owns_buffer(buffer) {
                 return Err("scripted SDMA write owner belongs to another driver".to_owned());
             }
-            match self.pop()? {
+            let fault = match self.pop()? {
                 ScriptedSdmaStepV1::Write {
                     offset: expected_offset,
                     byte_len,
-                } if expected_offset == offset && byte_len == bytes.len() => {}
+                } if expected_offset == offset && byte_len == bytes.len() => None,
+                ScriptedSdmaStepV1::WriteFault {
+                    offset: expected_offset,
+                    byte_len,
+                    written_prefix,
+                    panic,
+                } if expected_offset == offset && byte_len == bytes.len() => {
+                    assert!(written_prefix <= byte_len);
+                    Some((written_prefix, panic))
+                }
                 step => return Err(format!("scripted SDMA write mismatch: {step:?}")),
-            }
+            };
             if buffer.kind != ScriptedBufferKindV1::Host {
                 return Err("scripted SDMA write requires host storage".to_owned());
             }
@@ -2384,6 +2419,14 @@ mod scripted {
                 .filter(|end| *end <= buffer.bytes.len())
                 .ok_or("scripted write exceeds buffer")?;
             buffer.full_content_certificate = None;
+            if let Some((written_prefix, panic)) = fault {
+                buffer.bytes[start..start + written_prefix]
+                    .copy_from_slice(&bytes[..written_prefix]);
+                if panic {
+                    std::panic::panic_any("scripted SDMA host write panic");
+                }
+                return Err("scripted SDMA host write failure".to_owned());
+            }
             buffer.bytes[start..end].copy_from_slice(bytes);
             Ok(())
         }
@@ -2413,24 +2456,8 @@ mod scripted {
                 let offset = (index as u64)
                     .checked_mul(u64::from(GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1))
                     .ok_or("scripted authenticated write offset overflow")?;
-                match self.pop()? {
-                    ScriptedSdmaStepV1::Write {
-                        offset: expected_offset,
-                        byte_len,
-                    } if expected_offset == offset && byte_len == chunk.len() => {}
-                    step => {
-                        return Err(format!(
-                            "scripted authenticated SDMA write mismatch: {step:?}"
-                        ));
-                    }
-                }
-                let start = usize::try_from(offset)
-                    .map_err(|_| "scripted authenticated write offset overflow")?;
-                let end = start
-                    .checked_add(chunk.len())
-                    .ok_or("scripted authenticated write range overflow")?;
+                self.write_host(buffer, offset, chunk)?;
                 hasher.update(chunk);
-                buffer.bytes[start..end].copy_from_slice(chunk);
             }
             let digest = hasher.finalize().into();
             buffer.full_content_certificate = Some(ScriptedHostContentCertificateV1 {
