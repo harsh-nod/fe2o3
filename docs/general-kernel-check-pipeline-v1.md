@@ -43,6 +43,15 @@ obligations. Their checked receipt attaches to the same executable owner
 without rematerializing it. All compile/check and simulation-export routes
 cross this boundary; simulation export still grants no launch authority.
 
+An exact fixed-array index can fail during materialization, before a ranked
+graph exists. This rejection retains `FE2O3-BOUNDS-001`, the exact index/extent
+witness, semantic location and available Rust source provenance. It reports
+the earlier failure phase without inventing a ranked-IR dump or rerunning an
+alternate analysis route. Missing provenance remains explicitly unavailable.
+An incomplete or impure helper also rejects before ranked projection; its
+diagnostic retains and explicitly labels the helper declaration location,
+without misidentifying that location as a particular caller or effect.
+
 Materialization and canonical assertion projection have separate fixed logical
 work/storage ledgers. These are not whole-compiler allocation meters: source
 MIR/SSA, legacy correspondence and other source-ranked analysis storage retain

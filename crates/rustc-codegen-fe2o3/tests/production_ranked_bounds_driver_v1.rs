@@ -442,14 +442,17 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
             && oob.stderr.contains("required: 64 < 64")
             && oob.stderr.contains("Rust source")
             && oob.stderr.contains(&oob_source_location)
-            && oob.stderr.contains("kernel.index_constant 64")
-            && oob
-                .stderr
-                .contains("ranked PLIRON before rejected lowering")
+            && oob.stderr.contains("pre-ranked materialization failed")
             && oob
                 .stderr
                 .contains("lowering stopped before target IR or artifact emission"),
         "out-of-bounds diagnostic was incomplete:\n{}",
+        oob.stderr,
+    );
+    assert!(
+        !oob.stderr
+            .contains("ranked PLIRON before rejected lowering"),
+        "early materialization failure claimed a ranked graph:\n{}",
         oob.stderr,
     );
     for forbidden in ["kernel-ir-v1", "GeneralGemm", "Unknown/Unproved"] {
@@ -741,11 +744,24 @@ fn production_barrier_cfg_preserves_order_and_fails_closed() {
     );
 
     let helper = run_feature_extraction(&ScratchTarget::new(), "barrier_helper");
+    let helper_declaration = format!(":{}:", ranked_bounds_fixture_line("fn helper_barrier()"));
     assert!(
         !helper.status.success()
+            && helper.stderr.contains("pre-ranked materialization failed")
             && helper.stderr.contains(
-                "a call terminator before exact callable memory-effect summaries are available"
-            ),
+                "reachable deterministic scalar helper is not interprocedurally complete and pure"
+            )
+            && helper.stderr.lines().any(|line| {
+                line.contains("helper declaration at Rust source")
+                    && line.contains(&helper_declaration)
+            })
+            && helper
+                .stderr
+                .contains("lowering stopped before target IR or artifact emission")
+            && !helper
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && !helper.stderr.contains("safety-verified lowering input"),
         "helper-mediated barrier bypassed the semantic boundary:\n{}",
         helper.stderr,
     );

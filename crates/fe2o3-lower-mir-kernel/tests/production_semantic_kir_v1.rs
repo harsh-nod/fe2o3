@@ -4504,10 +4504,7 @@ fn impure_and_tail_called_helpers_fail_closed() {
     .unwrap_err();
     assert!(matches!(
         impure,
-        ProductionSemanticKirErrorV1::Unsupported {
-            detail: "reachable deterministic scalar helper is not interprocedurally complete and pure",
-            ..
-        }
+        ProductionSemanticKirErrorV1::HelperEffectsUnavailable { function: 1, .. }
     ));
 
     let tail = ProductionSemanticKirOwnerV1::try_lower(
