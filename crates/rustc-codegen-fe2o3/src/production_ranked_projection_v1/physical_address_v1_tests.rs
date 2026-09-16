@@ -1,3 +1,519 @@
+mod identity_getter_physical_tests {
+    use super::*;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    use fe2o3_lower_mir_kernel::{
+        ProductionCanonicalMemoryAnalysisCandidateV1 as Candidate,
+        ProductionScopedCanonicalStoreAnalysisV1 as Analysis,
+    };
+
+    fn with_fixture(
+        value: u32,
+        collected_modes: bool,
+        profile: Profile,
+        body: impl FnOnce(
+            &ProductionSourceOutputOccurrencesV1<'_, '_>,
+            &mut CanonicalMemoryProjectedRootV1,
+            &mut Budget<'_>,
+        ) -> Result<(), ProductionSourceOutputErrorV1>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        with_fixture_stores(value, collected_modes, profile, 1, body)
+    }
+
+    fn with_fixture_stores(
+        value: u32,
+        collected_modes: bool,
+        profile: Profile,
+        stores: usize,
+        body: impl FnOnce(
+            &ProductionSourceOutputOccurrencesV1<'_, '_>,
+            &mut CanonicalMemoryProjectedRootV1,
+            &mut Budget<'_>,
+        ) -> Result<(), ProductionSourceOutputErrorV1>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        let ssa = identity_getter_shape_tests::source_ssa_options(value, collected_modes, stores);
+        with_admitted_fixture(ssa, collected_modes, profile, body)
+    }
+
+    fn with_admitted_fixture(
+        mut ssa: ProductionSemanticSsaOwnerV1,
+        collected_modes: bool,
+        profile: Profile,
+        body: impl FnOnce(
+            &ProductionSourceOutputOccurrencesV1<'_, '_>,
+            &mut CanonicalMemoryProjectedRootV1,
+            &mut Budget<'_>,
+        ) -> Result<(), ProductionSourceOutputErrorV1>,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        let mut work = Work::new(LIMIT);
+        let mut budget = Budget::new(&mut work, STORAGE_LIMIT);
+        budget.reserve_storage(PREFIX).unwrap();
+        let capture = ssa
+            .try_capture_occurrences_with_budget_v1(&mut budget)
+            .unwrap();
+        budget.reserve_storage(capture.retained_storage()).unwrap();
+        let inputs = [ranked_root_input_1d(
+            if collected_modes {
+                "other_identity_entry"
+            } else {
+                A_NAME
+            },
+            if collected_modes { 246 } else { 247 },
+            64,
+        )];
+        let launch = source_launch_roster_for_ranked_inputs_v1(&ssa, &inputs).unwrap();
+        let source = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+            ssa,
+            launch,
+            fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+            &mut budget,
+        )
+        .unwrap();
+        let source_bytes = source.executable_storage().retained_storage()
+            + source.assert_origin_storage().payload_storage();
+        budget.reserve_storage(source_bytes).unwrap();
+        let source_floor = budget.storage();
+        let result;
+        {
+            let bound =
+                dialect_amdgcn::bind_production_target_v1(source.executable().module(), profile)
+                    .unwrap();
+            let (input, storage) =
+                Owner::from_module_ref_with_verification_budget_v12(bound.module(), &mut budget)
+                    .unwrap();
+            let input_bytes = storage.retained_storage();
+            budget.reserve_storage(input_bytes).unwrap();
+            let observed =
+                fe2o3_pliron::optimize_native_neutral_kernel_ir_policy3_v1(&input, &mut budget)
+                    .unwrap();
+            budget
+                .reserve_storage(observed.storage().retained_storage())
+                .unwrap();
+            let checked = observed.try_check_and_finish_v1(&mut budget).unwrap();
+            let output_bytes = checked.storage().retained_storage();
+            budget.reserve_storage(output_bytes).unwrap();
+            let coordinate_bytes;
+            {
+                let (coordinates, storage) =
+                    dialect_amdgcn::check_production_target_coordinate_preservation_v1(
+                        source.executable(),
+                        &input,
+                        profile,
+                        &mut budget,
+                    )
+                    .unwrap();
+                coordinate_bytes = storage.retained_storage();
+                budget.reserve_storage(coordinate_bytes).unwrap();
+                let (view, storage) =
+                    fe2o3_lower_mir_kernel::derive_source_output_occurrences_policy3_v1(
+                        &source,
+                        &coordinates,
+                        &checked,
+                        &mut budget,
+                    )
+                    .unwrap();
+                let view_bytes = storage.retained_storage();
+                budget.reserve_storage(view_bytes).unwrap();
+                assert!(std::ptr::eq(view.output(), checked.owner()));
+                let projection = RankedProjectionSourceV1::from_legacy(&source).unwrap();
+                let references =
+                    crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default();
+                let floor = budget.storage();
+                result = with_ranked_root_preparation_v1(
+                    &projection,
+                    &inputs,
+                    &references,
+                    |effects, partition| {
+                        checked_output_session_v1::with_checked_output_assertions_view_budget_v1(
+                            &view,
+                            &mut budget,
+                            |session| {
+                                session.with_canonical_memory_scope_v1(|session| {
+                            let source_root = projection.source_launch().roots()[0];
+                            let selection = projection.semantic_ssa().source_semantic()
+                                .select_kernel_body_for_root_v1(source_root.selected_root()).unwrap();
+                            let mut root = {
+                                let mut facts = session.for_source(source_root.selected_root(), selection.body());
+                                project_canonical_memory_root_v1(
+                                    projection.semantic_ssa(), effects, selection, &inputs[0], source_root,
+                                    &partition[0], &mut facts,
+                                )?
+                            };
+                            session.with_output_occurrences_v1(|view, budget| {
+                                body(view, &mut root, budget).map_err(|error|
+                                    ProductionRankedProjectionErrorV1::CanonicalAssertions(
+                                        canonical_assertion_facts_v1::CanonicalAssertionErrorV1::Output(error),
+                                    ))
+                            })
+                        })
+                            },
+                        )
+                    },
+                );
+                assert_eq!(budget.storage(), floor);
+                drop(view);
+                budget.release_storage(view_bytes).unwrap();
+            }
+            budget.release_storage(coordinate_bytes).unwrap();
+            drop(checked);
+            budget.release_storage(output_bytes).unwrap();
+            drop(input);
+            budget.release_storage(input_bytes).unwrap();
+        }
+        assert_eq!(budget.storage(), source_floor);
+        drop(source);
+        budget.release_storage(source_bytes).unwrap();
+        budget.release_storage(capture.retained_storage()).unwrap();
+        assert_eq!(budget.storage(), PREFIX);
+        result
+    }
+
+    fn candidate(root: &CanonicalMemoryProjectedRootV1) -> Candidate<'_> {
+        Candidate {
+            selected_root: root.selected_root,
+            selected_function: root.selected_function,
+            lowering: &root.lowering,
+            access_sources: &root.access_sources,
+            executable_effect_sources: &root.executable_effect_sources,
+            control: root.control.candidate(),
+        }
+    }
+
+    fn complete(
+        view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+        root: &CanonicalMemoryProjectedRootV1,
+        budget: &mut Budget<'_>,
+        body: impl FnOnce(
+            &Analysis<'_, '_, '_>,
+            &mut Budget<'_>,
+        ) -> Result<(), ProductionSourceOutputErrorV1>,
+    ) -> Result<(), ProductionSourceOutputErrorV1> {
+        let candidates = [candidate(root)];
+        view.with_conditional_memory_control_coverage_v1(&candidates, budget, |control, budget| {
+            view.with_canonical_store_analysis_v1(
+                &candidates,
+                control,
+                budget,
+                |analyses, budget| {
+                    assert_eq!(analyses.len(), 1);
+                    body(&analyses[0], budget)
+                },
+            )
+        })
+    }
+
+    #[test]
+    fn identity_physical_joins_each_own_store_on_both_profiles_and_source_modes() {
+        use fe2o3_kernel_ir::{CanonicalKirDefinitionCoordinateV1 as Def, OperationKind as Op};
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            for mode in [false, true] {
+                for (value, stores) in [(17, 1), (29, 2)] {
+                    let mut entered = false;
+                    with_fixture_stores(value, mode, profile, stores, |view, root, budget| {
+                        let candidates = [candidate(root)];
+                        let ranked = root.control.candidate().arguments.iter()
+                            .find(|row| row.source_local.index() == 2).unwrap().ranked_value;
+                        let floor = budget.storage();
+                        view.with_conditional_memory_control_coverage_v1(
+                            &candidates, budget, |control, budget| {
+                                assert!(matches!(control.index_leaf(view, &candidates[0], ranked, budget),
+                                    Err(ProductionSourceOutputErrorV1::Invalid("identity getter address join is not implemented"))));
+                                assert!(matches!(control.index_value(view, &candidates[0], ranked, budget),
+                                    Err(ProductionSourceOutputErrorV1::Invalid("identity getter address join is not implemented"))));
+                                view.with_canonical_store_analysis_v1(&candidates, control, budget, |analyses, budget| {
+                                    let analysis = &analyses[0];
+                                    assert_eq!(analysis.access_count(), stores);
+                                    let live = budget.storage();
+                                    for _ in 0..2 {
+                                        analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                                            entered = true;
+                                            assert!(std::ptr::eq(relation.output(), view.output()));
+                                            assert_eq!(relation.global_access_count(), stores);
+                                            assert_eq!(relation.private_access_count(), 0);
+                                            let mut previous = None;
+                                            for ordinal in 0..stores {
+                                                let ordinary = analysis.access(ordinal, budget)?.unwrap();
+                                                let address = relation.access(ordinal, budget)?.unwrap();
+                                                assert_eq!(address.operation(), ordinary.operation());
+                                                assert_eq!(address.element_bytes(), 4);
+                                                assert_eq!(address.alignment(), 4);
+                                                assert_ne!(previous, Some(address.operation()));
+                                                previous = Some(address.operation());
+                                                let op = |coordinate: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1| {
+                                                    &relation.output().module().functions[coordinate.block.function.0 as usize]
+                                                        .body.as_ref().unwrap().blocks[coordinate.block.block as usize]
+                                                        .operations[coordinate.operation as usize]
+                                                };
+                                                let Op::Store { pointer, .. } = op(address.operation()).kind else { panic!("own Store") };
+                                                let gep = op(address.gep());
+                                                assert_eq!(gep.results[0].id, pointer);
+                                                assert_eq!(address.pointer_definition(), Def::Result { operation: address.gep(), result: 0 });
+                                                let Op::GetElementPointer { base, .. } = gep.kind else { panic!("own GEP") };
+                                                let Def::FunctionArgument { function, argument } = address.allocation() else { panic!("own Slice formal") };
+                                                assert_eq!(function, address.operation().block.function);
+                                                let body = relation.output().module().functions[function.0 as usize].body.as_ref().unwrap();
+                                                let mut definitions = body.blocks.iter().flat_map(|block| &block.operations)
+                                                    .filter(|row| row.results.iter().any(|result| result.id == base));
+                                                let data = definitions.next().unwrap();
+                                                assert!(definitions.next().is_none());
+                                                let Op::SliceData { slice } = data.kind else { panic!("own SliceData") };
+                                                assert_eq!(slice, body.parameters[argument as usize]);
+                                                let Def::Result { operation: index, result: 0 } = address.offset_definition() else { panic!("own coordinate") };
+                                                assert!(matches!(&op(index).kind, Op::Intrinsic(intrinsic)
+                                                    if *intrinsic == fe2o3_kernel_ir::IntrinsicOperation::global_id_1d()));
+                                            }
+                                            assert!(relation.access(stores, budget)?.is_none());
+                                            Ok(())
+                                        })?;
+                                        assert_eq!(budget.storage(), live);
+                                    }
+                                    Ok(())
+                                })
+                            })?;
+                        assert_eq!(budget.storage(), floor);
+                        Ok(())
+                    }).unwrap();
+                    assert!(entered);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn identity_physical_balanced_error_panic_and_storage_denial_restore_live_floor() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_fixture(29, true, profile, |view, root, budget| {
+                complete(view, root, budget, |analysis, budget| {
+                    let floor = budget.storage();
+                    let before = budget.work();
+                    let mut entered = false;
+                    let result = analysis.with_physical_address_relation_v1::<()>(
+                        budget,
+                        |relation, budget| {
+                            entered = true;
+                            assert!(relation.access(0, budget)?.is_some());
+                            Err(ProductionSourceOutputErrorV1::Invalid(
+                                "identity P callback marker",
+                            ))
+                        },
+                    );
+                    assert!(entered);
+                    assert!(matches!(
+                        result,
+                        Err(ProductionSourceOutputErrorV1::Invalid(
+                            "identity P callback marker"
+                        ))
+                    ));
+                    assert_eq!(budget.storage(), floor);
+                    assert!(budget.work() > before);
+                    entered = false;
+                    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        analysis.with_physical_address_relation_v1::<()>(
+                            budget,
+                            |relation, budget| {
+                                assert!(relation.access(0, budget)?.is_some());
+                                entered = true;
+                                std::panic::panic_any("identity P panic marker")
+                            },
+                        )
+                    }))
+                    .expect_err("original callback panic must resume");
+                    assert!(entered);
+                    assert_eq!(
+                        panic.downcast_ref::<&'static str>(),
+                        Some(&"identity P panic marker")
+                    );
+                    assert_eq!(budget.storage(), floor);
+                    let held = STORAGE_LIMIT - floor - 1;
+                    budget.reserve_storage(held).unwrap();
+                    let denied_floor = budget.storage();
+                    entered = false;
+                    let denied = analysis.with_physical_address_relation_v1(budget, |_, _| {
+                        entered = true;
+                        Ok(())
+                    });
+                    assert!(!entered);
+                    assert!(matches!(
+                        denied,
+                        Err(ProductionSourceOutputErrorV1::Resource(
+                            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Storage(
+                                _
+                            )
+                        ))
+                    ));
+                    assert_eq!(budget.storage(), denied_floor);
+                    let failure = budget.failed_storage();
+                    assert!(failure.is_some());
+                    budget.release_storage(held).unwrap();
+                    analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                        assert!(relation.access(0, budget)?.is_some());
+                        Ok(())
+                    })?;
+                    assert_eq!(budget.failed_storage(), failure);
+                    assert_eq!(budget.storage(), floor);
+                    Ok(())
+                })
+            })
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn identity_physical_rejects_distinct_ledger_and_missing_live_relation_storage() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_fixture(17, false, profile, |view, root, budget| {
+                complete(view, root, budget, |analysis, budget| {
+                    analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                        let live = budget.storage();
+                        let mut foreign_work = Work::new(LIMIT);
+                        let mut foreign = Budget::new(&mut foreign_work, STORAGE_LIMIT);
+                        foreign.reserve_storage(live).unwrap();
+                        assert!(matches!(relation.access(0, &mut foreign),
+                            Err(ProductionSourceOutputErrorV1::Resource(
+                                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting))));
+                        assert_eq!(foreign.storage(), live);
+                        // Deliberately violate and restore the caller reservation contract;
+                        // this does not replace the original ledger or any owner.
+                        budget.release_storage(1).unwrap();
+                        assert!(matches!(relation.access(0, budget),
+                            Err(ProductionSourceOutputErrorV1::Resource(
+                                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting))));
+                        budget.reserve_storage(1).unwrap();
+                        assert!(relation.access(0, budget)?.is_some());
+                        assert_eq!(budget.storage(), live);
+                        Ok(())
+                    })
+                })
+            }).unwrap();
+        }
+    }
+
+    #[test]
+    fn identity_physical_refuses_ranked_width_mismatch_after_completed_d() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_fixture(17, true, profile, |view, root, budget| {
+                let original = candidate(root);
+                let changed = physical_address_width_mutation_v1(&original);
+                let candidates = [Candidate {
+                    lowering: &changed,
+                    ..original
+                }];
+                let floor = budget.storage();
+                let mut entered_d = false;
+                let mut entered_p = false;
+                let result = view.with_conditional_memory_control_coverage_v1(
+                    &candidates,
+                    budget,
+                    |control, budget| {
+                        view.with_canonical_store_analysis_v1(
+                            &candidates,
+                            control,
+                            budget,
+                            |analyses, budget| {
+                                entered_d = true;
+                                analyses[0].with_physical_address_relation_v1(budget, |_, _| {
+                                    entered_p = true;
+                                    Ok(())
+                                })
+                            },
+                        )
+                    },
+                );
+                assert!(entered_d);
+                assert!(!entered_p);
+                assert!(matches!(
+                    result,
+                    Err(ProductionSourceOutputErrorV1::Invalid(
+                        "physical address requires one exact scalar slice extent and width"
+                    ))
+                ));
+                assert_eq!(budget.storage(), floor);
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn identity_physical_never_admits_a_duplicate_source_store_roster() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            with_fixture_stores(29, true, profile, 2, |view, root, budget| {
+                assert_eq!(root.access_sources.len(), 2);
+                let saved = root.access_sources[1];
+                root.access_sources[1] = root.access_sources[0];
+                let floor = budget.storage();
+                let mut entered = false;
+                let refused = complete(view, root, budget, |analysis, budget| {
+                    analysis.with_physical_address_relation_v1(budget, |_, _| {
+                        entered = true;
+                        Ok(())
+                    })
+                });
+                assert!(!entered);
+                // D or the complete Store partition may reject before P.
+                assert!(refused.is_err());
+                assert_eq!(budget.storage(), floor);
+                root.access_sources[1] = saved;
+                complete(view, root, budget, |analysis, budget| {
+                    analysis.with_physical_address_relation_v1(budget, |relation, _| {
+                        entered = true;
+                        assert_eq!(relation.global_access_count(), 2);
+                        Ok(())
+                    })
+                })?;
+                assert!(entered);
+                assert_eq!(budget.storage(), floor);
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn identity_physical_access_work_boundary_propagates_without_replacing_ledger() {
+        for profile in [Profile::Gfx942, Profile::Gfx950] {
+            for allowance in [22, 23] {
+                let mut entered = false;
+                let result = with_fixture(17, false, profile, |view, root, budget| {
+                    let floor = budget.storage();
+                    let result = complete(view, root, budget, |analysis, budget| {
+                        analysis.with_physical_address_relation_v1(budget, |relation, budget| {
+                            entered = true;
+                            let live = budget.storage();
+                            // Existing access contract: live-analysis 19 + relation 2 +
+                            // one binary-search step and one ordinal comparison.
+                            budget
+                                .charge_work(LIMIT - budget.work() - allowance)
+                                .unwrap();
+                            let before = budget.work();
+                            let query = relation.access(0, budget);
+                            if allowance == 23 {
+                                assert!(query.as_ref().is_ok_and(|row| row.is_some()));
+                                assert_eq!(budget.work() - before, 23);
+                            } else {
+                                assert!(matches!(query,
+                                    Err(ProductionSourceOutputErrorV1::SourceOrigin(
+                                        fe2o3_lower_mir_kernel::SemanticKirAssertOriginErrorV1::Resource(
+                                            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Work(error))))
+                                        if error.actual() == LIMIT + 1 && error.limit() == LIMIT));
+                            }
+                            assert_eq!(budget.storage(), live);
+                            query.map(|_| ())
+                        })
+                    });
+                    assert_eq!(budget.storage(), floor);
+                    result
+                });
+                assert!(entered);
+                // Completion still has its own paid liveness checks. No reset or
+                // continuation success is inferred from the inner query result.
+                if allowance == 22 {
+                    assert!(result.is_err());
+                }
+            }
+        }
+    }
+}
+
 // Genuine source/N/B/O tests. Component-only arithmetic/accounting cases live
 // in the lowerer child; no completed analysis is constructed by these tests.
 fn with_physical_address_source_v1(

@@ -15,6 +15,34 @@ struct SourceOutputPhysicalAddressRowV1 {
     alignment: u32,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct SourceOutputIdentityPhysicalKeyV1 {
+    ranked_index: ProductionRankedValueV1,
+    ranked_extent: ProductionRankedValueV1,
+    source_slice: SemanticLocalIdV1,
+    output_slice: ValueId,
+    pointer: SourceOutputAddressDefV1,
+    pointer_value: Option<ValueId>,
+    gep: SourceOutputAddressOpV1,
+    offset: SourceOutputAddressDefV1,
+    allocation: SourceOutputAddressDefV1,
+}
+
+fn source_output_identity_physical_key_v1(
+    sealed: SourceOutputIdentityPhysicalKeyV1,
+    actual: SourceOutputIdentityPhysicalKeyV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    budget.charge_work(16).map_err(Error::Resource)?;
+    if sealed != actual {
+        return Err(Error::Invalid(
+            "physical identity getter own address differs",
+        ));
+    }
+    Ok(())
+}
+
 /// Scoped correspondence of ordinary physical O addresses to the same checked
 /// memory projection. This is not bounds, alias, overflow, race, formal-memory,
 /// reference or native-admission proof. The current grammar is contiguous
@@ -907,6 +935,47 @@ fn source_output_address_access_v1(
                 }
                 let (gep, offset) =
                     gep.ok_or(Error::Invalid("physical slice access lacks one GEP"))?;
+                if analysis.control.candidates[analysis.control_ordinal]
+                    .identity_address
+                    .is_some()
+                {
+                    let (identity, own) = analysis
+                        .control
+                        .identity_address_use_v1(
+                            analysis.view,
+                            analysis.candidate,
+                            analysis.control_ordinal,
+                            *access.source(),
+                            row.coordinate,
+                            context.inner.budget,
+                        )?
+                        .ok_or(Error::Invalid("physical identity own-use seal absent"))?;
+                    source_output_identity_physical_key_v1(
+                        SourceOutputIdentityPhysicalKeyV1 {
+                            ranked_index: identity.ranked_index,
+                            ranked_extent: identity.ranked_extent,
+                            source_slice: identity.slice,
+                            output_slice: identity.output_slice,
+                            pointer: own.pointer.definition,
+                            pointer_value: Some(own.pointer.value),
+                            gep: own.gep,
+                            offset: identity.invocation.output,
+                            allocation: own.allocation,
+                        },
+                        SourceOutputIdentityPhysicalKeyV1 {
+                            ranked_index: indices[0],
+                            ranked_extent: extent,
+                            source_slice: length.source_local(),
+                            output_slice: length.output_value(),
+                            pointer: memory_pointer.coordinate,
+                            pointer_value: memory_pointer.value,
+                            gep,
+                            offset,
+                            allocation: allocation.coordinate,
+                        },
+                        context.inner.budget,
+                    )?;
+                }
                 assert_origin_push_v1(
                     &mut work.rows,
                     SourceOutputPhysicalAddressRowV1 {
@@ -1067,3 +1136,97 @@ impl<'source, 'output> ProductionScopedCanonicalStoreAnalysisV1<'_, 'source, 'ou
 include!("production_semantic_kir_v1/tests/production_source_output_physical_address_v1_tests.rs");
 
 include!("production_source_output_functional_address_v1.rs");
+
+#[cfg(test)]
+mod identity_physical_key_components_v1 {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrWorkBudgetV1 as Work, CanonicalKirBlockCoordinateV1 as Block,
+        CanonicalKirFunctionCoordinateV1 as Function,
+    };
+
+    // Inert equality keys only. These are not source/control/address owners.
+    fn key() -> SourceOutputIdentityPhysicalKeyV1 {
+        let operation = SourceOutputAddressOpV1 {
+            block: Block {
+                function: Function(2),
+                block: 3,
+            },
+            operation: 4,
+        };
+        let definition = SourceOutputAddressDefV1::Result {
+            operation,
+            result: 0,
+        };
+        SourceOutputIdentityPhysicalKeyV1 {
+            ranked_index: ProductionRankedValueV1::Argument(0),
+            ranked_extent: ProductionRankedValueV1::Argument(1),
+            source_slice: SemanticLocalIdV1::from_index(2),
+            output_slice: ValueId(3),
+            pointer: definition,
+            pointer_value: Some(ValueId(4)),
+            gep: operation,
+            offset: definition,
+            allocation: definition,
+        }
+    }
+
+    #[test]
+    fn identity_physical_key_rejects_each_own_use_axis_independently() {
+        let expected = key();
+        for axis in 0..10 {
+            let mut actual = expected;
+            let foreign = SourceOutputAddressDefV1::FunctionArgument {
+                function: Function(7),
+                argument: 0,
+            };
+            match axis {
+                0 => actual.ranked_index = ProductionRankedValueV1::Argument(9),
+                1 => actual.ranked_extent = ProductionRankedValueV1::Argument(9),
+                2 => actual.source_slice = SemanticLocalIdV1::from_index(9),
+                3 => actual.output_slice = ValueId(9),
+                4 => actual.pointer = foreign,
+                5 => actual.pointer_value = Some(ValueId(9)),
+                6 => actual.gep.block.function = Function(9),
+                7 => actual.offset = foreign,
+                8 => actual.allocation = foreign,
+                9 => actual.pointer_value = None,
+                _ => unreachable!(),
+            }
+            let mut work = Work::new(32);
+            let mut budget = AssertOriginBudgetV1::new(&mut work, 0);
+            assert!(matches!(
+                source_output_identity_physical_key_v1(expected, actual, &mut budget),
+                Err(ProductionSourceOutputErrorV1::Invalid(
+                    "physical identity getter own address differs"
+                ))
+            ));
+            assert_eq!(budget.work(), 16);
+            source_output_identity_physical_key_v1(expected, expected, &mut budget).unwrap();
+            assert_eq!(budget.work(), 32);
+            assert_eq!(budget.storage(), 0);
+        }
+    }
+
+    #[test]
+    fn identity_physical_key_prepays_exact_fixed_query_work_before_comparing() {
+        for limit in [15, 16] {
+            let mut work = Work::new(limit);
+            let mut budget = AssertOriginBudgetV1::new(&mut work, 0);
+            let result = source_output_identity_physical_key_v1(key(), key(), &mut budget);
+            if limit == 16 {
+                result.unwrap();
+                assert_eq!(budget.work(), 16);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ProductionSourceOutputErrorV1::Resource(
+                        AssertOriginResourceV1::Work(error)
+                    )) if error.actual() == 16 && error.limit() == 15
+                ));
+                assert_eq!(budget.work(), 0);
+            }
+            assert_eq!(budget.storage(), 0);
+        }
+    }
+}

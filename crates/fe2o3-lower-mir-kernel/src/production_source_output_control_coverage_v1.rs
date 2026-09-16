@@ -72,8 +72,8 @@ struct SourceOutputProjectionInvocationV1 {
     symbol: u32,
     first_use: usize,
     end_use: usize,
-    // This first identity-getter increment supplies D only, not the later
-    // physical/full-ranked payload-address substitution.
+    // Private address substitution also requires the candidate's retained
+    // own-Store seal. Public leaf queries and full-ranked joins remain closed.
     identity_getter: bool,
 }
 
@@ -132,6 +132,7 @@ struct SourceOutputControlCandidateIdentityV1<'a> {
     effects: &'a [ProductionRankedExecutableEffectSourceV1],
     claims: &'a ProductionProjectionControlCandidateV1,
     arguments: std::ops::Range<usize>,
+    identity_address: Option<SourceOutputIdentityAddressV1>,
 }
 
 /// Conditional memory-path coverage of exact borrowed inputs. Actual O is the
@@ -348,6 +349,35 @@ impl ProductionConditionalMemoryControlCoverageV1<'_> {
         budget: &mut AssertOriginBudgetV1<'_>,
     ) -> Result<Option<SourceOutputAddressLeafV1<'_>>, ProductionSourceOutputErrorV1> {
         self.require_candidate_at_v1(view, candidate, ordinal, budget)?;
+        if let Some(identity) = &self.candidates[ordinal].identity_address
+            && identity.ranked_index == ranked_value
+        {
+            use ProductionSourceOutputErrorV1 as Error;
+            budget.charge_work(12).map_err(Error::Resource)?;
+            let arguments = self
+                .arguments
+                .get(self.candidates[ordinal].arguments.clone())
+                .ok_or(Error::Invalid("identity address argument span absent"))?;
+            let found = assert_origin_find_v1(arguments, budget, |row, budget| {
+                budget.charge_work(1)?;
+                Ok(row.ranked_value.cmp(&ranked_value))
+            })
+            .map_err(Error::SourceOrigin)?
+            .ok_or(Error::Invalid("identity address index anchor absent"))?;
+            let row = &arguments[found];
+            let SourceOutputProjectionLeafOriginV1::Invocation(invocation) = &row.origin else {
+                return Err(Error::Invalid("identity address index is not Invocation"));
+            };
+            if !invocation.identity_getter
+                || *invocation != identity.invocation
+                || row.source_local != identity.witness
+                || row.component != ProductionProjectionArgumentComponentV1::Scalar
+                || row.scalar != source_output_address_u64_v1()
+            {
+                return Err(Error::Invalid("identity address sealed index differs"));
+            }
+            return Ok(Some(SourceOutputAddressLeafV1::Invocation(row, invocation)));
+        }
         source_output_control_leaf_rows_v1(
             self.arguments,
             self.literal_uses,
@@ -355,6 +385,80 @@ impl ProductionConditionalMemoryControlCoverageV1<'_> {
             ranked_value,
             budget,
         )
+    }
+
+    fn identity_address_use_v1(
+        &self,
+        view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
+        candidate: &ProductionCanonicalMemoryAnalysisCandidateV1<'_>,
+        ordinal: usize,
+        source: ProductionRankedAccessSourceV1,
+        operation: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> Result<
+        Option<(
+            &SourceOutputIdentityAddressV1,
+            &SourceOutputIdentityStoreAddressV1,
+        )>,
+        ProductionSourceOutputErrorV1,
+    > {
+        use ProductionSourceOutputErrorV1 as Error;
+        self.require_candidate_at_v1(view, candidate, ordinal, budget)?;
+        budget.charge_work(16).map_err(Error::Resource)?;
+        let Some(identity) = &self.candidates[ordinal].identity_address else {
+            return Ok(None);
+        };
+        let statement = source
+            .semantic_statement()
+            .ok_or(Error::Invalid("identity address source statement absent"))?;
+        if source.semantic_access_ordinal() != 0 {
+            return Err(Error::Invalid(
+                "identity address source access ordinal differs",
+            ));
+        }
+        let key = (source.semantic_block(), statement);
+        let found = assert_origin_find_v1(&identity.stores, budget, |row, budget| {
+            budget.charge_work(3)?;
+            Ok(row.site.cmp(&key))
+        })
+        .map_err(Error::SourceOrigin)?
+        .ok_or(Error::Invalid("identity address own source Store absent"))?;
+        let row = &identity.stores[found];
+        let address = row
+            .address
+            .as_ref()
+            .ok_or(Error::Invalid("identity address own Store seal absent"))?;
+        if !row.seen
+            || address.output != operation
+            || address.original.block.function != self.candidates[ordinal].canonical
+            || address.output.block.function != self.candidates[ordinal].canonical
+            || address.pointer.coordinate
+                != (fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand {
+                    operation,
+                    operand: 0,
+                })
+        {
+            return Err(Error::Invalid(
+                "identity address own Store occurrence differs",
+            ));
+        }
+        let original = view
+            .source
+            .executable()
+            .module()
+            .functions
+            .get(address.original.block.function.0 as usize)
+            .and_then(|function| function.body.as_ref())
+            .and_then(|body| body.blocks.get(address.original.block.block as usize))
+            .and_then(|block| block.operations.get(address.original.operation as usize))
+            .ok_or(Error::Invalid("identity address original Store absent"))?;
+        if !matches!(original.kind, OperationKind::Store { pointer, .. } if pointer == identity.original_pointer)
+        {
+            return Err(Error::Invalid(
+                "identity address original getter pointer differs",
+            ));
+        }
+        Ok(Some((identity, address)))
     }
 
     fn address_inventory_v1(
@@ -2513,7 +2617,7 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                             &mut context,
                         )?;
                     }
-                    if let Some(identity) = &identity {
+                    if let Some(identity) = &mut identity {
                         source_output_identity_stores_v1(
                             self,
                             candidate,
@@ -2524,29 +2628,14 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                     }
                     Ok(())
                 })?;
-                if let Some(identity) = identity {
-                    let bytes = identity
-                        .source
-                        .stores
-                        .capacity()
-                        .checked_mul(std::mem::size_of::<SourceOutputIdentityStoreV1>())
-                        .and_then(|n| {
-                            identity
-                                .source
-                                .some_region
-                                .capacity()
-                                .checked_mul(std::mem::size_of::<bool>())
-                                .and_then(|m| n.checked_add(m))
-                        })
-                        .and_then(|n| {
-                            n.checked_add(
-                                std::mem::size_of::<Option<SourceOutputIdentityGetterV1>>(),
-                            )
-                        })
-                        .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?;
-                    drop(identity);
-                    budget.release_storage(bytes).map_err(Error::Resource)?;
-                }
+                let identity_address = identity
+                    .map(|identity| source_output_identity_address_move_v1(identity, budget))
+                    .transpose()?;
+                let moved_header = if identity_address.is_some() {
+                    std::mem::size_of::<Option<SourceOutputIdentityAddressV1>>()
+                } else {
+                    0
+                };
                 assert_origin_push_v1(
                     &mut identities,
                     SourceOutputControlCandidateIdentityV1 {
@@ -2559,10 +2648,18 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                         effects: candidate.executable_effect_sources,
                         claims: candidate.control,
                         arguments: first..arguments.len(),
+                        identity_address,
                     },
                     budget,
                 )
                 .map_err(Error::SourceOrigin)?;
+                if moved_header != 0 {
+                    // The moved summary header now occupies the paid candidate
+                    // slot; its Store capacity stays reserved through the scope.
+                    budget
+                        .release_storage(moved_header)
+                        .map_err(Error::Resource)?;
+                }
             }
             let coverage = ProductionConditionalMemoryControlCoverageV1 {
                 view_identity: std::ptr::from_ref(self).cast::<()>(),
@@ -4143,6 +4240,26 @@ struct SourceOutputIdentityStoreV1 {
     site: (u32, u32),
     operand: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
     seen: bool,
+    address: Option<SourceOutputIdentityStoreAddressV1>,
+}
+
+struct SourceOutputIdentityStoreAddressV1 {
+    original: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+    output: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+    pointer: SourceOutputControlUseIdentityV1,
+    gep: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+    allocation: fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1,
+}
+
+struct SourceOutputIdentityAddressV1 {
+    invocation: SourceOutputProjectionInvocationV1,
+    witness: SemanticLocalIdV1,
+    slice: SemanticLocalIdV1,
+    original_pointer: ValueId,
+    output_slice: ValueId,
+    ranked_index: ProductionRankedValueV1,
+    ranked_extent: ProductionRankedValueV1,
+    stores: Vec<SourceOutputIdentityStoreV1>,
 }
 
 struct SourceOutputIdentitySourceV1 {
@@ -4161,15 +4278,256 @@ struct SourceOutputIdentitySourceV1 {
 
 struct SourceOutputIdentityGetterV1 {
     source: SourceOutputIdentitySourceV1,
+    invocation: SourceOutputProjectionInvocationV1,
+    witness: SemanticLocalIdV1,
     original_compare: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
     original_pointer: ValueId,
     output_compare: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
     output_condition: ValueId,
     output_index: ValueId,
     output_slice: ValueId,
+    output_allocation: fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1,
     ranked_index: ProductionRankedValueV1,
     ranked_extent: ProductionRankedValueV1,
     source_argument: u32,
+}
+
+fn source_output_identity_address_move_v1(
+    identity: SourceOutputIdentityGetterV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<SourceOutputIdentityAddressV1, ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    // Twelve fixed fields plus three transfer/drop steps; this does not scan
+    // the source or Store list again, and the existing allocation is moved.
+    budget.charge_work(15).map_err(Error::Resource)?;
+    budget
+        .reserve_storage(std::mem::size_of::<Option<SourceOutputIdentityAddressV1>>())
+        .map_err(Error::Resource)?;
+    let released = identity
+        .source
+        .some_region
+        .capacity()
+        .checked_mul(std::mem::size_of::<bool>())
+        .and_then(|bytes| {
+            bytes.checked_add(std::mem::size_of::<Option<SourceOutputIdentityGetterV1>>())
+        })
+        .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?;
+    let SourceOutputIdentityGetterV1 {
+        source,
+        invocation,
+        witness,
+        original_pointer,
+        output_slice,
+        ranked_index,
+        ranked_extent,
+        ..
+    } = identity;
+    let SourceOutputIdentitySourceV1 {
+        slice,
+        stores,
+        some_region,
+        ..
+    } = source;
+    let address = SourceOutputIdentityAddressV1 {
+        invocation,
+        witness,
+        slice,
+        original_pointer,
+        output_slice,
+        ranked_index,
+        ranked_extent,
+        stores,
+    };
+    drop(some_region);
+    budget.release_storage(released).map_err(Error::Resource)?;
+    Ok(address)
+}
+
+#[cfg(test)]
+mod identity_address_transfer_components_v1 {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrWorkBudgetV1 as Work, CanonicalKirBlockCoordinateV1 as Block,
+        CanonicalKirFunctionCoordinateV1 as Function,
+    };
+
+    const PREFIX: usize = 37;
+
+    // Unauthenticated private data for ownership/accounting tests only. This
+    // never constructs a public control, completed analysis or address owner.
+    fn descriptor() -> SourceOutputIdentityGetterV1 {
+        let operation = fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1 {
+            block: Block {
+                function: Function(2),
+                block: 3,
+            },
+            operation: 4,
+        };
+        let definition = fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1::Result {
+            operation,
+            result: 0,
+        };
+        let anchor = SourceOutputInvocationSourceAnchorV1 {
+            get: fe2o3_mir_model::SsaEdgeIdV1::new(SsaBlockIdV1::new(3), 0),
+            producer: fe2o3_mir_model::SsaEdgeIdV1::new(SsaBlockIdV1::new(2), 0),
+            raw: SsaValueV1::Definition(fe2o3_mir_model::SsaDefinitionIdV1::new(4)),
+            witness: SsaValueV1::Definition(fe2o3_mir_model::SsaDefinitionIdV1::new(5)),
+        };
+        let stores = (0..3)
+            .map(|statement| SourceOutputIdentityStoreV1 {
+                site: (3, statement),
+                operand: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1::StoreDestination,
+                seen: true,
+                address: None,
+            })
+            .collect();
+        SourceOutputIdentityGetterV1 {
+            source: SourceOutputIdentitySourceV1 {
+                anchor,
+                slice: SemanticLocalIdV1::from_index(1),
+                discriminator: SemanticLocalIdV1::from_index(6),
+                discriminator_site: (3, 0),
+                switch: SemanticBlockIdV1::from_index(3),
+                some: SemanticBlockIdV1::from_index(4),
+                none: SemanticBlockIdV1::from_index(5),
+                some_ordinal: 1,
+                fallback: None,
+                stores,
+                some_region: vec![false, true, true, false, false],
+            },
+            invocation: SourceOutputProjectionInvocationV1 {
+                source_index: 0,
+                source: anchor,
+                original: definition,
+                output: definition,
+                symbol: 7,
+                first_use: 0,
+                end_use: 0,
+                identity_getter: true,
+            },
+            witness: SemanticLocalIdV1::from_index(2),
+            original_compare: operation,
+            original_pointer: ValueId(8),
+            output_compare: operation,
+            output_condition: ValueId(9),
+            output_index: ValueId(10),
+            output_slice: ValueId(11),
+            output_allocation: definition,
+            ranked_index: ProductionRankedValueV1::Argument(0),
+            ranked_extent: ProductionRankedValueV1::Argument(1),
+            source_argument: 0,
+        }
+    }
+
+    fn charges(value: &SourceOutputIdentityGetterV1) -> (usize, usize, usize) {
+        let stores =
+            value.source.stores.capacity() * std::mem::size_of::<SourceOutputIdentityStoreV1>();
+        let old = std::mem::size_of::<Option<SourceOutputIdentityGetterV1>>()
+            + stores
+            + value.source.some_region.capacity() * std::mem::size_of::<bool>();
+        let new = std::mem::size_of::<Option<SourceOutputIdentityAddressV1>>();
+        (old, new, stores)
+    }
+
+    #[test]
+    fn identity_address_transfer_moves_store_allocation_and_releases_exact_old_owners() {
+        let value = descriptor();
+        let (old, new, stores) = charges(&value);
+        let pointer = value.source.stores.as_ptr();
+        let capacity = value.source.stores.capacity();
+        let mut work = Work::new(15);
+        let mut budget = AssertOriginBudgetV1::new(&mut work, PREFIX + old + new);
+        budget.reserve_storage(PREFIX).unwrap();
+        source_output_global_scratch_scope_v1(&mut budget, |budget| {
+            budget.reserve_storage(old).unwrap();
+            let result = source_output_identity_address_move_v1(value, budget)?;
+            assert_eq!(budget.work(), 15);
+            assert_eq!(budget.storage(), PREFIX + new + stores);
+            assert_eq!(budget.peak_storage(), PREFIX + old + new);
+            assert_eq!(result.stores.as_ptr(), pointer);
+            assert_eq!(result.stores.capacity(), capacity);
+            assert_eq!(result.stores.len(), 3);
+            assert_eq!(result.witness, SemanticLocalIdV1::from_index(2));
+            assert_eq!(result.slice, SemanticLocalIdV1::from_index(1));
+            assert_eq!(result.original_pointer, ValueId(8));
+            assert_eq!(result.output_slice, ValueId(11));
+            drop(result);
+            budget.release_storage(new + stores).unwrap();
+            assert_eq!(budget.storage(), PREFIX);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(budget.storage(), PREFIX);
+    }
+
+    #[test]
+    fn identity_address_transfer_new_header_denial_drops_input_then_restores_floor() {
+        let value = descriptor();
+        let (old, new, _) = charges(&value);
+        let mut work = Work::new(15);
+        let mut budget = AssertOriginBudgetV1::new(&mut work, PREFIX + old + new - 1);
+        budget.reserve_storage(PREFIX).unwrap();
+        let mut completed = false;
+        let result: Result<(), ProductionSourceOutputErrorV1> =
+            source_output_global_scratch_scope_v1(&mut budget, |budget| {
+                budget.reserve_storage(old).unwrap();
+                let moved = source_output_identity_address_move_v1(value, budget)?;
+                completed = true;
+                drop(moved);
+                Ok(())
+            });
+        assert!(!completed);
+        assert!(
+            matches!(result, Err(ProductionSourceOutputErrorV1::Resource(
+            AssertOriginResourceV1::Storage(error)))
+            if error.actual() == PREFIX + old + new && error.limit() == PREFIX + old + new - 1)
+        );
+        assert_eq!(budget.work(), 15);
+        assert_eq!(budget.storage(), PREFIX);
+        assert_eq!(budget.failed_storage(), Some(PREFIX + old + new));
+    }
+
+    #[test]
+    fn identity_address_transfer_post_allocation_push_denial_restores_outer_floor() {
+        let value = descriptor();
+        let (old, new, stores) = charges(&value);
+        // Move 15; growth of an empty destination vector 1; push 1 is denied.
+        let mut work = Work::new(16);
+        let mut budget = AssertOriginBudgetV1::new(&mut work, 1_000_000);
+        budget.reserve_storage(PREFIX).unwrap();
+        let mut reached_allocation = false;
+        let result: Result<(), ProductionSourceOutputErrorV1> =
+            source_output_global_scratch_scope_v1(&mut budget, |budget| {
+                budget.reserve_storage(old).unwrap();
+                let moved = source_output_identity_address_move_v1(value, budget)?;
+                assert_eq!(budget.storage(), PREFIX + new + stores);
+                let mut destination = Vec::new();
+                let result = assert_origin_push_v1(&mut destination, moved, budget);
+                assert!(destination.is_empty());
+                assert!(destination.capacity() >= 4);
+                reached_allocation = true;
+                assert_eq!(
+                    budget.storage(),
+                    PREFIX
+                        + new
+                        + stores
+                        + destination.capacity()
+                            * std::mem::size_of::<SourceOutputIdentityAddressV1>()
+                );
+                // The failed push consumed/dropped its value. The allocated
+                // destination is also dropped before scratch-floor restoration.
+                drop(destination);
+                result.map_err(ProductionSourceOutputErrorV1::SourceOrigin)
+            });
+        assert!(reached_allocation);
+        assert!(
+            matches!(result, Err(ProductionSourceOutputErrorV1::SourceOrigin(
+            SemanticKirAssertOriginErrorV1::Resource(AssertOriginResourceV1::Work(error))))
+            if error.actual() == 17 && error.limit() == 16)
+        );
+        assert_eq!(budget.work(), 16);
+        assert_eq!(budget.storage(), PREFIX);
+    }
 }
 
 fn source_output_identity_event_v1<'a>(
@@ -4779,6 +5137,7 @@ fn source_output_identity_source_v1(
                     site: (block as u32, statement as u32),
                     operand,
                     seen: false,
+                    address: None,
                 },
                 budget,
             )
@@ -5442,34 +5801,36 @@ fn source_output_identity_getter_v1(
         budget,
     )
     .map_err(Error::SourceOrigin)?;
+    let invocation = SourceOutputProjectionInvocationV1 {
+        source_index,
+        source: source.anchor,
+        original,
+        output,
+        symbol,
+        first_use,
+        end_use: uses.len(),
+        identity_getter: true,
+    };
     let row = SourceOutputProjectionArgumentV1 {
         ranked_value: claim.ranked_value,
         source_local: claim.source_local,
         component: claim.component,
         scalar: source_output_address_u64_v1(),
-        origin: SourceOutputProjectionLeafOriginV1::Invocation(
-            SourceOutputProjectionInvocationV1 {
-                source_index,
-                source: source.anchor,
-                original,
-                output,
-                symbol,
-                first_use,
-                end_use: uses.len(),
-                identity_getter: true,
-            },
-        ),
+        origin: SourceOutputProjectionLeafOriginV1::Invocation(invocation),
     };
     Ok((
         row,
         SourceOutputIdentityGetterV1 {
             source,
+            invocation,
+            witness: claim.source_local,
             original_compare,
             original_pointer: gep.results[0].id,
             output_compare,
             output_condition,
             output_index,
             output_slice: formal.output_value,
+            output_allocation: formal.output,
             ranked_index: claim.ranked_value,
             ranked_extent: extent_claim.ranked_value,
             source_argument,
@@ -5849,7 +6210,7 @@ fn source_output_identity_edges_v1(
 fn source_output_identity_stores_v1(
     view: &ProductionSourceOutputOccurrencesV1<'_, '_>,
     candidate: &ProductionCanonicalMemoryAnalysisCandidateV1<'_>,
-    identity: &SourceOutputIdentityGetterV1,
+    identity: &mut SourceOutputIdentityGetterV1,
     inventory: &fe2o3_kernel_analysis::CanonicalKirInventoryV1<'_>,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> Result<(), ProductionSourceOutputErrorV1> {
@@ -5928,12 +6289,12 @@ fn source_output_identity_stores_v1(
                 "identity Store source allocation or function differs",
             ));
         }
-        let original = before
+        let original_store = before
             .blocks
             .get(original.block.block as usize)
             .and_then(|block| block.operations.get(original.operation as usize))
             .ok_or(Error::Invalid("identity original Store absent"))?;
-        if !matches!(original.kind, OperationKind::Store { pointer, .. } if pointer == identity.original_pointer)
+        if !matches!(original_store.kind, OperationKind::Store { pointer, .. } if pointer == identity.original_pointer)
         {
             return Err(Error::Invalid(
                 "identity original Store does not use its getter pointer",
@@ -5997,6 +6358,20 @@ fn source_output_identity_stores_v1(
             return Err(Error::Invalid(
                 "identity output Store uses a different Slice allocation",
             ));
+        }
+        budget.charge_work(12).map_err(Error::Resource)?;
+        if identity.source.stores[found]
+            .address
+            .replace(SourceOutputIdentityStoreAddressV1 {
+                original,
+                output: operation,
+                pointer: actual,
+                gep: gep_op,
+                allocation: identity.output_allocation,
+            })
+            .is_some()
+        {
+            return Err(Error::Invalid("identity own Store address seal duplicated"));
         }
     }
     Ok(())
