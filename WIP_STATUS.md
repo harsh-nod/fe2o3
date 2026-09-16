@@ -30,11 +30,20 @@ hardware, publication or launch authority follows from these observations.
   Source/helper stability checks passed and private build/driver scratch was
   removed. The earlier pilot completed six tests but its observer rejected the
   artifact; neither pilot is accepted tutorial evidence.
-- A real managed batch run, successful standalone observer run, compiler and
+- The standalone VecAdd observer passed on exact commit
+  `70a55ac76edd4ccf0030d3643080a0145fdfb2d9`: all six reference tests passed,
+  no failures or ignored tests, all seven child phases exited zero, and no
+  observer errors were reported. It took 1,077.007 seconds within the unchanged
+  1,200-second limit. Source/helper checks passed; the private build/driver
+  directories and matching child processes were absent after cleanup.
+- That observation describes CPU reference behavior only. Its artifact digest
+  is post-execution on-disk, not sealed executed-image provenance. All authority
+  and qualification flags remain false; a real managed batch, compiler and
   simulator corpus qualification, and applicable hardware checks remain open.
 - The explicit bootstrap-host experiment is included: the shared driver
   bootstrap uses the exact discovered host target. All 45 protocol components
-  passed locally; real managed qualification and any speedup remain unproven.
+  passed locally. The standalone result above does not establish a speedup or
+  qualify the batch mode.
   Managed suite commands, profiles, jobs, deadlines and parser/verification
   gates are unchanged.
 - The approved Verus runtime qualification remains deferred, not passed.
