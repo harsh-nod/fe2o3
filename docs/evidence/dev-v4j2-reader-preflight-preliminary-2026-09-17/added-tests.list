@@ -1,0 +1,5 @@
+fe2o3_runtime_model test context_read_leases::tests::acquisition_group_counts_and_selected_slots_are_checked_before_commit ... ok
+fe2o3_runtime_model test context_read_leases::tests::acquisition_simultaneous_faults_follow_header_then_member_order ... ok
+fe2o3_runtime_model test context_read_leases::tests::constructor_contents_and_reader_capacity_error_priority_are_exact ... ok
+fe2o3_runtime_model test context_read_leases::tests::read_validation_simultaneous_faults_preserve_exact_precedence ... ok
+fe2o3_runtime_model test context_read_leases::tests::release_simultaneous_faults_follow_evidence_roster_headroom_then_member_order ... ok

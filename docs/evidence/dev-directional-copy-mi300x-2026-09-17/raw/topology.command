@@ -1,0 +1,1 @@
+ssh mi300x python3\ -I\ /home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/benchmarks/runtime_gfx942/r26-host-guard.py\ topology\ --gpu-index\ 1\ --pci-bdf\ 0000:26:00.0\ --unique-id\ 0xab83d2ffef0d3cdf 

@@ -1,0 +1,389 @@
+/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/target/release/examples/gfx942-runtime-directional-window-benchmark: OK
+/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/async-copy-hip: OK
+/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/async-copy-hsa: OK
+context diagnostic=shared-host-directional-copy git_commit=ed5b5d64bf95116c21e9bf350c30132ff2bbb524 gpu=1 unique_id=0xab83d2ffef0d3cdf bytes=268435456 depth=1 warmups=3 samples=10 repetitions=3 optional_context_journal=disabled
+phase repetition=1 backend=kfd
+2026-09-17T18:23:29.394022722Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+backend=kfd schema=fe2o3.async-copy-benchmark.v1 unique_id=ab83d2ffef0d3cdf profile=directional bytes=268435456 depth=1 queue_depth=1 batch_size=1 direction=h2d-then-d2h concurrency=1 configured_queues=1 doorbells_per_batch=2 packets_per_transfer=65 windows_per_transfer=2 max_packets_per_window=63 warmups=3 samples=10 h2d_engine_index=1 d2h_engine_index=0 h2d_p50_ns=6061707 h2d_p95_ns=6163008 h2d_p50_GBps=44.284 d2h_p50_ns=5067380 d2h_p95_ns=5076764 d2h_p50_GBps=52.973 completion=facade-wait-and-explicit-continuation-flush teardown=explicit
+completed repetition=1 backend=kfd exit=0
+2026-09-17T18:24:09.781693937Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+postflight repetition=1 backend=kfd exit=0
+phase repetition=1 backend=hsa
+2026-09-17T18:24:11.850288431Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+backend=hsa schema=fe2o3.async-copy-benchmark.v1 gpu_index=0 unique_id=ab83d2ffef0d3cdf target=gfx942 xnack=disabled bytes=268435456 depth=1 warmups=3 samples=10 h2d_p50_ns=4806159 h2d_p95_ns=5038416 h2d_p50_GBps=55.852 d2h_p50_ns=4788542 d2h_p95_ns=4813800 d2h_p50_GBps=56.058 device_pool_allocate_free_pair_ns=1876616
+completed repetition=1 backend=hsa exit=0
+2026-09-17T18:24:37.243063821Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+postflight repetition=1 backend=hsa exit=0
+phase repetition=1 backend=hip
+2026-09-17T18:24:39.320400849Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+backend=hip schema=fe2o3.async-copy-benchmark.v1 device_index=0 unique_id=ab83d2ffef0d3cdf target=gfx942:sramecc+:xnack- xnack=disabled bytes=268435456 depth=1 warmups=3 samples=10 h2d_p50_ns=4811948 h2d_p95_ns=4960229 h2d_p50_GBps=55.785 d2h_p50_ns=4750446 d2h_p95_ns=4751657 d2h_p50_GBps=56.507 device_pool_alloc_free_pair_ns=8407
+completed repetition=1 backend=hip exit=0
+2026-09-17T18:25:03.075821014Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+postflight repetition=1 backend=hip exit=0
+phase repetition=2 backend=hsa
+2026-09-17T18:25:05.147141725Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+backend=hsa schema=fe2o3.async-copy-benchmark.v1 gpu_index=0 unique_id=ab83d2ffef0d3cdf target=gfx942 xnack=disabled bytes=268435456 depth=1 warmups=3 samples=10 h2d_p50_ns=4989153 h2d_p95_ns=5107719 h2d_p50_GBps=53.804 d2h_p50_ns=4813059 d2h_p95_ns=4830285 d2h_p50_GBps=55.772 device_pool_allocate_free_pair_ns=1876969
+completed repetition=2 backend=hsa exit=0
+2026-09-17T18:25:30.558758252Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+postflight repetition=2 backend=hsa exit=0
+phase repetition=2 backend=hip
+2026-09-17T18:25:32.635242617Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+backend=hip schema=fe2o3.async-copy-benchmark.v1 device_index=0 unique_id=ab83d2ffef0d3cdf target=gfx942:sramecc+:xnack- xnack=disabled bytes=268435456 depth=1 warmups=3 samples=10 h2d_p50_ns=4795903 h2d_p95_ns=5005276 h2d_p50_GBps=55.972 d2h_p50_ns=4750615 d2h_p95_ns=4754251 d2h_p50_GBps=56.505 device_pool_alloc_free_pair_ns=8251
+completed repetition=2 backend=hip exit=0
+2026-09-17T18:25:56.341570925Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+postflight repetition=2 backend=hip exit=0
+phase repetition=2 backend=kfd
+2026-09-17T18:25:58.413087535Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+backend=kfd schema=fe2o3.async-copy-benchmark.v1 unique_id=ab83d2ffef0d3cdf profile=directional bytes=268435456 depth=1 queue_depth=1 batch_size=1 direction=h2d-then-d2h concurrency=1 configured_queues=1 doorbells_per_batch=2 packets_per_transfer=65 windows_per_transfer=2 max_packets_per_window=63 warmups=3 samples=10 h2d_engine_index=1 d2h_engine_index=0 h2d_p50_ns=6061305 h2d_p95_ns=6141646 h2d_p50_GBps=44.287 d2h_p50_ns=5059247 d2h_p95_ns=5069402 d2h_p50_GBps=53.058 completion=facade-wait-and-explicit-continuation-flush teardown=explicit
+completed repetition=2 backend=kfd exit=0
+2026-09-17T18:26:38.869281721Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+postflight repetition=2 backend=kfd exit=0
+phase repetition=3 backend=hip
+2026-09-17T18:26:40.935574118Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+backend=hip schema=fe2o3.async-copy-benchmark.v1 device_index=0 unique_id=ab83d2ffef0d3cdf target=gfx942:sramecc+:xnack- xnack=disabled bytes=268435456 depth=1 warmups=3 samples=10 h2d_p50_ns=4794841 h2d_p95_ns=5010093 h2d_p50_GBps=55.984 d2h_p50_ns=4750655 d2h_p95_ns=4752838 d2h_p50_GBps=56.505 device_pool_alloc_free_pair_ns=8436
+completed repetition=3 backend=hip exit=0
+2026-09-17T18:27:04.646903757Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+postflight repetition=3 backend=hip exit=0
+phase repetition=3 backend=kfd
+2026-09-17T18:27:06.720945931Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+backend=kfd schema=fe2o3.async-copy-benchmark.v1 unique_id=ab83d2ffef0d3cdf profile=directional bytes=268435456 depth=1 queue_depth=1 batch_size=1 direction=h2d-then-d2h concurrency=1 configured_queues=1 doorbells_per_batch=2 packets_per_transfer=65 windows_per_transfer=2 max_packets_per_window=63 warmups=3 samples=10 h2d_engine_index=1 d2h_engine_index=0 h2d_p50_ns=6035306 h2d_p95_ns=6128817 h2d_p50_GBps=44.478 d2h_p50_ns=5074099 d2h_p95_ns=5082532 d2h_p50_GBps=52.903 completion=facade-wait-and-explicit-continuation-flush teardown=explicit
+completed repetition=3 backend=kfd exit=0
+2026-09-17T18:27:47.397337986Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+postflight repetition=3 backend=kfd exit=0
+phase repetition=3 backend=hsa
+2026-09-17T18:27:49.478391732Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+backend=hsa schema=fe2o3.async-copy-benchmark.v1 gpu_index=0 unique_id=ab83d2ffef0d3cdf target=gfx942 xnack=disabled bytes=268435456 depth=1 warmups=3 samples=10 h2d_p50_ns=5033298 h2d_p95_ns=5134209 h2d_p50_GBps=53.332 d2h_p50_ns=4810805 d2h_p95_ns=4830314 d2h_p50_GBps=55.798 device_pool_allocate_free_pair_ns=1878139
+completed repetition=3 backend=hsa exit=0
+2026-09-17T18:28:14.875890954Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+postflight repetition=3 backend=hsa exit=0
+/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/target/release/examples/gfx942-runtime-directional-window-benchmark: OK
+/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/async-copy-hip: OK
+/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/async-copy-hsa: OK
+post_run_porcelain=
+final occupancy observation
+2026-09-17T18:28:17.084497409Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=1 uid=0xab83d2ffef0d3cdf bdf=0000:26:00.0
+2026-09-17T18:28:19.159279052Z
+finished exit=0 source_after_exit=0 binaries_after_exit=0 clean_exit=0 occupancy_exit=0

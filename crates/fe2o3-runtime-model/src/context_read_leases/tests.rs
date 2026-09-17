@@ -163,10 +163,16 @@ fn acquisition_preflight_is_atomic_for_every_roster_position() {
             let before = snapshot(&journal);
             let storage = storage_identity(&journal);
             let mut output = [None; 3];
-            assert!(
-                journal
-                    .acquire_reads(consumer(20), &requests, &mut output)
-                    .is_err()
+            let expected = match fault {
+                0 | 1 => Error::InvalidAllocationReference,
+                2 => Error::AllocationDeviceMismatch,
+                3 => Error::AllocationExtentMismatch,
+                4 | 5 => Error::InvalidExtent,
+                _ => Error::InvalidState,
+            };
+            assert_eq!(
+                journal.acquire_reads(consumer(20), &requests, &mut output),
+                Err(expected)
             );
             assert_eq!(output, [None; 3]);
             assert_eq!(snapshot(&journal), before);
@@ -201,10 +207,17 @@ fn capacity_canonicality_consumer_and_incarnation_rejections_preserve_all_state(
         }
         let original = output;
         let before = snapshot(&journal);
-        assert!(
-            journal
-                .acquire_reads(key, &requests[..2], &mut output)
-                .is_err()
+        let expected = match fault {
+            0 => Error::MemberCapacity,
+            1 | 2 => Error::NonCanonicalRoster,
+            3 => Error::ForeignContext,
+            4 | 5 => Error::InvalidWriterId,
+            6 => Error::EpochExhausted,
+            _ => Error::InvalidState,
+        };
+        assert_eq!(
+            journal.acquire_reads(key, &requests[..2], &mut output),
+            Err(expected)
         );
         assert_eq!(snapshot(&journal), before);
         assert_eq!(output, original);
@@ -309,10 +322,14 @@ fn release_roster_is_atomic_and_binds_exact_consumer_and_each_lease() {
             _ => evidence.consumer.local += 1,
         }
         let before = snapshot(&journal);
-        assert!(
-            journal
-                .release_reads(consumer(20), &references, &evidence)
-                .is_err()
+        let expected = match fault {
+            0..=2 | 5 => Error::InvalidReference,
+            3 | 4 => Error::NonCanonicalRoster,
+            _ => Error::SettlementEvidenceMismatch,
+        };
+        assert_eq!(
+            journal.release_reads(consumer(20), &references, &evidence),
+            Err(expected)
         );
         assert_eq!(snapshot(&journal), before);
         journal
@@ -444,4 +461,238 @@ fn success_then_no_effect_requires_the_exact_epoch_and_nonzero_lineage_snapshot(
     let lease = acquire(&mut journal, consumer(35), current);
     assert_eq!(journal.lookup_read(lease), Ok(current));
     release(&mut journal, lease);
+}
+
+#[test]
+fn constructor_contents_and_reader_capacity_error_priority_are_exact() {
+    let journal = Journal::new(7, 3, 5, 8).unwrap();
+    assert_eq!(journal.leases, [None; 8]);
+    assert_eq!(journal.free_reads, [7, 6, 5, 4, 3, 2, 1, 0]);
+    assert_eq!(journal.readers, [0; 3]);
+    assert_eq!(journal.next_incarnation, 1);
+    assert_eq!(journal.context_generation(), 7);
+    for reads in [0, CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1 + 1] {
+        assert_eq!(
+            Journal::new(0, 0, 0, reads).unwrap_err(),
+            Error::InvalidCapacity
+        );
+    }
+    assert_eq!(
+        Journal::new(0, 0, 0, 1).unwrap_err(),
+        Error::InvalidContextGeneration
+    );
+    assert_eq!(
+        Journal::new(7, 0, 0, 1).unwrap_err(),
+        Error::InvalidCapacity
+    );
+}
+
+#[test]
+fn acquisition_simultaneous_faults_follow_header_then_member_order() {
+    for fault in 0..8 {
+        let (mut journal, mut requests) = fixture(1);
+        let mut key = consumer(20);
+        let mut output = [None; 2];
+        let occupied = ContextReadLeaseReferenceV1 {
+            slot: 0,
+            incarnation: 1,
+            consumer: key,
+        };
+        requests[0].device.local += 1;
+        requests[1].allocation.key.local += 20;
+        journal.next_incarnation = 0;
+        let (count, output_count, expected) = match fault {
+            0 => {
+                key.context_generation += 1;
+                key.local = 0;
+                (0, 1, Error::ForeignContext)
+            }
+            1 => {
+                key.local = 0;
+                (0, 1, Error::InvalidWriterId)
+            }
+            2 => {
+                output[0] = Some(occupied);
+                (0, 1, Error::RosterCapacity)
+            }
+            3 => {
+                output[0] = Some(occupied);
+                (2, 1, Error::RosterCapacity)
+            }
+            4 => {
+                output[0] = Some(occupied);
+                (2, 2, Error::InvalidState)
+            }
+            5 => (2, 2, Error::MemberCapacity),
+            6 => (1, 1, Error::EpochExhausted),
+            _ => {
+                journal.next_incarnation = 1;
+                // The earlier device fault must precede a later allocation fault.
+                journal.free_reads.push(usize::MAX);
+                (2, 2, Error::AllocationDeviceMismatch)
+            }
+        };
+        let before = snapshot(&journal);
+        let original = output;
+        let storage = storage_identity(&journal);
+        assert_eq!(
+            journal.acquire_reads(key, &requests[..count], &mut output[..output_count]),
+            Err(expected)
+        );
+        assert_eq!(snapshot(&journal), before);
+        assert_eq!(output, original);
+        assert_eq!(storage_identity(&journal), storage);
+    }
+}
+
+#[test]
+fn read_validation_simultaneous_faults_preserve_exact_precedence() {
+    for fault in 0..6 {
+        let (mut journal, requests) = fixture(2);
+        let writer = journal.register_writer(consumer(20)).unwrap();
+        journal.begin_write(writer, &[member(requests[0])]).unwrap();
+        let mut request = requests[0];
+        request.content_lineage = 99;
+        request.attempt_epoch = 99;
+        let expected = match fault {
+            0 => {
+                request.allocation.key.local += 99;
+                request.device.local += 1;
+                Error::InvalidAllocationReference
+            }
+            1 => {
+                request.device.local += 1;
+                request.byte_extent += 1;
+                Error::AllocationDeviceMismatch
+            }
+            2 => {
+                request.byte_extent += 1;
+                request.byte_len = 0;
+                Error::AllocationExtentMismatch
+            }
+            3 => {
+                request.byte_len = 0;
+                Error::InvalidExtent
+            }
+            4 => {
+                request.byte_offset = u64::MAX;
+                Error::InvalidExtent
+            }
+            _ => Error::AllocationBusy,
+        };
+        let before = snapshot(&journal);
+        assert_eq!(journal.validate_read(&request), Err(expected));
+        assert_eq!(snapshot(&journal), before);
+    }
+}
+
+#[test]
+fn acquisition_group_counts_and_selected_slots_are_checked_before_commit() {
+    for fault in 0..5 {
+        let (mut journal, requests) = fixture(4);
+        let mut ranges = [requests[0]; 2];
+        ranges[1].byte_offset += 1;
+        match fault {
+            0 => journal.readers[requests[0].allocation.slot] = usize::MAX,
+            1 => journal.readers[requests[0].allocation.slot] = 3,
+            2 => *journal.free_reads.last_mut().unwrap() = usize::MAX,
+            3 => {
+                let slot = journal.free_reads[0];
+                journal.leases[slot] = Some(ReadLeaseV1 {
+                    reference: ContextReadLeaseReferenceV1 {
+                        slot,
+                        incarnation: 1,
+                        consumer: consumer(10),
+                    },
+                    request: requests[2],
+                });
+                *journal.free_reads.last_mut().unwrap() = slot;
+            }
+            _ => {
+                ranges[1] = ranges[0];
+                ranges[1].device.local += 1;
+            }
+        }
+        let before = snapshot(&journal);
+        let storage = storage_identity(&journal);
+        let mut output = [None; 2];
+        assert_eq!(
+            journal.acquire_reads(consumer(20), &ranges, &mut output),
+            Err(if fault == 4 {
+                Error::AllocationDeviceMismatch
+            } else {
+                Error::InvalidState
+            })
+        );
+        assert_eq!(snapshot(&journal), before);
+        assert_eq!(output, [None; 2]);
+        assert_eq!(storage_identity(&journal), storage);
+    }
+}
+
+#[test]
+fn release_simultaneous_faults_follow_evidence_roster_headroom_then_member_order() {
+    for fault in 0..9 {
+        let (mut journal, requests) = fixture(4);
+        let first = acquire(&mut journal, consumer(20), requests[0]);
+        let second = acquire(&mut journal, consumer(20), requests[1]);
+        let mut references = [first, second];
+        let mut evidence = ContextReadQuiescenceEvidenceV1 {
+            consumer: consumer(20),
+        };
+        let (count, expected) = match fault {
+            0 => {
+                evidence.consumer.local += 1;
+                (0, Error::SettlementEvidenceMismatch)
+            }
+            1 => (0, Error::RosterCapacity),
+            2 => {
+                journal.free_reads.push(usize::MAX);
+                references[0].consumer.local += 1;
+                (2, Error::InvalidState)
+            }
+            3 => {
+                references[0].consumer.local += 1;
+                references[0].slot = usize::MAX;
+                (2, Error::InvalidReference)
+            }
+            4 => {
+                journal.leases[first.slot]
+                    .as_mut()
+                    .unwrap()
+                    .request
+                    .content_lineage += 1;
+                references[1].incarnation += 1;
+                (2, Error::InvalidState)
+            }
+            5 => {
+                references[1] = first;
+                journal.readers[requests[0].allocation.slot] = 1;
+                (2, Error::NonCanonicalRoster)
+            }
+            6 => {
+                journal.readers[requests[1].allocation.slot] = 0;
+                (2, Error::InvalidState)
+            }
+            7 => {
+                let request = &mut journal.leases[second.slot].as_mut().unwrap().request;
+                *request = requests[0];
+                request.byte_offset += 1;
+                (2, Error::InvalidState)
+            }
+            _ => {
+                journal.free_reads = Vec::new();
+                references[0].incarnation += 1;
+                (2, Error::InvalidState)
+            }
+        };
+        let before = snapshot(&journal);
+        let storage = storage_identity(&journal);
+        assert_eq!(
+            journal.release_reads(consumer(20), &references[..count], &evidence),
+            Err(expected)
+        );
+        assert_eq!(snapshot(&journal), before);
+        assert_eq!(storage_identity(&journal), storage);
+    }
 }

@@ -10,7 +10,14 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest development (2026-09-17): [generated input leases](runtime-context-generated-read-leases-v1.md)
+Latest development (2026-09-17): [reader contents and ordered preflight](runtime-context-read-preflight-v1.md)
+adds a concrete proof over the unchanged V4-J1 journal definitions, source-bound
+executable mutations and exact Rust error-priority witnesses. Its scope stops
+before acquisition/release commits, invariant preservation and Rust/native
+composition. The [qualification receipt](evidence/dev-v4j2-reader-preflight-2026-09-17/README.md)
+keeps those obligations separate; accepted checkpoints and A1/A2 remain unchanged.
+
+Preceding development: [generated input leases](runtime-context-generated-read-leases-v1.md)
 bind ReadOnly shell custody to the original protected attempt, including launches
 without a writer or returned backend handle. Exact completion or quiescent Stop
 releases inputs before writer settlement; foreign readers still block retirement.

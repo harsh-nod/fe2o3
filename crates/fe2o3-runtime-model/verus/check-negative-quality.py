@@ -19,17 +19,17 @@ EXPECTED_CHECK_NEGATIVE_FUNCTION_SHA256 = (
 EXPECTED_RUNNER_FUNCTION_SHA256 = {
     "read_pin": "dd0f063d2e13126778cfec4fc6bd9a89af38a0b55ed45491e59eff830a3448aa",
     "check_digest": "1b1af7d88401a6baa244c63b3edd41fd15b07814e02f3d1bfb4b1841c33819e0",
-    "check_sources": "cf69c474454c912ba612bc4ad497ecff00d3bdce36f3a2ddd9098e48bc5aaad3",
+    "check_sources": "c75ca91465c7c020813a9c875258432ef505671cd529c23444f7ec34ba9bbfe4",
     "run_verus": "a22ae6cb1d34ec0ea6b402ecf96008773cefcc620e511aae7bc3d6e495b5cf66",
     "check_positive": "2f353f8881c8def07ede3a251bb64de9148b92c802eda65b768a64172cd65d92",
     "seal_authority": "3e49725d7555f6816455cac2080aae192a8ad6210f62f5be5d8f19ac395d227a",
 }
-EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1511
+EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1514
 EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENTS_SHA256 = (
-    "e79051b636492be2b10ba0341a172419e4130cc4a14acca8f2252b34a0b3bb56"
+    "4b07cdd80775d532012ce3f641af2b1bcb3391483adc3502160728ce8e1bd463"
 )
 EXPECTED_RUNNER_SHA256 = (
-    "27178c49928f90213f8d03b81318b9aeb509ac83b82ab7d97ebe19dd235c8fc0"
+    "7a6181301d9ebb46c4b53560f4726cf067540b773597f3700309d3c30bd0735b"
 )
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
 IDENTIFIER = r"(?:r#)?[A-Za-z_][A-Za-z0-9_]*"
@@ -82,7 +82,8 @@ RUNNER_TOOL_BINDING_BLOCK = (
     'negative_quality_reject_fixture="$script_dir/tests/fixtures/negative-quality-direct-literal.rs"',
     'negative_quality_accept_fixture="$script_dir/tests/fixtures/negative-quality-adverse-input.rs"',
     'journal_issuance_checker="$script_dir/check-journal-issuance.py"',
-    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker",
+    'read_preflight_checker="$script_dir/check-read-preflight.py"',
+    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker",
 )
 RUNNER_JOURNAL_CAMPAIGN_BLOCK = (
     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$journal_issuance_checker" --self-test "$journal_issuance_proof"',
@@ -90,6 +91,13 @@ RUNNER_JOURNAL_CAMPAIGN_BLOCK = (
     '    "RUSTUP_HOME=$runner_rustup_home" "CARGO_HOME=$runner_cargo_home" \\',
     '    /usr/bin/python3 -I "$journal_issuance_checker" \\',
     '    "$journal_issuance_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/journal-issuance"',
+)
+RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK = (
+    '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$read_preflight_checker" --self-test "$read_preflight_proof"',
+    '/usr/bin/env -i "HOME=$runner_home" "PATH=$runner_path" \\',
+    '    "RUSTUP_HOME=$runner_rustup_home" "CARGO_HOME=$runner_cargo_home" \\',
+    '    /usr/bin/python3 -I "$read_preflight_checker" \\',
+    '    "$read_preflight_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/read-preflight"',
 )
 RUNNER_NEGATIVE_QUALITY_INVOCATION_BLOCK = (
     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$negative_quality_checker" --self-test \\',
@@ -102,6 +110,7 @@ RUNNER_SOURCE_CHECKER_INVOCATION = (
     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$source_checker" \\'
 )
 RUNNER_TOOL_DIGEST_LINES = (
+    '    check_digest "$expected_read_preflight_checker" "$read_preflight_checker"',
     '    check_digest "$expected_journal_issuance_checker" "$journal_issuance_checker"',
     '    check_digest "$expected_closure" "$closure_manifest"',
     "    check_digest 'c0f5f201dca9ea6b3fa953884cdfaca8ca38413ad2a9de7700b3aaeb3a610d0c' \"$closure_checker\"",
@@ -111,6 +120,7 @@ RUNNER_TOOL_DIGEST_LINES = (
     '    check_digest "$expected_negative_quality_accept_fixture" "$negative_quality_accept_fixture"',
 )
 RUNNER_TOOL_NAMES = (
+    "read_preflight_checker",
     "journal_issuance_checker",
     "closure_manifest",
     "closure_checker",
@@ -939,6 +949,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
         "negative-quality invocation",
     )
     journal_start = exact_block_start(lines, RUNNER_JOURNAL_CAMPAIGN_BLOCK, "journal campaign")
+    reader_start = exact_block_start(lines, RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK, "reader preflight campaign")
     if not environment_start < root_start < tool_start < invocation_start:
         raise QualityError(
             "runner environment, root, tool, and invocation blocks are out of order",
@@ -966,6 +977,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
         )
     allowed_tool_lines.update(quality_audits)
     allowed_tool_lines.update(range(journal_start, journal_start + len(RUNNER_JOURNAL_CAMPAIGN_BLOCK)))
+    allowed_tool_lines.update(range(reader_start, reader_start + len(RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK)))
     for digest_line in RUNNER_TOOL_DIGEST_LINES:
         matches = [index for index, line in enumerate(lines) if line == digest_line]
         if len(matches) != 1:
@@ -1059,6 +1071,10 @@ def audit_runner_root_bindings(runner_source: str) -> None:
             and journal_start < quality_audits[-1] < closure_invocations[-1]):
         raise QualityError("journal campaign must run between authentication and final source/tool checks",
                            code="runner.journal_campaign.order")
+    if not (journal_start < reader_start < source_checks[-2]
+            and quality_audits[0] < reader_start < quality_audits[-1] < closure_invocations[-1]):
+        raise QualityError("reader campaign must run after J1 and before final source/tool checks",
+                           code="runner.reader_preflight_campaign.order")
     if late_block_starts != sorted(late_block_starts):
         raise QualityError(
             "runner late-authority binding blocks are out of order",
@@ -1489,6 +1505,7 @@ def build_inventory_fixture(root: Path) -> tuple[Path, Path]:
                 '    "$negative_beta"',
                 *RUNNER_NEGATIVE_QUALITY_INVOCATION_BLOCK,
                 *RUNNER_JOURNAL_CAMPAIGN_BLOCK,
+                *RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK,
                 "check_sources",
                 RUNNER_NEGATIVE_QUALITY_AUDIT,
                 "check_sources",
@@ -1563,6 +1580,34 @@ def inventory_self_test() -> None:
         )
 
     cases = [
+        (
+            "missing reader campaign",
+            lambda _d, r: replace_runner(r, "\n".join(RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK) + "\n", ""),
+        ),
+        (
+            "duplicate reader campaign",
+            lambda _d, r: r.write_text(r.read_text() + "\n".join(RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK) + "\n"),
+        ),
+        (
+            "changed reader arguments",
+            lambda _d, r: replace_runner(r, RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK[-1],
+                                        RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK[-1].replace('"$timeout_seconds"', '"300"')),
+        ),
+        (
+            "masked reader failure",
+            lambda _d, r: replace_runner(r, RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK[-1],
+                                        RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK[-1] + " || true"),
+        ),
+        (
+            "reader tool rebound",
+            lambda _d, r: r.write_text(r.read_text() + 'read_preflight_checker=/tmp/untrusted\n'),
+        ),
+        (
+            "relocated reader campaign",
+            lambda _d, r: r.write_text(r.read_text().replace(
+                "\n".join(RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK) + "\n", "")
+                + "\n".join(RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK) + "\n"),
+        ),
         (
             "missing journal campaign",
             lambda _d, r: replace_runner(r, "\n".join(RUNNER_JOURNAL_CAMPAIGN_BLOCK) + "\n", ""),
@@ -2132,6 +2177,10 @@ def inventory_self_test() -> None:
             expected_errors[case_label] = code
 
     expect("runner.raw_digest", "complete runner raw-byte substitution")
+    expect("runner.block.reader_preflight_campaign.count", "missing reader campaign", "duplicate reader campaign",
+           "changed reader arguments", "masked reader failure")
+    expect("runner.tool_wiring.unparsed", "reader tool rebound")
+    expect("runner.reader_preflight_campaign.order", "relocated reader campaign")
     expect("runner.block.journal_campaign.count", "missing journal campaign", "duplicate journal campaign",
            "changed journal arguments", "masked journal failure")
     expect("runner.tool_wiring.unparsed", "journal tool rebound")

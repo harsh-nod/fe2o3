@@ -1,0 +1,125 @@
+2026-09-17T18:16:20Z
+Cloning into '/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source'...
+done.
+From https://github.com/harsh-nod/fe2o3
+ * branch                  ed5b5d64bf95116c21e9bf350c30132ff2bbb524 -> FETCH_HEAD
+HEAD is now at ed5b5d64bf runtime: retain generated inputs through protected settlement
+ed5b5d64bf95116c21e9bf350c30132ff2bbb524
+rustc 1.96.0-nightly (55e86c996 2026-04-02)
+binary: rustc
+commit-hash: 55e86c996809902e8bbad512cfb4d2c18be446d9
+commit-date: 2026-04-02
+host: x86_64-unknown-linux-gnu
+release: 1.96.0-nightly
+LLVM version: 22.1.2
+cargo 1.96.0-nightly (888f67534 2026-03-30)
+release: 1.96.0-nightly
+commit-hash: 888f675344eb1cf2308fd53183e667bdd2c58e51
+commit-date: 2026-03-30
+host: x86_64-unknown-linux-gnu
+libgit2: 1.9.2 (sys:0.20.4 vendored)
+libcurl: 8.19.0-DEV (sys:0.4.87+curl-8.19.0 vendored ssl:OpenSSL/3.5.4)
+ssl: OpenSSL 3.5.4 30 Sep 2025
+os: Ubuntu 24.4.0 (noble) [64-bit]
+HIP version: 7.2.53211-97f5574fe2
+AMD clang version 22.0.0git (https://github.com/RadeonOpenCompute/llvm-project roc-7.2.4 26084 f58b06dce1f9c15707c5f808fd002e18c2accf7e)
+Target: x86_64-unknown-linux-gnu
+Thread model: posix
+InstalledDir: /opt/rocm-7.2.4/lib/llvm/bin
+Configuration file: /opt/rocm-7.2.4/lib/llvm/bin/clang++.cfg
+g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+Copyright (C) 2023 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+Linux sharkmi300x-1 6.8.0-124-generic #124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded futures-executor v0.3.34
+   Compiling typenum v1.20.1
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling cpufeatures v0.3.1
+   Compiling serde_core v1.0.229
+   Compiling cfg-if v1.0.4
+   Compiling zmij v1.0.23
+   Compiling autocfg v1.5.1
+   Compiling hybrid-array v0.4.14
+   Compiling serde v1.0.229
+   Compiling syn v3.0.4
+   Compiling rustix v1.1.4
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling serde_json v1.0.151
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-target-spec)
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-amd-target)
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling num-traits v0.2.19
+   Compiling itoa v1.0.18
+   Compiling spin v0.12.3
+   Compiling memchr v2.8.3
+   Compiling linux-raw-sys v0.12.1
+   Compiling serde_derive v1.0.229
+   Compiling bitflags v2.13.1
+   Compiling libc v0.2.189
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-runtime-model)
+   Compiling fe2o3-hsaco v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-hsaco)
+   Compiling pin-project-lite v0.2.17
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-amdhsa-loader)
+   Compiling zeroize v1.9.0
+   Compiling slab v0.4.12
+   Compiling futures-task v0.3.34
+   Compiling fe2o3-aql v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-aql)
+   Compiling fe2o3-kfd-uapi v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-kfd-uapi)
+   Compiling fe2o3-drm-uapi v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-drm-uapi)
+   Compiling arrayvec v0.7.8
+   Compiling futures-core v0.3.34
+   Compiling futures-util v0.3.34
+   Compiling fe2o3-profiler-protocol v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-kfd)
+   Compiling rmp v0.8.15
+   Compiling fe2o3-completion v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-completion)
+   Compiling fe2o3-host-api v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-host-api)
+   Compiling rmpv v1.3.1
+   Compiling futures-executor v0.3.34
+   Compiling tokio v1.47.1
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-runtime)
+   Compiling fe2o3-debug-protocol v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-debug-protocol)
+    Finished `release` profile [optimized] target(s) in 55.89s
+   Compiling typenum v1.20.1
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-target-spec)
+   Compiling libc v0.2.189
+   Compiling rustix v1.1.4
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-amd-target)
+   Compiling spin v0.12.3
+   Compiling cpufeatures v0.3.1
+   Compiling cfg-if v1.0.4
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-runtime-model)
+   Compiling fe2o3-hsaco v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-hsaco)
+   Compiling linux-raw-sys v0.12.1
+   Compiling hybrid-array v0.4.14
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling bitflags v2.13.1
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling arrayvec v0.7.8
+   Compiling fe2o3-kfd-uapi v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-kfd-uapi)
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-amdhsa-loader)
+   Compiling zeroize v1.9.0
+   Compiling fe2o3-drm-uapi v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-drm-uapi)
+   Compiling fe2o3-aql v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-aql)
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/source/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized] target(s) in 19.36s
+     Running unittests src/lib.rs (/home/harsh/fe2o3-copy-diagnostic-20260917.6CF3d70A/target/debug/deps/fe2o3_kfd-9ee3608d927b08c4)
+
+running 1 test
+test persistent_directional_sdma::tests::window_manifest_digest_is_frozen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1402 filtered out; finished in 0.00s
+
+2026-09-17T18:17:42Z

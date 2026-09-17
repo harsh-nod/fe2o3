@@ -1,0 +1,2 @@
+PASS: journal owned-process self-test (spawn/wait/post-reap interruption, timeout, spawn failure, success)
+PASS: reader self-test (21 mutations, 38 adverse diagnostics/sources rejected)

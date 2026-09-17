@@ -1,0 +1,2 @@
+PASS: runtime expected-negative quality and inventory self-test
+FAIL: verification runner does not match its complete-source audit

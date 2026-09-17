@@ -1,0 +1,1 @@
+python3 -I crates/fe2o3-runtime-model/verus/check-negative-quality.py --self-test crates/fe2o3-runtime-model/verus/tests/fixtures/negative-quality-direct-literal.rs crates/fe2o3-runtime-model/verus/tests/fixtures/negative-quality-adverse-input.rs 

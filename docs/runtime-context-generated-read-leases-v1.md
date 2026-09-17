@@ -75,3 +75,7 @@ protected GPU kernels or prove native retirement call ordering. That ordering is
 source-reviewed; production Worker V3/machine refinement, native concurrency/fault
 campaigns, initialized-input authority, ordered writers, cross-run reuse, aggregate
 residency, formal reader composition and matched HIP/HSA measurements remain open.
+
+Subsequent [V4-J2 development](runtime-context-read-preflight-v1.md) proves the
+model's constructor contents and ordered reader preflight only. It does not
+prove the generated Context composition or acquisition/release commits above.

@@ -1,0 +1,1729 @@
+diff --git a/crates/fe2o3-runtime-model/src/context_read_leases/tests.rs b/crates/fe2o3-runtime-model/src/context_read_leases/tests.rs
+index 4cb632ebb..468052873 100644
+--- a/crates/fe2o3-runtime-model/src/context_read_leases/tests.rs
++++ b/crates/fe2o3-runtime-model/src/context_read_leases/tests.rs
+@@ -163,10 +163,16 @@ fn acquisition_preflight_is_atomic_for_every_roster_position() {
+             let before = snapshot(&journal);
+             let storage = storage_identity(&journal);
+             let mut output = [None; 3];
+-            assert!(
+-                journal
+-                    .acquire_reads(consumer(20), &requests, &mut output)
+-                    .is_err()
++            let expected = match fault {
++                0 | 1 => Error::InvalidAllocationReference,
++                2 => Error::AllocationDeviceMismatch,
++                3 => Error::AllocationExtentMismatch,
++                4 | 5 => Error::InvalidExtent,
++                _ => Error::InvalidState,
++            };
++            assert_eq!(
++                journal.acquire_reads(consumer(20), &requests, &mut output),
++                Err(expected)
+             );
+             assert_eq!(output, [None; 3]);
+             assert_eq!(snapshot(&journal), before);
+@@ -201,10 +207,17 @@ fn capacity_canonicality_consumer_and_incarnation_rejections_preserve_all_state(
+         }
+         let original = output;
+         let before = snapshot(&journal);
+-        assert!(
+-            journal
+-                .acquire_reads(key, &requests[..2], &mut output)
+-                .is_err()
++        let expected = match fault {
++            0 => Error::MemberCapacity,
++            1 | 2 => Error::NonCanonicalRoster,
++            3 => Error::ForeignContext,
++            4 | 5 => Error::InvalidWriterId,
++            6 => Error::EpochExhausted,
++            _ => Error::InvalidState,
++        };
++        assert_eq!(
++            journal.acquire_reads(key, &requests[..2], &mut output),
++            Err(expected)
+         );
+         assert_eq!(snapshot(&journal), before);
+         assert_eq!(output, original);
+@@ -309,10 +322,14 @@ fn release_roster_is_atomic_and_binds_exact_consumer_and_each_lease() {
+             _ => evidence.consumer.local += 1,
+         }
+         let before = snapshot(&journal);
+-        assert!(
+-            journal
+-                .release_reads(consumer(20), &references, &evidence)
+-                .is_err()
++        let expected = match fault {
++            0..=2 | 5 => Error::InvalidReference,
++            3 | 4 => Error::NonCanonicalRoster,
++            _ => Error::SettlementEvidenceMismatch,
++        };
++        assert_eq!(
++            journal.release_reads(consumer(20), &references, &evidence),
++            Err(expected)
+         );
+         assert_eq!(snapshot(&journal), before);
+         journal
+@@ -445,3 +462,237 @@ fn success_then_no_effect_requires_the_exact_epoch_and_nonzero_lineage_snapshot(
+     assert_eq!(journal.lookup_read(lease), Ok(current));
+     release(&mut journal, lease);
+ }
++
++#[test]
++fn constructor_contents_and_reader_capacity_error_priority_are_exact() {
++    let journal = Journal::new(7, 3, 5, 8).unwrap();
++    assert_eq!(journal.leases, [None; 8]);
++    assert_eq!(journal.free_reads, [7, 6, 5, 4, 3, 2, 1, 0]);
++    assert_eq!(journal.readers, [0; 3]);
++    assert_eq!(journal.next_incarnation, 1);
++    assert_eq!(journal.context_generation(), 7);
++    for reads in [0, CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1 + 1] {
++        assert_eq!(
++            Journal::new(0, 0, 0, reads).unwrap_err(),
++            Error::InvalidCapacity
++        );
++    }
++    assert_eq!(
++        Journal::new(0, 0, 0, 1).unwrap_err(),
++        Error::InvalidContextGeneration
++    );
++    assert_eq!(
++        Journal::new(7, 0, 0, 1).unwrap_err(),
++        Error::InvalidCapacity
++    );
++}
++
++#[test]
++fn acquisition_simultaneous_faults_follow_header_then_member_order() {
++    for fault in 0..8 {
++        let (mut journal, mut requests) = fixture(1);
++        let mut key = consumer(20);
++        let mut output = [None; 2];
++        let occupied = ContextReadLeaseReferenceV1 {
++            slot: 0,
++            incarnation: 1,
++            consumer: key,
++        };
++        requests[0].device.local += 1;
++        requests[1].allocation.key.local += 20;
++        journal.next_incarnation = 0;
++        let (count, output_count, expected) = match fault {
++            0 => {
++                key.context_generation += 1;
++                key.local = 0;
++                (0, 1, Error::ForeignContext)
++            }
++            1 => {
++                key.local = 0;
++                (0, 1, Error::InvalidWriterId)
++            }
++            2 => {
++                output[0] = Some(occupied);
++                (0, 1, Error::RosterCapacity)
++            }
++            3 => {
++                output[0] = Some(occupied);
++                (2, 1, Error::RosterCapacity)
++            }
++            4 => {
++                output[0] = Some(occupied);
++                (2, 2, Error::InvalidState)
++            }
++            5 => (2, 2, Error::MemberCapacity),
++            6 => (1, 1, Error::EpochExhausted),
++            _ => {
++                journal.next_incarnation = 1;
++                // The earlier device fault must precede a later allocation fault.
++                journal.free_reads.push(usize::MAX);
++                (2, 2, Error::AllocationDeviceMismatch)
++            }
++        };
++        let before = snapshot(&journal);
++        let original = output;
++        let storage = storage_identity(&journal);
++        assert_eq!(
++            journal.acquire_reads(key, &requests[..count], &mut output[..output_count]),
++            Err(expected)
++        );
++        assert_eq!(snapshot(&journal), before);
++        assert_eq!(output, original);
++        assert_eq!(storage_identity(&journal), storage);
++    }
++}
++
++#[test]
++fn read_validation_simultaneous_faults_preserve_exact_precedence() {
++    for fault in 0..6 {
++        let (mut journal, requests) = fixture(2);
++        let writer = journal.register_writer(consumer(20)).unwrap();
++        journal.begin_write(writer, &[member(requests[0])]).unwrap();
++        let mut request = requests[0];
++        request.content_lineage = 99;
++        request.attempt_epoch = 99;
++        let expected = match fault {
++            0 => {
++                request.allocation.key.local += 99;
++                request.device.local += 1;
++                Error::InvalidAllocationReference
++            }
++            1 => {
++                request.device.local += 1;
++                request.byte_extent += 1;
++                Error::AllocationDeviceMismatch
++            }
++            2 => {
++                request.byte_extent += 1;
++                request.byte_len = 0;
++                Error::AllocationExtentMismatch
++            }
++            3 => {
++                request.byte_len = 0;
++                Error::InvalidExtent
++            }
++            4 => {
++                request.byte_offset = u64::MAX;
++                Error::InvalidExtent
++            }
++            _ => Error::AllocationBusy,
++        };
++        let before = snapshot(&journal);
++        assert_eq!(journal.validate_read(&request), Err(expected));
++        assert_eq!(snapshot(&journal), before);
++    }
++}
++
++#[test]
++fn acquisition_group_counts_and_selected_slots_are_checked_before_commit() {
++    for fault in 0..5 {
++        let (mut journal, requests) = fixture(4);
++        let mut ranges = [requests[0]; 2];
++        ranges[1].byte_offset += 1;
++        match fault {
++            0 => journal.readers[requests[0].allocation.slot] = usize::MAX,
++            1 => journal.readers[requests[0].allocation.slot] = 3,
++            2 => *journal.free_reads.last_mut().unwrap() = usize::MAX,
++            3 => {
++                let slot = journal.free_reads[0];
++                journal.leases[slot] = Some(ReadLeaseV1 {
++                    reference: ContextReadLeaseReferenceV1 {
++                        slot,
++                        incarnation: 1,
++                        consumer: consumer(10),
++                    },
++                    request: requests[2],
++                });
++                *journal.free_reads.last_mut().unwrap() = slot;
++            }
++            _ => {
++                ranges[1] = ranges[0];
++                ranges[1].device.local += 1;
++            }
++        }
++        let before = snapshot(&journal);
++        let storage = storage_identity(&journal);
++        let mut output = [None; 2];
++        assert_eq!(
++            journal.acquire_reads(consumer(20), &ranges, &mut output),
++            Err(if fault == 4 {
++                Error::AllocationDeviceMismatch
++            } else {
++                Error::InvalidState
++            })
++        );
++        assert_eq!(snapshot(&journal), before);
++        assert_eq!(output, [None; 2]);
++        assert_eq!(storage_identity(&journal), storage);
++    }
++}
++
++#[test]
++fn release_simultaneous_faults_follow_evidence_roster_headroom_then_member_order() {
++    for fault in 0..9 {
++        let (mut journal, requests) = fixture(4);
++        let first = acquire(&mut journal, consumer(20), requests[0]);
++        let second = acquire(&mut journal, consumer(20), requests[1]);
++        let mut references = [first, second];
++        let mut evidence = ContextReadQuiescenceEvidenceV1 {
++            consumer: consumer(20),
++        };
++        let (count, expected) = match fault {
++            0 => {
++                evidence.consumer.local += 1;
++                (0, Error::SettlementEvidenceMismatch)
++            }
++            1 => (0, Error::RosterCapacity),
++            2 => {
++                journal.free_reads.push(usize::MAX);
++                references[0].consumer.local += 1;
++                (2, Error::InvalidState)
++            }
++            3 => {
++                references[0].consumer.local += 1;
++                references[0].slot = usize::MAX;
++                (2, Error::InvalidReference)
++            }
++            4 => {
++                journal.leases[first.slot]
++                    .as_mut()
++                    .unwrap()
++                    .request
++                    .content_lineage += 1;
++                references[1].incarnation += 1;
++                (2, Error::InvalidState)
++            }
++            5 => {
++                references[1] = first;
++                journal.readers[requests[0].allocation.slot] = 1;
++                (2, Error::NonCanonicalRoster)
++            }
++            6 => {
++                journal.readers[requests[1].allocation.slot] = 0;
++                (2, Error::InvalidState)
++            }
++            7 => {
++                let request = &mut journal.leases[second.slot].as_mut().unwrap().request;
++                *request = requests[0];
++                request.byte_offset += 1;
++                (2, Error::InvalidState)
++            }
++            _ => {
++                journal.free_reads = Vec::new();
++                references[0].incarnation += 1;
++                (2, Error::InvalidState)
++            }
++        };
++        let before = snapshot(&journal);
++        let storage = storage_identity(&journal);
++        assert_eq!(
++            journal.release_reads(consumer(20), &references[..count], &evidence),
++            Err(expected)
++        );
++        assert_eq!(snapshot(&journal), before);
++        assert_eq!(storage_identity(&journal), storage);
++    }
++}
+diff --git a/crates/fe2o3-runtime-model/verus/check-negative-quality.py b/crates/fe2o3-runtime-model/verus/check-negative-quality.py
+index a737ccedb..0d449ae76 100755
+--- a/crates/fe2o3-runtime-model/verus/check-negative-quality.py
++++ b/crates/fe2o3-runtime-model/verus/check-negative-quality.py
+@@ -19,17 +19,17 @@ EXPECTED_CHECK_NEGATIVE_FUNCTION_SHA256 = (
+ EXPECTED_RUNNER_FUNCTION_SHA256 = {
+     "read_pin": "dd0f063d2e13126778cfec4fc6bd9a89af38a0b55ed45491e59eff830a3448aa",
+     "check_digest": "1b1af7d88401a6baa244c63b3edd41fd15b07814e02f3d1bfb4b1841c33819e0",
+-    "check_sources": "cf69c474454c912ba612bc4ad497ecff00d3bdce36f3a2ddd9098e48bc5aaad3",
++    "check_sources": "c75ca91465c7c020813a9c875258432ef505671cd529c23444f7ec34ba9bbfe4",
+     "run_verus": "a22ae6cb1d34ec0ea6b402ecf96008773cefcc620e511aae7bc3d6e495b5cf66",
+     "check_positive": "2f353f8881c8def07ede3a251bb64de9148b92c802eda65b768a64172cd65d92",
+     "seal_authority": "3e49725d7555f6816455cac2080aae192a8ad6210f62f5be5d8f19ac395d227a",
+ }
+-EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1511
++EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1514
+ EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENTS_SHA256 = (
+-    "e79051b636492be2b10ba0341a172419e4130cc4a14acca8f2252b34a0b3bb56"
++    "4b07cdd80775d532012ce3f641af2b1bcb3391483adc3502160728ce8e1bd463"
+ )
+ EXPECTED_RUNNER_SHA256 = (
+-    "27178c49928f90213f8d03b81318b9aeb509ac83b82ab7d97ebe19dd235c8fc0"
++    "7a6181301d9ebb46c4b53560f4726cf067540b773597f3700309d3c30bd0735b"
+ )
+ HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
+ IDENTIFIER = r"(?:r#)?[A-Za-z_][A-Za-z0-9_]*"
+@@ -82,7 +82,8 @@ RUNNER_TOOL_BINDING_BLOCK = (
+     'negative_quality_reject_fixture="$script_dir/tests/fixtures/negative-quality-direct-literal.rs"',
+     'negative_quality_accept_fixture="$script_dir/tests/fixtures/negative-quality-adverse-input.rs"',
+     'journal_issuance_checker="$script_dir/check-journal-issuance.py"',
+-    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker",
++    'read_preflight_checker="$script_dir/check-read-preflight.py"',
++    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker",
+ )
+ RUNNER_JOURNAL_CAMPAIGN_BLOCK = (
+     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$journal_issuance_checker" --self-test "$journal_issuance_proof"',
+@@ -91,6 +92,13 @@ RUNNER_JOURNAL_CAMPAIGN_BLOCK = (
+     '    /usr/bin/python3 -I "$journal_issuance_checker" \\',
+     '    "$journal_issuance_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/journal-issuance"',
+ )
++RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK = (
++    '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$read_preflight_checker" --self-test "$read_preflight_proof"',
++    '/usr/bin/env -i "HOME=$runner_home" "PATH=$runner_path" \\',
++    '    "RUSTUP_HOME=$runner_rustup_home" "CARGO_HOME=$runner_cargo_home" \\',
++    '    /usr/bin/python3 -I "$read_preflight_checker" \\',
++    '    "$read_preflight_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/read-preflight"',
++)
+ RUNNER_NEGATIVE_QUALITY_INVOCATION_BLOCK = (
+     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$negative_quality_checker" --self-test \\',
+     '    "$negative_quality_reject_fixture" \\',
+@@ -102,6 +110,7 @@ RUNNER_SOURCE_CHECKER_INVOCATION = (
+     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$source_checker" \\'
+ )
+ RUNNER_TOOL_DIGEST_LINES = (
++    '    check_digest "$expected_read_preflight_checker" "$read_preflight_checker"',
+     '    check_digest "$expected_journal_issuance_checker" "$journal_issuance_checker"',
+     '    check_digest "$expected_closure" "$closure_manifest"',
+     "    check_digest 'c0f5f201dca9ea6b3fa953884cdfaca8ca38413ad2a9de7700b3aaeb3a610d0c' \"$closure_checker\"",
+@@ -111,6 +120,7 @@ RUNNER_TOOL_DIGEST_LINES = (
+     '    check_digest "$expected_negative_quality_accept_fixture" "$negative_quality_accept_fixture"',
+ )
+ RUNNER_TOOL_NAMES = (
++    "read_preflight_checker",
+     "journal_issuance_checker",
+     "closure_manifest",
+     "closure_checker",
+@@ -939,6 +949,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
+         "negative-quality invocation",
+     )
+     journal_start = exact_block_start(lines, RUNNER_JOURNAL_CAMPAIGN_BLOCK, "journal campaign")
++    reader_start = exact_block_start(lines, RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK, "reader preflight campaign")
+     if not environment_start < root_start < tool_start < invocation_start:
+         raise QualityError(
+             "runner environment, root, tool, and invocation blocks are out of order",
+@@ -966,6 +977,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
+         )
+     allowed_tool_lines.update(quality_audits)
+     allowed_tool_lines.update(range(journal_start, journal_start + len(RUNNER_JOURNAL_CAMPAIGN_BLOCK)))
++    allowed_tool_lines.update(range(reader_start, reader_start + len(RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK)))
+     for digest_line in RUNNER_TOOL_DIGEST_LINES:
+         matches = [index for index, line in enumerate(lines) if line == digest_line]
+         if len(matches) != 1:
+@@ -1059,6 +1071,10 @@ def audit_runner_root_bindings(runner_source: str) -> None:
+             and journal_start < quality_audits[-1] < closure_invocations[-1]):
+         raise QualityError("journal campaign must run between authentication and final source/tool checks",
+                            code="runner.journal_campaign.order")
++    if not (journal_start < reader_start < source_checks[-2]
++            and quality_audits[0] < reader_start < quality_audits[-1] < closure_invocations[-1]):
++        raise QualityError("reader campaign must run after J1 and before final source/tool checks",
++                           code="runner.reader_preflight_campaign.order")
+     if late_block_starts != sorted(late_block_starts):
+         raise QualityError(
+             "runner late-authority binding blocks are out of order",
+@@ -1489,6 +1505,7 @@ def build_inventory_fixture(root: Path) -> tuple[Path, Path]:
+                 '    "$negative_beta"',
+                 *RUNNER_NEGATIVE_QUALITY_INVOCATION_BLOCK,
+                 *RUNNER_JOURNAL_CAMPAIGN_BLOCK,
++                *RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK,
+                 "check_sources",
+                 RUNNER_NEGATIVE_QUALITY_AUDIT,
+                 "check_sources",
+@@ -1563,6 +1580,34 @@ def inventory_self_test() -> None:
+         )
+ 
+     cases = [
++        (
++            "missing reader campaign",
++            lambda _d, r: replace_runner(r, "\n".join(RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK) + "\n", ""),
++        ),
++        (
++            "duplicate reader campaign",
++            lambda _d, r: r.write_text(r.read_text() + "\n".join(RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK) + "\n"),
++        ),
++        (
++            "changed reader arguments",
++            lambda _d, r: replace_runner(r, RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK[-1],
++                                        RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK[-1].replace('"$timeout_seconds"', '"300"')),
++        ),
++        (
++            "masked reader failure",
++            lambda _d, r: replace_runner(r, RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK[-1],
++                                        RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK[-1] + " || true"),
++        ),
++        (
++            "reader tool rebound",
++            lambda _d, r: r.write_text(r.read_text() + 'read_preflight_checker=/tmp/untrusted\n'),
++        ),
++        (
++            "relocated reader campaign",
++            lambda _d, r: r.write_text(r.read_text().replace(
++                "\n".join(RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK) + "\n", "")
++                + "\n".join(RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK) + "\n"),
++        ),
+         (
+             "missing journal campaign",
+             lambda _d, r: replace_runner(r, "\n".join(RUNNER_JOURNAL_CAMPAIGN_BLOCK) + "\n", ""),
+@@ -2132,6 +2177,10 @@ def inventory_self_test() -> None:
+             expected_errors[case_label] = code
+ 
+     expect("runner.raw_digest", "complete runner raw-byte substitution")
++    expect("runner.block.reader_preflight_campaign.count", "missing reader campaign", "duplicate reader campaign",
++           "changed reader arguments", "masked reader failure")
++    expect("runner.tool_wiring.unparsed", "reader tool rebound")
++    expect("runner.reader_preflight_campaign.order", "relocated reader campaign")
+     expect("runner.block.journal_campaign.count", "missing journal campaign", "duplicate journal campaign",
+            "changed journal arguments", "masked journal failure")
+     expect("runner.tool_wiring.unparsed", "journal tool rebound")
+diff --git a/crates/fe2o3-runtime-model/verus/check-read-preflight.py b/crates/fe2o3-runtime-model/verus/check-read-preflight.py
+new file mode 100644
+index 000000000..61c116534
+--- /dev/null
++++ b/crates/fe2o3-runtime-model/verus/check-read-preflight.py
+@@ -0,0 +1,345 @@
++#!/usr/bin/env python3
++"""Authenticated, source-bound V4-J2 preflight campaign; no commit/native claims."""
++
++from __future__ import annotations
++
++import argparse
++import copy
++import hashlib
++import importlib.util
++import json
++import os
++from pathlib import Path
++import py_compile
++import signal
++import sys
++import tempfile
++
++sys.dont_write_bytecode = True
++HERE = Path(__file__).resolve().parent
++ROOT = HERE.parents[2]
++PINS = HERE / "pins"
++POSITIVE_COUNT = 103
++INHERITED_COUNT = 69
++DEPENDENCY = "context_version_journal_issuance_v1.rs"
++PREFIX = ('// V4-J2 development: concrete reader contents and ordered preflight only.\n'
++          '// Commit preservation, Rust correspondence, storage and native authority are separate.\n')
++IMPORT = f'#[path = "{DEPENDENCY}"]\nmod issuance;\n'
++
++
++def require(condition, message):
++    if not condition:
++        raise ValueError(message)
++
++
++def digest(data: bytes) -> str:
++    return hashlib.sha256(data).hexdigest()
++
++
++def check_pin(path: Path, pin: Path) -> None:
++    expected = pin.read_text().strip()
++    require(len(expected) == 64 and digest(path.read_bytes()) == expected, f"source pin: {path.name}")
++
++
++def pinned_module(name: str, path: Path, pin: Path):
++    verified = path.read_bytes()
++    require(digest(verified) == pin.read_text().strip(), f"module source pin: {path.name}")
++    spec = importlib.util.spec_from_file_location(name, path)
++    require(spec is not None and spec.loader is not None, "module loader")
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[name] = module
++    # SourceFileLoader may consume a stale timestamp-valid .pyc even with -B.
++    exec(compile(verified, str(path), "exec"), module.__dict__)
++    check_pin(path, pin)
++    return module
++
++
++# Reuse unchanged, pinned body/span/process utilities, not their J1-only counts.
++BASE = pinned_module("reader_journal_utilities", HERE / "check-journal-issuance.py", PINS / "JOURNAL_ISSUANCE_CHECKER_SHA256")
++POLICY = pinned_module("reader_source_policy", ROOT / "examples/wave64_collectives_v1/check-proof-source.py",
++                       PINS / "PROOF_SOURCE_CHECKER_SHA256")
++
++
++def mutations():
++    def item(name, function, before, after, postcondition="exact_decision_v1"):
++        return BASE.Mutation(name, function, before, after, postcondition, POSITIVE_COUNT - 1)
++
++    constructor = "reader_constructor_exec_v1"
++    constructor_post = "reader_constructor_relation_v1"
++    acquire_frame = "    acquire_preflight_exec_v1(contents, consumer, requests, output.as_slice())"
++    release_frame = "    release_preflight_exec_v1(contents, consumer, references, evidence_consumer, observed_free_capacity)"
++    return [
++        item("constructor_lease_extent", constructor, "let leases = vacant_contents_exec_v1(reads);",
++             "let leases = vacant_contents_exec_v1(writers);", constructor_post),
++        item("constructor_count_extent", constructor, "let readers = zero_readers_exec_v1(allocations);",
++             "let readers = zero_readers_exec_v1(reads);", constructor_post),
++        item("constructor_free_contents", constructor, "let free_reads = free_contents_exec_v1(reads);",
++             "let free_reads = Vec::new();", constructor_post),
++        item("constructor_incarnation", constructor, "next_incarnation: 1", "next_incarnation: 2", constructor_post),
++        item("allocation_backlink", "allocation_lookup_exec_v1",
++             "if !same_allocation_exec_v1(member.allocation, reference)", "if false"),
++        item("read_empty_range", "validate_read_exec_v1",
++             "if request.byte_len == 0 { return Err(ReadErrorV1::InvalidExtent); }",
++             "if request.byte_len == 0 { return Ok(()); }"),
++        item("read_pending_writer", "validate_read_exec_v1",
++             "if entry.pending_member.is_some() { return Err(ReadErrorV1::AllocationBusy); }",
++             "if entry.pending_member.is_some() { return Ok(()); }"),
++        item("read_version", "validate_read_exec_v1",
++             "if entry.attempt_epoch != request.attempt_epoch\n        || entry.content_lineage != request.content_lineage { return Err(ReadErrorV1::InvalidState); }",
++             "if entry.attempt_epoch != request.attempt_epoch\n        || entry.content_lineage != request.content_lineage { return Ok(()); }"),
++        item("lease_identity", "lease_lookup_exec_v1",
++             "if !same_read_reference_exec_v1(entry.reference, reference) { return Err(ReadErrorV1::InvalidReference); }",
++             "if !same_read_reference_exec_v1(entry.reference, reference) { return Ok(entry.request); }"),
++        item("capacity_zero_incarnation", "validate_capacity_exec_v1",
++             "contents.next_incarnation == 0 || contents.next_incarnation.checked_add(count as u64).is_none()",
++             "contents.next_incarnation.checked_add(count as u64).is_none()"),
++        item("acquire_consumer", "acquire_header_exec_v1",
++             "if consumer.context_generation != contents.journal.context_generation { return Err(ReadErrorV1::ForeignContext); }",
++             "if consumer.context_generation != contents.journal.context_generation { return Ok(()); }"),
++        item("acquire_dirty_output", "acquire_header_exec_v1",
++             "if !output_vacant_exec_v1(output) { return Err(ReadErrorV1::InvalidState); }",
++             "if !output_vacant_exec_v1(output) { return Ok(()); }"),
++        item("acquire_canonical", "acquire_item_exec_v1",
++             "if !order_lt_exec_v1(prior, key) { return Err(ReadErrorV1::NonCanonicalRoster); }",
++             "if !order_lt_exec_v1(prior, key) { return Ok(ReadScanV1 { previous: Some(key), group: 0 }); }"),
++        item("acquire_occupied_slot", "acquire_item_exec_v1", "if contents.leases[slot].is_some()", "if false"),
++        item("release_evidence", "release_header_exec_v1",
++             "if !same_key_exec_v1(evidence_consumer, consumer) { return Err(ReadErrorV1::SettlementEvidenceMismatch); }",
++             "if !same_key_exec_v1(evidence_consumer, consumer) { return Ok(()); }"),
++        item("release_physical_headroom", "release_header_exec_v1",
++             "count > contents.leases.len() || count > observed_free_capacity", "count > contents.leases.len()"),
++        item("release_group_count", "release_item_exec_v1",
++             "if contents.readers[request.allocation.slot] < group", "if false"),
++        item("acquire_journal_frame", "acquire_preflight_contents_exec_v1", acquire_frame,
++             acquire_frame.replace("    acquire", "    let result = acquire") + ";\n    contents.journal.registration_watermark = 0;\n    result",
++             "acquire_preflight_relation_v1"),
++        item("acquire_output_frame", "acquire_preflight_contents_exec_v1", acquire_frame,
++             acquire_frame.replace("    acquire", "    let result = acquire") + ";\n    if output.len() > 0 { output[0] = None; }\n    result",
++             "acquire_preflight_relation_v1"),
++        item("release_incarnation_frame", "release_preflight_contents_exec_v1", release_frame,
++             release_frame.replace("    release", "    let result = release") + ";\n    contents.next_incarnation = 0;\n    result",
++             "release_preflight_relation_v1"),
++        item("unread_busy_class", "require_unread_exec_v1",
++             "if contents.readers[reference.slot] != 0 { return Err(ReadErrorV1::AllocationBusy); }",
++             "if contents.readers[reference.slot] != 0 { return Err(ReadErrorV1::InvalidState); }"),
++    ]
++
++
++def audit_source(source: str, dependency: Path, stripped: Path) -> None:
++    require(source.isascii(), "ASCII proof source")
++    require(source.startswith(PREFIX + IMPORT) and source.count(IMPORT) == 1, "exact initial pinned import")
++    check_pin(dependency, PINS / "CONTEXT_VERSION_JOURNAL_ISSUANCE_SHA256")
++    stripped.write_text(PREFIX + "\n\n" + source[len(PREFIX + IMPORT):], encoding="ascii")
++    POLICY.scan(stripped)
++    POLICY.scan(dependency)
++    check_pin(dependency, PINS / "CONTEXT_VERSION_JOURNAL_ISSUANCE_SHA256")
++
++
++def check_result(status, stdout, stderr, source, path, mutation):
++    require(status == (1 if mutation else 0), "normal expected exit required")
++    report = BASE.unique_json(stdout)
++    expected = {"encountered-error": mutation is not None, "encountered-vir-error": False,
++                "success": mutation is None, "verified": mutation.verified if mutation else POSITIVE_COUNT,
++                "errors": 1 if mutation else 0, "is-verifying-entire-crate": True}
++    actual = report["verification-results"]
++    require(actual == expected and all(type(actual[key]) is type(value) for key, value in expected.items()),
++            "exact whole-crate summary")
++    diagnostics = [BASE.unique_json(line) for line in stderr.splitlines()]
++    if mutation is None:
++        require(not diagnostics, "positive diagnostic output")
++        return
++    require(len(diagnostics) in (1, 2), "exact diagnostic count")
++    if len(diagnostics) == 2:
++        footer = diagnostics[1]
++        require(footer["$message_type"] == "diagnostic" and footer["message"] == "aborting due to 1 previous error"
++                and footer["level"] == "error" and not footer["spans"] and not footer["children"]
++                and footer["code"] is None, "exact error footer")
++    diagnostic = diagnostics[0]
++    require(diagnostic["$message_type"] == "diagnostic" and diagnostic["level"] == "error"
++            and diagnostic["message"] == "postcondition not satisfied" and diagnostic["code"] is None
++            and not diagnostic["children"], "intended postcondition error")
++    spans = diagnostic["spans"]
++    require(len(spans) == 2, "exact postcondition/exit spans")
++    for span in spans:
++        BASE.check_span(span, source, path)
++    primary = [span for span in spans if span["is_primary"] is True]
++    secondary = [span for span in spans if span["is_primary"] is False]
++    require(len(primary) == len(secondary) == 1, "one primary and one exit")
++    post, exit_span = primary[0], secondary[0]
++    require((post["byte_start"], post["byte_end"]) == BASE.postcondition_bounds(source, mutation)
++            and post["label"] == "failed this postcondition", "exact intended postcondition")
++    _, body, end = BASE.function_bounds(source, mutation.function)
++    require(body <= exit_span["byte_start"] < exit_span["byte_end"] <= end, "exit inside target body")
++    require(exit_span["label"] in ("at this exit", "at the end of the function body"), "expected exit label")
++
++
++def campaign(source: Path, verus: Path, timeout: int, output: Path):
++    source, verus = source.resolve(strict=True), verus.resolve(strict=True)
++    require(1 <= timeout <= 300, "timeout must be 1 through 300")
++    require(verus.name == "verus", "named Verus executable required")
++    check_pin(source, PINS / "CONTEXT_READ_PREFLIGHT_SHA256")
++    check_pin(Path(__file__), PINS / "READ_PREFLIGHT_CHECKER_SHA256")
++    check_pin(verus, PINS / "VERUS_SHA256")
++    dependency = HERE / DEPENDENCY
++    check_pin(dependency, PINS / "CONTEXT_VERSION_JOURNAL_ISSUANCE_SHA256")
++    closure = ROOT / "examples/row_softmax_v1/verify-verus-closure.sh"
++    manifest = PINS / "VERUS_CLOSURE_MANIFEST"
++    check_pin(manifest, PINS / "VERUS_CLOSURE_MANIFEST_SHA256")
++    require(digest(closure.read_bytes()) == "c0f5f201dca9ea6b3fa953884cdfaca8ca38413ad2a9de7700b3aaeb3a610d0c", "closure checker pin")
++    inputs = [source, dependency, Path(__file__), Path(BASE.__file__), Path(POLICY.__file__),
++              closure, manifest, verus, verus.parent / "rust_verify", verus.parent / "z3"]
++    inputs.extend(PINS / name for name in ["CONTEXT_READ_PREFLIGHT_SHA256", "READ_PREFLIGHT_CHECKER_SHA256",
++                  "CONTEXT_VERSION_JOURNAL_ISSUANCE_SHA256", "JOURNAL_ISSUANCE_CHECKER_SHA256",
++                  "PROOF_SOURCE_CHECKER_SHA256", "VERUS_CLOSURE_MANIFEST_SHA256", "VERUS_SHA256"])
++    identities = {str(path): digest(path.read_bytes()) for path in inputs}
++    output.mkdir()
++    (output / "inputs.json").write_text(json.dumps(identities, indent=2) + "\n")
++    environment = {"HOME": os.environ.get("HOME", "/nonexistent")}
++    for name in ("RUSTUP_HOME", "CARGO_HOME"):
++        environment[name] = os.environ.get(name, str(Path(environment["HOME"]) / (".rustup" if name == "RUSTUP_HOME" else ".cargo")))
++    environment["PATH"] = environment["CARGO_HOME"] + "/bin:/usr/bin:/bin"
++    environment["VERUS_Z3_PATH"] = str(verus.parent / "z3")
++    original, original_dependency = source.read_text(), dependency.read_bytes()
++    cases = [("positive_before", None), *[(item.name, item) for item in mutations()], ("positive_after", None)]
++    for phase in ["before", "after"]:
++        status, _, _ = BASE.run_owned(["/bin/sh", str(closure), str(verus.parent), str(manifest)],
++                                      120, output / f"closure-{phase}", environment)
++        require(status == 0, "authenticated Verus distribution")
++        if phase == "after":
++            break
++        for name, mutation in cases:
++            out = output / name
++            out.mkdir()
++            candidate, candidate_dependency = out / "reader.rs", out / DEPENDENCY
++            expected = (BASE.mutate(original, mutation) if mutation else original).encode("ascii")
++            candidate.write_bytes(expected)
++            candidate_dependency.write_bytes(original_dependency)
++            audit_source(expected.decode("ascii"), candidate_dependency, out / "audited-reader-body.rs")
++            generated = {str(path): digest(path.read_bytes()) for path in [candidate, candidate_dependency, out / "audited-reader-body.rs"]}
++            (out / "sources.json").write_text(json.dumps(generated, indent=2) + "\n")
++            command = ["/usr/bin/timeout", "--foreground", "--signal=TERM", "--kill-after=5", str(timeout),
++                       str(verus), "--crate-type", "lib", "--triggers-mode", "silent", "--no-cheating",
++                       "--output-json", "--error-format=json", "--num-threads", "4", str(candidate)]
++            require(candidate.read_bytes() == expected and candidate_dependency.read_bytes() == original_dependency,
++                    "exact solver inputs before")
++            status, stdout, stderr = BASE.run_owned(command, timeout + 10, out / "solver", environment)
++            require({path: digest(Path(path).read_bytes()) for path in generated} == generated, "generated source replacement")
++            check_result(status, stdout, stderr, expected.decode("ascii"), candidate, mutation)
++            require({str(path): digest(path.read_bytes()) for path in inputs} == identities, "source/tool replacement")
++            print(f"PASS: reader preflight {name}", flush=True)
++    require({str(path): digest(path.read_bytes()) for path in inputs} == identities, "final source/tool identities")
++    print(f"READ_PREFLIGHT_OK obligations={POSITIVE_COUNT} inherited={INHERITED_COUNT} new={POSITIVE_COUNT - INHERITED_COUNT} executable_mutations={len(mutations())}", flush=True)
++
++
++def self_test(source: str):
++    for case in mutations():
++        BASE.postcondition_bounds(BASE.mutate(source, case), case)
++    case = mutations()[0]
++    changed = BASE.mutate(source, case)
++    path = Path("/owned/reader.rs")
++    start, end = BASE.postcondition_bounds(changed, case)
++    _, body, finish = BASE.function_bounds(changed, case.function)
++
++    def span(begin, finish, primary, label):
++        first, last = changed.count("\n", 0, begin) + 1, changed.count("\n", 0, finish) + 1
++        return {"file_name": str(path), "byte_start": begin, "byte_end": finish,
++                "line_start": first, "line_end": last, "column_start": begin - changed.rfind("\n", 0, begin),
++                "column_end": finish - changed.rfind("\n", 0, finish), "is_primary": primary,
++                "label": label, "expansion": None,
++                "text": [{"text": line} for line in changed.splitlines()[first - 1:last]]}
++
++    report = {"verification-results": {"encountered-error": True, "encountered-vir-error": False,
++              "success": False, "verified": POSITIVE_COUNT - 1, "errors": 1, "is-verifying-entire-crate": True}}
++    diagnostic = {"$message_type": "diagnostic", "message": "postcondition not satisfied", "code": None,
++                  "level": "error", "children": [], "spans": [span(start, end, True, "failed this postcondition"),
++                  span(body, finish, False, "at the end of the function body")]}
++    stdout, stderr = json.dumps(report), json.dumps(diagnostic)
++    check_result(1, stdout, stderr, changed, path, case)
++    positive = copy.deepcopy(report)
++    positive["verification-results"].update({"encountered-error": False, "success": True, "verified": POSITIVE_COUNT, "errors": 0})
++    check_result(0, json.dumps(positive), "", source, path, None)
++    rejected = 0
++
++    def rejects(status=1, out=stdout, err=stderr):
++        nonlocal rejected
++        try:
++            check_result(status, out, err, changed, path, case)
++        except (ValueError, KeyError, TypeError):
++            rejected += 1
++        else:
++            raise ValueError("parser accepted adverse diagnostic")
++
++    for status in [0, 2, 101, 124, 137, -9, -15]:
++        rejects(status=status)
++    for field, value in [("verified", 69), ("verified", 102.0), ("errors", 2), ("errors", True),
++                         ("encountered-vir-error", True), ("is-verifying-entire-crate", False), ("success", 0)]:
++        bad = copy.deepcopy(report)
++        bad["verification-results"][field] = value
++        rejects(out=json.dumps(bad))
++    for field, value in [("message", "precondition not satisfied"), ("code", {"code": "E0308"}),
++                         ("level", "warning"), ("children", [{"message": "solver timed out"}])]:
++        bad = copy.deepcopy(diagnostic)
++        bad[field] = value
++        rejects(err=json.dumps(bad))
++    for field, value in [("file_name", "/owned/" + DEPENDENCY), ("byte_start", start + 1),
++                         ("byte_end", end - 1), ("line_start", 1), ("column_start", 1),
++                         ("label", "different postcondition"), ("text", []), ("expansion", {})]:
++        bad = copy.deepcopy(diagnostic)
++        bad["spans"][0][field] = value
++        rejects(err=json.dumps(bad))
++    rejects(out=stdout + stdout)
++    rejects(out=stdout.replace('"errors": 1', '"errors": 1, "errors": 1'))
++    rejects(err=stderr + "\n" + stderr)
++    rejects(err=stderr + "\nsolver timed out")
++    rejects(err="")
++    bad = copy.deepcopy(diagnostic)
++    bad["spans"][1] = span(0, 2, False, "at this exit")
++    rejects(err=json.dumps(bad))
++    with tempfile.TemporaryDirectory(prefix="fe2o3-reader-audit-") as temporary:
++        stripped = Path(temporary) / "body.rs"
++        audit_source(source, HERE / DEPENDENCY, stripped)
++        for invalid in [source.replace(IMPORT, IMPORT.replace(DEPENDENCY, "foreign.rs")),
++                        "/*\n" + source + "\n*/", source + "\nmod foreign;\n",
++                        source + '\ninclude!("foreign.rs");\n', source + '\n#[cfg(false)] fn hidden() {}\n',
++                        source + '\nverus! { proof fn bypass() { assume(false); } }\n']:
++            try:
++                audit_source(invalid, HERE / DEPENDENCY, stripped)
++            except (ValueError, POLICY.ScanError):
++                rejected += 1
++            else:
++                raise ValueError("import/source auditor accepted adverse source")
++        module_path, module_pin = Path(temporary) / "cached.py", Path(temporary) / "cached.pin"
++        module_path.write_bytes(b"VALUE = 2\n")
++        original_stat = module_path.stat()
++        py_compile.compile(str(module_path), doraise=True)
++        module_path.write_bytes(b"VALUE = 1\n")
++        os.utime(module_path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
++        module_pin.write_text(digest(module_path.read_bytes()) + "\n")
++        require(pinned_module("reader_cache_self_test", module_path, module_pin).VALUE == 1,
++                "pinned loader must ignore timestamp-valid stale bytecode")
++        del sys.modules["reader_cache_self_test"]
++    BASE.process_self_test()
++    print(f"PASS: reader self-test ({len(mutations())} mutations, {rejected} adverse diagnostics/sources rejected)")
++
++
++def main():
++    for signum in BASE.SIGNALS:
++        signal.signal(signum, BASE.interrupted)
++    signal.pthread_sigmask(signal.SIG_UNBLOCK, BASE.SIGNALS)
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--self-test", action="store_true")
++    parser.add_argument("source", type=Path)
++    parser.add_argument("verus", type=Path, nargs="?")
++    parser.add_argument("timeout", type=int, nargs="?")
++    parser.add_argument("output", type=Path, nargs="?")
++    args = parser.parse_args()
++    if args.self_test:
++        require(args.verus is None and args.timeout is None and args.output is None, "self-test arguments")
++        self_test(args.source.read_text())
++    else:
++        require(args.verus is not None and args.timeout is not None and args.output is not None, "campaign arguments")
++        campaign(args.source, args.verus, args.timeout, args.output)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/crates/fe2o3-runtime-model/verus/context_read_preflight_v1.rs b/crates/fe2o3-runtime-model/verus/context_read_preflight_v1.rs
+new file mode 100644
+index 000000000..f8947ff08
+--- /dev/null
++++ b/crates/fe2o3-runtime-model/verus/context_read_preflight_v1.rs
+@@ -0,0 +1,696 @@
++// V4-J2 development: concrete reader contents and ordered preflight only.
++// Commit preservation, Rust correspondence, storage and native authority are separate.
++#[path = "context_version_journal_issuance_v1.rs"]
++mod issuance;
++use issuance::*;
++use vstd::prelude::*;
++
++verus! {
++
++#[derive(Clone, Copy)]
++pub enum ReadErrorV1 {
++    InvalidContextGeneration, InvalidCapacity, ForeignContext, InvalidWriterId,
++    WriterReplay, WriterCapacity, InvalidReference, InvalidState,
++    InvalidAllocationReference, AllocationDeviceMismatch, AllocationExtentMismatch,
++    InvalidExtent, AllocationBusy, RosterCapacity, MemberCapacity, EpochExhausted,
++    NonCanonicalRoster, SettlementEvidenceMismatch,
++}
++
++#[derive(Clone, Copy)]
++pub struct AllocationReadV1 {
++    pub allocation: AllocationReferenceV1,
++    pub device: DeviceKeyV1,
++    pub byte_extent: u64,
++    pub byte_offset: u64,
++    pub byte_len: u64,
++    pub attempt_epoch: u64,
++    pub content_lineage: u64,
++}
++
++#[derive(Clone, Copy)]
++pub struct ReadReferenceV1 {
++    pub slot: usize,
++    pub incarnation: u64,
++    pub consumer: WriterKeyV1,
++}
++
++#[derive(Clone, Copy)]
++pub struct ReadLeaseV1 {
++    pub reference: ReadReferenceV1,
++    pub request: AllocationReadV1,
++}
++
++pub struct ReadContentsV1 {
++    pub journal: JournalContentsV1,
++    pub leases: Vec<Option<ReadLeaseV1>>,
++    pub free_reads: Vec<usize>,
++    pub readers: Vec<usize>,
++    pub next_incarnation: u64,
++}
++
++pub open spec fn exact_decision_v1<T>(actual: Result<T, ReadErrorV1>, expected: Result<T, ReadErrorV1>) -> bool {
++    actual == expected
++}
++
++pub open spec fn lift_error_v1(error: JournalErrorV1) -> ReadErrorV1 {
++    match error {
++        JournalErrorV1::InvalidContextGeneration => ReadErrorV1::InvalidContextGeneration,
++        JournalErrorV1::InvalidCapacity => ReadErrorV1::InvalidCapacity,
++        JournalErrorV1::ForeignContext => ReadErrorV1::ForeignContext,
++        JournalErrorV1::InvalidWriterId => ReadErrorV1::InvalidWriterId,
++        JournalErrorV1::WriterReplay => ReadErrorV1::WriterReplay,
++        JournalErrorV1::WriterCapacity => ReadErrorV1::WriterCapacity,
++        JournalErrorV1::InvalidReference => ReadErrorV1::InvalidReference,
++        JournalErrorV1::InvalidState => ReadErrorV1::InvalidState,
++    }
++}
++
++pub fn lift_error_exec_v1(error: JournalErrorV1) -> (result: ReadErrorV1)
++    ensures result == lift_error_v1(error),
++{
++    match error {
++        JournalErrorV1::InvalidContextGeneration => ReadErrorV1::InvalidContextGeneration,
++        JournalErrorV1::InvalidCapacity => ReadErrorV1::InvalidCapacity,
++        JournalErrorV1::ForeignContext => ReadErrorV1::ForeignContext,
++        JournalErrorV1::InvalidWriterId => ReadErrorV1::InvalidWriterId,
++        JournalErrorV1::WriterReplay => ReadErrorV1::WriterReplay,
++        JournalErrorV1::WriterCapacity => ReadErrorV1::WriterCapacity,
++        JournalErrorV1::InvalidReference => ReadErrorV1::InvalidReference,
++        JournalErrorV1::InvalidState => ReadErrorV1::InvalidState,
++    }
++}
++
++pub open spec fn reader_constructor_admission_v1(
++    context: u64, allocations: usize, writers: usize, reads: usize,
++) -> Option<ReadErrorV1> {
++    if reads == 0 || reads > 1_048_576 { Some(ReadErrorV1::InvalidCapacity) }
++    else {
++        match constructor_admission_v1(context, allocations, writers) {
++            Some(error) => Some(lift_error_v1(error)),
++            None => None,
++        }
++    }
++}
++
++pub open spec fn reader_constructor_relation_v1(
++    context: u64, allocations: usize, writers: usize, reads: usize,
++    result: Result<ReadContentsV1, ReadErrorV1>,
++) -> bool {
++    match reader_constructor_admission_v1(context, allocations, writers, reads) {
++        Some(error) => result == Err(error),
++        None => match result {
++            Err(_) => false,
++            Ok(contents) => {
++                &&& constructor_contents_initialized_v1(contents.journal, context, allocations, writers)
++                &&& contents.leases@ == Seq::new(reads as nat, |i: int| None)
++                &&& contents.free_reads@ == reverse_free_v1(reads)
++                &&& contents.readers@ == Seq::new(allocations as nat, |i: int| 0usize)
++                &&& contents.next_incarnation == 1
++            },
++        },
++    }
++}
++
++pub fn zero_readers_exec_v1(capacity: usize) -> (result: Vec<usize>)
++    ensures result@ == Seq::new(capacity as nat, |i: int| 0usize),
++{
++    let mut result = Vec::new();
++    let mut index = 0;
++    while index < capacity
++        invariant index <= capacity, result@ == Seq::new(index as nat, |i: int| 0usize),
++        decreases capacity - index,
++    {
++        result.push(0);
++        index += 1;
++        proof { assert(result@ =~= Seq::new(index as nat, |i: int| 0usize)); }
++    }
++    result
++}
++
++pub fn reader_constructor_exec_v1(
++    context: u64, allocations: usize, writers: usize, reads: usize,
++) -> (result: Result<ReadContentsV1, ReadErrorV1>)
++    ensures reader_constructor_relation_v1(context, allocations, writers, reads, result),
++{
++    if reads == 0 || reads > 1_048_576 { return Err(ReadErrorV1::InvalidCapacity); }
++    let journal = match constructor_contents_exec_v1(context, allocations, writers) {
++        Ok(value) => value,
++        Err(error) => return Err(lift_error_exec_v1(error)),
++    };
++    let leases = vacant_contents_exec_v1(reads);
++    let free_reads = free_contents_exec_v1(reads);
++    let readers = zero_readers_exec_v1(allocations);
++    Ok(ReadContentsV1 { journal, leases, free_reads, readers, next_incarnation: 1 })
++}
++
++pub open spec fn same_allocation_v1(left: AllocationReferenceV1, right: AllocationReferenceV1) -> bool {
++    left.slot == right.slot && left.key.context_generation == right.key.context_generation
++        && left.key.local == right.key.local
++}
++
++pub fn same_allocation_exec_v1(left: AllocationReferenceV1, right: AllocationReferenceV1) -> (result: bool)
++    ensures result == same_allocation_v1(left, right),
++{
++    left.slot == right.slot && left.key.context_generation == right.key.context_generation
++        && left.key.local == right.key.local
++}
++
++pub open spec fn same_read_reference_v1(left: ReadReferenceV1, right: ReadReferenceV1) -> bool {
++    left.slot == right.slot && left.incarnation == right.incarnation
++        && same_key_v1(left.consumer, right.consumer)
++}
++
++pub fn same_read_reference_exec_v1(left: ReadReferenceV1, right: ReadReferenceV1) -> (result: bool)
++    ensures result == same_read_reference_v1(left, right),
++{
++    left.slot == right.slot && left.incarnation == right.incarnation
++        && same_key_exec_v1(left.consumer, right.consumer)
++}
++
++// Returns the exact allocation only after checking the production pending backlink.
++pub open spec fn allocation_decision_v1(
++    journal: JournalContentsV1, reference: AllocationReferenceV1,
++) -> Result<AllocationEntryV1, ReadErrorV1> {
++    if reference.slot >= journal.allocations@.len() { Err(ReadErrorV1::InvalidAllocationReference) }
++    else { match journal.allocations@[reference.slot as int] {
++        None => Err(ReadErrorV1::InvalidAllocationReference),
++        Some(entry) => {
++            if entry.key.context_generation != reference.key.context_generation
++                || entry.key.local != reference.key.local
++                || entry.key.context_generation != journal.context_generation {
++                Err(ReadErrorV1::InvalidAllocationReference)
++            } else { match entry.pending_member {
++                None => Ok(entry),
++                Some(slot) => {
++                    if slot >= journal.members@.len() { Err(ReadErrorV1::InvalidState) }
++                    else { match journal.members@[slot as int] {
++                        Some(member) => if same_allocation_v1(member.allocation, reference) {
++                            Ok(entry)
++                        } else { Err(ReadErrorV1::InvalidState) },
++                        None => Err(ReadErrorV1::InvalidState),
++                    } }
++                },
++            } }
++        },
++    } }
++}
++
++pub fn allocation_lookup_exec_v1(journal: &JournalContentsV1, reference: AllocationReferenceV1)
++    -> (result: Result<AllocationEntryV1, ReadErrorV1>)
++    ensures exact_decision_v1(result, allocation_decision_v1(*journal, reference)),
++{
++    if reference.slot >= journal.allocations.len() { return Err(ReadErrorV1::InvalidAllocationReference); }
++    let entry = match journal.allocations[reference.slot] {
++        Some(entry) => entry,
++        None => return Err(ReadErrorV1::InvalidAllocationReference),
++    };
++    if entry.key.context_generation != reference.key.context_generation
++        || entry.key.local != reference.key.local
++        || entry.key.context_generation != journal.context_generation {
++        return Err(ReadErrorV1::InvalidAllocationReference);
++    }
++    if let Some(slot) = entry.pending_member {
++        if slot >= journal.members.len() { return Err(ReadErrorV1::InvalidState); }
++        match journal.members[slot] {
++            Some(member) => {
++                if !same_allocation_exec_v1(member.allocation, reference) { return Err(ReadErrorV1::InvalidState); }
++            },
++            None => return Err(ReadErrorV1::InvalidState),
++        }
++    }
++    Ok(entry)
++}
++
++pub open spec fn read_decision_v1(journal: JournalContentsV1, request: AllocationReadV1)
++    -> Result<(), ReadErrorV1>
++{
++    match allocation_decision_v1(journal, request.allocation) {
++        Err(error) => Err(error),
++        Ok(entry) => {
++            if entry.device.context_generation != request.device.context_generation
++                || entry.device.local != request.device.local { Err(ReadErrorV1::AllocationDeviceMismatch) }
++            else if entry.byte_extent != request.byte_extent { Err(ReadErrorV1::AllocationExtentMismatch) }
++            else if request.byte_len == 0 || request.byte_offset + request.byte_len > u64::MAX
++                || request.byte_offset + request.byte_len > request.byte_extent { Err(ReadErrorV1::InvalidExtent) }
++            else if entry.pending_member.is_some() { Err(ReadErrorV1::AllocationBusy) }
++            else if entry.attempt_epoch != request.attempt_epoch
++                || entry.content_lineage != request.content_lineage { Err(ReadErrorV1::InvalidState) }
++            else { Ok(()) }
++        },
++    }
++}
++
++pub fn validate_read_exec_v1(journal: &JournalContentsV1, request: AllocationReadV1)
++    -> (result: Result<(), ReadErrorV1>)
++    ensures exact_decision_v1(result, read_decision_v1(*journal, request)),
++{
++    let entry = match allocation_lookup_exec_v1(journal, request.allocation) {
++        Ok(entry) => entry,
++        Err(error) => return Err(error),
++    };
++    if entry.device.context_generation != request.device.context_generation
++        || entry.device.local != request.device.local { return Err(ReadErrorV1::AllocationDeviceMismatch); }
++    if entry.byte_extent != request.byte_extent { return Err(ReadErrorV1::AllocationExtentMismatch); }
++    if request.byte_len == 0 { return Err(ReadErrorV1::InvalidExtent); }
++    let end = match request.byte_offset.checked_add(request.byte_len) {
++        Some(value) => value,
++        None => return Err(ReadErrorV1::InvalidExtent),
++    };
++    if end > request.byte_extent { return Err(ReadErrorV1::InvalidExtent); }
++    if entry.pending_member.is_some() { return Err(ReadErrorV1::AllocationBusy); }
++    if entry.attempt_epoch != request.attempt_epoch
++        || entry.content_lineage != request.content_lineage { return Err(ReadErrorV1::InvalidState); }
++    Ok(())
++}
++
++pub open spec fn lease_decision_v1(contents: ReadContentsV1, reference: ReadReferenceV1)
++    -> Result<AllocationReadV1, ReadErrorV1>
++{
++    if reference.slot >= contents.leases@.len() { Err(ReadErrorV1::InvalidReference) }
++    else { match contents.leases@[reference.slot as int] {
++        None => Err(ReadErrorV1::InvalidReference),
++        Some(entry) => {
++            if !same_read_reference_v1(entry.reference, reference) { Err(ReadErrorV1::InvalidReference) }
++            else { match read_decision_v1(contents.journal, entry.request) {
++                Err(error) => Err(error),
++                Ok(()) => Ok(entry.request),
++            } }
++        },
++    } }
++}
++
++pub fn lease_lookup_exec_v1(contents: &ReadContentsV1, reference: ReadReferenceV1)
++    -> (result: Result<AllocationReadV1, ReadErrorV1>)
++    ensures exact_decision_v1(result, lease_decision_v1(*contents, reference)),
++{
++    if reference.slot >= contents.leases.len() { return Err(ReadErrorV1::InvalidReference); }
++    let entry = match contents.leases[reference.slot] {
++        Some(value) => value,
++        None => return Err(ReadErrorV1::InvalidReference),
++    };
++    if !same_read_reference_exec_v1(entry.reference, reference) { return Err(ReadErrorV1::InvalidReference); }
++    match validate_read_exec_v1(&contents.journal, entry.request) {
++        Err(error) => Err(error),
++        Ok(()) => Ok(entry.request),
++    }
++}
++
++pub open spec fn capacity_decision_v1(contents: ReadContentsV1, count: usize) -> Result<(), ReadErrorV1> {
++    if count > contents.free_reads@.len() { Err(ReadErrorV1::MemberCapacity) }
++    else if contents.next_incarnation == 0 || contents.next_incarnation + count > u64::MAX {
++        Err(ReadErrorV1::EpochExhausted)
++    } else { Ok(()) }
++}
++
++pub fn validate_capacity_exec_v1(contents: &ReadContentsV1, count: usize)
++    -> (result: Result<(), ReadErrorV1>)
++    requires count <= u64::MAX,
++    ensures exact_decision_v1(result, capacity_decision_v1(*contents, count)),
++{
++    if count > contents.free_reads.len() { return Err(ReadErrorV1::MemberCapacity); }
++    if contents.next_incarnation == 0 || contents.next_incarnation.checked_add(count as u64).is_none() {
++        return Err(ReadErrorV1::EpochExhausted);
++    }
++    Ok(())
++}
++
++pub type ReadOrderV1 = (u64, u64, u64, u64);
++
++#[derive(Clone, Copy)]
++pub struct ReadScanV1 { pub previous: Option<ReadOrderV1>, pub group: usize }
++
++pub open spec fn read_order_v1(request: AllocationReadV1, incarnation: u64) -> ReadOrderV1 {
++    (request.allocation.key.local, request.byte_offset, request.byte_len, incarnation)
++}
++
++pub open spec fn order_lt_v1(left: ReadOrderV1, right: ReadOrderV1) -> bool {
++    left.0 < right.0 || (left.0 == right.0 && (left.1 < right.1
++        || (left.1 == right.1 && (left.2 < right.2 || (left.2 == right.2 && left.3 < right.3)))))
++}
++
++pub fn order_lt_exec_v1(left: ReadOrderV1, right: ReadOrderV1) -> (result: bool)
++    ensures result == order_lt_v1(left, right),
++{
++    left.0 < right.0 || (left.0 == right.0 && (left.1 < right.1
++        || (left.1 == right.1 && (left.2 < right.2 || (left.2 == right.2 && left.3 < right.3)))))
++}
++
++pub open spec fn next_group_v1(previous: Option<ReadOrderV1>, group: usize, key: ReadOrderV1) -> usize {
++    if previous.is_some() && previous.unwrap().0 == key.0 { (group + 1) as usize } else { 1 }
++}
++
++pub fn next_group_exec_v1(previous: Option<ReadOrderV1>, group: usize, key: ReadOrderV1) -> (result: usize)
++    requires group < usize::MAX,
++    ensures result == next_group_v1(previous, group, key), result <= group + 1,
++{
++    if let Some(prior) = previous {
++        if prior.0 == key.0 { return group + 1; }
++    }
++    1
++}
++
++pub fn output_vacant_exec_v1(output: &[Option<ReadReferenceV1>]) -> (result: bool)
++    ensures result == (forall|i: int| 0 <= i < output@.len() ==> output@[i].is_none()),
++{
++    let mut index = 0;
++    while index < output.len()
++        invariant index <= output.len(), forall|i: int| 0 <= i < index ==> output@[i].is_none(),
++        decreases output.len() - index,
++    {
++        if output[index].is_some() { return false; }
++        index += 1;
++    }
++    true
++}
++
++pub open spec fn acquire_header_v1(
++    contents: ReadContentsV1, consumer: WriterKeyV1, count: usize, output: Seq<Option<ReadReferenceV1>>,
++) -> Result<(), ReadErrorV1> {
++    if consumer.context_generation != contents.journal.context_generation { Err(ReadErrorV1::ForeignContext) }
++    else if !issuable_id_v1(consumer.local) { Err(ReadErrorV1::InvalidWriterId) }
++    else if count == 0 || count != output.len() { Err(ReadErrorV1::RosterCapacity) }
++    else if exists|i: int| 0 <= i < output.len() && output[i].is_some() { Err(ReadErrorV1::InvalidState) }
++    else { capacity_decision_v1(contents, count) }
++}
++
++pub fn acquire_header_exec_v1(
++    contents: &ReadContentsV1, consumer: WriterKeyV1, count: usize, output: &[Option<ReadReferenceV1>],
++) -> (result: Result<(), ReadErrorV1>)
++    requires count <= u64::MAX,
++    ensures exact_decision_v1(result, acquire_header_v1(*contents, consumer, count, output@)),
++{
++    if consumer.context_generation != contents.journal.context_generation { return Err(ReadErrorV1::ForeignContext); }
++    if !issuable_id_exec_v1(consumer.local) { return Err(ReadErrorV1::InvalidWriterId); }
++    if count == 0 || count != output.len() { return Err(ReadErrorV1::RosterCapacity); }
++    if !output_vacant_exec_v1(output) { return Err(ReadErrorV1::InvalidState); }
++    validate_capacity_exec_v1(contents, count)
++}
++
++pub open spec fn acquire_item_v1(
++    contents: ReadContentsV1, request: AllocationReadV1, index: usize, state: ReadScanV1,
++) -> Result<ReadScanV1, ReadErrorV1> {
++    match read_decision_v1(contents.journal, request) {
++        Err(error) => Err(error),
++        Ok(()) => {
++            let key = read_order_v1(request, 0);
++            if state.previous.is_some() && !order_lt_v1(state.previous.unwrap(), key) {
++                Err(ReadErrorV1::NonCanonicalRoster)
++            } else {
++                let group = next_group_v1(state.previous, state.group, key);
++                let count = contents.readers@[request.allocation.slot as int] + group;
++                if count > usize::MAX || count > contents.leases@.len() { Err(ReadErrorV1::InvalidState) }
++                else {
++                    let slot = contents.free_reads@[contents.free_reads@.len() - index - 1];
++                    if slot >= contents.leases@.len() || contents.leases@[slot as int].is_some() {
++                        Err(ReadErrorV1::InvalidState)
++                    } else { Ok(ReadScanV1 { previous: Some(key), group }) }
++                }
++            }
++        },
++    }
++}
++
++pub fn acquire_item_exec_v1(
++    contents: &ReadContentsV1, request: AllocationReadV1, index: usize, state: ReadScanV1,
++) -> (result: Result<ReadScanV1, ReadErrorV1>)
++    requires contents.readers@.len() == contents.journal.allocations@.len(),
++        index < contents.free_reads@.len(), state.group < usize::MAX,
++    ensures exact_decision_v1(result, acquire_item_v1(*contents, request, index, state)),
++        match result { Ok(next) => next.group <= state.group + 1, Err(_) => true },
++{
++    match validate_read_exec_v1(&contents.journal, request) {
++        Err(error) => return Err(error), Ok(()) => {},
++    }
++    let key = (request.allocation.key.local, request.byte_offset, request.byte_len, 0);
++    if let Some(prior) = state.previous {
++        if !order_lt_exec_v1(prior, key) { return Err(ReadErrorV1::NonCanonicalRoster); }
++    }
++    let group = next_group_exec_v1(state.previous, state.group, key);
++    let count = match contents.readers[request.allocation.slot].checked_add(group) {
++        Some(value) => value, None => return Err(ReadErrorV1::InvalidState),
++    };
++    if count > contents.leases.len() { return Err(ReadErrorV1::InvalidState); }
++    let slot = contents.free_reads[contents.free_reads.len() - index - 1];
++    if slot >= contents.leases.len() { return Err(ReadErrorV1::InvalidState); }
++    if contents.leases[slot].is_some() { return Err(ReadErrorV1::InvalidState); }
++    Ok(ReadScanV1 { previous: Some(key), group })
++}
++
++// A left-to-right first-error scan, not a conjunction of unordered validity checks.
++pub open spec fn acquire_scan_v1(
++    contents: ReadContentsV1, requests: Seq<AllocationReadV1>, index: nat, state: ReadScanV1,
++) -> Result<(), ReadErrorV1>
++    decreases requests.len() - index,
++{
++    if index >= requests.len() { Ok(()) }
++    else { match acquire_item_v1(contents, requests[index as int], index as usize, state) {
++        Err(error) => Err(error),
++        Ok(next) => acquire_scan_v1(contents, requests, index + 1, next),
++    } }
++}
++
++pub open spec fn acquire_decision_v1(
++    contents: ReadContentsV1, consumer: WriterKeyV1, requests: Seq<AllocationReadV1>,
++    output: Seq<Option<ReadReferenceV1>>,
++) -> Result<(), ReadErrorV1> {
++    match acquire_header_v1(contents, consumer, requests.len() as usize, output) {
++        Err(error) => Err(error),
++        Ok(()) => acquire_scan_v1(contents, requests, 0, ReadScanV1 { previous: None, group: 0 }),
++    }
++}
++
++pub fn acquire_preflight_exec_v1(
++    contents: &ReadContentsV1, consumer: WriterKeyV1, requests: &[AllocationReadV1],
++    output: &[Option<ReadReferenceV1>],
++) -> (result: Result<(), ReadErrorV1>)
++    requires contents.readers@.len() == contents.journal.allocations@.len(), requests@.len() <= u64::MAX,
++    ensures exact_decision_v1(result, acquire_decision_v1(*contents, consumer, requests@, output@)),
++{
++    match acquire_header_exec_v1(contents, consumer, requests.len(), output) {
++        Err(error) => return Err(error), Ok(()) => {},
++    }
++    let mut index = 0;
++    let mut state = ReadScanV1 { previous: None, group: 0 };
++    while index < requests.len()
++        invariant index <= requests.len(), state.group <= index,
++            requests@.len() <= contents.free_reads@.len(),
++            contents.readers@.len() == contents.journal.allocations@.len(),
++            acquire_decision_v1(*contents, consumer, requests@, output@)
++                == acquire_scan_v1(*contents, requests@, index as nat, state),
++        decreases requests.len() - index,
++    {
++        match acquire_item_exec_v1(contents, requests[index], index, state) {
++            Err(error) => return Err(error),
++            Ok(next) => state = next,
++        }
++        index += 1;
++    }
++    Ok(())
++}
++
++pub open spec fn release_header_v1(
++    contents: ReadContentsV1, consumer: WriterKeyV1, evidence_consumer: WriterKeyV1,
++    count: usize, observed_free_capacity: usize,
++) -> Result<(), ReadErrorV1> {
++    if !same_key_v1(evidence_consumer, consumer) { Err(ReadErrorV1::SettlementEvidenceMismatch) }
++    else if count == 0 { Err(ReadErrorV1::RosterCapacity) }
++    else if contents.free_reads@.len() + count > usize::MAX
++        || contents.free_reads@.len() + count > contents.leases@.len()
++        || contents.free_reads@.len() + count > observed_free_capacity { Err(ReadErrorV1::InvalidState) }
++    else { Ok(()) }
++}
++
++pub fn release_header_exec_v1(
++    contents: &ReadContentsV1, consumer: WriterKeyV1, evidence_consumer: WriterKeyV1,
++    count: usize, observed_free_capacity: usize,
++) -> (result: Result<(), ReadErrorV1>)
++    ensures exact_decision_v1(result, release_header_v1(*contents, consumer, evidence_consumer, count, observed_free_capacity)),
++{
++    if !same_key_exec_v1(evidence_consumer, consumer) { return Err(ReadErrorV1::SettlementEvidenceMismatch); }
++    if count == 0 { return Err(ReadErrorV1::RosterCapacity); }
++    let count = match contents.free_reads.len().checked_add(count) {
++        Some(value) => value, None => return Err(ReadErrorV1::InvalidState),
++    };
++    if count > contents.leases.len() || count > observed_free_capacity { return Err(ReadErrorV1::InvalidState); }
++    Ok(())
++}
++
++pub open spec fn release_item_v1(
++    contents: ReadContentsV1, consumer: WriterKeyV1, reference: ReadReferenceV1, state: ReadScanV1,
++) -> Result<ReadScanV1, ReadErrorV1> {
++    if !same_key_v1(reference.consumer, consumer) { Err(ReadErrorV1::InvalidReference) }
++    else { match lease_decision_v1(contents, reference) {
++        Err(error) => Err(error),
++        Ok(request) => {
++            let key = read_order_v1(request, reference.incarnation);
++            if state.previous.is_some() && !order_lt_v1(state.previous.unwrap(), key) {
++                Err(ReadErrorV1::NonCanonicalRoster)
++            } else {
++                let group = next_group_v1(state.previous, state.group, key);
++                if contents.readers@[request.allocation.slot as int] < group { Err(ReadErrorV1::InvalidState) }
++                else { Ok(ReadScanV1 { previous: Some(key), group }) }
++            }
++        },
++    } }
++}
++
++pub fn release_item_exec_v1(
++    contents: &ReadContentsV1, consumer: WriterKeyV1, reference: ReadReferenceV1, state: ReadScanV1,
++) -> (result: Result<ReadScanV1, ReadErrorV1>)
++    requires contents.readers@.len() == contents.journal.allocations@.len(), state.group < usize::MAX,
++    ensures exact_decision_v1(result, release_item_v1(*contents, consumer, reference, state)),
++        match result { Ok(next) => next.group <= state.group + 1, Err(_) => true },
++{
++    if !same_key_exec_v1(reference.consumer, consumer) { return Err(ReadErrorV1::InvalidReference); }
++    let request = match lease_lookup_exec_v1(contents, reference) {
++        Err(error) => return Err(error), Ok(request) => request,
++    };
++    let key = (request.allocation.key.local, request.byte_offset, request.byte_len, reference.incarnation);
++    if let Some(prior) = state.previous {
++        if !order_lt_exec_v1(prior, key) { return Err(ReadErrorV1::NonCanonicalRoster); }
++    }
++    let group = next_group_exec_v1(state.previous, state.group, key);
++    if contents.readers[request.allocation.slot] < group { return Err(ReadErrorV1::InvalidState); }
++    Ok(ReadScanV1 { previous: Some(key), group })
++}
++
++pub open spec fn release_scan_v1(
++    contents: ReadContentsV1, consumer: WriterKeyV1, references: Seq<ReadReferenceV1>, index: nat, state: ReadScanV1,
++) -> Result<(), ReadErrorV1>
++    decreases references.len() - index,
++{
++    if index >= references.len() { Ok(()) }
++    else { match release_item_v1(contents, consumer, references[index as int], state) {
++        Err(error) => Err(error),
++        Ok(next) => release_scan_v1(contents, consumer, references, index + 1, next),
++    } }
++}
++
++pub open spec fn release_decision_v1(
++    contents: ReadContentsV1, consumer: WriterKeyV1, references: Seq<ReadReferenceV1>,
++    evidence_consumer: WriterKeyV1, observed_free_capacity: usize,
++) -> Result<(), ReadErrorV1> {
++    match release_header_v1(contents, consumer, evidence_consumer, references.len() as usize, observed_free_capacity) {
++        Err(error) => Err(error),
++        Ok(()) => release_scan_v1(contents, consumer, references, 0, ReadScanV1 { previous: None, group: 0 }),
++    }
++}
++
++pub fn release_preflight_exec_v1(
++    contents: &ReadContentsV1, consumer: WriterKeyV1, references: &[ReadReferenceV1],
++    evidence_consumer: WriterKeyV1, observed_free_capacity: usize,
++) -> (result: Result<(), ReadErrorV1>)
++    requires contents.readers@.len() == contents.journal.allocations@.len(),
++    ensures exact_decision_v1(result, release_decision_v1(*contents, consumer, references@, evidence_consumer, observed_free_capacity)),
++{
++    match release_header_exec_v1(contents, consumer, evidence_consumer, references.len(), observed_free_capacity) {
++        Err(error) => return Err(error), Ok(()) => {},
++    }
++    let mut index = 0;
++    let mut state = ReadScanV1 { previous: None, group: 0 };
++    while index < references.len()
++        invariant index <= references.len(), state.group <= index,
++            contents.readers@.len() == contents.journal.allocations@.len(),
++            release_decision_v1(*contents, consumer, references@, evidence_consumer, observed_free_capacity)
++                == release_scan_v1(*contents, consumer, references@, index as nat, state),
++        decreases references.len() - index,
++    {
++        match release_item_exec_v1(contents, consumer, references[index], state) {
++            Err(error) => return Err(error),
++            Ok(next) => state = next,
++        }
++        index += 1;
++    }
++    Ok(())
++}
++
++pub open spec fn unread_scan_v1(
++    contents: ReadContentsV1, references: Seq<AllocationReferenceV1>, index: nat,
++) -> Result<(), ReadErrorV1>
++    decreases references.len() - index,
++{
++    if index >= references.len() { Ok(()) }
++    else { match allocation_decision_v1(contents.journal, references[index as int]) {
++        Err(error) => Err(error),
++        Ok(_) => {
++            if contents.readers@[references[index as int].slot as int] != 0 { Err(ReadErrorV1::AllocationBusy) }
++            else { unread_scan_v1(contents, references, index + 1) }
++        },
++    } }
++}
++
++pub fn require_unread_exec_v1(contents: &ReadContentsV1, references: &[AllocationReferenceV1])
++    -> (result: Result<(), ReadErrorV1>)
++    requires contents.readers@.len() == contents.journal.allocations@.len(),
++    ensures exact_decision_v1(result, unread_scan_v1(*contents, references@, 0)),
++{
++    let mut index = 0;
++    while index < references.len()
++        invariant index <= references.len(),
++            contents.readers@.len() == contents.journal.allocations@.len(),
++            unread_scan_v1(*contents, references@, 0) == unread_scan_v1(*contents, references@, index as nat),
++        decreases references.len() - index,
++    {
++        let reference = references[index];
++        match allocation_lookup_exec_v1(&contents.journal, reference) {
++            Err(error) => return Err(error), Ok(_) => {},
++        }
++        if contents.readers[reference.slot] != 0 { return Err(ReadErrorV1::AllocationBusy); }
++        index += 1;
++    }
++    Ok(())
++}
++
++// Project all actual fields, including the base journal's issuance state.
++pub open spec fn reader_contents_frame_v1(before: ReadContentsV1, after: ReadContentsV1) -> bool {
++    &&& issuance_contents_frame_v1(before.journal, after.journal)
++    &&& after.journal.registration_watermark == before.journal.registration_watermark
++    &&& after.journal.reserved_count == before.journal.reserved_count
++    &&& after.journal.writers@ == before.journal.writers@
++    &&& after.journal.free@ == before.journal.free@
++    &&& after.leases@ == before.leases@
++    &&& after.free_reads@ == before.free_reads@
++    &&& after.readers@ == before.readers@
++    &&& after.next_incarnation == before.next_incarnation
++}
++
++pub open spec fn acquire_preflight_relation_v1(
++    before: ReadContentsV1, after: ReadContentsV1, consumer: WriterKeyV1, requests: Seq<AllocationReadV1>,
++    output_before: Seq<Option<ReadReferenceV1>>, output_after: Seq<Option<ReadReferenceV1>>,
++    result: Result<(), ReadErrorV1>,
++) -> bool {
++    reader_contents_frame_v1(before, after) && output_after == output_before
++        && result == acquire_decision_v1(before, consumer, requests, output_before)
++}
++
++pub fn acquire_preflight_contents_exec_v1(
++    contents: &mut ReadContentsV1, consumer: WriterKeyV1, requests: &[AllocationReadV1],
++    output: &mut Vec<Option<ReadReferenceV1>>,
++) -> (result: Result<(), ReadErrorV1>)
++    requires old(contents).readers@.len() == old(contents).journal.allocations@.len(), requests@.len() <= u64::MAX,
++    ensures acquire_preflight_relation_v1(*old(contents), *final(contents), consumer, requests@,
++        old(output)@, final(output)@, result),
++{
++    acquire_preflight_exec_v1(contents, consumer, requests, output.as_slice())
++}
++
++pub open spec fn release_preflight_relation_v1(
++    before: ReadContentsV1, after: ReadContentsV1, consumer: WriterKeyV1, references: Seq<ReadReferenceV1>,
++    evidence_consumer: WriterKeyV1, observed_free_capacity: usize, result: Result<(), ReadErrorV1>,
++) -> bool {
++    reader_contents_frame_v1(before, after)
++        && result == release_decision_v1(before, consumer, references, evidence_consumer, observed_free_capacity)
++}
++
++pub fn release_preflight_contents_exec_v1(
++    contents: &mut ReadContentsV1, consumer: WriterKeyV1, references: &[ReadReferenceV1],
++    evidence_consumer: WriterKeyV1, observed_free_capacity: usize,
++) -> (result: Result<(), ReadErrorV1>)
++    requires old(contents).readers@.len() == old(contents).journal.allocations@.len(),
++    ensures release_preflight_relation_v1(*old(contents), *final(contents), consumer, references@,
++        evidence_consumer, observed_free_capacity, result),
++{
++    release_preflight_exec_v1(contents, consumer, references, evidence_consumer, observed_free_capacity)
++}
++
++}
+diff --git a/crates/fe2o3-runtime-model/verus/pins/CONTEXT_READ_PREFLIGHT_SHA256 b/crates/fe2o3-runtime-model/verus/pins/CONTEXT_READ_PREFLIGHT_SHA256
+new file mode 100644
+index 000000000..257f83178
+--- /dev/null
++++ b/crates/fe2o3-runtime-model/verus/pins/CONTEXT_READ_PREFLIGHT_SHA256
+@@ -0,0 +1 @@
++acb26a009d0946e22d8fb6027b99a47b922ada6a8200992d8b38699a108f1f15
+diff --git a/crates/fe2o3-runtime-model/verus/pins/NEGATIVE_QUALITY_CHECKER_SHA256 b/crates/fe2o3-runtime-model/verus/pins/NEGATIVE_QUALITY_CHECKER_SHA256
+index 88755ae14..08029096e 100644
+--- a/crates/fe2o3-runtime-model/verus/pins/NEGATIVE_QUALITY_CHECKER_SHA256
++++ b/crates/fe2o3-runtime-model/verus/pins/NEGATIVE_QUALITY_CHECKER_SHA256
+@@ -1 +1 @@
+-9965c22ff273640658de3b025a0e9d2d5d5e113fec68c9ab71faaeadfadadae1
++ac3b40b8954ae5f63ffb8fe437ad90375df0cc12b2d0f91cd6a11749e999fcc6
+diff --git a/crates/fe2o3-runtime-model/verus/pins/READ_PREFLIGHT_CHECKER_SHA256 b/crates/fe2o3-runtime-model/verus/pins/READ_PREFLIGHT_CHECKER_SHA256
+new file mode 100644
+index 000000000..6926d97d1
+--- /dev/null
++++ b/crates/fe2o3-runtime-model/verus/pins/READ_PREFLIGHT_CHECKER_SHA256
+@@ -0,0 +1 @@
++65fda7a03aadde1afe5dc82ae6b47c67febcdd045e67ec114eaff75db69a8322
+diff --git a/crates/fe2o3-runtime-model/verus/pins/TRANSCRIPT_SHA256 b/crates/fe2o3-runtime-model/verus/pins/TRANSCRIPT_SHA256
+index d754fb430..ff609c63b 100644
+--- a/crates/fe2o3-runtime-model/verus/pins/TRANSCRIPT_SHA256
++++ b/crates/fe2o3-runtime-model/verus/pins/TRANSCRIPT_SHA256
+@@ -1 +1 @@
+-f8bf6c761b4fd45e5e22a60c3e1b6101cbce19a1809c52b7fec4b34bc4bdaafb
++78ca7b3c6d910dc47969aaddd8bd57253c643b9635f20ed395562c2449925ca3
+diff --git a/crates/fe2o3-runtime-model/verus/verify-verus.sh b/crates/fe2o3-runtime-model/verus/verify-verus.sh
+index fe83b8ea9..64b04caa4 100755
+--- a/crates/fe2o3-runtime-model/verus/verify-verus.sh
++++ b/crates/fe2o3-runtime-model/verus/verify-verus.sh
+@@ -8,6 +8,7 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+ repo_root=$(CDPATH='' cd -- "$script_dir/../../.." && pwd)
+ \readonly script_dir repo_root
+ journal_issuance_proof="$script_dir/context_version_journal_issuance_v1.rs"
++read_preflight_proof="$script_dir/context_read_preflight_v1.rs"
+ lifecycle_proof="$script_dir/runtime_lifecycle_v1.rs"
+ identity_proof="$script_dir/device_identity_generation_v1.rs"
+ projection_proof="$script_dir/device_projection_refinement_v1.rs"
+@@ -764,7 +765,8 @@ negative_quality_checker="$script_dir/check-negative-quality.py"
+ negative_quality_reject_fixture="$script_dir/tests/fixtures/negative-quality-direct-literal.rs"
+ negative_quality_accept_fixture="$script_dir/tests/fixtures/negative-quality-adverse-input.rs"
+ journal_issuance_checker="$script_dir/check-journal-issuance.py"
+-\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker
++read_preflight_checker="$script_dir/check-read-preflight.py"
++\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker
+ verus_bin=${VERUS:-verus}
+ 
+ if [ "$#" -ne 0 ]; then
+@@ -787,6 +789,8 @@ read_pin() {
+ expected_lifecycle=$(read_pin "$pin_dir/MODEL_SHA256")
+ expected_journal_issuance=$(read_pin "$pin_dir/CONTEXT_VERSION_JOURNAL_ISSUANCE_SHA256")
+ expected_journal_issuance_checker=$(read_pin "$pin_dir/JOURNAL_ISSUANCE_CHECKER_SHA256")
++expected_read_preflight=$(read_pin "$pin_dir/CONTEXT_READ_PREFLIGHT_SHA256")
++expected_read_preflight_checker=$(read_pin "$pin_dir/READ_PREFLIGHT_CHECKER_SHA256")
+ expected_identity=$(read_pin "$pin_dir/DEVICE_IDENTITY_MODEL_SHA256")
+ expected_projection=$(read_pin "$pin_dir/DEVICE_PROJECTION_REFINEMENT_SHA256")
+ expected_memory=$(read_pin "$pin_dir/MEMORY_LIFECYCLE_SHA256")
+@@ -1573,6 +1577,8 @@ check_digest() {
+ }
+ 
+ check_sources() {
++    check_digest "$expected_read_preflight" "$read_preflight_proof"
++    check_digest "$expected_read_preflight_checker" "$read_preflight_checker"
+     check_digest "$expected_journal_issuance" "$journal_issuance_proof"
+     check_digest "$expected_journal_issuance_checker" "$journal_issuance_checker"
+     check_digest "$expected_lifecycle" "$lifecycle_proof"
+@@ -3196,6 +3202,13 @@ check_positive "$journal_issuance_proof" 'verification results:: 69 verified, 0
+     /usr/bin/python3 -I "$journal_issuance_checker" \
+     "$journal_issuance_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/journal-issuance"
+ 
++# The reader checker admits only its exact pinned J1 import and audits both files.
++/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$read_preflight_checker" --self-test "$read_preflight_proof"
++/usr/bin/env -i "HOME=$runner_home" "PATH=$runner_path" \
++    "RUSTUP_HOME=$runner_rustup_home" "CARGO_HOME=$runner_cargo_home" \
++    /usr/bin/python3 -I "$read_preflight_checker" \
++    "$read_preflight_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/read-preflight"
++
+ check_positive "$lifecycle_proof" 'verification results:: 2 verified, 0 errors' lifecycle
+ check_positive "$identity_proof" 'verification results:: 4 verified, 0 errors' identity-generation
+ check_positive "$projection_proof" 'verification results:: 4 verified, 0 errors' device-projection-refinement
+@@ -3953,6 +3966,7 @@ check_digest "$expected_verus" "$verus_path"
+ "$closure_checker" "$verus_root" "$closure_manifest"
+ 
+ transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r57_three_binding_compute_obligations=35 r57_three_binding_compute_mutations=23 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 r61_owner_async_custody_obligations=8 r61_owner_async_custody_mutations=8 r62_operation_control_obligations=8 r62_operation_control_mutations=8 r63_graph_reservation_obligations=8 r63_graph_reservation_mutations=8 r64_payload_budget_obligations=8 r64_payload_budget_mutations=8 r65_graph_versions_obligations=8 r65_graph_versions_mutations=8 r66_compute_sdma_coexistence_obligations=16 r66_compute_sdma_coexistence_mutations=8 r67_resource_credits_obligations=14 r67_resource_credits_mutations=8 r68_device_backing_credits_obligations=4 r68_device_backing_credits_mutations=5 r69_host_capture_obligations=4 r69_host_capture_mutations=5 r70_resource_batch_obligations=9 r70_resource_batch_mutations=9 r71_device_pool_obligations=15 r71_device_pool_mutations=10 r72_host_visible_backing_credits_obligations=5 r72_host_visible_backing_credits_mutations=9 r73_generated_result_storage_obligations=7 r73_generated_result_storage_mutations=8 journal_issuance_obligations=69 journal_issuance_executable_mutations=21 expected_negative_files=686'
++transcript="$transcript reader_preflight_obligations=103 reader_preflight_inherited=69 reader_preflight_new=34 reader_preflight_executable_mutations=21"
+ actual_transcript=$(printf '%s\n' "$transcript" | /usr/bin/sha256sum | /usr/bin/awk '{ print $1 }')
+ if [ "$actual_transcript" != "$expected_transcript" ]; then
+     printf 'FAIL: verification transcript does not match the pin\n' >&2
+diff --git a/docs/runtime-a1-a2-swarm-current.md b/docs/runtime-a1-a2-swarm-current.md
+index 444e04a3d..c9a91b7f5 100644
+--- a/docs/runtime-a1-a2-swarm-current.md
++++ b/docs/runtime-a1-a2-swarm-current.md
+@@ -10,7 +10,14 @@ Resources' V4-J1 proof handoff above the locally accepted
+ Its immediate assignments supersede the older checkpoint tables below, whose
+ detailed contracts and historical observations are retained.
+ 
+-Latest development (2026-09-17): [generated input leases](runtime-context-generated-read-leases-v1.md)
++Latest development (2026-09-17): [reader contents and ordered preflight](runtime-context-read-preflight-v1.md)
++adds a concrete proof over the unchanged V4-J1 journal definitions, source-bound
++executable mutations and exact Rust error-priority witnesses. Its scope stops
++before acquisition/release commits, invariant preservation and Rust/native
++composition. The [qualification receipt](evidence/dev-v4j2-reader-preflight-2026-09-17/README.md)
++keeps those obligations separate; accepted checkpoints and A1/A2 remain unchanged.
++
++Preceding development: [generated input leases](runtime-context-generated-read-leases-v1.md)
+ bind ReadOnly shell custody to the original protected attempt, including launches
+ without a writer or returned backend handle. Exact completion or quiescent Stop
+ releases inputs before writer settlement; foreign readers still block retirement.
+diff --git a/docs/runtime-context-generated-read-leases-v1.md b/docs/runtime-context-generated-read-leases-v1.md
+index ef6fc2a34..f74c8a277 100644
+--- a/docs/runtime-context-generated-read-leases-v1.md
++++ b/docs/runtime-context-generated-read-leases-v1.md
+@@ -75,3 +75,7 @@ protected GPU kernels or prove native retirement call ordering. That ordering is
+ source-reviewed; production Worker V3/machine refinement, native concurrency/fault
+ campaigns, initialized-input authority, ordered writers, cross-run reuse, aggregate
+ residency, formal reader composition and matched HIP/HSA measurements remain open.
++
++Subsequent [V4-J2 development](runtime-context-read-preflight-v1.md) proves the
++model's constructor contents and ordered reader preflight only. It does not
++prove the generated Context composition or acquisition/release commits above.
+diff --git a/docs/runtime-context-read-preflight-v1.md b/docs/runtime-context-read-preflight-v1.md
+new file mode 100644
+index 000000000..da5620efb
+--- /dev/null
++++ b/docs/runtime-context-read-preflight-v1.md
+@@ -0,0 +1,97 @@
++# V4-J2 Reader Contents And Ordered Preflight
++
++Development proof packet, not full reader lifecycle verification. Accepted
++checkpoints remain Native R125 CPU/test, Admission R118B C1-C3 and Resources
++R116/V3. A1/A2 and #182 remain open.
++
++The executable Verus model in
++`crates/fe2o3-runtime-model/verus/context_read_preflight_v1.rs` imports the exact,
++unchanged V4-J1 journal types and constructor. Its 103 obligations include 69
++inherited J1 obligations and 34 new reader obligations. The
++[qualification receipt](evidence/dev-v4j2-reader-preflight-2026-09-17/README.md)
++separates these solver results from Rust tests and native acceptance.
++
++## Proved Boundary
++
++- Constructor admission checks reader capacity before the base journal's
++  generation/capacity checks. On successful storage, the concrete contents have
++  the exact inner journal, vacant leases, descending free stack, zero counts and
++  initial incarnation 1.
++- Exact allocation lookup checks slot, key and context before validating the
++  pending-member backlink. Read validation then checks device, extent, nonempty
++  checked range, pending writer, attempt epoch and content lineage in that order.
++- Lease lookup checks the complete slot/incarnation/consumer identity before
++  validating its stored request against the current allocation.
++- Acquire preflight checks consumer, roster/output shape, clean output, capacity
++  and incarnation headroom, then scans requests in caller order. Each request is
++  validated before canonical order, grouped reader-count headroom and the selected
++  free suffix slot. The first failing member determines the error.
++- Release preflight checks evidence identity, nonempty roster and free storage
++  headroom before scanning exact references, current requests, canonical order
++  and grouped counts. Identical ranges acquired separately may be released in
++  increasing incarnation order, including a canonical subset of live leases.
++- The unread guard performs exact allocation lookup before testing its count.
++  Mutable preflight wrappers frame every proof-side journal and reader contents field;
++  acquisition also frames the complete output, on both success and rejection.
++
++These are executable Vec/slice scans against explicit ordered decision specs,
++not unordered validity predicates. The admission scans are linear in their
++rosters and perform no explicit Vec allocation; physical allocation behavior is
++outside the contents proof.
++
++## Premises And Nonclaims
++
++The batch/guard functions require only that reader-count and allocation vectors
++have equal lengths for direct indexing. Acquisition additionally requires the
++request count to fit u64, as it does on the supported 32/64-bit targets. They do
++not assume clean output, valid or sorted requests, current references, matching
++evidence, sufficient capacity, correct counts, unique free slots or a healthy
++reader invariant. Malformed pending backlinks, occupied/out-of-range free slots,
++zero incarnations and incorrect counts remain available rejection cases.
++
++The release capacity parameter represents the production `free_reads.capacity()`
++observation; authenticating that observation and physical storage is separate.
++Quiescence evidence remains an inert identity premise, not native authentication.
++Both writer kinds are accepted. Epoch and lineage may differ, and lineage zero
++is legal; neither case proves initialized input.
++
++Preflight success does not establish safe commit. Duplicate free slots, incorrect
++counts, duplicate base allocation identities or orphan members can violate the
++healthy invariant without being rejected by these local guards. Still open:
++
++- Exact acquisition/release commit effects, incarnation freshness and invariant
++  preservation, including partition uniqueness and reader-count conservation.
++- Base allocation/member invariant reachability and composition with writer
++  mutation, settlement, retirement and Unknown disposal.
++- Mechanical production Rust correspondence, storage allocation/capacity/pointer
++  preservation, panics/unwind and whole-call atomicity.
++- Context ordinary/generated ownership domains, authenticated native completion,
++  Worker V3/machine refinement, concurrency/fault qualification and performance.
++
++## Qualification
++
++`check-read-preflight.py` admits only the exact initial pinned J1 import,
++independently audits that dependency and applies the unchanged forbidden-source
++policy to the remaining source. Every solver case gets its own exact dependency
++copy, with source/tool checks before and after execution. Pinned Python utilities
++are compiled from the verified source bytes, bypassing stale bytecode caches.
++
++Twenty-one reversible executable-body mutations retain the original contracts.
++Acceptance requires normal exit 1, exactly 102 verified obligations and one
++intended postcondition error, with exact source spans in the mutated function.
++Compile errors, wrong-module errors, unrelated failures, timeouts and extra
++diagnostics fail qualification. Positive runs before and after require 103/0.
++Parser, import-policy, stale-bytecode and process-cleanup self-tests are included.
++The global `verify-verus.sh` runs the reader campaign without weakening its
++existing source policy or changing historical J1 source/checker pins.
++The runner's structural auditor independently checks the reader campaign wiring
++and six new adverse integration fixtures; the 686 legacy negative files remain
++unchanged. The preliminary integration failure and repaired qualification are
++preserved as separate cohorts in the receipt.
++
++Rust witnesses strengthen three existing error matrices to assert exact enums
++and add five tests for constructor contents and simultaneous-fault ordering,
++grouped counts, selected slots, evidence and physical headroom. Existing ABA,
++multi-range and 4,000-step partition traces remain executable corroboration,
++not proofs of commits. Malformed base pending backlinks are modeled by the proof
++but are not constructed through the safe Rust API in these tests.
