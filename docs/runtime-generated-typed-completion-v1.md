@@ -63,7 +63,9 @@ activation, dropping either acknowledgement or completion loses observation but
 does not cancel execution or refund retained producer/native resources. The old
 preparation control does not cancel an activated invocation. Stop suppresses
 typed delivery and uses the existing disposal path; ordinary drain preserves
-delivery. Generated graph/dependency/repeated-drain qualification remains C6.
+delivery. Subsequent [C6 development](runtime-generated-graph-v1.md) adds graph
+dependencies and corrects direct typed drain before ISSUE; the frozen C5 evidence
+below predates that correction. Native graph qualification remains open.
 
 ## Qualification Scope
 

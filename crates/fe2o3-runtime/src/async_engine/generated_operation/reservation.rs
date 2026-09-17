@@ -22,6 +22,9 @@ pub struct RuntimeAsyncReservedTicketV1 {
 }
 
 impl RuntimeAsyncReservedTicketV1 {
+    pub(in crate::async_engine) fn has_completion_v1(&self) -> bool {
+        self.domain.is_some()
+    }
     #[cfg(test)]
     pub(in crate::async_engine) fn completion_for_test_v1(
         &mut self,

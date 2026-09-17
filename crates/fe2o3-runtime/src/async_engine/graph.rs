@@ -12,7 +12,10 @@ use fe2o3_completion::{
     ContextIdentityV1, FailureCodeV1, StreamIdentityV1,
 };
 use std::collections::VecDeque;
+mod generated;
 mod versions;
+use generated::GraphReplyV1;
+pub use generated::*;
 pub use versions::{
     MAX_RUNTIME_GRAPH_VERSION_REFERENCES_V1, MAX_RUNTIME_GRAPH_VERSIONS_V1,
     RuntimeGraphDataVersionV1, RuntimeGraphInputVersionV1, RuntimeGraphVersionRecordV1,
@@ -363,38 +366,68 @@ impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
 }
 
 pub(super) trait EngineGraphV1<B: RuntimeBackendV1>: Send {
-    fn admit(&mut self, context: &mut RuntimeContextV1<B>) -> bool;
+    fn admit(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        operations: &mut operation::OperationRegistryV1<B>,
+    ) -> bool;
     fn advance(
         &mut self,
         context: &mut RuntimeContextV1<B>,
+        operations: &mut operation::OperationRegistryV1<B>,
         budget: usize,
         flush_budget: usize,
     ) -> bool;
     fn reject(&mut self, error: RuntimeGraphErrorV1<B::Error>);
-    fn stop(&mut self, context: &mut RuntimeContextV1<B>);
+    fn stop(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        operations: &mut operation::OperationRegistryV1<B>,
+    );
+    fn take_generated_request(&mut self) -> Option<RuntimeGeneratedGraphRequestV1<B>> {
+        None
+    }
+}
+
+enum PreparedGraphActionV1 {
+    Ordinary(PreparedContextGraphActionV1),
+    Generated(RuntimeAsyncReservedTicketV1),
+}
+
+enum ActiveGraphActionV1 {
+    Ordinary(
+        usize,
+        RuntimeSubmissionV1<()>,
+        Option<RuntimeCompletionStatusV1>,
+    ),
+    Generated(usize, RuntimeAsyncGeneratedCompletionV1),
 }
 
 struct Graph<B: RuntimeBackendV1> {
     versions: Option<versions::VersionLedger>,
     request: Option<RuntimeGraphRequestV1<B>>,
+    generated: BTreeMap<CompletionNodeIdV1, RuntimeAsyncReservedTicketV1>,
     authority: Option<CompletionAuthorityV1>,
     token: Option<ContextGraphReservationV1>,
     execution: Option<RuntimeGraphExecutionIdentityV1>,
-    actions: Vec<Option<PreparedContextGraphActionV1>>,
+    actions: Vec<Option<PreparedGraphActionV1>>,
     ids: Vec<CompletionNodeIdV1>,
+    node_streams: Vec<RuntimeStreamIdV1>,
     issued: Vec<bool>,
-    active: VecDeque<(
-        usize,
-        RuntimeSubmissionV1<()>,
-        Option<RuntimeCompletionStatusV1>,
-    )>,
+    active: VecDeque<ActiveGraphActionV1>,
     streams: Vec<RuntimeStreamIdV1>,
     flush_cursor: usize,
     next_poll: bool,
     cancel_applied: bool,
+    terminal_cleanup_pending: bool,
     control: RuntimeGraphControlV1,
     slot: Option<Arc<AtomicBool>>,
-    reply: owned::Reply<RuntimeGraphResultV1<B::Error>>,
+    reply: GraphReplyV1<B>,
+    completions: Vec<(CompletionNodeIdV1, RuntimeGeneratedCompletionReceiptV1)>,
+    generated_errors: Vec<(
+        CompletionNodeIdV1,
+        RuntimeGeneratedGraphNodeErrorV1<B::Error>,
+    )>,
     observations: Vec<(CompletionNodeIdV1, RuntimeCompletionStatusV1)>,
     errors: Vec<(CompletionNodeIdV1, RuntimeErrorV1<B::Error>)>,
     rejected_observations: u64,
@@ -403,11 +436,51 @@ struct Graph<B: RuntimeBackendV1> {
 
 impl<B: RuntimeBackendV1> Drop for Graph<B> {
     fn drop(&mut self) {
+        if self.request.is_some() && matches!(self.reply, GraphReplyV1::Generated(_)) {
+            self.reject_admission(RuntimeGeneratedGraphAdmissionErrorV1::Engine(
+                RuntimeAsyncEngineCallErrorV1::EngineStopped,
+            ));
+        }
         self.release_slot();
     }
 }
 
 impl<B: RuntimeBackendV1> Graph<B> {
+    fn new(
+        request: RuntimeGraphRequestV1<B>,
+        generated: BTreeMap<CompletionNodeIdV1, RuntimeAsyncReservedTicketV1>,
+        control: RuntimeGraphControlV1,
+        slot: Arc<AtomicBool>,
+        reply: GraphReplyV1<B>,
+    ) -> Self {
+        Self {
+            versions: None,
+            request: Some(request),
+            generated,
+            authority: None,
+            token: None,
+            execution: None,
+            actions: Vec::new(),
+            ids: Vec::new(),
+            node_streams: Vec::new(),
+            issued: Vec::new(),
+            active: VecDeque::new(),
+            streams: Vec::new(),
+            flush_cursor: 0,
+            next_poll: false,
+            cancel_applied: false,
+            terminal_cleanup_pending: false,
+            control,
+            slot: Some(slot),
+            reply,
+            completions: Vec::new(),
+            generated_errors: Vec::new(),
+            observations: Vec::new(),
+            errors: Vec::new(),
+            rejected_observations: 0,
+            rejected_releases: 0,
+        }
+    }
     fn release_slot(&mut self) {
         if let Some(slot) = self.slot.take() {
             slot.store(false, Ordering::Release);
@@ -416,7 +489,8 @@ impl<B: RuntimeBackendV1> Graph<B> {
     fn prepare(
         &mut self,
         context: &mut RuntimeContextV1<B>,
-    ) -> Result<(), RuntimeGraphErrorV1<B::Error>> {
+        operations: &mut operation::OperationRegistryV1<B>,
+    ) -> Result<(), RuntimeGeneratedGraphAdmissionErrorV1<B::Error>> {
         let request = self.request.as_ref().expect("unadmitted graph");
         for (&identity, &stream) in &request.streams {
             let actual = context
@@ -425,7 +499,8 @@ impl<B: RuntimeBackendV1> Graph<B> {
             if actual != identity {
                 return Err(RuntimeGraphErrorV1::Invalid(
                     RuntimeGraphValidationErrorV1::StreamBindings,
-                ));
+                )
+                .into());
             }
         }
         for node in request.graph.nodes() {
@@ -444,15 +519,34 @@ impl<B: RuntimeBackendV1> Graph<B> {
                         )
                         .map_err(RuntimeGraphErrorV1::Context)?,
                 ),
+                (CompletionNodeKindV1::Future(_), None)
+                    if self.generated.contains_key(&node.id()) =>
+                {
+                    let ticket = &self.generated[&node.id()];
+                    if !ticket.has_completion_v1() {
+                        return Err(RuntimeGeneratedGraphAdmissionErrorV1::Activation(
+                            generated_operation::adoption::ActivationErrorV1::Context(
+                                crate::RuntimeValidationErrorV1::Unsupported.into(),
+                            ),
+                        ));
+                    }
+                    operations
+                        .validate_reserved(context, ticket, request.streams[&node.stream()], None)
+                        .map_err(RuntimeGeneratedGraphAdmissionErrorV1::Activation)?;
+                    None
+                }
                 (CompletionNodeKindV1::Future(_), None) => {
                     return Err(RuntimeGraphErrorV1::Invalid(
                         RuntimeGraphValidationErrorV1::MissingOperation,
-                    ));
+                    )
+                    .into());
                 }
                 _ => None,
             };
-            self.actions.push(action);
+            self.actions
+                .push(action.map(PreparedGraphActionV1::Ordinary));
             self.ids.push(node.id());
+            self.node_streams.push(request.streams[&node.stream()]);
             self.issued.push(false);
         }
         request
@@ -461,16 +555,25 @@ impl<B: RuntimeBackendV1> Graph<B> {
         self.versions =
             Some(versions::VersionLedger::prepare(request).map_err(RuntimeGraphErrorV1::Invalid)?);
         self.streams.extend(request.streams.values().copied());
-        let request = self.request.take().expect("validated request");
         let graph_context = request.graph.context();
         let graph_identity = request.graph.identity();
-        self.authority = Some(request.graph.into_completion_authority());
         self.active.reserve(self.ids.len());
         self.observations.reserve(self.ids.len());
         self.errors.reserve(self.ids.len());
+        self.completions.reserve(self.generated.len());
+        self.generated_errors.reserve(self.generated.len());
         let token = context
             .reserve_graph_v1(self.ids.len())
             .map_err(|e| RuntimeGraphErrorV1::Context(e.into()))?;
+        let request = self.request.take().expect("committed request");
+        self.authority = Some(request.graph.into_completion_authority());
+        for (node, ticket) in core::mem::take(&mut self.generated) {
+            let index = self
+                .ids
+                .binary_search(&node)
+                .expect("validated generated node");
+            self.actions[index] = Some(PreparedGraphActionV1::Generated(ticket));
+        }
         self.token = Some(token);
         self.execution = Some(RuntimeGraphExecutionIdentityV1 {
             context: graph_context,
@@ -481,6 +584,7 @@ impl<B: RuntimeBackendV1> Graph<B> {
     }
 
     fn fail_node(&mut self, index: usize, code: u32) {
+        self.terminal_cleanup_pending = true;
         self.versions.as_mut().unwrap().fail(index);
         // SAFETY: only this owner issues nodes. The caller established either
         // definite nonpublication or exact quiescent failure for this occurrence.
@@ -493,18 +597,37 @@ impl<B: RuntimeBackendV1> Graph<B> {
         }
     }
 
-    fn apply_cancel(&mut self) {
-        if self.cancel_applied || !self.control.0.load(Ordering::Acquire) {
-            return;
+    fn apply_cancel(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        operations: &mut operation::OperationRegistryV1<B>,
+    ) -> bool {
+        let cancel = self.control.0.load(Ordering::Acquire);
+        if (!cancel || self.cancel_applied) && !self.terminal_cleanup_pending {
+            return true;
         }
-        self.cancel_applied = true;
-        let authority = self.authority.as_mut().unwrap();
         let reason = CancellationCodeV1::new(1).unwrap();
         for (index, &node) in self.ids.iter().enumerate() {
             if self.issued[index] {
                 continue;
             }
-            match authority.state(node).unwrap() {
+            let state = self.authority.as_ref().unwrap().state(node).unwrap();
+            if !cancel && !state.is_terminal() {
+                continue;
+            }
+            // Drop of a ticket cannot reclaim its parked owner. Retire that
+            // exact registry entry before recording conclusive cancellation.
+            if let Some(PreparedGraphActionV1::Generated(ticket)) = &self.actions[index]
+                && !operations.discard_reserved(&ticket.key)
+            {
+                context.quarantine_after_async_command_panic_v1();
+                self.reject(RuntimeGraphErrorV1::Context(
+                    crate::RuntimeValidationErrorV1::InvalidBackendDescription.into(),
+                ));
+                return false;
+            }
+            let authority = self.authority.as_mut().unwrap();
+            match state {
                 CompletionNodeStateV1::Blocked => {
                     authority.cancel_blocked(node, reason).unwrap();
                 }
@@ -519,6 +642,9 @@ impl<B: RuntimeBackendV1> Graph<B> {
             }
             self.actions[index] = None;
         }
+        self.cancel_applied |= cancel;
+        self.terminal_cleanup_pending = false;
+        true
     }
 
     fn finish(&mut self, context: &mut RuntimeContextV1<B>) -> bool {
@@ -552,7 +678,7 @@ impl<B: RuntimeBackendV1> Graph<B> {
             .try_into_report()
             .unwrap_or_else(|_| panic!("terminal graph"));
         self.release_slot();
-        self.reply.complete(Ok(Ok(RuntimeGraphReportV1 {
+        let report = RuntimeGraphReportV1 {
             execution: self.execution.take().expect("admitted graph occurrence"),
             versions,
             version_inputs,
@@ -561,19 +687,44 @@ impl<B: RuntimeBackendV1> Graph<B> {
             errors: core::mem::take(&mut self.errors),
             rejected_observations: self.rejected_observations,
             rejected_releases: self.rejected_releases,
-        })));
+        };
+        match &mut self.reply {
+            GraphReplyV1::Ordinary(reply) => reply.complete(Ok(Ok(report))),
+            GraphReplyV1::Generated(reply) => {
+                reply.complete(Ok(Ok(RuntimeGeneratedGraphReportV1 {
+                    graph: report,
+                    completions: core::mem::take(&mut self.completions),
+                    errors: core::mem::take(&mut self.generated_errors),
+                })))
+            }
+        }
         true
     }
 
     fn reject(&mut self, error: RuntimeGraphErrorV1<B::Error>) {
+        if self.request.is_some() {
+            self.reject_admission(RuntimeGeneratedGraphAdmissionErrorV1::Graph(error));
+            return;
+        }
         self.release_slot();
-        self.reply.complete(Ok(Err(error)));
+        match &mut self.reply {
+            GraphReplyV1::Ordinary(reply) => reply.complete(Ok(Err(error))),
+            GraphReplyV1::Generated(reply) => {
+                reply.complete(Ok(Err(RuntimeGeneratedGraphFailureV1::Execution(error))))
+            }
+        }
     }
 }
 
 impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
-    fn issue_one(&mut self, context: &mut RuntimeContextV1<B>) -> bool {
-        self.apply_cancel();
+    fn issue_one(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        operations: &mut operation::OperationRegistryV1<B>,
+    ) -> bool {
+        if self.control.0.load(Ordering::Acquire) && !self.apply_cancel(context, operations) {
+            return true;
+        }
         let Some(node) = self.authority.as_mut().unwrap().pop_ready_notification() else {
             return false;
         };
@@ -591,17 +742,48 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
         }
         self.issued[index] = true;
         match self.actions[index].take() {
-            Some(action) => match context.submit_graph_action_v1(self.token.unwrap(), action) {
-                Ok(submission) => self.active.push_back((index, submission, None)),
-                Err(error) => {
-                    if context.is_terminal() {
-                        self.reject(RuntimeGraphErrorV1::Context(error));
-                    } else {
-                        self.errors.push((node, error));
-                        self.fail_node(index, 1);
+            Some(PreparedGraphActionV1::Generated(ticket)) => {
+                let mut ticket = Some(ticket);
+                match operations.activate_reserved(
+                    context,
+                    &mut ticket,
+                    self.node_streams[index],
+                    self.token,
+                ) {
+                    Ok(completion) => self
+                        .active
+                        .push_back(ActiveGraphActionV1::Generated(index, completion)),
+                    Err(error) => {
+                        if context.is_terminal() {
+                            return true;
+                        }
+                        if !operations
+                            .discard_reserved(&ticket.as_ref().expect("rejected ticket").key)
+                        {
+                            context.quarantine_after_async_command_panic_v1();
+                            return true;
+                        }
+                        self.generated_errors
+                            .push((node, RuntimeGeneratedGraphNodeErrorV1::Activation(error)));
+                        self.fail_node(index, 3);
                     }
                 }
-            },
+            }
+            Some(PreparedGraphActionV1::Ordinary(action)) => {
+                match context.submit_graph_action_v1(self.token.unwrap(), action) {
+                    Ok(submission) => self
+                        .active
+                        .push_back(ActiveGraphActionV1::Ordinary(index, submission, None)),
+                    Err(error) => {
+                        if context.is_terminal() {
+                            self.reject(RuntimeGraphErrorV1::Context(error));
+                        } else {
+                            self.errors.push((node, error));
+                            self.fail_node(index, 1);
+                        }
+                    }
+                }
+            }
             None => {
                 // SAFETY: this is a validated host-only event join; Ready means
                 // all exact predecessors succeeded, and the context is reserved.
@@ -618,30 +800,41 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
     }
 
     fn poll_one(&mut self, context: &mut RuntimeContextV1<B>) -> bool {
-        let Some((index, mut submission, retiring)) = self.active.pop_front() else {
+        let Some(active) = self.active.pop_front() else {
             return false;
+        };
+        let (index, mut submission, retiring) = match active {
+            ActiveGraphActionV1::Ordinary(index, submission, retiring) => {
+                (index, submission, retiring)
+            }
+            ActiveGraphActionV1::Generated(index, mut completion) => {
+                match completion.try_take_ready_v1() {
+                    None => self
+                        .active
+                        .push_back(ActiveGraphActionV1::Generated(index, completion)),
+                    Some(Ok(Ok(receipt))) => {
+                        self.completions.push((self.ids[index], receipt));
+                        self.succeed_operation(context, index);
+                    }
+                    Some(result) => {
+                        let error = match result {
+                            Err(error) => RuntimeGeneratedGraphNodeErrorV1::Engine(error),
+                            Ok(Err(error)) => RuntimeGeneratedGraphNodeErrorV1::Readback(error),
+                            Ok(Ok(_)) => unreachable!(),
+                        };
+                        self.generated_errors.push((self.ids[index], error));
+                        self.fail_node(index, 4);
+                    }
+                }
+                return true;
+            }
         };
         let token = self.token.unwrap();
         if let Some(status) = retiring {
             match context.release_graph_submission_v1(token, &submission) {
                 Ok(()) => {
                     if status == RuntimeCompletionStatusV1::Succeeded {
-                        if !self.versions.as_mut().unwrap().commit(index) {
-                            context.quarantine_after_async_command_panic_v1();
-                            self.reject(RuntimeGraphErrorV1::Invalid(
-                                RuntimeGraphValidationErrorV1::VersionNotAvailable,
-                            ));
-                            return true;
-                        }
-                        // SAFETY: exact context success was observed and native
-                        // retirement succeeded before permitting dependent issue.
-                        unsafe {
-                            self.authority
-                                .as_mut()
-                                .unwrap()
-                                .mark_succeeded(self.ids[index])
-                                .unwrap();
-                        }
+                        self.succeed_operation(context, index);
                     } else {
                         self.fail_node(index, 2);
                     }
@@ -651,7 +844,11 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
                 }
                 Err(_) => {
                     self.rejected_releases = self.rejected_releases.saturating_add(1);
-                    self.active.push_back((index, submission, Some(status)));
+                    self.active.push_back(ActiveGraphActionV1::Ordinary(
+                        index,
+                        submission,
+                        Some(status),
+                    ));
                 }
             }
             return true;
@@ -660,7 +857,8 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
             Ok(_) => {}
             Err(RuntimeErrorV1::BackendRejected(_)) => {
                 self.rejected_observations = self.rejected_observations.saturating_add(1);
-                self.active.push_back((index, submission, None));
+                self.active
+                    .push_back(ActiveGraphActionV1::Ordinary(index, submission, None));
                 return true;
             }
             Err(error) if context.is_terminal() => {
@@ -680,21 +878,49 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
             .query_submission(&submission)
             .expect("exact owned submission");
         if status == RuntimeCompletionStatusV1::Pending {
-            self.active.push_back((index, submission, None));
+            self.active
+                .push_back(ActiveGraphActionV1::Ordinary(index, submission, None));
         } else {
             self.observations.push((self.ids[index], status));
-            self.active.push_back((index, submission, Some(status)));
+            self.active.push_back(ActiveGraphActionV1::Ordinary(
+                index,
+                submission,
+                Some(status),
+            ));
         }
         true
+    }
+
+    fn succeed_operation(&mut self, context: &mut RuntimeContextV1<B>, index: usize) {
+        if !self.versions.as_mut().unwrap().commit(index) {
+            context.quarantine_after_async_command_panic_v1();
+            self.reject(RuntimeGraphErrorV1::Invalid(
+                RuntimeGraphValidationErrorV1::VersionNotAvailable,
+            ));
+            return;
+        }
+        // SAFETY: the exact ordinary submission was successfully retired, or
+        // the original generated decoder/gate receipt followed full settlement.
+        unsafe {
+            self.authority
+                .as_mut()
+                .unwrap()
+                .mark_succeeded(self.ids[index])
+                .unwrap();
+        }
     }
 }
 
 impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> EngineGraphV1<B> for Graph<B> {
-    fn admit(&mut self, context: &mut RuntimeContextV1<B>) -> bool {
-        match self.prepare(context) {
+    fn admit(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        operations: &mut operation::OperationRegistryV1<B>,
+    ) -> bool {
+        match self.prepare(context, operations) {
             Ok(()) => true,
             Err(error) => {
-                self.reject(error);
+                self.reject_admission(error);
                 false
             }
         }
@@ -702,10 +928,13 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> EngineGraph
     fn advance(
         &mut self,
         context: &mut RuntimeContextV1<B>,
+        operations: &mut operation::OperationRegistryV1<B>,
         budget: usize,
         flush_budget: usize,
     ) -> bool {
-        self.apply_cancel();
+        if !self.apply_cancel(context, operations) {
+            return true;
+        }
         for _ in 0..budget {
             self.next_poll = !self.next_poll;
             let mut progressed = false;
@@ -713,7 +942,7 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> EngineGraph
                 progressed = if poll {
                     self.poll_one(context)
                 } else {
-                    self.issue_one(context)
+                    self.issue_one(context, operations)
                 };
                 if progressed {
                     break;
@@ -726,7 +955,7 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> EngineGraph
                 break;
             }
         }
-        if self.finish(context) {
+        if !self.apply_cancel(context, operations) || self.finish(context) {
             return true;
         }
         for _ in 0..flush_budget.min(self.streams.len()) {
@@ -744,14 +973,23 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> EngineGraph
     fn reject(&mut self, error: RuntimeGraphErrorV1<B::Error>) {
         Graph::reject(self, error);
     }
-    fn stop(&mut self, context: &mut RuntimeContextV1<B>) {
+    fn stop(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        operations: &mut operation::OperationRegistryV1<B>,
+    ) {
         self.control.cancel_unissued();
-        self.apply_cancel();
+        if !self.apply_cancel(context, operations) {
+            return;
+        }
         if !self.finish(context) {
             // Stop is not native quiescence. Preserve the context reservation
             // even after the driver/reply is dropped by owner shutdown.
             context.quarantine_after_async_command_panic_v1();
         }
+    }
+    fn take_generated_request(&mut self) -> Option<RuntimeGeneratedGraphRequestV1<B>> {
+        Graph::take_generated_request(self)
     }
 }
 
@@ -778,28 +1016,13 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static>
             return Err(RuntimeAsyncEngineCallErrorV1::GraphCapacity);
         }
         let control = RuntimeGraphControlV1(Arc::new(AtomicBool::new(false)));
-        let graph = Graph {
-            versions: None,
-            request: Some(request),
-            authority: None,
-            token: None,
-            execution: None,
-            actions: Vec::new(),
-            ids: Vec::new(),
-            issued: Vec::new(),
-            active: VecDeque::new(),
-            streams: Vec::new(),
-            flush_cursor: 0,
-            next_poll: false,
-            cancel_applied: false,
-            control: control.clone(),
-            slot: Some(Arc::clone(&self.observer.graph_slot)),
-            reply,
-            observations: Vec::new(),
-            errors: Vec::new(),
-            rejected_observations: 0,
-            rejected_releases: 0,
-        };
+        let graph = Graph::new(
+            request,
+            BTreeMap::new(),
+            control.clone(),
+            Arc::clone(&self.observer.graph_slot),
+            GraphReplyV1::Ordinary(reply),
+        );
         match self
             .observer
             .try_send_command(RuntimeAsyncEngineCommandV1::Graph(Box::new(graph)))

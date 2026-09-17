@@ -117,6 +117,131 @@ fn installed_attempt(
     (hold, plan, roster)
 }
 
+#[test]
+fn generated_graph_context_settlement_releases_all_exact_metadata_before_reservation() {
+    let mut context = context();
+    let (hold, plan, roster, access) = install_with_graph(&mut context, true);
+    let token = access.unwrap();
+    context
+        .begin_generated_issue_v1(&hold, plan, &roster)
+        .unwrap();
+    context.install_generated_submission_v1(&hold, 900).unwrap();
+    context.close_graph_issue_v1(token).unwrap();
+    assert_eq!(
+        context.release_graph_v1(token),
+        Err(RuntimeValidationErrorV1::SubmissionPending)
+    );
+    assert_eq!(context.allocations.len(), 3);
+    // This is the shared Context bookkeeping tail, not a native settlement claim.
+    context
+        .generated_issues
+        .get_mut(&hold.stream())
+        .unwrap()
+        .phase = PhaseV1::Unknown;
+    let settled = assumed_settlement(&context, &hold);
+    context
+        .settle_completed_gfx942_context_v1(&hold, settled)
+        .unwrap();
+    assert!(context.allocations.is_empty());
+    assert!(context.backend_allocations.is_empty());
+    assert!(context.generated_issues.is_empty());
+    assert!(context.submissions.is_empty());
+    assert!(context.backend_submissions.is_empty());
+    assert_eq!(
+        context.unpublished_identity_for_test_v1(hold.stream()),
+        Some(None)
+    );
+    assert!(context.streams[&hold.stream()].generated.is_none());
+    context.release_graph_v1(token).unwrap();
+    assert!(context.graph_reservation.is_none());
+}
+
+#[test]
+fn generated_graph_invalid_access_precedes_native_and_carrier_callbacks() {
+    for missing in [false, true] {
+        let mut context = context();
+        let (hold, _, roster, access) = install_with_graph(&mut context, true);
+        let calls = Rc::new(Cell::new(0));
+        let drops = Rc::new(Cell::new(0));
+        let mut prepared = context.bound_preparation_for_test_v1(carrier(&calls, &drops));
+        let mut foreign = RuntimeContextV1::open(KfdRuntimeBackendV1::mock()).unwrap();
+        let foreign_token = foreign.reserve_graph_v1(1).unwrap();
+        context.graph_reservation = if missing { None } else { Some(foreign_token) };
+        let next = context.next_identity;
+        assert!(matches!(
+            context.progress_gfx942_issue_v1(&mut prepared, &roster, &hold),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::ContextReserved
+            ))
+        ));
+        assert!(matches!(
+            context.complete_gfx942_issue_v1(&mut prepared, &roster, &hold),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::ContextReserved
+            ))
+        ));
+        assert_eq!(calls.get(), 0);
+        assert_eq!(drops.get(), 0);
+        assert!(!context.is_terminal());
+        assert_eq!(context.next_identity, next);
+        assert!(context.generated_issues.is_empty());
+        assert_eq!(context.allocations.len(), 3);
+        context.graph_reservation = access;
+        context.retire_generated_shells_v1(&hold).unwrap();
+        context.release_unpublished_hold_v1(&hold).unwrap();
+        context.close_graph_issue_v1(access.unwrap()).unwrap();
+        context.release_graph_v1(access.unwrap()).unwrap();
+        foreign.close_graph_issue_v1(foreign_token).unwrap();
+        foreign.release_graph_v1(foreign_token).unwrap();
+    }
+}
+
+#[test]
+fn generated_graph_release_rejects_unpaired_backend_indexes_and_callbacks() {
+    for member in 0..3 {
+        let mut context = context();
+        let token = context.reserve_graph_v1(1).unwrap();
+        context.close_graph_issue_v1(token).unwrap();
+        match member {
+            0 => {
+                context.backend_submissions.insert(900);
+            }
+            1 => {
+                context.backend_events.insert(901);
+            }
+            _ => context.completion_callback_count = 1,
+        }
+        assert_eq!(
+            context.release_graph_v1(token),
+            Err(RuntimeValidationErrorV1::SubmissionPending)
+        );
+        assert_eq!(context.graph_reservation, Some(token));
+        context.backend_submissions.clear();
+        context.backend_events.clear();
+        context.completion_callback_count = 0;
+        context.release_graph_v1(token).unwrap();
+    }
+}
+
+#[test]
+fn generated_graph_shared_drain_snapshot_excludes_only_registry_owned_submission() {
+    let mut context = context();
+    let (hold, _, _) = installed_attempt(&mut context, 900);
+    let generated = context.generated_issues[&hold.stream()].id;
+    let ordinary =
+        RuntimeSubmissionIdV1::new(context.context_generation, context.next_id().unwrap());
+    let mut record = context.submissions[&generated];
+    record.backend_submission = 901;
+    context.submissions.insert(ordinary, record);
+    context.backend_submissions.insert(901);
+    let (pending, _) = context.snapshot_async_drain_v1().unwrap();
+    assert_eq!(pending.into_iter().collect::<Vec<_>>(), [ordinary]);
+    assert_eq!(context.async_drain_counts_v1().pending, 2);
+    assert_eq!(context.generated_issues[&hold.stream()].id, generated);
+    // Deliberately constructed bookkeeping, not two real native submissions.
+    core::mem::forget(context);
+}
+
 fn assert_submission_retained(
     context: &RuntimeContextV1<KfdRuntimeBackendV1>,
     id: RuntimeSubmissionIdV1,

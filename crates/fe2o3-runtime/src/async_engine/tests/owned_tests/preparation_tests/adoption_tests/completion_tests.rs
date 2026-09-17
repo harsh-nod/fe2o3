@@ -1,5 +1,6 @@
 use super::*;
 use generated_operation::adoption::CompletionHooksV1;
+mod graph_tests;
 
 type Observation =
     Result<Result<(), crate::RuntimeGfx942ReadbackErrorV1>, RuntimeAsyncEngineCallErrorV1>;
@@ -107,16 +108,26 @@ fn reserve_completion(
     drops: Arc<AtomicUsize>,
     mode: u8,
 ) -> (RuntimeAsyncReservedTicketV1, RuntimeStreamIdV1) {
+    reserve_completion_with_domain(h, drops, mode, Arc::new(()))
+}
+
+fn reserve_completion_with_domain(
+    h: &mut Harness,
+    drops: Arc<AtomicUsize>,
+    mode: u8,
+    domain: Arc<()>,
+) -> (RuntimeAsyncReservedTicketV1, RuntimeStreamIdV1) {
     let stream = h
         .context
         .create_stream(h.context.devices()[0].id())
         .unwrap();
-    let future = preparation_with_hooks(
+    let future = preparation_with_domain(
         &h.handle,
         h.state.clone(),
         drops,
         mode,
         Some(completion_hooks()),
+        domain,
     );
     h.command();
     h.advance();
@@ -208,7 +219,7 @@ fn generated_completion_domain_failure_precedes_reservation_and_preserves_exact_
                     Ok(reservation_tests::roster())
                 }),
                 Some(AdoptionHooksV1 {
-                    preflight: |_, _, _, _| panic!("no adoption preflight"),
+                    preflight: |_, _, _, _, _| panic!("no adoption preflight"),
                     ready: |_, _| panic!("no adoption readiness"),
                     adopt: |_, _, _, _| panic!("no adoption"),
                     retire: |_, _| panic!("no native retirement"),
@@ -470,7 +481,19 @@ fn generated_completion_does_not_require_observer_polling_and_drain_keeps_delive
     let drops = Arc::new(AtomicUsize::new(0));
     let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
     let completion = activate_observer(&mut h, ticket, stream);
+    h.state.lock().unwrap().adoption_ready_mode = 1;
+    for _ in 0..2 {
+        h.advance();
+        h.registry.retire_unpublished_v1(&mut h.context, 1);
+        assert_eq!(h.registry.active_len(), 1);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        assert_eq!(h.state.lock().unwrap().adoption_retire_calls, 0);
+    }
+    h.state.lock().unwrap().adoption_ready_mode = 0;
     for _ in 0..3 {
+        h.registry.retire_unpublished_v1(&mut h.context, 1);
+        assert_eq!(h.registry.active_len(), 1);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
         h.advance();
     }
     h.registry.retire_unpublished_v1(&mut h.context, 1);

@@ -5,9 +5,16 @@ use super::*;
 pub(crate) struct ContextUnpublishedHoldV1 {
     stream: RuntimeStreamIdV1,
     local: u64,
+    access: Option<ContextGraphReservationV1>,
 }
 
 impl ContextUnpublishedHoldV1 {
+    pub(super) fn graph_access(&self) -> Option<ContextGraphReservationV1> {
+        self.access
+    }
+    pub(crate) fn is_graph_scoped_v1(&self) -> bool {
+        self.access.is_some()
+    }
     pub(super) fn identity(&self) -> u64 {
         self.local
     }
@@ -29,7 +36,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &self,
         hold: &ContextUnpublishedHoldV1,
     ) -> Result<(), RuntimeValidationErrorV1> {
-        self.require_live()?;
+        self.require_graph_access(hold.access)?;
         if self
             .streams
             .get(&hold.stream)
@@ -40,11 +47,31 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             Err(RuntimeValidationErrorV1::ContextReserved)
         }
     }
+    #[cfg(test)]
     pub(crate) fn hold_unpublished_stream_v1(
         &mut self,
         stream: RuntimeStreamIdV1,
     ) -> Result<ContextUnpublishedHoldV1, RuntimeValidationErrorV1> {
-        self.require_live()?;
+        self.hold_unpublished_stream_with_access_v1(stream, None)
+    }
+
+    pub(crate) fn require_unpublished_open_access_v1(
+        &self,
+        access: Option<ContextGraphReservationV1>,
+    ) -> Result<(), RuntimeValidationErrorV1> {
+        self.require_graph_access(access)?;
+        if access.is_some() && self.graph_issue_closed {
+            return Err(RuntimeValidationErrorV1::ContextReserved);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn hold_unpublished_stream_with_access_v1(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+        access: Option<ContextGraphReservationV1>,
+    ) -> Result<ContextUnpublishedHoldV1, RuntimeValidationErrorV1> {
+        self.require_unpublished_open_access_v1(access)?;
         self.require_stream_unheld_v1(stream)?;
         // Polling a deferred submission can publish it. Do not claim exclusive
         // unpublished custody while an older operation may still make progress.
@@ -62,14 +89,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .get_mut(&stream)
             .expect("validated stream")
             .unpublished = Some(local);
-        Ok(ContextUnpublishedHoldV1 { stream, local })
+        Ok(ContextUnpublishedHoldV1 {
+            stream,
+            local,
+            access,
+        })
     }
 
     pub(crate) fn release_unpublished_hold_v1(
         &mut self,
         hold: &ContextUnpublishedHoldV1,
     ) -> Result<(), RuntimeValidationErrorV1> {
-        self.require_live()?;
+        self.require_graph_access(hold.access)?;
         let record = self
             .streams
             .get_mut(&hold.stream())

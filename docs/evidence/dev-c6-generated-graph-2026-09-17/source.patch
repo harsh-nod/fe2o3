@@ -1,0 +1,2806 @@
+diff --git a/crates/fe2o3-runtime/src/async_engine.rs b/crates/fe2o3-runtime/src/async_engine.rs
+index c5a98db76..2ba2dcadb 100644
+--- a/crates/fe2o3-runtime/src/async_engine.rs
++++ b/crates/fe2o3-runtime/src/async_engine.rs
+@@ -1484,7 +1484,12 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
+         if !stopped && let Some(mode) = progress.as_ref() {
+             if let Some(active) = graph.as_mut() {
+                 match catch_unwind(AssertUnwindSafe(|| {
+-                    active.advance(context, config.polls_per_tick, mode.config.flushes_per_tick)
++                    active.advance(
++                        context,
++                        operations,
++                        config.polls_per_tick,
++                        mode.config.flushes_per_tick,
++                    )
+                 })) {
+                     Ok(true) => graph = None,
+                     Ok(false) => {}
+@@ -1570,7 +1575,9 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
+     if let Some(mut graph) = graph {
+         if context.is_terminal() {
+             // Dropping an observer/driver cannot discharge ambiguous custody.
+-        } else if let Err(payload) = catch_unwind(AssertUnwindSafe(|| graph.stop(context))) {
++        } else if let Err(payload) =
++            catch_unwind(AssertUnwindSafe(|| graph.stop(context, operations)))
++        {
+             core::mem::forget(payload);
+             context.quarantine_after_async_command_panic_v1();
+         }
+@@ -1611,7 +1618,7 @@ fn handle_command_v1<B: RuntimeBackendV1 + 'static>(
+             {
+                 incoming.reject(RuntimeGraphErrorV1::Busy);
+             } else {
+-                match catch_unwind(AssertUnwindSafe(|| incoming.admit(context))) {
++                match catch_unwind(AssertUnwindSafe(|| incoming.admit(context, operations))) {
+                     Ok(true) => *graph = Some(incoming),
+                     Ok(false) => {}
+                     Err(payload) => {
+diff --git a/crates/fe2o3-runtime/src/async_engine/generated_operation.rs b/crates/fe2o3-runtime/src/async_engine/generated_operation.rs
+index 6acee35da..1a6fe4720 100644
+--- a/crates/fe2o3-runtime/src/async_engine/generated_operation.rs
++++ b/crates/fe2o3-runtime/src/async_engine/generated_operation.rs
+@@ -219,6 +219,7 @@ impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P,
+         &mut self,
+         context: &mut RuntimeContextV1<B>,
+         stream: RuntimeStreamIdV1,
++        access: Option<crate::context::ContextGraphReservationV1>,
+     ) -> Result<(), RuntimeErrorV1<B::Error>> {
+         let hooks = self
+             .adoption
+@@ -229,6 +230,7 @@ impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P,
+             self.prepared.as_ref().expect("reserved payload"),
+             self.roster.as_ref().expect("reserved roster"),
+             stream,
++            access,
+         )
+     }
+ 
+diff --git a/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs b/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs
+index af2dedce9..523d8cff8 100644
+--- a/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs
++++ b/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs
+@@ -9,6 +9,7 @@ type AdoptionPreflightV1<B, P> = fn(
+     &P,
+     &crate::generated_source::GeneratedHostRosterV1,
+     RuntimeStreamIdV1,
++    Option<crate::context::ContextGraphReservationV1>,
+ ) -> Result<(), RuntimeErrorV1<<B as RuntimeBackendV1>::Error>>;
+ type AdoptV1<B, P> = fn(
+     &mut RuntimeContextV1<B>,
+@@ -114,6 +115,9 @@ impl UnpublishedAdoptionV1 {
+ 
+ impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
+     pub(super) fn advance_unpublished_v1(&mut self, context: &mut RuntimeContextV1<B>) -> bool {
++        if self.observations_stopped || context.is_terminal() {
++            return false;
++        }
+         let owner = self.unpublished.as_mut().expect("active unpublished owner");
+         if owner.phase == PhaseV1::Adopting {
+             // No error or unwind may make this effect callable a second time.
+@@ -207,6 +211,16 @@ impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
+         let Some(owner) = self.unpublished.as_mut() else {
+             return Ok(false);
+         };
++        let delivers_completion = self
++            .adoption
++            .as_ref()
++            .and_then(|hooks| hooks.issue)
++            .is_some_and(|issue| issue.completion.is_some());
++        // Accepted completion-capable invocations keep progressing during drain,
++        // including adoption before ISSUE. Only Stop can abandon their output.
++        if (owner.hold.is_graph_scoped_v1() || delivers_completion) && !self.observations_stopped {
++            return Ok(false);
++        }
+         if matches!(owner.phase, PhaseV1::Issued | PhaseV1::PhysicallySettled) {
+             // Drain observes the accepted prefix without cancelling output.
+             // Only actual Stop, after stopping the reserved completion observer,
+@@ -316,7 +330,7 @@ impl<B: RuntimeBackendV1> ActivateCommandV1<B> {
+         operations: &mut operation::OperationRegistryV1<B>,
+     ) {
+         let result = catch_unwind(AssertUnwindSafe(|| {
+-            operations.activate_reserved(context, &mut self.ticket, self.stream)
++            operations.activate_reserved(context, &mut self.ticket, self.stream, None)
+         }));
+         match result {
+             Ok(Ok(completion)) => {
+diff --git a/crates/fe2o3-runtime/src/async_engine/generated_operation/completion.rs b/crates/fe2o3-runtime/src/async_engine/generated_operation/completion.rs
+index ae2126636..59152df93 100644
+--- a/crates/fe2o3-runtime/src/async_engine/generated_operation/completion.rs
++++ b/crates/fe2o3-runtime/src/async_engine/generated_operation/completion.rs
+@@ -90,6 +90,27 @@ impl fmt::Display for RuntimeAsyncGeneratedJoinFailureV1 {
+ impl Error for RuntimeAsyncGeneratedJoinFailureV1 {}
+ 
+ impl RuntimeAsyncGeneratedCompletionV1 {
++    pub(in crate::async_engine) fn try_take_ready_v1(
++        &mut self,
++    ) -> Option<RuntimeAsyncGeneratedCompletionResultV1> {
++        let result = self.future.try_take_ready_v1()?;
++        Some(self.finish_v1(result))
++    }
++
++    fn finish_v1(
++        &mut self,
++        result: Result<GeneratedCompletionOutcomeV1, RuntimeAsyncEngineCallErrorV1>,
++    ) -> RuntimeAsyncGeneratedCompletionResultV1 {
++        match result {
++            Err(error) => Err(error),
++            Ok(Err(error)) => Ok(Err(error)),
++            Ok(Ok(())) => self
++                .domain
++                .take()
++                .map(|domain| Ok(RuntimeGeneratedCompletionReceiptV1 { domain }))
++                .ok_or(RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket),
++        }
++    }
+     /// Tests host output binding without granting completion or execution authority.
+     #[doc(hidden)]
+     pub fn matches_owner<T: Send + Sync + 'static>(&self, owner: &Arc<T>) -> bool {
+@@ -134,14 +155,7 @@ impl Future for RuntimeAsyncGeneratedCompletionV1 {
+     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+         match Pin::new(&mut self.future).poll(cx) {
+             Poll::Pending => Poll::Pending,
+-            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+-            Poll::Ready(Ok(Err(error))) => Poll::Ready(Ok(Err(error))),
+-            Poll::Ready(Ok(Ok(()))) => Poll::Ready(
+-                self.domain
+-                    .take()
+-                    .map(|domain| Ok(RuntimeGeneratedCompletionReceiptV1 { domain }))
+-                    .ok_or(RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket),
+-            ),
++            Poll::Ready(result) => Poll::Ready(self.finish_v1(result)),
+         }
+     }
+ }
+diff --git a/crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs b/crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs
+index ad2ee1917..a769c32fc 100644
+--- a/crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs
++++ b/crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs
+@@ -22,6 +22,9 @@ pub struct RuntimeAsyncReservedTicketV1 {
+ }
+ 
+ impl RuntimeAsyncReservedTicketV1 {
++    pub(in crate::async_engine) fn has_completion_v1(&self) -> bool {
++        self.domain.is_some()
++    }
+     #[cfg(test)]
+     pub(in crate::async_engine) fn completion_for_test_v1(
+         &mut self,
+diff --git a/crates/fe2o3-runtime/src/async_engine/graph.rs b/crates/fe2o3-runtime/src/async_engine/graph.rs
+index d4aac6576..31a8f2b49 100644
+--- a/crates/fe2o3-runtime/src/async_engine/graph.rs
++++ b/crates/fe2o3-runtime/src/async_engine/graph.rs
+@@ -12,7 +12,10 @@ use fe2o3_completion::{
+     ContextIdentityV1, FailureCodeV1, StreamIdentityV1,
+ };
+ use std::collections::VecDeque;
++mod generated;
+ mod versions;
++use generated::GraphReplyV1;
++pub use generated::*;
+ pub use versions::{
+     MAX_RUNTIME_GRAPH_VERSION_REFERENCES_V1, MAX_RUNTIME_GRAPH_VERSIONS_V1,
+     RuntimeGraphDataVersionV1, RuntimeGraphInputVersionV1, RuntimeGraphVersionRecordV1,
+@@ -363,38 +366,68 @@ impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
+ }
+ 
+ pub(super) trait EngineGraphV1<B: RuntimeBackendV1>: Send {
+-    fn admit(&mut self, context: &mut RuntimeContextV1<B>) -> bool;
++    fn admit(
++        &mut self,
++        context: &mut RuntimeContextV1<B>,
++        operations: &mut operation::OperationRegistryV1<B>,
++    ) -> bool;
+     fn advance(
+         &mut self,
+         context: &mut RuntimeContextV1<B>,
++        operations: &mut operation::OperationRegistryV1<B>,
+         budget: usize,
+         flush_budget: usize,
+     ) -> bool;
+     fn reject(&mut self, error: RuntimeGraphErrorV1<B::Error>);
+-    fn stop(&mut self, context: &mut RuntimeContextV1<B>);
++    fn stop(
++        &mut self,
++        context: &mut RuntimeContextV1<B>,
++        operations: &mut operation::OperationRegistryV1<B>,
++    );
++    fn take_generated_request(&mut self) -> Option<RuntimeGeneratedGraphRequestV1<B>> {
++        None
++    }
++}
++
++enum PreparedGraphActionV1 {
++    Ordinary(PreparedContextGraphActionV1),
++    Generated(RuntimeAsyncReservedTicketV1),
++}
++
++enum ActiveGraphActionV1 {
++    Ordinary(
++        usize,
++        RuntimeSubmissionV1<()>,
++        Option<RuntimeCompletionStatusV1>,
++    ),
++    Generated(usize, RuntimeAsyncGeneratedCompletionV1),
+ }
+ 
+ struct Graph<B: RuntimeBackendV1> {
+     versions: Option<versions::VersionLedger>,
+     request: Option<RuntimeGraphRequestV1<B>>,
++    generated: BTreeMap<CompletionNodeIdV1, RuntimeAsyncReservedTicketV1>,
+     authority: Option<CompletionAuthorityV1>,
+     token: Option<ContextGraphReservationV1>,
+     execution: Option<RuntimeGraphExecutionIdentityV1>,
+-    actions: Vec<Option<PreparedContextGraphActionV1>>,
++    actions: Vec<Option<PreparedGraphActionV1>>,
+     ids: Vec<CompletionNodeIdV1>,
++    node_streams: Vec<RuntimeStreamIdV1>,
+     issued: Vec<bool>,
+-    active: VecDeque<(
+-        usize,
+-        RuntimeSubmissionV1<()>,
+-        Option<RuntimeCompletionStatusV1>,
+-    )>,
++    active: VecDeque<ActiveGraphActionV1>,
+     streams: Vec<RuntimeStreamIdV1>,
+     flush_cursor: usize,
+     next_poll: bool,
+     cancel_applied: bool,
++    terminal_cleanup_pending: bool,
+     control: RuntimeGraphControlV1,
+     slot: Option<Arc<AtomicBool>>,
+-    reply: owned::Reply<RuntimeGraphResultV1<B::Error>>,
++    reply: GraphReplyV1<B>,
++    completions: Vec<(CompletionNodeIdV1, RuntimeGeneratedCompletionReceiptV1)>,
++    generated_errors: Vec<(
++        CompletionNodeIdV1,
++        RuntimeGeneratedGraphNodeErrorV1<B::Error>,
++    )>,
+     observations: Vec<(CompletionNodeIdV1, RuntimeCompletionStatusV1)>,
+     errors: Vec<(CompletionNodeIdV1, RuntimeErrorV1<B::Error>)>,
+     rejected_observations: u64,
+@@ -403,11 +436,51 @@ struct Graph<B: RuntimeBackendV1> {
+ 
+ impl<B: RuntimeBackendV1> Drop for Graph<B> {
+     fn drop(&mut self) {
++        if self.request.is_some() && matches!(self.reply, GraphReplyV1::Generated(_)) {
++            self.reject_admission(RuntimeGeneratedGraphAdmissionErrorV1::Engine(
++                RuntimeAsyncEngineCallErrorV1::EngineStopped,
++            ));
++        }
+         self.release_slot();
+     }
+ }
+ 
+ impl<B: RuntimeBackendV1> Graph<B> {
++    fn new(
++        request: RuntimeGraphRequestV1<B>,
++        generated: BTreeMap<CompletionNodeIdV1, RuntimeAsyncReservedTicketV1>,
++        control: RuntimeGraphControlV1,
++        slot: Arc<AtomicBool>,
++        reply: GraphReplyV1<B>,
++    ) -> Self {
++        Self {
++            versions: None,
++            request: Some(request),
++            generated,
++            authority: None,
++            token: None,
++            execution: None,
++            actions: Vec::new(),
++            ids: Vec::new(),
++            node_streams: Vec::new(),
++            issued: Vec::new(),
++            active: VecDeque::new(),
++            streams: Vec::new(),
++            flush_cursor: 0,
++            next_poll: false,
++            cancel_applied: false,
++            terminal_cleanup_pending: false,
++            control,
++            slot: Some(slot),
++            reply,
++            completions: Vec::new(),
++            generated_errors: Vec::new(),
++            observations: Vec::new(),
++            errors: Vec::new(),
++            rejected_observations: 0,
++            rejected_releases: 0,
++        }
++    }
+     fn release_slot(&mut self) {
+         if let Some(slot) = self.slot.take() {
+             slot.store(false, Ordering::Release);
+@@ -416,7 +489,8 @@ impl<B: RuntimeBackendV1> Graph<B> {
+     fn prepare(
+         &mut self,
+         context: &mut RuntimeContextV1<B>,
+-    ) -> Result<(), RuntimeGraphErrorV1<B::Error>> {
++        operations: &mut operation::OperationRegistryV1<B>,
++    ) -> Result<(), RuntimeGeneratedGraphAdmissionErrorV1<B::Error>> {
+         let request = self.request.as_ref().expect("unadmitted graph");
+         for (&identity, &stream) in &request.streams {
+             let actual = context
+@@ -425,7 +499,8 @@ impl<B: RuntimeBackendV1> Graph<B> {
+             if actual != identity {
+                 return Err(RuntimeGraphErrorV1::Invalid(
+                     RuntimeGraphValidationErrorV1::StreamBindings,
+-                ));
++                )
++                .into());
+             }
+         }
+         for node in request.graph.nodes() {
+@@ -444,15 +519,34 @@ impl<B: RuntimeBackendV1> Graph<B> {
+                         )
+                         .map_err(RuntimeGraphErrorV1::Context)?,
+                 ),
++                (CompletionNodeKindV1::Future(_), None)
++                    if self.generated.contains_key(&node.id()) =>
++                {
++                    let ticket = &self.generated[&node.id()];
++                    if !ticket.has_completion_v1() {
++                        return Err(RuntimeGeneratedGraphAdmissionErrorV1::Activation(
++                            generated_operation::adoption::ActivationErrorV1::Context(
++                                crate::RuntimeValidationErrorV1::Unsupported.into(),
++                            ),
++                        ));
++                    }
++                    operations
++                        .validate_reserved(context, ticket, request.streams[&node.stream()], None)
++                        .map_err(RuntimeGeneratedGraphAdmissionErrorV1::Activation)?;
++                    None
++                }
+                 (CompletionNodeKindV1::Future(_), None) => {
+                     return Err(RuntimeGraphErrorV1::Invalid(
+                         RuntimeGraphValidationErrorV1::MissingOperation,
+-                    ));
++                    )
++                    .into());
+                 }
+                 _ => None,
+             };
+-            self.actions.push(action);
++            self.actions
++                .push(action.map(PreparedGraphActionV1::Ordinary));
+             self.ids.push(node.id());
++            self.node_streams.push(request.streams[&node.stream()]);
+             self.issued.push(false);
+         }
+         request
+@@ -461,16 +555,25 @@ impl<B: RuntimeBackendV1> Graph<B> {
+         self.versions =
+             Some(versions::VersionLedger::prepare(request).map_err(RuntimeGraphErrorV1::Invalid)?);
+         self.streams.extend(request.streams.values().copied());
+-        let request = self.request.take().expect("validated request");
+         let graph_context = request.graph.context();
+         let graph_identity = request.graph.identity();
+-        self.authority = Some(request.graph.into_completion_authority());
+         self.active.reserve(self.ids.len());
+         self.observations.reserve(self.ids.len());
+         self.errors.reserve(self.ids.len());
++        self.completions.reserve(self.generated.len());
++        self.generated_errors.reserve(self.generated.len());
+         let token = context
+             .reserve_graph_v1(self.ids.len())
+             .map_err(|e| RuntimeGraphErrorV1::Context(e.into()))?;
++        let request = self.request.take().expect("committed request");
++        self.authority = Some(request.graph.into_completion_authority());
++        for (node, ticket) in core::mem::take(&mut self.generated) {
++            let index = self
++                .ids
++                .binary_search(&node)
++                .expect("validated generated node");
++            self.actions[index] = Some(PreparedGraphActionV1::Generated(ticket));
++        }
+         self.token = Some(token);
+         self.execution = Some(RuntimeGraphExecutionIdentityV1 {
+             context: graph_context,
+@@ -481,6 +584,7 @@ impl<B: RuntimeBackendV1> Graph<B> {
+     }
+ 
+     fn fail_node(&mut self, index: usize, code: u32) {
++        self.terminal_cleanup_pending = true;
+         self.versions.as_mut().unwrap().fail(index);
+         // SAFETY: only this owner issues nodes. The caller established either
+         // definite nonpublication or exact quiescent failure for this occurrence.
+@@ -493,18 +597,37 @@ impl<B: RuntimeBackendV1> Graph<B> {
+         }
+     }
+ 
+-    fn apply_cancel(&mut self) {
+-        if self.cancel_applied || !self.control.0.load(Ordering::Acquire) {
+-            return;
++    fn apply_cancel(
++        &mut self,
++        context: &mut RuntimeContextV1<B>,
++        operations: &mut operation::OperationRegistryV1<B>,
++    ) -> bool {
++        let cancel = self.control.0.load(Ordering::Acquire);
++        if (!cancel || self.cancel_applied) && !self.terminal_cleanup_pending {
++            return true;
+         }
+-        self.cancel_applied = true;
+-        let authority = self.authority.as_mut().unwrap();
+         let reason = CancellationCodeV1::new(1).unwrap();
+         for (index, &node) in self.ids.iter().enumerate() {
+             if self.issued[index] {
+                 continue;
+             }
+-            match authority.state(node).unwrap() {
++            let state = self.authority.as_ref().unwrap().state(node).unwrap();
++            if !cancel && !state.is_terminal() {
++                continue;
++            }
++            // Drop of a ticket cannot reclaim its parked owner. Retire that
++            // exact registry entry before recording conclusive cancellation.
++            if let Some(PreparedGraphActionV1::Generated(ticket)) = &self.actions[index]
++                && !operations.discard_reserved(&ticket.key)
++            {
++                context.quarantine_after_async_command_panic_v1();
++                self.reject(RuntimeGraphErrorV1::Context(
++                    crate::RuntimeValidationErrorV1::InvalidBackendDescription.into(),
++                ));
++                return false;
++            }
++            let authority = self.authority.as_mut().unwrap();
++            match state {
+                 CompletionNodeStateV1::Blocked => {
+                     authority.cancel_blocked(node, reason).unwrap();
+                 }
+@@ -519,6 +642,9 @@ impl<B: RuntimeBackendV1> Graph<B> {
+             }
+             self.actions[index] = None;
+         }
++        self.cancel_applied |= cancel;
++        self.terminal_cleanup_pending = false;
++        true
+     }
+ 
+     fn finish(&mut self, context: &mut RuntimeContextV1<B>) -> bool {
+@@ -552,7 +678,7 @@ impl<B: RuntimeBackendV1> Graph<B> {
+             .try_into_report()
+             .unwrap_or_else(|_| panic!("terminal graph"));
+         self.release_slot();
+-        self.reply.complete(Ok(Ok(RuntimeGraphReportV1 {
++        let report = RuntimeGraphReportV1 {
+             execution: self.execution.take().expect("admitted graph occurrence"),
+             versions,
+             version_inputs,
+@@ -561,19 +687,44 @@ impl<B: RuntimeBackendV1> Graph<B> {
+             errors: core::mem::take(&mut self.errors),
+             rejected_observations: self.rejected_observations,
+             rejected_releases: self.rejected_releases,
+-        })));
++        };
++        match &mut self.reply {
++            GraphReplyV1::Ordinary(reply) => reply.complete(Ok(Ok(report))),
++            GraphReplyV1::Generated(reply) => {
++                reply.complete(Ok(Ok(RuntimeGeneratedGraphReportV1 {
++                    graph: report,
++                    completions: core::mem::take(&mut self.completions),
++                    errors: core::mem::take(&mut self.generated_errors),
++                })))
++            }
++        }
+         true
+     }
+ 
+     fn reject(&mut self, error: RuntimeGraphErrorV1<B::Error>) {
++        if self.request.is_some() {
++            self.reject_admission(RuntimeGeneratedGraphAdmissionErrorV1::Graph(error));
++            return;
++        }
+         self.release_slot();
+-        self.reply.complete(Ok(Err(error)));
++        match &mut self.reply {
++            GraphReplyV1::Ordinary(reply) => reply.complete(Ok(Err(error))),
++            GraphReplyV1::Generated(reply) => {
++                reply.complete(Ok(Err(RuntimeGeneratedGraphFailureV1::Execution(error))))
++            }
++        }
+     }
+ }
+ 
+ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
+-    fn issue_one(&mut self, context: &mut RuntimeContextV1<B>) -> bool {
+-        self.apply_cancel();
++    fn issue_one(
++        &mut self,
++        context: &mut RuntimeContextV1<B>,
++        operations: &mut operation::OperationRegistryV1<B>,
++    ) -> bool {
++        if self.control.0.load(Ordering::Acquire) && !self.apply_cancel(context, operations) {
++            return true;
++        }
+         let Some(node) = self.authority.as_mut().unwrap().pop_ready_notification() else {
+             return false;
+         };
+@@ -591,17 +742,48 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
+         }
+         self.issued[index] = true;
+         match self.actions[index].take() {
+-            Some(action) => match context.submit_graph_action_v1(self.token.unwrap(), action) {
+-                Ok(submission) => self.active.push_back((index, submission, None)),
+-                Err(error) => {
+-                    if context.is_terminal() {
+-                        self.reject(RuntimeGraphErrorV1::Context(error));
+-                    } else {
+-                        self.errors.push((node, error));
+-                        self.fail_node(index, 1);
++            Some(PreparedGraphActionV1::Generated(ticket)) => {
++                let mut ticket = Some(ticket);
++                match operations.activate_reserved(
++                    context,
++                    &mut ticket,
++                    self.node_streams[index],
++                    self.token,
++                ) {
++                    Ok(completion) => self
++                        .active
++                        .push_back(ActiveGraphActionV1::Generated(index, completion)),
++                    Err(error) => {
++                        if context.is_terminal() {
++                            return true;
++                        }
++                        if !operations
++                            .discard_reserved(&ticket.as_ref().expect("rejected ticket").key)
++                        {
++                            context.quarantine_after_async_command_panic_v1();
++                            return true;
++                        }
++                        self.generated_errors
++                            .push((node, RuntimeGeneratedGraphNodeErrorV1::Activation(error)));
++                        self.fail_node(index, 3);
++                    }
++                }
++            }
++            Some(PreparedGraphActionV1::Ordinary(action)) => {
++                match context.submit_graph_action_v1(self.token.unwrap(), action) {
++                    Ok(submission) => self
++                        .active
++                        .push_back(ActiveGraphActionV1::Ordinary(index, submission, None)),
++                    Err(error) => {
++                        if context.is_terminal() {
++                            self.reject(RuntimeGraphErrorV1::Context(error));
++                        } else {
++                            self.errors.push((node, error));
++                            self.fail_node(index, 1);
++                        }
+                     }
+                 }
+-            },
++            }
+             None => {
+                 // SAFETY: this is a validated host-only event join; Ready means
+                 // all exact predecessors succeeded, and the context is reserved.
+@@ -618,30 +800,41 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
+     }
+ 
+     fn poll_one(&mut self, context: &mut RuntimeContextV1<B>) -> bool {
+-        let Some((index, mut submission, retiring)) = self.active.pop_front() else {
++        let Some(active) = self.active.pop_front() else {
+             return false;
+         };
++        let (index, mut submission, retiring) = match active {
++            ActiveGraphActionV1::Ordinary(index, submission, retiring) => {
++                (index, submission, retiring)
++            }
++            ActiveGraphActionV1::Generated(index, mut completion) => {
++                match completion.try_take_ready_v1() {
++                    None => self
++                        .active
++                        .push_back(ActiveGraphActionV1::Generated(index, completion)),
++                    Some(Ok(Ok(receipt))) => {
++                        self.completions.push((self.ids[index], receipt));
++                        self.succeed_operation(context, index);
++                    }
++                    Some(result) => {
++                        let error = match result {
++                            Err(error) => RuntimeGeneratedGraphNodeErrorV1::Engine(error),
++                            Ok(Err(error)) => RuntimeGeneratedGraphNodeErrorV1::Readback(error),
++                            Ok(Ok(_)) => unreachable!(),
++                        };
++                        self.generated_errors.push((self.ids[index], error));
++                        self.fail_node(index, 4);
++                    }
++                }
++                return true;
++            }
++        };
+         let token = self.token.unwrap();
+         if let Some(status) = retiring {
+             match context.release_graph_submission_v1(token, &submission) {
+                 Ok(()) => {
+                     if status == RuntimeCompletionStatusV1::Succeeded {
+-                        if !self.versions.as_mut().unwrap().commit(index) {
+-                            context.quarantine_after_async_command_panic_v1();
+-                            self.reject(RuntimeGraphErrorV1::Invalid(
+-                                RuntimeGraphValidationErrorV1::VersionNotAvailable,
+-                            ));
+-                            return true;
+-                        }
+-                        // SAFETY: exact context success was observed and native
+-                        // retirement succeeded before permitting dependent issue.
+-                        unsafe {
+-                            self.authority
+-                                .as_mut()
+-                                .unwrap()
+-                                .mark_succeeded(self.ids[index])
+-                                .unwrap();
+-                        }
++                        self.succeed_operation(context, index);
+                     } else {
+                         self.fail_node(index, 2);
+                     }
+@@ -651,7 +844,11 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
+                 }
+                 Err(_) => {
+                     self.rejected_releases = self.rejected_releases.saturating_add(1);
+-                    self.active.push_back((index, submission, Some(status)));
++                    self.active.push_back(ActiveGraphActionV1::Ordinary(
++                        index,
++                        submission,
++                        Some(status),
++                    ));
+                 }
+             }
+             return true;
+@@ -660,7 +857,8 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
+             Ok(_) => {}
+             Err(RuntimeErrorV1::BackendRejected(_)) => {
+                 self.rejected_observations = self.rejected_observations.saturating_add(1);
+-                self.active.push_back((index, submission, None));
++                self.active
++                    .push_back(ActiveGraphActionV1::Ordinary(index, submission, None));
+                 return true;
+             }
+             Err(error) if context.is_terminal() => {
+@@ -680,21 +878,49 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
+             .query_submission(&submission)
+             .expect("exact owned submission");
+         if status == RuntimeCompletionStatusV1::Pending {
+-            self.active.push_back((index, submission, None));
++            self.active
++                .push_back(ActiveGraphActionV1::Ordinary(index, submission, None));
+         } else {
+             self.observations.push((self.ids[index], status));
+-            self.active.push_back((index, submission, Some(status)));
++            self.active.push_back(ActiveGraphActionV1::Ordinary(
++                index,
++                submission,
++                Some(status),
++            ));
+         }
+         true
+     }
++
++    fn succeed_operation(&mut self, context: &mut RuntimeContextV1<B>, index: usize) {
++        if !self.versions.as_mut().unwrap().commit(index) {
++            context.quarantine_after_async_command_panic_v1();
++            self.reject(RuntimeGraphErrorV1::Invalid(
++                RuntimeGraphValidationErrorV1::VersionNotAvailable,
++            ));
++            return;
++        }
++        // SAFETY: the exact ordinary submission was successfully retired, or
++        // the original generated decoder/gate receipt followed full settlement.
++        unsafe {
++            self.authority
++                .as_mut()
++                .unwrap()
++                .mark_succeeded(self.ids[index])
++                .unwrap();
++        }
++    }
+ }
+ 
+ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> EngineGraphV1<B> for Graph<B> {
+-    fn admit(&mut self, context: &mut RuntimeContextV1<B>) -> bool {
+-        match self.prepare(context) {
++    fn admit(
++        &mut self,
++        context: &mut RuntimeContextV1<B>,
++        operations: &mut operation::OperationRegistryV1<B>,
++    ) -> bool {
++        match self.prepare(context, operations) {
+             Ok(()) => true,
+             Err(error) => {
+-                self.reject(error);
++                self.reject_admission(error);
+                 false
+             }
+         }
+@@ -702,10 +928,13 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> EngineGraph
+     fn advance(
+         &mut self,
+         context: &mut RuntimeContextV1<B>,
++        operations: &mut operation::OperationRegistryV1<B>,
+         budget: usize,
+         flush_budget: usize,
+     ) -> bool {
+-        self.apply_cancel();
++        if !self.apply_cancel(context, operations) {
++            return true;
++        }
+         for _ in 0..budget {
+             self.next_poll = !self.next_poll;
+             let mut progressed = false;
+@@ -713,7 +942,7 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> EngineGraph
+                 progressed = if poll {
+                     self.poll_one(context)
+                 } else {
+-                    self.issue_one(context)
++                    self.issue_one(context, operations)
+                 };
+                 if progressed {
+                     break;
+@@ -726,7 +955,7 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> EngineGraph
+                 break;
+             }
+         }
+-        if self.finish(context) {
++        if !self.apply_cancel(context, operations) || self.finish(context) {
+             return true;
+         }
+         for _ in 0..flush_budget.min(self.streams.len()) {
+@@ -744,15 +973,24 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> EngineGraph
+     fn reject(&mut self, error: RuntimeGraphErrorV1<B::Error>) {
+         Graph::reject(self, error);
+     }
+-    fn stop(&mut self, context: &mut RuntimeContextV1<B>) {
++    fn stop(
++        &mut self,
++        context: &mut RuntimeContextV1<B>,
++        operations: &mut operation::OperationRegistryV1<B>,
++    ) {
+         self.control.cancel_unissued();
+-        self.apply_cancel();
++        if !self.apply_cancel(context, operations) {
++            return;
++        }
+         if !self.finish(context) {
+             // Stop is not native quiescence. Preserve the context reservation
+             // even after the driver/reply is dropped by owner shutdown.
+             context.quarantine_after_async_command_panic_v1();
+         }
+     }
++    fn take_generated_request(&mut self) -> Option<RuntimeGeneratedGraphRequestV1<B>> {
++        Graph::take_generated_request(self)
++    }
+ }
+ 
+ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static>
+@@ -778,28 +1016,13 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static>
+             return Err(RuntimeAsyncEngineCallErrorV1::GraphCapacity);
+         }
+         let control = RuntimeGraphControlV1(Arc::new(AtomicBool::new(false)));
+-        let graph = Graph {
+-            versions: None,
+-            request: Some(request),
+-            authority: None,
+-            token: None,
+-            execution: None,
+-            actions: Vec::new(),
+-            ids: Vec::new(),
+-            issued: Vec::new(),
+-            active: VecDeque::new(),
+-            streams: Vec::new(),
+-            flush_cursor: 0,
+-            next_poll: false,
+-            cancel_applied: false,
+-            control: control.clone(),
+-            slot: Some(Arc::clone(&self.observer.graph_slot)),
+-            reply,
+-            observations: Vec::new(),
+-            errors: Vec::new(),
+-            rejected_observations: 0,
+-            rejected_releases: 0,
+-        };
++        let graph = Graph::new(
++            request,
++            BTreeMap::new(),
++            control.clone(),
++            Arc::clone(&self.observer.graph_slot),
++            GraphReplyV1::Ordinary(reply),
++        );
+         match self
+             .observer
+             .try_send_command(RuntimeAsyncEngineCommandV1::Graph(Box::new(graph)))
+diff --git a/crates/fe2o3-runtime/src/async_engine/graph/generated.rs b/crates/fe2o3-runtime/src/async_engine/graph/generated.rs
+new file mode 100644
+index 000000000..7579eab00
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/async_engine/graph/generated.rs
+@@ -0,0 +1,323 @@
++//! Move-only generated graph admission and per-node original completion receipts.
++
++use super::*;
++use generated_operation::adoption::ActivationErrorV1;
++
++/// An ordinary graph plus fresh reserved generated invocations. Dependencies
++/// order execution; they do not rebind a successor's already-frozen DATA inputs.
++/// Dropping an unsubmitted request drops tickets, not their parked runtime owners;
++/// recover tickets with `take_reserved` to explicitly discard them instead.
++///
++/// ```compile_fail,E0599
++/// use fe2o3_runtime::{KfdRuntimeBackendV1, RuntimeGeneratedGraphRequestV1};
++/// fn duplicate(request: RuntimeGeneratedGraphRequestV1<KfdRuntimeBackendV1>) { request.clone(); }
++/// ```
++pub struct RuntimeGeneratedGraphRequestV1<B: RuntimeBackendV1> {
++    request: RuntimeGraphRequestV1<B>,
++    generated: BTreeMap<CompletionNodeIdV1, RuntimeAsyncReservedTicketV1>,
++}
++
++impl<B: RuntimeBackendV1> fmt::Debug for RuntimeGeneratedGraphRequestV1<B> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("RuntimeGeneratedGraphRequestV1")
++            .field("generated", &self.generated)
++            .finish_non_exhaustive()
++    }
++}
++
++#[derive(Debug)]
++pub struct RuntimeGeneratedGraphBindingFailureV1 {
++    pub ticket: RuntimeAsyncReservedTicketV1,
++    pub error: RuntimeGraphValidationErrorV1,
++}
++impl fmt::Display for RuntimeGeneratedGraphBindingFailureV1 {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        self.error.fmt(f)
++    }
++}
++impl Error for RuntimeGeneratedGraphBindingFailureV1 {}
++
++impl<B: RuntimeBackendV1> RuntimeGeneratedGraphRequestV1<B> {
++    pub fn new(request: RuntimeGraphRequestV1<B>) -> Self {
++        Self {
++            request,
++            generated: BTreeMap::new(),
++        }
++    }
++
++    /// Rejects without consuming the original ticket. Context/registry identity
++    /// and completion support are checked on the owner thread before admission.
++    pub fn bind_reserved(
++        &mut self,
++        node: CompletionNodeIdV1,
++        ticket: RuntimeAsyncReservedTicketV1,
++    ) -> Result<(), RuntimeGeneratedGraphBindingFailureV1> {
++        let valid = self.request.check_node(node).and_then(|()| {
++            if self.generated.contains_key(&node) {
++                Err(RuntimeGraphValidationErrorV1::DuplicateOperation)
++            } else {
++                Ok(())
++            }
++        });
++        if let Err(error) = valid {
++            return Err(RuntimeGeneratedGraphBindingFailureV1 { ticket, error });
++        }
++        self.generated.insert(node, ticket);
++        Ok(())
++    }
++
++    pub fn take_reserved(
++        &mut self,
++        node: CompletionNodeIdV1,
++    ) -> Option<RuntimeAsyncReservedTicketV1> {
++        self.generated.remove(&node)
++    }
++}
++
++#[derive(Debug)]
++#[non_exhaustive]
++pub enum RuntimeGeneratedGraphAdmissionErrorV1<E> {
++    Engine(RuntimeAsyncEngineCallErrorV1),
++    Graph(RuntimeGraphErrorV1<E>),
++    Activation(ActivationErrorV1<E>),
++}
++impl<E: fmt::Display> fmt::Display for RuntimeGeneratedGraphAdmissionErrorV1<E> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::Engine(error) => error.fmt(f),
++            Self::Graph(error) => error.fmt(f),
++            Self::Activation(error) => error.fmt(f),
++        }
++    }
++}
++impl<E: Error + 'static> Error for RuntimeGeneratedGraphAdmissionErrorV1<E> {}
++impl<E> From<RuntimeGraphErrorV1<E>> for RuntimeGeneratedGraphAdmissionErrorV1<E> {
++    fn from(error: RuntimeGraphErrorV1<E>) -> Self {
++        Self::Graph(error)
++    }
++}
++
++/// No graph reservation was committed. Every original ticket is returned.
++pub struct RuntimeGeneratedGraphSubmissionFailureV1<B: RuntimeBackendV1> {
++    pub request: Box<RuntimeGeneratedGraphRequestV1<B>>,
++    pub error: RuntimeGeneratedGraphAdmissionErrorV1<B::Error>,
++}
++
++pub enum RuntimeGeneratedGraphFailureV1<B: RuntimeBackendV1> {
++    Rejected(RuntimeGeneratedGraphSubmissionFailureV1<B>),
++    /// Admission committed. This error is not proof of native quiescence.
++    Execution(RuntimeGraphErrorV1<B::Error>),
++}
++
++impl<B: RuntimeBackendV1> fmt::Debug for RuntimeGeneratedGraphSubmissionFailureV1<B> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("RuntimeGeneratedGraphSubmissionFailureV1")
++            .field("request", &self.request)
++            .field("error", &self.error)
++            .finish()
++    }
++}
++impl<B: RuntimeBackendV1> fmt::Debug for RuntimeGeneratedGraphFailureV1<B> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::Rejected(failure) => f.debug_tuple("Rejected").field(failure).finish(),
++            Self::Execution(error) => f.debug_tuple("Execution").field(error).finish(),
++        }
++    }
++}
++impl<B: RuntimeBackendV1> fmt::Display for RuntimeGeneratedGraphSubmissionFailureV1<B> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        self.error.fmt(f)
++    }
++}
++impl<B: RuntimeBackendV1> Error for RuntimeGeneratedGraphSubmissionFailureV1<B> {}
++impl<B: RuntimeBackendV1> fmt::Display for RuntimeGeneratedGraphFailureV1<B> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::Rejected(failure) => failure.fmt(f),
++            Self::Execution(error) => error.fmt(f),
++        }
++    }
++}
++impl<B: RuntimeBackendV1> Error for RuntimeGeneratedGraphFailureV1<B> {}
++
++#[derive(Debug)]
++#[non_exhaustive]
++pub enum RuntimeGeneratedGraphNodeErrorV1<E> {
++    Activation(ActivationErrorV1<E>),
++    Engine(RuntimeAsyncEngineCallErrorV1),
++    Readback(crate::RuntimeGfx942ReadbackErrorV1),
++}
++impl<E: fmt::Display> fmt::Display for RuntimeGeneratedGraphNodeErrorV1<E> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::Activation(error) => error.fmt(f),
++            Self::Engine(error) => error.fmt(f),
++            Self::Readback(error) => error.fmt(f),
++        }
++    }
++}
++impl<E: Error + 'static> Error for RuntimeGeneratedGraphNodeErrorV1<E> {}
++
++/// Retired graph plus exact, move-only receipts for host typed output extraction.
++/// Failed or cancelled generated nodes never produce a successful receipt.
++#[derive(Debug)]
++pub struct RuntimeGeneratedGraphReportV1<E> {
++    pub graph: RuntimeGraphReportV1<E>,
++    pub completions: Vec<(CompletionNodeIdV1, RuntimeGeneratedCompletionReceiptV1)>,
++    pub errors: Vec<(CompletionNodeIdV1, RuntimeGeneratedGraphNodeErrorV1<E>)>,
++}
++
++pub type RuntimeGeneratedGraphResultV1<B> = Result<
++    RuntimeGeneratedGraphReportV1<<B as RuntimeBackendV1>::Error>,
++    RuntimeGeneratedGraphFailureV1<B>,
++>;
++
++#[must_use = "dropping graph observation does not cancel execution"]
++/// ```compile_fail,E0599
++/// use fe2o3_runtime::{KfdRuntimeBackendV1, RuntimeAsyncGeneratedGraphFutureV1};
++/// fn duplicate(future: RuntimeAsyncGeneratedGraphFutureV1<KfdRuntimeBackendV1>) { future.clone(); }
++/// ```
++pub struct RuntimeAsyncGeneratedGraphFutureV1<B: RuntimeBackendV1> {
++    future: RuntimeAsyncCommandFutureV1<RuntimeGeneratedGraphResultV1<B>>,
++    control: RuntimeGraphControlV1,
++}
++impl<B: RuntimeBackendV1> RuntimeAsyncGeneratedGraphFutureV1<B> {
++    pub fn control(&self) -> RuntimeGraphControlV1 {
++        self.control.clone()
++    }
++}
++impl<B: RuntimeBackendV1> Future for RuntimeAsyncGeneratedGraphFutureV1<B> {
++    type Output = Result<RuntimeGeneratedGraphResultV1<B>, RuntimeAsyncEngineCallErrorV1>;
++    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
++        Pin::new(&mut self.future).poll(cx)
++    }
++}
++
++pub(super) enum GraphReplyV1<B: RuntimeBackendV1> {
++    Ordinary(owned::Reply<RuntimeGraphResultV1<B::Error>>),
++    Generated(owned::Reply<RuntimeGeneratedGraphResultV1<B>>),
++}
++
++impl<B: RuntimeBackendV1> Graph<B> {
++    pub(super) fn take_generated_request(&mut self) -> Option<RuntimeGeneratedGraphRequestV1<B>> {
++        if !matches!(self.reply, GraphReplyV1::Generated(_)) {
++            return None;
++        }
++        Some(RuntimeGeneratedGraphRequestV1 {
++            request: self.request.take()?,
++            generated: core::mem::take(&mut self.generated),
++        })
++    }
++
++    pub(super) fn reject_admission(
++        &mut self,
++        error: RuntimeGeneratedGraphAdmissionErrorV1<B::Error>,
++    ) {
++        self.release_slot();
++        let request = self.take_generated_request();
++        match (&mut self.reply, error) {
++            (GraphReplyV1::Generated(reply), error) => {
++                reply.complete(Ok(Err(RuntimeGeneratedGraphFailureV1::Rejected(
++                    RuntimeGeneratedGraphSubmissionFailureV1 {
++                        request: Box::new(request.expect("uncommitted generated graph")),
++                        error,
++                    },
++                ))));
++            }
++            (
++                GraphReplyV1::Ordinary(reply),
++                RuntimeGeneratedGraphAdmissionErrorV1::Graph(error),
++            ) => {
++                reply.complete(Ok(Err(error)));
++            }
++            _ => unreachable!("generated-only admission error"),
++        }
++    }
++}
++
++impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static>
++    RuntimeAsyncProgressHandleV1<B>
++{
++    /// Uses the existing exclusive graph executor and generated operation registry.
++    /// Immediate and ordinary owner-thread rejection return the unchanged request.
++    ///
++    /// ```no_run
++    /// use fe2o3_runtime::{KfdRuntimeBackendV1, RuntimeAsyncProgressHandleV1,
++    ///     RuntimeAsyncReservedTicketV1, RuntimeGeneratedGraphRequestV1,
++    ///     RuntimeGeneratedGraphReportV1, RuntimeGraphRequestV1, KfdRuntimeBackendErrorV1};
++    /// use fe2o3_runtime::completion::CompletionNodeIdV1;
++    /// async fn execute(handle: &RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1>,
++    ///     graph: RuntimeGraphRequestV1<KfdRuntimeBackendV1>, node: CompletionNodeIdV1,
++    ///     ticket: RuntimeAsyncReservedTicketV1) -> RuntimeGeneratedGraphReportV1<KfdRuntimeBackendErrorV1> {
++    ///     let mut request = RuntimeGeneratedGraphRequestV1::new(graph);
++    ///     request.bind_reserved(node, ticket).expect("valid node");
++    ///     let future = handle.try_submit_generated_graph_v1(request).expect("queued");
++    ///     fn assert_send<T: Send>(_: &T) {}
++    ///     assert_send(&future);
++    ///     future.await.expect("live engine").expect("retired graph")
++    /// }
++    /// ```
++    pub fn try_submit_generated_graph_v1(
++        &self,
++        request: RuntimeGeneratedGraphRequestV1<B>,
++    ) -> Result<RuntimeAsyncGeneratedGraphFutureV1<B>, RuntimeGeneratedGraphSubmissionFailureV1<B>>
++    {
++        let failure = |request, error| RuntimeGeneratedGraphSubmissionFailureV1 {
++            request: Box::new(request),
++            error: RuntimeGeneratedGraphAdmissionErrorV1::Engine(error),
++        };
++        if self.observer.is_worker_thread() {
++            return Err(failure(
++                request,
++                RuntimeAsyncEngineCallErrorV1::ReentrantCall,
++            ));
++        }
++        let (reply, future) = match owned::Reply::budgeted_pair(&self.observer.reply_budget) {
++            Ok(pair) => pair,
++            Err(error) => return Err(failure(request, error)),
++        };
++        if self
++            .observer
++            .graph_slot
++            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
++            .is_err()
++        {
++            return Err(failure(
++                request,
++                RuntimeAsyncEngineCallErrorV1::GraphCapacity,
++            ));
++        }
++        let control = RuntimeGraphControlV1(Arc::new(AtomicBool::new(false)));
++        let graph = Graph::new(
++            request.request,
++            request.generated,
++            control.clone(),
++            Arc::clone(&self.observer.graph_slot),
++            GraphReplyV1::Generated(reply),
++        );
++        match self
++            .observer
++            .try_send_command(RuntimeAsyncEngineCommandV1::Graph(Box::new(graph)))
++        {
++            Ok(()) => Ok(RuntimeAsyncGeneratedGraphFutureV1 { future, control }),
++            Err(error) => {
++                let (command, error) = match error {
++                    TrySendError::Full(command) => {
++                        (command, RuntimeAsyncEngineCallErrorV1::CommandQueueFull)
++                    }
++                    TrySendError::Disconnected(command) => {
++                        (command, RuntimeAsyncEngineCallErrorV1::EngineStopped)
++                    }
++                };
++                let RuntimeAsyncEngineCommandV1::Graph(mut graph) = command else {
++                    unreachable!()
++                };
++                let request = graph
++                    .take_generated_request()
++                    .expect("unsubmitted generated graph");
++                Err(failure(request, error))
++            }
++        }
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/async_engine/operation.rs b/crates/fe2o3-runtime/src/async_engine/operation.rs
+index ee2c50e96..5439a87bf 100644
+--- a/crates/fe2o3-runtime/src/async_engine/operation.rs
++++ b/crates/fe2o3-runtime/src/async_engine/operation.rs
+@@ -59,6 +59,7 @@ pub(super) trait EngineOperationV1<B: RuntimeBackendV1> {
+         &mut self,
+         _context: &mut RuntimeContextV1<B>,
+         _stream: RuntimeStreamIdV1,
++        _access: Option<crate::context::ContextGraphReservationV1>,
+     ) -> Result<(), RuntimeErrorV1<B::Error>> {
+         Err(crate::RuntimeValidationErrorV1::Unsupported.into())
+     }
+@@ -217,20 +218,21 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
+         entry.driver.reserve_generated(context, completion)
+     }
+ 
+-    pub(super) fn activate_reserved(
++    pub(super) fn validate_reserved(
+         &mut self,
+         context: &mut RuntimeContextV1<B>,
+-        ticket: &mut Option<RuntimeAsyncReservedTicketV1>,
++        ticket: &RuntimeAsyncReservedTicketV1,
+         stream: RuntimeStreamIdV1,
+-    ) -> Result<
+-        RuntimeAsyncGeneratedCompletionV1,
+-        generated_operation::adoption::ActivationErrorV1<B::Error>,
+-    > {
++        access: Option<crate::context::ContextGraphReservationV1>,
++    ) -> Result<usize, generated_operation::adoption::ActivationErrorV1<B::Error>> {
+         use generated_operation::adoption::ActivationErrorV1 as Error;
+         if context.is_terminal() || !self.owner_cleanup {
+             return Err(Error::Engine(RuntimeAsyncEngineCallErrorV1::EngineStopped));
+         }
+-        let key = &ticket.as_ref().expect("queued reserved ticket").key;
++        context
++            .require_unpublished_open_access_v1(access)
++            .map_err(|e| Error::Context(e.into()))?;
++        let key = &ticket.key;
+         if key.context_generation != context.capture_context_generation_v1() {
+             return Err(Error::Engine(
+                 RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket,
+@@ -255,10 +257,33 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
+         }
+         self.parked[index]
+             .driver
+-            .preflight_adoption(context, stream)
++            .preflight_adoption(context, stream, access)
+             .map_err(Error::Context)?;
++        context
++            .require_unpublished_open_access_v1(access)
++            .map_err(|e| Error::Context(e.into()))?;
++        Ok(index)
++    }
++
++    pub(super) fn activate_reserved(
++        &mut self,
++        context: &mut RuntimeContextV1<B>,
++        ticket: &mut Option<RuntimeAsyncReservedTicketV1>,
++        stream: RuntimeStreamIdV1,
++        access: Option<crate::context::ContextGraphReservationV1>,
++    ) -> Result<
++        RuntimeAsyncGeneratedCompletionV1,
++        generated_operation::adoption::ActivationErrorV1<B::Error>,
++    > {
++        use generated_operation::adoption::ActivationErrorV1 as Error;
++        let index = self.validate_reserved(
++            context,
++            ticket.as_ref().expect("queued reserved ticket"),
++            stream,
++            access,
++        )?;
+         let hold = context
+-            .hold_unpublished_stream_v1(stream)
++            .hold_unpublished_stream_with_access_v1(stream, access)
+             .map_err(|error| Error::Context(error.into()))?;
+         let entry = self.parked.remove(index).expect("exact parked entry");
+         debug_assert!(
+@@ -658,6 +683,9 @@ pub(super) fn advance_operations_v1<B: RuntimeBackendV1>(
+     flush_budget: usize,
+     flush: RuntimeAsyncFlushDriverV1<B>,
+ ) {
++    if context.is_terminal() {
++        return;
++    }
+     for _ in 0..poll_budget.min(operations.active_len()) {
+         let entry = operations
+             .entries
+diff --git a/crates/fe2o3-runtime/src/async_engine/owned.rs b/crates/fe2o3-runtime/src/async_engine/owned.rs
+index 26f8af3ed..cf3ef6b65 100644
+--- a/crates/fe2o3-runtime/src/async_engine/owned.rs
++++ b/crates/fe2o3-runtime/src/async_engine/owned.rs
+@@ -87,6 +87,22 @@ fn discard_waker(waker: Option<Waker>) {
+ }
+ 
+ impl<R> RuntimeAsyncCommandFutureV1<R> {
++    /// Owner-loop observation of the original cell, without a second waiter.
++    pub(super) fn try_take_ready_v1(&mut self) -> Option<Result<R, RuntimeAsyncEngineCallErrorV1>> {
++        assert!(
++            !self.completed,
++            "runtime command future polled after completion"
++        );
++        let (result, waker) = {
++            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
++            let result = state.result.take();
++            let waker = result.as_ref().and_then(|_| state.waker.take());
++            (result, waker)
++        };
++        discard_waker(waker);
++        self.completed = result.is_some();
++        result
++    }
+     #[cfg(test)]
+     pub(super) fn result_probe_for_test_v1(
+         &self,
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/graph_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/graph_tests.rs
+index 070e8f210..7c8225d30 100644
+--- a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/graph_tests.rs
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/graph_tests.rs
+@@ -145,17 +145,23 @@ impl Harness {
+         let RuntimeAsyncEngineCommandV1::Graph(mut graph) = self.receiver.recv().unwrap() else {
+             panic!("graph command");
+         };
+-        if graph.admit(&mut self.context) {
++        if graph.admit(
++            &mut self.context,
++            &mut operation::OperationRegistryV1::new(4, true),
++        ) {
+             self.graph = Some(graph);
+         }
+         future
+     }
+     fn tick(&mut self, budget: usize) {
+-        if self
+-            .graph
+-            .as_mut()
+-            .is_some_and(|graph| graph.advance(&mut self.context, budget, 1))
+-        {
++        if self.graph.as_mut().is_some_and(|graph| {
++            graph.advance(
++                &mut self.context,
++                &mut operation::OperationRegistryV1::new(4, true),
++                budget,
++                1,
++            )
++        }) {
+             self.graph = None;
+         }
+     }
+@@ -718,7 +724,10 @@ fn r63_reply_releases_slot_before_wake_without_clearing_successor_slot() {
+     let RuntimeAsyncEngineCommandV1::Graph(mut graph) = h.receiver.recv().unwrap() else {
+         panic!("successor command");
+     };
+-    assert!(graph.admit(&mut h.context));
++    assert!(graph.admit(
++        &mut h.context,
++        &mut operation::OperationRegistryV1::new(4, true)
++    ));
+     h.graph = Some(graph);
+     h.succeed();
+     result(wake.successor.lock().unwrap().take().unwrap()).unwrap();
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests.rs
+index 264ced153..a2e999c15 100644
+--- a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests.rs
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests.rs
+@@ -641,17 +641,31 @@ fn preparation_park_and_discard_do_not_remove_other_active_streams() {
+ fn preparation_parked_owner_does_not_block_graph_admission_guard() {
+     struct Probe(Arc<AtomicBool>);
+     impl graph::EngineGraphV1<MockBackend> for Probe {
+-        fn admit(&mut self, _: &mut RuntimeContextV1<MockBackend>) -> bool {
++        fn admit(
++            &mut self,
++            _: &mut RuntimeContextV1<MockBackend>,
++            _: &mut operation::OperationRegistryV1<MockBackend>,
++        ) -> bool {
+             self.0.store(true, Ordering::SeqCst);
+             false
+         }
+-        fn advance(&mut self, _: &mut RuntimeContextV1<MockBackend>, _: usize, _: usize) -> bool {
++        fn advance(
++            &mut self,
++            _: &mut RuntimeContextV1<MockBackend>,
++            _: &mut operation::OperationRegistryV1<MockBackend>,
++            _: usize,
++            _: usize,
++        ) -> bool {
+             panic!("probe never installs")
+         }
+         fn reject(&mut self, _: RuntimeGraphErrorV1<MockError>) {
+             panic!("inert park must not block graph admission")
+         }
+-        fn stop(&mut self, _: &mut RuntimeContextV1<MockBackend>) {
++        fn stop(
++            &mut self,
++            _: &mut RuntimeContextV1<MockBackend>,
++            _: &mut operation::OperationRegistryV1<MockBackend>,
++        ) {
+             panic!("probe never installs")
+         }
+     }
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs
+index 2af2d3be5..6f71591f7 100644
+--- a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs
+@@ -119,7 +119,7 @@ fn hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
+     AdoptionHooksV1 {
+         issue: None,
+         ready: |context, _| context.backend().adoption_ready(),
+-        preflight: |context, payload, _, _| {
++        preflight: |context, payload, _, _, _| {
+             payload
+                 .state
+                 .lock()
+@@ -198,12 +198,23 @@ fn preparation_with_hooks<B: RetireBackend + 'static>(
+     drops: Arc<AtomicUsize>,
+     mode: u8,
+     hooks: Option<AdoptionHooksV1<B, Payload>>,
++) -> RuntimeAsyncPreparationV1<()> {
++    preparation_with_domain(handle, state, drops, mode, hooks, Arc::new(()))
++}
++
++fn preparation_with_domain<B: RetireBackend + 'static>(
++    handle: &RuntimeAsyncProgressHandleV1<B>,
++    state: Arc<Mutex<MockState>>,
++    drops: Arc<AtomicUsize>,
++    mode: u8,
++    hooks: Option<AdoptionHooksV1<B, Payload>>,
++    result_domain: Arc<()>,
+ ) -> RuntimeAsyncPreparationV1<()> {
+     handle
+         .enqueue_preparation_with_adoption_v1(
+             Box::new(move |_| {
+                 Ok(Payload {
+-                    result_domain: Arc::new(()),
++                    result_domain,
+                     _local: LocalPayload {
+                         local: Rc::new(Cell::new(0)),
+                         drops,
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests.rs
+index 7709935b0..d515f61d3 100644
+--- a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests.rs
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests.rs
+@@ -1,5 +1,6 @@
+ use super::*;
+ use generated_operation::adoption::CompletionHooksV1;
++mod graph_tests;
+ 
+ type Observation =
+     Result<Result<(), crate::RuntimeGfx942ReadbackErrorV1>, RuntimeAsyncEngineCallErrorV1>;
+@@ -106,17 +107,27 @@ fn reserve_completion(
+     h: &mut Harness,
+     drops: Arc<AtomicUsize>,
+     mode: u8,
++) -> (RuntimeAsyncReservedTicketV1, RuntimeStreamIdV1) {
++    reserve_completion_with_domain(h, drops, mode, Arc::new(()))
++}
++
++fn reserve_completion_with_domain(
++    h: &mut Harness,
++    drops: Arc<AtomicUsize>,
++    mode: u8,
++    domain: Arc<()>,
+ ) -> (RuntimeAsyncReservedTicketV1, RuntimeStreamIdV1) {
+     let stream = h
+         .context
+         .create_stream(h.context.devices()[0].id())
+         .unwrap();
+-    let future = preparation_with_hooks(
++    let future = preparation_with_domain(
+         &h.handle,
+         h.state.clone(),
+         drops,
+         mode,
+         Some(completion_hooks()),
++        domain,
+     );
+     h.command();
+     h.advance();
+@@ -208,7 +219,7 @@ fn generated_completion_domain_failure_precedes_reservation_and_preserves_exact_
+                     Ok(reservation_tests::roster())
+                 }),
+                 Some(AdoptionHooksV1 {
+-                    preflight: |_, _, _, _| panic!("no adoption preflight"),
++                    preflight: |_, _, _, _, _| panic!("no adoption preflight"),
+                     ready: |_, _| panic!("no adoption readiness"),
+                     adopt: |_, _, _, _| panic!("no adoption"),
+                     retire: |_, _| panic!("no native retirement"),
+@@ -470,7 +481,19 @@ fn generated_completion_does_not_require_observer_polling_and_drain_keeps_delive
+     let drops = Arc::new(AtomicUsize::new(0));
+     let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
+     let completion = activate_observer(&mut h, ticket, stream);
++    h.state.lock().unwrap().adoption_ready_mode = 1;
++    for _ in 0..2 {
++        h.advance();
++        h.registry.retire_unpublished_v1(&mut h.context, 1);
++        assert_eq!(h.registry.active_len(), 1);
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        assert_eq!(h.state.lock().unwrap().adoption_retire_calls, 0);
++    }
++    h.state.lock().unwrap().adoption_ready_mode = 0;
+     for _ in 0..3 {
++        h.registry.retire_unpublished_v1(&mut h.context, 1);
++        assert_eq!(h.registry.active_len(), 1);
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
+         h.advance();
+     }
+     h.registry.retire_unpublished_v1(&mut h.context, 1);
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests/graph_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests/graph_tests.rs
+new file mode 100644
+index 000000000..520f31e44
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests/graph_tests.rs
+@@ -0,0 +1,953 @@
++use super::*;
++use crate::completion::{
++    CompletionGraphV1, CompletionNodeIdV1, CompletionNodeStateV1, CompletionNodeV1,
++    FutureIdentityV1,
++};
++
++type ActiveGraph = Option<Box<dyn graph::EngineGraphV1<MockBackend>>>;
++
++fn id(n: u32) -> CompletionNodeIdV1 {
++    CompletionNodeIdV1::new(n).unwrap()
++}
++
++fn request<B: RuntimeBackendV1>(
++    context: &RuntimeContextV1<B>,
++    stream: RuntimeStreamIdV1,
++    tickets: Vec<RuntimeAsyncReservedTicketV1>,
++) -> RuntimeGeneratedGraphRequestV1<B> {
++    let identity = context.completion_stream_identity_v1(stream).unwrap();
++    let nodes = (1..=tickets.len() as u32)
++        .map(|n| {
++            CompletionNodeV1::future(
++                id(n),
++                FutureIdentityV1::new(identity, [n as u8; 32]),
++                (n > 1).then(|| id(n - 1)),
++            )
++        })
++        .collect();
++    let graph = CompletionGraphV1::new(identity.context(), vec![identity], nodes).unwrap();
++    let mut request = RuntimeGeneratedGraphRequestV1::new(
++        RuntimeGraphRequestV1::new(graph, vec![(identity, stream)]).unwrap(),
++    );
++    for (index, ticket) in tickets.into_iter().enumerate() {
++        request.bind_reserved(id(index as u32 + 1), ticket).unwrap();
++    }
++    request
++}
++
++fn command(h: &mut Harness, graph: &mut ActiveGraph) {
++    let command = h.receiver.try_recv().unwrap();
++    assert!(!handle_command_v1(
++        &mut h.context,
++        &mut BTreeMap::new(),
++        &mut h.registry,
++        graph,
++        None,
++        command,
++        h.config,
++        Some(RuntimeAsyncProgressConfigV1::default())
++    ));
++}
++
++fn advance_graph(h: &mut Harness, graph: &mut ActiveGraph) {
++    if graph
++        .as_mut()
++        .is_some_and(|graph| graph.advance(&mut h.context, &mut h.registry, 8, 1))
++    {
++        *graph = None;
++    }
++}
++
++fn finish(h: &mut Harness, graph: &mut ActiveGraph) {
++    for _ in 0..20 {
++        if graph.is_none() {
++            return;
++        }
++        h.advance();
++        advance_graph(h, graph);
++    }
++    panic!("generated graph did not finish");
++}
++
++#[test]
++fn generated_graph_dependency_waits_for_original_decoder_and_returns_exact_receipts() {
++    let mut h = Harness::new(2, 4, true);
++    let drops = Arc::new(AtomicUsize::new(0));
++    let domains = [Arc::new(()), Arc::new(())];
++    let (a, stream) = reserve_completion_with_domain(&mut h, drops.clone(), 0, domains[0].clone());
++    let (b, _) = reserve_completion_with_domain(&mut h, drops.clone(), 0, domains[1].clone());
++    let request = request(&h.context, stream, vec![a, b]);
++    let future = h.handle.try_submit_generated_graph_v1(request).unwrap();
++    let mut graph = None;
++    command(&mut h, &mut graph);
++    assert!(graph.is_some());
++    advance_graph(&mut h, &mut graph);
++    assert_eq!((h.registry.len(), h.registry.active_len()), (2, 1));
++    for expected in ["adopt", "issue", "poll"] {
++        h.advance();
++        assert_eq!(
++            h.state.lock().unwrap().adoption_order.last(),
++            Some(&expected)
++        );
++        advance_graph(&mut h, &mut graph);
++        assert_eq!((h.registry.len(), h.registry.active_len()), (2, 1));
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++    }
++    h.advance(); // Settlement, decoder and gate commit, not just physical completion.
++    assert_eq!((h.registry.len(), h.registry.active_len()), (1, 0));
++    assert_eq!(drops.load(Ordering::SeqCst), 1);
++    assert!(
++        h.state
++            .lock()
++            .unwrap()
++            .adoption_order
++            .contains(&"gate_commit")
++    );
++    advance_graph(&mut h, &mut graph);
++    assert_eq!((h.registry.len(), h.registry.active_len()), (1, 1));
++    finish(&mut h, &mut graph);
++    let report = ready(future).unwrap().unwrap();
++    assert_eq!(
++        report
++            .completions
++            .iter()
++            .map(|(node, _)| *node)
++            .collect::<Vec<_>>(),
++        [id(1), id(2)]
++    );
++    assert!(report.errors.is_empty());
++    for (index, (_, receipt)) in report.completions.iter().enumerate() {
++        assert!(receipt.matches_owner(&domains[index]));
++        assert!(!receipt.matches_owner(&domains[1 - index]));
++    }
++    assert!(
++        report
++            .graph
++            .completion
++            .entries()
++            .iter()
++            .all(|node| node.state() == CompletionNodeStateV1::Succeeded)
++    );
++    assert_eq!(drops.load(Ordering::SeqCst), 2);
++    assert_eq!(h.registry.len(), 0);
++    assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++    h.context.destroy_stream(stream).unwrap();
++}
++
++#[test]
++fn generated_graph_failed_decoder_discards_dependent_without_receipt_or_issue() {
++    for mode in [23, 24] {
++        let mut h = Harness::new(2, 4, true);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let (a, stream) = reserve_completion(&mut h, drops.clone(), mode);
++        let (b, _) = reserve_completion(&mut h, drops.clone(), 0);
++        let future = h
++            .handle
++            .try_submit_generated_graph_v1(request(&h.context, stream, vec![a, b]))
++            .unwrap();
++        let mut graph = None;
++        command(&mut h, &mut graph);
++        finish(&mut h, &mut graph);
++        let report = ready(future).unwrap().unwrap();
++        assert!(report.completions.is_empty());
++        assert_eq!(report.errors.len(), 1);
++        assert_eq!(report.errors[0].0, id(1));
++        match (&report.errors[0].1, mode) {
++            (
++                RuntimeGeneratedGraphNodeErrorV1::Readback(
++                    crate::RuntimeGfx942ReadbackErrorV1::InvalidStorage,
++                ),
++                23,
++            )
++            | (
++                RuntimeGeneratedGraphNodeErrorV1::Engine(
++                    RuntimeAsyncEngineCallErrorV1::CommandPanicked,
++                ),
++                24,
++            ) => {}
++            other => panic!("unexpected decoder outcome: {other:?}"),
++        }
++        assert!(matches!(
++            report.graph.completion.entries()[1].state(),
++            CompletionNodeStateV1::DependencyFailed { .. }
++        ));
++        assert_eq!(h.state.lock().unwrap().adoption_completed.len(), 1);
++        assert_eq!(drops.load(Ordering::SeqCst), 2);
++        assert_eq!(h.registry.len(), 0);
++        h.context.destroy_stream(stream).unwrap();
++    }
++}
++
++#[test]
++fn generated_graph_cancellation_discards_only_unactivated_exact_owners() {
++    for activated in [false, true] {
++        let mut h = Harness::new(4, 6, true);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let (a, stream) = reserve_completion(&mut h, drops.clone(), 0);
++        let (b, _) = reserve_completion(&mut h, drops.clone(), 0);
++        let (c, _) = reserve_completion(&mut h, drops.clone(), 0);
++        let unrelated_drops = Arc::new(AtomicUsize::new(0));
++        let (unrelated, _) = reserve_completion(&mut h, unrelated_drops.clone(), 0);
++        let future = h
++            .handle
++            .try_submit_generated_graph_v1(request(&h.context, stream, vec![a, b, c]))
++            .unwrap();
++        let mut graph = None;
++        command(&mut h, &mut graph);
++        if activated {
++            advance_graph(&mut h, &mut graph);
++            h.advance();
++        }
++        future.control().cancel_unissued();
++        advance_graph(&mut h, &mut graph);
++        assert_eq!(drops.load(Ordering::SeqCst), if activated { 2 } else { 3 });
++        finish(&mut h, &mut graph);
++        let report = ready(future).unwrap().unwrap();
++        assert_eq!(report.completions.len(), usize::from(activated));
++        assert_eq!(
++            h.state.lock().unwrap().adoption_completed.len(),
++            usize::from(activated)
++        );
++        assert_eq!(h.registry.len(), 1);
++        assert_eq!(drops.load(Ordering::SeqCst), 3);
++        assert_eq!(unrelated_drops.load(Ordering::SeqCst), 0);
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
++        assert!(h.registry.discard_reserved(&unrelated.key));
++        drop(unrelated);
++        assert_eq!(unrelated_drops.load(Ordering::SeqCst), 1);
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++    }
++}
++
++#[test]
++fn generated_graph_adoption_is_not_disposed_by_drain_cleanup() {
++    let mut h = Harness::new(2, 4, true);
++    let drops = Arc::new(AtomicUsize::new(0));
++    let (a, stream) = reserve_completion(&mut h, drops.clone(), 0);
++    let (b, _) = reserve_completion(&mut h, drops.clone(), 0);
++    let future = h
++        .handle
++        .try_submit_generated_graph_v1(request(&h.context, stream, vec![a, b]))
++        .unwrap();
++    let mut graph = None;
++    command(&mut h, &mut graph);
++    advance_graph(&mut h, &mut graph);
++    drop(future);
++    for _ in 0..2 {
++        h.registry.retire_unpublished_v1(&mut h.context, 2);
++        assert_eq!(h.registry.len(), 2);
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        h.advance();
++    }
++    for _ in 0..20 {
++        advance_graph(&mut h, &mut graph);
++        h.advance();
++        h.registry.retire_unpublished_v1(&mut h.context, 2);
++        if graph.is_none() {
++            break;
++        }
++    }
++    assert!(graph.is_none());
++    assert_eq!(h.registry.len(), 0);
++    assert_eq!(drops.load(Ordering::SeqCst), 2);
++    assert_eq!(h.state.lock().unwrap().adoption_completed.len(), 2);
++    assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++}
++
++#[test]
++fn generated_graph_rejection_returns_exact_ticket_and_preserves_parked_credit() {
++    for mode in [0, 1, 2] {
++        let mut h = Harness::new(2, 3, true);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let (ticket, stream) =
++            reserve_completion(&mut h, drops.clone(), if mode == 1 { 1 } else { 0 });
++        let key = ticket.key.clone();
++        let request = request(&h.context, stream, vec![ticket]);
++        let token = (mode == 2).then(|| h.context.reserve_graph_v1(1).unwrap());
++        let future = h.handle.try_submit_generated_graph_v1(request).unwrap();
++        let mut graph = None;
++        if mode == 0 {
++            // A real active preparation makes the owner-thread admission Busy.
++            drop(
++                prepare(
++                    &h.handle,
++                    Arc::new(AtomicUsize::new(0)),
++                    drops.clone(),
++                    false,
++                )
++                .unwrap(),
++            );
++            let incoming = h.receiver.try_recv().unwrap();
++            h.command();
++            assert!(!handle_command_v1(
++                &mut h.context,
++                &mut BTreeMap::new(),
++                &mut h.registry,
++                &mut graph,
++                None,
++                incoming,
++                h.config,
++                Some(RuntimeAsyncProgressConfigV1::default())
++            ));
++        } else {
++            command(&mut h, &mut graph);
++        }
++        assert!(graph.is_none());
++        let Err(RuntimeGeneratedGraphFailureV1::Rejected(mut failure)) = ready(future).unwrap()
++        else {
++            panic!("expected admission rejection")
++        };
++        let ticket = failure.request.take_reserved(id(1)).unwrap();
++        assert!(Arc::ptr_eq(&key, &ticket.key));
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        assert_eq!(
++            h.handle.observer.reply_cells_in_use(),
++            if mode == 0 { 2 } else { 1 }
++        );
++        assert!(h.registry.discard_reserved(&ticket.key));
++        drop(ticket);
++        if let Some(token) = token {
++            h.context.close_graph_issue_v1(token).unwrap();
++            h.context.release_graph_v1(token).unwrap();
++        }
++        if mode == 0 {
++            h.advance();
++            h.registry.dispose_quiescent();
++        }
++    }
++}
++
++#[test]
++fn generated_graph_hold_requires_exact_open_token_and_blocks_release() {
++    let mut h = Harness::new(1, 2, true);
++    let stream = h
++        .context
++        .create_stream(h.context.devices()[0].id())
++        .unwrap();
++    let mut foreign = Harness::new(1, 2, true);
++    let wrong = foreign.context.reserve_graph_v1(1).unwrap();
++    let token = h.context.reserve_graph_v1(1).unwrap();
++    assert!(h.context.hold_unpublished_stream_v1(stream).is_err());
++    assert!(
++        h.context
++            .hold_unpublished_stream_with_access_v1(stream, Some(wrong))
++            .is_err()
++    );
++    assert_eq!(
++        h.context.unpublished_identity_for_test_v1(stream),
++        Some(None)
++    );
++    let hold = h
++        .context
++        .hold_unpublished_stream_with_access_v1(stream, Some(token))
++        .unwrap();
++    h.context.close_graph_issue_v1(token).unwrap();
++    assert_eq!(
++        h.context.release_graph_v1(token),
++        Err(RuntimeValidationErrorV1::SubmissionPending)
++    );
++    assert!(
++        h.context
++            .hold_unpublished_stream_with_access_v1(stream, Some(token))
++            .is_err()
++    );
++    h.context.release_unpublished_hold_v1(&hold).unwrap();
++    h.context.release_graph_v1(token).unwrap();
++    assert!(h.context.release_unpublished_hold_v1(&hold).is_err());
++    let ordinary = h.context.hold_unpublished_stream_v1(stream).unwrap();
++    h.context.release_unpublished_hold_v1(&ordinary).unwrap();
++    foreign.context.close_graph_issue_v1(wrong).unwrap();
++    foreign.context.release_graph_v1(wrong).unwrap();
++}
++
++#[test]
++fn generated_graph_immediate_and_queued_rejections_preserve_exact_tickets() {
++    for mode in 0..7 {
++        let mut h = Harness::new(2, 5, true);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
++        let key = ticket.key.clone();
++        let mut occupied = None;
++        let mut credits = Vec::new();
++        if mode == 6 {
++            let (other, other_stream) = reserve_completion(&mut h, drops.clone(), 0);
++            occupied = Some(
++                h.handle
++                    .try_submit_generated_graph_v1(request(&h.context, other_stream, vec![other]))
++                    .unwrap(),
++            );
++        }
++        let request = request(&h.context, stream, vec![ticket]);
++        let mut failure = if mode == 0 {
++            let future = h.handle.try_submit_generated_graph_v1(request).unwrap();
++            drop(h.receiver.try_recv().unwrap());
++            let Err(RuntimeGeneratedGraphFailureV1::Rejected(failure)) = ready(future).unwrap()
++            else {
++                panic!("queued rejection")
++            };
++            failure
++        } else {
++            match mode {
++                1 => h.handle.observer.admission.close(),
++                2 => h
++                    .handle
++                    .observer
++                    .worker_thread
++                    .set(thread::current().id())
++                    .unwrap(),
++                3 => {
++                    for _ in 0..4 {
++                        h.handle
++                            .observer
++                            .sender
++                            .try_send(RuntimeAsyncEngineCommandV1::Stop)
++                            .unwrap_or_else(|_| panic!("queue"));
++                    }
++                }
++                4 => {
++                    let (_, receiver) = sync_channel(1);
++                    drop(core::mem::replace(&mut h.receiver, receiver));
++                }
++                5 => {
++                    for _ in 0..4 {
++                        credits.push(
++                            owned::Reply::<()>::budgeted_pair(&h.handle.observer.reply_budget)
++                                .unwrap(),
++                        );
++                    }
++                }
++                _ => {}
++            }
++            h.handle
++                .try_submit_generated_graph_v1(request)
++                .err()
++                .expect("immediate rejection")
++        };
++        let expected = match mode {
++            2 => RuntimeAsyncEngineCallErrorV1::ReentrantCall,
++            3 => RuntimeAsyncEngineCallErrorV1::CommandQueueFull,
++            5 => RuntimeAsyncEngineCallErrorV1::ReplyCapacity,
++            6 => RuntimeAsyncEngineCallErrorV1::GraphCapacity,
++            _ => RuntimeAsyncEngineCallErrorV1::EngineStopped,
++        };
++        assert!(
++            matches!(failure.error, RuntimeGeneratedGraphAdmissionErrorV1::Engine(error) if error == expected)
++        );
++        let ticket = failure.request.take_reserved(id(1)).unwrap();
++        assert!(Arc::ptr_eq(&key, &ticket.key));
++        assert_eq!(
++            (h.registry.len(), h.registry.active_len()),
++            (if mode == 6 { 2 } else { 1 }, 0)
++        );
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        assert!(h.state.lock().unwrap().adoption_order.is_empty());
++        assert!(h.registry.discard_reserved(&ticket.key));
++        drop(ticket);
++        drop(credits);
++        if let Some(future) = occupied {
++            drop(h.receiver.try_recv().unwrap());
++            let Err(RuntimeGeneratedGraphFailureV1::Rejected(mut failure)) = ready(future).unwrap()
++            else {
++                panic!("queued occupying graph")
++            };
++            let ticket = failure.request.take_reserved(id(1)).unwrap();
++            assert!(h.registry.discard_reserved(&ticket.key));
++            drop(ticket);
++        }
++        assert!(!h.handle.observer.graph_slot.load(Ordering::Acquire));
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++        assert_eq!(h.registry.len(), 0);
++    }
++}
++
++#[test]
++fn generated_graph_owned_drain_completes_accepted_prefix_or_retains_on_exhaustion() {
++    for (exhausted, drop_observer) in [(false, false), (false, true), (true, false)] {
++        let state = Arc::new(Mutex::new(MockState::default()));
++        let trace = Arc::new(Mutex::new(OwnerTrace::default()));
++        let drops = Arc::new(AtomicUsize::new(0));
++        let config = RuntimeAsyncEngineConfigV1::new(8, 4, 8, 1, Duration::from_millis(1)).unwrap();
++        let (engine, handle) = start_with_config(state.clone(), trace, config);
++        let stream = handle
++            .observer
++            .try_with_context(|context| context.create_stream(context.devices()[0].id()).unwrap())
++            .unwrap();
++        let mut tickets = Vec::new();
++        for _ in 0..2 {
++            let ticket = join(preparation_with_hooks(
++                &handle,
++                state.clone(),
++                drops.clone(),
++                0,
++                Some(completion_hooks()),
++            ))
++            .unwrap()
++            .unwrap();
++            tickets.push(
++                join(handle.try_reserve_prepared_v1(ticket).unwrap())
++                    .unwrap()
++                    .unwrap(),
++            );
++        }
++        let request = handle
++            .observer
++            .try_with_context(move |context| request(context, stream, tickets))
++            .unwrap();
++        let entered = Arc::new(Barrier::new(2));
++        let released = Arc::new(Barrier::new(2));
++        let (a, b) = (entered.clone(), released.clone());
++        drop(
++            handle
++                .observer
++                .enqueue_with_context(move |_| {
++                    a.wait();
++                    b.wait();
++                })
++                .unwrap(),
++        );
++        entered.wait();
++        let future = handle.try_submit_generated_graph_v1(request).unwrap();
++        let future = if drop_observer {
++            drop(future);
++            None
++        } else {
++            Some(future)
++        };
++        let drain = handle.begin_drain(if exhausted { 1 } else { 64 }).unwrap();
++        assert!(matches!(
++            handle.observer.enqueue_with_context(|_| ()),
++            Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
++        ));
++        released.wait();
++        let report = join(drain).unwrap();
++        let shutdown = engine.shutdown().unwrap();
++        if exhausted {
++            assert_eq!(report.outcome, RuntimeAsyncDrainOutcomeV1::BudgetExhausted);
++            assert!(report.graph_active);
++            assert_eq!(report.operations_remaining, 1);
++            assert_eq!(
++                shutdown.disposition,
++                RuntimeAsyncOwnedDispositionV1::RetainedUntilProcessExit
++            );
++            assert_eq!(drops.load(Ordering::SeqCst), 0);
++            assert!(matches!(
++                join(future.unwrap()),
++                Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
++            ));
++        } else {
++            assert_eq!(report.outcome, RuntimeAsyncDrainOutcomeV1::Quiescent);
++            assert!(!report.graph_active);
++            assert_eq!(report.operations_remaining, 0);
++            assert_eq!(
++                shutdown.disposition,
++                RuntimeAsyncOwnedDispositionV1::Released
++            );
++            assert!(shutdown.cleanup.unwrap().is_complete());
++            assert_eq!(drops.load(Ordering::SeqCst), 2);
++            if let Some(future) = future {
++                let report = join(future).unwrap().unwrap();
++                assert_eq!(report.completions.len(), 2);
++                assert!(report.errors.is_empty());
++            }
++            assert_eq!(handle.observer.reply_cells_in_use(), 0);
++        }
++    }
++}
++
++#[test]
++fn generated_graph_terminal_faults_and_stop_retain_active_custody() {
++    for mode in [10, 11, 30, 40, 0] {
++        let mut h = Harness::new(2, 4, true);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let (a, stream) = reserve_completion(&mut h, drops.clone(), mode);
++        let (b, _) = reserve_completion(&mut h, drops.clone(), 0);
++        let future = h
++            .handle
++            .try_submit_generated_graph_v1(request(&h.context, stream, vec![a, b]))
++            .unwrap();
++        let mut graph = None;
++        command(&mut h, &mut graph);
++        advance_graph(&mut h, &mut graph);
++        h.advance();
++        if mode == 0 {
++            graph
++                .as_mut()
++                .unwrap()
++                .stop(&mut h.context, &mut h.registry);
++        } else {
++            for _ in 0..4 {
++                h.advance();
++                if h.context.is_terminal() {
++                    break;
++                }
++            }
++        }
++        assert!(h.context.is_terminal());
++        assert_eq!(h.registry.active_len(), 1);
++        assert_eq!(drops.load(Ordering::SeqCst), usize::from(mode == 0));
++        assert!(
++            h.context
++                .unpublished_identity_for_test_v1(stream)
++                .unwrap()
++                .is_some()
++        );
++        assert!(!h.registry.stop_observations());
++        drop(graph);
++        assert!(matches!(
++            ready(future),
++            Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
++        ));
++        let before = h.state.lock().unwrap().adoption_order.clone();
++        h.advance();
++        h.registry.retire_unpublished_v1(&mut h.context, 4);
++        let after = h.state.lock().unwrap().adoption_order.clone();
++        assert_eq!(after, before);
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++        core::mem::forget(h.registry); // Mirror process-retained ambiguous native custody.
++    }
++}
++
++#[test]
++fn generated_graph_post_admission_rejection_preserves_independent_branch() {
++    let mut h = Harness::new(3, 5, true);
++    let drops = Arc::new(AtomicUsize::new(0));
++    let stream = h
++        .context
++        .create_stream(h.context.devices()[0].id())
++        .unwrap();
++    let mut hooks = completion_hooks();
++    hooks.preflight = |context: &mut RuntimeContextV1<MockBackend>, _, _, _, _| {
++        if context.backend().state.lock().unwrap().complete_on_flush {
++            Err(RuntimeValidationErrorV1::Unsupported.into())
++        } else {
++            Ok(())
++        }
++    };
++    let preparation =
++        preparation_with_hooks(&h.handle, h.state.clone(), drops.clone(), 0, Some(hooks));
++    h.command();
++    h.advance();
++    let reserve = h
++        .handle
++        .try_reserve_prepared_v1(ready(preparation).unwrap().unwrap())
++        .unwrap();
++    h.command();
++    let a = ready(reserve).unwrap().unwrap();
++    let (dependent, _) = reserve_completion(&mut h, drops.clone(), 0);
++    let (independent, other) = reserve_completion(&mut h, drops.clone(), 0);
++    let first = h.context.completion_stream_identity_v1(stream).unwrap();
++    let second = h.context.completion_stream_identity_v1(other).unwrap();
++    let graph = CompletionGraphV1::new(
++        first.context(),
++        vec![first, second],
++        vec![
++            CompletionNodeV1::future(id(1), FutureIdentityV1::new(first, [1; 32]), None),
++            CompletionNodeV1::future(id(2), FutureIdentityV1::new(first, [2; 32]), Some(id(1))),
++            CompletionNodeV1::future(id(3), FutureIdentityV1::new(second, [3; 32]), None),
++        ],
++    )
++    .unwrap();
++    let mut request = RuntimeGeneratedGraphRequestV1::new(
++        RuntimeGraphRequestV1::new(graph, vec![(first, stream), (second, other)]).unwrap(),
++    );
++    for (n, ticket) in [(1, a), (2, dependent), (3, independent)] {
++        request.bind_reserved(id(n), ticket).unwrap();
++    }
++    let future = h.handle.try_submit_generated_graph_v1(request).unwrap();
++    let mut active = None;
++    command(&mut h, &mut active);
++    h.state.lock().unwrap().complete_on_flush = true;
++    finish(&mut h, &mut active);
++    let report = ready(future).unwrap().unwrap();
++    assert_eq!(report.completions.len(), 1);
++    assert_eq!(report.completions[0].0, id(3));
++    assert!(
++        matches!(report.errors.as_slice(), [(node, RuntimeGeneratedGraphNodeErrorV1::Activation(_))] if *node == id(1))
++    );
++    assert!(matches!(
++        report.graph.completion.entries()[1].state(),
++        CompletionNodeStateV1::DependencyFailed { .. }
++    ));
++    assert_eq!(h.state.lock().unwrap().adoption_completed.len(), 1);
++    assert_eq!(drops.load(Ordering::SeqCst), 3);
++    assert_eq!(h.registry.len(), 0);
++    assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++}
++
++#[test]
++fn generated_graph_fresh_occurrences_have_distinct_generations_and_no_residue() {
++    let mut h = Harness::new(1, 3, true);
++    let drops = Arc::new(AtomicUsize::new(0));
++    let mut generations = Vec::new();
++    for occurrence in 1..=3 {
++        let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
++        let future = h
++            .handle
++            .try_submit_generated_graph_v1(request(&h.context, stream, vec![ticket]))
++            .unwrap();
++        let mut graph = None;
++        command(&mut h, &mut graph);
++        finish(&mut h, &mut graph);
++        let report = ready(future).unwrap().unwrap();
++        generations.push(report.graph.execution.generation());
++        assert_eq!(report.completions.len(), 1);
++        assert_eq!(
++            h.context.unpublished_identity_for_test_v1(stream),
++            Some(None)
++        );
++        h.context.destroy_stream(stream).unwrap();
++        assert_eq!(h.registry.len(), 0);
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++        assert_eq!(drops.load(Ordering::SeqCst), occurrence);
++    }
++    assert!(generations.windows(2).all(|pair| pair[0] < pair[1]));
++}
++
++#[test]
++fn generated_graph_binding_rejections_preserve_both_original_tickets() {
++    let mut h = Harness::new(2, 4, true);
++    let drops = Arc::new(AtomicUsize::new(0));
++    let (first, stream) = reserve_completion(&mut h, drops.clone(), 0);
++    let (second, _) = reserve_completion(&mut h, drops.clone(), 0);
++    let keys = [first.key.clone(), second.key.clone()];
++    let mut request = request(&h.context, stream, vec![first]);
++    let failure = request.bind_reserved(id(99), second).unwrap_err();
++    assert_eq!(failure.error, RuntimeGraphValidationErrorV1::UnknownNode);
++    assert!(Arc::ptr_eq(&keys[1], &failure.ticket.key));
++    let failure = request.bind_reserved(id(1), failure.ticket).unwrap_err();
++    assert_eq!(
++        failure.error,
++        RuntimeGraphValidationErrorV1::DuplicateOperation
++    );
++    assert!(Arc::ptr_eq(&keys[1], &failure.ticket.key));
++    let first = request.take_reserved(id(1)).unwrap();
++    assert!(Arc::ptr_eq(&keys[0], &first.key));
++    assert_eq!(drops.load(Ordering::SeqCst), 0);
++    assert_eq!(h.handle.observer.reply_cells_in_use(), 2);
++    for ticket in [first, failure.ticket] {
++        assert!(h.registry.discard_reserved(&ticket.key));
++    }
++    assert_eq!(drops.load(Ordering::SeqCst), 2);
++    assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++}
++
++#[test]
++fn generated_graph_mixes_ordinary_launch_and_copy_in_the_existing_executor() {
++    let mut h = Harness::new(1, 3, true);
++    let drops = Arc::new(AtomicUsize::new(0));
++    let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
++    let device = h.context.devices()[0].id();
++    let module = h.context.load_module(device, &[1]).unwrap();
++    let kernel = Arc::new(
++        h.context
++            .resolve_kernel::<EmptyArgs>(module, "mixed")
++            .unwrap(),
++    );
++    let source = h
++        .context
++        .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 8)
++        .unwrap();
++    let destination = h
++        .context
++        .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 8)
++        .unwrap();
++    let identity = h.context.completion_stream_identity_v1(stream).unwrap();
++    let nodes = (1..=3)
++        .map(|n| {
++            CompletionNodeV1::future(
++                id(n),
++                FutureIdentityV1::new(identity, [n as u8; 32]),
++                (n > 1).then(|| id(n - 1)),
++            )
++        })
++        .collect();
++    let graph = CompletionGraphV1::new(identity.context(), vec![identity], nodes).unwrap();
++    let mut request = RuntimeGraphRequestV1::new(graph, vec![(identity, stream)]).unwrap();
++    request
++        .bind_launch(id(1), kernel, &EmptyArgs, geometry())
++        .unwrap();
++    request
++        .bind_copy(
++            id(3),
++            RuntimeMemoryRegionV1 {
++                allocation: source,
++                access: RuntimeAccessV1::Read,
++                byte_offset: 0,
++                byte_len: 64,
++            },
++            RuntimeMemoryRegionV1 {
++                allocation: destination,
++                access: RuntimeAccessV1::Write,
++                byte_offset: 0,
++                byte_len: 64,
++            },
++        )
++        .unwrap();
++    let mut request = RuntimeGeneratedGraphRequestV1::new(request);
++    request.bind_reserved(id(2), ticket).unwrap();
++    let future = h.handle.try_submit_generated_graph_v1(request).unwrap();
++    let mut active = None;
++    command(&mut h, &mut active);
++    for _ in 0..30 {
++        for status in h.state.lock().unwrap().statuses.values_mut() {
++            *status = BackendPollV1::Succeeded;
++        }
++        h.advance();
++        advance_graph(&mut h, &mut active);
++        if active.is_none() {
++            break;
++        }
++    }
++    assert!(active.is_none());
++    let report = ready(future).unwrap().unwrap();
++    assert_eq!(report.completions.len(), 1);
++    assert_eq!(report.completions[0].0, id(2));
++    assert_eq!(
++        report.graph.observations,
++        [
++            (id(1), RuntimeCompletionStatusV1::Succeeded),
++            (id(3), RuntimeCompletionStatusV1::Succeeded)
++        ]
++    );
++    assert!(
++        report
++            .graph
++            .completion
++            .entries()
++            .iter()
++            .all(|entry| entry.state() == CompletionNodeStateV1::Succeeded)
++    );
++    assert!(report.errors.is_empty());
++    assert!(report.graph.errors.is_empty());
++    assert_eq!(drops.load(Ordering::SeqCst), 1);
++    assert_eq!(h.registry.len(), 0);
++    assert!(h.context.cleanup().is_complete());
++}
++
++#[test]
++fn generated_graph_foreign_or_domainless_ticket_rejection_is_precommit() {
++    for foreign in [false, true] {
++        let mut h = Harness::new(2, 4, true);
++        let mut other = Harness::new(1, 3, true);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let (valid, stream) = reserve_completion(&mut h, drops.clone(), 0);
++        let (invalid, _) = if foreign {
++            reserve_completion(&mut other, drops.clone(), 0)
++        } else {
++            reserved(&mut h, drops.clone(), 0, true)
++        };
++        let keys = [valid.key.clone(), invalid.key.clone()];
++        let future = h
++            .handle
++            .try_submit_generated_graph_v1(request(&h.context, stream, vec![valid, invalid]))
++            .unwrap();
++        let mut active = None;
++        command(&mut h, &mut active);
++        assert!(active.is_none());
++        let Err(RuntimeGeneratedGraphFailureV1::Rejected(mut failure)) = ready(future).unwrap()
++        else {
++            panic!("invalid ticket")
++        };
++        match (&failure.error, foreign) {
++            (
++                RuntimeGeneratedGraphAdmissionErrorV1::Activation(ActivationErrorV1::Engine(
++                    RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket,
++                )),
++                true,
++            )
++            | (
++                RuntimeGeneratedGraphAdmissionErrorV1::Activation(ActivationErrorV1::Context(
++                    RuntimeErrorV1::Validation(RuntimeValidationErrorV1::Unsupported),
++                )),
++                false,
++            ) => {}
++            other => panic!("unexpected admission error: {other:?}"),
++        }
++        assert_eq!(
++            h.context.unpublished_identity_for_test_v1(stream),
++            Some(None)
++        );
++        let token = h.context.reserve_graph_v1(1).unwrap();
++        h.context.close_graph_issue_v1(token).unwrap();
++        h.context.release_graph_v1(token).unwrap();
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        for (index, key) in keys.iter().enumerate() {
++            let ticket = failure.request.take_reserved(id(index as u32 + 1)).unwrap();
++            assert!(Arc::ptr_eq(key, &ticket.key));
++            let registry = if foreign && index == 1 {
++                &mut other.registry
++            } else {
++                &mut h.registry
++            };
++            assert!(registry.discard_reserved(&ticket.key));
++        }
++        assert_eq!(drops.load(Ordering::SeqCst), 2);
++    }
++}
++
++#[test]
++fn generated_graph_shared_direct_completion_drains_from_adoption() {
++    for drop_observer in [false, true] {
++        let state = Arc::new(Mutex::new(MockState::default()));
++        let drops = Arc::new(AtomicUsize::new(0));
++        let (engine, handle) = start(state.clone(), Arc::new(Mutex::new(OwnerTrace::default())));
++        let stream = handle
++            .observer
++            .try_with_context(|context| context.create_stream(context.devices()[0].id()).unwrap())
++            .unwrap();
++        let ticket = join(preparation_with_hooks(
++            &handle,
++            state.clone(),
++            drops.clone(),
++            0,
++            Some(completion_hooks()),
++        ))
++        .unwrap()
++        .unwrap();
++        let ticket = join(handle.try_reserve_prepared_v1(ticket).unwrap())
++            .unwrap()
++            .unwrap();
++        let entered = Arc::new(Barrier::new(2));
++        let released = Arc::new(Barrier::new(2));
++        let (a, b) = (entered.clone(), released.clone());
++        drop(
++            handle
++                .observer
++                .enqueue_with_context(move |_| {
++                    a.wait();
++                    b.wait();
++                })
++                .unwrap(),
++        );
++        entered.wait();
++        let activation = handle.try_activate_reserved_v1(ticket, stream).unwrap();
++        let drain = handle.begin_drain(64).unwrap();
++        released.wait();
++        let completion = join(activation).unwrap().unwrap();
++        let completion = if drop_observer {
++            drop(completion);
++            None
++        } else {
++            Some(completion)
++        };
++        let report = join(drain).unwrap();
++        assert_eq!(report.outcome, RuntimeAsyncDrainOutcomeV1::Quiescent);
++        assert_eq!(report.operations_remaining, 0);
++        assert_eq!(
++            engine.shutdown().unwrap().disposition,
++            RuntimeAsyncOwnedDispositionV1::Released
++        );
++        if let Some(completion) = completion {
++            assert!(join(completion).unwrap().is_ok());
++        }
++        assert_eq!(drops.load(Ordering::SeqCst), 1);
++        assert!(
++            state
++                .lock()
++                .unwrap()
++                .adoption_order
++                .contains(&"gate_commit")
++        );
++        assert_eq!(handle.observer.reply_cells_in_use(), 0);
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs
+index abeb1d4b9..acfb6b08f 100644
+--- a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs
+@@ -159,7 +159,7 @@ fn transferable_engine_cannot_activate_generated_issue() {
+     let mut nonowned = operation::OperationRegistryV1::new(1, false);
+     let mut ticket = Some(ticket);
+     let failure = nonowned
+-        .activate_reserved(&mut h.context, &mut ticket, stream)
++        .activate_reserved(&mut h.context, &mut ticket, stream, None)
+         .unwrap_err();
+     assert!(matches!(
+         failure,
+diff --git a/crates/fe2o3-runtime/src/context/drain.rs b/crates/fe2o3-runtime/src/context/drain.rs
+index e87e5f845..576899470 100644
+--- a/crates/fe2o3-runtime/src/context/drain.rs
++++ b/crates/fe2o3-runtime/src/context/drain.rs
+@@ -13,11 +13,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         submissions
+             .try_reserve(self.submissions.len())
+             .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+-        submissions.extend(
+-            self.submissions
+-                .iter()
+-                .filter_map(|(&id, record)| (!record.status.is_terminal()).then_some(id)),
+-        );
++        submissions.extend(self.submissions.iter().filter_map(|(&id, record)| {
++            // The generated registry alone progresses and removes its
++            // exact submissions. Snapshotting them here would create a
++            // second observer and leave stale IDs after C4 retirement.
++            let generated = self
++                .generated_issues
++                .get(&record.stream)
++                .is_some_and(|attempt| attempt.owns_submission_v1(id));
++            (!record.status.is_terminal() && !generated).then_some(id)
++        }));
+         submissions.sort_unstable();
+         let mut streams = Vec::new();
+         streams
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue.rs b/crates/fe2o3-runtime/src/context/generated_issue.rs
+index e3aceedf4..39029fd1f 100644
+--- a/crates/fe2o3-runtime/src/context/generated_issue.rs
++++ b/crates/fe2o3-runtime/src/context/generated_issue.rs
+@@ -26,6 +26,12 @@ pub(super) struct GeneratedIssueV1 {
+     submission: Option<RuntimeSubmissionV1<()>>,
+ }
+ 
++impl GeneratedIssueV1 {
++    pub(super) fn owns_submission_v1(&self, id: RuntimeSubmissionIdV1) -> bool {
++        self.id == id
++    }
++}
++
+ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+     fn generated_issue_token_v1(
+         &self,
+@@ -148,6 +154,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+         roster: &GeneratedHostRosterV1,
+         hold: &ContextUnpublishedHoldV1,
+     ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        self.validate_unpublished_hold_v1(hold)?;
+         let mut complete = false;
+         let result = catch_unwind(AssertUnwindSafe(|| {
+             self.validate_gfx942_prepared_v1(prepared)?;
+@@ -282,7 +289,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+             self.submissions.remove(&id);
+             self.backend_submissions.remove(&backend_submission);
+             self.retire_generated_shells_v1(hold)?;
+-            self.require_live()?;
++            self.require_graph_access(hold.graph_access())?;
+             self.generated_issues.remove(&hold.stream());
+             retired = true;
+             Ok(())
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue/completion.rs b/crates/fe2o3-runtime/src/context/generated_issue/completion.rs
+index 05517817d..920939b14 100644
+--- a/crates/fe2o3-runtime/src/context/generated_issue/completion.rs
++++ b/crates/fe2o3-runtime/src/context/generated_issue/completion.rs
+@@ -48,6 +48,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+         roster: &GeneratedHostRosterV1,
+         hold: &ContextUnpublishedHoldV1,
+     ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        self.validate_unpublished_hold_v1(hold)?;
+         let result = catch_unwind(AssertUnwindSafe(|| {
+             self.validate_gfx942_prepared_v1(prepared)?;
+             let plan = self.generated_plan_for_hold_v1(hold)?;
+@@ -123,6 +124,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+         hold: &ContextUnpublishedHoldV1,
+         settled: NativeSettlementV1,
+     ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        self.validate_unpublished_hold_v1(hold)?;
+         let attempt = self
+             .generated_issues
+             .get(&hold.stream())
+@@ -140,7 +142,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+             return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
+         }
+         self.retire_generated_shells_v1(hold)?;
+-        self.require_live()?;
++        self.require_graph_access(hold.graph_access())?;
+         self.release_unpublished_hold_v1(hold)?;
+         // This status describes native execution. Typed output stays behind
+         // its original gate until the async driver consumes the decoder.
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue/tests.rs b/crates/fe2o3-runtime/src/context/generated_issue/tests.rs
+index 1fc7a7426..50c934a64 100644
+--- a/crates/fe2o3-runtime/src/context/generated_issue/tests.rs
++++ b/crates/fe2o3-runtime/src/context/generated_issue/tests.rs
+@@ -10,6 +10,19 @@ fn install(
+     ContextUnpublishedHoldV1,
+     GeneratedShellPlanV1,
+     GeneratedHostRosterV1,
++) {
++    let (hold, plan, roster, _) = install_with_graph(context, false);
++    (hold, plan, roster)
++}
++
++fn install_with_graph(
++    context: &mut RuntimeContextV1<KfdRuntimeBackendV1>,
++    graph: bool,
++) -> (
++    ContextUnpublishedHoldV1,
++    GeneratedShellPlanV1,
++    GeneratedHostRosterV1,
++    Option<ContextGraphReservationV1>,
+ ) {
+     let (binding, _) = RuntimeContextV1::generated_shell_test_binding_v1(&mut context.backend);
+     context
+@@ -18,7 +31,10 @@ fn install(
+         .unwrap();
+     let device = context.devices()[0].id();
+     let stream = context.create_stream(device).unwrap();
+-    let hold = context.hold_unpublished_stream_v1(stream).unwrap();
++    let access = graph.then(|| context.reserve_graph_v1(1).unwrap());
++    let hold = context
++        .hold_unpublished_stream_with_access_v1(stream, access)
++        .unwrap();
+     let (hsaco, projection) = source_projection();
+     let authority = source_authority(&projection);
+     let roster = GeneratedHostRosterV1::from_projection(&projection).unwrap();
+@@ -28,7 +44,7 @@ fn install(
+         .install_generated_shells_v1(device, binding.native_device, &hold, &mut source, &roster)
+         .unwrap();
+     let plan = context.generated_plan_for_hold_v1(&hold).unwrap();
+-    (hold, plan, roster)
++    (hold, plan, roster, access)
+ }
+ 
+ fn context() -> RuntimeContextV1<KfdRuntimeBackendV1> {
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue/tests/completion_tests.rs b/crates/fe2o3-runtime/src/context/generated_issue/tests/completion_tests.rs
+index eadb522e9..58515e442 100644
+--- a/crates/fe2o3-runtime/src/context/generated_issue/tests/completion_tests.rs
++++ b/crates/fe2o3-runtime/src/context/generated_issue/tests/completion_tests.rs
+@@ -117,6 +117,131 @@ fn installed_attempt(
+     (hold, plan, roster)
+ }
+ 
++#[test]
++fn generated_graph_context_settlement_releases_all_exact_metadata_before_reservation() {
++    let mut context = context();
++    let (hold, plan, roster, access) = install_with_graph(&mut context, true);
++    let token = access.unwrap();
++    context
++        .begin_generated_issue_v1(&hold, plan, &roster)
++        .unwrap();
++    context.install_generated_submission_v1(&hold, 900).unwrap();
++    context.close_graph_issue_v1(token).unwrap();
++    assert_eq!(
++        context.release_graph_v1(token),
++        Err(RuntimeValidationErrorV1::SubmissionPending)
++    );
++    assert_eq!(context.allocations.len(), 3);
++    // This is the shared Context bookkeeping tail, not a native settlement claim.
++    context
++        .generated_issues
++        .get_mut(&hold.stream())
++        .unwrap()
++        .phase = PhaseV1::Unknown;
++    let settled = assumed_settlement(&context, &hold);
++    context
++        .settle_completed_gfx942_context_v1(&hold, settled)
++        .unwrap();
++    assert!(context.allocations.is_empty());
++    assert!(context.backend_allocations.is_empty());
++    assert!(context.generated_issues.is_empty());
++    assert!(context.submissions.is_empty());
++    assert!(context.backend_submissions.is_empty());
++    assert_eq!(
++        context.unpublished_identity_for_test_v1(hold.stream()),
++        Some(None)
++    );
++    assert!(context.streams[&hold.stream()].generated.is_none());
++    context.release_graph_v1(token).unwrap();
++    assert!(context.graph_reservation.is_none());
++}
++
++#[test]
++fn generated_graph_invalid_access_precedes_native_and_carrier_callbacks() {
++    for missing in [false, true] {
++        let mut context = context();
++        let (hold, _, roster, access) = install_with_graph(&mut context, true);
++        let calls = Rc::new(Cell::new(0));
++        let drops = Rc::new(Cell::new(0));
++        let mut prepared = context.bound_preparation_for_test_v1(carrier(&calls, &drops));
++        let mut foreign = RuntimeContextV1::open(KfdRuntimeBackendV1::mock()).unwrap();
++        let foreign_token = foreign.reserve_graph_v1(1).unwrap();
++        context.graph_reservation = if missing { None } else { Some(foreign_token) };
++        let next = context.next_identity;
++        assert!(matches!(
++            context.progress_gfx942_issue_v1(&mut prepared, &roster, &hold),
++            Err(RuntimeErrorV1::Validation(
++                RuntimeValidationErrorV1::ContextReserved
++            ))
++        ));
++        assert!(matches!(
++            context.complete_gfx942_issue_v1(&mut prepared, &roster, &hold),
++            Err(RuntimeErrorV1::Validation(
++                RuntimeValidationErrorV1::ContextReserved
++            ))
++        ));
++        assert_eq!(calls.get(), 0);
++        assert_eq!(drops.get(), 0);
++        assert!(!context.is_terminal());
++        assert_eq!(context.next_identity, next);
++        assert!(context.generated_issues.is_empty());
++        assert_eq!(context.allocations.len(), 3);
++        context.graph_reservation = access;
++        context.retire_generated_shells_v1(&hold).unwrap();
++        context.release_unpublished_hold_v1(&hold).unwrap();
++        context.close_graph_issue_v1(access.unwrap()).unwrap();
++        context.release_graph_v1(access.unwrap()).unwrap();
++        foreign.close_graph_issue_v1(foreign_token).unwrap();
++        foreign.release_graph_v1(foreign_token).unwrap();
++    }
++}
++
++#[test]
++fn generated_graph_release_rejects_unpaired_backend_indexes_and_callbacks() {
++    for member in 0..3 {
++        let mut context = context();
++        let token = context.reserve_graph_v1(1).unwrap();
++        context.close_graph_issue_v1(token).unwrap();
++        match member {
++            0 => {
++                context.backend_submissions.insert(900);
++            }
++            1 => {
++                context.backend_events.insert(901);
++            }
++            _ => context.completion_callback_count = 1,
++        }
++        assert_eq!(
++            context.release_graph_v1(token),
++            Err(RuntimeValidationErrorV1::SubmissionPending)
++        );
++        assert_eq!(context.graph_reservation, Some(token));
++        context.backend_submissions.clear();
++        context.backend_events.clear();
++        context.completion_callback_count = 0;
++        context.release_graph_v1(token).unwrap();
++    }
++}
++
++#[test]
++fn generated_graph_shared_drain_snapshot_excludes_only_registry_owned_submission() {
++    let mut context = context();
++    let (hold, _, _) = installed_attempt(&mut context, 900);
++    let generated = context.generated_issues[&hold.stream()].id;
++    let ordinary =
++        RuntimeSubmissionIdV1::new(context.context_generation, context.next_id().unwrap());
++    let mut record = context.submissions[&generated];
++    record.backend_submission = 901;
++    context.submissions.insert(ordinary, record);
++    context.backend_submissions.insert(901);
++    let (pending, _) = context.snapshot_async_drain_v1().unwrap();
++    assert_eq!(pending.into_iter().collect::<Vec<_>>(), [ordinary]);
++    assert_eq!(context.async_drain_counts_v1().pending, 2);
++    assert_eq!(context.generated_issues[&hold.stream()].id, generated);
++    // Deliberately constructed bookkeeping, not two real native submissions.
++    core::mem::forget(context);
++}
++
+ fn assert_submission_retained(
+     context: &RuntimeContextV1<KfdRuntimeBackendV1>,
+     id: RuntimeSubmissionIdV1,
+diff --git a/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs b/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs
+index 601e3813b..e09d64640 100644
+--- a/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs
++++ b/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs
+@@ -10,7 +10,9 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+         prepared: &RuntimeGfx942PreparedV1<T>,
+         expected: &GeneratedHostRosterV1,
+         stream: RuntimeStreamIdV1,
++        access: Option<ContextGraphReservationV1>,
+     ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        self.require_unpublished_open_access_v1(access)?;
+         self.validate_gfx942_prepared_v1(prepared)?;
+         let stream = self
+             .streams
+diff --git a/crates/fe2o3-runtime/src/context/graph.rs b/crates/fe2o3-runtime/src/context/graph.rs
+index 1578841f4..762015eed 100644
+--- a/crates/fe2o3-runtime/src/context/graph.rs
++++ b/crates/fe2o3-runtime/src/context/graph.rs
+@@ -125,7 +125,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             self.graph_issue_closed,
+             self.submissions.len(),
+             self.events.len(),
+-        ) {
++        ) || self.has_unpublished_holds_v1()
++            || !self.generated_issues.is_empty()
++            || self
++                .streams
++                .values()
++                .any(|stream| stream.generated.is_some())
++            || self.completion_callback_count != 0
++            || !self.backend_submissions.is_empty()
++            || !self.backend_events.is_empty()
++        {
+             return Err(RuntimeValidationErrorV1::SubmissionPending);
+         }
+         self.graph_reservation = None;
+diff --git a/crates/fe2o3-runtime/src/context/unpublished.rs b/crates/fe2o3-runtime/src/context/unpublished.rs
+index 5f8fcf27f..2db206cf0 100644
+--- a/crates/fe2o3-runtime/src/context/unpublished.rs
++++ b/crates/fe2o3-runtime/src/context/unpublished.rs
+@@ -5,9 +5,16 @@ use super::*;
+ pub(crate) struct ContextUnpublishedHoldV1 {
+     stream: RuntimeStreamIdV1,
+     local: u64,
++    access: Option<ContextGraphReservationV1>,
+ }
+ 
+ impl ContextUnpublishedHoldV1 {
++    pub(super) fn graph_access(&self) -> Option<ContextGraphReservationV1> {
++        self.access
++    }
++    pub(crate) fn is_graph_scoped_v1(&self) -> bool {
++        self.access.is_some()
++    }
+     pub(super) fn identity(&self) -> u64 {
+         self.local
+     }
+@@ -29,7 +36,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         &self,
+         hold: &ContextUnpublishedHoldV1,
+     ) -> Result<(), RuntimeValidationErrorV1> {
+-        self.require_live()?;
++        self.require_graph_access(hold.access)?;
+         if self
+             .streams
+             .get(&hold.stream)
+@@ -40,11 +47,31 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             Err(RuntimeValidationErrorV1::ContextReserved)
+         }
+     }
++    #[cfg(test)]
+     pub(crate) fn hold_unpublished_stream_v1(
+         &mut self,
+         stream: RuntimeStreamIdV1,
+     ) -> Result<ContextUnpublishedHoldV1, RuntimeValidationErrorV1> {
+-        self.require_live()?;
++        self.hold_unpublished_stream_with_access_v1(stream, None)
++    }
++
++    pub(crate) fn require_unpublished_open_access_v1(
++        &self,
++        access: Option<ContextGraphReservationV1>,
++    ) -> Result<(), RuntimeValidationErrorV1> {
++        self.require_graph_access(access)?;
++        if access.is_some() && self.graph_issue_closed {
++            return Err(RuntimeValidationErrorV1::ContextReserved);
++        }
++        Ok(())
++    }
++
++    pub(crate) fn hold_unpublished_stream_with_access_v1(
++        &mut self,
++        stream: RuntimeStreamIdV1,
++        access: Option<ContextGraphReservationV1>,
++    ) -> Result<ContextUnpublishedHoldV1, RuntimeValidationErrorV1> {
++        self.require_unpublished_open_access_v1(access)?;
+         self.require_stream_unheld_v1(stream)?;
+         // Polling a deferred submission can publish it. Do not claim exclusive
+         // unpublished custody while an older operation may still make progress.
+@@ -62,14 +89,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             .get_mut(&stream)
+             .expect("validated stream")
+             .unpublished = Some(local);
+-        Ok(ContextUnpublishedHoldV1 { stream, local })
++        Ok(ContextUnpublishedHoldV1 {
++            stream,
++            local,
++            access,
++        })
+     }
+ 
+     pub(crate) fn release_unpublished_hold_v1(
+         &mut self,
+         hold: &ContextUnpublishedHoldV1,
+     ) -> Result<(), RuntimeValidationErrorV1> {
+-        self.require_live()?;
++        self.require_graph_access(hold.access)?;
+         let record = self
+             .streams
+             .get_mut(&hold.stream())

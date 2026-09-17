@@ -125,7 +125,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             self.graph_issue_closed,
             self.submissions.len(),
             self.events.len(),
-        ) {
+        ) || self.has_unpublished_holds_v1()
+            || !self.generated_issues.is_empty()
+            || self
+                .streams
+                .values()
+                .any(|stream| stream.generated.is_some())
+            || self.completion_callback_count != 0
+            || !self.backend_submissions.is_empty()
+            || !self.backend_events.is_empty()
+        {
             return Err(RuntimeValidationErrorV1::SubmissionPending);
         }
         self.graph_reservation = None;

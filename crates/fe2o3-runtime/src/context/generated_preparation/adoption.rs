@@ -10,7 +10,9 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         prepared: &RuntimeGfx942PreparedV1<T>,
         expected: &GeneratedHostRosterV1,
         stream: RuntimeStreamIdV1,
+        access: Option<ContextGraphReservationV1>,
     ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+        self.require_unpublished_open_access_v1(access)?;
         self.validate_gfx942_prepared_v1(prepared)?;
         let stream = self
             .streams

@@ -1484,7 +1484,12 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
         if !stopped && let Some(mode) = progress.as_ref() {
             if let Some(active) = graph.as_mut() {
                 match catch_unwind(AssertUnwindSafe(|| {
-                    active.advance(context, config.polls_per_tick, mode.config.flushes_per_tick)
+                    active.advance(
+                        context,
+                        operations,
+                        config.polls_per_tick,
+                        mode.config.flushes_per_tick,
+                    )
                 })) {
                     Ok(true) => graph = None,
                     Ok(false) => {}
@@ -1570,7 +1575,9 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
     if let Some(mut graph) = graph {
         if context.is_terminal() {
             // Dropping an observer/driver cannot discharge ambiguous custody.
-        } else if let Err(payload) = catch_unwind(AssertUnwindSafe(|| graph.stop(context))) {
+        } else if let Err(payload) =
+            catch_unwind(AssertUnwindSafe(|| graph.stop(context, operations)))
+        {
             core::mem::forget(payload);
             context.quarantine_after_async_command_panic_v1();
         }
@@ -1611,7 +1618,7 @@ fn handle_command_v1<B: RuntimeBackendV1 + 'static>(
             {
                 incoming.reject(RuntimeGraphErrorV1::Busy);
             } else {
-                match catch_unwind(AssertUnwindSafe(|| incoming.admit(context))) {
+                match catch_unwind(AssertUnwindSafe(|| incoming.admit(context, operations))) {
                     Ok(true) => *graph = Some(incoming),
                     Ok(false) => {}
                     Err(payload) => {

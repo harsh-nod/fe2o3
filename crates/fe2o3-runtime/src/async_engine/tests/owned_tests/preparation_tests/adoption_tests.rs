@@ -119,7 +119,7 @@ fn hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
     AdoptionHooksV1 {
         issue: None,
         ready: |context, _| context.backend().adoption_ready(),
-        preflight: |context, payload, _, _| {
+        preflight: |context, payload, _, _, _| {
             payload
                 .state
                 .lock()
@@ -199,11 +199,22 @@ fn preparation_with_hooks<B: RetireBackend + 'static>(
     mode: u8,
     hooks: Option<AdoptionHooksV1<B, Payload>>,
 ) -> RuntimeAsyncPreparationV1<()> {
+    preparation_with_domain(handle, state, drops, mode, hooks, Arc::new(()))
+}
+
+fn preparation_with_domain<B: RetireBackend + 'static>(
+    handle: &RuntimeAsyncProgressHandleV1<B>,
+    state: Arc<Mutex<MockState>>,
+    drops: Arc<AtomicUsize>,
+    mode: u8,
+    hooks: Option<AdoptionHooksV1<B, Payload>>,
+    result_domain: Arc<()>,
+) -> RuntimeAsyncPreparationV1<()> {
     handle
         .enqueue_preparation_with_adoption_v1(
             Box::new(move |_| {
                 Ok(Payload {
-                    result_domain: Arc::new(()),
+                    result_domain,
                     _local: LocalPayload {
                         local: Rc::new(Cell::new(0)),
                         drops,

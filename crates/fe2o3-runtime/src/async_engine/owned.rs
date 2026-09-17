@@ -87,6 +87,22 @@ fn discard_waker(waker: Option<Waker>) {
 }
 
 impl<R> RuntimeAsyncCommandFutureV1<R> {
+    /// Owner-loop observation of the original cell, without a second waiter.
+    pub(super) fn try_take_ready_v1(&mut self) -> Option<Result<R, RuntimeAsyncEngineCallErrorV1>> {
+        assert!(
+            !self.completed,
+            "runtime command future polled after completion"
+        );
+        let (result, waker) = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let result = state.result.take();
+            let waker = result.as_ref().and_then(|_| state.waker.take());
+            (result, waker)
+        };
+        discard_waker(waker);
+        self.completed = result.is_some();
+        result
+    }
     #[cfg(test)]
     pub(super) fn result_probe_for_test_v1(
         &self,

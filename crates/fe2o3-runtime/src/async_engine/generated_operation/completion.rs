@@ -90,6 +90,27 @@ impl fmt::Display for RuntimeAsyncGeneratedJoinFailureV1 {
 impl Error for RuntimeAsyncGeneratedJoinFailureV1 {}
 
 impl RuntimeAsyncGeneratedCompletionV1 {
+    pub(in crate::async_engine) fn try_take_ready_v1(
+        &mut self,
+    ) -> Option<RuntimeAsyncGeneratedCompletionResultV1> {
+        let result = self.future.try_take_ready_v1()?;
+        Some(self.finish_v1(result))
+    }
+
+    fn finish_v1(
+        &mut self,
+        result: Result<GeneratedCompletionOutcomeV1, RuntimeAsyncEngineCallErrorV1>,
+    ) -> RuntimeAsyncGeneratedCompletionResultV1 {
+        match result {
+            Err(error) => Err(error),
+            Ok(Err(error)) => Ok(Err(error)),
+            Ok(Ok(())) => self
+                .domain
+                .take()
+                .map(|domain| Ok(RuntimeGeneratedCompletionReceiptV1 { domain }))
+                .ok_or(RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket),
+        }
+    }
     /// Tests host output binding without granting completion or execution authority.
     #[doc(hidden)]
     pub fn matches_owner<T: Send + Sync + 'static>(&self, owner: &Arc<T>) -> bool {
@@ -134,14 +155,7 @@ impl Future for RuntimeAsyncGeneratedCompletionV1 {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match Pin::new(&mut self.future).poll(cx) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
-            Poll::Ready(Ok(Err(error))) => Poll::Ready(Ok(Err(error))),
-            Poll::Ready(Ok(Ok(()))) => Poll::Ready(
-                self.domain
-                    .take()
-                    .map(|domain| Ok(RuntimeGeneratedCompletionReceiptV1 { domain }))
-                    .ok_or(RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket),
-            ),
+            Poll::Ready(result) => Poll::Ready(self.finish_v1(result)),
         }
     }
 }

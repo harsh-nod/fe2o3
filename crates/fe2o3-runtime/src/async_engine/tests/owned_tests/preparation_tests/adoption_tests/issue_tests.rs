@@ -159,7 +159,7 @@ fn transferable_engine_cannot_activate_generated_issue() {
     let mut nonowned = operation::OperationRegistryV1::new(1, false);
     let mut ticket = Some(ticket);
     let failure = nonowned
-        .activate_reserved(&mut h.context, &mut ticket, stream)
+        .activate_reserved(&mut h.context, &mut ticket, stream, None)
         .unwrap_err();
     assert!(matches!(
         failure,

@@ -10,14 +10,24 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest development (2026-09-17): private C4 completion and the
+Latest development (2026-09-17): [C6 generated graph execution](runtime-generated-graph-v1.md)
+now integrates exact graph reservations, original typed completion receipts,
+owner-preserving admission, cancellation and accepted-prefix drain in the
+existing scheduler. Nineteen focused CPU tests pass. Frozen-source GNU and scoped
+musl qualification each pass 934 runtime and 271 host tests, with seventeen and
+four ignored respectively; all quality gates and 61 doctests pass. It also
+corrects pre-ISSUE direct typed drain and prevents
+duplicate generic drain observation of generated submissions. Protected native
+graph execution, formal correspondence and performance remain unqualified.
+
+Preceding private C4 completion and the
 [C5 typed completion API](runtime-generated-typed-completion-v1.md) now have
 separately sealed CPU qualification. C5 adds the original completion observer,
 identity-bound charged typed output and blocking join without another reply or
 decoder. GNU and scoped musl each pass 915 runtime and 271 host tests, with
 seventeen and four ignored respectively; all quality gates and 58 doctests pass.
-Protected native typed execution is not qualified. C6 generated graph/drain,
-heterogeneous bundle collection, production journals, formal correspondence and
+Protected native typed execution is not qualified. Beyond the C6 development
+above, heterogeneous bundle collection, production journals, formal correspondence and
 matched performance remain open; accepted milestones below are unchanged.
 
 Current accepted Native checkpoint: [R125 live prepared persistent cancellation](runtime-live-persistent-cancel-v1.md),

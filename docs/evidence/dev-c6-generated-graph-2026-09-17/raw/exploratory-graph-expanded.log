@@ -1,0 +1,36 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 30.52s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-6c92d220710fa6fb)
+
+running 16 tests
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_adoption_is_not_disposed_by_drain_cleanup ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_binding_rejections_preserve_both_original_tickets ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_cancellation_discards_only_unactivated_exact_owners ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_dependency_waits_for_original_decoder_and_returns_exact_receipts ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_failed_decoder_discards_dependent_without_receipt_or_issue ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_fresh_occurrences_have_distinct_generations_and_no_residue ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_hold_requires_exact_open_token_and_blocks_release ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_immediate_and_queued_rejections_preserve_exact_tickets ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_mixes_ordinary_launch_and_copy_in_the_existing_executor ... FAILED
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_owned_drain_completes_accepted_prefix_or_retains_on_exhaustion ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_post_admission_rejection_preserves_independent_branch ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_rejection_returns_exact_ticket_and_preserves_parked_credit ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_terminal_faults_and_stop_retain_active_custody ... ok
+test context::generated_issue::tests::completion_tests::generated_graph_context_settlement_releases_all_exact_metadata_before_reservation ... ok
+test context::generated_issue::tests::completion_tests::generated_graph_invalid_access_precedes_native_and_carrier_callbacks ... ok
+test context::generated_issue::tests::completion_tests::generated_graph_release_rejects_unpaired_backend_indexes_and_callbacks ... ok
+
+failures:
+
+---- async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_mixes_ordinary_launch_and_copy_in_the_existing_executor stdout ----
+
+thread 'async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_mixes_ordinary_launch_and_copy_in_the_existing_executor' (2949771) panicked at crates/fe2o3-runtime/src/async_engine.rs:2389:65:
+no entry found for key
+
+
+failures:
+    async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_mixes_ordinary_launch_and_copy_in_the_existing_executor
+
+test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 932 filtered out; finished in 0.31s
+
+error: test failed, to rerun pass `-p fe2o3-runtime --lib`

@@ -59,6 +59,7 @@ pub(super) trait EngineOperationV1<B: RuntimeBackendV1> {
         &mut self,
         _context: &mut RuntimeContextV1<B>,
         _stream: RuntimeStreamIdV1,
+        _access: Option<crate::context::ContextGraphReservationV1>,
     ) -> Result<(), RuntimeErrorV1<B::Error>> {
         Err(crate::RuntimeValidationErrorV1::Unsupported.into())
     }
@@ -217,20 +218,21 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
         entry.driver.reserve_generated(context, completion)
     }
 
-    pub(super) fn activate_reserved(
+    pub(super) fn validate_reserved(
         &mut self,
         context: &mut RuntimeContextV1<B>,
-        ticket: &mut Option<RuntimeAsyncReservedTicketV1>,
+        ticket: &RuntimeAsyncReservedTicketV1,
         stream: RuntimeStreamIdV1,
-    ) -> Result<
-        RuntimeAsyncGeneratedCompletionV1,
-        generated_operation::adoption::ActivationErrorV1<B::Error>,
-    > {
+        access: Option<crate::context::ContextGraphReservationV1>,
+    ) -> Result<usize, generated_operation::adoption::ActivationErrorV1<B::Error>> {
         use generated_operation::adoption::ActivationErrorV1 as Error;
         if context.is_terminal() || !self.owner_cleanup {
             return Err(Error::Engine(RuntimeAsyncEngineCallErrorV1::EngineStopped));
         }
-        let key = &ticket.as_ref().expect("queued reserved ticket").key;
+        context
+            .require_unpublished_open_access_v1(access)
+            .map_err(|e| Error::Context(e.into()))?;
+        let key = &ticket.key;
         if key.context_generation != context.capture_context_generation_v1() {
             return Err(Error::Engine(
                 RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket,
@@ -255,10 +257,33 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
         }
         self.parked[index]
             .driver
-            .preflight_adoption(context, stream)
+            .preflight_adoption(context, stream, access)
             .map_err(Error::Context)?;
+        context
+            .require_unpublished_open_access_v1(access)
+            .map_err(|e| Error::Context(e.into()))?;
+        Ok(index)
+    }
+
+    pub(super) fn activate_reserved(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        ticket: &mut Option<RuntimeAsyncReservedTicketV1>,
+        stream: RuntimeStreamIdV1,
+        access: Option<crate::context::ContextGraphReservationV1>,
+    ) -> Result<
+        RuntimeAsyncGeneratedCompletionV1,
+        generated_operation::adoption::ActivationErrorV1<B::Error>,
+    > {
+        use generated_operation::adoption::ActivationErrorV1 as Error;
+        let index = self.validate_reserved(
+            context,
+            ticket.as_ref().expect("queued reserved ticket"),
+            stream,
+            access,
+        )?;
         let hold = context
-            .hold_unpublished_stream_v1(stream)
+            .hold_unpublished_stream_with_access_v1(stream, access)
             .map_err(|error| Error::Context(error.into()))?;
         let entry = self.parked.remove(index).expect("exact parked entry");
         debug_assert!(
@@ -658,6 +683,9 @@ pub(super) fn advance_operations_v1<B: RuntimeBackendV1>(
     flush_budget: usize,
     flush: RuntimeAsyncFlushDriverV1<B>,
 ) {
+    if context.is_terminal() {
+        return;
+    }
     for _ in 0..poll_budget.min(operations.active_len()) {
         let entry = operations
             .entries

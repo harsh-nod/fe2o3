@@ -13,11 +13,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         submissions
             .try_reserve(self.submissions.len())
             .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
-        submissions.extend(
-            self.submissions
-                .iter()
-                .filter_map(|(&id, record)| (!record.status.is_terminal()).then_some(id)),
-        );
+        submissions.extend(self.submissions.iter().filter_map(|(&id, record)| {
+            // The generated registry alone progresses and removes its
+            // exact submissions. Snapshotting them here would create a
+            // second observer and leave stale IDs after C4 retirement.
+            let generated = self
+                .generated_issues
+                .get(&record.stream)
+                .is_some_and(|attempt| attempt.owns_submission_v1(id));
+            (!record.status.is_terminal() && !generated).then_some(id)
+        }));
         submissions.sort_unstable();
         let mut streams = Vec::new();
         streams

@@ -219,6 +219,7 @@ impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P,
         &mut self,
         context: &mut RuntimeContextV1<B>,
         stream: RuntimeStreamIdV1,
+        access: Option<crate::context::ContextGraphReservationV1>,
     ) -> Result<(), RuntimeErrorV1<B::Error>> {
         let hooks = self
             .adoption
@@ -229,6 +230,7 @@ impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P,
             self.prepared.as_ref().expect("reserved payload"),
             self.roster.as_ref().expect("reserved roster"),
             stream,
+            access,
         )
     }
 

@@ -9,6 +9,7 @@ type AdoptionPreflightV1<B, P> = fn(
     &P,
     &crate::generated_source::GeneratedHostRosterV1,
     RuntimeStreamIdV1,
+    Option<crate::context::ContextGraphReservationV1>,
 ) -> Result<(), RuntimeErrorV1<<B as RuntimeBackendV1>::Error>>;
 type AdoptV1<B, P> = fn(
     &mut RuntimeContextV1<B>,
@@ -114,6 +115,9 @@ impl UnpublishedAdoptionV1 {
 
 impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
     pub(super) fn advance_unpublished_v1(&mut self, context: &mut RuntimeContextV1<B>) -> bool {
+        if self.observations_stopped || context.is_terminal() {
+            return false;
+        }
         let owner = self.unpublished.as_mut().expect("active unpublished owner");
         if owner.phase == PhaseV1::Adopting {
             // No error or unwind may make this effect callable a second time.
@@ -207,6 +211,16 @@ impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
         let Some(owner) = self.unpublished.as_mut() else {
             return Ok(false);
         };
+        let delivers_completion = self
+            .adoption
+            .as_ref()
+            .and_then(|hooks| hooks.issue)
+            .is_some_and(|issue| issue.completion.is_some());
+        // Accepted completion-capable invocations keep progressing during drain,
+        // including adoption before ISSUE. Only Stop can abandon their output.
+        if (owner.hold.is_graph_scoped_v1() || delivers_completion) && !self.observations_stopped {
+            return Ok(false);
+        }
         if matches!(owner.phase, PhaseV1::Issued | PhaseV1::PhysicallySettled) {
             // Drain observes the accepted prefix without cancelling output.
             // Only actual Stop, after stopping the reserved completion observer,
@@ -316,7 +330,7 @@ impl<B: RuntimeBackendV1> ActivateCommandV1<B> {
         operations: &mut operation::OperationRegistryV1<B>,
     ) {
         let result = catch_unwind(AssertUnwindSafe(|| {
-            operations.activate_reserved(context, &mut self.ticket, self.stream)
+            operations.activate_reserved(context, &mut self.ticket, self.stream, None)
         }));
         match result {
             Ok(Ok(completion)) => {

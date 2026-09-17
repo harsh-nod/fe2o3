@@ -145,17 +145,23 @@ impl Harness {
         let RuntimeAsyncEngineCommandV1::Graph(mut graph) = self.receiver.recv().unwrap() else {
             panic!("graph command");
         };
-        if graph.admit(&mut self.context) {
+        if graph.admit(
+            &mut self.context,
+            &mut operation::OperationRegistryV1::new(4, true),
+        ) {
             self.graph = Some(graph);
         }
         future
     }
     fn tick(&mut self, budget: usize) {
-        if self
-            .graph
-            .as_mut()
-            .is_some_and(|graph| graph.advance(&mut self.context, budget, 1))
-        {
+        if self.graph.as_mut().is_some_and(|graph| {
+            graph.advance(
+                &mut self.context,
+                &mut operation::OperationRegistryV1::new(4, true),
+                budget,
+                1,
+            )
+        }) {
             self.graph = None;
         }
     }
@@ -718,7 +724,10 @@ fn r63_reply_releases_slot_before_wake_without_clearing_successor_slot() {
     let RuntimeAsyncEngineCommandV1::Graph(mut graph) = h.receiver.recv().unwrap() else {
         panic!("successor command");
     };
-    assert!(graph.admit(&mut h.context));
+    assert!(graph.admit(
+        &mut h.context,
+        &mut operation::OperationRegistryV1::new(4, true)
+    ));
     h.graph = Some(graph);
     h.succeed();
     result(wake.successor.lock().unwrap().take().unwrap()).unwrap();

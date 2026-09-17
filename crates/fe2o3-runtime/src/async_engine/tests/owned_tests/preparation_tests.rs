@@ -641,17 +641,31 @@ fn preparation_park_and_discard_do_not_remove_other_active_streams() {
 fn preparation_parked_owner_does_not_block_graph_admission_guard() {
     struct Probe(Arc<AtomicBool>);
     impl graph::EngineGraphV1<MockBackend> for Probe {
-        fn admit(&mut self, _: &mut RuntimeContextV1<MockBackend>) -> bool {
+        fn admit(
+            &mut self,
+            _: &mut RuntimeContextV1<MockBackend>,
+            _: &mut operation::OperationRegistryV1<MockBackend>,
+        ) -> bool {
             self.0.store(true, Ordering::SeqCst);
             false
         }
-        fn advance(&mut self, _: &mut RuntimeContextV1<MockBackend>, _: usize, _: usize) -> bool {
+        fn advance(
+            &mut self,
+            _: &mut RuntimeContextV1<MockBackend>,
+            _: &mut operation::OperationRegistryV1<MockBackend>,
+            _: usize,
+            _: usize,
+        ) -> bool {
             panic!("probe never installs")
         }
         fn reject(&mut self, _: RuntimeGraphErrorV1<MockError>) {
             panic!("inert park must not block graph admission")
         }
-        fn stop(&mut self, _: &mut RuntimeContextV1<MockBackend>) {
+        fn stop(
+            &mut self,
+            _: &mut RuntimeContextV1<MockBackend>,
+            _: &mut operation::OperationRegistryV1<MockBackend>,
+        ) {
             panic!("probe never installs")
         }
     }

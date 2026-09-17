@@ -26,6 +26,12 @@ pub(super) struct GeneratedIssueV1 {
     submission: Option<RuntimeSubmissionV1<()>>,
 }
 
+impl GeneratedIssueV1 {
+    pub(super) fn owns_submission_v1(&self, id: RuntimeSubmissionIdV1) -> bool {
+        self.id == id
+    }
+}
+
 impl RuntimeContextV1<KfdRuntimeBackendV1> {
     fn generated_issue_token_v1(
         &self,
@@ -148,6 +154,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         roster: &GeneratedHostRosterV1,
         hold: &ContextUnpublishedHoldV1,
     ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+        self.validate_unpublished_hold_v1(hold)?;
         let mut complete = false;
         let result = catch_unwind(AssertUnwindSafe(|| {
             self.validate_gfx942_prepared_v1(prepared)?;
@@ -282,7 +289,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             self.submissions.remove(&id);
             self.backend_submissions.remove(&backend_submission);
             self.retire_generated_shells_v1(hold)?;
-            self.require_live()?;
+            self.require_graph_access(hold.graph_access())?;
             self.generated_issues.remove(&hold.stream());
             retired = true;
             Ok(())

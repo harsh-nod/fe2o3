@@ -11,6 +11,19 @@ fn install(
     GeneratedShellPlanV1,
     GeneratedHostRosterV1,
 ) {
+    let (hold, plan, roster, _) = install_with_graph(context, false);
+    (hold, plan, roster)
+}
+
+fn install_with_graph(
+    context: &mut RuntimeContextV1<KfdRuntimeBackendV1>,
+    graph: bool,
+) -> (
+    ContextUnpublishedHoldV1,
+    GeneratedShellPlanV1,
+    GeneratedHostRosterV1,
+    Option<ContextGraphReservationV1>,
+) {
     let (binding, _) = RuntimeContextV1::generated_shell_test_binding_v1(&mut context.backend);
     context
         .backend
@@ -18,7 +31,10 @@ fn install(
         .unwrap();
     let device = context.devices()[0].id();
     let stream = context.create_stream(device).unwrap();
-    let hold = context.hold_unpublished_stream_v1(stream).unwrap();
+    let access = graph.then(|| context.reserve_graph_v1(1).unwrap());
+    let hold = context
+        .hold_unpublished_stream_with_access_v1(stream, access)
+        .unwrap();
     let (hsaco, projection) = source_projection();
     let authority = source_authority(&projection);
     let roster = GeneratedHostRosterV1::from_projection(&projection).unwrap();
@@ -28,7 +44,7 @@ fn install(
         .install_generated_shells_v1(device, binding.native_device, &hold, &mut source, &roster)
         .unwrap();
     let plan = context.generated_plan_for_hold_v1(&hold).unwrap();
-    (hold, plan, roster)
+    (hold, plan, roster, access)
 }
 
 fn context() -> RuntimeContextV1<KfdRuntimeBackendV1> {

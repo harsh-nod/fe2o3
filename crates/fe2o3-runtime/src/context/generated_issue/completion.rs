@@ -48,6 +48,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         roster: &GeneratedHostRosterV1,
         hold: &ContextUnpublishedHoldV1,
     ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+        self.validate_unpublished_hold_v1(hold)?;
         let result = catch_unwind(AssertUnwindSafe(|| {
             self.validate_gfx942_prepared_v1(prepared)?;
             let plan = self.generated_plan_for_hold_v1(hold)?;
@@ -123,6 +124,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         hold: &ContextUnpublishedHoldV1,
         settled: NativeSettlementV1,
     ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+        self.validate_unpublished_hold_v1(hold)?;
         let attempt = self
             .generated_issues
             .get(&hold.stream())
@@ -140,7 +142,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
         }
         self.retire_generated_shells_v1(hold)?;
-        self.require_live()?;
+        self.require_graph_access(hold.graph_access())?;
         self.release_unpublished_hold_v1(hold)?;
         // This status describes native execution. Typed output stays behind
         // its original gate until the async driver consumes the decoder.
