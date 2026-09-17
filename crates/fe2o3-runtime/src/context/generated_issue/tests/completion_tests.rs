@@ -242,7 +242,7 @@ fn generated_graph_shared_drain_snapshot_excludes_only_registry_owned_submission
     core::mem::forget(context);
 }
 
-fn assert_submission_retained(
+pub(super) fn assert_submission_retained(
     context: &RuntimeContextV1<KfdRuntimeBackendV1>,
     id: RuntimeSubmissionIdV1,
     before: SubmissionRecordV1,
@@ -253,6 +253,7 @@ fn assert_submission_retained(
     assert_eq!(after.device, before.device);
     assert_eq!(after.quiescent, before.quiescent);
     assert_eq!(after.status, before.status);
+    assert_eq!(after.journal_writer, before.journal_writer);
 }
 
 #[test]

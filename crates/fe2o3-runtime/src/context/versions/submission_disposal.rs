@@ -7,7 +7,7 @@ use fe2o3_runtime_model::{
 };
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
-    fn validate_disposal_submission_v1(
+    pub(super) fn validate_disposal_submission_v1(
         &self,
         id: RuntimeSubmissionIdV1,
         writer: ContextWriterReferenceV1,
@@ -38,6 +38,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .get(&id)
             .ok_or(E::InvalidReference)?;
         if root.writer != writer
+            || root.domain != SubmissionWriterDomainV1::Ordinary
             || root.journal_disposed
             || root.allocations.len() != root.members.len()
             || root.disposed_count >= root.allocations.len()
@@ -144,7 +145,27 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if root.disposed_count != root.members.len() {
             return Ok(());
         }
+        self.commit_submission_writer_disposal_v1(id)
+    }
 
+    pub(super) fn commit_submission_writer_disposal_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Result<(), ContextVersionJournalErrorV1> {
+        use ContextVersionJournalErrorV1 as E;
+        let root = self
+            .versions
+            .as_ref()
+            .ok_or(E::InvalidState)?
+            .submission_writers
+            .get(&id)
+            .ok_or(E::InvalidReference)?;
+        if root.journal_disposed
+            || root.disposed_count != root.members.len()
+            || root.allocations.len() != root.members.len()
+        {
+            return Err(E::InvalidState);
+        }
         let writer = root.writer;
         self.validate_disposal_submission_v1(id, writer)?;
         let versions = self.versions.as_mut().expect("configured journal");

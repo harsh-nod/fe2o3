@@ -10,7 +10,16 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest development (2026-09-17): [ordinary Unknown writer disposal](runtime-context-version-journal-disposal-v1.md)
+Latest development (2026-09-17): [generated writer journal integration](runtime-context-version-journal-generated-v1.md)
+binds protected ISSUE to original writable allocation IDs and separates generic
+observations from protected completion. Successful protected settlement precedes
+shell retirement; Stop disposes the complete Unknown writer and independent
+read-only members through the existing batch boundary. The
+[qualification receipt](evidence/dev-v6-generated-journal-2026-09-17/README.md)
+is CPU/test evidence, not native, formal or performance acceptance. A1/A2 and the
+accepted checkpoints remain unchanged.
+
+Preceding development: [ordinary Unknown writer disposal](runtime-context-version-journal-disposal-v1.md)
 now joins per-allocation owner disposal to exact whole-roster journal retirement.
 Disposed Context IDs cannot be used or released twice; all writer credits remain
 charged until the complete original roster is disposed. Rejected/quiescent

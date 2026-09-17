@@ -1068,7 +1068,7 @@ pub(crate) mod tests {
         source_projection_with_access(geometry, [crate::Gfx942RuntimeBufferAccessV1::ReadWrite; 3])
     }
 
-    fn source_projection_with_access(
+    pub(crate) fn source_projection_with_access(
         geometry: fe2o3_aql::AqlDispatchGeometryV1,
         accesses: [crate::Gfx942RuntimeBufferAccessV1; 3],
     ) -> (Vec<u8>, crate::PreparedGfx942PersistentDispatchV1) {

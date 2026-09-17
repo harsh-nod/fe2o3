@@ -8,6 +8,7 @@ pub(super) struct NativeSettlementV1 {
     backend_submission: u64,
     stream: RuntimeStreamIdV1,
     hold: u64,
+    expected_writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
 }
 
 #[cfg(test)]
@@ -21,6 +22,7 @@ pub(super) fn assume_native_settlement_for_context_test_v1(
         backend_submission: attempt.submission.as_ref().unwrap().backend_submission,
         stream: hold.stream(),
         hold: hold.identity(),
+        expected_writer: attempt.expected_writer,
     }
 }
 
@@ -68,6 +70,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             let token = self.generated_issue_token_v1(hold, &plan)?;
             let id = token.id;
             let backend_submission = token.backend_submission;
+            let expected_writer = attempt.expected_writer;
             let uid = self.generated_issue_device_uid_v1(plan.binding.backend_device)?;
             self.generated_issues
                 .get_mut(&hold.stream())
@@ -110,6 +113,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                     backend_submission,
                     stream: hold.stream(),
                     hold: hold.identity(),
+                    expected_writer,
                 })
             })?;
             self.settle_completed_gfx942_context_v1(hold, settled)
@@ -138,15 +142,17 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             || settled.backend_submission != backend_submission
             || settled.stream != hold.stream()
             || settled.hold != hold.identity()
+            || settled.expected_writer != attempt.expected_writer
         {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
         }
+        self.settle_generated_writer_v1(hold.stream(), SubmissionWriterOutcomeV1::Success)?;
         self.retire_generated_shells_v1(hold)?;
         self.require_graph_access(hold.graph_access())?;
         self.release_unpublished_hold_v1(hold)?;
         // This status describes native execution. Typed output stays behind
         // its original gate until the async driver consumes the decoder.
-        self.transition_submission_status(id, RuntimeCompletionStatusV1::Succeeded)?;
+        self.publish_submission_status_v1(id, RuntimeCompletionStatusV1::Succeeded)?;
         self.submissions.remove(&id);
         self.backend_submissions.remove(&backend_submission);
         self.generated_issues.remove(&hold.stream());

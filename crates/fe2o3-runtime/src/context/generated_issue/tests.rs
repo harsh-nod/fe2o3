@@ -1,8 +1,9 @@
 use super::*;
 use crate::RuntimeGfx942GeneratedSourceMutV1;
-use crate::authorized_execution::tests::{source_authority, source_projection};
+use crate::authorized_execution::tests::{source_authority, source_projection_with_access};
 
 mod completion_tests;
+mod journal_tests;
 
 fn install(
     context: &mut RuntimeContextV1<KfdRuntimeBackendV1>,
@@ -24,6 +25,23 @@ fn install_with_graph(
     GeneratedHostRosterV1,
     Option<ContextGraphReservationV1>,
 ) {
+    install_with_access(
+        context,
+        graph,
+        [crate::Gfx942RuntimeBufferAccessV1::ReadWrite; 3],
+    )
+}
+
+fn install_with_access(
+    context: &mut RuntimeContextV1<KfdRuntimeBackendV1>,
+    graph: bool,
+    accesses: [crate::Gfx942RuntimeBufferAccessV1; 3],
+) -> (
+    ContextUnpublishedHoldV1,
+    GeneratedShellPlanV1,
+    GeneratedHostRosterV1,
+    Option<ContextGraphReservationV1>,
+) {
     let (binding, _) = RuntimeContextV1::generated_shell_test_binding_v1(&mut context.backend);
     context
         .backend
@@ -35,7 +53,10 @@ fn install_with_graph(
     let hold = context
         .hold_unpublished_stream_with_access_v1(stream, access)
         .unwrap();
-    let (hsaco, projection) = source_projection();
+    let (hsaco, projection) = source_projection_with_access(
+        fe2o3_aql::AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+        accesses,
+    );
     let authority = source_authority(&projection);
     let roster = GeneratedHostRosterV1::from_projection(&projection).unwrap();
     let mut storage = projection.into_generated_storage_v1();

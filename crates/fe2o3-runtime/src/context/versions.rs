@@ -6,10 +6,11 @@ use fe2o3_runtime_model::{
     ContextJournalDeviceKeyV1, ContextVersionJournalErrorV1, ContextVersionJournalV1,
 };
 
+mod generated;
 mod submission_disposal;
 mod submissions;
 mod writers;
-pub(super) use submissions::SubmissionWriterOutcomeV1;
+pub(super) use submissions::{SubmissionWriterDomainV1, SubmissionWriterOutcomeV1};
 
 /// Bounded journal metadata counts, not residency, initializedness or data versions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -243,9 +244,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// enumeration. Other failures return the possibly enumeration-entered backend.
     ///
     /// This development profile tracks allocation custody, synchronous host
-    /// writes and ordinary asynchronous launch/copy destinations. Writer
-    /// capacity and unresolved writes gate subsequent writes. Generated protected
-    /// launches, backend aliases and input leases remain outside this profile;
+    /// writes, ordinary asynchronous launch/copy destinations, and the original
+    /// writable buffers of protected generated attempts. Generated settlement
+    /// requires protected completion or whole-batch Stop disposal, never generic
+    /// polling. Writer capacity and unresolved writes gate subsequent writes.
+    /// Backend aliases and input leases remain outside this profile;
     /// no content lineage or reuse permission is exposed. Unknown async writers
     /// retain their journal metadata and credits, even after submission metadata
     /// is released, until every original destination owner has been disposed.

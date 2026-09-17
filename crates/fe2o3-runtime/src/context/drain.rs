@@ -42,6 +42,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .submissions
             .get(&id)
             .ok_or(RuntimeValidationErrorV1::UnknownSubmission)?;
+        self.require_ordinary_submission_v1(id)?;
         if record.status.is_terminal() {
             return Ok(record.status);
         }

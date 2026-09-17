@@ -21,6 +21,7 @@ pub(super) struct GeneratedIssueV1 {
     plan: GeneratedShellPlanV1,
     roster: GeneratedHostRosterV1,
     phase: PhaseV1,
+    pub(super) expected_writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
     // The original hold/carrier remain in the owner-only async registry. Owned
     // shutdown retains that registry and this Context together on any failure.
     submission: Option<RuntimeSubmissionV1<()>>,
@@ -29,6 +30,22 @@ pub(super) struct GeneratedIssueV1 {
 impl GeneratedIssueV1 {
     pub(super) fn owns_submission_v1(&self, id: RuntimeSubmissionIdV1) -> bool {
         self.id == id
+    }
+
+    pub(super) fn writer_binding_v1(&self) -> (RuntimeSubmissionIdV1, SubmissionWriterDomainV1) {
+        (self.id, generated_writer_domain_v1(&self.plan))
+    }
+
+    pub(super) fn writer_roster_v1(&self) -> (&GeneratedShellPlanV1, &GeneratedHostRosterV1) {
+        (&self.plan, &self.roster)
+    }
+}
+
+fn generated_writer_domain_v1(plan: &GeneratedShellPlanV1) -> SubmissionWriterDomainV1 {
+    SubmissionWriterDomainV1::Generated {
+        stream: plan.binding.stream,
+        hold: plan.binding.hold,
+        shell_key: plan.key,
     }
 }
 
@@ -56,6 +73,14 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
         }
         self.live_submission_record(token)?;
+        self.validate_generated_writer_v1(
+            attempt.id,
+            generated_writer_domain_v1(plan),
+            attempt.expected_writer,
+            plan,
+            &attempt.roster,
+        )
+        .map_err(|_| RuntimeValidationErrorV1::InvalidBackendDescription)?;
         Ok(token)
     }
 
@@ -93,7 +118,24 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         self.backend_submissions
             .try_reserve(1)
             .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        let mut destinations =
+            [RuntimeAllocationIdV1::new(0, 0); fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_DATA_V1];
+        let mut count = 0;
+        for (member, slot) in plan.members[..plan.count]
+            .iter()
+            .zip(&roster.buffers[..roster.count])
+        {
+            if slot.expect("validated roster").access
+                != crate::Gfx942RuntimeBufferAccessV1::ReadOnly
+            {
+                destinations[count] = member.expect("validated plan").logical;
+                count += 1;
+            }
+        }
+        let prepared = self.prepare_submission_writer_v1(&destinations[..count])?;
         let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
+        let expected_writer =
+            self.begin_submission_writer_v1(id, prepared, generated_writer_domain_v1(&plan))?;
         self.generated_issues.insert(
             hold.stream(),
             GeneratedIssueV1 {
@@ -101,6 +143,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 plan,
                 roster: roster.clone(),
                 phase: PhaseV1::Entering,
+                expected_writer,
                 submission: None,
             },
         );
@@ -123,6 +166,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         assert!(attempt.submission.is_none());
         let id = attempt.id;
         let device = attempt.plan.binding.device;
+        let journal_writer = attempt.expected_writer;
         attempt.submission = Some(RuntimeSubmissionV1 {
             id,
             backend_submission,
@@ -142,7 +186,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 device,
                 quiescent: false,
                 status: RuntimeCompletionStatusV1::Pending,
-                journal_writer: None,
+                journal_writer,
             },
         );
         assert!(self.backend_submissions.insert(backend_submission));
@@ -279,24 +323,66 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             self.backend
                 .release_submission_v1(backend_submission)
                 .map_err(map_backend_error)?;
-            self.generated_issues
-                .get_mut(&hold.stream())
-                .expect("retained attempt")
-                .phase = PhaseV1::DisposedWithoutResult;
-            self.transition_submission_status(
-                id,
-                RuntimeCompletionStatusV1::QuiescentWithoutResult,
-            )?;
-            self.submissions.remove(&id);
-            self.backend_submissions.remove(&backend_submission);
-            self.retire_generated_shells_v1(hold)?;
-            self.require_graph_access(hold.graph_access())?;
-            self.generated_issues.remove(&hold.stream());
+            self.settle_stopped_gfx942_context_v1(hold, id, backend_submission)?;
             retired = true;
             Ok(())
         }));
         self.finish_generated_issue_v1(hold, result)?;
         Ok(retired)
+    }
+
+    // Native DATA and submission disposal precede this owner-only metadata tail.
+    fn settle_stopped_gfx942_context_v1(
+        &mut self,
+        hold: &ContextUnpublishedHoldV1,
+        id: RuntimeSubmissionIdV1,
+        backend_submission: u64,
+    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+        let plan = self.generated_plan_for_hold_v1(hold)?;
+        let token = self.generated_issue_token_v1(hold, &plan)?;
+        if token.id != id || token.backend_submission != backend_submission {
+            return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
+        }
+        self.settle_generated_writer_v1(hold.stream(), SubmissionWriterOutcomeV1::Unknown)?;
+        self.generated_issues
+            .get_mut(&hold.stream())
+            .expect("retained attempt")
+            .phase = PhaseV1::DisposedWithoutResult;
+        self.publish_submission_status_v1(id, RuntimeCompletionStatusV1::QuiescentWithoutResult)?;
+        self.submissions.remove(&id);
+        self.backend_submissions.remove(&backend_submission);
+        self.retire_generated_shells_v1(hold)?;
+        self.require_graph_access(hold.graph_access())?;
+        self.generated_issues.remove(&hold.stream());
+        Ok(())
+    }
+
+    fn settle_generated_writer_v1(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+        outcome: SubmissionWriterOutcomeV1,
+    ) -> Result<(), RuntimeValidationErrorV1> {
+        let attempt = self
+            .generated_issues
+            .get(&stream)
+            .ok_or(RuntimeValidationErrorV1::InvalidBackendDescription)?;
+        let (id, domain) = attempt.writer_binding_v1();
+        let result = self.validate_generated_writer_v1(
+            id,
+            domain,
+            attempt.expected_writer,
+            &attempt.plan,
+            &attempt.roster,
+        );
+        self.journal_result_v1(result)?;
+        self.settle_generated_submission_writer_v1(id, domain, outcome)?;
+        if matches!(outcome, SubmissionWriterOutcomeV1::Success) {
+            self.generated_issues
+                .get_mut(&stream)
+                .expect("retained attempt")
+                .expected_writer = None;
+        }
+        Ok(())
     }
 
     fn generated_issue_device_uid_v1(

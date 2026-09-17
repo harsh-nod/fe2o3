@@ -169,38 +169,14 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         if !self.backend.validate_generated_shell_disposal_v1(&plan) {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
         }
-        let mut references = [fe2o3_runtime_model::ContextAllocationReferenceV1 {
-            slot: 0,
-            key: fe2o3_runtime_model::ContextAllocationKeyV1 {
-                context_generation: 0,
-                local: 0,
-            },
-        }; fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_DATA_V1];
-        if let Some(versions) = self.versions.as_ref() {
-            let result = (|| {
-                for (index, member) in plan.members[..plan.count].iter().flatten().enumerate() {
-                    references[index] = versions
-                        .validate_live(member.logical, &self.allocations[&member.logical])?;
-                }
-                versions.validate_retirement(&references[..plan.count])
-            })();
-            self.journal_result_v1(result)?;
-        }
+        let result = self.prepare_generated_shell_retirement_v1(plan);
+        let ticket = self.journal_result_v1(result)?;
         self.guard_journal_unwind_v1(|context| {
             context.backend.dispose_generated_shells_v1(&plan);
-            for member in plan.members[..plan.count].iter().flatten() {
-                context.dispose_allocation_credits_v1(member.logical);
-            }
-            if let Some(versions) = context.versions.as_mut() {
-                let result = versions.retire(&references[..plan.count]);
-                context
-                    .journal_result_v1(result)
-                    .expect("generated journal disposal invariant");
-            }
-            for member in plan.members[..plan.count].iter().flatten() {
-                context.allocations.remove(&member.logical);
-                context.backend_allocations.remove(&member.backend);
-            }
+            let result = context.finish_generated_shell_retirement_v1(ticket);
+            context
+                .journal_result_v1(result)
+                .expect("generated journal disposal invariant");
             context
                 .streams
                 .get_mut(&hold.stream())

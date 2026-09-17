@@ -82,10 +82,11 @@ SPI Rejected, completion and cancellation classifications remain explicit backen
 contracts, not authenticated machine-refinement evidence. The existing V4-J1
 issuance proof does not prove this production settlement integration.
 
-Generated protected execution is deliberately not enrolled by this helper. It
-requires its own effect roster, closing currentness, checked readback, native
-retirement and production verifier/refinement evidence before journal settlement.
-Existing generated transitions retain their distinct completion path.
+Generated protected execution is not enrolled by this ordinary helper. The later
+[generated journal join](runtime-context-version-journal-generated-v1.md) provides
+its own original writable roster, closing currentness, checked readback and
+native-retirement settlement path. That CPU-qualified integration does not supply
+production verifier/refinement evidence or native protected qualification.
 
 Backend aliases, input/read leases, ordered overlapping writers, cross-run version
 consumption, content recovery and aggregate native-residency disposal remain open.

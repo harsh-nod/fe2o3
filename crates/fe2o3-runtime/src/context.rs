@@ -24,7 +24,7 @@ use allocation_admission::ContextAllocationAdmissionV1;
 pub use drain_capture::*;
 pub use generated_preparation::*;
 pub(crate) use unpublished::ContextUnpublishedHoldV1;
-use versions::{ContextVersionsV1, SubmissionWriterOutcomeV1};
+use versions::{ContextVersionsV1, SubmissionWriterDomainV1, SubmissionWriterOutcomeV1};
 pub use versions::{RuntimeContextJournalUsageV1, RuntimeContextOpenFailureV1};
 
 /// Maximum number of devices retained by one runtime context.
@@ -1543,6 +1543,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         submission: RuntimeSubmissionIdV1,
         status: RuntimeCompletionStatusV1,
     ) -> Result<RuntimeCompletionStatusV1, RuntimeValidationErrorV1> {
+        self.require_ordinary_submission_v1(submission)?;
         let Some(record) = self.submissions.get(&submission) else {
             return Ok(status);
         };
@@ -1555,6 +1556,22 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             SubmissionWriterOutcomeV1::Unknown
         };
         self.settle_submission_writer_v1(submission, outcome)?;
+        self.publish_submission_status_v1(submission, status)
+    }
+
+    // Generated callers must settle their receipt-bound writer separately.
+    fn publish_submission_status_v1(
+        &mut self,
+        submission: RuntimeSubmissionIdV1,
+        status: RuntimeCompletionStatusV1,
+    ) -> Result<RuntimeCompletionStatusV1, RuntimeValidationErrorV1> {
+        let record = self
+            .submissions
+            .get(&submission)
+            .ok_or(RuntimeValidationErrorV1::UnknownSubmission)?;
+        if record.status.is_terminal() || !status.is_terminal() {
+            return Ok(record.status);
+        }
         let record = self
             .submissions
             .get_mut(&submission)
@@ -1701,6 +1718,35 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(RuntimeValidationErrorV1::WrongDevice);
         }
         Ok(record)
+    }
+
+    fn require_ordinary_submission_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Result<(), RuntimeValidationErrorV1> {
+        if self.submissions.get(&id).is_some_and(|record| {
+            self.generated_issues
+                .get(&record.stream)
+                .is_some_and(|attempt| attempt.owns_submission_v1(id))
+        }) {
+            return Err(RuntimeValidationErrorV1::ContextReserved);
+        }
+        Ok(())
+    }
+
+    fn require_retained_submission_unheld_v1(
+        &self,
+        record: &SubmissionRecordV1,
+    ) -> Result<(), RuntimeValidationErrorV1> {
+        // A quiescent submission may legitimately outlive its destroyed stream.
+        if self
+            .streams
+            .get(&record.stream)
+            .is_some_and(|stream| stream.unpublished.is_some())
+        {
+            return Err(RuntimeValidationErrorV1::ContextReserved);
+        }
+        Ok(())
     }
 
     fn backend_result<T>(
@@ -2541,6 +2587,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     ) -> Result<RuntimePollV1, RuntimeErrorV1<B::Error>> {
         self.require_graph_access(access)?;
         let record = self.live_submission_record(submission)?;
+        self.require_stream_unheld_v1(record.stream)?;
         if record.status.is_terminal() {
             return Ok(submission.observe_status(record.status));
         }
@@ -2557,6 +2604,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     ) -> Result<RuntimePollV1, RuntimeErrorV1<B::Error>> {
         self.require_live()?;
         let record = self.live_submission_record(submission)?;
+        self.require_stream_unheld_v1(record.stream)?;
         if record.status.is_terminal() {
             return Ok(submission.observe_status(record.status));
         }
@@ -2637,6 +2685,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         timeout: Duration,
     ) -> Result<RuntimeStreamObservationV1, RuntimeErrorV1<B::Error>> {
         self.require_live()?;
+        self.require_stream_unheld_v1(stream)?;
         self.stream_observation(stream)?;
         let deadline = Instant::now()
             .checked_add(timeout)
@@ -2745,6 +2794,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     ) -> Result<(), RuntimeErrorV1<B::Error>> {
         self.require_graph_access(access)?;
         let record = self.submission_record(submission)?;
+        self.require_retained_submission_unheld_v1(&record)?;
         if !record.quiescent {
             return Err(RuntimeValidationErrorV1::SubmissionPending.into());
         }
@@ -2777,6 +2827,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     ) -> Result<RuntimeEventIdV1, RuntimeErrorV1<B::Error>> {
         self.require_live()?;
         let submission_record = self.live_submission_record(submission)?;
+        self.require_stream_unheld_v1(submission_record.stream)?;
         if self.events.len() >= MAX_RUNTIME_EVENTS_V1 {
             return Err(RuntimeValidationErrorV1::Capacity.into());
         }
@@ -3166,6 +3217,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     {
         self.require_live()?;
         let record = self.submission_record(submission)?;
+        self.require_retained_submission_unheld_v1(&record)?;
         if record.quiescent {
             return Ok(RuntimeCancellationV1::TooLate);
         }
@@ -3219,6 +3271,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(RuntimeValidationErrorV1::InvalidDeadline.into());
         }
         let record = self.submission_record(submission)?;
+        self.require_retained_submission_unheld_v1(&record)?;
         if record.status.is_terminal() {
             return Ok(submission.observe_status(record.status));
         }

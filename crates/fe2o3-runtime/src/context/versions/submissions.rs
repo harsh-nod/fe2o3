@@ -5,8 +5,19 @@ use fe2o3_runtime_model::{
 };
 
 // Context owns this root independently of a returned backend/public handle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::context) enum SubmissionWriterDomainV1 {
+    Ordinary,
+    Generated {
+        stream: RuntimeStreamIdV1,
+        hold: u64,
+        shell_key: u64,
+    },
+}
+
 pub(super) struct RetainedSubmissionWriterV1 {
     pub(super) writer: ContextWriterReferenceV1,
+    pub(super) domain: SubmissionWriterDomainV1,
     pub(super) allocations: Vec<SubmissionWriterAllocationV1>,
     pub(super) members: Vec<ContextAllocationWriteV1>,
     pub(super) disposal_started: bool,
@@ -20,7 +31,7 @@ pub(super) struct SubmissionWriterAllocationV1 {
     pub(super) disposed: bool,
 }
 
-struct PreparedSubmissionWriterV1 {
+pub(in crate::context) struct PreparedSubmissionWriterV1 {
     allocations: Vec<SubmissionWriterAllocationV1>,
     members: Vec<ContextAllocationWriteV1>,
 }
@@ -79,7 +90,7 @@ impl ContextVersionsV1 {
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
-    fn prepare_submission_writer_v1(
+    pub(in crate::context) fn prepare_submission_writer_v1(
         &mut self,
         destinations: &[RuntimeAllocationIdV1],
     ) -> Result<Option<PreparedSubmissionWriterV1>, RuntimeValidationErrorV1> {
@@ -145,6 +156,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     disposed: false,
                 });
             }
+            context
+                .versions
+                .as_mut()
+                .expect("configured journal")
+                .submission_writers
+                .try_reserve(1)
+                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
             Ok(Some(PreparedSubmissionWriterV1 {
                 allocations,
                 members,
@@ -152,10 +170,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         })
     }
 
-    fn begin_submission_writer_v1(
+    pub(in crate::context) fn begin_submission_writer_v1(
         &mut self,
         id: RuntimeSubmissionIdV1,
         prepared: Option<PreparedSubmissionWriterV1>,
+        domain: SubmissionWriterDomainV1,
     ) -> Result<Option<ContextWriterReferenceV1>, RuntimeValidationErrorV1> {
         self.guard_journal_unwind_v1(|context| {
             let Some(prepared) = prepared else {
@@ -186,6 +205,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 id,
                 RetainedSubmissionWriterV1 {
                     writer,
+                    domain,
                     allocations: prepared.allocations,
                     members: prepared.members,
                     disposal_started: false,
@@ -216,6 +236,24 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         id: RuntimeSubmissionIdV1,
         outcome: SubmissionWriterOutcomeV1,
     ) -> Result<(), RuntimeValidationErrorV1> {
+        self.require_ordinary_submission_v1(id)?;
+        if self.versions.as_ref().is_some_and(|versions| {
+            versions
+                .submission_writers
+                .get(&id)
+                .is_some_and(|root| root.domain != SubmissionWriterDomainV1::Ordinary)
+        }) {
+            return Err(RuntimeValidationErrorV1::ContextReserved);
+        }
+        self.settle_writer_v1(id, SubmissionWriterDomainV1::Ordinary, outcome)
+    }
+
+    pub(super) fn settle_writer_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+        domain: SubmissionWriterDomainV1,
+        outcome: SubmissionWriterOutcomeV1,
+    ) -> Result<(), RuntimeValidationErrorV1> {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let record = self.submissions.get(&id);
             let expected = record.and_then(|record| record.journal_writer);
@@ -231,6 +269,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 return absent;
             };
             let writer = root.writer;
+            if root.domain != domain {
+                return Err(ContextVersionJournalErrorV1::InvalidReference);
+            }
             if record.is_some() && expected != Some(writer) {
                 return Err(ContextVersionJournalErrorV1::InvalidReference);
             }
@@ -319,16 +360,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         submit: impl FnOnce(&mut B) -> Result<u64, RuntimeBackendFailureV1<B::Error>>,
     ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<B::Error>> {
         let prepared = self.prepare_submission_writer_v1(destinations)?;
-        if prepared.is_some() {
-            // Settlements can leave hash-table tombstones despite a free model
-            // slot. Restore insertion headroom before burning an ID or Begin.
-            self.versions
-                .as_mut()
-                .expect("configured journal")
-                .submission_writers
-                .try_reserve(1)
-                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
-        }
         self.submissions
             .try_reserve(1)
             .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
@@ -336,7 +367,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .try_reserve(1)
             .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
         let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
-        let journal_writer = self.begin_submission_writer_v1(id, prepared)?;
+        let journal_writer =
+            self.begin_submission_writer_v1(id, prepared, SubmissionWriterDomainV1::Ordinary)?;
         let result = self.invoke_journal_backend_v1(submit);
         let backend_submission = match result {
             Ok(handle) => handle,
