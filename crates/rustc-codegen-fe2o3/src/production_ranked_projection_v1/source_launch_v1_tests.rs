@@ -438,19 +438,67 @@ fn source_launch_production_row_guard_rejects_substituted_grid_identity_and_root
 }
 
 #[test]
-fn source_launch_production_checks_later_geometry_before_earlier_body_failure() {
+fn source_launch_production_accepts_empty_roots_and_rejects_later_geometry() {
     let inputs = source_launch_test_inputs_v1();
     let individual = project_ranked_fixture_v1(
         source_launch_test_ssa_owner_v1(),
         &inputs,
         &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::default(),
     );
-    assert!(matches!(
-        individual,
-        Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "a kernel without a statically ranked indexed memory access"
-        ))
-    ));
+    let individual = individual.unwrap();
+    assert_eq!(individual.roots.len(), 2);
+    assert_eq!(
+        individual
+            .materialized
+            .empty_effect_helpers()
+            .iter()
+            .count(),
+        0
+    );
+    for (ordinal, root) in individual.roots.iter().enumerate() {
+        assert!(root.all_kernel_checks_are_clean());
+        assert_eq!(
+            root.semantic_root,
+            SemanticFunctionIdV1::from_index(ordinal as u32)
+        );
+        assert_eq!(root.kernel_binding, inputs[ordinal].kernel_binding);
+        assert_eq!(root.source_rank, 1);
+        assert!(root.access_sources.is_empty());
+        assert!(root.executable_effect_sources.is_empty());
+        let operations = root
+            .lowering
+            .kernel()
+            .blocks()
+            .iter()
+            .flat_map(|block| block.operations())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            operations
+                .iter()
+                .filter(|operation| matches!(
+                    operation,
+                    ProductionRankedOperationV1::ExecutionLayout { .. }
+                ))
+                .count(),
+            1,
+        );
+        assert!(operations.iter().any(|operation| matches!(operation,
+            ProductionRankedOperationV1::ExecutionLayout {
+                grid_identity,
+                global_extents: [192, 1, 1],
+                workgroup_extents: [64, 1, 1],
+                subgroup_size: 64,
+                full_physical_workgroups: true,
+            } if *grid_identity == u64::from_le_bytes(inputs[ordinal].kernel_binding[..8].try_into().unwrap())
+        )));
+        assert!(!operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::InvocationIndex { .. }
+                | ProductionRankedOperationV1::Access { .. }
+                | ProductionRankedOperationV1::AtomicAccess { .. }
+                | ProductionRankedOperationV1::AllocationEffect { .. }
+        )));
+    }
 
     let mut conflicting = source_launch_test_inputs_v1();
     conflicting[1].source_launch = LaunchContract::new(

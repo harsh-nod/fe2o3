@@ -2011,6 +2011,8 @@ enum DefinedCallableEmptyEffectDecisionV1 {
     Unknown,
     ExactEmptyDeterministicScalar,
     ExactEmptyOnly,
+    // Negative-only state: every use still requires its root/call-local join.
+    LocalMemoryRequiresCall,
     Rejected,
 }
 
@@ -2995,7 +2997,7 @@ pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
     let roots = {
-        let source = RankedProjectionSourceV1::from_legacy(&materialized)?;
+        let source = RankedProjectionSourceV1::from_materialized_checked(&materialized)?;
         with_projection_source_budget_v1(&source, |budget| {
             project_ranked_roots_v1(&source, root_inputs, reference_bindings, budget)
         })?
@@ -3504,11 +3506,8 @@ fn project_and_verify_ranked_root_v1(
         if let Some(error) = incomplete.take() {
             return Err(error);
         }
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "a kernel without a statically ranked indexed memory access",
-        ));
     }
-    // The launch layout defines the domain even when source never reads a coordinate.
+    // The launch layout defines the domain, including complete memory-free kernels.
     if entry_operations.first() != Some(&ranked_execution_layout_v1(source_root.layout())) {
         incomplete.get_or_insert(ProductionRankedProjectionErrorV1::Incomplete(
             "ranked execution domain differs from the authenticated source launch",
@@ -22983,14 +22982,22 @@ fn project_direct_call_accesses(
     ) {
         return Ok(());
     }
-    require_bounds_neutral_callable(
-        callables,
-        callable_effects,
-        call.callee(),
-        block_index,
-        source,
-        false,
-    )?;
+    if matches!(
+        callables.get(call.callee().index() as usize),
+        Some(SemanticCallableDeclV1::Defined { function })
+            if !callable_effects.is_exact_empty(*function)
+    ) {
+        projected_views.require_unit_local_call(block_index, call, source)?;
+    } else {
+        require_bounds_neutral_callable(
+            callables,
+            callable_effects,
+            call.callee(),
+            block_index,
+            source,
+            false,
+        )?;
+    }
     for argument in call.arguments() {
         project_operand_read(
             types,

@@ -22,6 +22,25 @@ pub(super) struct RankedProjectionSourceV1<'s> {
 }
 
 impl<'s> RankedProjectionSourceV1<'s> {
+    // This borrows inputs, not a helper-effect decision. The materialized join
+    // and each ordinary call consume the sealed source relation separately.
+    pub(super) fn from_materialized_checked(
+        owner: &'s ProductionPreRankedKirOwnerV1,
+    ) -> Result<Self, Error> {
+        let minimum_storage = owner
+            .unit_local_source_storage_floor_v1()
+            .map_err(Error::StructuralValidation)?;
+        Ok(Self {
+            owner,
+            semantic_ssa: owner.semantic_ssa(),
+            source_launch: owner.source_launch(),
+            executable: owner.executable(),
+            origins: owner.assert_origins(),
+            minimum_storage,
+        })
+    }
+
+    #[cfg(test)]
     pub(super) fn from_legacy(owner: &'s ProductionPreRankedKirOwnerV1) -> Result<Self, Error> {
         if owner.helper_source_policy_v1()
             == fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1::UnitLocal

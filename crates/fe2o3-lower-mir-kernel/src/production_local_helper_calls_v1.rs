@@ -518,5 +518,6 @@ fn check_unit_local_indexed_calls_v1(
     if rows.associations.iter().any(|row| row.call_count == 0) {
         return Err(mismatch());
     }
+    sort_unit_local_calls_v1(&mut rows.calls, budget)?;
     Ok(())
 }

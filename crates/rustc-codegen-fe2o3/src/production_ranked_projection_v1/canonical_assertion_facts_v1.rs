@@ -96,6 +96,20 @@ pub(super) enum ProjectedAssertionConditionV1 {
 /// origin view and exact borrowed graph report below. Tests must identify any
 /// isolated synthetic decision inputs explicitly.
 pub(super) trait ProjectedAssertionFactsV1 {
+    fn require_unit_local_call(
+        &mut self,
+        block: usize,
+        call: &super::SemanticDirectCallV1,
+        source: super::SemanticSourceProvenanceV1,
+    ) -> Result<(), ProjectionError> {
+        Err(ProjectionError::UnresolvedCallableEffect {
+            block,
+            source: Box::new(source),
+            callee: call.callee().index(),
+            tail: false,
+        })
+    }
+
     fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError>;
 
     fn private_array_initializer_count(
@@ -218,6 +232,41 @@ struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
     semantic_function: SemanticFunctionIdV1,
 }
 impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
+    fn require_unit_local_call(
+        &mut self,
+        block: usize,
+        call: &super::SemanticDirectCallV1,
+        source: super::SemanticSourceProvenanceV1,
+    ) -> Result<(), ProjectionError> {
+        self.budget.charge_work(1).map_err(resource)?;
+        let source_block = u32::try_from(block).map_err(|_| resource(Resource::Arithmetic))?;
+        self.owner
+            .with_checked_unit_local_source_v1(
+                self.report.inventory(),
+                self.budget,
+                |view, budget| {
+                    let checked = view.bounds_neutral_call_v1(
+                        self.correspondence_owner,
+                        self.semantic_function,
+                        SemanticBlockIdV1::from_index(source_block),
+                        call,
+                        budget,
+                    )?;
+                    Ok(match checked {
+                        Some(_checked) => Ok(()),
+                        None => Err(()),
+                    })
+                },
+            )
+            .map_err(ProjectionError::StructuralValidation)?
+            .map_err(|()| ProjectionError::UnresolvedCallableEffect {
+                block,
+                source: Box::new(source),
+                callee: call.callee().index(),
+                tail: false,
+            })
+    }
+
     fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError> {
         self.budget.charge_work(amount).map_err(resource)
     }
