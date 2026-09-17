@@ -6,7 +6,10 @@ explicit subset of verified canonical Kernel IR. The frozen
 `admit_v9` consumes exact V9 custody for additive f32 wave collectives, and
 `admit_v10` consumes exact V10 custody for those collectives plus additive
 memory-intrinsic execution. `admit_v11` consumes exact V11 custody, including
-the target-neutral pointer-access restriction operation. Raw in-memory modules
+the target-neutral pointer-access restriction operation. `admit_v12` consumes
+exact current V12 custody without projecting it to V11; supported operations
+use the same interpreter, while reachable vector and verification-event
+carriers remain typed `InertV12Carrier` preflight refusals. Raw in-memory modules
 and other wire formats are not execution inputs. The production compiler's
 Bundle V4 exporter binds exact V7 KIR, Bundle V5 binds exact V10 KIR, and the
 current Bundle V6 route binds exact V11 KIR. None grants execution or hardware
@@ -17,7 +20,7 @@ ownership matrix as stable JSON. It covers every top-level KIR operation and
 terminator for each simulator-facing profile, plus every scalar
 unary/binary/compare/cast type combination. Rows name either the exact
 simulator owner or the typed preflight rejection; the document explicitly
-identifies V7, V9, V10, and V11 separately, names those rows as declared tool-contract facts with no authority, and
+identifies V7, V9, V10, V11, and V12 separately, names those rows as declared tool-contract facts with no authority, and
 grants no hardware or performance authority. The complete newline-terminated
 compact V1 document is fixed at 4,779,513 bytes and its regression test rejects
 any unreviewed schema-size change.
@@ -30,7 +33,7 @@ observed. Those remain separate compiler, artifact, runtime, and qualification
 contracts. In particular, V9/V10 f32 wave ownership must not be read as a
 `gfx942` hardware-availability claim.
 
-V11 `RestrictPointerAccess` preserves pointer identity, pointee type, and
+V11/V12 `RestrictPointerAccess` preserves pointer identity, pointee type, and
 address space while changing only `ReadWrite` access to `ReadOnly`. Preflight
 rejects access widening, identity relabeling, write-only substitution, and any
 pointee or address-space change. Execution copies the pointer provenance and
@@ -44,7 +47,7 @@ export does not execute or authorize a kernel, and its extraction-only compiler
 binding does not authenticate compiler execution.
 
 Admission relies on that consumed owner's private immutable bytes and identity:
-the owner cannot be constructed without exact V7 canonical decoding and full
+the owner cannot be constructed without exact versioned canonical decoding and full
 semantic verification. The simulator therefore does not rerun the semantic
 verifier. It independently enforces `max_canonical_bytes`, canonical-decodes and
 re-encodes the consumed bytes, and then accounts the resulting decode-phase
@@ -187,7 +190,7 @@ event-sink failures, replay failures, and internal scheduler failures are typed
 boundaries rather than reduction targets.
 
 `SimulationFailureReductionReportV1` independently binds the admitted V7, V9,
-V10, or V11 KIR identity, full structured request context, target, every simulation
+V10, V11, or V12 KIR identity, full structured request context, target, every simulation
 and reduction limit, original schedule and decisions, minimized prefix,
 completed failure-terminating reproducer decisions, attempt coverage, exact
 failure fingerprint, and integrity identities. Its strict canonical JSON codec
@@ -266,7 +269,7 @@ generic-address-space atomics, all other external calls, generic barriers,
 legacy-request dynamic LDS, multiple dynamic bases, `DynamicAtLeast`,
 non-scalar workgroup memory, matrix operations, gfx950 LDS transpose
 operations, V7 memory intrinsics,
-V10/V11 non-scalar, constant-address-space, or generic-address-space memory intrinsics, external-MMIO
+V10/V11/V12 non-scalar, constant-address-space, or generic-address-space memory intrinsics, external-MMIO
 volatile access, target-layout mismatches, and inline assembly remain typed
 unsupported states. Pointer distance additionally rejects distinct logical
 allocations because the CPU model has no physical-address equality claim. The
@@ -278,9 +281,10 @@ GPU floating-point modes, GPU timing, GPU performance, or prove memory-model
 race freedom.
 
 Callers consume an exact V7 owner with `AdmittedSimulationModuleV1::admit`, or
-an exact V9/V10/V11 owner with `AdmittedSimulationModuleV1::admit_v9`,
-`AdmittedSimulationModuleV1::admit_v10`, or
-`AdmittedSimulationModuleV1::admit_v11`, then
+an exact V9/V10/V11/V12 owner with `AdmittedSimulationModuleV1::admit_v9`,
+`AdmittedSimulationModuleV1::admit_v10`,
+`AdmittedSimulationModuleV1::admit_v11`, or
+`AdmittedSimulationModuleV1::admit_v12`, then
 provide an explicit target, resource limits, launch shape, and typed scalar or
 byte-addressed buffer arguments in `SimulationRequestV1`. Index scalars,
 buffers, and views are bound to the 32- or 64-bit layout used to construct them;

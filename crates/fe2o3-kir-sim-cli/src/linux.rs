@@ -2004,11 +2004,13 @@ fn load_admitted_kir_v12(
     )?;
     let limits = cli_simulation_limits();
     let canonical = VerifiedCanonicalKernelIrV12::from_canonical_bytes(kir).map_err(|error| {
-        Failure::new(
+        let mut failure = Failure::new(
             Stage::KirAdmission,
             kir_v12_error_kind(&error),
             bounded_display(&error),
-        )
+        );
+        failure.0.input = Some(InputCode::KirV12);
+        failure
     })?;
     let admitted = AdmittedSimulationModuleV1::admit_v12(canonical, limits).map_err(|error| {
         Failure::new(
