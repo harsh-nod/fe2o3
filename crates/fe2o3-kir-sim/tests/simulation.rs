@@ -32,6 +32,9 @@ use fe2o3_kir_sim::{
     UnsupportedFeatureV1,
 };
 
+#[path = "simulation/guarded_index_composition.rs"]
+mod guarded_index_composition;
+
 fn reduction_limits(max_decisions: usize) -> SimulationFailureReductionLimitsV1 {
     SimulationFailureReductionLimitsV1::new(max_decisions + 2, max_decisions, max_decisions * 3)
         .unwrap()
