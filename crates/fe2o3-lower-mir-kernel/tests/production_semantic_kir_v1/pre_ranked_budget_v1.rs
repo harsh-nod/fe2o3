@@ -41,7 +41,17 @@ const COMPLETE_WORK: usize = BEFORE_HASH + HASH_WORK;
 // borrowed source-span index3; per-function seen counts3; exact span checks5;
 // function coverage1; assertion coverage1. No assertions means no definition scan.
 const ORIGIN_WORK: usize = 1 + 6 + 3 + 9 + 3 + 3 + 5 + 1 + 1;
-const MATERIALIZATION_WORK: usize = COMPLETE_WORK + ORIGIN_WORK;
+// Retained helper absence: entry4 + source row2 + physical row2 + absence2.
+// Sealing the immutable graph/origin/helper subtotal pays two checked additions.
+const HELPER_WORK: usize = 4 + 2 + 2 + 2 + 2;
+const MATERIALIZATION_WORK: usize = COMPLETE_WORK + ORIGIN_WORK + HELPER_WORK;
+
+fn empty_helper_payload() -> usize {
+    // Four empty Vec headers, the helper receipt, and the checked owner subtotal.
+    4 * std::mem::size_of::<Vec<()>>()
+        + std::mem::size_of::<fe2o3_lower_mir_kernel::ProductionHelperMemoryStorageV1>()
+        + std::mem::size_of::<usize>()
+}
 
 fn origin_retained_payload() -> usize {
     // Three Vec headers + receipt, four requested function-association rows.
@@ -88,6 +98,7 @@ fn complete_storage() -> usize {
     // scratch: module rows5 + max(CFG peak16, retained CFG11 + definitions3).
     assert!(role_tree_payload() > 5 + 16);
     assert!(role_tree_payload() > origin_peak_scratch());
+    assert!(role_tree_payload() > origin_retained_payload() + empty_helper_payload());
     retained_payload() + role_tree_payload()
 }
 
@@ -218,7 +229,8 @@ fn pre_ranked_exact_canonical_envelope_preserves_nonzero_prefixes() {
     // Kernel IDs10 + domain2 + workgroup13 + capabilities4 = 29.
     assert_eq!(WIRE, (20 + 85 + 12) + (5 + 8 + 27 + 4) + (10 + 2 + 13 + 4));
     assert_eq!(ORIGIN_WORK, 32);
-    assert_eq!(MATERIALIZATION_WORK, 1_560);
+    assert_eq!(HELPER_WORK, 12);
+    assert_eq!(MATERIALIZATION_WORK, 1_572);
     let exact = admit(MATERIALIZATION_WORK, complete_storage());
     let owner = exact
         .result
@@ -238,6 +250,14 @@ fn pre_ranked_exact_canonical_envelope_preserves_nonzero_prefixes() {
     );
     assert_eq!(owner.assert_origins().source_site_count(), 0);
     assert_eq!(owner.assert_origins().binding_count(), 0);
+    assert_eq!(
+        owner.helper_memory_storage_v1().retained_storage(),
+        empty_helper_payload()
+    );
+    assert_eq!(
+        owner.retained_analysis_storage_v1(),
+        retained_payload() + origin_retained_payload() + empty_helper_payload()
+    );
 }
 
 #[test]
@@ -282,16 +302,34 @@ fn pre_ranked_one_under_storage_denies_inverse_comparison_scratch() {
 
 #[test]
 fn pre_ranked_one_under_complete_work_denies_origin_coverage_without_resetting_history() {
-    let short = admit(MATERIALIZATION_WORK - 1, complete_storage());
+    let origin_complete = COMPLETE_WORK + ORIGIN_WORK;
+    let short = admit(origin_complete - 1, complete_storage());
     assert!(
         matches!(short.result, Err(ProductionPreRankedKirErrorV1::Lowering(
         ProductionSemanticKirErrorV1::AssertOrigin(SemanticKirAssertOriginErrorV1::Resource(
             CanonicalKernelIrVerificationResourceErrorV1::Work(error)
         ))
-    )) if error.actual() == WORK_PREFIX + MATERIALIZATION_WORK
-        && error.limit() == WORK_PREFIX + MATERIALIZATION_WORK - 1)
+    )) if error.actual() == WORK_PREFIX + origin_complete
+        && error.limit() == WORK_PREFIX + origin_complete - 1)
     );
-    assert_eq!(short.work, WORK_PREFIX + MATERIALIZATION_WORK - 1);
+    assert_eq!(short.work, WORK_PREFIX + origin_complete - 1);
+    assert_eq!(short.rejected_work, Some(WORK_PREFIX + origin_complete));
+    assert_eq!(short.rejected_storage, None);
+    assert_eq!(short.peak, STORAGE_PREFIX + complete_storage());
+}
+
+#[test]
+fn pre_ranked_one_under_retained_total_denies_the_last_two_checked_additions() {
+    let short = admit(MATERIALIZATION_WORK - 1, complete_storage());
+    assert!(matches!(short.result,
+        Err(ProductionPreRankedKirErrorV1::Lowering(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                CanonicalKernelIrVerificationResourceErrorV1::Work(error)
+            )
+        )) if error.actual() == WORK_PREFIX + MATERIALIZATION_WORK
+            && error.limit() == WORK_PREFIX + MATERIALIZATION_WORK - 1
+    ));
+    assert_eq!(short.work, WORK_PREFIX + MATERIALIZATION_WORK - 2);
     assert_eq!(
         short.rejected_work,
         Some(WORK_PREFIX + MATERIALIZATION_WORK)

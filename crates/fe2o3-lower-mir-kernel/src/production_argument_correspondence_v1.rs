@@ -2,6 +2,7 @@
 // signature. This is entry identity, not current SSA provenance or authority.
 
 type ArgumentBudgetV1<'a> = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'a>;
+type ArgumentLedgerV1 = fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1;
 type ArgumentResourceV1 = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1;
 
 impl From<ArgumentResourceV1> for ProductionSemanticKirErrorV1 {
@@ -103,10 +104,15 @@ fn with_parameter_correspondence_v1<'w, R>(
         &mut ProductionArgumentViewV1<'s, 'w>,
     ) -> Result<R, ProductionSemanticKirErrorV1>,
 ) -> Result<R, ProductionSemanticKirErrorV1> {
+    budget.charge_work(2)?;
+    let work_ledger = budget.work_ledger_identity_v1();
     let floor = budget.storage();
     let result = check_argument_trace_v1(semantic, instance, target, trace, budget, use_view);
     // All function-local owners have dropped on either Result path. Work and
     // peak history remain cumulative; this scope does not promise unwind cleanup.
+    if work_ledger != budget.work_ledger_identity_v1() {
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
     budget.release_storage(budget.storage() - floor)?;
     result
 }

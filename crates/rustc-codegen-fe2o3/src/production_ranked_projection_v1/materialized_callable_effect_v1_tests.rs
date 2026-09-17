@@ -306,8 +306,7 @@ fn materialized_helper_effect_query_releases_report_before_outer_scope_cleanup()
 fn materialized_helper_effect_roster_scan_has_an_exact_work_boundary() {
     let owner = materialized_aggregate_helper_v1();
     let source = RankedProjectionSourceV1::from_legacy(&owner).unwrap();
-    let floor = owner.executable_storage().retained_storage()
-        + owner.assert_origin_storage().payload_storage();
+    let floor = owner.retained_analysis_storage_v1();
     let run = |budget: &mut Budget<'_>| {
         with_canonical_assertions_source_budget_v1(&source, budget, |session| {
             session.callable_effect_summaries(&source)

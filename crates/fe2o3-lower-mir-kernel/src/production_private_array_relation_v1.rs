@@ -800,7 +800,7 @@ impl ProductionPreRankedKirOwnerV1 {
     /// absent, or mismatched retained relations remain errors. The returned
     /// integer is inert: it grants no source-value, refinement, artifact or
     /// launch authority. It neither installs a row nor changes the source plan.
-    /// Keep the same graph and assertion-origin storage floor reserved. One
+    /// Keep the same graph, assertion-origin and helper-memory floor reserved. One
     /// fixed extraction work unit precedes the unchanged allocation-free query.
     pub fn materialized_private_array_constant_index(
         &self,
@@ -827,11 +827,7 @@ impl ProductionPreRankedKirOwnerV1 {
         use SemanticKirPrivateArrayQueryErrorV1::{Incomplete, InvalidSource, Mismatch, Resource};
         use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as ResourceError;
         budget.charge_work(3).map_err(Resource)?;
-        let floor = self
-            .executable_storage
-            .retained_storage()
-            .checked_add(self.assert_origins.storage.payload_storage())
-            .ok_or(Resource(ResourceError::Arithmetic))?;
+        let floor = self.retained_analysis_storage_v1();
         if budget.storage() < floor {
             return Err(Resource(ResourceError::Accounting));
         }

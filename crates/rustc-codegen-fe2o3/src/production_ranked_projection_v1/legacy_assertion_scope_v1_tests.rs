@@ -74,8 +74,7 @@ mod legacy_scope_tests {
                 ..
             }
         ));
-        let floor = materialized.executable_storage().retained_storage()
-            + materialized.assert_origin_storage().payload_storage();
+        let floor = materialized.retained_analysis_storage_v1();
         let mut work = Work::new(1_000_000);
         let mut budget = Budget::new(&mut work, floor);
         budget.reserve_storage(floor).unwrap();
@@ -314,8 +313,7 @@ mod legacy_scope_tests {
                         .iter()
                         .all(|row| row.semantic_statement() == Some(1))
                 );
-                let floor = materialized.executable_storage().retained_storage()
-                    + materialized.assert_origin_storage().payload_storage();
+                let floor = materialized.retained_analysis_storage_v1();
                 let mut work = Work::new(1_000_000);
                 let mut budget = Budget::new(&mut work, floor);
                 budget.reserve_storage(floor).unwrap();
@@ -611,6 +609,14 @@ mod legacy_scope_tests {
         let canonical_buffer = graph.canonical().canonical_bytes().as_ptr();
         let graph_storage = materialized.executable_storage();
         let origins_storage = materialized.assert_origin_storage();
+        let helper_storage = materialized.helper_memory_storage_v1();
+        let retained_total = materialized.retained_analysis_storage_v1();
+        assert_eq!(
+            retained_total,
+            graph_storage.retained_storage()
+                + origins_storage.payload_storage()
+                + helper_storage.retained_storage()
+        );
         let program = project_and_verify_ranked_materialized_semantic_mir_v1(
             materialized,
             &[ranked_root_input_1d("neutral_generated_hostile", 247, 64)],
@@ -667,6 +673,14 @@ mod legacy_scope_tests {
         assert_eq!(
             attached.pre_ranked_assert_origin_storage(),
             Some(origins_storage)
+        );
+        assert_eq!(
+            attached.pre_ranked_helper_memory_storage_v1(),
+            Some(helper_storage)
+        );
+        assert_eq!(
+            attached.pre_ranked_retained_analysis_storage_v1(),
+            Some(retained_total)
         );
     }
 
@@ -733,12 +747,16 @@ mod legacy_scope_tests {
     }
 
     #[test]
-    fn legacy_scope_requires_both_borrowed_payloads_before_any_callback_or_work() {
+    fn legacy_scope_requires_all_borrowed_payloads_before_any_callback_or_work() {
         let source = assertion_materialized(literal_assertion(true, true, false));
         let graph = source.executable_storage().retained_storage();
         let origins = source.assert_origin_storage().payload_storage();
+        let helpers = source.helper_memory_storage_v1().retained_storage();
+        let total = source.retained_analysis_storage_v1();
         assert!(origins > 0);
-        for floor in [0, graph, graph + origins - 1] {
+        assert!(helpers > 0);
+        assert_eq!(total, graph + origins + helpers);
+        for floor in [0, graph, graph + origins - 1, graph + origins, total - 1] {
             let mut work = Work::new(7);
             let mut budget = Budget::new(&mut work, floor);
             budget.charge_work(7).unwrap();
@@ -783,9 +801,7 @@ mod legacy_scope_tests {
         }
         let source = assertion_materialized(literal_assertion(true, true, false));
         let executable = source.executable() as *const _;
-        let floor = source.executable_storage().retained_storage()
-            + source.assert_origin_storage().payload_storage()
-            + 31;
+        let floor = source.retained_analysis_storage_v1() + 31;
         let work_limit =
             usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap();
         let storage_limit = crate::production_canonical_phase_policy_v1::STORAGE_LIMIT;
@@ -1774,8 +1790,7 @@ mod legacy_scope_tests {
             Ok(())
         })
         .unwrap();
-        let floor = materialized.executable_storage().retained_storage()
-            + materialized.assert_origin_storage().payload_storage();
+        let floor = materialized.retained_analysis_storage_v1();
         let mut work = Work::new(1_000_000);
         let mut budget = Budget::new(&mut work, floor);
         budget.reserve_storage(floor).unwrap();

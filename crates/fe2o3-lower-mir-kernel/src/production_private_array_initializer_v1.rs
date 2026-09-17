@@ -181,7 +181,8 @@ impl ProductionPreRankedKirOwnerV1 {
     /// The inert count grants no functional, artifact or launch authority.
     /// `None` is restricted to the sealed promoted-local case; a retained but
     /// unsupported, missing or malformed initializer remains an error. Keep
-    /// this owner's graph and assertion-origin payload reserved in `budget`.
+    /// this owner's graph, assertion-origin and helper-memory payloads reserved
+    /// in `budget`.
     pub fn materialized_private_array_initializer_count(
         &self,
         selected_root: SemanticFunctionIdV1,
@@ -192,11 +193,7 @@ impl ProductionPreRankedKirOwnerV1 {
         use SemanticKirPrivateArrayQueryErrorV1::{Incomplete, InvalidSource, Mismatch, Resource};
         use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as ResourceError;
         budget.charge_work(3).map_err(Resource)?;
-        let floor = self
-            .executable_storage
-            .retained_storage()
-            .checked_add(self.assert_origins.storage.payload_storage())
-            .ok_or(Resource(ResourceError::Arithmetic))?;
+        let floor = self.retained_analysis_storage_v1();
         if budget.storage() < floor {
             return Err(Resource(ResourceError::Accounting));
         }

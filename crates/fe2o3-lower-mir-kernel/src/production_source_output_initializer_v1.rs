@@ -42,14 +42,13 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
         use ProductionSourceOutputErrorV1 as Error;
         use ProductionSourceOutputPrivateArrayAccessV1 as Access;
         use ProductionSourceOutputPrivateArrayInitializerV1 as Outcome;
-        // Same minimum live-payload floor as the ordinary indexed facade.
+        // Preserve the fixed floor precharge. The source subtotal already
+        // includes its sealed graph, assertion-origin and helper receipts.
         budget.charge_work(4).map_err(Error::Resource)?;
         let minimum = self
             .source
-            .executable_storage()
-            .retained_storage()
-            .checked_add(self.source.assert_origin_storage().payload_storage())
-            .and_then(|n| n.checked_add(self.checked_output.storage().retained_storage()))
+            .retained_analysis_storage_v1()
+            .checked_add(self.checked_output.storage().retained_storage())
             .and_then(|n| n.checked_add(self.storage.retained_storage()))
             .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?;
         if budget.storage() < minimum {

@@ -47,8 +47,7 @@ fn assert_private_initializer_rows_v1(
             }
         ));
     }
-    let floor = materialized.executable_storage().retained_storage()
-        + materialized.assert_origin_storage().payload_storage();
+    let floor = materialized.retained_analysis_storage_v1();
     let mut work = Work::new(1_000_000);
     let mut budget = Budget::new(&mut work, floor);
     budget.reserve_storage(floor).unwrap();

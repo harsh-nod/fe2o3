@@ -492,8 +492,13 @@ fn with_owner_call_v1<'w, R>(
         &mut ProductionCallViewV1<'s, 'w>,
     ) -> Result<R, ProductionSemanticKirErrorV1>,
 ) -> Result<R, ProductionSemanticKirErrorV1> {
+    budget.charge_work(2)?;
+    let work_ledger = budget.work_ledger_identity_v1();
     let floor = budget.storage();
     let result = with_call_view_v1(owner, module, rows, selected, budget, use_view);
+    if work_ledger != budget.work_ledger_identity_v1() {
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
     budget.release_storage(budget.storage() - floor)?;
     result
 }

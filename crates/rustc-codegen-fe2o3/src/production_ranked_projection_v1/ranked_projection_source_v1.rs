@@ -23,11 +23,7 @@ pub(super) struct RankedProjectionSourceV1<'s> {
 
 impl<'s> RankedProjectionSourceV1<'s> {
     pub(super) fn from_legacy(owner: &'s ProductionPreRankedKirOwnerV1) -> Result<Self, Error> {
-        let minimum_storage = owner
-            .executable_storage()
-            .retained_storage()
-            .checked_add(owner.assert_origin_storage().payload_storage())
-            .ok_or_else(|| resource(Resource::Arithmetic))?;
+        let minimum_storage = owner.retained_analysis_storage_v1();
         Ok(Self {
             owner,
             semantic_ssa: owner.semantic_ssa(),
