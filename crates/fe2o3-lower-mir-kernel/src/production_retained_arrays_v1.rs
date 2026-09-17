@@ -521,9 +521,23 @@ impl SemanticFunctionLoweringV1<'_> {
                 )
             })?;
             let offset = self.emit_index_constant(operations, index as u64)?;
+            let gep_operation = operations.len();
             let pointer = self.emit_retained_array_pointer_v1(&slot, offset, operations)?;
+            let initializer = self.private_arrays.prepare_initializer_address(
+                place,
+                index,
+                value,
+                offset,
+                pointer,
+                gep_operation,
+            )?;
             let mut access = MemoryAccess::new(AddressSpace::Private, slot.alignment);
             access.volatile = volatility == SemanticVolatilityV1::Volatile;
+            if initializer {
+                self.private_arrays
+                    .prepare_effect(self.emitted_operations)?;
+            }
+            let operation = operations.len();
             self.push_operation(operations, || {
                 Operation::new(
                     Vec::new(),
@@ -534,6 +548,16 @@ impl SemanticFunctionLoweringV1<'_> {
                     },
                 )
             })?;
+            if initializer {
+                self.private_arrays.commit_effect(
+                    self.correspondence_owner,
+                    self.semantic_function,
+                    place,
+                    PrivateArrayAccessV1::Write,
+                    operation,
+                    self.emitted_operations,
+                )?;
+            }
         }
         self.retained_local_initialized
             .insert(place.local().index());
