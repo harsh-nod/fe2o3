@@ -13,9 +13,11 @@ use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Atomic, AtomicKind, Axis,
     BarrierSemantics, BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator,
     ComparePredicate, Constant, Convergence, F32MathFunction, FloatConversionKind, FloatOperation,
-    FormalMemoryIncompleteReason, Function, FunctionBody, FunctionId, FunctionOperationLocation,
-    Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1,
-    IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
+    FormalAccessDomainV1, FormalGuardedPathV1, FormalIndexWidth, FormalMemoryAccess,
+    FormalMemoryAccessKind, FormalMemoryIncompleteReason, FormalMemoryObligations, Function,
+    FunctionBody, FunctionId, FunctionOperationLocation, Gfx950LdsTransposeFormatV1,
+    Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1, IndexKind, IntrinsicKind,
+    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
     MAX_OPERATIONS_V1 as MAX_BLOCK_OPERATIONS_V1, MatrixOperation, MatrixOperationKind,
     MemoryAccess, MemoryEffect, MemoryIntrinsicOperation, MemoryOrdering, Module, Operation,
     OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope, TensorLayoutContractV1,
@@ -2355,13 +2357,14 @@ impl ProductionSemanticKirOwnerV1 {
 
     pub(crate) fn retained_generic_checks_discharge_guarded_accesses(
         &self,
-        kernel_id: &str,
+        fresh: &crate::production_formal_memory_v1::FreshFormalGuardedReportV1<'_>,
         guarded_locations: &[FunctionOperationLocation],
     ) -> Result<(), ProductionMemoryDischargeFailureV1> {
+        let kernel = fresh.kernel();
         let Some(checks) = self
             .generic_checks
             .iter()
-            .find(|checks| checks.function_name == kernel_id)
+            .find(|checks| checks.function_name == kernel.id.as_str())
         else {
             return Err(ProductionMemoryDischargeFailureV1::stage(
                 "verified Kernel IR does not retain mandatory ranked checks for the selected kernel",
@@ -2372,11 +2375,21 @@ impl ProductionSemanticKirOwnerV1 {
                 "a retained mandatory ranked check is not clean",
             ));
         }
+        let mut budget = GuardedAddressProofBudgetV1::new(self.limits.max_operations)?;
+        budget.prepay(4)?;
+        let Some((report, witness_extents)) = fresh.for_owner(self) else {
+            return Err(ProductionMemoryDischargeFailureV1::stage(
+                "guarded proof received a report from another semantic owner",
+            ));
+        };
         guarded_accesses_have_structural_bounds_result(
             &self.module,
-            kernel_id,
+            kernel,
+            report,
+            witness_extents,
             guarded_locations,
             self.limits.max_operations,
+            &mut budget,
         )
     }
 
@@ -7607,7 +7620,62 @@ struct GuardedAddressProofBudgetV1 {
     remaining: usize,
 }
 
+struct GuardedAccessCursorV1<'a> {
+    rows: &'a [FormalMemoryAccess],
+    next: usize,
+}
+
+impl<'a> GuardedAccessCursorV1<'a> {
+    fn observe(
+        &mut self,
+        location: FunctionOperationLocation,
+        budget: &mut GuardedAddressProofBudgetV1,
+    ) -> Result<Option<&'a FormalMemoryAccess>, ProductionMemoryDischargeFailureV1> {
+        budget.prepay(2)?;
+        let row = self
+            .rows
+            .get(self.next)
+            .filter(|row| row.location() == location);
+        if row.is_some() {
+            budget.prepay(2)?;
+            self.next += 1;
+        }
+        Ok(row)
+    }
+
+    fn finish(
+        &self,
+        budget: &mut GuardedAddressProofBudgetV1,
+    ) -> Result<(), ProductionMemoryDischargeFailureV1> {
+        budget.prepay(1)?;
+        if self.next != self.rows.len() {
+            return Err(ProductionMemoryDischargeFailureV1::stage(
+                "formal access rows do not match retained Kernel IR body order",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl GuardedAddressProofBudgetV1 {
+    fn new(max_operations: usize) -> Result<Self, ProductionMemoryDischargeFailureV1> {
+        let remaining = max_operations
+            .checked_mul(GUARDED_ADDRESS_PROOF_STEPS_PER_OPERATION_V1)
+            .ok_or_else(|| {
+                ProductionMemoryDischargeFailureV1::stage(
+                    "guarded proof resource budget overflowed",
+                )
+            })?;
+        Ok(Self { remaining })
+    }
+
+    fn prepay(&mut self, amount: usize) -> Result<(), ProductionMemoryDischargeFailureV1> {
+        self.remaining = self.remaining.checked_sub(amount).ok_or_else(|| {
+            ProductionMemoryDischargeFailureV1::stage("guarded proof exceeded its work budget")
+        })?;
+        Ok(())
+    }
+
     fn charge(&mut self) -> Result<(), ()> {
         self.remaining = self.remaining.checked_sub(1).ok_or(())?;
         Ok(())
@@ -7616,19 +7684,38 @@ impl GuardedAddressProofBudgetV1 {
 
 fn guarded_accesses_have_structural_bounds_result(
     module: &Module,
-    kernel_id: &str,
+    kernel: &Kernel,
+    report: &FormalMemoryObligations,
+    witness_extents: [u64; 3],
     guarded_locations: &[FunctionOperationLocation],
     max_operations: usize,
+    budget: &mut GuardedAddressProofBudgetV1,
 ) -> Result<(), ProductionMemoryDischargeFailureV1> {
-    let Some(kernel) = module
-        .kernels
-        .iter()
-        .find(|kernel| kernel.id.as_str() == kernel_id)
-    else {
+    budget.prepay(20)?;
+    let names = kernel
+        .id
+        .as_str()
+        .len()
+        .checked_add(kernel.entry.as_str().len())
+        .ok_or_else(|| {
+            ProductionMemoryDischargeFailureV1::stage("guarded proof name size overflowed")
+        })?;
+    budget.prepay(names)?;
+    let count = witness_extents
+        .into_iter()
+        .try_fold(1_u64, |count, extent| count.checked_mul(extent));
+    if report.kernel() != &kernel.id
+        || report.entry() != &kernel.entry
+        || report.index_width() != FormalIndexWidth::Bits64
+        || count.is_none_or(|count| count == 0)
+        || report
+            .invocations()
+            .is_none_or(|range| range.start() != 0 || Some(range.end_exclusive()) != count)
+    {
         return Err(ProductionMemoryDischargeFailureV1::stage(
-            "guarded proof cannot find the selected kernel",
+            "guarded proof report does not match its kernel and exact witness",
         ));
-    };
+    }
     let Some(function) = module.function(&kernel.entry) else {
         return Err(ProductionMemoryDischargeFailureV1::stage(
             "guarded proof cannot find the selected kernel entry",
@@ -7654,6 +7741,10 @@ fn guarded_accesses_have_structural_bounds_result(
 
     let mut actual = BTreeMap::new();
     let mut operation_count = 0_usize;
+    let mut cursor = GuardedAccessCursorV1 {
+        rows: report.accesses(),
+        next: 0,
+    };
     for block in &body.blocks {
         for parameter in &block.parameters {
             if definitions
@@ -7685,12 +7776,20 @@ fn guarded_accesses_have_structural_bounds_result(
                     ));
                 }
             }
+            // Formal rows retain body order, not numeric block order. A pending
+            // load without a row must leave a later row untouched.
+            let location = FunctionOperationLocation::new(block.id, ordinal);
+            let row = cursor.observe(location, budget)?;
             if matches!(
                 &operation.kind,
                 OperationKind::GuardedLoad { access, .. }
                     if access.address_space != AddressSpace::Private
             ) {
-                let location = FunctionOperationLocation::new(block.id, ordinal);
+                if guarded_load_is_core_proved_v1(
+                    function, report, location, operation, row, budget,
+                )? {
+                    continue;
+                }
                 if actual.insert(location, operation).is_some() {
                     return Err(ProductionMemoryDischargeFailureV1::access(
                         location,
@@ -7701,6 +7800,8 @@ fn guarded_accesses_have_structural_bounds_result(
         }
     }
 
+    cursor.finish(budget)?;
+    budget.prepay(3)?;
     let provided = guarded_locations.iter().copied().collect::<BTreeSet<_>>();
     if actual.is_empty()
         || provided.len() != guarded_locations.len()
@@ -7711,18 +7812,8 @@ fn guarded_accesses_have_structural_bounds_result(
         ));
     }
 
-    let Some(proof_steps) =
-        max_operations.checked_mul(GUARDED_ADDRESS_PROOF_STEPS_PER_OPERATION_V1)
-    else {
-        return Err(ProductionMemoryDischargeFailureV1::stage(
-            "guarded proof resource budget overflowed",
-        ));
-    };
-    let mut budget = GuardedAddressProofBudgetV1 {
-        remaining: proof_steps,
-    };
     for (location, operation) in actual {
-        if guarded_load_has_structural_bound(operation, &definitions, &mut budget) {
+        if guarded_load_has_structural_bound(operation, &definitions, budget) {
             continue;
         }
         if let Some((_predicate, index, slice)) =
@@ -7743,6 +7834,56 @@ fn guarded_accesses_have_structural_bounds_result(
     Ok(())
 }
 
+fn guarded_load_is_core_proved_v1(
+    function: &Function,
+    report: &FormalMemoryObligations,
+    location: FunctionOperationLocation,
+    operation: &Operation,
+    row: Option<&FormalMemoryAccess>,
+    budget: &mut GuardedAddressProofBudgetV1,
+) -> Result<bool, ProductionMemoryDischargeFailureV1> {
+    budget.prepay(2)?;
+    let Some(row) = row else { return Ok(false) };
+    let FormalAccessDomainV1::SliceBounded(domain) = row.domain() else {
+        return Ok(false);
+    };
+    budget.prepay(24)?;
+    let OperationKind::GuardedLoad {
+        pointer,
+        predicate,
+        access,
+        ..
+    } = &operation.kind
+    else {
+        return Err(ProductionMemoryDischargeFailureV1::access(
+            location,
+            "core guarded row does not name a guarded load",
+        ));
+    };
+    let parameter = usize::try_from(domain.allocation().parameter_index()).ok();
+    let slice = parameter.and_then(|parameter| function.signature.parameters.get(parameter));
+    let value = parameter.and_then(|parameter| function.body.as_ref()?.parameters.get(parameter));
+    if row.location() != location
+        || row.kind() != FormalMemoryAccessKind::Read
+        || domain.path() != FormalGuardedPathV1::ExplicitPredicate
+        || domain.pointer() != *pointer
+        || domain.predicate() != *predicate
+        || domain.allocation() != row.allocation()
+        || value != Some(&domain.slice())
+        || !matches!(slice, Some(Type::Slice(slice)) if slice.address_space == access.address_space)
+        || row.address_space() != access.address_space
+        || row.alignment() != u64::from(access.alignment)
+        || row.byte_width() != domain.element_bytes()
+        || Some(row.invocations()) != report.invocations()
+    {
+        return Err(ProductionMemoryDischargeFailureV1::access(
+            location,
+            "core guarded row differs from its exact load and formal slice subject",
+        ));
+    }
+    Ok(true)
+}
+
 #[cfg(test)]
 fn guarded_accesses_have_structural_bounds(
     module: &Module,
@@ -7752,11 +7893,34 @@ fn guarded_accesses_have_structural_bounds(
     let [kernel] = module.kernels.as_slice() else {
         return false;
     };
+    let witness_extents = match &kernel.domain {
+        LaunchDomain::D1 {
+            x: LaunchExtent::Static(x),
+        } => [u64::from(*x), 1, 1],
+        _ => return false,
+    };
+    let Ok(analysis) = fe2o3_kernel_ir::derive_kernel_memory_obligations_for_launch(
+        module,
+        &kernel.id,
+        fe2o3_kernel_ir::ExplicitLaunchExtent::Exact {
+            rank: 1,
+            extents: witness_extents,
+        },
+        FormalIndexWidth::Bits64,
+    ) else {
+        return false;
+    };
+    let Ok(mut budget) = GuardedAddressProofBudgetV1::new(max_operations) else {
+        return false;
+    };
     guarded_accesses_have_structural_bounds_result(
         module,
-        kernel.id.as_str(),
+        kernel,
+        analysis.obligations(),
+        witness_extents,
         guarded_locations,
         max_operations,
+        &mut budget,
     )
     .is_ok()
 }
@@ -29820,11 +29984,27 @@ mod resource_tests {
         };
         *predicate = ComparePredicate::Equal;
         verify_module(&wrong_bound.module).expect("hostile comparison remains valid Kernel IR");
+        let kernel = &wrong_bound.module.kernels[0];
+        let witness_extents = [64, 1, 1];
+        let analysis = fe2o3_kernel_ir::derive_kernel_memory_obligations_for_launch(
+            &wrong_bound.module,
+            &kernel.id,
+            fe2o3_kernel_ir::ExplicitLaunchExtent::Exact {
+                rank: 1,
+                extents: witness_extents,
+            },
+            FormalIndexWidth::Bits64,
+        )
+        .unwrap();
+        let mut budget = GuardedAddressProofBudgetV1::new(12).unwrap();
         let failure = guarded_accesses_have_structural_bounds_result(
             &wrong_bound.module,
-            wrong_bound.module.kernels[0].id.as_str(),
+            kernel,
+            analysis.obligations(),
+            witness_extents,
             &wrong_bound.locations,
             12,
+            &mut budget,
         )
         .expect_err("wrong comparison must not prove a slice bound");
         assert!(matches!(
@@ -30194,6 +30374,8 @@ mod resource_tests {
     ) -> ProductionRankedKernelLoweringInputV1 {
         ranked_correlation_input_for_accesses(&[access], allocation_origin)
     }
+
+    include!("production_semantic_kir_v1/guarded_formal_consumer_tests.rs");
 
     fn ranked_correlation_input_for_accesses(
         accesses: &[AccessKindAttr],

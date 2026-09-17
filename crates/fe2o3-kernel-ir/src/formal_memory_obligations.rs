@@ -12,14 +12,18 @@ use crate::{
     analyze_control_flow, analyze_interprocedural_effects_from_verified_v1, verify_module_ref,
 };
 
+mod guarded_access_v1;
 mod pointer_derivation;
 mod private_slots;
 mod receipt_v1;
 
+pub use guarded_access_v1::FormalGuardedMemoryResourceErrorV1;
 pub use receipt_v1::*;
 
+use guarded_access_v1::{GuardedAnalysisV1, GuardedControlV1, GuardedResourceErrorV1};
 use pointer_derivation::{
-    AccessDerivationContext, derive_access, derive_conservative_guarded_access,
+    AccessDerivationContext, AccessDerivationError, derive_access,
+    derive_conservative_guarded_access,
 };
 use private_slots::{classify_eligible_private_slots, collect_private_load_sources};
 
@@ -156,6 +160,78 @@ pub enum FormalMemoryAccessKind {
     Atomic,
 }
 
+/// A proved condition on an actual access, not an authenticated runtime length.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum FormalGuardedPathV1 {
+    ExplicitPredicate,
+    TrueEdge {
+        source: BlockId,
+        ordinal: usize,
+        target: BlockId,
+    },
+}
+
+/// The may-access domain is the outer launch intersected with index < slice.len.
+/// Coordinates are inert without the original verified-module extraction owner.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FormalSliceBoundedDomainV1 {
+    allocation: FormalAllocationIdentity,
+    slice: ValueId,
+    index: ValueId,
+    length: ValueId,
+    predicate: ValueId,
+    selected_offset: ValueId,
+    pointer: ValueId,
+    element_bytes: u64,
+    path: FormalGuardedPathV1,
+}
+
+impl FormalSliceBoundedDomainV1 {
+    pub const fn allocation(self) -> FormalAllocationIdentity {
+        self.allocation
+    }
+    pub const fn slice(self) -> ValueId {
+        self.slice
+    }
+    pub const fn index(self) -> ValueId {
+        self.index
+    }
+    pub const fn length(self) -> ValueId {
+        self.length
+    }
+    pub const fn predicate(self) -> ValueId {
+        self.predicate
+    }
+    pub const fn selected_offset(self) -> ValueId {
+        self.selected_offset
+    }
+    pub const fn pointer(self) -> ValueId {
+        self.pointer
+    }
+    pub const fn element_bytes(self) -> u64 {
+        self.element_bytes
+    }
+    pub const fn path(self) -> FormalGuardedPathV1 {
+        self.path
+    }
+
+    /// Descriptive evaluation only; neither input authenticates a runtime binding.
+    pub const fn may_access_untrusted_index(
+        self,
+        index: u64,
+        slice_len: u64,
+        launch_len: u64,
+    ) -> bool {
+        index < launch_len && index < slice_len
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum FormalAccessDomainV1 {
+    LaunchEnvelope,
+    SliceBounded(FormalSliceBoundedDomainV1),
+}
+
 /// A compiler-derived, per-invocation byte region rooted at a formal kernel
 /// parameter.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -168,6 +244,7 @@ pub struct FormalMemoryAccess {
     byte_width: u64,
     alignment: u64,
     invocations: InvocationRange1d,
+    domain: FormalAccessDomainV1,
 }
 
 impl FormalMemoryAccess {
@@ -202,6 +279,11 @@ impl FormalMemoryAccess {
     pub const fn invocations(&self) -> InvocationRange1d {
         self.invocations
     }
+
+    /// Inspect this before interpreting byte_offset over the outer launch universe.
+    pub const fn domain(&self) -> FormalAccessDomainV1 {
+        self.domain
+    }
 }
 
 /// Runtime allocation size needed for one compiler-derived access family.
@@ -212,7 +294,13 @@ impl FormalMemoryAccess {
 pub struct FormalBoundsRequirement {
     location: FunctionOperationLocation,
     allocation: FormalAllocationIdentity,
-    minimum_byte_len: u64,
+    kind: FormalBoundsKindV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum FormalBoundsKindV1 {
+    FixedMinimumBytes(u64),
+    SliceElementAtGuardedIndex(FormalSliceBoundedDomainV1),
 }
 
 impl FormalBoundsRequirement {
@@ -224,14 +312,24 @@ impl FormalBoundsRequirement {
         self.allocation
     }
 
-    pub const fn minimum_byte_len(self) -> u64 {
-        self.minimum_byte_len
+    pub const fn minimum_byte_len(self) -> Option<u64> {
+        match self.kind {
+            FormalBoundsKindV1::FixedMinimumBytes(bytes) => Some(bytes),
+            _ => None,
+        }
+    }
+
+    pub const fn kind(self) -> FormalBoundsKindV1 {
+        self.kind
     }
 
     /// Descriptive check only; the caller remains responsible for
     /// authenticating which runtime allocation and extent are being checked.
     pub const fn is_met_by_untrusted_byte_len(self, byte_len: u64) -> bool {
-        byte_len >= self.minimum_byte_len
+        match self.minimum_byte_len() {
+            Some(minimum) => byte_len >= minimum,
+            None => false,
+        }
     }
 }
 
@@ -262,8 +360,23 @@ impl FormalByteRange {
 pub struct RuntimeAliasRequirement {
     left: FormalAllocationIdentity,
     right: FormalAllocationIdentity,
-    left_accessed_bytes: FormalByteRange,
-    right_accessed_bytes: FormalByteRange,
+    left_accessed_bytes: FormalAliasRegionV1,
+    right_accessed_bytes: FormalAliasRegionV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum FormalAliasRegionV1 {
+    FixedBytes(FormalByteRange),
+    WholeFormalAllocation,
+}
+
+impl FormalAliasRegionV1 {
+    pub const fn fixed_bytes(self) -> Option<FormalByteRange> {
+        match self {
+            Self::FixedBytes(range) => Some(range),
+            Self::WholeFormalAllocation => None,
+        }
+    }
 }
 
 impl RuntimeAliasRequirement {
@@ -275,11 +388,18 @@ impl RuntimeAliasRequirement {
         self.right
     }
 
-    pub const fn left_accessed_bytes(self) -> FormalByteRange {
-        self.left_accessed_bytes
+    pub const fn left_accessed_bytes(self) -> Option<FormalByteRange> {
+        self.left_accessed_bytes.fixed_bytes()
     }
 
-    pub const fn right_accessed_bytes(self) -> FormalByteRange {
+    pub const fn right_accessed_bytes(self) -> Option<FormalByteRange> {
+        self.right_accessed_bytes.fixed_bytes()
+    }
+
+    pub const fn left_region(self) -> FormalAliasRegionV1 {
+        self.left_accessed_bytes
+    }
+    pub const fn right_region(self) -> FormalAliasRegionV1 {
         self.right_accessed_bytes
     }
 }
@@ -365,6 +485,10 @@ pub enum FormalMemoryIncompleteReason {
         location: FunctionOperationLocation,
         index: ValueId,
         allocation: FormalAllocationIdentity,
+    },
+    GuardedAccessPathUnavailable {
+        location: FunctionOperationLocation,
+        predicate: ValueId,
     },
     ElementWidthUnavailable {
         location: FunctionOperationLocation,
@@ -481,6 +605,7 @@ pub enum FormalMemoryObligationError {
     InvalidModule(VerificationErrors),
     MissingKernel { kernel: KernelId },
     InvalidInvocationRange(RegionValidationError),
+    GuardedResource(FormalGuardedMemoryResourceErrorV1),
 }
 
 impl fmt::Display for FormalMemoryObligationError {
@@ -496,6 +621,7 @@ impl fmt::Display for FormalMemoryObligationError {
                     "formal launch invocation range is invalid: {error}"
                 )
             }
+            Self::GuardedResource(error) => error.fmt(formatter),
         }
     }
 }
@@ -506,7 +632,14 @@ impl Error for FormalMemoryObligationError {
             Self::InvalidModule(errors) => Some(errors),
             Self::InvalidInvocationRange(error) => Some(error),
             Self::MissingKernel { .. } => None,
+            Self::GuardedResource(error) => Some(error),
         }
+    }
+}
+
+impl From<GuardedResourceErrorV1> for FormalMemoryObligationError {
+    fn from(error: GuardedResourceErrorV1) -> Self {
+        Self::GuardedResource(error)
     }
 }
 
@@ -606,7 +739,7 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
         .iter()
         .map(|allocation| (allocation.value, allocation.identity))
         .collect();
-    let definitions = collect_definitions(function);
+    let (definitions, guarded_control) = collect_definitions(function)?;
     if !body.blocks[0].parameters.is_empty() {
         reasons.insert(
             FormalMemoryIncompleteReason::UnsupportedEntryBlockParameters {
@@ -623,11 +756,17 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
         &value_types,
         &eligible_private_slots,
     );
+    let guarded = guarded_control
+        .map(|control| {
+            GuardedAnalysisV1::new(control, &definitions, function, kernel.domain.rank() == 1)
+        })
+        .transpose()?;
     let mut context = AccessDerivationContext::new(
         &definitions,
         &value_types,
         &allocation_by_value,
         &private_load_sources,
+        guarded,
     );
     let mut accesses = Vec::new();
 
@@ -660,12 +799,18 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                             FormalMemoryAccessKind::Read,
                             *access,
                             invocations,
+                            None,
                             &mut context,
                         ) {
-                            Ok(access) => accesses.push(access),
-                            Err(reason) => {
+                            Ok(access) => guarded_access_v1::report_push(
+                                &mut context.guarded,
+                                &mut accesses,
+                                access,
+                            )?,
+                            Err(AccessDerivationError::Incomplete(reason)) => {
                                 reasons.insert(reason);
                             }
+                            Err(AccessDerivationError::Resource(error)) => return Err(error.into()),
                         }
                     }
                 }
@@ -684,12 +829,21 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                             FormalMemoryAccessKind::Write,
                             *access,
                             invocations,
+                            match operation.kind {
+                                OperationKind::GuardedStore { predicate, .. } => Some(predicate),
+                                _ => None,
+                            },
                             &mut context,
                         ) {
-                            Ok(access) => accesses.push(access),
-                            Err(reason) => {
+                            Ok(access) => guarded_access_v1::report_push(
+                                &mut context.guarded,
+                                &mut accesses,
+                                access,
+                            )?,
+                            Err(AccessDerivationError::Incomplete(reason)) => {
                                 reasons.insert(reason);
                             }
+                            Err(AccessDerivationError::Resource(error)) => return Err(error.into()),
                         }
                     }
                 }
@@ -705,8 +859,12 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                 OperationKind::GuardedLoad { access, .. }
                     if access.address_space == AddressSpace::Private => {}
                 OperationKind::GuardedLoad {
-                    pointer, access, ..
+                    pointer,
+                    access,
+                    predicate,
+                    ..
                 } => {
+                    let mut checked_guard = false;
                     if let Some(invocations) = access_invocations {
                         match derive_access(
                             location,
@@ -714,26 +872,46 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                             FormalMemoryAccessKind::Read,
                             *access,
                             invocations,
+                            Some(*predicate),
                             &mut context,
                         ) {
-                            Ok(access) => accesses.push(access),
-                            Err(exact_reason) => match derive_conservative_guarded_access(
-                                location,
-                                *pointer,
-                                *access,
-                                invocations,
-                                &mut context,
-                            ) {
-                                Ok(access) => accesses.push(access),
-                                Err(_) => {
-                                    reasons.insert(exact_reason);
+                            Ok(access) => {
+                                checked_guard =
+                                    matches!(access.domain, FormalAccessDomainV1::SliceBounded(_));
+                                guarded_access_v1::report_push(
+                                    &mut context.guarded,
+                                    &mut accesses,
+                                    access,
+                                )?;
+                            }
+                            Err(AccessDerivationError::Incomplete(exact_reason)) => {
+                                match derive_conservative_guarded_access(
+                                    location,
+                                    *pointer,
+                                    *access,
+                                    invocations,
+                                    &mut context,
+                                ) {
+                                    Ok(access) => guarded_access_v1::report_push(
+                                        &mut context.guarded,
+                                        &mut accesses,
+                                        access,
+                                    )?,
+                                    Err(_) => {
+                                        reasons.insert(exact_reason);
+                                    }
                                 }
-                            },
+                            }
+                            Err(AccessDerivationError::Resource(error)) => return Err(error.into()),
                         }
                     }
-                    reasons.insert(
-                        FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { location },
-                    );
+                    if !checked_guard {
+                        reasons.insert(
+                            FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof {
+                                location,
+                            },
+                        );
+                    }
                 }
                 OperationKind::Atomic(atomic) => {
                     if let Some(invocations) = access_invocations {
@@ -743,12 +921,18 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                             FormalMemoryAccessKind::Atomic,
                             atomic.access,
                             invocations,
+                            None,
                             &mut context,
                         ) {
-                            Ok(access) => accesses.push(access),
-                            Err(reason) => {
+                            Ok(access) => guarded_access_v1::report_push(
+                                &mut context.guarded,
+                                &mut accesses,
+                                access,
+                            )?,
+                            Err(AccessDerivationError::Incomplete(reason)) => {
                                 reasons.insert(reason);
                             }
+                            Err(AccessDerivationError::Resource(error)) => return Err(error.into()),
                         }
                     }
                 }
@@ -789,9 +973,11 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
         }
     }
 
-    let bounds_requirements = derive_bounds_requirements(&accesses, &mut reasons);
-    let runtime_alias_requirements = derive_alias_requirements(&accesses);
-    let inter_invocation_conflicts = derive_inter_invocation_conflicts(&accesses);
+    let bounds_requirements =
+        derive_bounds_requirements(&accesses, &mut reasons, &mut context.guarded)?;
+    let runtime_alias_requirements = derive_alias_requirements(&accesses, &mut context.guarded)?;
+    let inter_invocation_conflicts =
+        derive_inter_invocation_conflicts(&accesses, &mut context.guarded)?;
     let obligations = FormalMemoryObligations {
         kernel: kernel.id.clone(),
         entry: kernel.entry.clone(),
@@ -925,7 +1111,9 @@ struct Definitions<'module> {
     entry: BlockId,
 }
 
-fn collect_definitions(function: &Function) -> Definitions<'_> {
+fn collect_definitions(
+    function: &Function,
+) -> Result<(Definitions<'_>, Option<GuardedControlV1>), GuardedResourceErrorV1> {
     let mut operations = BTreeMap::new();
     let mut block_parameter_inputs = BTreeMap::new();
     let body = function
@@ -934,6 +1122,7 @@ fn collect_definitions(function: &Function) -> Definitions<'_> {
         .expect("verified function is defined");
     let control_flow = analyze_control_flow(function)
         .expect("verified function has analyzable bounded control flow");
+    let guarded_control = GuardedControlV1::collect(function, &control_flow)?;
     let entry = body.blocks[0].id;
     let reachable_blocks = body
         .blocks
@@ -980,14 +1169,17 @@ fn collect_definitions(function: &Function) -> Definitions<'_> {
     }
     let block_parameter_origins = compute_unique_block_parameter_origins(&block_parameter_inputs);
     let affine_expressions = compute_affine_expressions(&operations, &block_parameter_origins);
-    Definitions {
-        operations,
-        block_parameter_inputs,
-        block_parameter_origins,
-        affine_expressions,
-        reachable_blocks,
-        entry,
-    }
+    Ok((
+        Definitions {
+            operations,
+            block_parameter_inputs,
+            block_parameter_origins,
+            affine_expressions,
+            reachable_blocks,
+            entry,
+        },
+        guarded_control,
+    ))
 }
 
 impl Definitions<'_> {
@@ -1490,32 +1682,50 @@ fn scalar_byte_width(scalar: ScalarType) -> Option<u64> {
 fn derive_bounds_requirements(
     accesses: &[FormalMemoryAccess],
     reasons: &mut BTreeSet<FormalMemoryIncompleteReason>,
-) -> Vec<FormalBoundsRequirement> {
-    accesses
-        .iter()
-        .filter_map(|access| {
+    guarded: &mut Option<GuardedAnalysisV1<'_>>,
+) -> Result<Vec<FormalBoundsRequirement>, GuardedResourceErrorV1> {
+    let mut bounds = Vec::new();
+    for access in accesses {
+        if let Some(guarded) = guarded.as_mut() {
+            guarded.bounds_work()?;
+        }
+        let kind = if let FormalAccessDomainV1::SliceBounded(domain) = access.domain {
+            FormalBoundsKindV1::SliceElementAtGuardedIndex(domain)
+        } else {
             let range = match access.byte_offset {
                 // Only guarded reads are admitted with an unbounded affine
                 // expression, and their bounds stay behind the distinct ranked
                 // proof reason emitted at extraction time.
-                ByteExpression::Unbounded => return None,
-                ByteExpression::Affine { .. } => access_envelope(access).or_else(|| {
-                    reasons.insert(FormalMemoryIncompleteReason::AddressArithmeticOverflow {
-                        location: access.location,
-                    });
-                    None
-                })?,
+                ByteExpression::Unbounded => continue,
+                ByteExpression::Affine { .. } => match access_envelope(access) {
+                    Some(range) => range,
+                    None => {
+                        reasons.insert(FormalMemoryIncompleteReason::AddressArithmeticOverflow {
+                            location: access.location,
+                        });
+                        continue;
+                    }
+                },
             };
-            Some(FormalBoundsRequirement {
+            FormalBoundsKindV1::FixedMinimumBytes(range.end_exclusive)
+        };
+        guarded_access_v1::report_push(
+            guarded,
+            &mut bounds,
+            FormalBoundsRequirement {
                 location: access.location,
                 allocation: access.allocation,
-                minimum_byte_len: range.end_exclusive,
-            })
-        })
-        .collect()
+                kind,
+            },
+        )?;
+    }
+    Ok(bounds)
 }
 
 fn access_envelope(access: &FormalMemoryAccess) -> Option<FormalByteRange> {
+    if access.domain != FormalAccessDomainV1::LaunchEnvelope {
+        return None;
+    }
     let ByteExpression::Affine {
         constant,
         invocation_coefficient,
@@ -1538,58 +1748,87 @@ fn access_envelope(access: &FormalMemoryAccess) -> Option<FormalByteRange> {
 
 #[derive(Clone, Copy)]
 struct AllocationEnvelope {
-    range: FormalByteRange,
+    range: FormalAliasRegionV1,
     writes: bool,
     address_space: AddressSpace,
 }
 
-fn derive_alias_requirements(accesses: &[FormalMemoryAccess]) -> Vec<RuntimeAliasRequirement> {
-    let mut envelopes = BTreeMap::<FormalAllocationIdentity, AllocationEnvelope>::new();
+fn derive_alias_requirements(
+    accesses: &[FormalMemoryAccess],
+    guarded: &mut Option<GuardedAnalysisV1<'_>>,
+) -> Result<Vec<RuntimeAliasRequirement>, GuardedResourceErrorV1> {
+    let mut entries = Vec::<(FormalAllocationIdentity, AllocationEnvelope)>::new();
     for access in accesses {
-        let range = match access.byte_offset {
-            ByteExpression::Unbounded => FormalByteRange {
-                start: 0,
-                end_exclusive: u64::MAX,
-            },
-            ByteExpression::Affine { .. } => {
-                let Some(range) = access_envelope(access) else {
-                    continue;
-                };
-                range
+        guarded_access_v1::report_work(guarded, 8)?;
+        let range = if matches!(access.domain, FormalAccessDomainV1::SliceBounded(_)) {
+            FormalAliasRegionV1::WholeFormalAllocation
+        } else {
+            match access.byte_offset {
+                ByteExpression::Unbounded => FormalAliasRegionV1::FixedBytes(FormalByteRange {
+                    start: 0,
+                    end_exclusive: u64::MAX,
+                }),
+                ByteExpression::Affine { .. } => {
+                    let Some(range) = access_envelope(access) else {
+                        continue;
+                    };
+                    FormalAliasRegionV1::FixedBytes(range)
+                }
             }
         };
-        envelopes
-            .entry(access.allocation)
-            .and_modify(|envelope| {
-                envelope.range.start = envelope.range.start.min(range.start);
-                envelope.range.end_exclusive =
-                    envelope.range.end_exclusive.max(range.end_exclusive);
-                envelope.writes |= access.kind != FormalMemoryAccessKind::Read;
-            })
-            .or_insert(AllocationEnvelope {
-                range,
-                writes: access.kind != FormalMemoryAccessKind::Read,
-                address_space: access.address_space,
-            });
+        guarded_access_v1::report_push(
+            guarded,
+            &mut entries,
+            (
+                access.allocation,
+                AllocationEnvelope {
+                    range,
+                    writes: access.kind != FormalMemoryAccessKind::Read,
+                    address_space: access.address_space,
+                },
+            ),
+        )?;
     }
-
-    let entries: Vec<_> = envelopes.into_iter().collect();
+    if let Some(guarded) = guarded.as_mut() {
+        guarded.ledger.sort(&mut entries, 1, |a, b| a.0.cmp(&b.0))?;
+    } else {
+        entries.sort_unstable_by_key(|row| row.0);
+    }
+    let mut count = 0_usize;
+    for index in 0..entries.len() {
+        guarded_access_v1::report_work(guarded, 8)?;
+        let (allocation, next) = entries[index];
+        if count != 0 && entries[count - 1].0 == allocation {
+            let envelope = &mut entries[count - 1].1;
+            envelope.range = envelope.range.union(next.range);
+            envelope.writes |= next.writes;
+        } else {
+            entries[count] = (allocation, next);
+            count += 1;
+        }
+    }
+    entries.truncate(count);
     let mut requirements = Vec::new();
     for (left_index, (left, left_envelope)) in entries.iter().enumerate() {
         for (right, right_envelope) in &entries[left_index + 1..] {
+            guarded_access_v1::report_work(guarded, 8)?;
             if address_spaces_may_alias(left_envelope.address_space, right_envelope.address_space)
                 && (left_envelope.writes || right_envelope.writes)
             {
-                requirements.push(RuntimeAliasRequirement {
-                    left: *left,
-                    right: *right,
-                    left_accessed_bytes: left_envelope.range,
-                    right_accessed_bytes: right_envelope.range,
-                });
+                guarded_access_v1::report_push(
+                    guarded,
+                    &mut requirements,
+                    RuntimeAliasRequirement {
+                        left: *left,
+                        right: *right,
+                        left_accessed_bytes: left_envelope.range,
+                        right_accessed_bytes: right_envelope.range,
+                    },
+                )?;
             }
         }
     }
-    requirements
+    Ok(requirements)
 }
 
 fn address_spaces_may_alias(left: AddressSpace, right: AddressSpace) -> bool {
@@ -1605,10 +1844,12 @@ fn address_spaces_may_alias(left: AddressSpace, right: AddressSpace) -> bool {
 
 fn derive_inter_invocation_conflicts(
     accesses: &[FormalMemoryAccess],
-) -> Vec<InterInvocationConflictRequirement> {
+    guarded: &mut Option<GuardedAnalysisV1<'_>>,
+) -> Result<Vec<InterInvocationConflictRequirement>, GuardedResourceErrorV1> {
     let mut requirements = Vec::new();
     for (left_index, left) in accesses.iter().enumerate() {
         for right in &accesses[left_index..] {
+            guarded_access_v1::report_work(guarded, 32)?;
             if left.allocation != right.allocation
                 || (left.kind == FormalMemoryAccessKind::Read
                     && right.kind == FormalMemoryAccessKind::Read)
@@ -1618,14 +1859,18 @@ fn derive_inter_invocation_conflicts(
             {
                 continue;
             }
-            requirements.push(InterInvocationConflictRequirement {
-                left: left.location,
-                right: right.location,
-                allocation: left.allocation,
-            });
+            guarded_access_v1::report_push(
+                guarded,
+                &mut requirements,
+                InterInvocationConflictRequirement {
+                    left: left.location,
+                    right: right.location,
+                    allocation: left.allocation,
+                },
+            )?;
         }
     }
-    requirements
+    Ok(requirements)
 }
 
 fn proves_distinct_invocation_disjointness(

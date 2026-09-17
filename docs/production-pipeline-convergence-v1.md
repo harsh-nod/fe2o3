@@ -313,6 +313,31 @@ Source proof, compiler transformation validation, LLVM/ISA correspondence,
 machine inspection, hardware observation, and runtime authority remain
 separate evidence classes.
 
+### Guarded memory obligations
+
+Formal memory analysis distinguishes launch-envelope accesses from slice-bounded
+accesses. A proved guarded access retains its actual predicate, slice, pointer,
+element width and invocation range, plus symbolic bounds and alias obligations.
+Selecting zero for an inactive index does not make that index globally equal to
+the active index or require the slice to cover the entire launch.
+
+Production admission partitions guarded reads using a freshly derived report
+borrowed from the same live semantic KIR owner. Core-proved reads and reads still
+requiring ranked structural proof must exhaust the actual body-order census.
+The consumer rejects unconsumed, duplicate or out-of-order report rows,
+foreign-owner reports, and missing or extra pending reason locations. It does
+not interpret the absence of a ranked-proof reason as proof by itself.
+Unsupported effects and other outstanding obligations retain their own gates.
+
+The inert receipt facade preserves legacy V1 bytes and adds guarded V3/policy2
+encoding for the symbolic representation. Singleton V4 admission evidence pairs
+outer policy1 only with legacy V1, and outer policy2 only with guarded V3 and an
+exact positive Bits64 structural witness. Legacy nested V2 is not admitted by
+either pairing. Multiroot payload association remains an inert, exact-root
+check, not singleton admission or live proof authority. Decoding, canonical
+reencoding and matching identities do not authenticate compiler origin, prove
+LLVM or machine refinement, or grant runtime authority.
+
 ## AMDGPU and finalization
 
 One AMDGPU lowering owner centralizes exact target identity, features, wave
