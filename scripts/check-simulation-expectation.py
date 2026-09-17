@@ -198,6 +198,11 @@ def validate_payload(document, label):
             count = uint(argument["elements"], U64_MAX, f"{location}.elements")
             buffer, length = backings[identity]
             require(argument["element"] == buffer["element"], f"{location}: backing element mismatch")
+            require(
+                buffer["access"] == "read_write" or buffer["access"] == argument["access"],
+                f"{location}: incompatible backing access",
+            )
+            require(buffer["alignment"] >= argument["alignment"], f"{location}: insufficient backing alignment")
             require(offset % argument["alignment"] == 0, f"{location}: unaligned view")
             require(offset + count * width <= length, f"{location}: view exceeds backing")
         else:
