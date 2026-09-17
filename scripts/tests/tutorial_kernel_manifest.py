@@ -405,6 +405,30 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("qualification receipts and policy/final-graph evidence are not implemented", result.stderr)
 
+    def test_kernel_pair_cli_emits_only_incomplete_obligations(self):
+        result = subprocess.run(
+            [sys.executable, str(CHECKER), "--emit-kernel-pairs"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["schema"], "fe2o3-tutorial-kernel-pair-obligations-v1")
+        self.assertIs(report["qualified"], False)
+        self.assertIs(report["inventoryComplete"], False)
+        self.assertIsNone(report["requiredPairCount"])
+        self.assertEqual(report["qualifiedPairCount"], 0)
+        self.assertEqual(report["requiredModes"], ["simt", "tile"])
+        self.assertEqual(len(report["fixtureSelections"]), 48)
+        self.assertEqual(len(report["sourceDriverCases"]), 13)
+        self.assertEqual(len(report["displayObservations"]), 53)
+        self.assertEqual(sum(row["sourceItemStatus"] == "pending"
+                             for row in report["displayObservations"]), 52)
+        self.assertTrue(all(row["lexicalKernelNames"] is None
+                            for row in report["displayObservations"]))
+        self.assertEqual(report["stageStatus"], "not-evaluated")
+        self.assertEqual(report["variantBindingStatus"], "pending")
+        self.assertEqual(report["productionContract"], self.original["productionContract"])
+
     def test_release_schema_and_accepted_baseline_are_rejected(self):
         self.manifest["schema"] = "fe2o3-tutorial-kernel-manifest-v1"
         self.reject("source-contract schema")
