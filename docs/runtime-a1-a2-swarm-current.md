@@ -10,13 +10,22 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest development (2026-09-17): the opt-in Context journal now joins ordinary
+Latest development (2026-09-17): [ordinary Unknown writer disposal](runtime-context-version-journal-disposal-v1.md)
+now joins per-allocation owner disposal to exact whole-roster journal retirement.
+Disposed Context IDs cannot be used or released twice; all writer credits remain
+charged until the complete original roster is disposed. Rejected/quiescent
+cleanup can resume; terminal/panicking cleanup retains the remaining custody.
+The [CPU qualification receipt](evidence/dev-v6-unknown-disposal-2026-09-17/README.md)
+does not qualify native pool residency, protected generated execution, formal
+correspondence or performance. Accepted checkpoints and A1/A2 remain unchanged.
+
+Preceding development: the opt-in Context journal now joins ordinary
 async launch/copy writers to completion, explicit cancellation and retained
 Unknown outcomes. Original submission IDs and independent writer roots preserve
 custody even without a returned handle or after metadata release. See the
 [async writer boundary](runtime-context-version-journal-async-v1.md) and its
 [qualification archive](evidence/dev-v6-async-writers-2026-09-17/README.md).
-Generated protected execution, input leases, ordered writers, full disposal,
+Generated protected execution, input leases, ordered writers, native residency,
 formal correspondence, native qualification and matched performance remain open;
 this does not advance the accepted checkpoints or close A1/A2.
 

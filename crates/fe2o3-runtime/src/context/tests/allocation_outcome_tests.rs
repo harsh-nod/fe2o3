@@ -1,6 +1,7 @@
 use super::*;
 
 mod async_tests;
+mod disposal_tests;
 mod writer_tests;
 use crate::{RuntimeResourceKindV1 as K, RuntimeResourceVectorV1};
 use std::sync::{
@@ -46,6 +47,8 @@ struct AllocationOnlyBackend {
     release_failure: MockMemoryFailure,
     release_diagnostic: Option<Box<Diagnostic>>,
     release_calls: usize,
+    release_handles: Vec<u64>,
+    release_failure_handle: Option<u64>,
     failure_call: Option<DiagnosticCall>,
     call_failure: MockMemoryFailure,
     call_diagnostic: Option<Box<Diagnostic>>,
@@ -154,10 +157,16 @@ impl RuntimeBackendV1 for AllocationOnlyBackend {
         allocation: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.release_calls += 1;
-        diagnostic_failure(
-            core::mem::take(&mut self.release_failure),
-            &mut self.release_diagnostic,
-        )?;
+        self.release_handles.push(allocation);
+        if self
+            .release_failure_handle
+            .is_none_or(|handle| handle == allocation)
+        {
+            diagnostic_failure(
+                core::mem::take(&mut self.release_failure),
+                &mut self.release_diagnostic,
+            )?;
+        }
         self.inner.release_allocation_v1(allocation).unwrap();
         Ok(())
     }

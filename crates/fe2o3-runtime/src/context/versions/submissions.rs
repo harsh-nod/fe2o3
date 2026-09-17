@@ -6,12 +6,22 @@ use fe2o3_runtime_model::{
 
 // Context owns this root independently of a returned backend/public handle.
 pub(super) struct RetainedSubmissionWriterV1 {
-    writer: ContextWriterReferenceV1,
-    allocations: Vec<RuntimeAllocationIdV1>,
+    pub(super) writer: ContextWriterReferenceV1,
+    pub(super) allocations: Vec<SubmissionWriterAllocationV1>,
+    pub(super) members: Vec<ContextAllocationWriteV1>,
+    pub(super) disposal_started: bool,
+    pub(super) disposed_count: usize,
+    pub(super) journal_disposed: bool,
+}
+
+pub(super) struct SubmissionWriterAllocationV1 {
+    pub(super) id: RuntimeAllocationIdV1,
+    pub(super) record: AllocationRecordV1,
+    pub(super) disposed: bool,
 }
 
 struct PreparedSubmissionWriterV1 {
-    allocations: Vec<RuntimeAllocationIdV1>,
+    allocations: Vec<SubmissionWriterAllocationV1>,
     members: Vec<ContextAllocationWriteV1>,
 }
 
@@ -24,6 +34,42 @@ pub(in crate::context) enum SubmissionWriterOutcomeV1 {
 
 #[cfg(test)]
 impl ContextVersionsV1 {
+    pub(in crate::context) fn submission_disposal_member_for_test_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+        index: usize,
+    ) -> (
+        RuntimeAllocationIdV1,
+        AllocationRecordV1,
+        ContextAllocationWriteV1,
+        bool,
+    ) {
+        let root = &self.submission_writers[&id];
+        let allocation = &root.allocations[index];
+        (
+            allocation.id,
+            allocation.record,
+            root.members[index],
+            allocation.disposed,
+        )
+    }
+
+    pub(in crate::context) fn submission_disposal_progress_for_test_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Option<(usize, bool)> {
+        self.submission_writers
+            .get(&id)
+            .map(|root| (root.disposed_count, root.journal_disposed))
+    }
+
+    pub(in crate::context) fn clear_disposal_phase_for_test_v1(
+        &mut self,
+        reference: ContextAllocationReferenceV1,
+    ) {
+        self.phases[reference.slot] = None;
+    }
+
     pub(in crate::context) fn remove_submission_writer_root_for_test_v1(
         &mut self,
         id: RuntimeSubmissionIdV1,
@@ -47,27 +93,31 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             if versions.journal.remaining_writer_slots() == 0 {
                 return Err(RuntimeValidationErrorV1::Capacity);
             }
-            let mut allocations = Vec::new();
-            allocations
+            let mut canonical = Vec::new();
+            canonical
                 .try_reserve_exact(destinations.len())
                 .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
-            allocations.extend_from_slice(destinations);
-            allocations.sort_unstable();
-            allocations.dedup();
+            canonical.extend_from_slice(destinations);
+            canonical.sort_unstable();
+            canonical.dedup();
+            let mut allocations = Vec::new();
+            allocations
+                .try_reserve_exact(canonical.len())
+                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
             let mut members = Vec::new();
             members
-                .try_reserve_exact(allocations.len())
+                .try_reserve_exact(canonical.len())
                 .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
-            for id in &allocations {
-                let record = context
+            for id in canonical {
+                let record = *context
                     .allocations
-                    .get(id)
+                    .get(&id)
                     .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
                 let result = context
                     .versions
                     .as_ref()
                     .expect("configured journal")
-                    .whole_allocation(*id, record);
+                    .whole_allocation(id, &record);
                 let member = context.journal_result_v1(result)?;
                 let result = context
                     .versions
@@ -89,6 +139,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     return Err(RuntimeValidationErrorV1::Capacity);
                 }
                 members.push(member);
+                allocations.push(SubmissionWriterAllocationV1 {
+                    id,
+                    record,
+                    disposed: false,
+                });
             }
             Ok(Some(PreparedSubmissionWriterV1 {
                 allocations,
@@ -132,9 +187,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 RetainedSubmissionWriterV1 {
                     writer,
                     allocations: prepared.allocations,
+                    members: prepared.members,
+                    disposal_started: false,
+                    disposed_count: 0,
+                    journal_disposed: false,
                 },
             );
-            let result = versions.journal.begin_write(writer, &prepared.members);
+            let result = versions
+                .journal
+                .begin_write(writer, &versions.submission_writers[&id].members);
             if result.is_err() {
                 let abort = versions.journal.abort_reserved(writer);
                 context.journal_result_v1(abort)?;
@@ -223,9 +284,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             })) {
                 core::mem::forget(payload);
             }
-            for id in &root.allocations {
+            for allocation in &root.allocations {
                 if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
-                    self.allocation_admission.quarantine(*id);
+                    self.allocation_admission.quarantine(allocation.id);
                 })) {
                     core::mem::forget(payload);
                 }

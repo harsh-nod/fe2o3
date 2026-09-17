@@ -154,7 +154,10 @@ fn actual_launch_preserves_boxed_submit_errors_and_unwind_identity_without_handl
                     fixture.context.is_terminal(),
                     matches!(failure, Failure::Terminal | Failure::Panic)
                 );
-                assert!(!fixture.context.cleanup().is_complete());
+                assert_eq!(
+                    fixture.context.cleanup().is_complete(),
+                    failure == Failure::Quiescent
+                );
             }
         }
     }
@@ -213,7 +216,7 @@ fn observation_failure_matrix_preserves_diagnostics_and_exact_neighbor_credits()
                     .with(K::AllocationRecords, 2)
             );
             assert_eq!(usage.quarantined_records, if terminal { 2 } else { 0 });
-            assert!(!fixture.context.cleanup().is_complete());
+            assert_eq!(fixture.context.cleanup().is_complete(), !terminal);
         }
     }
 }

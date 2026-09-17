@@ -10,9 +10,16 @@ use crate::resource_credits::{
 pub(super) struct ContextAllocationAdmissionV1 {
     accounts: HashMap<RuntimeDeviceIdV1, RuntimeResourceCreditAccountV1>,
     retained: HashMap<RuntimeAllocationIdV1, RuntimeRetainedResourceCreditsV1>,
+    #[cfg(test)]
+    reject_disposal: Option<RuntimeAllocationIdV1>,
 }
 
 impl ContextAllocationAdmissionV1 {
+    #[cfg(test)]
+    pub(in crate::context) fn reject_disposal_for_test_v1(&mut self, id: RuntimeAllocationIdV1) {
+        self.reject_disposal = Some(id);
+    }
+
     pub(super) fn prepare_roster(
         &mut self,
         device: RuntimeDeviceIdV1,
@@ -47,6 +54,14 @@ impl ContextAllocationAdmissionV1 {
                 usage.reserved_records + usage.retained_records + usage.quarantined_records
             })
             .sum()
+    }
+
+    pub(super) fn has_expected_credit(
+        &self,
+        id: RuntimeAllocationIdV1,
+        device: RuntimeDeviceIdV1,
+    ) -> bool {
+        self.accounts.contains_key(&device) == self.retained.contains_key(&id)
     }
 
     pub(super) fn prepare_registry(
@@ -95,6 +110,11 @@ impl ContextAllocationAdmissionV1 {
         &mut self,
         id: RuntimeAllocationIdV1,
     ) -> Result<(), RuntimeResourceCreditErrorV1> {
+        #[cfg(test)]
+        if self.reject_disposal == Some(id) {
+            self.reject_disposal = None;
+            return Err(RuntimeResourceCreditErrorV1::Invariant);
+        }
         if let Some(credits) = self.retained.remove(&id) {
             credits.release_after_disposal()?;
         }

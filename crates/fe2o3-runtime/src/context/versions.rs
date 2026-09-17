@@ -6,6 +6,7 @@ use fe2o3_runtime_model::{
     ContextJournalDeviceKeyV1, ContextVersionJournalErrorV1, ContextVersionJournalV1,
 };
 
+mod submission_disposal;
 mod submissions;
 mod writers;
 pub(super) use submissions::SubmissionWriterOutcomeV1;
@@ -50,6 +51,7 @@ impl<B: RuntimeBackendV1> RuntimeContextOpenFailureV1<B> {
 enum AllocationPhaseV1 {
     Provisional,
     Live,
+    Disposed,
 }
 
 pub(super) struct ContextVersionsV1 {
@@ -66,7 +68,16 @@ pub(super) struct AllocationDisposalV1 {
     id: RuntimeAllocationIdV1,
     record: AllocationRecordV1,
     member: fe2o3_runtime_model::ContextAllocationWriteV1,
-    writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
+    kind: AllocationDisposalKindV1,
+}
+
+enum AllocationDisposalKindV1 {
+    Unwritten,
+    Synchronous(fe2o3_runtime_model::ContextWriterReferenceV1),
+    Submission {
+        id: RuntimeSubmissionIdV1,
+        index: usize,
+    },
 }
 
 impl AllocationEnrollmentV1 {
@@ -236,7 +247,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// capacity and unresolved writes gate subsequent writes. Generated protected
     /// launches, backend aliases and input leases remain outside this profile;
     /// no content lineage or reuse permission is exposed. Unknown async writers
-    /// retain their allocations, even after submission metadata is released.
+    /// retain their journal metadata and credits, even after submission metadata
+    /// is released, until every original destination owner has been disposed.
     /// The default `open` path is unchanged.
     pub fn open_with_version_journal_v1(
         backend: B,
@@ -349,6 +361,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 context.quarantine_submission_writers_v1();
                 panic!("allocation disposal plan identity invariant");
             }
+            let plan = match plan {
+                Some(plan) if matches!(plan.kind, AllocationDisposalKindV1::Submission { .. }) => {
+                    let result = context.finish_submission_allocation_disposal_v1(plan);
+                    context
+                        .journal_result_v1(result)
+                        .expect("submission allocation disposal invariant");
+                    return;
+                }
+                plan => plan,
+            };
             context.dispose_allocation_credits_v1(id);
             if let Some(plan) = plan {
                 let result = context

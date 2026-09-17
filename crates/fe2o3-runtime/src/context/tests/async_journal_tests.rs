@@ -106,7 +106,7 @@ fn async_writer_uses_exact_submission_identity_and_settles_once_through_event() 
     assert!(context.cleanup().is_complete());
 }
 
-struct MixedArguments(Vec<RuntimeMemoryRegionV1>);
+pub(super) struct MixedArguments(pub(super) Vec<RuntimeMemoryRegionV1>);
 
 impl RuntimeArgumentsV1 for MixedArguments {
     const SIGNATURE_V1: [u8; 32] = [41; 32];
@@ -127,7 +127,7 @@ impl RuntimeArgumentsV1 for MixedArguments {
     }
 }
 
-fn region(
+pub(super) fn region(
     allocation: RuntimeAllocationIdV1,
     access: RuntimeAccessV1,
     byte_offset: u64,
@@ -360,17 +360,12 @@ fn failed_or_resultless_completion_retains_unknown_after_metadata_release() {
         assert!(context.submissions.is_empty());
         assert_eq!(context.version_journal_writer_records_v1(), Some(1));
         assert_eq!(state(&context, allocation).content_lineage, 0);
-        assert!(matches!(
-            context.release_allocation(allocation),
-            Err(RuntimeErrorV1::Validation(
-                RuntimeValidationErrorV1::Unsupported
-            ))
-        ));
+        context.release_allocation(allocation).unwrap();
         let report = context.cleanup();
-        assert!(!report.is_complete());
+        assert!(report.is_complete());
         assert!(!report.is_terminal());
-        assert_eq!(report.writer_journal_records_v1(), 1);
-        assert!(context.allocations.contains_key(&allocation));
+        assert_eq!(report.writer_journal_records_v1(), 0);
+        assert!(!context.allocations.contains_key(&allocation));
     }
 }
 
@@ -473,7 +468,10 @@ fn initial_no_handle_failures_settle_only_definite_rejection() {
                 context.is_terminal(),
                 failure != MockMemoryFailure::Quiescent
             );
-            assert!(!context.cleanup().is_complete());
+            assert_eq!(
+                context.cleanup().is_complete(),
+                failure == MockMemoryFailure::Quiescent
+            );
         }
     }
 }

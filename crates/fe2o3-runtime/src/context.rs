@@ -1960,6 +1960,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.seal_backend_protocol(protocol_error, id)
     }
 
+    /// Releases only the named allocation owner after backend confirmation.
+    ///
+    /// In the opt-in journal profile, an Unknown async writer may cover several
+    /// allocations. Each successful release makes its handle unusable, but the
+    /// complete writer's journal slots and request credits remain retained until
+    /// every original destination is disposed. Cleanup can finish the remainder.
+    /// A successful release does not imply that backend pool residency is zero.
     pub fn release_allocation(
         &mut self,
         allocation: RuntimeAllocationIdV1,

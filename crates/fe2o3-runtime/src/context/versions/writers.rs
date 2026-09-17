@@ -37,6 +37,11 @@ impl ContextVersionsV1 {
 
     pub(in crate::context) fn retained_writers(&self) -> usize {
         self.journal.writer_capacity() - self.journal.remaining_writer_slots()
+            + self
+                .submission_writers
+                .values()
+                .filter(|root| root.journal_disposed)
+                .count()
     }
 
     #[cfg(test)]
@@ -65,17 +70,21 @@ impl ContextVersionsV1 {
         if self.whole_allocation(plan.id, &plan.record)? != plan.member {
             return Err(ContextVersionJournalErrorV1::InvalidAllocationReference);
         }
-        if let Some(writer) = plan.writer {
-            self.journal.dispose_unknown(
-                writer,
-                &ContextWriterDisposalEvidenceV1 {
+        match plan.kind {
+            AllocationDisposalKindV1::Synchronous(writer) => {
+                self.journal.dispose_unknown(
                     writer,
-                    allocations: &[plan.member],
-                },
-            )?;
-            self.phases[plan.member.allocation.slot] = None;
-        } else {
-            self.retire(&[plan.member.allocation])?;
+                    &ContextWriterDisposalEvidenceV1 {
+                        writer,
+                        allocations: &[plan.member],
+                    },
+                )?;
+                self.phases[plan.member.allocation.slot] = None;
+            }
+            AllocationDisposalKindV1::Unwritten => self.retire(&[plan.member.allocation])?,
+            AllocationDisposalKindV1::Submission { .. } => {
+                return Err(ContextVersionJournalErrorV1::InvalidState);
+            }
         }
         Ok(())
     }
@@ -298,11 +307,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             });
             let (member, pending) = context.journal_result_v1(result)?;
             let versions = context.versions.as_ref().expect("configured journal");
-            let writer = match pending {
+            let kind = match pending {
                 None => {
                     let result = versions.validate_retirement(&[member.allocation]);
                     context.journal_result_v1(result)?;
-                    None
+                    AllocationDisposalKindV1::Unwritten
                 }
                 Some((_, ContextWriterStateV1::Pending { .. })) => {
                     return Err(RuntimeValidationErrorV1::ContextReserved);
@@ -314,7 +323,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         .journal
                         .validate_unknown_disposal(writer, &[member]);
                     context.journal_result_v1(result)?;
-                    Some(writer)
+                    AllocationDisposalKindV1::Synchronous(writer)
+                }
+                Some((writer, ContextWriterStateV1::Unknown { .. }))
+                    if writer.key.kind == ContextWriterKindV1::Submission =>
+                {
+                    let result = context
+                        .prepare_submission_allocation_disposal_v1(id, *record, member, writer);
+                    return context.journal_result_v1(result).map(Some);
                 }
                 Some((_, ContextWriterStateV1::Unknown { .. })) => {
                     return Err(RuntimeValidationErrorV1::Unsupported);
@@ -328,7 +344,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 id,
                 record: *record,
                 member,
-                writer,
+                kind,
             }))
         })
     }

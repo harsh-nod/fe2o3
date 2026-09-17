@@ -156,6 +156,11 @@ independently of completion handles. This development profile rejects overlappin
 unsettled writers and does not expose lineage, read leases or reuse authority.
 Generated protected execution is separate. See the
 [async journal boundary](../../docs/runtime-context-version-journal-async-v1.md).
+Ordinary Unknown writers now retain each successful allocation-owner disposal
+receipt until the whole roster is gone, without implicitly releasing siblings.
+Journal slots and request credits return only at that final boundary. See the
+[disposal contract](../../docs/runtime-context-version-journal-disposal-v1.md);
+this does not establish zero native pool residency or recovered content.
 
 R66 adds reciprocal native storage checks and runtime scheduling for disjoint
 primary persistent compute with directional-persistent H2D/D2H copies. This

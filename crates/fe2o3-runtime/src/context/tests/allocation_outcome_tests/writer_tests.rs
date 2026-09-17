@@ -497,17 +497,15 @@ fn disabled_journal_preserves_write_ids_and_legacy_panic_behavior() {
 
 #[test]
 fn unsupported_unknown_rosters_keep_all_members_while_cleanup_releases_unrelated_ids() {
-    for (kind, count) in [
-        (ContextWriterKindV1::Synchronous, 2),
-        (ContextWriterKindV1::Submission, 1),
-    ] {
+    for count in [2, 3] {
+        let kind = ContextWriterKindV1::Synchronous;
         let mut context =
-            Context::open_with_version_journal_v1(AllocationOnlyBackend::default(), 3, 1).unwrap();
+            Context::open_with_version_journal_v1(AllocationOnlyBackend::default(), 4, 1).unwrap();
         let device = context.devices()[0].id();
         context
-            .configure_allocation_admission_v1(device, 24, 3)
+            .configure_allocation_admission_v1(device, 32, 4)
             .unwrap();
-        let ids: Vec<_> = (0..3)
+        let ids: Vec<_> = (0..4)
             .map(|_| {
                 context
                     .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
@@ -543,7 +541,7 @@ fn unsupported_unknown_rosters_keep_all_members_while_cleanup_releases_unrelated
             assert!(!context.is_terminal());
             assert_eq!(report.writer_journal_records_v1(), 1);
             assert_eq!(report.allocation_journal_records_v1(), count);
-            assert_eq!(context.backend.release_calls, 3 - count);
+            assert_eq!(context.backend.release_calls, 4 - count);
             assert_eq!(context.next_identity, next);
             assert_eq!(
                 context

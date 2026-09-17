@@ -44,9 +44,10 @@ or duplicate handle is rooted before protocol rejection seals Context.
 
 Repeated terminal observations do not settle twice. A later stream destroy cannot
 downgrade an already successful writer. Unknown roots survive release of their
-submission metadata. Exact whole-writer physical disposal for Submission writers
-is not yet integrated: those allocations remain retained and cleanup reports
-incomplete, rather than borrowing the singleton synchronous-writer disposal rule.
+submission metadata. The subsequent [Unknown disposal extension](runtime-context-version-journal-disposal-v1.md)
+retains per-member allocation-owner disposal receipts and retires the complete
+ordinary Submission roster only after every original destination is disposed.
+Its qualification is separate from the original async writer archive above.
 
 Terminal failures and caught backend panics quarantine all retained ordinary
 submission writers, including when the failing call concerns a different
@@ -87,7 +88,7 @@ retirement and production verifier/refinement evidence before journal settlement
 Existing generated transitions retain their distinct completion path.
 
 Backend aliases, input/read leases, ordered overlapping writers, cross-run version
-consumption, content recovery and multi-member physical disposal remain open.
+consumption, content recovery and aggregate native-residency disposal remain open.
 Pending or Unknown membership currently rejects a later writer even if an event
 dependency or stream order would otherwise serialize it. No public lineage or
 reuse authority is exposed by this development profile. Native GPU campaigns,
