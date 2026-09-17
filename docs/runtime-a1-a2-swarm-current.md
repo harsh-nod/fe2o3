@@ -10,7 +10,22 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest development (2026-09-17): [reader contents and ordered preflight](runtime-context-read-preflight-v1.md)
+Latest development (2026-09-17): [reader commit contents](runtime-context-read-commit-v1.md)
+composes the unchanged ordered preflight with executable acquisition/release
+loops. It specifies exact lease/output contents, reader multiplicities, free-list
+order and incarnation updates, with rejection framing and a scan-to-commit safety
+bridge. Successful acquisition retains an explicit selected-free uniqueness
+premise; release uniqueness is derived from exact lookup and canonical order.
+The proof has 127 whole-crate obligations (103 inherited, 24 new), a separate
+15-mutation campaign, recursive pinned include auditing and two new Rust batch
+and epoch-boundary witnesses. The
+[qualification receipt](evidence/dev-v4j3-reader-commits-2026-09-17/README.md)
+records the actual gate outcomes. This does not prove full arena invariant
+preservation, base membership/settlement reachability, Rust/native refinement,
+physical storage or HIP/HSA parity. Accepted checkpoints are unchanged; A1/A2
+remain open.
+
+Earlier development (2026-09-17): [reader contents and ordered preflight](runtime-context-read-preflight-v1.md)
 adds a concrete proof over the unchanged V4-J1 journal definitions, source-bound
 executable mutations and exact Rust error-priority witnesses. Its scope stops
 before acquisition/release commits, invariant preservation and Rust/native

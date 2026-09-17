@@ -1,0 +1,51 @@
+2026-09-17T19:22:46Z
+Cloning into '/home/harsh/fe2o3-engine-diagnostic-20260917.vNTF2iSX/source'...
+done.
+From https://github.com/harsh-nod/fe2o3
+ * branch                  04d9f3ca37cd17536901d4d7cab405bf06f54454 -> FETCH_HEAD
+HEAD is now at 04d9f3ca37 runtime: verify reader preflight and measure directional copies
+04d9f3ca37cd17536901d4d7cab405bf06f54454
+rustc 1.96.0-nightly (55e86c996 2026-04-02)
+binary: rustc
+commit-hash: 55e86c996809902e8bbad512cfb4d2c18be446d9
+commit-date: 2026-04-02
+host: x86_64-unknown-linux-gnu
+release: 1.96.0-nightly
+LLVM version: 22.1.2
+cargo 1.96.0-nightly (888f67534 2026-03-30)
+release: 1.96.0-nightly
+commit-hash: 888f675344eb1cf2308fd53183e667bdd2c58e51
+commit-date: 2026-03-30
+host: x86_64-unknown-linux-gnu
+libgit2: 1.9.2 (sys:0.20.4 vendored)
+libcurl: 8.19.0-DEV (sys:0.4.87+curl-8.19.0 vendored ssl:OpenSSL/3.5.4)
+ssl: OpenSSL 3.5.4 30 Sep 2025
+os: Ubuntu 24.4.0 (noble) [64-bit]
+Linux sharkmi300x-1 6.8.0-124-generic #124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+   Compiling typenum v1.20.1
+   Compiling fe2o3-target-spec v0.1.0 (/home/harsh/fe2o3-engine-diagnostic-20260917.vNTF2iSX/source/crates/fe2o3-target-spec)
+   Compiling spin v0.12.3
+   Compiling cfg-if v1.0.4
+   Compiling rustix v1.1.4
+   Compiling libc v0.2.189
+   Compiling fe2o3-amd-target v0.1.0 (/home/harsh/fe2o3-engine-diagnostic-20260917.vNTF2iSX/source/crates/fe2o3-amd-target)
+   Compiling cpufeatures v0.3.1
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/fe2o3-engine-diagnostic-20260917.vNTF2iSX/source/crates/fe2o3-runtime-model)
+   Compiling bitflags v2.13.1
+   Compiling hybrid-array v0.4.14
+   Compiling fe2o3-hsaco v0.1.0 (/home/harsh/fe2o3-engine-diagnostic-20260917.vNTF2iSX/source/crates/fe2o3-hsaco)
+   Compiling linux-raw-sys v0.12.1
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/home/harsh/fe2o3-engine-diagnostic-20260917.vNTF2iSX/source/crates/fe2o3-amdhsa-loader)
+   Compiling fe2o3-drm-uapi v0.1.0 (/home/harsh/fe2o3-engine-diagnostic-20260917.vNTF2iSX/source/crates/fe2o3-drm-uapi)
+   Compiling zeroize v1.9.0
+   Compiling fe2o3-kfd-uapi v0.1.0 (/home/harsh/fe2o3-engine-diagnostic-20260917.vNTF2iSX/source/crates/fe2o3-kfd-uapi)
+   Compiling fe2o3-aql v0.1.0 (/home/harsh/fe2o3-engine-diagnostic-20260917.vNTF2iSX/source/crates/fe2o3-aql)
+   Compiling arrayvec v0.7.8
+   Compiling fe2o3-resource-accounting v0.1.0 (/home/harsh/fe2o3-engine-diagnostic-20260917.vNTF2iSX/source/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/fe2o3-engine-diagnostic-20260917.vNTF2iSX/source/crates/fe2o3-kfd)
+    Finished `release` profile [optimized] target(s) in 19.58s
+2026-09-17T19:23:09Z

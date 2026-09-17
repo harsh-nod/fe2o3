@@ -1,0 +1,1 @@
+prlimit --core=0:0 -- python3 -I crates/fe2o3-runtime-model/verus/check-read-commit.py crates/fe2o3-runtime-model/verus/context_read_commit_v1.rs /home/harsh/.local/opt/verus-0.2026.08.09.92f466f/verus 120 /home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-v4j3-reader-commits-2026-09-17/commit-campaign 

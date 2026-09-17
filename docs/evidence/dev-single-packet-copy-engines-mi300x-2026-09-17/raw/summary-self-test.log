@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-single-packet-copy-engines-mi300x-2026-09-17/summarize.py", line 113, in <module>
+    self_test(text)
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-single-packet-copy-engines-mi300x-2026-09-17/summarize.py", line 100, in self_test
+    analyze(changed)
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-single-packet-copy-engines-mi300x-2026-09-17/summarize.py", line 37, in analyze
+    fields = parse(line, number)
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/benchmarks/runtime_gfx942/check-parity.py", line 527, in parse_fields
+    raise CheckError(
+engine_diagnostic_helpers.CheckError: line 31: malformed or duplicate field 'profile'

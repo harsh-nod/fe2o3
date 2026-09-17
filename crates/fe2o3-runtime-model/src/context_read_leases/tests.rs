@@ -92,6 +92,137 @@ fn release(journal: &mut Journal, reference: ContextReadLeaseReferenceV1) {
 }
 
 #[test]
+fn batched_commits_preserve_exact_counts_contents_and_free_stack_order() {
+    let (mut journal, requests) = fixture(8);
+    let retained = acquire(&mut journal, consumer(19), requests[0]);
+    let ranges = [
+        ContextAllocationReadV1 {
+            byte_offset: 0,
+            byte_len: 4,
+            ..requests[0]
+        },
+        ContextAllocationReadV1 {
+            byte_offset: 8,
+            byte_len: 4,
+            ..requests[0]
+        },
+        ContextAllocationReadV1 {
+            byte_offset: 0,
+            byte_len: 4,
+            ..requests[1]
+        },
+        ContextAllocationReadV1 {
+            byte_offset: 8,
+            byte_len: 4,
+            ..requests[1]
+        },
+        requests[2],
+    ];
+    let storage = storage_identity(&journal);
+    let free_before = journal.free_reads.clone();
+    let leases_before = journal.leases.clone();
+    let readers_before = journal.readers.clone();
+    let next_before = journal.next_incarnation;
+    journal.reset_access_count_for_test_v1();
+    let base_before = format!("{:?}", journal.journal);
+    let mut output = [None; 5];
+    journal
+        .acquire_reads(consumer(20), &ranges, &mut output)
+        .unwrap();
+    let references = output.map(Option::unwrap);
+    let mut expected_leases = leases_before;
+    let mut expected_readers = readers_before;
+    for (index, (&reference, &request)) in references.iter().zip(&ranges).enumerate() {
+        assert_eq!(reference.slot, free_before[free_before.len() - 1 - index]);
+        assert_eq!(reference.incarnation, next_before + index as u64);
+        assert_eq!(reference.consumer, consumer(20));
+        expected_leases[reference.slot] = Some(ReadLeaseV1 { reference, request });
+        expected_readers[request.allocation.slot] += 1;
+    }
+    let mut expected_free = free_before[..free_before.len() - ranges.len()].to_vec();
+    assert_eq!(journal.leases, expected_leases);
+    assert_eq!(journal.readers, expected_readers);
+    assert_eq!(journal.free_reads, expected_free);
+    assert_eq!(journal.next_incarnation, next_before + ranges.len() as u64);
+
+    let released = [references[0], references[2], references[4]];
+    journal
+        .release_reads(
+            consumer(20),
+            &released,
+            &ContextReadQuiescenceEvidenceV1 {
+                consumer: consumer(20),
+            },
+        )
+        .unwrap();
+    for reference in released {
+        let entry = expected_leases[reference.slot].take().unwrap();
+        expected_readers[entry.request.allocation.slot] -= 1;
+        expected_free.push(reference.slot);
+        assert_eq!(journal.lookup_read(reference), Err(Error::InvalidReference));
+    }
+    assert_eq!(journal.leases, expected_leases);
+    assert_eq!(journal.readers, expected_readers);
+    assert_eq!(journal.free_reads, expected_free);
+    assert_eq!(journal.next_incarnation, next_before + ranges.len() as u64);
+    assert_eq!(journal.lookup_read(retained), Ok(requests[0]));
+    assert_eq!(journal.lookup_read(references[1]), Ok(ranges[1]));
+    assert_eq!(journal.lookup_read(references[3]), Ok(ranges[3]));
+    assert_eq!(storage_identity(&journal), storage);
+    journal.reset_access_count_for_test_v1();
+    assert_eq!(format!("{:?}", journal.journal), base_before);
+
+    let mut reused = [None; 3];
+    journal
+        .acquire_reads(consumer(21), &ranges[..3], &mut reused)
+        .unwrap();
+    let mut released_slots = released.map(|reference| reference.slot);
+    released_slots.reverse();
+    assert_eq!(
+        reused.map(|reference| reference.unwrap().slot),
+        released_slots
+    );
+    assert_eq!(storage_identity(&journal), storage);
+}
+
+#[test]
+fn last_admissible_incarnation_batch_never_reopens_after_release() {
+    let (mut journal, requests) = fixture(3);
+    journal.next_incarnation = u64::MAX - 3;
+    let storage = storage_identity(&journal);
+    let mut output = [None; 3];
+    journal
+        .acquire_reads(consumer(20), &requests, &mut output)
+        .unwrap();
+    let references = output.map(Option::unwrap);
+    assert_eq!(
+        references.map(|reference| reference.incarnation),
+        [u64::MAX - 3, u64::MAX - 2, u64::MAX - 1]
+    );
+    assert_eq!(journal.next_incarnation, u64::MAX);
+    journal
+        .release_reads(
+            consumer(20),
+            &references,
+            &ContextReadQuiescenceEvidenceV1 {
+                consumer: consumer(20),
+            },
+        )
+        .unwrap();
+    assert_eq!(journal.next_incarnation, u64::MAX);
+    assert_eq!(journal.readers, [0; 4]);
+    let before = snapshot(&journal);
+    let mut retry = [None];
+    assert_eq!(
+        journal.acquire_reads(consumer(21), &requests[..1], &mut retry),
+        Err(Error::EpochExhausted)
+    );
+    assert_eq!(retry, [None]);
+    assert_eq!(snapshot(&journal), before);
+    assert_eq!(storage_identity(&journal), storage);
+}
+
+#[test]
 fn overlapping_readers_block_every_writer_and_retirement_boundary_until_last_release() {
     let (mut journal, requests) = fixture(4);
     let storage = storage_identity(&journal);

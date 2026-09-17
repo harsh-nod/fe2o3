@@ -1,0 +1,25 @@
+{
+  "command": [
+    "/usr/bin/timeout",
+    "--foreground",
+    "--signal=TERM",
+    "--kill-after=5",
+    "120",
+    "/home/harsh/.local/opt/verus-0.2026.08.09.92f466f/verus",
+    "--crate-type",
+    "lib",
+    "--triggers-mode",
+    "silent",
+    "--no-cheating",
+    "--output-json",
+    "--error-format=json",
+    "--num-threads",
+    "4",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-v4j3-reader-commits-2026-09-17/commit-campaign/release_lease_contents/commit.rs"
+  ],
+  "started_ns": 1789673269934489158,
+  "process_group": 323237,
+  "group_absent": true,
+  "finished_ns": 1789673285926284436,
+  "status": 1
+}

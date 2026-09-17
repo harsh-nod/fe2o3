@@ -1,0 +1,1295 @@
+diff --git a/crates/fe2o3-runtime-model/src/context_read_leases/tests.rs b/crates/fe2o3-runtime-model/src/context_read_leases/tests.rs
+index 468052873..3e15987b3 100644
+--- a/crates/fe2o3-runtime-model/src/context_read_leases/tests.rs
++++ b/crates/fe2o3-runtime-model/src/context_read_leases/tests.rs
+@@ -91,6 +91,137 @@ fn release(journal: &mut Journal, reference: ContextReadLeaseReferenceV1) {
+         .unwrap();
+ }
+ 
++#[test]
++fn batched_commits_preserve_exact_counts_contents_and_free_stack_order() {
++    let (mut journal, requests) = fixture(8);
++    let retained = acquire(&mut journal, consumer(19), requests[0]);
++    let ranges = [
++        ContextAllocationReadV1 {
++            byte_offset: 0,
++            byte_len: 4,
++            ..requests[0]
++        },
++        ContextAllocationReadV1 {
++            byte_offset: 8,
++            byte_len: 4,
++            ..requests[0]
++        },
++        ContextAllocationReadV1 {
++            byte_offset: 0,
++            byte_len: 4,
++            ..requests[1]
++        },
++        ContextAllocationReadV1 {
++            byte_offset: 8,
++            byte_len: 4,
++            ..requests[1]
++        },
++        requests[2],
++    ];
++    let storage = storage_identity(&journal);
++    let free_before = journal.free_reads.clone();
++    let leases_before = journal.leases.clone();
++    let readers_before = journal.readers.clone();
++    let next_before = journal.next_incarnation;
++    journal.reset_access_count_for_test_v1();
++    let base_before = format!("{:?}", journal.journal);
++    let mut output = [None; 5];
++    journal
++        .acquire_reads(consumer(20), &ranges, &mut output)
++        .unwrap();
++    let references = output.map(Option::unwrap);
++    let mut expected_leases = leases_before;
++    let mut expected_readers = readers_before;
++    for (index, (&reference, &request)) in references.iter().zip(&ranges).enumerate() {
++        assert_eq!(reference.slot, free_before[free_before.len() - 1 - index]);
++        assert_eq!(reference.incarnation, next_before + index as u64);
++        assert_eq!(reference.consumer, consumer(20));
++        expected_leases[reference.slot] = Some(ReadLeaseV1 { reference, request });
++        expected_readers[request.allocation.slot] += 1;
++    }
++    let mut expected_free = free_before[..free_before.len() - ranges.len()].to_vec();
++    assert_eq!(journal.leases, expected_leases);
++    assert_eq!(journal.readers, expected_readers);
++    assert_eq!(journal.free_reads, expected_free);
++    assert_eq!(journal.next_incarnation, next_before + ranges.len() as u64);
++
++    let released = [references[0], references[2], references[4]];
++    journal
++        .release_reads(
++            consumer(20),
++            &released,
++            &ContextReadQuiescenceEvidenceV1 {
++                consumer: consumer(20),
++            },
++        )
++        .unwrap();
++    for reference in released {
++        let entry = expected_leases[reference.slot].take().unwrap();
++        expected_readers[entry.request.allocation.slot] -= 1;
++        expected_free.push(reference.slot);
++        assert_eq!(journal.lookup_read(reference), Err(Error::InvalidReference));
++    }
++    assert_eq!(journal.leases, expected_leases);
++    assert_eq!(journal.readers, expected_readers);
++    assert_eq!(journal.free_reads, expected_free);
++    assert_eq!(journal.next_incarnation, next_before + ranges.len() as u64);
++    assert_eq!(journal.lookup_read(retained), Ok(requests[0]));
++    assert_eq!(journal.lookup_read(references[1]), Ok(ranges[1]));
++    assert_eq!(journal.lookup_read(references[3]), Ok(ranges[3]));
++    assert_eq!(storage_identity(&journal), storage);
++    journal.reset_access_count_for_test_v1();
++    assert_eq!(format!("{:?}", journal.journal), base_before);
++
++    let mut reused = [None; 3];
++    journal
++        .acquire_reads(consumer(21), &ranges[..3], &mut reused)
++        .unwrap();
++    let mut released_slots = released.map(|reference| reference.slot);
++    released_slots.reverse();
++    assert_eq!(
++        reused.map(|reference| reference.unwrap().slot),
++        released_slots
++    );
++    assert_eq!(storage_identity(&journal), storage);
++}
++
++#[test]
++fn last_admissible_incarnation_batch_never_reopens_after_release() {
++    let (mut journal, requests) = fixture(3);
++    journal.next_incarnation = u64::MAX - 3;
++    let storage = storage_identity(&journal);
++    let mut output = [None; 3];
++    journal
++        .acquire_reads(consumer(20), &requests, &mut output)
++        .unwrap();
++    let references = output.map(Option::unwrap);
++    assert_eq!(
++        references.map(|reference| reference.incarnation),
++        [u64::MAX - 3, u64::MAX - 2, u64::MAX - 1]
++    );
++    assert_eq!(journal.next_incarnation, u64::MAX);
++    journal
++        .release_reads(
++            consumer(20),
++            &references,
++            &ContextReadQuiescenceEvidenceV1 {
++                consumer: consumer(20),
++            },
++        )
++        .unwrap();
++    assert_eq!(journal.next_incarnation, u64::MAX);
++    assert_eq!(journal.readers, [0; 4]);
++    let before = snapshot(&journal);
++    let mut retry = [None];
++    assert_eq!(
++        journal.acquire_reads(consumer(21), &requests[..1], &mut retry),
++        Err(Error::EpochExhausted)
++    );
++    assert_eq!(retry, [None]);
++    assert_eq!(snapshot(&journal), before);
++    assert_eq!(storage_identity(&journal), storage);
++}
++
+ #[test]
+ fn overlapping_readers_block_every_writer_and_retirement_boundary_until_last_release() {
+     let (mut journal, requests) = fixture(4);
+diff --git a/crates/fe2o3-runtime-model/verus/check-negative-quality.py b/crates/fe2o3-runtime-model/verus/check-negative-quality.py
+index 0d449ae76..ac8335f17 100755
+--- a/crates/fe2o3-runtime-model/verus/check-negative-quality.py
++++ b/crates/fe2o3-runtime-model/verus/check-negative-quality.py
+@@ -19,17 +19,17 @@ EXPECTED_CHECK_NEGATIVE_FUNCTION_SHA256 = (
+ EXPECTED_RUNNER_FUNCTION_SHA256 = {
+     "read_pin": "dd0f063d2e13126778cfec4fc6bd9a89af38a0b55ed45491e59eff830a3448aa",
+     "check_digest": "1b1af7d88401a6baa244c63b3edd41fd15b07814e02f3d1bfb4b1841c33819e0",
+-    "check_sources": "c75ca91465c7c020813a9c875258432ef505671cd529c23444f7ec34ba9bbfe4",
++    "check_sources": "ff5b809d6bc58c65ef30cc6d8df6d6690c843039cfb6dd35749692817a6df56c",
+     "run_verus": "a22ae6cb1d34ec0ea6b402ecf96008773cefcc620e511aae7bc3d6e495b5cf66",
+     "check_positive": "2f353f8881c8def07ede3a251bb64de9148b92c802eda65b768a64172cd65d92",
+     "seal_authority": "3e49725d7555f6816455cac2080aae192a8ad6210f62f5be5d8f19ac395d227a",
+ }
+-EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1514
++EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1517
+ EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENTS_SHA256 = (
+-    "4b07cdd80775d532012ce3f641af2b1bcb3391483adc3502160728ce8e1bd463"
++    "e52e723c248708483fcfa2004e1caf3cec035214e2f7cea8aacedfa4b3937220"
+ )
+ EXPECTED_RUNNER_SHA256 = (
+-    "7a6181301d9ebb46c4b53560f4726cf067540b773597f3700309d3c30bd0735b"
++    "02a90595970ccf697a81c8dc2e9033cfb5c07aef571f8919d85e323f2dfebda9"
+ )
+ HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
+ IDENTIFIER = r"(?:r#)?[A-Za-z_][A-Za-z0-9_]*"
+@@ -83,7 +83,8 @@ RUNNER_TOOL_BINDING_BLOCK = (
+     'negative_quality_accept_fixture="$script_dir/tests/fixtures/negative-quality-adverse-input.rs"',
+     'journal_issuance_checker="$script_dir/check-journal-issuance.py"',
+     'read_preflight_checker="$script_dir/check-read-preflight.py"',
+-    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker",
++    'read_commit_checker="$script_dir/check-read-commit.py"',
++    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker read_commit_checker",
+ )
+ RUNNER_JOURNAL_CAMPAIGN_BLOCK = (
+     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$journal_issuance_checker" --self-test "$journal_issuance_proof"',
+@@ -99,6 +100,13 @@ RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK = (
+     '    /usr/bin/python3 -I "$read_preflight_checker" \\',
+     '    "$read_preflight_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/read-preflight"',
+ )
++RUNNER_READ_COMMIT_CAMPAIGN_BLOCK = (
++    '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$read_commit_checker" --self-test "$read_commit_proof"',
++    '/usr/bin/env -i "HOME=$runner_home" "PATH=$runner_path" \\',
++    '    "RUSTUP_HOME=$runner_rustup_home" "CARGO_HOME=$runner_cargo_home" \\',
++    '    /usr/bin/python3 -I "$read_commit_checker" \\',
++    '    "$read_commit_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/read-commit"',
++)
+ RUNNER_NEGATIVE_QUALITY_INVOCATION_BLOCK = (
+     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$negative_quality_checker" --self-test \\',
+     '    "$negative_quality_reject_fixture" \\',
+@@ -110,6 +118,7 @@ RUNNER_SOURCE_CHECKER_INVOCATION = (
+     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$source_checker" \\'
+ )
+ RUNNER_TOOL_DIGEST_LINES = (
++    '    check_digest "$expected_read_commit_checker" "$read_commit_checker"',
+     '    check_digest "$expected_read_preflight_checker" "$read_preflight_checker"',
+     '    check_digest "$expected_journal_issuance_checker" "$journal_issuance_checker"',
+     '    check_digest "$expected_closure" "$closure_manifest"',
+@@ -120,6 +129,7 @@ RUNNER_TOOL_DIGEST_LINES = (
+     '    check_digest "$expected_negative_quality_accept_fixture" "$negative_quality_accept_fixture"',
+ )
+ RUNNER_TOOL_NAMES = (
++    "read_commit_checker",
+     "read_preflight_checker",
+     "journal_issuance_checker",
+     "closure_manifest",
+@@ -950,6 +960,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
+     )
+     journal_start = exact_block_start(lines, RUNNER_JOURNAL_CAMPAIGN_BLOCK, "journal campaign")
+     reader_start = exact_block_start(lines, RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK, "reader preflight campaign")
++    commit_start = exact_block_start(lines, RUNNER_READ_COMMIT_CAMPAIGN_BLOCK, "reader commit campaign")
+     if not environment_start < root_start < tool_start < invocation_start:
+         raise QualityError(
+             "runner environment, root, tool, and invocation blocks are out of order",
+@@ -978,6 +989,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
+     allowed_tool_lines.update(quality_audits)
+     allowed_tool_lines.update(range(journal_start, journal_start + len(RUNNER_JOURNAL_CAMPAIGN_BLOCK)))
+     allowed_tool_lines.update(range(reader_start, reader_start + len(RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK)))
++    allowed_tool_lines.update(range(commit_start, commit_start + len(RUNNER_READ_COMMIT_CAMPAIGN_BLOCK)))
+     for digest_line in RUNNER_TOOL_DIGEST_LINES:
+         matches = [index for index, line in enumerate(lines) if line == digest_line]
+         if len(matches) != 1:
+@@ -1075,6 +1087,10 @@ def audit_runner_root_bindings(runner_source: str) -> None:
+             and quality_audits[0] < reader_start < quality_audits[-1] < closure_invocations[-1]):
+         raise QualityError("reader campaign must run after J1 and before final source/tool checks",
+                            code="runner.reader_preflight_campaign.order")
++    if not (reader_start < commit_start < source_checks[-2]
++            and quality_audits[0] < commit_start < quality_audits[-1] < closure_invocations[-1]):
++        raise QualityError("commit campaign must run after reader preflight and before final source/tool checks",
++                           code="runner.reader_commit_campaign.order")
+     if late_block_starts != sorted(late_block_starts):
+         raise QualityError(
+             "runner late-authority binding blocks are out of order",
+@@ -1506,6 +1522,7 @@ def build_inventory_fixture(root: Path) -> tuple[Path, Path]:
+                 *RUNNER_NEGATIVE_QUALITY_INVOCATION_BLOCK,
+                 *RUNNER_JOURNAL_CAMPAIGN_BLOCK,
+                 *RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK,
++                *RUNNER_READ_COMMIT_CAMPAIGN_BLOCK,
+                 "check_sources",
+                 RUNNER_NEGATIVE_QUALITY_AUDIT,
+                 "check_sources",
+@@ -1580,6 +1597,34 @@ def inventory_self_test() -> None:
+         )
+ 
+     cases = [
++        (
++            "missing commit campaign",
++            lambda _d, r: replace_runner(r, "\n".join(RUNNER_READ_COMMIT_CAMPAIGN_BLOCK) + "\n", ""),
++        ),
++        (
++            "duplicate commit campaign",
++            lambda _d, r: r.write_text(r.read_text() + "\n".join(RUNNER_READ_COMMIT_CAMPAIGN_BLOCK) + "\n"),
++        ),
++        (
++            "changed commit arguments",
++            lambda _d, r: replace_runner(r, RUNNER_READ_COMMIT_CAMPAIGN_BLOCK[-1],
++                                        RUNNER_READ_COMMIT_CAMPAIGN_BLOCK[-1].replace('"$timeout_seconds"', '"300"')),
++        ),
++        (
++            "masked commit failure",
++            lambda _d, r: replace_runner(r, RUNNER_READ_COMMIT_CAMPAIGN_BLOCK[-1],
++                                        RUNNER_READ_COMMIT_CAMPAIGN_BLOCK[-1] + " || true"),
++        ),
++        (
++            "commit tool rebound",
++            lambda _d, r: r.write_text(r.read_text() + 'read_commit_checker=/tmp/untrusted\n'),
++        ),
++        (
++            "relocated commit campaign",
++            lambda _d, r: r.write_text(r.read_text().replace(
++                "\n".join(RUNNER_READ_COMMIT_CAMPAIGN_BLOCK) + "\n", "")
++                + "\n".join(RUNNER_READ_COMMIT_CAMPAIGN_BLOCK) + "\n"),
++        ),
+         (
+             "missing reader campaign",
+             lambda _d, r: replace_runner(r, "\n".join(RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK) + "\n", ""),
+@@ -2181,6 +2226,10 @@ def inventory_self_test() -> None:
+            "changed reader arguments", "masked reader failure")
+     expect("runner.tool_wiring.unparsed", "reader tool rebound")
+     expect("runner.reader_preflight_campaign.order", "relocated reader campaign")
++    expect("runner.block.reader_commit_campaign.count", "missing commit campaign", "duplicate commit campaign",
++           "changed commit arguments", "masked commit failure")
++    expect("runner.tool_wiring.unparsed", "commit tool rebound")
++    expect("runner.reader_commit_campaign.order", "relocated commit campaign")
+     expect("runner.block.journal_campaign.count", "missing journal campaign", "duplicate journal campaign",
+            "changed journal arguments", "masked journal failure")
+     expect("runner.tool_wiring.unparsed", "journal tool rebound")
+diff --git a/crates/fe2o3-runtime-model/verus/check-read-commit.py b/crates/fe2o3-runtime-model/verus/check-read-commit.py
+new file mode 100644
+index 000000000..c9ae6e71c
+--- /dev/null
++++ b/crates/fe2o3-runtime-model/verus/check-read-commit.py
+@@ -0,0 +1,227 @@
++#!/usr/bin/env python3
++"""Source-bound V4-J3 reader commit campaign; not a native/invariant proof."""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import importlib.util
++import json
++import os
++from pathlib import Path
++import signal
++import sys
++import tempfile
++
++sys.dont_write_bytecode = True
++HERE = Path(__file__).resolve().parent
++ROOT = HERE.parents[2]
++PINS = HERE / "pins"
++POSITIVE_COUNT = 127
++INHERITED_COUNT = 103
++DEPENDENCY = "context_read_preflight_v1.rs"
++PREFIX = '// V4-J3 development: reader commit contents; no native authority claim.\n'
++INCLUDE = f'include!("{DEPENDENCY}");\n'
++
++
++def require(condition, message):
++    if not condition:
++        raise ValueError(message)
++
++
++def digest(data: bytes) -> str:
++    return hashlib.sha256(data).hexdigest()
++
++
++def check_pin(path: Path, pin: Path) -> None:
++    expected = pin.read_text().strip()
++    require(len(expected) == 64 and digest(path.read_bytes()) == expected, f"source pin: {path.name}")
++
++
++def pinned_module(name: str, path: Path, pin: Path):
++    verified = path.read_bytes()
++    require(digest(verified) == pin.read_text().strip(), f"module source pin: {path.name}")
++    spec = importlib.util.spec_from_file_location(name, path)
++    require(spec is not None and spec.loader is not None, "module loader")
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[name] = module
++    exec(compile(verified, str(path), "exec"), module.__dict__)
++    check_pin(path, pin)
++    return module
++
++
++PREFLIGHT = pinned_module("commit_preflight_utilities", HERE / "check-read-preflight.py",
++                          PINS / "READ_PREFLIGHT_CHECKER_SHA256")
++BASE, POLICY = PREFLIGHT.BASE, PREFLIGHT.POLICY
++# Reuse the authenticated strict diagnostic parser with this crate's exact count.
++# Its mutation count and source audit are not used to qualify the new commit body.
++PREFLIGHT.POSITIVE_COUNT = POSITIVE_COUNT
++
++
++def mutations():
++    acquire = "    acquire_commit_exec_v1(contents, consumer, requests, output);"
++    release = "    release_commit_exec_v1(contents, references);"
++    cases = []
++    for kind, anchor, function, postcondition in [
++        ("acquire", acquire, "acquire_contents_exec_v1", "acquire_execution_relation_v1"),
++        ("release", release, "release_contents_exec_v1", "release_execution_relation_v1"),
++    ]:
++        changes = [
++            ("skip_commit", f"    // MUTANT: omitted {kind} commit."),
++            ("journal_frame", anchor + "\n    contents.journal.registration_watermark = 0;"),
++            ("incarnation", anchor + "\n    contents.next_incarnation = 0;"),
++            ("free_contents", anchor + "\n    contents.free_reads.clear();"),
++            ("reader_counts", anchor + "\n    if contents.readers.len() > 0 { contents.readers.set(0, 0); }"),
++            ("lease_contents", anchor + "\n    if contents.leases.len() > 0 { contents.leases.set(0, None); }"),
++        ]
++        if kind == "acquire":
++            changes.append(("output_contents", anchor + "\n    if output.len() > 0 { output.set(0, None); }"))
++        for name, after in changes:
++            cases.append(BASE.Mutation(f"{kind}_{name}", function, anchor, after,
++                                       postcondition, POSITIVE_COUNT - 1))
++        cases.append(BASE.Mutation(f"{kind}_rejection_frame", function,
++                                   "Err(error) => return Err(error)",
++                                   "Err(error) => { contents.next_incarnation = 0; return Err(error); }",
++                                   postcondition, POSITIVE_COUNT - 1))
++    return cases
++
++
++def audit_source(source: str, dependency: Path, journal: Path, output: Path) -> None:
++    require(source.isascii(), "ASCII proof source")
++    require(source.startswith(PREFIX + INCLUDE) and source.count(INCLUDE) == 1, "exact initial pinned include")
++    check_pin(dependency, PINS / "CONTEXT_READ_PREFLIGHT_SHA256")
++    check_pin(journal, PINS / "CONTEXT_VERSION_JOURNAL_ISSUANCE_SHA256")
++    stripped = output / "audited-commit-body.rs"
++    stripped.write_text(PREFIX + "\n" + source[len(PREFIX + INCLUDE):], encoding="ascii")
++    POLICY.scan(stripped)
++    PREFLIGHT.audit_source(dependency.read_text(), journal, output / "audited-preflight-body.rs")
++    check_pin(dependency, PINS / "CONTEXT_READ_PREFLIGHT_SHA256")
++    check_pin(journal, PINS / "CONTEXT_VERSION_JOURNAL_ISSUANCE_SHA256")
++
++
++def campaign(source: Path, verus: Path, timeout: int, output: Path):
++    source, verus = source.resolve(strict=True), verus.resolve(strict=True)
++    require(1 <= timeout <= 300, "timeout must be 1 through 300")
++    require(verus.name == "verus", "named Verus executable required")
++    pin_names = {
++        source: "CONTEXT_READ_COMMIT_SHA256",
++        Path(__file__): "READ_COMMIT_CHECKER_SHA256",
++        HERE / DEPENDENCY: "CONTEXT_READ_PREFLIGHT_SHA256",
++        HERE / PREFLIGHT.DEPENDENCY: "CONTEXT_VERSION_JOURNAL_ISSUANCE_SHA256",
++        Path(PREFLIGHT.__file__): "READ_PREFLIGHT_CHECKER_SHA256",
++        Path(BASE.__file__): "JOURNAL_ISSUANCE_CHECKER_SHA256",
++        Path(POLICY.__file__): "PROOF_SOURCE_CHECKER_SHA256",
++        verus: "VERUS_SHA256",
++        PINS / "VERUS_CLOSURE_MANIFEST": "VERUS_CLOSURE_MANIFEST_SHA256",
++    }
++    for path, name in pin_names.items():
++        check_pin(path, PINS / name)
++    closure = ROOT / "examples/row_softmax_v1/verify-verus-closure.sh"
++    manifest = PINS / "VERUS_CLOSURE_MANIFEST"
++    require(digest(closure.read_bytes()) == "c0f5f201dca9ea6b3fa953884cdfaca8ca38413ad2a9de7700b3aaeb3a610d0c", "closure checker pin")
++    inputs = [*pin_names, *[PINS / name for name in pin_names.values()], closure,
++              verus.parent / "rust_verify", verus.parent / "z3"]
++    identities = {str(path): digest(path.read_bytes()) for path in inputs}
++    output.mkdir()
++    (output / "inputs.json").write_text(json.dumps(identities, indent=2) + "\n")
++    environment = {"HOME": os.environ.get("HOME", "/nonexistent")}
++    for name in ("RUSTUP_HOME", "CARGO_HOME"):
++        environment[name] = os.environ.get(name, str(Path(environment["HOME"]) / (".rustup" if name == "RUSTUP_HOME" else ".cargo")))
++    environment["PATH"] = environment["CARGO_HOME"] + "/bin:/usr/bin:/bin"
++    environment["VERUS_Z3_PATH"] = str(verus.parent / "z3")
++    original = source.read_text()
++    dependencies = {name: (HERE / name).read_bytes() for name in [DEPENDENCY, PREFLIGHT.DEPENDENCY]}
++    cases = [("positive_before", None), *[(item.name, item) for item in mutations()], ("positive_after", None)]
++    for phase in ["before", "after"]:
++        status, _, _ = BASE.run_owned(["/bin/sh", str(closure), str(verus.parent), str(manifest)],
++                                      120, output / f"closure-{phase}", environment)
++        require(status == 0, "authenticated Verus distribution")
++        if phase == "after":
++            break
++        for name, mutation in cases:
++            out = output / name
++            out.mkdir()
++            candidate = out / "commit.rs"
++            expected = (BASE.mutate(original, mutation) if mutation else original).encode("ascii")
++            candidate.write_bytes(expected)
++            for dependency, data in dependencies.items():
++                (out / dependency).write_bytes(data)
++            audit_source(expected.decode("ascii"), out / DEPENDENCY, out / PREFLIGHT.DEPENDENCY, out)
++            generated = {str(path): digest(path.read_bytes()) for path in
++                         [candidate, out / DEPENDENCY, out / PREFLIGHT.DEPENDENCY,
++                          out / "audited-commit-body.rs", out / "audited-preflight-body.rs"]}
++            (out / "sources.json").write_text(json.dumps(generated, indent=2) + "\n")
++            command = ["/usr/bin/timeout", "--foreground", "--signal=TERM", "--kill-after=5", str(timeout),
++                       str(verus), "--crate-type", "lib", "--triggers-mode", "silent", "--no-cheating",
++                       "--output-json", "--error-format=json", "--num-threads", "4", str(candidate)]
++            require({path: digest(Path(path).read_bytes()) for path in generated} == generated, "exact solver inputs before")
++            status, stdout, stderr = BASE.run_owned(command, timeout + 10, out / "solver", environment)
++            require({path: digest(Path(path).read_bytes()) for path in generated} == generated, "generated source replacement")
++            PREFLIGHT.check_result(status, stdout, stderr, expected.decode("ascii"), candidate, mutation)
++            require({str(path): digest(path.read_bytes()) for path in inputs} == identities, "source/tool replacement")
++            print(f"PASS: reader commit {name}", flush=True)
++    require({str(path): digest(path.read_bytes()) for path in inputs} == identities, "final source/tool identities")
++    print(f"READ_COMMIT_OK obligations={POSITIVE_COUNT} inherited={INHERITED_COUNT} new={POSITIVE_COUNT - INHERITED_COUNT} executable_mutations={len(mutations())}", flush=True)
++
++
++def self_test(source: str):
++    for case in mutations():
++        changed = BASE.mutate(source, case)
++        BASE.postcondition_bounds(changed, case)
++    # Exercise the unchanged parser's exact counts/spans, stale-bytecode defense,
++    # recursive import audit and process ownership tests with the current count.
++    PREFLIGHT.self_test((HERE / DEPENDENCY).read_text())
++    rejected = 0
++    with tempfile.TemporaryDirectory(prefix="fe2o3-commit-audit-") as temporary:
++        output = Path(temporary)
++        dependency, journal = output / DEPENDENCY, output / PREFLIGHT.DEPENDENCY
++        dependency.write_bytes((HERE / DEPENDENCY).read_bytes())
++        journal.write_bytes((HERE / PREFLIGHT.DEPENDENCY).read_bytes())
++        audit_source(source, dependency, journal, output)
++        for invalid in [source.replace(INCLUDE, INCLUDE.replace(DEPENDENCY, "foreign.rs")),
++                        "\n" + source, source + INCLUDE, "/*\n" + source + "\n*/",
++                        source + '\ninclude!("foreign.rs");\n', source + '\nmod foreign;\n',
++                        source + '\n#[cfg(false)] fn hidden() {}\n',
++                        source + '\nverus! { proof fn bypass() { assume(false); } }\n']:
++            try:
++                audit_source(invalid, dependency, journal, output)
++            except (ValueError, POLICY.ScanError):
++                rejected += 1
++            else:
++                raise ValueError("include/source auditor accepted adverse source")
++        for path in [dependency, journal]:
++            original = path.read_bytes()
++            path.write_bytes(original + b"\n")
++            try:
++                audit_source(source, dependency, journal, output)
++            except (ValueError, POLICY.ScanError):
++                rejected += 1
++            else:
++                raise ValueError("recursive dependency substitution accepted")
++            finally:
++                path.write_bytes(original)
++        audit_source(source, dependency, journal, output)
++    print(f"PASS: commit self-test ({len(mutations())} reversible mutations, {rejected} additional adverse sources rejected)")
++
++
++def main():
++    for signum in BASE.SIGNALS:
++        signal.signal(signum, BASE.interrupted)
++    signal.pthread_sigmask(signal.SIG_UNBLOCK, BASE.SIGNALS)
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--self-test", action="store_true")
++    parser.add_argument("source", type=Path)
++    parser.add_argument("verus", type=Path, nargs="?")
++    parser.add_argument("timeout", type=int, nargs="?")
++    parser.add_argument("output", type=Path, nargs="?")
++    args = parser.parse_args()
++    if args.self_test:
++        require(args.verus is None and args.timeout is None and args.output is None, "self-test arguments")
++        self_test(args.source.read_text())
++    else:
++        require(args.verus is not None and args.timeout is not None and args.output is not None, "campaign arguments")
++        campaign(args.source, args.verus, args.timeout, args.output)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/crates/fe2o3-runtime-model/verus/context_read_commit_v1.rs b/crates/fe2o3-runtime-model/verus/context_read_commit_v1.rs
+new file mode 100644
+index 000000000..b375aedb3
+--- /dev/null
++++ b/crates/fe2o3-runtime-model/verus/context_read_commit_v1.rs
+@@ -0,0 +1,555 @@
++// V4-J3 development: reader commit contents; no native authority claim.
++include!("context_read_preflight_v1.rs");
++
++verus! {
++
++pub open spec fn read_slot_count_v1(requests: Seq<AllocationReadV1>, slot: usize) -> nat
++    decreases requests.len(),
++{
++    if requests.len() == 0 { 0 }
++    else { read_slot_count_v1(requests.drop_last(), slot)
++        + if requests.last().allocation.slot == slot { 1nat } else { 0nat } }
++}
++
++pub proof fn read_slot_count_bound_v1(requests: Seq<AllocationReadV1>, slot: usize)
++    ensures read_slot_count_v1(requests, slot) <= requests.len(),
++    decreases requests.len(),
++{
++    if requests.len() > 0 { read_slot_count_bound_v1(requests.drop_last(), slot); }
++}
++
++pub proof fn read_slot_count_push_v1(requests: Seq<AllocationReadV1>, request: AllocationReadV1, slot: usize)
++    ensures read_slot_count_v1(requests.push(request), slot)
++        == read_slot_count_v1(requests, slot) + if request.allocation.slot == slot { 1nat } else { 0nat },
++{
++    assert(requests.push(request).drop_last() =~= requests);
++}
++
++pub open spec fn reader_journal_frame_v1(before: ReadContentsV1, after: ReadContentsV1) -> bool {
++    &&& issuance_contents_frame_v1(before.journal, after.journal)
++    &&& after.journal.registration_watermark == before.journal.registration_watermark
++    &&& after.journal.reserved_count == before.journal.reserved_count
++    &&& after.journal.writers@ == before.journal.writers@
++    &&& after.journal.free@ == before.journal.free@
++}
++
++pub open spec fn acquired_reference_v1(before: ReadContentsV1, consumer: WriterKeyV1, index: int) -> ReadReferenceV1 {
++    ReadReferenceV1 { slot: before.free_reads@[before.free_reads@.len() - 1 - index],
++        incarnation: (before.next_incarnation + index) as u64, consumer }
++}
++
++pub open spec fn selected_free_unique_v1(before: ReadContentsV1, count: nat) -> bool {
++    forall|i: int, j: int| 0 <= i < j < count ==>
++        #[trigger] before.free_reads@[before.free_reads@.len() - 1 - i]
++            != #[trigger] before.free_reads@[before.free_reads@.len() - 1 - j]
++}
++
++// These are explicit commit safety premises, not an assumed reachable-state invariant.
++pub open spec fn acquire_commit_ready_v1(before: ReadContentsV1, requests: Seq<AllocationReadV1>) -> bool {
++    &&& requests.len() <= before.free_reads@.len()
++    &&& requests.len() <= u64::MAX
++    &&& 0 < before.next_incarnation
++    &&& before.next_incarnation + requests.len() <= u64::MAX
++    &&& selected_free_unique_v1(before, requests.len())
++    &&& acquire_prefix_ready_v1(before, requests, requests.len())
++}
++
++pub open spec fn acquire_prefix_ready_v1(before: ReadContentsV1, requests: Seq<AllocationReadV1>, end: nat) -> bool {
++    forall|i: int| 0 <= i < end ==> {
++        let slot = before.free_reads@[before.free_reads@.len() - 1 - i];
++        let allocation = (#[trigger] requests[i]).allocation.slot;
++        &&& slot < before.leases@.len()
++        &&& before.leases@[slot as int].is_none()
++        &&& allocation < before.readers@.len()
++        &&& before.readers@[allocation as int]
++            + read_slot_count_v1(requests.take(i + 1), allocation) <= usize::MAX
++        &&& before.readers@[allocation as int]
++            + read_slot_count_v1(requests.take(i + 1), allocation) <= before.leases@.len()
++    }
++}
++
++pub open spec fn acquired_leases_v1(
++    before: ReadContentsV1, consumer: WriterKeyV1, requests: Seq<AllocationReadV1>, count: nat,
++) -> Seq<Option<ReadLeaseV1>>
++    decreases count,
++{
++    if count == 0 { before.leases@ }
++    else {
++        let reference = acquired_reference_v1(before, consumer, count - 1);
++        acquired_leases_v1(before, consumer, requests, (count - 1) as nat)
++            .update(reference.slot as int, Some(ReadLeaseV1 { reference, request: requests[count - 1] }))
++    }
++}
++
++pub open spec fn acquire_commit_prefix_v1(
++    before: ReadContentsV1, after: ReadContentsV1, consumer: WriterKeyV1,
++    requests: Seq<AllocationReadV1>, output_before: Seq<Option<ReadReferenceV1>>,
++    output_after: Seq<Option<ReadReferenceV1>>, count: nat,
++) -> bool {
++    &&& reader_journal_frame_v1(before, after)
++    &&& after.next_incarnation == before.next_incarnation
++    &&& after.free_reads@ == before.free_reads@.take(before.free_reads@.len() - count)
++    &&& after.leases@ == acquired_leases_v1(before, consumer, requests, count)
++    &&& after.leases@.len() == before.leases@.len()
++    &&& after.readers@.len() == before.readers@.len()
++    &&& forall|a: int| 0 <= a < after.readers@.len() ==>
++        after.readers@[a] == before.readers@[a] + read_slot_count_v1(requests.take(count as int), a as usize)
++    &&& output_after.len() == output_before.len()
++    &&& forall|i: int| 0 <= i < output_after.len() ==> output_after[i]
++        == if i < count { Some(acquired_reference_v1(before, consumer, i)) } else { output_before[i] }
++}
++
++pub open spec fn acquire_commit_relation_v1(
++    before: ReadContentsV1, after: ReadContentsV1, consumer: WriterKeyV1,
++    requests: Seq<AllocationReadV1>, output: Seq<Option<ReadReferenceV1>>,
++) -> bool {
++    &&& reader_journal_frame_v1(before, after)
++    &&& after.next_incarnation == before.next_incarnation + requests.len()
++    &&& after.free_reads@ == before.free_reads@.take(before.free_reads@.len() - requests.len())
++    &&& after.leases@ == acquired_leases_v1(before, consumer, requests, requests.len())
++    &&& after.leases@.len() == before.leases@.len()
++    &&& after.readers@.len() == before.readers@.len()
++    &&& forall|a: int| 0 <= a < after.readers@.len() ==>
++        after.readers@[a] == before.readers@[a] + read_slot_count_v1(requests, a as usize)
++    &&& output.len() == requests.len()
++    &&& forall|i: int| 0 <= i < output.len() ==> output[i] == Some(acquired_reference_v1(before, consumer, i))
++}
++
++pub proof fn acquired_lease_installed_v1(
++    before: ReadContentsV1, consumer: WriterKeyV1, requests: Seq<AllocationReadV1>, count: nat, index: nat,
++)
++    requires acquire_commit_ready_v1(before, requests), index < count <= requests.len(),
++    ensures acquired_leases_v1(before, consumer, requests, count)
++        [acquired_reference_v1(before, consumer, index as int).slot as int]
++        == Some(ReadLeaseV1 { reference: acquired_reference_v1(before, consumer, index as int), request: requests[index as int] }),
++        acquired_leases_v1(before, consumer, requests, count).len() == before.leases@.len(),
++    decreases count,
++{
++    if index + 1 < count {
++        acquired_lease_installed_v1(before, consumer, requests, (count - 1) as nat, index);
++    } else if count > 1 {
++        acquired_lease_installed_v1(before, consumer, requests, (count - 1) as nat, 0);
++    }
++}
++
++pub proof fn acquired_outputs_are_installed_v1(
++    before: ReadContentsV1, after: ReadContentsV1, consumer: WriterKeyV1,
++    requests: Seq<AllocationReadV1>, output: Seq<Option<ReadReferenceV1>>,
++)
++    requires acquire_commit_ready_v1(before, requests), acquire_commit_relation_v1(before, after, consumer, requests, output),
++    ensures forall|i: int| 0 <= i < requests.len() ==> {
++        let reference = (#[trigger] output[i]).unwrap();
++        &&& output[i].is_some()
++        &&& reference.slot < after.leases@.len()
++        &&& after.leases@[reference.slot as int] == Some(ReadLeaseV1 { reference, request: requests[i] })
++        &&& before.next_incarnation <= reference.incarnation < after.next_incarnation
++        &&& 0 < reference.incarnation
++    },
++{
++    assert forall|i: int| 0 <= i < requests.len() implies {
++        let reference = (#[trigger] output[i]).unwrap();
++        &&& output[i].is_some()
++        &&& reference.slot < after.leases@.len()
++        &&& after.leases@[reference.slot as int] == Some(ReadLeaseV1 { reference, request: requests[i] })
++        &&& before.next_incarnation <= reference.incarnation < after.next_incarnation
++        &&& 0 < reference.incarnation
++    } by {
++        acquired_lease_installed_v1(before, consumer, requests, requests.len(), i as nat);
++    }
++}
++
++pub fn acquire_commit_exec_v1(
++    contents: &mut ReadContentsV1, consumer: WriterKeyV1, requests: &[AllocationReadV1],
++    output: &mut Vec<Option<ReadReferenceV1>>,
++)
++    requires acquire_commit_ready_v1(*old(contents), requests@), old(output)@.len() == requests@.len(),
++    ensures acquire_commit_relation_v1(*old(contents), *final(contents), consumer, requests@, final(output)@),
++{
++    let ghost before = *contents;
++    let ghost output_before = output@;
++    let reader_capacity = contents.readers.len();
++    let mut index = 0;
++    proof {
++        assert(before.free_reads@.take(before.free_reads@.len() as int) =~= before.free_reads@);
++        assert(requests@.take(0) =~= Seq::<AllocationReadV1>::empty());
++    }
++    while index < requests.len()
++        invariant index <= requests.len(), output_before.len() == requests@.len(),
++            before.readers@.len() == reader_capacity,
++            acquire_commit_ready_v1(before, requests@),
++            acquire_commit_prefix_v1(before, *contents, consumer, requests@, output_before, output@, index as nat),
++        decreases requests.len() - index,
++    {
++        let ghost previous_readers = contents.readers@;
++        let ghost previous_output = output@;
++        let ghost previous_leases = contents.leases@;
++        let slot = contents.free_reads.pop().unwrap();
++        let reference = ReadReferenceV1 { slot, incarnation: contents.next_incarnation + index as u64, consumer };
++        contents.leases.set(slot, Some(ReadLeaseV1 { reference, request: requests[index] }));
++        let allocation = requests[index].allocation.slot;
++        proof {
++            assert(requests@.take(index + 1) =~= requests@.take(index as int).push(requests@[index as int]));
++            read_slot_count_push_v1(requests@.take(index as int), requests@[index as int], allocation);
++        }
++        let count = contents.readers[allocation] + 1;
++        contents.readers.set(allocation, count);
++        output.set(index, Some(reference));
++        proof {
++            assert forall|a: int| 0 <= a < contents.readers@.len() implies
++                contents.readers@[a] == before.readers@[a] + read_slot_count_v1(requests@.take(index + 1), a as usize) by {
++                read_slot_count_push_v1(requests@.take(index as int), requests@[index as int], a as usize);
++            }
++            assert(contents.free_reads@ =~= before.free_reads@.take(before.free_reads@.len() - index - 1));
++        }
++        index += 1;
++    }
++    proof { assert(requests@.take(requests@.len() as int) =~= requests@); }
++    contents.next_incarnation += requests.len() as u64;
++}
++
++pub open spec fn released_requests_v1(before: ReadContentsV1, references: Seq<ReadReferenceV1>) -> Seq<AllocationReadV1> {
++    Seq::new(references.len(), |i: int| before.leases@[references[i].slot as int].unwrap().request)
++}
++
++pub open spec fn release_commit_ready_v1(before: ReadContentsV1, references: Seq<ReadReferenceV1>) -> bool {
++    &&& before.free_reads@.len() + references.len() <= usize::MAX
++    &&& before.free_reads@.len() + references.len() <= before.leases@.len()
++    &&& forall|i: int, j: int| 0 <= i < j < references.len() ==> references[i].slot != references[j].slot
++    &&& release_prefix_ready_v1(before, references, references.len())
++}
++
++pub open spec fn release_prefix_ready_v1(before: ReadContentsV1, references: Seq<ReadReferenceV1>, end: nat) -> bool {
++    forall|i: int| 0 <= i < end ==> {
++        let slot = (#[trigger] references[i]).slot;
++        let entry = before.leases@[slot as int].unwrap();
++        &&& slot < before.leases@.len()
++        &&& before.leases@[slot as int].is_some()
++        &&& same_read_reference_v1(entry.reference, references[i])
++        &&& entry.request.allocation.slot < before.readers@.len()
++        &&& read_slot_count_v1(released_requests_v1(before, references).take(i + 1), entry.request.allocation.slot)
++            <= before.readers@[entry.request.allocation.slot as int]
++    }
++}
++
++pub open spec fn released_leases_v1(before: ReadContentsV1, references: Seq<ReadReferenceV1>, count: nat)
++    -> Seq<Option<ReadLeaseV1>>
++    decreases count,
++{
++    if count == 0 { before.leases@ }
++    else { released_leases_v1(before, references, (count - 1) as nat).update(references[count - 1].slot as int, None) }
++}
++
++pub proof fn released_leases_unselected_v1(before: ReadContentsV1, references: Seq<ReadReferenceV1>, count: nat, slot: int)
++    requires count <= references.len(), 0 <= slot < before.leases@.len(),
++        forall|i: int| 0 <= i < count ==> references[i].slot != slot,
++        forall|i: int| 0 <= i < count ==> references[i].slot < before.leases@.len(),
++    ensures released_leases_v1(before, references, count)[slot] == before.leases@[slot],
++        released_leases_v1(before, references, count).len() == before.leases@.len(),
++    decreases count,
++{
++    if count > 0 { released_leases_unselected_v1(before, references, (count - 1) as nat, slot); }
++}
++
++pub open spec fn release_commit_prefix_v1(
++    before: ReadContentsV1, after: ReadContentsV1, references: Seq<ReadReferenceV1>, count: nat,
++) -> bool {
++    &&& reader_journal_frame_v1(before, after)
++    &&& after.next_incarnation == before.next_incarnation
++    &&& after.free_reads@ == before.free_reads@ + Seq::new(count, |i: int| references[i].slot)
++    &&& after.leases@ == released_leases_v1(before, references, count)
++    &&& after.leases@.len() == before.leases@.len()
++    &&& after.readers@.len() == before.readers@.len()
++    &&& forall|a: int| 0 <= a < after.readers@.len() ==>
++        after.readers@[a] == before.readers@[a]
++            - read_slot_count_v1(released_requests_v1(before, references).take(count as int), a as usize)
++}
++
++pub fn release_commit_exec_v1(contents: &mut ReadContentsV1, references: &[ReadReferenceV1])
++    requires release_commit_ready_v1(*old(contents), references@),
++    ensures release_commit_prefix_v1(*old(contents), *final(contents), references@, references@.len()),
++{
++    let ghost before = *contents;
++    let ghost requests = released_requests_v1(before, references@);
++    let reader_capacity = contents.readers.len();
++    let mut index = 0;
++    proof {
++        assert(Seq::new(0, |i: int| references@[i].slot) =~= Seq::<usize>::empty());
++        assert(before.free_reads@ + Seq::<usize>::empty() =~= before.free_reads@);
++        assert(requests.take(0) =~= Seq::<AllocationReadV1>::empty());
++    }
++    while index < references.len()
++        invariant index <= references.len(), release_commit_ready_v1(before, references@),
++            before.readers@.len() == reader_capacity,
++            requests == released_requests_v1(before, references@),
++            release_commit_prefix_v1(before, *contents, references@, index as nat),
++        decreases references.len() - index,
++    {
++        let reference = references[index];
++        let ghost previous_readers = contents.readers@;
++        proof { released_leases_unselected_v1(before, references@, index as nat, reference.slot as int); }
++        let entry = contents.leases[reference.slot].unwrap();
++        contents.leases.set(reference.slot, None);
++        let allocation = entry.request.allocation.slot;
++        proof {
++            assert(requests.take(index + 1) =~= requests.take(index as int).push(requests[index as int]));
++            read_slot_count_push_v1(requests.take(index as int), requests[index as int], allocation);
++        }
++        let count = contents.readers[allocation] - 1;
++        contents.readers.set(allocation, count);
++        contents.free_reads.push(reference.slot);
++        proof {
++            assert forall|a: int| 0 <= a < contents.readers@.len() implies
++                contents.readers@[a] == before.readers@[a] - read_slot_count_v1(requests.take(index + 1), a as usize) by {
++                assert(previous_readers[a] == before.readers@[a] - read_slot_count_v1(requests.take(index as int), a as usize));
++                assert(requests[index as int].allocation.slot == allocation);
++                assert(contents.readers@[a] == if a == allocation { previous_readers[a] - 1 } else { previous_readers[a] as int });
++                read_slot_count_push_v1(requests.take(index as int), requests[index as int], a as usize);
++            }
++            assert(contents.free_reads@ =~= before.free_reads@ + Seq::new((index + 1) as nat, |i: int| references@[i].slot));
++        }
++        index += 1;
++    }
++}
++
++pub open spec fn order_local_count_v1(keys: Seq<ReadOrderV1>, local: u64) -> nat
++    decreases keys.len(),
++{
++    if keys.len() == 0 { 0 }
++    else { order_local_count_v1(keys.drop_last(), local) + if keys.last().0 == local { 1nat } else { 0nat } }
++}
++
++pub proof fn order_local_count_zero_v1(keys: Seq<ReadOrderV1>, local: u64)
++    requires forall|i: int| 0 <= i < keys.len() ==> (#[trigger] keys[i]).0 != local,
++    ensures order_local_count_v1(keys, local) == 0,
++    decreases keys.len(),
++{
++    if keys.len() > 0 { order_local_count_zero_v1(keys.drop_last(), local); }
++}
++
++pub proof fn order_transitive_v1(left: ReadOrderV1, middle: ReadOrderV1, right: ReadOrderV1)
++    requires order_lt_v1(left, middle), order_lt_v1(middle, right),
++    ensures order_lt_v1(left, right),
++{}
++
++pub open spec fn canonical_prefix_v1(keys: Seq<ReadOrderV1>, end: nat, state: ReadScanV1) -> bool {
++    &&& end <= keys.len()
++    &&& state.group <= end
++    &&& forall|i: int, j: int| 0 <= i < j < end ==> order_lt_v1(#[trigger] keys[i], #[trigger] keys[j])
++    &&& if end == 0 { state.previous.is_none() && state.group == 0 }
++        else { state.previous == Some(keys[end - 1])
++            && state.group == order_local_count_v1(keys.take(end as int), keys[end - 1].0) }
++}
++
++pub proof fn canonical_prefix_extend_v1(keys: Seq<ReadOrderV1>, end: nat, state: ReadScanV1)
++    requires canonical_prefix_v1(keys, end, state), end < keys.len(), end < usize::MAX,
++        state.previous.is_some() ==> order_lt_v1(state.previous.unwrap(), keys[end as int]),
++    ensures canonical_prefix_v1(keys, end + 1, ReadScanV1 { previous: Some(keys[end as int]),
++        group: next_group_v1(state.previous, state.group, keys[end as int]) }),
++{
++    let key = keys[end as int];
++    assert forall|i: int, j: int| 0 <= i < j < end + 1 implies order_lt_v1(keys[i], keys[j]) by {
++        if j == end && i < end - 1 { order_transitive_v1(keys[i], keys[end - 1], key); }
++    }
++    assert(keys.take((end + 1) as int).drop_last() =~= keys.take(end as int));
++    assert(keys.take((end + 1) as int).last() == key);
++    if end == 0 {
++        assert(keys.take(0) =~= Seq::<ReadOrderV1>::empty());
++    } else if keys[end - 1].0 != key.0 {
++        assert forall|i: int| 0 <= i < end implies (#[trigger] keys.take(end as int)[i]).0 != key.0 by {
++            if i < end - 1 { assert(order_lt_v1(keys[i], keys[end - 1])); }
++        }
++        order_local_count_zero_v1(keys.take(end as int), key.0);
++    }
++    assert(order_local_count_v1(keys.take((end + 1) as int), key.0)
++        == order_local_count_v1(keys.take(end as int), key.0) + 1);
++}
++
++pub proof fn validated_same_slot_local_v1(journal: JournalContentsV1, left: AllocationReadV1, right: AllocationReadV1)
++    requires read_decision_v1(journal, left) == Ok(()), read_decision_v1(journal, right) == Ok(()),
++        left.allocation.slot == right.allocation.slot,
++    ensures left.allocation.key.local == right.allocation.key.local,
++{}
++
++pub proof fn read_count_local_dominance_v1(
++    journal: JournalContentsV1, requests: Seq<AllocationReadV1>, keys: Seq<ReadOrderV1>, target: AllocationReadV1,
++)
++    requires requests.len() == keys.len(), read_decision_v1(journal, target) == Ok(()),
++        forall|i: int| 0 <= i < requests.len() ==> read_decision_v1(journal, #[trigger] requests[i]) == Ok(()),
++        forall|i: int| 0 <= i < requests.len() ==> (#[trigger] keys[i]).0 == requests[i].allocation.key.local,
++    ensures read_slot_count_v1(requests, target.allocation.slot)
++        <= order_local_count_v1(keys, target.allocation.key.local),
++    decreases requests.len(),
++{
++    if requests.len() > 0 {
++        read_count_local_dominance_v1(journal, requests.drop_last(), keys.drop_last(), target);
++        if requests.last().allocation.slot == target.allocation.slot {
++            validated_same_slot_local_v1(journal, requests.last(), target);
++        }
++    }
++}
++
++pub proof fn acquire_scan_commit_ready_v1(
++    before: ReadContentsV1, consumer: WriterKeyV1, requests: Seq<AllocationReadV1>, output: Seq<Option<ReadReferenceV1>>,
++    index: nat, state: ReadScanV1,
++)
++    requires before.readers@.len() == before.journal.allocations@.len(), requests.len() <= usize::MAX,
++        requests.len() <= u64::MAX,
++        acquire_header_v1(before, consumer, requests.len() as usize, output) == Ok(()),
++        selected_free_unique_v1(before, requests.len()),
++        index <= requests.len(), acquire_scan_v1(before, requests, index, state) == Ok(()),
++        canonical_prefix_v1(Seq::new(requests.len(), |i: int| read_order_v1(requests[i], 0)), index, state),
++        forall|i: int| 0 <= i < index ==> read_decision_v1(before.journal, #[trigger] requests[i]) == Ok(()),
++        acquire_prefix_ready_v1(before, requests, index),
++    ensures acquire_commit_ready_v1(before, requests), output.len() == requests.len(),
++        forall|i: int| 0 <= i < requests.len() ==> read_decision_v1(before.journal, #[trigger] requests[i]) == Ok(()),
++    decreases requests.len() - index,
++{
++    let keys = Seq::new(requests.len(), |i: int| read_order_v1(requests[i], 0));
++    if index < requests.len() {
++        let request = requests[index as int];
++        let next = match acquire_item_v1(before, request, index as usize, state) { Ok(next) => next, Err(_) => state };
++        canonical_prefix_extend_v1(keys, index, state);
++        read_count_local_dominance_v1(before.journal, requests.take((index + 1) as int), keys.take((index + 1) as int), request);
++        assert(next == ReadScanV1 { previous: Some(keys[index as int]),
++            group: next_group_v1(state.previous, state.group, keys[index as int]) });
++        assert(canonical_prefix_v1(keys, index + 1, next));
++        assert(read_slot_count_v1(requests.take((index + 1) as int), request.allocation.slot) <= next.group);
++        assert(before.readers@[request.allocation.slot as int] + next.group <= before.leases@.len());
++        assert(acquire_prefix_ready_v1(before, requests, index + 1));
++        acquire_scan_commit_ready_v1(before, consumer, requests, output, index + 1, next);
++    }
++}
++
++pub proof fn acquire_preflight_implies_commit_ready_v1(
++    before: ReadContentsV1, consumer: WriterKeyV1, requests: Seq<AllocationReadV1>, output: Seq<Option<ReadReferenceV1>>,
++)
++    requires before.readers@.len() == before.journal.allocations@.len(), requests.len() <= usize::MAX,
++        requests.len() <= u64::MAX, acquire_decision_v1(before, consumer, requests, output) == Ok(()),
++        selected_free_unique_v1(before, requests.len()),
++    ensures acquire_commit_ready_v1(before, requests), output.len() == requests.len(),
++        forall|i: int| 0 <= i < requests.len() ==> read_decision_v1(before.journal, #[trigger] requests[i]) == Ok(()),
++{
++    acquire_scan_commit_ready_v1(before, consumer, requests, output, 0, ReadScanV1 { previous: None, group: 0 });
++}
++
++pub proof fn release_scan_commit_ready_v1(
++    before: ReadContentsV1, consumer: WriterKeyV1, references: Seq<ReadReferenceV1>,
++    evidence_consumer: WriterKeyV1, observed_free_capacity: usize,
++    index: nat, state: ReadScanV1,
++)
++    requires before.readers@.len() == before.journal.allocations@.len(), references.len() <= usize::MAX,
++        release_header_v1(before, consumer, evidence_consumer, references.len() as usize, observed_free_capacity) == Ok(()),
++        index <= references.len(), release_scan_v1(before, consumer, references, index, state) == Ok(()),
++        canonical_prefix_v1(Seq::new(references.len(), |i: int|
++            read_order_v1(released_requests_v1(before, references)[i], references[i].incarnation)), index, state),
++        forall|i: int| 0 <= i < index ==>
++            read_decision_v1(before.journal, #[trigger] released_requests_v1(before, references)[i]) == Ok(()),
++        release_prefix_ready_v1(before, references, index),
++    ensures release_commit_ready_v1(before, references),
++    decreases references.len() - index,
++{
++    let requests = released_requests_v1(before, references);
++    let keys = Seq::new(references.len(), |i: int| read_order_v1(requests[i], references[i].incarnation));
++    if index < references.len() {
++        let reference = references[index as int];
++        let next = match release_item_v1(before, consumer, reference, state) { Ok(next) => next, Err(_) => state };
++        canonical_prefix_extend_v1(keys, index, state);
++        read_count_local_dominance_v1(before.journal, requests.take((index + 1) as int), keys.take((index + 1) as int), requests[index as int]);
++        assert(next == ReadScanV1 { previous: Some(keys[index as int]),
++            group: next_group_v1(state.previous, state.group, keys[index as int]) });
++        release_scan_commit_ready_v1(before, consumer, references, evidence_consumer, observed_free_capacity, index + 1, next);
++    } else {
++        assert forall|i: int, j: int| 0 <= i < j < references.len() implies references[i].slot != references[j].slot by {
++            if references[i].slot == references[j].slot {
++                assert(keys[i] == keys[j]);
++                assert(order_lt_v1(keys[i], keys[j]));
++            }
++        }
++    }
++}
++
++pub proof fn release_preflight_implies_commit_ready_v1(
++    before: ReadContentsV1, consumer: WriterKeyV1, references: Seq<ReadReferenceV1>,
++    evidence_consumer: WriterKeyV1, observed_free_capacity: usize,
++)
++    requires before.readers@.len() == before.journal.allocations@.len(), references.len() <= usize::MAX,
++        release_decision_v1(before, consumer, references, evidence_consumer, observed_free_capacity) == Ok(()),
++    ensures release_commit_ready_v1(before, references),
++{
++    release_scan_commit_ready_v1(before, consumer, references, evidence_consumer, observed_free_capacity,
++        0, ReadScanV1 { previous: None, group: 0 });
++}
++
++pub open spec fn acquire_execution_relation_v1(
++    before: ReadContentsV1, after: ReadContentsV1, consumer: WriterKeyV1, requests: Seq<AllocationReadV1>,
++    output_before: Seq<Option<ReadReferenceV1>>, output_after: Seq<Option<ReadReferenceV1>>, result: Result<(), ReadErrorV1>,
++) -> bool {
++    &&& result == acquire_decision_v1(before, consumer, requests, output_before)
++    &&& match result {
++        Err(_) => reader_contents_frame_v1(before, after) && output_after == output_before,
++        Ok(()) => acquire_commit_relation_v1(before, after, consumer, requests, output_after),
++    }
++}
++
++pub fn acquire_contents_exec_v1(
++    contents: &mut ReadContentsV1, consumer: WriterKeyV1, requests: &[AllocationReadV1], output: &mut Vec<Option<ReadReferenceV1>>,
++) -> (result: Result<(), ReadErrorV1>)
++    requires old(contents).readers@.len() == old(contents).journal.allocations@.len(), requests@.len() <= u64::MAX,
++        acquire_decision_v1(*old(contents), consumer, requests@, old(output)@) == Ok(())
++            ==> selected_free_unique_v1(*old(contents), requests@.len()),
++    ensures acquire_execution_relation_v1(*old(contents), *final(contents), consumer, requests@, old(output)@, final(output)@, result),
++{
++    let ghost before = *contents;
++    let ghost output_before = output@;
++    let _count = requests.len();
++    let decision = acquire_preflight_exec_v1(contents, consumer, requests, output.as_slice());
++    proof {
++        assert(decision == acquire_decision_v1(before, consumer, requests@, output_before));
++    }
++    match decision {
++        Err(error) => return Err(error), Ok(value) => {
++            // Materialize extensional equality of the unit payload for the scan bridge.
++            proof { assert(value =~= ()); }
++        },
++    }
++    proof { acquire_preflight_implies_commit_ready_v1(*contents, consumer, requests@, output@); }
++    acquire_commit_exec_v1(contents, consumer, requests, output);
++    Ok(())
++}
++
++pub open spec fn release_execution_relation_v1(
++    before: ReadContentsV1, after: ReadContentsV1, consumer: WriterKeyV1, references: Seq<ReadReferenceV1>,
++    evidence_consumer: WriterKeyV1, observed_free_capacity: usize, result: Result<(), ReadErrorV1>,
++) -> bool {
++    &&& result == release_decision_v1(before, consumer, references, evidence_consumer, observed_free_capacity)
++    &&& match result {
++        Err(_) => reader_contents_frame_v1(before, after),
++        Ok(()) => release_commit_prefix_v1(before, after, references, references.len()),
++    }
++}
++
++pub fn release_contents_exec_v1(
++    contents: &mut ReadContentsV1, consumer: WriterKeyV1, references: &[ReadReferenceV1],
++    evidence_consumer: WriterKeyV1, observed_free_capacity: usize,
++) -> (result: Result<(), ReadErrorV1>)
++    requires old(contents).readers@.len() == old(contents).journal.allocations@.len(),
++    ensures release_execution_relation_v1(*old(contents), *final(contents), consumer, references@,
++        evidence_consumer, observed_free_capacity, result),
++{
++    let ghost before = *contents;
++    let _count = references.len();
++    let decision = release_preflight_exec_v1(contents, consumer, references, evidence_consumer, observed_free_capacity);
++    proof {
++        assert(decision == release_decision_v1(before, consumer, references@, evidence_consumer, observed_free_capacity));
++    }
++    match decision {
++        Err(error) => return Err(error), Ok(value) => {
++            proof { assert(value =~= ()); }
++        },
++    }
++    proof { release_preflight_implies_commit_ready_v1(*contents, consumer, references@, evidence_consumer, observed_free_capacity); }
++    release_commit_exec_v1(contents, references);
++    Ok(())
++}
++
++}
+diff --git a/crates/fe2o3-runtime-model/verus/pins/CONTEXT_READ_COMMIT_SHA256 b/crates/fe2o3-runtime-model/verus/pins/CONTEXT_READ_COMMIT_SHA256
+new file mode 100644
+index 000000000..883bdf547
+--- /dev/null
++++ b/crates/fe2o3-runtime-model/verus/pins/CONTEXT_READ_COMMIT_SHA256
+@@ -0,0 +1 @@
++0a8f4fbde07ad650a9b6facbd4d5910fbf6f5058eedf9ff4b4875867db67e2f2
+diff --git a/crates/fe2o3-runtime-model/verus/pins/NEGATIVE_QUALITY_CHECKER_SHA256 b/crates/fe2o3-runtime-model/verus/pins/NEGATIVE_QUALITY_CHECKER_SHA256
+index 08029096e..ab159d765 100644
+--- a/crates/fe2o3-runtime-model/verus/pins/NEGATIVE_QUALITY_CHECKER_SHA256
++++ b/crates/fe2o3-runtime-model/verus/pins/NEGATIVE_QUALITY_CHECKER_SHA256
+@@ -1 +1 @@
+-ac3b40b8954ae5f63ffb8fe437ad90375df0cc12b2d0f91cd6a11749e999fcc6
++6db5d8c929605e05f280ef79ba076833d7c3a7bcd14bc4ed9e2802295c609d3f
+diff --git a/crates/fe2o3-runtime-model/verus/pins/READ_COMMIT_CHECKER_SHA256 b/crates/fe2o3-runtime-model/verus/pins/READ_COMMIT_CHECKER_SHA256
+new file mode 100644
+index 000000000..75f11ab03
+--- /dev/null
++++ b/crates/fe2o3-runtime-model/verus/pins/READ_COMMIT_CHECKER_SHA256
+@@ -0,0 +1 @@
++2cb386c522c1bc72826ec8b3fa3b4092391166dbe8b1e43ae5dc776e791e34db
+diff --git a/crates/fe2o3-runtime-model/verus/pins/TRANSCRIPT_SHA256 b/crates/fe2o3-runtime-model/verus/pins/TRANSCRIPT_SHA256
+index ff609c63b..49ca4a5ab 100644
+--- a/crates/fe2o3-runtime-model/verus/pins/TRANSCRIPT_SHA256
++++ b/crates/fe2o3-runtime-model/verus/pins/TRANSCRIPT_SHA256
+@@ -1 +1 @@
+-78ca7b3c6d910dc47969aaddd8bd57253c643b9635f20ed395562c2449925ca3
++174ca8101754f58d4a51a9f1b7fabb120fc7d42d2dec616c2e9cfed09baa8826
+diff --git a/crates/fe2o3-runtime-model/verus/verify-verus.sh b/crates/fe2o3-runtime-model/verus/verify-verus.sh
+index 64b04caa4..ae6784527 100755
+--- a/crates/fe2o3-runtime-model/verus/verify-verus.sh
++++ b/crates/fe2o3-runtime-model/verus/verify-verus.sh
+@@ -9,6 +9,7 @@ repo_root=$(CDPATH='' cd -- "$script_dir/../../.." && pwd)
+ \readonly script_dir repo_root
+ journal_issuance_proof="$script_dir/context_version_journal_issuance_v1.rs"
+ read_preflight_proof="$script_dir/context_read_preflight_v1.rs"
++read_commit_proof="$script_dir/context_read_commit_v1.rs"
+ lifecycle_proof="$script_dir/runtime_lifecycle_v1.rs"
+ identity_proof="$script_dir/device_identity_generation_v1.rs"
+ projection_proof="$script_dir/device_projection_refinement_v1.rs"
+@@ -766,7 +767,8 @@ negative_quality_reject_fixture="$script_dir/tests/fixtures/negative-quality-dir
+ negative_quality_accept_fixture="$script_dir/tests/fixtures/negative-quality-adverse-input.rs"
+ journal_issuance_checker="$script_dir/check-journal-issuance.py"
+ read_preflight_checker="$script_dir/check-read-preflight.py"
+-\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker
++read_commit_checker="$script_dir/check-read-commit.py"
++\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker read_commit_checker
+ verus_bin=${VERUS:-verus}
+ 
+ if [ "$#" -ne 0 ]; then
+@@ -791,6 +793,8 @@ expected_journal_issuance=$(read_pin "$pin_dir/CONTEXT_VERSION_JOURNAL_ISSUANCE_
+ expected_journal_issuance_checker=$(read_pin "$pin_dir/JOURNAL_ISSUANCE_CHECKER_SHA256")
+ expected_read_preflight=$(read_pin "$pin_dir/CONTEXT_READ_PREFLIGHT_SHA256")
+ expected_read_preflight_checker=$(read_pin "$pin_dir/READ_PREFLIGHT_CHECKER_SHA256")
++expected_read_commit=$(read_pin "$pin_dir/CONTEXT_READ_COMMIT_SHA256")
++expected_read_commit_checker=$(read_pin "$pin_dir/READ_COMMIT_CHECKER_SHA256")
+ expected_identity=$(read_pin "$pin_dir/DEVICE_IDENTITY_MODEL_SHA256")
+ expected_projection=$(read_pin "$pin_dir/DEVICE_PROJECTION_REFINEMENT_SHA256")
+ expected_memory=$(read_pin "$pin_dir/MEMORY_LIFECYCLE_SHA256")
+@@ -1577,6 +1581,8 @@ check_digest() {
+ }
+ 
+ check_sources() {
++    check_digest "$expected_read_commit" "$read_commit_proof"
++    check_digest "$expected_read_commit_checker" "$read_commit_checker"
+     check_digest "$expected_read_preflight" "$read_preflight_proof"
+     check_digest "$expected_read_preflight_checker" "$read_preflight_checker"
+     check_digest "$expected_journal_issuance" "$journal_issuance_proof"
+@@ -3209,6 +3215,13 @@ check_positive "$journal_issuance_proof" 'verification results:: 69 verified, 0
+     /usr/bin/python3 -I "$read_preflight_checker" \
+     "$read_preflight_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/read-preflight"
+ 
++# Only the commit checker admits the exact pinned include and audits its closure.
++/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$read_commit_checker" --self-test "$read_commit_proof"
++/usr/bin/env -i "HOME=$runner_home" "PATH=$runner_path" \
++    "RUSTUP_HOME=$runner_rustup_home" "CARGO_HOME=$runner_cargo_home" \
++    /usr/bin/python3 -I "$read_commit_checker" \
++    "$read_commit_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/read-commit"
++
+ check_positive "$lifecycle_proof" 'verification results:: 2 verified, 0 errors' lifecycle
+ check_positive "$identity_proof" 'verification results:: 4 verified, 0 errors' identity-generation
+ check_positive "$projection_proof" 'verification results:: 4 verified, 0 errors' device-projection-refinement
+@@ -3967,6 +3980,7 @@ check_digest "$expected_verus" "$verus_path"
+ 
+ transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r57_three_binding_compute_obligations=35 r57_three_binding_compute_mutations=23 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 r61_owner_async_custody_obligations=8 r61_owner_async_custody_mutations=8 r62_operation_control_obligations=8 r62_operation_control_mutations=8 r63_graph_reservation_obligations=8 r63_graph_reservation_mutations=8 r64_payload_budget_obligations=8 r64_payload_budget_mutations=8 r65_graph_versions_obligations=8 r65_graph_versions_mutations=8 r66_compute_sdma_coexistence_obligations=16 r66_compute_sdma_coexistence_mutations=8 r67_resource_credits_obligations=14 r67_resource_credits_mutations=8 r68_device_backing_credits_obligations=4 r68_device_backing_credits_mutations=5 r69_host_capture_obligations=4 r69_host_capture_mutations=5 r70_resource_batch_obligations=9 r70_resource_batch_mutations=9 r71_device_pool_obligations=15 r71_device_pool_mutations=10 r72_host_visible_backing_credits_obligations=5 r72_host_visible_backing_credits_mutations=9 r73_generated_result_storage_obligations=7 r73_generated_result_storage_mutations=8 journal_issuance_obligations=69 journal_issuance_executable_mutations=21 expected_negative_files=686'
+ transcript="$transcript reader_preflight_obligations=103 reader_preflight_inherited=69 reader_preflight_new=34 reader_preflight_executable_mutations=21"
++transcript="$transcript reader_commit_obligations=127 reader_commit_inherited=103 reader_commit_new=24 reader_commit_executable_mutations=15"
+ actual_transcript=$(printf '%s\n' "$transcript" | /usr/bin/sha256sum | /usr/bin/awk '{ print $1 }')
+ if [ "$actual_transcript" != "$expected_transcript" ]; then
+     printf 'FAIL: verification transcript does not match the pin\n' >&2
+diff --git a/docs/runtime-a1-a2-swarm-current.md b/docs/runtime-a1-a2-swarm-current.md
+index c9a91b7f5..6a0117a42 100644
+--- a/docs/runtime-a1-a2-swarm-current.md
++++ b/docs/runtime-a1-a2-swarm-current.md
+@@ -10,7 +10,22 @@ Resources' V4-J1 proof handoff above the locally accepted
+ Its immediate assignments supersede the older checkpoint tables below, whose
+ detailed contracts and historical observations are retained.
+ 
+-Latest development (2026-09-17): [reader contents and ordered preflight](runtime-context-read-preflight-v1.md)
++Latest development (2026-09-17): [reader commit contents](runtime-context-read-commit-v1.md)
++composes the unchanged ordered preflight with executable acquisition/release
++loops. It specifies exact lease/output contents, reader multiplicities, free-list
++order and incarnation updates, with rejection framing and a scan-to-commit safety
++bridge. Successful acquisition retains an explicit selected-free uniqueness
++premise; release uniqueness is derived from exact lookup and canonical order.
++The proof has 127 whole-crate obligations (103 inherited, 24 new), a separate
++15-mutation campaign, recursive pinned include auditing and two new Rust batch
++and epoch-boundary witnesses. The
++[qualification receipt](evidence/dev-v4j3-reader-commits-2026-09-17/README.md)
++records the actual gate outcomes. This does not prove full arena invariant
++preservation, base membership/settlement reachability, Rust/native refinement,
++physical storage or HIP/HSA parity. Accepted checkpoints are unchanged; A1/A2
++remain open.
++
++Earlier development (2026-09-17): [reader contents and ordered preflight](runtime-context-read-preflight-v1.md)
+ adds a concrete proof over the unchanged V4-J1 journal definitions, source-bound
+ executable mutations and exact Rust error-priority witnesses. Its scope stops
+ before acquisition/release commits, invariant preservation and Rust/native
+diff --git a/docs/runtime-context-read-commit-v1.md b/docs/runtime-context-read-commit-v1.md
+new file mode 100644
+index 000000000..eef0106aa
+--- /dev/null
++++ b/docs/runtime-context-read-commit-v1.md
+@@ -0,0 +1,88 @@
++# Context Reader Commit Contents V1
++
++V4-J3 is a conditional contents-correctness development packet. It composes the
++unchanged V4-J2 ordered preflight with executable acquisition and release loops.
++It does not advance the accepted native runtime milestone or close A1/A2 or #182.
++
++## Contract
++
++The proof includes the exact pinned `context_read_preflight_v1.rs`, which imports
++the exact pinned V4-J1 journal definitions. There is one nominal instance of each
++type; the qualified preflight source, checker and contracts remain unchanged.
++
++Acquisition requires reader/allocation extent agreement and a request length
++representable as `u64`. Only **if preflight succeeds**, the selected reverse free
++suffix must contain distinct slots. This extra premise is necessary: preflight
++checks selected-slot vacancy, but deliberately does not detect duplicate free
++indices in an unreachable, corrupted arena. Rejections do not need uniqueness.
++
++On success, the proof establishes:
++
++- The complete base journal is unchanged.
++- Free slots are popped from the original tail in request order.
++- Each selected lease contains exactly its request, consumer, physical slot and
++  `before.next_incarnation + request_index`.
++- Every reader count increases by that allocation slot's exact multiplicity.
++- Every output entry contains the corresponding installed reference.
++- The next incarnation advances by exactly the batch length, without overflow.
++
++The installed-output theorem proves that returned references name their exact
++new leases and belong to the nonzero newly minted interval. This does not by
++itself establish historical freshness against an arbitrary malformed prestate.
++
++Release needs only reader/allocation extent agreement in the composed execution
++contract. Successful exact lookup and canonical ordering imply distinct released
++lease slots; uniqueness is proved, not assumed. Each selected lease is cleared,
++its allocation's reader count is decremented exactly once, and its slot is
++appended in caller order. Unselected lease contents are retained. The complete
++base journal and next incarnation remain unchanged.
++
++Both composed operations return the exact ordered preflight result. On every
++rejection, all modeled contents are unchanged; acquisition also preserves the
++entire caller output. Neither commit introduces a new recoverable error after
++successful preflight.
++
++## Proof Structure
++
++Recursive sequence multiplicities provide exact prefix count equations for the
++loops. A canonical-order induction relates each scan's same-local group to its
++prefix. Exact allocation lookup proves that equal physical allocation slots
++have equal local IDs. Per-slot multiplicity is therefore bounded by the group
++count even if a malformed base journal aliases one local ID to different slots.
++The bridge does not assume global allocation-ID uniqueness.
++
++The executable loops follow production `context_read_leases.rs`: acquisition
++pops, installs, increments and writes outputs before advancing the incarnation;
++release reads/takes a lease, clears it, decrements and pushes. Proof-side vector
++stores model contents, not allocation failure, physical addresses or panic
++behavior. The extra length observations only expose finite Rust index bounds.
++
++The current whole-crate count is 127 obligations: 103 inherited and 24 new.
++`check-read-commit.py` admits only the exact initial pinned include, audits the
++remaining commit body with the unchanged general source policy, and recursively
++authenticates/audits preflight and J1. No global include exception is introduced.
++
++The campaign requires two exact 127/0 positives and 15 reversible executable
++body mutations rejected with exactly 126 verified obligations and one intended
++postcondition error. Mutations skip commits or corrupt journal, incarnation,
++free-list, reader-count, lease, output or rejection-frame contents. Compiler,
++VIR, timeout, unrelated, extra or mislocated diagnostics are not accepted.
++
++Two added Rust tests compare exact batched contents, partial-release order,
++LIFO reuse and storage identity, and exercise the last admissible incarnation
++batch followed by irreversible exhaustion. These are production witnesses, not
++a mechanical refinement theorem.
++
++## Remaining Obligations
++
++- Reachable free/occupied partition and reader-count invariant preservation.
++- Constructor-to-commit composition and interaction with enrollment, writer
++  membership, settlement, retirement and Unknown disposal.
++- Historical incarnation freshness, rather than only the current mint interval.
++- Production Rust refinement, actual vector capacity, nonallocation and unwind.
++- Authentication of quiescence evidence and observed free capacity. The latter
++  remains an external preflight observation, not a proved physical reservation.
++- Ordinary/generated Context composition, initialized inputs, native custody
++  and machine-code execution.
++
++No new GPU benchmark or HIP/HSA parity claim follows from this proof packet.
