@@ -1,0 +1,18 @@
+Uid:	61073	61073	61073	61073
+Gid:	61073	61073	61073	61073
+Groups:	61073
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	0000000000000000
+CapAmb:	0000000000000000
+NoNewPrivs:	1
+Seccomp:	0
+Seccomp_filters:	0
+FE2O3_FUNCTIONAL_REFINEMENT_RUNTIME_V1_INSTALLED_OK manifest_sha256=ffef09bd240c90e72cbff31a82bc5173c796ba7ab9af239245e7ad892c25641c root=/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5
+functional_refinement_runtime_v1::tests::protected_public_lease_rejects_false_proof: test
+
+running 1 test
+test functional_refinement_runtime_v1::tests::protected_public_lease_rejects_false_proof ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 110 filtered out; finished in 89.46s

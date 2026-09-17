@@ -62,10 +62,11 @@ compiler refinement, or agreement with physical hardware.
 6. Provision the pinned protected runtime in an administrator-controlled
    compatible environment and archive exact-source proof and GPU evidence.
 
-As checked on 2026-09-17, both MI300X and MI350 are reachable, but neither has
-the required protected runtime installation. User-owned Verus binaries do not
-meet that deployment requirement. Provisioning alone also does not implement
-the missing compiler/refinement backends above.
+The initial 2026-09-17 host checks found no protected runtime installation.
+A later MI350 follow-up provisioned and tested an isolated runtime image; see
+the evidence below. Its root is inside that image, not installed into the
+host's `/opt`. Production service deployment and the missing compiler/refinement
+backends above remain separate work.
 
 ## Validation
 
@@ -96,3 +97,33 @@ Adapter tests cover the internal byte/symbol/range binding helpers. A genuine
 public typed-request integration fixture remains missing; synthetic protected
 receipts were not introduced to make that test pass. The scalar census tests
 use semantic-source fixtures, not ordinary rustc compilation of the example.
+
+## MI350 Protected Runtime Follow-up
+
+Both `mi350` and `mi350-2` are reachable with administrator provisioning access.
+MI350 supplied Ubuntu 24.04, matching Rust inputs, and Docker. The exact pinned
+libc package was recovered from the official Ubuntu snapshot service rather
+than replacing host libraries or changing runtime pins.
+
+At source checkpoint `c18f7e5c1ea66321eb7dd4604a4a49e20b1511c6`, the existing
+provisioner passed its source and installed-file audits inside an isolated
+Ubuntu image. Both public protected-lease tests then passed in debug mode:
+
+- `protected_public_lease_executes_real_verus`: one passed, zero ignored;
+  the generated true assertion produced exactly one verified proof.
+- `protected_public_lease_rejects_false_proof`: one passed, zero ignored;
+  Verus returned exit 1 and an assertion failure for the false assertion.
+  Environmental rejection would not satisfy this test.
+
+The retained MI350 image is `fe2o3-proof-runtime:20260917-c18f7e5`, image ID
+`sha256:a2c76f4d0c6781a44d42479162479c48f6cfc44f0e00a21ada814b3b2ca6847d`.
+Tests used a non-root UID, no capabilities or network, a read-only root,
+private namespaces, and explicit process/memory/CPU limits. The container's
+outer seccomp filter was disabled because the existing supervisor requires
+an unfiltered entry state before installing its own proof-child filter.
+No host-wide security setting was changed.
+
+[Exact identities, commands, scope, and test logs](evidence/mi350-protected-runtime-20260917/README.md)
+record this follow-up. It establishes protected-runtime API execution in this
+isolated environment, not production service qualification, release-mode
+coverage, source/GPU semantic equivalence, a GPU launch, or tutorial coverage.
