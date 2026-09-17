@@ -7,6 +7,7 @@ mod resource_tests {
 
     include!("native_switch_resource_tests.rs");
     include!("guard_candidate_tests.rs");
+    include!("publication_atomic_identity_v1_tests.rs");
 
     fn debug_named_function_v1(context: &mut Context) -> (FuncOp, Value) {
         register_dialect(context, &DialectName::try_new(DIALECT_NAME).unwrap()).unwrap();

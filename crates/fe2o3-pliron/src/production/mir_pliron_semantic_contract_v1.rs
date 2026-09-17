@@ -284,7 +284,7 @@ pub fn reconcile_ranked_kernel_with_safe_reference_mir_v1(
 
 pub fn require_mir_pliron_semantic_contract_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
-    evidence: &ProductionMiddleEndEvidenceV5,
+    evidence: &dyn super::ProductionMiddleEndEvidenceViewV1,
     total_output: ProductionTotalOutputStagingReportV2,
     contract: &MirPlironSemanticContractV1,
 ) -> Result<ProductionMirPlironSemanticContractReportV1, ProductionMirPlironSemanticContractErrorV1>

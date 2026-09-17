@@ -56,10 +56,11 @@ pub use ranked_memory::{
     IndexLessThanBranchOp, IndexType, IndexUnknownOp, IndexUnsignedCastOp, IndexValueAttr,
     InvocationDimensionAttr, InvocationIndexOp, LaunchExtentAttr, MAX_DETERMINISTIC_JOIN_INPUTS_V1,
     MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, NoAliasClassAttr, OwnershipContractOp,
-    OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp, RankedMemoryError, RankedViewOp,
-    RankedViewType, ReturnOp, SUPPORTED_ELEMENT_WIDTHS, TrapOp, is_checked_access_capability_type,
-    is_index_type, is_supported_allocation_effect_contract_v1,
-    neutral_workgroup_allocation_contract_v1, ranked_view_type,
+    OwnershipCoverageAttr, OwnershipPartitionAttr, PublicationAtomicAccessAttr,
+    PublicationReadGuardOp, RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType,
+    ReturnOp, SUPPORTED_ELEMENT_WIDTHS, TrapOp, is_checked_access_capability_type, is_index_type,
+    is_supported_allocation_effect_contract_v1, neutral_workgroup_allocation_contract_v1,
+    ranked_view_type,
 };
 pub use semantic_contract::{
     RequireEquivalentOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr,
@@ -417,6 +418,7 @@ pub fn register_dialect(
     <AccessKindAttr as Attribute>::register::<AccessKindAttr>(context);
     <AtomicOrderingAttr as Attribute>::register::<AtomicOrderingAttr>(context);
     <AtomicScopeAttr as Attribute>::register::<AtomicScopeAttr>(context);
+    <PublicationAtomicAccessAttr as Attribute>::register::<PublicationAtomicAccessAttr>(context);
     <MemorySpaceAttr as Attribute>::register::<MemorySpaceAttr>(context);
     <AllocationOriginAttr as Attribute>::register::<AllocationOriginAttr>(context);
     <NoAliasClassAttr as Attribute>::register::<NoAliasClassAttr>(context);
@@ -450,6 +452,7 @@ pub fn register_dialect(
     CheckedRowStripedIndex2DOp::register(context);
     DimensionOp::register(context);
     RankedAccessOp::register(context);
+    PublicationReadGuardOp::register(context);
     OwnershipContractOp::register(context);
     AllocationEffectOp::register(context);
     IndexLessThanBranchOp::register(context);

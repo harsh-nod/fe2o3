@@ -47,6 +47,8 @@ pub const INERT_SEMANTIC_MIR_VERSION_V28: u16 = 28;
 pub const INERT_SEMANTIC_MIR_VERSION_V29: u16 = 29;
 /// V30 retains the consuming read-only allocation terminals.
 pub const INERT_SEMANTIC_MIR_VERSION_V30: u16 = 30;
+/// V31 retains the two closed static publication terminals, not an HB proof.
+pub const INERT_SEMANTIC_MIR_VERSION_V31: u16 = 31;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -72,6 +74,7 @@ pub enum SemanticMirWireVersionV1 {
     V28,
     V29,
     V30,
+    V31,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -94,6 +97,7 @@ impl SemanticMirWireVersionV1 {
             Self::V28 => INERT_SEMANTIC_MIR_VERSION_V28,
             Self::V29 => INERT_SEMANTIC_MIR_VERSION_V29,
             Self::V30 => INERT_SEMANTIC_MIR_VERSION_V30,
+            Self::V31 => INERT_SEMANTIC_MIR_VERSION_V31,
         }
     }
 
@@ -116,6 +120,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V28 => Some(Self::V28),
             INERT_SEMANTIC_MIR_VERSION_V29 => Some(Self::V29),
             INERT_SEMANTIC_MIR_VERSION_V30 => Some(Self::V30),
+            INERT_SEMANTIC_MIR_VERSION_V31 => Some(Self::V31),
             _ => None,
         }
     }
@@ -5605,6 +5610,18 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         view: SemanticTypeIdV1,
         element: SemanticTypeIdV1,
     },
+    /// Retains the exact private producer signature; ordering proof is separate.
+    StaticPublication128PublishF32 {
+        payload: SemanticTypeIdV1,
+        flags: SemanticTypeIdV1,
+        result: SemanticTypeIdV1,
+    },
+    /// The consumer always requests/acquires; only its payload read is guarded.
+    StaticPublication128TryReadF32 {
+        payload: SemanticTypeIdV1,
+        flags: SemanticTypeIdV1,
+        result: SemanticTypeIdV1,
+    },
     /// Creates a typed zero accumulator associated with an authenticated lane.
     F32MatrixAccumulatorZero {
         lane: SemanticTypeIdV1,
@@ -6293,6 +6310,13 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V30, limits)
     }
 
+    pub fn admit_exact_v31(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V31, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
@@ -6304,6 +6328,7 @@ impl InertSemanticMirRequestV1 {
     /// and the unit spelling of an empty RustCall source tuple. V29 retains
     /// genuine-core AtomicU32 identity without changing the intrinsic grammar.
     /// V30 adds consuming read-only allocation terminals, not launch authority.
+    /// V31 adds inert static-publication terminal records, not ordering authority.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -7920,6 +7945,12 @@ fn record_intrinsic_capability_claims(
         SemanticCompilerIntrinsicOperationV1::DisjointSliceIntoReadOnly { slice, .. } => {
             claims.claim_mapping(slice, SemanticDisjointIndexSpaceV1::Index1d)
         }
+        SemanticCompilerIntrinsicOperationV1::StaticPublication128PublishF32 {
+            payload, ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::StaticPublication128TryReadF32 {
+            payload, ..
+        } => claims.claim_mapping(payload, SemanticDisjointIndexSpaceV1::Index1d),
         SemanticCompilerIntrinsicOperationV1::ThreadIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
@@ -8551,6 +8582,12 @@ fn compiler_intrinsic_signature_matches(
         | SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLoadOr { .. }) => {
             read_only_allocation_signature_matches_v30(request, operation, inputs, output)
         }
+        operation @ (SemanticCompilerIntrinsicOperationV1::StaticPublication128PublishF32 {
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::StaticPublication128TryReadF32 {
+            ..
+        }) => static_publication_signature_matches_v31(request, operation, inputs, output),
         SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
             lane,
             fragment,
@@ -9767,6 +9804,7 @@ fn ensure_identity_order(
 
 include!("semantic_mir_v1/core_atomic_u32_v29.rs");
 include!("semantic_mir_v1/read_only_allocation_v30.rs");
+include!("semantic_mir_v1/static_publication_v31.rs");
 
 fn validate_type(
     context: &mut ValidationContextV1<'_>,
@@ -16073,6 +16111,18 @@ fn enqueue_compiler_intrinsic_type_references(
         SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLoadOr { view, element } => {
             pending.extend([view, element]);
         }
+        SemanticCompilerIntrinsicOperationV1::StaticPublication128PublishF32 {
+            payload,
+            flags,
+            result,
+        }
+        | SemanticCompilerIntrinsicOperationV1::StaticPublication128TryReadF32 {
+            payload,
+            flags,
+            result,
+        } => {
+            pending.extend([payload, flags, result]);
+        }
         SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
             lane, fragment, ..
         } => {
@@ -16726,6 +16776,13 @@ fn uses_bf16_conversion(request: &InertSemanticMirRequestV1) -> bool {
 }
 
 fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
+    if request.callables.iter().any(|callable| {
+        matches!(callable,
+        SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }
+            if is_static_publication_intrinsic_v31(*operation))
+    }) {
+        return SemanticMirWireVersionV1::V31;
+    }
     if request.callables.iter().any(|callable| {
         matches!(callable,
         SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }
@@ -18403,6 +18460,12 @@ fn encode_compiler_intrinsic_operation(
         | SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLoadOr { .. }) => {
             encode_read_only_allocation_intrinsic_v30(writer, operation, declared_wire_version)
         }
+        operation @ (SemanticCompilerIntrinsicOperationV1::StaticPublication128PublishF32 {
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::StaticPublication128TryReadF32 {
+            ..
+        }) => encode_static_publication_intrinsic_v31(writer, operation, declared_wire_version),
         SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedRowStriped2d {
             input_witness,
             output_stripe,

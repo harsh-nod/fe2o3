@@ -56,6 +56,8 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     DisjointSliceIntoReadOnly,
     ReadOnlyAllocationLen,
     ReadOnlyAllocationLoadOr,
+    StaticPublication128PublishF32,
+    StaticPublication128TryReadF32,
     WorkgroupLdsScopeCurrent,
     DynamicLdsExactCurrent,
     DynamicLdsIntoCollectiveRawParts,
@@ -282,6 +284,12 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::ReadOnlyAllocationLoadOr => {
                 Self::Expand(ProductionTerminalExpansionV1::ReadOnlyAllocationLoadOr)
+            }
+            TrustedDeviceItem::StaticPublication128PublishF32 => {
+                Self::Expand(ProductionTerminalExpansionV1::StaticPublication128PublishF32)
+            }
+            TrustedDeviceItem::StaticPublication128TryReadF32 => {
+                Self::Expand(ProductionTerminalExpansionV1::StaticPublication128TryReadF32)
             }
             TrustedDeviceItem::WorkgroupLdsScopeCurrent => {
                 Self::Expand(ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent)
@@ -621,6 +629,12 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::ReadOnlyAllocationLoadOr) => {
                 TrustedDeviceItem::ReadOnlyAllocationLoadOr
+            }
+            Self::Expand(ProductionTerminalExpansionV1::StaticPublication128PublishF32) => {
+                TrustedDeviceItem::StaticPublication128PublishF32
+            }
+            Self::Expand(ProductionTerminalExpansionV1::StaticPublication128TryReadF32) => {
+                TrustedDeviceItem::StaticPublication128TryReadF32
             }
             Self::Expand(ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent) => {
                 TrustedDeviceItem::WorkgroupLdsScopeCurrent

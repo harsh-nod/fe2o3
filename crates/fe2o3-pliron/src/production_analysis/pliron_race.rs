@@ -255,7 +255,28 @@ fn race_resource_upper_bound_for_shape_v1(
     } else {
         checked_race_mul_v1(pairs, MAX_RANKED_MEMORY_RANK * MAX_RANKED_MEMORY_RANK + 16)?
     };
+    // The closed publication analysis scans once, then (only on the exact
+    // 256-invocation domain) explores every possible acyclic CFG path.
+    let (publication_work, publication_temporary) = if invocations == 256 && effects >= 5 {
+        let blocks = census.blocks.min(1024);
+        let queries = checked_race_mul_v1(256, checked_race_sum_v1(&[
+            checked_race_mul_v1(blocks, 2)?, 1,
+        ])?)?;
+        let (raw_work, raw_storage) = raw_index_evaluation_resource_upper_bound_v1(
+            census.operations.min(8192), queries, 3,
+        )?;
+        (checked_race_sum_v1(&[
+            checked_race_mul_v1(census.operations, 8)?,
+            checked_race_mul_v1(blocks, 256 * 64)?,
+            raw_work,
+        ])?, checked_race_sum_v1(&[
+            checked_race_mul_v1(blocks, 24)?, raw_storage, 64,
+        ])?)
+    } else {
+        (checked_race_mul_v1(census.operations, 8)?, 64)
+    };
     let work = checked_race_sum_v1(&[
+        publication_work,
         checked_race_mul_v1(census.operations, 32)?,
         checked_race_mul_v1(census.successors, MAX_RANKED_MEMORY_RANK + 4)?,
         symbolic_work,
@@ -311,6 +332,7 @@ fn race_resource_upper_bound_for_shape_v1(
     let retained_findings = checked_race_mul_v1(retained_finding_count, per_finding_storage)?;
     let attempted_finding = per_finding_storage;
     let temporary = checked_race_sum_v1(&[
+        publication_temporary,
         effect_state,
         address_state,
         attempted_finding,
@@ -547,9 +569,13 @@ impl RankedRaceFindingV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RankedRaceReportV1 {
     findings: Vec<RankedRaceFindingV1>,
+    static_publication: Vec<RankedStaticPublicationProofV1>,
 }
 
-super::pliron_report_payload_receipt::impl_empty_findings_payload_v1!(RankedRaceReportV1);
+include!("pliron_race/static_publication_v1.rs");
+#[cfg(test)]
+#[path = "pliron_race/static_publication_v1_tests.rs"]
+mod static_publication_tests;
 
 impl RankedRaceReportV1 {
     pub const fn pass(&self) -> KernelCheckPassKindV1 {

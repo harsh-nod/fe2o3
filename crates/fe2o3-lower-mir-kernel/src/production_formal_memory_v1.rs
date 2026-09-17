@@ -1,5 +1,8 @@
 //! Owner-held formal memory admission for verified target-neutral Kernel IR.
 
+#[path = "production_formal_memory_static_geometry_v1.rs"]
+mod static_publication_geometry;
+
 use std::{error::Error, fmt};
 
 use fe2o3_kernel_ir::{
@@ -38,6 +41,8 @@ fn format_formal_reasons(
 /// Fail-closed diagnostics from production formal-memory admission.
 #[derive(Debug)]
 pub enum ProductionFormalMemoryErrorV1 {
+    /// The exact finite publication roster or its full-domain proof changed.
+    StaticPublicationDischarge(&'static str),
     /// The retained semantic-to-Kernel-IR owner no longer verifies.
     SemanticKir(ProductionSemanticKirErrorV1),
     /// Formal extraction requires a nonempty selected-kernel roster.
@@ -85,6 +90,7 @@ pub enum ProductionFormalMemoryErrorV1 {
 impl fmt::Display for ProductionFormalMemoryErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::StaticPublicationDischarge(detail) => write!(formatter, "static publication discharge failed: {detail}"),
             Self::SemanticKir(error) => write!(formatter, "verified semantic KIR failed: {error}"),
             Self::KernelCount { actual } => write!(
                 formatter,
@@ -141,6 +147,7 @@ impl Error for ProductionFormalMemoryErrorV1 {
             Self::SemanticKir(error) => Some(error),
             Self::Analysis(error) => Some(error),
             Self::KernelCount { .. }
+            | Self::StaticPublicationDischarge(_)
             | Self::Incomplete { .. }
             | Self::CompilerOwnedWorkgroupDischarge { .. }
             | Self::UnsupportedIndexDischarge { .. }
@@ -171,7 +178,10 @@ pub struct ProductionFormalMemoryKernelV1 {
     obligations: FormalMemoryObligations,
     ranked_discharged_reasons: Box<[FormalMemoryIncompleteReason]>,
     compiler_discharged_reasons: Box<[FormalMemoryIncompleteReason]>,
+    static_publication: Option<ProductionStaticPublicationDischargeV1>,
 }
+
+include!("production_formal_memory_static_publication_v1.rs");
 
 impl fmt::Debug for ProductionFormalMemoryOwnerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -286,6 +296,10 @@ impl ProductionFormalMemoryOwnerV1 {
 }
 
 impl ProductionFormalMemoryKernelV1 {
+    pub(crate) fn static_publication(&self) -> Option<&ProductionStaticPublicationDischargeV1> {
+        self.static_publication.as_ref()
+    }
+
     /// Borrows this kernel's complete formal obligations.
     pub const fn obligations(&self) -> &FormalMemoryObligations {
         &self.obligations
@@ -307,7 +321,11 @@ impl ProductionFormalMemoryKernelV1 {
             .kernels
             .iter()
             .find(|kernel| kernel.id == *self.obligations.kernel())
-            .map(|kernel| witness_extents(&kernel.domain))
+            .map(|kernel| if self.static_publication.is_some() {
+                [256, 1, 1]
+            } else {
+                witness_extents(&kernel.domain)
+            })
     }
 
     /// Returns the flattened structural witness invocation count.
@@ -436,9 +454,10 @@ fn derive_admitted_obligations_for_kernel(
     let module = semantic_kir.module();
     let domain = &kernel.domain;
     let rank = domain.rank();
+    let mut static_publication = derive_static_publication_discharge_v1(semantic_kir, kernel)?;
     let witness = ExplicitLaunchExtent::Exact {
         rank,
-        extents: witness_extents(domain),
+        extents: if static_publication.is_some() { [256, 1, 1] } else { witness_extents(domain) },
     };
     let analysis = derive_kernel_memory_obligations_for_launch(
         module,
@@ -533,7 +552,9 @@ fn derive_admitted_obligations_for_kernel(
             )
         }
     };
-    if !obligations.inter_invocation_conflicts().is_empty() {
+    if let Some(publication) = &mut static_publication {
+        discharge_static_publication_conflicts_v1(publication, &obligations)?;
+    } else if !obligations.inter_invocation_conflicts().is_empty() {
         return Err(ProductionFormalMemoryErrorV1::InterInvocationConflicts {
             conflicts: obligations
                 .inter_invocation_conflicts()
@@ -545,6 +566,7 @@ fn derive_admitted_obligations_for_kernel(
         obligations,
         ranked_discharged_reasons,
         compiler_discharged_reasons,
+        static_publication,
     })
 }
 

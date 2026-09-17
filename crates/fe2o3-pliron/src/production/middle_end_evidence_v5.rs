@@ -35,6 +35,8 @@ const TYPED_SUMMARY_COUNTERS_V5: usize = 10;
 const RECONCILIATION_COUNTERS_V5: usize = 2;
 const IDENTITY_DOMAIN_V5: &[u8] = b"FE2O3/PRODUCTION-MIDDLE-END-EVIDENCE-IDENTITY/V5\0";
 
+include!("middle_end_evidence_common_v1.rs");
+
 /// Stable V5 wire domain, distinct from the frozen V4 domain.
 pub const PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V5: &[u8] =
     b"fe2o3.production-middle-end-evidence.v5";
@@ -94,7 +96,7 @@ pub enum ProductionMiddleEndEvidencePassV5 {
 }
 
 impl ProductionMiddleEndEvidencePassV5 {
-    const fn tag(self) -> u8 {
+    pub(super) const fn tag(self) -> u8 {
         match self {
             Self::TensorLayout => 1,
             Self::MemoryBounds => 2,
@@ -168,7 +170,7 @@ impl ProductionMiddleEndPassSuccessV5 {
     }
 }
 
-const PASS_SUCCESSES_V5: [ProductionMiddleEndPassSuccessV5; PASS_COUNT_V5] = [
+pub(super) const PASS_SUCCESSES_V5: [ProductionMiddleEndPassSuccessV5; PASS_COUNT_V5] = [
     ProductionMiddleEndPassSuccessV5::new(ProductionMiddleEndEvidencePassV5::TensorLayout),
     ProductionMiddleEndPassSuccessV5::new(ProductionMiddleEndEvidencePassV5::MemoryBounds),
     ProductionMiddleEndPassSuccessV5::new(ProductionMiddleEndEvidencePassV5::AtomicLegality),
@@ -671,71 +673,32 @@ impl ProductionMiddleEndEvidenceV5 {
         ranked: &ProductionRankedKernelLoweringInputV1,
         deterministic_ranked_ir: &str,
     ) -> Result<Self, ProductionMiddleEndEvidenceCodecErrorV5> {
-        validate_ranked_ir_v5(deterministic_ranked_ir.as_bytes())?;
-        let source_semantic_identity = revalidated_source_semantic_identity(semantic)
-            .map_err(ProductionMiddleEndEvidenceCodecErrorV5::HistoricalV4)?;
-        ranked
-            .revalidate_structure()
-            .map_err(ProductionMiddleEndEvidenceCodecErrorV5::RankedKernel)?;
-        validate_v5_live_reports(ranked)?;
-        let observed = ranked.ownership_report().coverage_summary();
-        let coverage = ProductionMiddleEndCoverageSummaryV5 {
-            total_view_declared: usize_to_u64(observed.total_view_declared())?,
-            total_view_proved: usize_to_u64(observed.total_view_proved())?,
-            collective_contributions_declared: usize_to_u64(
-                observed.collective_contributions_declared(),
-            )?,
-            collective_contributions_proved: usize_to_u64(
-                observed.collective_contributions_proved(),
-            )?,
-        };
-        validate_coverage_v5(coverage)?;
-        let semantic_report = ranked.semantic_report();
-        let effect_report = semantic_report.effect_refinement();
-        let reference_obligations_declared =
-            usize_to_u64(semantic_report.reference_obligation_count())?
-                .checked_add(usize_to_u64(semantic_report.numerical_obligation_count())?)
-                .ok_or(ProductionMiddleEndEvidenceCodecErrorV5::CounterOverflow)?;
-        let reference_obligations_policy_checked =
-            usize_to_u64(semantic_report.policy_checked_reference_obligation_count())?
-                .checked_add(usize_to_u64(
-                    semantic_report.policy_checked_numerical_obligation_count(),
-                )?)
-                .ok_or(ProductionMiddleEndEvidenceCodecErrorV5::CounterOverflow)?;
-        let semantics = ProductionMiddleEndSemanticSummaryV5 {
-            // V5 keeps one wire counter for authenticated scalar theorems;
-            // exact equalities and finite-error relations are both included.
-            reference_obligations_declared,
-            reference_obligations_policy_checked,
-            effect_contracts_declared: usize_to_u64(effect_report.contract_count())?,
-            effect_contracts_proved: usize_to_u64(effect_report.proved_contract_count())?,
-            collective_contracts_declared: usize_to_u64(
-                semantic_report.collective_contract_count(),
-            )?,
-            collective_contracts_policy_checked: usize_to_u64(
-                semantic_report.policy_checked_collective_contract_count(),
-            )?,
-        };
-        validate_semantics_v5(semantics)?;
-        let typed_summary = typed_semantic_obligation_summary_v2(ranked.kernel())
-            .map_err(ProductionMiddleEndEvidenceCodecErrorV5::RankedKernel)?;
-        validate_typed_summary_v5(typed_summary)?;
-        let observed_reconciliation = typed_semantic_commitment_reconciliation_v2(ranked)
-            .map_err(ProductionMiddleEndEvidenceCodecErrorV5::RankedKernel)?;
-        let reconciliation = ProductionMiddleEndTypedSemanticReconciliationV5 {
-            recipe_expression_roots: usize_to_u64(
-                observed_reconciliation.recipe_expression_roots(),
-            )?,
-            pliron_commitment_roots: usize_to_u64(
-                observed_reconciliation.pliron_commitment_roots(),
-            )?,
-            ordered_commitments_sha256: *observed_reconciliation.ordered_commitments_sha256(),
-        };
-        validate_reconciliation_v5(typed_summary, reconciliation)?;
-        let ranked_kernel_identity = derive_ranked_kernel_identity(ranked);
-        if ranked_kernel_identity == [0; SHA256_BYTES] {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV5::ZeroRankedKernelIdentity);
+        if ranked
+            .kernel()
+            .blocks()
+            .iter()
+            .flat_map(|block| block.operations())
+            .any(|operation| {
+                matches!(
+                    operation,
+                    super::ProductionRankedOperationV1::PublicationAtomicStoreU32 { .. }
+                        | super::ProductionRankedOperationV1::PublicationAtomicLoadU32 { .. }
+                        | super::ProductionRankedOperationV1::PublicationReadGuard { .. }
+                )
+            })
+            || ranked.race_report().static_publication().is_some()
+        {
+            return Err(ProductionMiddleEndEvidenceCodecErrorV5::UnsupportedStaticPublication);
         }
+        validate_ranked_ir_v5(deterministic_ranked_ir.as_bytes())?;
+        let CommonMiddleEndFactsV1 {
+            source_semantic_identity,
+            ranked_kernel_identity,
+            coverage,
+            semantics,
+            typed_summary,
+            reconciliation,
+        } = CommonMiddleEndFactsV1::revalidate(semantic, ranked)?;
         let encoded = encode_record_v5(
             source_semantic_identity,
             ranked_kernel_identity,
@@ -865,6 +828,7 @@ impl fmt::Debug for ProductionMiddleEndEvidenceV5 {
 
 #[derive(Debug)]
 pub enum ProductionMiddleEndEvidenceCodecErrorV5 {
+    UnsupportedStaticPublication,
     HistoricalV4(ProductionMiddleEndEvidenceCodecErrorV4),
     RankedKernel(ProductionRankedKernelErrorV1),
     ReportPassOrderMismatch {
@@ -921,6 +885,8 @@ pub enum ProductionMiddleEndEvidenceCodecErrorV5 {
 impl fmt::Display for ProductionMiddleEndEvidenceCodecErrorV5 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnsupportedStaticPublication => formatter
+                .write_str("V5 cannot represent static publication happens-before evidence"),
             Self::HistoricalV4(error) => {
                 write!(formatter, "historical V4 boundary failed: {error}")
             }
@@ -1324,21 +1290,24 @@ fn derive_evidence_identity_v5(preimage: &[u8]) -> Option<[u8; SHA256_BYTES]> {
     (identity != [0; SHA256_BYTES]).then_some(identity)
 }
 
-struct ReaderV5<'a> {
+pub(super) struct ReaderV5<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
 
 impl<'a> ReaderV5<'a> {
-    const fn new(bytes: &'a [u8]) -> Self {
+    pub(super) const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
     }
 
-    const fn offset(&self) -> usize {
+    pub(super) const fn offset(&self) -> usize {
         self.offset
     }
 
-    fn take(&mut self, length: usize) -> Result<&'a [u8], ProductionMiddleEndEvidenceCodecErrorV5> {
+    pub(super) fn take(
+        &mut self,
+        length: usize,
+    ) -> Result<&'a [u8], ProductionMiddleEndEvidenceCodecErrorV5> {
         let end = self
             .offset
             .checked_add(length)
@@ -1351,7 +1320,7 @@ impl<'a> ReaderV5<'a> {
         Ok(result)
     }
 
-    fn fixed<const N: usize>(
+    pub(super) fn fixed<const N: usize>(
         &mut self,
     ) -> Result<[u8; N], ProductionMiddleEndEvidenceCodecErrorV5> {
         self.take(N)?
@@ -1359,23 +1328,23 @@ impl<'a> ReaderV5<'a> {
             .map_err(|_| ProductionMiddleEndEvidenceCodecErrorV5::Truncated)
     }
 
-    fn u8(&mut self) -> Result<u8, ProductionMiddleEndEvidenceCodecErrorV5> {
+    pub(super) fn u8(&mut self) -> Result<u8, ProductionMiddleEndEvidenceCodecErrorV5> {
         Ok(self.fixed::<1>()?[0])
     }
 
-    fn u16(&mut self) -> Result<u16, ProductionMiddleEndEvidenceCodecErrorV5> {
+    pub(super) fn u16(&mut self) -> Result<u16, ProductionMiddleEndEvidenceCodecErrorV5> {
         Ok(u16::from_le_bytes(self.fixed()?))
     }
 
-    fn u32(&mut self) -> Result<u32, ProductionMiddleEndEvidenceCodecErrorV5> {
+    pub(super) fn u32(&mut self) -> Result<u32, ProductionMiddleEndEvidenceCodecErrorV5> {
         Ok(u32::from_le_bytes(self.fixed()?))
     }
 
-    fn u64(&mut self) -> Result<u64, ProductionMiddleEndEvidenceCodecErrorV5> {
+    pub(super) fn u64(&mut self) -> Result<u64, ProductionMiddleEndEvidenceCodecErrorV5> {
         Ok(u64::from_le_bytes(self.fixed()?))
     }
 
-    fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.offset == self.bytes.len()
     }
 }

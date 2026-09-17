@@ -9,7 +9,7 @@ use std::{error::Error, fmt};
 
 use super::middle_end_evidence_v4::derive_ranked_kernel_identity;
 use super::{
-    ProductionMiddleEndEvidenceV5, ProductionRankedKernelErrorV1,
+    ProductionRankedKernelErrorV1,
     ProductionRankedKernelLoweringInputV1, ProductionTypedSemanticObligationSummaryV2,
     typed_semantic_obligation_summary_v2,
 };
@@ -195,7 +195,7 @@ struct ObservedTotalOutputFactsV2 {
 /// This is an input-validation gate for aggregate replay, not proof authority.
 pub fn require_total_output_staging_v2(
     ranked: &ProductionRankedKernelLoweringInputV1,
-    evidence: &ProductionMiddleEndEvidenceV5,
+    evidence: &dyn super::ProductionMiddleEndEvidenceViewV1,
 ) -> Result<ProductionTotalOutputStagingReportV2, ProductionTotalOutputStagingErrorV2> {
     if derive_ranked_kernel_identity(ranked) != *evidence.ranked_kernel_identity()
         || !evidence

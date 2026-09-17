@@ -35,6 +35,7 @@ pub mod memory;
 pub mod mx;
 pub mod read_only_allocation;
 pub mod simd;
+pub mod static_publication;
 pub mod sync;
 pub mod tensor;
 pub mod thread;
@@ -91,6 +92,7 @@ pub use math::{DEVICE_MATH_CONTRACT_VERSION_V1, DeviceMath};
 pub use mx::{MxScaleConversionError, MxScaleE8M0, MxScaleE8M0x4};
 pub use read_only_allocation::{ReadOnlyAllocation, ReadOnlyAllocationElement};
 pub use simd::{GpuSimd, GpuSimdElement, GpuSimdLaneCount, ValidGpuSimdLaneCount};
+pub use static_publication::{PublicationAttemptF32, publish_once_128};
 pub use sync::{
     AmdBarrierTarget, BarrierInitializationError, BarrierPending, BarrierReady,
     BarrierUninitialized, Gfx12, Gfx942, ManagedBarrier, NamedBarrierSlot,

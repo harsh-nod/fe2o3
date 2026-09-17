@@ -67,7 +67,10 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV4 {
         let [kernel] = owner.kernels() else {
             return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
         };
-        if !kernel.obligations().inter_invocation_conflicts().is_empty() {
+        // V4 has no field for a read-from/HB proof, even if affine extraction
+        // happens to retain zero raw conflicts for unsupported dynamic indices.
+        if kernel.static_publication().is_some()
+            || !kernel.obligations().inter_invocation_conflicts().is_empty() {
             return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
         }
         let receipt =

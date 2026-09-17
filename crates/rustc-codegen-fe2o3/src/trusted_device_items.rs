@@ -37,8 +37,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0xc6, 0x76, 0xa0, 0x67, 0x39, 0x73, 0xdb, 0x28, 0x21, 0x21, 0x55, 0xcf, 0x82, 0xad, 0xbc, 0x98,
-    0x7d, 0x8f, 0x7d, 0x5c, 0x4a, 0xed, 0x60, 0x4d, 0x6e, 0x1a, 0x99, 0x87, 0xc8, 0x68, 0xdb, 0x10,
+    0xd3, 0x76, 0xc8, 0x30, 0x67, 0x6b, 0x1a, 0xa6, 0x17, 0x38, 0x0b, 0x85, 0x88, 0x8a, 0xf0, 0x67,
+    0x1d, 0x61, 0xa6, 0xac, 0x33, 0x9a, 0x0b, 0x67, 0x80, 0xef, 0x4e, 0x46, 0x3f, 0x70, 0xe4, 0x00,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -262,6 +262,9 @@ pub(crate) enum TrustedDeviceItem {
     DisjointSliceIntoReadOnly,
     ReadOnlyAllocationLen,
     ReadOnlyAllocationLoadOr,
+    PublicationAttemptF32,
+    StaticPublication128PublishF32,
+    StaticPublication128TryReadF32,
     DeviceGlobalMutPtrU32AsAtomic,
     DeviceGlobalMutPtrI32AsAtomic,
     DeviceGlobalMutPtrU64AsAtomic,
@@ -476,6 +479,21 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::ReadOnlyAllocationLoadOr,
         "fe2o3_device_read_only_allocation_load_or_v1",
         "fe2o3_device::ReadOnlyAllocation::load_or",
+    ),
+    (
+        TrustedDeviceItem::PublicationAttemptF32,
+        "fe2o3_device_publication_attempt_f32_v1",
+        "fe2o3_device::PublicationAttemptF32",
+    ),
+    (
+        TrustedDeviceItem::StaticPublication128PublishF32,
+        "fe2o3_device_static_publication_128_publish_f32_v1",
+        "fe2o3_device::static_publication::publish_cell_128",
+    ),
+    (
+        TrustedDeviceItem::StaticPublication128TryReadF32,
+        "fe2o3_device_static_publication_128_try_read_f32_v1",
+        "fe2o3_device::static_publication::request_and_try_read_cell_128",
     ),
     (
         TrustedDeviceItem::DeviceGlobalMutPtr,
@@ -1629,6 +1647,15 @@ fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option
         TrustedDeviceItem::ReadOnlyAllocationLoadOr => {
             Some("fe2o3_device::read_only_allocation::{impl#3}::load_or")
         }
+        TrustedDeviceItem::PublicationAttemptF32 => {
+            Some("fe2o3_device::static_publication::PublicationAttemptF32")
+        }
+        TrustedDeviceItem::StaticPublication128PublishF32 => {
+            Some("fe2o3_device::static_publication::publish_cell_128")
+        }
+        TrustedDeviceItem::StaticPublication128TryReadF32 => {
+            Some("fe2o3_device::static_publication::request_and_try_read_cell_128")
+        }
         TrustedDeviceItem::ThreadIndex => Some("fe2o3_device::thread::ThreadIndex"),
         TrustedDeviceItem::DisjointIndex => Some("fe2o3_device::thread::DisjointIndex"),
         TrustedDeviceItem::ShiftedIndexSpace => Some("fe2o3_device::thread::Shifted"),
@@ -2112,6 +2139,9 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::DisjointSliceIntoReadOnly
             | TrustedDeviceItem::ReadOnlyAllocationLen
             | TrustedDeviceItem::ReadOnlyAllocationLoadOr
+            | TrustedDeviceItem::PublicationAttemptF32
+            | TrustedDeviceItem::StaticPublication128PublishF32
+            | TrustedDeviceItem::StaticPublication128TryReadF32
     )
 }
 
@@ -3340,6 +3370,9 @@ mod tests {
             TrustedDeviceItem::DisjointSliceIntoReadOnly,
             TrustedDeviceItem::ReadOnlyAllocationLen,
             TrustedDeviceItem::ReadOnlyAllocationLoadOr,
+            TrustedDeviceItem::PublicationAttemptF32,
+            TrustedDeviceItem::StaticPublication128PublishF32,
+            TrustedDeviceItem::StaticPublication128TryReadF32,
             TrustedDeviceItem::StridedReadView2D,
             TrustedDeviceItem::StridedReadView2DError,
             TrustedDeviceItem::StridedReadView2DFromSharedSlice,
@@ -3490,9 +3523,27 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("c676a0673973db28212155cf82adbc987d8f7d5c4aed604d6e1a9987c868db10")
+            digest("d376c830676b1aa617380b85888af0671d61a6ac339a0b6780ef4e463f70e400")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
+    }
+
+    #[test]
+    fn reviewed_static_publication_facade_remains_force_inlined() {
+        let source = fs::read_to_string(
+            Path::new(super::REVIEWED_FE2O3_DEVICE_SOURCE_ROOT).join("static_publication.rs"),
+        )
+        .unwrap();
+        let facade = source.split("pub fn publish_once_128(").next().unwrap();
+        assert!(facade.trim_end().ends_with("#[rustc_force_inline]"));
+        for diagnostic in [
+            "fe2o3_device_static_publication_128_publish_f32_v1",
+            "fe2o3_device_static_publication_128_try_read_f32_v1",
+        ] {
+            assert!(source.contains(&format!(
+                "#[inline(never)]\n#[rustc_diagnostic_item = \"{diagnostic}\"]"
+            )));
+        }
     }
 
     #[test]
@@ -3899,6 +3950,9 @@ mod tests {
             TrustedDeviceItem::DisjointSliceIntoReadOnly,
             TrustedDeviceItem::ReadOnlyAllocationLen,
             TrustedDeviceItem::ReadOnlyAllocationLoadOr,
+            TrustedDeviceItem::PublicationAttemptF32,
+            TrustedDeviceItem::StaticPublication128PublishF32,
+            TrustedDeviceItem::StaticPublication128TryReadF32,
             TrustedDeviceItem::KernelError,
             TrustedDeviceItem::KernelContext,
             TrustedDeviceItem::KernelContextIssue,

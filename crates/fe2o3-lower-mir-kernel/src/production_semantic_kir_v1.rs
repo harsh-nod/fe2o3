@@ -2596,6 +2596,8 @@ fn ranked_access_sources_are_well_formed(
                 | ProductionRankedOperationV1::ValueAccess { .. }
                 | ProductionRankedOperationV1::AtomicAccess { .. }
                 | ProductionRankedOperationV1::AtomicValueAccess { .. }
+                | ProductionRankedOperationV1::PublicationAtomicStoreU32 { .. }
+                | ProductionRankedOperationV1::PublicationAtomicLoadU32 { .. }
                 | ProductionRankedOperationV1::AllocationEffect { .. }
         ) || !ranked_locations.insert((source.ranked_block, source.ranked_operation))
         {
@@ -3669,208 +3671,7 @@ fn index_semantic_access_span(
     Some(())
 }
 
-fn index_ranked_correlation(
-    lowering: &ProductionRankedKernelLoweringInputV1,
-    sources: &[ProductionRankedAccessSourceV1],
-    max_operations: usize,
-    budget: &mut UnsupportedIndexCorrelationBudgetV1,
-) -> Option<RankedCorrelationIndexV1> {
-    if sources.len() > DEFAULT_MAX_OPERATIONS_V1 {
-        return None;
-    }
-    let mut operation_count = 0_usize;
-    let mut view_definitions = BTreeMap::new();
-    let mut semantic_expressions = BTreeMap::new();
-    for block in lowering.kernel().blocks() {
-        budget.charge()?;
-        for operation in block.operations() {
-            operation_count = operation_count.checked_add(1)?;
-            if operation_count > max_operations {
-                return None;
-            }
-            budget.charge()?;
-            let definition = match operation {
-                ProductionRankedOperationV1::View {
-                    result,
-                    allocation_origin,
-                    ..
-                } => Some((
-                    *result,
-                    RankedViewDefinitionV1 {
-                        allocation_origin: *allocation_origin,
-                        memory_space: dialect_kernel::MemorySpaceAttr::Global,
-                        noalias_class: 0,
-                    },
-                )),
-                ProductionRankedOperationV1::ViewInSpace {
-                    result,
-                    memory_space,
-                    allocation_origin,
-                    ..
-                } => Some((
-                    *result,
-                    RankedViewDefinitionV1 {
-                        allocation_origin: *allocation_origin,
-                        memory_space: *memory_space,
-                        noalias_class: 0,
-                    },
-                )),
-                _ => None,
-            };
-            if let Some((result, definition)) = definition {
-                budget.charge()?;
-                if view_definitions.insert(result, definition).is_some() {
-                    return None;
-                }
-            }
-            if let ProductionRankedOperationV1::SemanticExpression {
-                result,
-                expression,
-                numerical_contract,
-            } = operation
-            {
-                budget.charge()?;
-                if semantic_expressions
-                    .insert(*result, (expression.clone(), *numerical_contract))
-                    .is_some()
-                {
-                    return None;
-                }
-            }
-        }
-    }
-
-    let mut ranked_locations = BTreeSet::new();
-    let mut sites_by_ranked_location = BTreeMap::new();
-    let mut source_ordinals = BTreeMap::<(u32, Option<u32>), BTreeSet<u32>>::new();
-    let mut sources_by_site = BTreeMap::new();
-    let mut conservative_sources_by_statement = BTreeMap::new();
-    let mut ambiguous_conservative_statements = BTreeSet::new();
-    for source in sources {
-        budget.charge()?;
-        let operation = lowering
-            .kernel()
-            .blocks()
-            .get(source.ranked_block as usize)?
-            .operations()
-            .get(source.ranked_operation as usize)?;
-        let (access, allocation, value, atomic) = match operation {
-            ProductionRankedOperationV1::Access { kind, view, .. } => {
-                (*kind, IndexedRankedAllocationV1::View(*view), None, None)
-            }
-            ProductionRankedOperationV1::PredicatedAccess { kind, view, .. } => {
-                (*kind, IndexedRankedAllocationV1::View(*view), None, None)
-            }
-            ProductionRankedOperationV1::ValueAccess {
-                kind, view, value, ..
-            } => (
-                *kind,
-                IndexedRankedAllocationV1::View(*view),
-                Some(*value),
-                None,
-            ),
-            ProductionRankedOperationV1::AtomicAccess {
-                kind,
-                ordering,
-                scope,
-                view,
-                ..
-            } => (
-                *kind,
-                IndexedRankedAllocationV1::View(*view),
-                None,
-                Some(normalize_ranked_atomic_contract_v1(*ordering, *scope)),
-            ),
-            ProductionRankedOperationV1::AtomicValueAccess {
-                kind,
-                ordering,
-                scope,
-                view,
-                value,
-                ..
-            } => (
-                *kind,
-                IndexedRankedAllocationV1::View(*view),
-                Some(*value),
-                Some(normalize_ranked_atomic_contract_v1(*ordering, *scope)),
-            ),
-            ProductionRankedOperationV1::AllocationEffect {
-                kind,
-                memory_space,
-                allocation_origin,
-                noalias_class,
-            } => (
-                *kind,
-                IndexedRankedAllocationV1::Direct(RankedViewDefinitionV1 {
-                    allocation_origin: *allocation_origin,
-                    memory_space: *memory_space,
-                    noalias_class: *noalias_class,
-                }),
-                None,
-                None,
-            ),
-            _ => return None,
-        };
-        if !ranked_locations.insert((source.ranked_block, source.ranked_operation))
-            || !source_ordinals
-                .entry((source.semantic_block, source.semantic_statement))
-                .or_default()
-                .insert(source.semantic_access_ordinal)
-        {
-            return None;
-        }
-        let site = SemanticAccessSiteV1 {
-            block: source.semantic_block,
-            statement: source.semantic_statement,
-            ordinal: source.semantic_access_ordinal,
-        };
-        if sites_by_ranked_location
-            .insert((source.ranked_block, source.ranked_operation), site)
-            .is_some()
-        {
-            return None;
-        }
-        let indexed = IndexedRankedAccessSourceV1 {
-            ranked_block: source.ranked_block,
-            ranked_operation: source.ranked_operation,
-            access,
-            allocation,
-            value,
-            atomic,
-        };
-        if matches!(allocation, IndexedRankedAllocationV1::Direct(_)) {
-            let key = (site.block, site.statement);
-            if !ambiguous_conservative_statements.contains(&key)
-                && conservative_sources_by_statement
-                    .insert(key, indexed)
-                    .is_some()
-            {
-                conservative_sources_by_statement.remove(&key);
-                ambiguous_conservative_statements.insert(key);
-            }
-        }
-        if sources_by_site.insert(site, indexed).is_some() {
-            return None;
-        }
-    }
-    for ordinals in source_ordinals.values() {
-        budget.charge()?;
-        if !ordinals
-            .iter()
-            .copied()
-            .eq(0..u32::try_from(ordinals.len()).unwrap_or(u32::MAX))
-        {
-            return None;
-        }
-    }
-    Some(RankedCorrelationIndexV1 {
-        sources_by_site,
-        conservative_sources_by_statement,
-        sites_by_ranked_location,
-        view_definitions,
-        semantic_expressions,
-    })
-}
+include!("production_semantic_kir_v1/ranked_correlation_index_v1.rs");
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum NormalizedScalarExpressionV1 {
@@ -6225,6 +6026,14 @@ fn validate_mir_pliron_translation_with_semantic_v1(
         .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
     let public_effect_counts = public_effect_counts_by_call_v1(&kir, &semantic_sites, &mut budget)?;
     let mut conditional_reads = BTreeMap::new();
+    let publication = StaticPublicationCorrelationV1 {
+        semantic,
+        semantic_function,
+        kir: &kir,
+        sites: &semantic_sites,
+        ranked: &ranked,
+        lowering,
+    };
     if let Some(location) = kir.unmodeled_memory_effects.first().copied() {
         return Err(
             ProductionMirPlironTranslationErrorV1::UnattributedExecutableEffect { location },
@@ -6438,6 +6247,7 @@ fn validate_mir_pliron_translation_with_semantic_v1(
                 ranked_operation: source.ranked_operation,
             });
         }
+        publication.validate_written_constant(source, *consumer, &mut budget)?;
         if let Some(ranked_value) = source.value {
             let operation = kir.operations.get(&consumer.location).ok_or(
                 ProductionMirPlironTranslationErrorV1::ValueExpressionMismatch {
@@ -6516,18 +6326,23 @@ fn validate_mir_pliron_translation_with_semantic_v1(
                     location: consumer.location,
                 },
             )?;
-            if let Some(witness) = authenticate_conditional_total_read_v1(
-                semantic,
-                semantic_function,
-                site,
-                logical_site,
-                *consumer,
-                operation,
-                public_effect_counts
-                    .get(&(site.block, site.statement))
-                    .copied()
-                    .unwrap_or(0),
-            ) {
+            let count = public_effect_counts
+                .get(&(site.block, site.statement))
+                .copied()
+                .unwrap_or(0);
+            let publication_read =
+                publication.authenticate_read(site, logical_site, *consumer, count, &mut budget)?;
+            if let Some(witness) = publication_read.or_else(|| {
+                authenticate_conditional_total_read_v1(
+                    semantic,
+                    semantic_function,
+                    site,
+                    logical_site,
+                    *consumer,
+                    operation,
+                    count,
+                )
+            }) {
                 let key = witness
                     .key()
                     .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
@@ -6845,10 +6660,11 @@ struct NormalizedEffectFlowV1 {
 }
 
 include!("production_semantic_kir_v1/conditional_read_flow_v1.rs");
+include!("production_semantic_kir_v1/static_publication_flow_v1.rs");
 
 fn validate_effect_control_flow_v1(
     body: &FunctionBody,
-    ranked: &fe2o3_pliron::ProductionRankedKernelV1,
+    ranked_kernel: &fe2o3_pliron::ProductionRankedKernelV1,
     locations: &[(
         SemanticAccessSiteV1,
         FunctionOperationLocation,
@@ -6861,6 +6677,7 @@ fn validate_effect_control_flow_v1(
     let mut kir_events = BTreeMap::<u32, Vec<(u64, SemanticAccessSiteV1)>>::new();
     let mut ranked_events = BTreeMap::<u32, Vec<(u64, SemanticAccessSiteV1)>>::new();
     let mut seen_ranked_effects = BTreeMap::<(u32, u32), SemanticAccessSiteV1>::new();
+    let mut ranked_conditional_reads = BTreeMap::new();
     for (site, kir, operation_access_ordinal, ranked) in locations {
         budget
             .charge()
@@ -6877,6 +6694,29 @@ fn validate_effect_control_flow_v1(
             continue;
         }
         seen_ranked_effects.insert(*ranked, *site);
+        let kir_key = (
+            kir.block.0,
+            (kir.operation_index as u64) << 32 | u64::from(*operation_access_ordinal),
+        );
+        if site.ordinal == 2
+            && conditional_reads
+                .get(&kir_key)
+                .is_some_and(|proof| proof.site == *site)
+            && static_publication_ranked_optional_read_v1(ranked_kernel, ranked.0, ranked.1, budget)
+                .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?
+        {
+            let witness = AuthenticatedConditionalReadV1 {
+                location: FunctionOperationLocation::new(BlockId(ranked.0), ranked.1 as usize),
+                operation_access_ordinal: 0,
+                site: *site,
+            };
+            ranked_conditional_reads.insert(
+                witness
+                    .key()
+                    .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?,
+                witness,
+            );
+        }
         kir_events.entry(kir.block.0).or_default().push((
             (u64::try_from(kir.operation_index)
                 .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?
@@ -6906,7 +6746,7 @@ fn validate_effect_control_flow_v1(
             second_semantic_block: 0,
             second_semantic_statement: None,
         })?;
-    let ranked_successors = ranked
+    let ranked_successors = ranked_kernel
         .blocks()
         .iter()
         .enumerate()
@@ -6935,7 +6775,7 @@ fn validate_effect_control_flow_v1(
         0,
         &ranked_events,
         &ranked_successors,
-        &BTreeMap::new(),
+        &ranked_conditional_reads,
         budget,
     )
     .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
@@ -11849,6 +11689,7 @@ include!("production_call_destination_v1.rs");
 include!("production_semantic_kir_v1/dynamic_local_array_v1.rs");
 include!("production_semantic_kir_v1/atomic_load_store_v1.rs");
 include!("production_semantic_kir_v1/read_only_allocation_v1.rs");
+include!("production_semantic_kir_v1/static_publication_v1.rs");
 
 struct SemanticFunctionLoweringV1<'a> {
     fixed_array_analysis: Option<FixedArrayGuardAnalysisV1<'a>>,
@@ -16373,6 +16214,36 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     block, call, operations, *view, *element,
                 )?
             }
+            SemanticCompilerIntrinsicOperationV1::StaticPublication128PublishF32 {
+                payload,
+                flags,
+                result,
+            } => self.lower_static_publication_v1(
+                block,
+                call,
+                operations,
+                StaticPublicationTypesV1 {
+                    payload: *payload,
+                    flags: *flags,
+                    result: *result,
+                },
+                StaticPublicationRoleV1::Publish,
+            )?,
+            SemanticCompilerIntrinsicOperationV1::StaticPublication128TryReadF32 {
+                payload,
+                flags,
+                result,
+            } => self.lower_static_publication_v1(
+                block,
+                call,
+                operations,
+                StaticPublicationTypesV1 {
+                    payload: *payload,
+                    flags: *flags,
+                    result: *result,
+                },
+                StaticPublicationRoleV1::TryRead,
+            )?,
             SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
                 result,
                 view,
@@ -25262,6 +25133,19 @@ fn disjoint_slice_descriptor(
         let candidate = match callable {
             SemanticCallableDeclV1::CompilerIntrinsic {
                 operation:
+                    SemanticCompilerIntrinsicOperationV1::StaticPublication128PublishF32 {
+                        payload, ..
+                    }
+                    | SemanticCompilerIntrinsicOperationV1::StaticPublication128TryReadF32 {
+                        payload, ..
+                    },
+                ..
+            } if *payload == ty => {
+                let (element, length) = static_publication_payload_fields_v1(types, *payload)?;
+                Some((element, length, AccessMode::ReadWrite))
+            }
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation:
                     SemanticCompilerIntrinsicOperationV1::DisjointSliceIntoReadOnly {
                         slice,
                         view,
@@ -26098,6 +25982,7 @@ mod resource_tests {
     include!("production_semantic_kir_v1/guarded_effect_flow_v1_tests.rs");
     include!("production_semantic_kir_v1/conditional_total_read_replay_v1_tests.rs");
     include!("production_semantic_kir_v1/read_only_allocation_v1_tests.rs");
+    include!("production_semantic_kir_v1/static_publication_v1_tests.rs");
     mod private_array_resource_tests {
         include!("production_semantic_kir_v1/tests/production_private_array_resource_tests.rs");
     }

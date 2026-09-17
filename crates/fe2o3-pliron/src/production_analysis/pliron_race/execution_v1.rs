@@ -274,10 +274,6 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
         .iter()
         .filter_map(|effect| effect.kind.writes_memory().then_some(effect.noalias_class))
         .collect::<HashSet<_>>();
-    // Read-only allocation classes cannot participate in a data race. Keep
-    // reads that may alias a write, but do not require unrelated input-only
-    // address calculations to be recoverable by the race proof.
-    effects.retain(|effect| classes_with_writes.contains(&effect.noalias_class));
     let layout = match analyses.execution_layout() {
         Ok(layout) => layout,
         Err(failure) => {
@@ -313,7 +309,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
         layout.global_extents.to_vec()
     } else if sparse.has_declared_launch_extent() {
         sparse.launch_extents().to_vec()
-    } else if effects.is_empty() {
+    } else if effects.is_empty() || classes_with_writes.is_empty() {
         vec![1]
     } else {
         return one(RankedRaceFindingV1::ExecutionLayoutUnavailable {
@@ -321,6 +317,24 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
         });
     };
 
+    let static_publication = match derive_static_publication_v1(
+        context, &inventory, sparse, layout, &effects,
+    ) {
+        Ok(proof) => proof,
+        Err(finding) => return one(*finding),
+    };
+    if let Some(proof) = static_publication {
+        // Preserve the exact cross-invocation discharge roster in the report.
+        // Only its closed five-effect protocol leaves generic pair analysis;
+        // every other allocation and access remains subject to ordinary checks.
+        effects.retain(|effect| {
+            ![0, 1, 2, 3, 5].iter().any(|ordinal| proof.sites[*ordinal] == effect.location)
+        });
+    }
+    // The publication proof inspected the complete effect inventory first,
+    // including unknown-alias reads which cannot safely leave its roster.
+    // Unrelated input-only classes need no generic address reconstruction.
+    effects.retain(|effect| classes_with_writes.contains(&effect.noalias_class));
     let invocation_bounds = invocation_upper_bounds_by_block(context, function, &inventory);
     if symbolically_proves_disjoint(
         context,
@@ -331,7 +345,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
         invocation_bounds.as_deref(),
     ) || presburger_proves_no_conflicts(&effects, sparse, presburger, &launch_extents)
     {
-        return clean();
+        return RankedRaceReportV1 { findings: Vec::new(), static_publication: static_publication.into_iter().collect() };
     }
     let release_signal_views = effects
         .iter()
@@ -552,7 +566,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
             insert_witness(state, witness);
         }
     }
-    RankedRaceReportV1 { findings }
+    RankedRaceReportV1 { findings, static_publication: static_publication.into_iter().collect() }
 }
 
 pub(crate) fn require_pliron_ranked_race_freedom_with_analyses_v1(

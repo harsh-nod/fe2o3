@@ -9,6 +9,14 @@ mod kir_optimization_map_v12;
 mod optimization_v1;
 mod optimization_v12;
 mod production;
+pub use production::{ProductionMiddleEndEvidenceViewV1, ProductionMiddleEndLiveIdentityV1};
+pub use production::{
+    InertProductionMiddleEndEvidenceV6, MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V6,
+    MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V6, PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V6,
+    PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V6, ProductionMiddleEndEvidenceCodecErrorV6,
+    ProductionMiddleEndEvidenceIdentityV6, ProductionMiddleEndEvidenceV6,
+    ProductionMiddleEndPublicationSiteV6, ProductionMiddleEndPublicationSummaryV6,
+};
 mod production_analysis;
 
 pub use canonical_analysis_scope_v1::*;

@@ -1321,11 +1321,12 @@ impl Verify for DimensionOp {
 #[pliron_op(
     name = "kernel.access",
     format,
-    interfaces = [NResultsInterface<0>, NRegionsInterface<0>],
+    interfaces = [NRegionsInterface<0>],
     attributes = (
         kernel_access_kind: AccessKindAttr,
         kernel_atomic_ordering: AtomicOrderingAttr,
-        kernel_atomic_scope: AtomicScopeAttr
+        kernel_atomic_scope: AtomicScopeAttr,
+        kernel_publication_atomic: PublicationAtomicAccessAttr
     )
 )]
 pub struct RankedAccessOp;
@@ -1378,7 +1379,7 @@ impl RankedAccessOp {
         if kind.is_atomic() {
             return Err(RankedMemoryError::MissingAtomicContract);
         }
-        validate_predicated_access(context, view, index, success)?;
+        validate_predicated_access(context, kind, view, index, success)?;
         Self::build(context, kind, None, None, view, vec![index], Some(success))
     }
 
@@ -1468,11 +1469,17 @@ impl RankedAccessOp {
 
 impl Verify for RankedAccessOp {
     fn verify(&self, context: &Context) -> PlironResult<()> {
-        verify_no_regions_results_successors(self, context, 0, 0)?;
+        let publication = self.publication_atomic_kind(context);
+        let results = usize::from(publication == Some(PublicationAtomicAccessAttr::AcquireU32));
+        verify_no_regions_results_successors(self, context, results, 0)?;
         let operation = self.get_operation();
         let operation = operation.deref(context);
         if operation.get_num_operands() == 0
-            || !(1..=3).contains(&payload_attribute_count(&operation))
+            || if publication.is_some() {
+                payload_attribute_count(&operation) != 4
+            } else {
+                !(1..=3).contains(&payload_attribute_count(&operation))
+            }
             || self.kind(context).is_none()
         {
             return verify_err!(
@@ -1508,6 +1515,11 @@ impl Verify for RankedAccessOp {
         for operand in 1..=actual {
             require_index_operand(self, context, operand)?;
         }
+        if let Some(publication) = publication
+            && let Err(error) = self.verify_publication_atomic(context, publication)
+        {
+            return verify_err!(self.loc(context), error);
+        }
         if let Some(success) = success {
             if self.kind(context).is_none_or(AccessKindAttr::is_atomic) || actual != 1 {
                 return verify_err!(
@@ -1519,6 +1531,7 @@ impl Verify for RankedAccessOp {
             }
             if let Err(error) = validate_predicated_access(
                 context,
+                self.kind(context).expect("checked access kind"),
                 self.view(context),
                 self.indices(context)[0],
                 success,
@@ -1530,8 +1543,11 @@ impl Verify for RankedAccessOp {
     }
 }
 
+include!("ranked_memory_publication_v1.rs");
+
 fn validate_predicated_access(
     context: &Context,
+    kind: AccessKindAttr,
     view: Value,
     index: Value,
     success: Value,
@@ -1583,6 +1599,20 @@ fn validate_predicated_access(
                 checked.result(context),
                 checked.success(context),
                 checked.physical_extent(context),
+            )
+        } else if let Some(checked) = producer.downcast_ref::<PublicationReadGuardOp>() {
+            if kind != AccessKindAttr::Read
+                || view_type.deref(context).element_width() != 32
+                || view_operation.memory_space(context) != Some(MemorySpaceAttr::Global)
+            {
+                return Err(RankedMemoryError::MalformedPayload(
+                    "publication guard permits only an ordinary Global f32 read",
+                ));
+            }
+            (
+                checked.result(context),
+                Some(checked.success(context)),
+                Some(checked.physical_extent(context)),
             )
         } else {
             return Err(RankedMemoryError::MalformedPayload(
@@ -2694,6 +2724,7 @@ fn verify_no_regions_results_successors(
                     | "kernel_access_kind"
                     | "kernel_atomic_ordering"
                     | "kernel_atomic_scope"
+                    | "kernel_publication_atomic"
                     | "kernel_memory_space"
                     | "kernel_allocation_origin"
                     | "kernel_noalias_class"

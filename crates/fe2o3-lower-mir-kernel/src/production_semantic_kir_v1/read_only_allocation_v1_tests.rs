@@ -11,7 +11,7 @@ mod read_only_allocation_v1_tests {
         SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], ty(kind)).unwrap()
     }
 
-    fn types(float: bool) -> Vec<SemanticTypeDeclV1> {
+    pub(super) fn types(float: bool) -> Vec<SemanticTypeDeclV1> {
         let raw = SemanticBackendScalarV1::initialized(
             SemanticBackendPrimitiveV1::pointer(0, 8, 8),
             SemanticScalarValidityRangeV1::new(0, u128::from(u64::MAX)),

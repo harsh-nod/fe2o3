@@ -64,6 +64,8 @@ use crate::protected_rustc_invocation::{
 const CODE_OBJECT_VERSION_V3: u16 = 6;
 const WAVE_WIDTH_BITS_V3: u16 = 64;
 
+include!("production_semantic_lineage_v3/static_publication_v1.rs");
+
 fn validate_final_llvm_layout(llvm: &str) -> Result<(), ProductionSemanticLineageErrorV3> {
     let expected_header = format!(
         "target triple = \"amdgcn-amd-amdhsa\"\ntarget datalayout = \"{PRODUCTION_WORKER_DATA_LAYOUT_V1}\"\n"
@@ -205,6 +207,13 @@ fn prepare_lineage_evidence_v1(
         ));
     }
 
+    if ranked.root_count() > 1 && ranked.roots().iter().any(|root| {
+        root.verification().middle_end_evidence().static_publication().is_some()
+    }) {
+        return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
+            "static publication requires singleton formal-admission custody",
+        ));
+    }
     let roster_identity = *ranked.canonical_roster_identity().as_bytes();
     let canonical_kernel_order = ranked.canonical_kernel_order().to_vec().into_boxed_slice();
     let mut roots = Vec::with_capacity(ranked.root_count());
@@ -325,9 +334,14 @@ fn prepare_lineage_evidence_v1(
             admitted.semantic_kir(),
             verification.semantic_u32_induction(),
         )?;
-        let formal = InertCanonicalFormalMemoryAdmissionEvidenceV4::from_live_owner(admitted)?;
+        let formal_bytes = prepare_formal_admission_payload_v5(
+            admitted,
+            verification.middle_end_evidence().static_publication().is_some(),
+            &root.middle_end,
+            semantic.semantic_sha256().as_bytes(),
+            neutral_kir,
+        )?;
         if correspondence.nested_v4().canonical_kernel_ir_identity() != neutral_kir
-            || formal.canonical_kernel_ir_identity() != neutral_kir
         {
             return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
                 "singleton lineage names a different neutral KIR",
@@ -340,7 +354,7 @@ fn prepare_lineage_evidence_v1(
                     correspondence.canonical_bytes(),
                 )?,
             formal_memory: InertFormalMemoryReceiptV3::from_canonical_preimage(
-                formal.canonical_bytes(),
+                formal_bytes.as_slice(),
             )?,
             proof_verus_evidence: root.verus_execution.clone(),
             roster_custody: PreparedLineageRosterCustodyV1::Singleton,
@@ -1074,8 +1088,10 @@ impl PreparedProductionSemanticLineageV3 {
                 let correspondence = InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(
                     self.mir_to_kir_correspondence.canonical_preimage(),
                 )?;
-                let formal = InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(
+                let formal_kir = validate_formal_middle_end_pair_v5(
+                    self.middle_end.canonical_preimage(),
                     self.formal_memory.canonical_preimage(),
+                    self.semantic_mir.identity().sha256(),
                 )?;
                 if correspondence
                     .nested_v4()
@@ -1084,13 +1100,12 @@ impl PreparedProductionSemanticLineageV3 {
                     != self.semantic_mir.identity().sha256()
                     || correspondence.nested_v4().canonical_kernel_ir_identity()
                         != self.neutral_kir_custody
-                    || formal.canonical_kernel_ir_identity() != self.neutral_kir_custody
+                    || formal_kir != self.neutral_kir_custody
                     || correspondence.grants_authority()
                     || correspondence
                         .nested_v4()
                         .semantic_u32_induction()
                         .grants_authority()
-                    || formal.grants_authority()
                 {
                     return Err(ProductionSemanticLineageErrorV3::AxisMismatch(
                         "lossless semantic correspondence custody changed before final handoff",

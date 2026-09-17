@@ -178,8 +178,9 @@ pub(crate) fn preflight_ranked_bounds_resource_upper_bound_v1(
     // Args-edge relations have a different closure from the legacy global
     // guard-bitset waves. Their bounded execution includes the denied prefix.
     let (transport_work, transport_storage) = bounds_transport_resource_bound_v1(census)?;
+    let (literal_work, literal_storage) = bounds_literal_equality_resource_bound_v1(census);
     let charged_work = checked_ranked_bounds_sum_v1(
-        &[charged_work, transport_work],
+        &[charged_work, transport_work, literal_work],
         "memory-bounds transported work upper bound",
     )?;
 
@@ -219,7 +220,7 @@ pub(crate) fn preflight_ranked_bounds_resource_upper_bound_v1(
     // a denied request allocates nothing. Released query buffers are still
     // charged cumulatively, so this also covers old+new growth overlap.
     let internal_storage = checked_ranked_bounds_sum_v1(
-        &[internal_storage, transport_storage],
+        &[internal_storage, transport_storage, literal_storage],
         "memory-bounds transported storage upper bound",
     )?
     .min(MAX_RANKED_BOUNDS_STORAGE_ITEMS);
@@ -598,6 +599,7 @@ impl std::error::Error for RankedBoundsCheckErrorV1 {}
 
 include!("pliron_ranked_bounds/facts_v1.rs");
 include!("pliron_ranked_bounds/edge_transport_v1.rs");
+include!("pliron_ranked_bounds/literal_equality_v1.rs");
 include!("pliron_ranked_bounds/checked_domain_dag_v1.rs");
 include!("pliron_ranked_bounds/checked_domain_state_v1.rs");
 include!("pliron_ranked_bounds/checked_domain_solver_v1.rs");

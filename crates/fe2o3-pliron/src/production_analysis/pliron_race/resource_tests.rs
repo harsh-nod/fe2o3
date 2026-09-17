@@ -94,6 +94,7 @@ mod status_tests {
     fn rejected_race_finding_dominates_an_incomplete_finding() {
         let report = RankedRaceReportV1 {
             findings: vec![RankedRaceFindingV1::BoundsPrerequisiteRejected, conflict()],
+            static_publication: Vec::new(),
         };
         assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
         assert!(!report.is_clean());
@@ -120,9 +121,10 @@ mod status_tests {
         // three eight-unit frames, and eight invocation decode items.
         // The single symbolic pair also prepays twelve root queries and
         // three comparisons: 12*4+3=51. These queries allocate nothing.
-        const EXACT_WORK: usize = 3_067;
+        // Publication inventory adds eight work units and 64 scratch units.
+        const EXACT_WORK: usize = 3_075;
         const EXACT_RETAINED: usize = 1_272;
-        const EXACT_PEAK: usize = 68_502;
+        const EXACT_PEAK: usize = 68_566;
         let exact = race_resource_upper_bound_for_shape_v1(
             census,
             Some((2, 1)),
@@ -225,14 +227,14 @@ mod status_tests {
             ..ProductionAnalysisInputCensusV1::default()
         };
         for (shape, work) in [
-            (None, 1_051_203),
-            (Some((0, 1)), 1_051_203),
-            (Some((1, 1)), 2_707),
+            (None, 1_051_211),
+            (Some((0, 1)), 1_051_211),
+            (Some((1, 1)), 2_715),
         ] {
             const RETAINED: usize = 1_272;
             // Effect collection (88), four signal/class sets (8), one retained
             // diagnostic and one construction temporary. No exact map/query.
-            const PEAK: usize = 88 + 8 + 2 * RETAINED;
+            const PEAK: usize = 88 + 8 + 2 * RETAINED + 64;
             let bound = race_resource_upper_bound_for_shape_v1(
                 census,
                 shape,
@@ -269,7 +271,7 @@ mod status_tests {
         assert_eq!(bound.retained_storage_upper_bound(), PER_FINDING);
         assert_eq!(
             bound.peak_storage_upper_bound(),
-            64 * (8 + 16 + 64) + 385 * 11 + 64 * 8 + 2 * PER_FINDING
+            64 * (8 + 16 + 64) + 385 * 11 + 64 * 8 + 2 * PER_FINDING + 64
         );
         let without_text = ProductionAnalysisInputCensusV1 {
             identifier_bytes: 0,
@@ -358,8 +360,8 @@ mod status_tests {
         )
         .unwrap();
         assert_eq!(bound.retained_storage_upper_bound(), 1_272);
-        assert_eq!(bound.work_upper_bound(), 1_051_203 + work);
-        assert_eq!(bound.peak_storage_upper_bound(), 2_640 + storage);
+        assert_eq!(bound.work_upper_bound(), 1_051_211 + work);
+        assert_eq!(bound.peak_storage_upper_bound(), 2_704 + storage);
         assert_eq!(
             race_resource_upper_bound_for_shape_v1(
                 census,

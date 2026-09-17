@@ -11,6 +11,16 @@ const PINS: [[u8; 32]; 6] = [
 ];
 
 pub fn canonical_inert_gfx942_invocation_hex() -> String {
+    canonical_inert_invocation_hex("gfx942:xnack-")
+}
+
+pub fn canonical_inert_gfx950_invocation_hex() -> String {
+    canonical_inert_invocation_hex("gfx950:xnack-")
+}
+
+// Diagnostic descriptors only: these fixed test pins do not authenticate the
+// running compiler or replace its independently recorded build provenance.
+fn canonical_inert_invocation_hex(target: &str) -> String {
     let rustc = RustcUnitV2::new(
         "/workspace/fe2o3",
         vec![
@@ -28,7 +38,7 @@ pub fn canonical_inert_gfx942_invocation_hex() -> String {
     let environment = CompileEnvironmentV2::from_child_environment([
         os_entry("CARGO_CFG_TARGET_ARCH", "amdgcn"),
         os_entry("FE2O3_HSACO_DIR", "/workspace/fe2o3/target/fe2o3"),
-        os_entry("FE2O3_TARGET", "gfx942:xnack-"),
+        os_entry("FE2O3_TARGET", target),
         os_entry("FE2O3_VERIFY_KERNEL_IR", "1"),
     ])
     .expect("valid inert extraction environment");

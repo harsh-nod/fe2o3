@@ -175,6 +175,28 @@ and verifies total fallback behavior without any memory read. These tests and
 the unsafe inventory do not prove GPU coherence, tensor publication, or launch
 authority. No generic unsafe allowance is added for the new source API.
 
+## One-Attempt Publication
+
+`fe2o3-device/src/static_publication.rs` adds exactly five unsafe blocks and
+no unsafe function. Two private terminal blocks perform the ordinary `f32`
+payload store and conditional load. Their sole public caller checks the
+actual payload and flag extents, exact 256-invocation launch extent, role,
+and cell bounds before either terminal. The consumed `DisjointSlice` supplies
+validity, alignment, initialization, and the original exclusive allocation
+lease. Production admission must additionally prove one unique producer and
+consumer per cell, mutually exclusive once-only sites, and absence of other
+root uses or escapes across the whole kernel.
+
+The producer's payload store precedes its System Release of READY. The
+consumer's own System Release of REQUEST precedes the actual System Acquire;
+only equality with the distinct READY marker guards the ordinary read.
+Write-read coherence excludes older READY values. This is not an initial-zero
+assumption, a residency/progress guarantee, or authority carried by the plain
+result struct. Existing atomic runtime memory eligibility remains required.
+The other three unsafe blocks construct exclusively owned local arrays in
+host tests. Neither those tests nor this inventory grants GPU execution or
+protected runtime authority.
+
 ## Initial Reduction
 
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:

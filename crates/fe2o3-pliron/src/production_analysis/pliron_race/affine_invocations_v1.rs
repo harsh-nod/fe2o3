@@ -283,11 +283,13 @@ fn sparse_failure(failure: SparseIndexFailureV1) -> String {
 fn one(finding: RankedRaceFindingV1) -> RankedRaceReportV1 {
     RankedRaceReportV1 {
         findings: vec![finding],
+        static_publication: Vec::new(),
     }
 }
 
 fn clean() -> RankedRaceReportV1 {
     RankedRaceReportV1 {
         findings: Vec::new(),
+        static_publication: Vec::new(),
     }
 }

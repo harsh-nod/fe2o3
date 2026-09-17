@@ -1,4 +1,5 @@
 use super::*;
+include!("literal_equality_v1_tests.rs");
 use crate::production_analysis::pliron_ir_identity::LivePlironStructuralIdentityProviderV1;
 use crate::production_analysis::pliron_pass_contract::PlironStructuralIdentityProviderV1;
 use dialect_kernel::{DIALECT_NAME, register_dialect};

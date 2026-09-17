@@ -119,11 +119,11 @@
     }
 
     #[test]
-    fn authenticated_ranked_projection_exposes_v5_and_inert_induction_evidence() {
+    fn authenticated_ranked_projection_exposes_versioned_live_and_inert_induction_evidence() {
         let middle_end_accessor: for<'a> fn(
             &'a AuthenticatedRankedVerificationV5,
         )
-            -> &'a fe2o3_pliron::ProductionMiddleEndEvidenceV5 =
+            -> &'a CompilerMiddleEndEvidenceV1 =
             AuthenticatedRankedVerificationV5::middle_end_evidence;
         let induction_accessor: for<'a> fn(
             &'a AuthenticatedRankedVerificationV5,

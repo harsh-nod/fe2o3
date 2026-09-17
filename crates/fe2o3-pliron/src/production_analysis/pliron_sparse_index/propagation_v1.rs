@@ -13,13 +13,26 @@ fn derive_definition(
         SparseDefinitionKindV1::Merge(inputs) => {
             merge_facts(inputs, lattice, definition_indices, propagation_work)
         }
-        SparseDefinitionKindV1::Operation(operation) => Ok(derive_operation(
-            context,
-            *operation,
-            lattice,
-            definition_indices,
-            launch_extents,
-        )),
+        SparseDefinitionKindV1::Operation(operation) => {
+            if let Some(guard) =
+                Operation::get_op::<dialect_kernel::PublicationReadGuardOp>(*operation, context)
+            {
+                // Only result zero is an exact copy. The success capability and
+                // the acquire value gain no sparse arithmetic facts.
+                return Ok(if definition.result == guard.result(context) {
+                    lookup(guard.index(context), lattice, definition_indices)
+                } else {
+                    known(SparseIndexFactV1::Unknown)
+                });
+            }
+            Ok(derive_operation(
+                context,
+                *operation,
+                lattice,
+                definition_indices,
+                launch_extents,
+            ))
+        }
     }
 }
 

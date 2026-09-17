@@ -21,7 +21,7 @@ use super::mir_pliron_semantic_contract_v1::{
     production_dynamic_output_symbol_v1, production_output_domain_identity_v1,
 };
 use super::{
-    ProductionMiddleEndEvidenceV5, ProductionMirPlironSemanticContractErrorV1,
+    ProductionMirPlironSemanticContractErrorV1,
     ProductionMirPlironSemanticContractReportV1, ProductionNonCanonicalLoopProofErrorV1,
     ProductionNonCanonicalLoopProofRequirementV1, ProductionRankedKernelLoweringInputV1,
     ProductionRankedOperationV1, ProductionRankedValueV1, ProductionTotalOutputStagingErrorV2,
@@ -192,7 +192,7 @@ impl Error for ProductionMirPlironSemanticContractDerivationErrorV1 {
 /// No workload declaration or caller-provided semantic contract is accepted.
 pub fn derive_and_reconcile_mir_pliron_semantic_contract_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
-    evidence: &ProductionMiddleEndEvidenceV5,
+    evidence: &dyn super::ProductionMiddleEndEvidenceViewV1,
 ) -> Result<
     ProductionReconciledMirPlironSemanticContractV1,
     ProductionMirPlironSemanticContractDerivationErrorV1,
@@ -212,7 +212,7 @@ pub fn derive_and_reconcile_mir_pliron_semantic_contract_v1(
 
 fn derive_contract_data_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
-    evidence: &ProductionMiddleEndEvidenceV5,
+    evidence: &dyn super::ProductionMiddleEndEvidenceViewV1,
 ) -> Result<MirPlironSemanticContractV1, ProductionMirPlironSemanticContractDerivationErrorV1> {
     let receipts = ranked.retained_policy_checked_refinement_staging();
     let first = receipts

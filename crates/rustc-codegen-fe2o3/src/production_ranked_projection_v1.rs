@@ -295,6 +295,7 @@ struct IntrinsicProjectionV1 {
     read_view_effects: Vec<Option<GuardedRankedAccessV1>>,
     direct_read_effects: Vec<Option<GuardedRankedAccessV1>>,
     direct_write_effects: Vec<Option<GuardedRankedAccessV1>>,
+    static_publication: Option<ProjectedStaticPublicationV1>,
     pipeline_effects: Vec<Option<ProjectedPipelineEffectV1>>,
     generated_terminator_effects: Vec<Option<Vec<ProjectedGeneratedExecutableEffectV1>>>,
     extent_argument_count: usize,
@@ -675,6 +676,7 @@ enum ProjectedBlockItemV1 {
     },
     Guarded(GuardedRankedAccessV1),
     Pipeline(ProjectedPipelineEffectV1),
+    StaticPublication(ProjectedStaticPublicationEffectV1),
     GeneratedFromSemanticTerminator(ProjectedGeneratedExecutableEffectV1),
 }
 
@@ -693,7 +695,8 @@ impl ProjectedSemanticBlockV1 {
                     | ProductionRankedOperationV1::AllocationEffect { .. },
                 ..
             }
-            | ProjectedBlockItemV1::Guarded(_) => true,
+            | ProjectedBlockItemV1::Guarded(_)
+            | ProjectedBlockItemV1::StaticPublication(_) => true,
             ProjectedBlockItemV1::Pipeline(ProjectedPipelineEffectV1::Access { .. }) => true,
             ProjectedBlockItemV1::Pipeline(_) => false,
             ProjectedBlockItemV1::GeneratedFromSemanticTerminator(effect) => {
@@ -723,6 +726,7 @@ impl ProjectedSemanticBlockV1 {
             ProjectedBlockItemV1::Guarded(access) => {
                 access.memory_space != MemorySpaceAttr::Private
             }
+            ProjectedBlockItemV1::StaticPublication(_) => true,
             ProjectedBlockItemV1::Pipeline(ProjectedPipelineEffectV1::Access { .. }) => true,
             ProjectedBlockItemV1::Pipeline(_) => false,
             ProjectedBlockItemV1::GeneratedFromSemanticTerminator(_) => false,
@@ -892,10 +896,12 @@ pub struct ProductionRankedSemanticProjectionRosterReceiptV1 {
 /// production checks. Only the production projection can construct this owner.
 #[must_use = "dropping ranked verification abandons its production lineage"]
 pub(crate) struct AuthenticatedRankedVerificationV5 {
-    middle_end_evidence: fe2o3_pliron::ProductionMiddleEndEvidenceV5,
+    middle_end_evidence: CompilerMiddleEndEvidenceV1,
     functional: Option<AuthenticatedFunctionalVerificationV1>,
     semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
 }
+
+include!("production_ranked_projection_v1/middle_end_evidence_owner_v1.rs");
 
 /// One canonically ordered ranked-verification owner bound to its exact root
 /// identity metadata.
@@ -1005,7 +1011,7 @@ struct AuthenticatedFunctionalVerificationV1 {
 }
 
 impl AuthenticatedRankedVerificationV5 {
-    pub(crate) const fn middle_end_evidence(&self) -> &fe2o3_pliron::ProductionMiddleEndEvidenceV5 {
+    pub(crate) const fn middle_end_evidence(&self) -> &CompilerMiddleEndEvidenceV1 {
         &self.middle_end_evidence
     }
 
@@ -1048,6 +1054,7 @@ pub(crate) enum ProductionRankedVerificationErrorV1 {
     SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     Custody(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     MiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV5),
+    PublicationMiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV6),
     SemanticContract(fe2o3_pliron::ProductionMirPlironSemanticContractDerivationErrorV1),
     ParallelContract(fe2o3_pliron::ProductionParallelReferenceContractErrorV1),
     AggregateVerus(crate::production_mir_pliron_verus_join_v1::ProductionMirPlironVerusJoinErrorV1),
@@ -1074,6 +1081,7 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
             }
             Self::Custody(error) => write!(formatter, "ranked proof custody failed: {error}"),
             Self::MiddleEndEvidence(error) => error.fmt(formatter),
+            Self::PublicationMiddleEndEvidence(error) => error.fmt(formatter),
             Self::SemanticContract(error) => {
                 write!(
                     formatter,
@@ -1102,6 +1110,7 @@ impl std::error::Error for ProductionRankedVerificationErrorV1 {
             Self::SemanticU32Induction(error) => Some(error),
             Self::Custody(error) => Some(error),
             Self::MiddleEndEvidence(error) => Some(error),
+            Self::PublicationMiddleEndEvidence(error) => Some(error),
             Self::SemanticContract(error) => Some(error),
             Self::ParallelContract(error) => Some(error),
             Self::AggregateVerus(error) => Some(error),
@@ -1310,18 +1319,17 @@ fn authenticate_ranked_root_v5(
     semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
 ) -> Result<AuthenticatedRankedVerificationV5, ProductionRankedVerificationErrorV1> {
     let middle_end_evidence =
-        fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(semantic_owner, lowering, ranked_ir)
-            .map_err(ProductionRankedVerificationErrorV1::MiddleEndEvidence)?;
+        CompilerMiddleEndEvidenceV1::try_new(semantic_owner, lowering, ranked_ir)?;
     let functional = if lowering.has_retained_policy_checked_refinement_staging() {
         let semantics = fe2o3_pliron::derive_and_reconcile_mir_pliron_semantic_contract_v1(
             lowering,
-            &middle_end_evidence,
+            middle_end_evidence.view(),
         )
         .map_err(ProductionRankedVerificationErrorV1::SemanticContract)?;
         let (parallel_contract, parallel_report) =
             fe2o3_pliron::derive_and_require_parallel_reference_contract_v1(
                 lowering,
-                &middle_end_evidence,
+                middle_end_evidence.view(),
                 semantics.semantic_contract_report(),
                 semantics.contract(),
             )
@@ -1329,7 +1337,7 @@ fn authenticate_ranked_root_v5(
         let aggregate =
             crate::production_mir_pliron_verus_join_v1::authenticate_mir_pliron_contract_per_compilation_v1(
                 lowering,
-                &middle_end_evidence,
+                middle_end_evidence.view(),
                 semantics.contract(),
                 semantics.semantic_contract_report(),
                 &parallel_contract,
@@ -1358,11 +1366,7 @@ fn ranked_roster_identity_records_v1(
     roots
         .iter()
         .map(|root| {
-            let middle_end_identity = root
-                .verification()
-                .middle_end_evidence()
-                .as_inert()
-                .identity();
+            let middle_end_identity = root.verification().middle_end_evidence().identity();
             let induction = root.verification().semantic_u32_induction();
             RankedRosterIdentityRecordV1 {
                 logical_name: root.logical_name(),
@@ -1444,18 +1448,13 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                 &root.executable_effect_sources,
             )
             .map_err(ProductionRankedVerificationErrorV1::Custody)?;
-            let revalidated = fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(
+            let revalidated = CompilerMiddleEndEvidenceV1::try_new(
                 semantic_owner,
                 &root.lowering,
                 &root.ranked_ir,
-            )
-            .map_err(ProductionRankedVerificationErrorV1::MiddleEndEvidence)?;
-            if revalidated.as_inert().canonical_bytes()
-                != root
-                    .verification
-                    .middle_end_evidence
-                    .as_inert()
-                    .canonical_bytes()
+            )?;
+            if revalidated.canonical_bytes()
+                != root.verification.middle_end_evidence.canonical_bytes()
                 || root
                     .verification
                     .has_authenticated_functional_verification()
@@ -3320,6 +3319,14 @@ fn project_and_verify_ranked_root_v1(
         &bounds_checks.checks,
         &intrinsic.local_contracts.allocations,
     )?;
+    if let Some(publication) = &intrinsic.static_publication {
+        let inventory = &mut intrinsic.local_contracts.atomic_allocations;
+        inventory.charge(inventory.coherent.len() + 1)?;
+        let origin = publication.source.flags.allocation.allocation_origin;
+        if let Err(position) = inventory.coherent.binary_search(&origin) {
+            inventory.coherent.insert(position, origin);
+        }
+    }
     let switch_predicates = switch_predicates(
         function,
         &intrinsic.option_predicates,
@@ -3461,6 +3468,12 @@ fn project_and_verify_ranked_root_v1(
                 access,
             });
         }
+        let publication = intrinsic
+            .static_publication
+            .as_ref()
+            .and_then(|publication| publication.blocks.get(block_index))
+            .and_then(Option::as_ref)
+            .cloned();
         if let Some(access) = intrinsic
             .direct_read_effects
             .get(block_index)
@@ -3507,6 +3520,11 @@ fn project_and_verify_ranked_root_v1(
             local_sources,
             &mut entry_operations,
         )?;
+        if let Some(effect) = publication {
+            projected
+                .items
+                .push(ProjectedBlockItemV1::StaticPublication(effect));
+        }
         if let Some(effect) = intrinsic
             .pipeline_effects
             .get(block_index)
@@ -3528,7 +3546,13 @@ fn project_and_verify_ranked_root_v1(
             );
         }
         projected_effect_count = projected_effect_count
-            .checked_add(projected.items.len())
+            .checked_add(
+                projected
+                    .items
+                    .iter()
+                    .map(projected_item_operation_count_v1)
+                    .sum::<usize>(),
+            )
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "semantic CFG projection operation count overflow",
             ))?;
@@ -3589,6 +3613,7 @@ fn project_and_verify_ranked_root_v1(
         &switch_predicates,
         &intrinsic.deterministic_switches,
         &intrinsic.uniform_inductions,
+        intrinsic.static_publication.as_ref(),
         entry_operations,
         projected_blocks,
         assertion_facts,
@@ -3726,7 +3751,8 @@ fn projected_reference_gpu_writes_v2(
             | ProductionRankedOperationV1::AtomicAccess { view, indices, .. } => {
                 (*view, indices.clone())
             }
-            ProductionRankedOperationV1::PredicatedAccess { view, index, .. } => {
+            ProductionRankedOperationV1::PredicatedAccess { view, index, .. }
+            | ProductionRankedOperationV1::PublicationAtomicStoreU32 { view, index, .. } => {
                 (*view, vec![*index])
             }
             _ => {
@@ -4451,6 +4477,8 @@ fn production_access_sources(
                 | ProductionRankedOperationV1::ValueAccess { .. }
                 | ProductionRankedOperationV1::AtomicAccess { .. }
                 | ProductionRankedOperationV1::AtomicValueAccess { .. }
+                | ProductionRankedOperationV1::PublicationAtomicStoreU32 { .. }
+                | ProductionRankedOperationV1::PublicationAtomicLoadU32 { .. }
                 | ProductionRankedOperationV1::AllocationEffect { .. }
         ) {
             continue;
@@ -4516,6 +4544,8 @@ fn project_rust_bounds_checks(
 include!("production_ranked_projection_v1/dynamic_local_array_v1.rs");
 include!("production_ranked_projection_v1/indexed_atomic_v1.rs");
 include!("production_ranked_projection_v1/consumed_read_only_v1.rs");
+include!("production_ranked_projection_v1/static_publication_v1.rs");
+include!("production_ranked_projection_v1/static_publication_projection_v1.rs");
 
 #[allow(clippy::too_many_arguments)]
 fn project_rust_bounds_checks_with_ordinary_v1(
@@ -7547,6 +7577,8 @@ fn project_intrinsic_contracts(
         &scalar_inventory.address_escaped,
     )?;
     let local_allocations = local_allocation_contracts(types, function, &allocation_origins)?;
+    let static_publication =
+        audit_static_publication_source_v1(types, callables, function, &local_allocations)?;
     let capability_effects = project_authenticated_capabilities_v1(
         types,
         callables,
@@ -9295,6 +9327,21 @@ fn project_intrinsic_contracts(
         next_value,
     )?;
 
+    let static_publication = static_publication
+        .map(|source| {
+            StaticPublicationProjectorV1 {
+                types,
+                callables,
+                function,
+                index_values: &index_values,
+                extent_arguments: &mut runtime_slice_extent_arguments,
+                next_argument: &mut next_runtime_argument,
+                entry_operations: operations,
+                next_value,
+            }
+            .project(source)
+        })
+        .transpose()?;
     let checked_reference_origins = checked_reference_origins(
         function,
         callables,
@@ -9340,6 +9387,7 @@ fn project_intrinsic_contracts(
         read_view_effects,
         direct_read_effects,
         direct_write_effects,
+        static_publication,
         pipeline_effects,
         generated_terminator_effects,
     })
@@ -19623,6 +19671,13 @@ fn order_projected_block_effects(
 enum ProjectedCfgTerminatorV1 {
     AbsentMaterialized,
     Branch(usize),
+    PublicationComparison {
+        kind: StaticPublicationComparisonKindV1,
+        lhs: ProductionRankedValueV1,
+        rhs: ProductionRankedValueV1,
+        true_block: usize,
+        false_block: usize,
+    },
     Predicate {
         predicate: GuardPredicateV1,
         true_block: usize,
@@ -19966,6 +20021,7 @@ fn build_ranked_cfg(
     switch_predicates: &[Option<GuardPredicateV1>],
     deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
     uniform_inductions: &[ProjectedUniformInductionV1],
+    publication: Option<&ProjectedStaticPublicationV1>,
     entry_operations: Vec<ProductionRankedOperationV1>,
     mut projected_blocks: Vec<ProjectedSemanticBlockV1>,
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
@@ -20003,6 +20059,12 @@ fn build_ranked_cfg(
         .map(|index| {
             if !assertion_facts.is_materialized_block(index)? {
                 return Ok(ProjectedCfgTerminatorV1::AbsentMaterialized);
+            }
+            if let Some(control) = publication
+                .and_then(|publication| publication.controls.get(index))
+                .and_then(Clone::clone)
+            {
+                return Ok(control);
             }
             projected_cfg_terminator(
                 function,
@@ -20047,7 +20109,13 @@ fn build_ranked_cfg(
     let operation_count = projected_blocks
         .iter()
         .try_fold(entry_operations.len(), |count, block| {
-            count.checked_add(block.items.len())
+            count.checked_add(
+                block
+                    .items
+                    .iter()
+                    .map(projected_item_operation_count_v1)
+                    .sum::<usize>(),
+            )
         })
         .and_then(|count| count.checked_add(block_count));
     if operation_count.is_none_or(|count| count > MAX_RANKED_BOUNDS_OPERATIONS) {
@@ -20064,7 +20132,8 @@ fn build_ranked_cfg(
         .map(ProductionRankedValueIdV1::get)
         .max()
         .map_or(0, |value| value.saturating_add(1));
-    let pipeline_values = prepare_pipeline_values_v1(&mut projected_blocks, &mut next_value)?;
+    let pipeline_values =
+        prepare_pipeline_values_v1(&mut projected_blocks, &reachable, &mut next_value)?;
     let mut blocks = Vec::with_capacity(block_count);
     blocks.push(ProductionRankedBlockV1::new(
         entry_operations,
@@ -20236,6 +20305,37 @@ fn build_ranked_cfg(
                     }
                     current = continuation;
                     operations = Vec::new();
+                }
+                ProjectedBlockItemV1::StaticPublication(effect) => {
+                    for operation in effect.materialize()? {
+                        let access = match &operation {
+                            ProductionRankedOperationV1::Access { kind, .. }
+                            | ProductionRankedOperationV1::PredicatedAccess { kind, .. } => {
+                                Some(*kind)
+                            }
+                            ProductionRankedOperationV1::PublicationAtomicStoreU32 { .. } => {
+                                Some(AccessKindAttr::AtomicWrite)
+                            }
+                            ProductionRankedOperationV1::PublicationAtomicLoadU32 { .. } => {
+                                Some(AccessKindAttr::AtomicRead)
+                            }
+                            _ => None,
+                        };
+                        if let Some(access) = access {
+                            sources.push(ProjectedAccessSourceV1 {
+                                block: current,
+                                operation: operations.len(),
+                                access,
+                                memory_space: MemorySpaceAttr::Global,
+                                source: function.blocks()[semantic_index].terminator().source(),
+                                semantic_site: Some(ProjectedSemanticAccessSiteV1 {
+                                    block: semantic_index,
+                                    statement: None,
+                                }),
+                            });
+                        }
+                        operations.push(operation);
+                    }
                 }
                 ProjectedBlockItemV1::Pipeline(effect) => {
                     let access = match &effect {
@@ -20546,6 +20646,21 @@ fn build_ranked_cfg(
                 continue;
             }
             let terminator = match terminator {
+                ProjectedCfgTerminatorV1::PublicationComparison {
+                    kind,
+                    lhs,
+                    rhs,
+                    true_block,
+                    false_block,
+                } => materialize_static_publication_comparison_v1(
+                    kind,
+                    lhs,
+                    rhs,
+                    ranked_block_id(projected_target(&base_blocks, true_block)?)?,
+                    ranked_block_id(projected_target(&base_blocks, false_block)?)?,
+                    arguments_for(true_block)?,
+                    arguments_for(false_block)?,
+                ),
                 ProjectedCfgTerminatorV1::Branch(target) => {
                     ProductionRankedTerminatorV1::BranchArgs {
                         arguments: arguments_for(target)?,
@@ -20689,6 +20804,26 @@ fn build_ranked_cfg(
                 projected_target(&base_blocks, true_block)?,
                 projected_target(&base_blocks, false_block)?,
             )?,
+            ProjectedCfgTerminatorV1::PublicationComparison {
+                kind,
+                lhs,
+                rhs,
+                true_block,
+                false_block,
+            } => push_block_at(
+                &mut blocks,
+                current,
+                operations,
+                materialize_static_publication_comparison_v1(
+                    kind,
+                    lhs,
+                    rhs,
+                    ranked_block_id(projected_target(&base_blocks, true_block)?)?,
+                    ranked_block_id(projected_target(&base_blocks, false_block)?)?,
+                    Vec::new(),
+                    Vec::new(),
+                ),
+            )?,
             ProjectedCfgTerminatorV1::AnalysisSplit {
                 first_block,
                 second_block,
@@ -20779,11 +20914,18 @@ fn ranked_operation_last_result_v1(
 
 fn prepare_pipeline_values_v1(
     projected_blocks: &mut [ProjectedSemanticBlockV1],
+    reachable: &[bool],
     next_value: &mut u32,
 ) -> Result<HashMap<usize, ProductionRankedValueV1>, ProductionRankedProjectionErrorV1> {
     let mut pipeline_values = HashMap::new();
-    for block in projected_blocks {
+    for (block_index, block) in projected_blocks.iter_mut().enumerate() {
         for item in &mut block.items {
+            if let ProjectedBlockItemV1::StaticPublication(effect) = item {
+                if reachable.get(block_index).copied().unwrap_or(false) {
+                    effect.prepare_values(next_value)?;
+                }
+                continue;
+            }
             let ProjectedBlockItemV1::Pipeline(effect) = item else {
                 continue;
             };
@@ -20991,6 +21133,13 @@ fn reachable_projected_blocks(
                 ));
             }
             ProjectedCfgTerminatorV1::Branch(target) => pending.push(*target),
+            ProjectedCfgTerminatorV1::PublicationComparison {
+                true_block,
+                false_block,
+                ..
+            } => {
+                pending.extend([*true_block, *false_block]);
+            }
             ProjectedCfgTerminatorV1::Predicate {
                 predicate,
                 true_block,
@@ -21652,6 +21801,36 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             ranked_value_text_v1(*view),
             format_ranked_values(indices),
             ranked_value_text_v1(*value),
+        ),
+        ProductionRankedOperationV1::PublicationAtomicStoreU32 { view, index, value } => format!(
+            "  kernel.publication_release_u32 {}[{}] = {}\n",
+            ranked_value_text_v1(*view),
+            ranked_value_text_v1(*index),
+            value,
+        ),
+        ProductionRankedOperationV1::PublicationAtomicLoadU32 {
+            result,
+            view,
+            index,
+        } => format!(
+            "  {} = kernel.publication_acquire_u32 {}[{}]\n",
+            ranked_value_text_v1(ProductionRankedValueV1::Local(*result)),
+            ranked_value_text_v1(*view),
+            ranked_value_text_v1(*index),
+        ),
+        ProductionRankedOperationV1::PublicationReadGuard {
+            result,
+            success,
+            index,
+            physical_extent,
+            acquired,
+        } => format!(
+            "  {}, {} = kernel.publication_read_guard {}, {}, {}\n",
+            ranked_value_text_v1(ProductionRankedValueV1::Local(*result)),
+            ranked_value_text_v1(ProductionRankedValueV1::Local(*success)),
+            ranked_value_text_v1(*index),
+            ranked_value_text_v1(*physical_extent),
+            ranked_value_text_v1(*acquired),
         ),
         ProductionRankedOperationV1::OwnershipContract {
             view,
@@ -22377,7 +22556,7 @@ fn projected_block_uses_bounds_check(
             access.indices.contains(&check.index)
                 && access.comparisons.contains(&(check.index, check.extent))
         }
-        ProjectedBlockItemV1::Pipeline(_) => false,
+        ProjectedBlockItemV1::Pipeline(_) | ProjectedBlockItemV1::StaticPublication(_) => false,
         ProjectedBlockItemV1::GeneratedFromSemanticTerminator(_) => false,
         ProjectedBlockItemV1::Effect { .. } => false,
     })
@@ -24306,6 +24485,7 @@ mod tests {
             switch_predicates,
             deterministic_switches,
             uniform_inductions,
+            None,
             entry_operations,
             projected_blocks,
             &mut ComponentDynamicAssertionFactsV1,
@@ -24325,6 +24505,10 @@ mod tests {
     include!("production_ranked_projection_v1/constant_slice_index_v1_tests.rs");
     include!("production_ranked_projection_v1/indexed_atomic_v1_tests.rs");
     include!("production_ranked_projection_v1/consumed_read_only_v1_tests.rs");
+    include!("production_ranked_projection_v1/static_publication_v1_tests.rs");
+    include!("production_ranked_projection_v1/static_publication_deferred_v1_tests.rs");
+    include!("production_ranked_projection_v1/static_publication_control_v1_tests.rs");
+    include!("production_ranked_projection_v1/middle_end_evidence_owner_v1_tests.rs");
     include!("production_ranked_projection_v1/dynamic_local_array_tests.rs");
     include!("production_ranked_projection_v1/projection_05_tests.rs");
     include!("production_ranked_projection_v1/projection_06_tests.rs");

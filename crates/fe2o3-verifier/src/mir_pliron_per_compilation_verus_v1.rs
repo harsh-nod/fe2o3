@@ -18,7 +18,7 @@ use fe2o3_functional_proof::{
     VerusToolchainIdentityV2,
 };
 use fe2o3_pliron::{
-    HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionMiddleEndEvidenceV5,
+    HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionMiddleEndEvidenceViewV1,
     ProductionMirPlironSemanticContractErrorV1, ProductionMirPlironSemanticContractReportV1,
     ProductionParallelReferenceContractErrorV1, ProductionParallelReferenceContractReportV1,
     ProductionRankedKernelLoweringInputV1, ProductionReconciledMirPlironKernelV1,
@@ -342,7 +342,7 @@ pub fn execute_mir_pliron_semantic_contract_per_compilation_v1(
 pub fn execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
     ranked: &ProductionRankedKernelLoweringInputV1,
-    evidence: &ProductionMiddleEndEvidenceV5,
+    evidence: &dyn ProductionMiddleEndEvidenceViewV1,
     contract: &fe2o3_functional_proof::MirPlironSemanticContractV1,
     structural_report: ProductionMirPlironSemanticContractReportV1,
     parallel_contract: &ParallelReferenceContractV1,

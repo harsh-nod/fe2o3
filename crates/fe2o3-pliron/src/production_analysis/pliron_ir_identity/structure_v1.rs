@@ -237,12 +237,26 @@ fn validate_attribute_dict(
     location: PlironPreserveLocationV1,
 ) -> Result<usize, PlironIrIdentityErrorV1> {
     let mut type_nodes = 0_usize;
-    for attribute in attributes.0.values() {
+    for (key, attribute) in &attributes.0 {
         let attribute_id = attribute.get_attr_id();
         if !is_production_attribute_id_parts_v1(
             attribute_id.dialect.as_ref(),
             attribute_id.name.as_ref(),
         ) {
+            return Err(PlironIrIdentityErrorV1::UnsupportedAttribute {
+                location: location.clone(),
+                attribute: render_attribute_id_v1(attribute, location.clone())?,
+            });
+        }
+        if ((attribute_id.dialect.as_ref() == "kernel"
+            && AsRef::<str>::as_ref(&attribute_id.name) == "publication_atomic")
+            || key.as_ref() == "kernel_publication_atomic")
+            && (key.as_ref() != "kernel_publication_atomic"
+                || attribute
+                    .downcast_ref::<dialect_kernel::PublicationAtomicAccessAttr>()
+                    .is_none()
+                || !matches!(&location, PlironPreserveLocationV1::Operation { name, .. } if name == "kernel.access"))
+        {
             return Err(PlironIrIdentityErrorV1::UnsupportedAttribute {
                 location: location.clone(),
                 attribute: render_attribute_id_v1(attribute, location.clone())?,
@@ -325,6 +339,30 @@ fn render_attribute(
             location,
             attribute: attribute_id,
         });
+    }
+    // New protocol markers have a closed encoding independent of their printer.
+    // Native verification still checks the separately retained access attributes
+    // and SSA result shape; this marker alone grants no publication authority.
+    if attribute_id == "kernel.publication_atomic" {
+        use dialect_kernel::PublicationAtomicAccessAttr;
+        let value = match attribute.downcast_ref::<PublicationAtomicAccessAttr>() {
+            Some(PublicationAtomicAccessAttr::ReleaseRequestU32) => {
+                "u32:release:system:store=1:results=0"
+            }
+            Some(PublicationAtomicAccessAttr::ReleaseReadyU32) => {
+                "u32:release:system:store=2:results=0"
+            }
+            Some(PublicationAtomicAccessAttr::AcquireU32) => {
+                "u32:acquire:system:result=index-zext-u32"
+            }
+            None => {
+                return Err(PlironIrIdentityErrorV1::UnsupportedAttribute {
+                    location,
+                    attribute: attribute_id,
+                });
+            }
+        };
+        return Ok((attribute_id, value.to_owned()));
     }
     let value = render_bounded(location, "attribute", |writer| {
         use pliron::builtin::attributes::{FPDoubleAttr, FPHalfAttr, FPSingleAttr};
@@ -612,6 +650,7 @@ fn is_production_attribute_id_parts_v1(dialect: &str, name: &str) -> bool {
                 | "analysis_split_control_count"
                 | "atomic_ordering"
                 | "atomic_scope"
+                | "publication_atomic"
                 | "dimension"
                 | "index_binary_kind"
                 | "index_value"

@@ -978,6 +978,10 @@ pub(crate) fn evaluate_raw_index_at_invocation_v1(
 #[derive(Clone, Copy)]
 enum RawIndexEvaluationFrameV1 {
     Evaluate(Value),
+    FinishCopy {
+        value: Value,
+        source: Value,
+    },
     FinishBinary {
         value: Value,
         lhs: Value,
@@ -1073,6 +1077,28 @@ fn evaluate_raw_index_iterative(
                     cache.insert(value, result);
                     continue;
                 }
+                if let Some(guard) =
+                    operation.downcast_ref::<dialect_kernel::PublicationReadGuardOp>()
+                {
+                    if value != guard.result(context) {
+                        active.remove(&value);
+                        return Err(RawIndexEvaluationFailureV1::Incomplete(
+                            "publication success is not a raw index value",
+                        ));
+                    }
+                    let source = guard.index(context);
+                    push_raw_index_evaluation_frame_v1(
+                        &mut stack,
+                        RawIndexEvaluationFrameV1::FinishCopy { value, source },
+                        evaluation_stack_frame_limit,
+                    )?;
+                    push_raw_index_evaluation_frame_v1(
+                        &mut stack,
+                        RawIndexEvaluationFrameV1::Evaluate(source),
+                        evaluation_stack_frame_limit,
+                    )?;
+                    continue;
+                }
                 let Some(binary) = operation.downcast_ref::<IndexBinaryOp>() else {
                     active.remove(&value);
                     return Err(RawIndexEvaluationFailureV1::Incomplete(
@@ -1101,6 +1127,17 @@ fn evaluate_raw_index_iterative(
                     RawIndexEvaluationFrameV1::Evaluate(lhs),
                     evaluation_stack_frame_limit,
                 )?;
+            }
+            RawIndexEvaluationFrameV1::FinishCopy { value, source } => {
+                let result =
+                    cache
+                        .get(&source)
+                        .copied()
+                        .ok_or(RawIndexEvaluationFailureV1::Incomplete(
+                            "raw-index copy lost its source result",
+                        ))?;
+                active.remove(&value);
+                cache.insert(value, result);
             }
             RawIndexEvaluationFrameV1::FinishBinary {
                 value,
@@ -1148,3 +1185,4 @@ fn evaluate_raw_index_iterative(
 }
 
 include!("pliron_analysis_witness/resource_tests.rs");
+include!("pliron_analysis_witness/publication_index_v1_tests.rs");

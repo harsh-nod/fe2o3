@@ -369,6 +369,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes inert V31 publication signatures without ordering authority.
+    pub fn decode_exact_v31_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V31),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -412,6 +424,7 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V28
                         | SemanticMirWireVersionV1::V29
                         | SemanticMirWireVersionV1::V30
+                        | SemanticMirWireVersionV1::V31
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -1676,7 +1689,9 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V30 {
+        let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V31 {
+            73
+        } else if self.wire_version >= SemanticMirWireVersionV1::V30 {
             71
         } else if self.wire_version >= SemanticMirWireVersionV1::V15 {
             68
@@ -2130,6 +2145,16 @@ impl<'a> CanonicalDecoderV1<'a> {
             71 => SemanticCompilerIntrinsicOperationV1::ReadOnlyAllocationLoadOr {
                 view: SemanticTypeIdV1(self.u32()?),
                 element: SemanticTypeIdV1(self.u32()?),
+            },
+            72 => SemanticCompilerIntrinsicOperationV1::StaticPublication128PublishF32 {
+                payload: SemanticTypeIdV1(self.u32()?),
+                flags: SemanticTypeIdV1(self.u32()?),
+                result: SemanticTypeIdV1(self.u32()?),
+            },
+            73 => SemanticCompilerIntrinsicOperationV1::StaticPublication128TryReadF32 {
+                payload: SemanticTypeIdV1(self.u32()?),
+                flags: SemanticTypeIdV1(self.u32()?),
+                result: SemanticTypeIdV1(self.u32()?),
             },
             _ => unreachable!(),
         })
@@ -2737,6 +2762,7 @@ mod tests {
     mod frozen_v15;
     mod read_only_allocation_v30_tests;
     mod rust_call_local_tests;
+    mod static_publication_v31_tests;
 
     fn identity(tag: u8) -> [u8; 32] {
         [tag; 32]

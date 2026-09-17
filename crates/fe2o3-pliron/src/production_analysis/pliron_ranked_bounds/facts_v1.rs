@@ -47,6 +47,7 @@ enum RankedOperationKind {
     DeterministicJoin,
     CheckedTiledIndex2D,
     CheckedRowStripedIndex2D,
+    PublicationReadGuard,
     Dimension,
     RankedAccess,
     OwnershipContract,
@@ -128,6 +129,11 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         .is_some()
     {
         Some(RankedOperationKind::CheckedRowStripedIndex2D)
+    } else if operation
+        .downcast_ref::<dialect_kernel::PublicationReadGuardOp>()
+        .is_some()
+    {
+        Some(RankedOperationKind::PublicationReadGuard)
     } else if operation.downcast_ref::<DimensionOp>().is_some() {
         Some(RankedOperationKind::Dimension)
     } else if operation.downcast_ref::<RankedAccessOp>().is_some() {

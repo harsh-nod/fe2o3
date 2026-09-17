@@ -27,6 +27,8 @@ use super::{
 
 mod middle_end_evidence_v4;
 mod middle_end_evidence_v5;
+mod middle_end_evidence_v6;
+mod middle_end_evidence_view_v1;
 mod mir_pliron_semantic_contract_derivation_v1;
 mod mir_pliron_semantic_contract_v1;
 mod noncanonical_loop_proof_v1;
@@ -39,6 +41,8 @@ mod total_output_refinement_v2;
 
 pub use middle_end_evidence_v4::*;
 pub use middle_end_evidence_v5::*;
+pub use middle_end_evidence_v6::*;
+pub use middle_end_evidence_view_v1::*;
 pub use mir_pliron_semantic_contract_derivation_v1::*;
 pub use mir_pliron_semantic_contract_v1::*;
 pub use noncanonical_loop_proof_v1::*;

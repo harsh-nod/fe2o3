@@ -4,7 +4,7 @@ use std::{error::Error, fmt};
 
 use fe2o3_functional_proof::{MirPlironSemanticContractV1, ParallelReferenceContractV1};
 use fe2o3_pliron::{
-    ProductionMiddleEndEvidenceV5, ProductionMirPlironSemanticContractReportV1,
+    ProductionMiddleEndEvidenceViewV1, ProductionMirPlironSemanticContractReportV1,
     ProductionParallelReferenceContractReportV1, ProductionRankedKernelLoweringInputV1,
     ProductionRefinementStagingPolicyV2,
 };
@@ -40,7 +40,7 @@ impl AuthenticatedMirPlironPerCompilationVerificationV1 {
 /// semantic-contract reconciliation, and before target-neutral lowering.
 pub(crate) fn authenticate_mir_pliron_contract_per_compilation_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
-    evidence: &ProductionMiddleEndEvidenceV5,
+    evidence: &dyn ProductionMiddleEndEvidenceViewV1,
     contract: &MirPlironSemanticContractV1,
     structural_report: ProductionMirPlironSemanticContractReportV1,
     parallel_contract: &ParallelReferenceContractV1,

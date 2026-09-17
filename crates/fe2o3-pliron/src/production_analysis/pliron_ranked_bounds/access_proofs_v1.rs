@@ -51,6 +51,10 @@ fn verify_access(
         }
         let index_expr = canonical_index_expr(index, context);
         let extent_expr = extent_expr(view, &view_type, dimension, context);
+        check.budget.work(16)?;
+        if publication_predicate_bounds_v1(access, dimension, index, context) {
+            continue;
+        }
         let guarded = if let Some(transport) = check.transport {
             transport.proves(
                 block,
@@ -66,6 +70,20 @@ fn verify_access(
         if guarded
             || remainder_bound_is_proven(index, extent_expr, context)
             || sparse_bound_is_proven(index, extent_expr, check.sparse_indices)
+        {
+            continue;
+        }
+        if view_type.shape().len() == 1
+            && block != 0
+            && check.graph.proves_relation(
+                block,
+                LessThanFact {
+                    lhs: index_expr,
+                    rhs: extent_expr,
+                },
+                true,
+                check.budget,
+            )?
         {
             continue;
         }
@@ -139,6 +157,40 @@ fn verify_access(
         }
     }
     Ok(())
+}
+
+// This proves only the conditional read's physical bound. It establishes no
+// read-from relation, initialization, role, or happens-before authority.
+fn publication_predicate_bounds_v1(
+    access: &RankedAccessOp,
+    dimension: usize,
+    index: Value,
+    context: &Context,
+) -> bool {
+    if dimension != 0 || access.kind(context) != Some(dialect_kernel::AccessKindAttr::Read) {
+        return false;
+    }
+    let Some(definition) = index.defining_op() else {
+        return false;
+    };
+    let Some(guard) =
+        Operation::get_op::<dialect_kernel::PublicationReadGuardOp>(definition, context)
+    else {
+        return false;
+    };
+    let Some(view_definition) = access.view(context).defining_op() else {
+        return false;
+    };
+    let Some(view) = Operation::get_op::<RankedViewOp>(view_definition, context) else {
+        return false;
+    };
+    let Some(view_type) = ranked_view_type(access.view(context), context) else {
+        return false;
+    };
+    guard.result(context) == index
+        && access.checked_success(context) == Some(guard.success(context))
+        && view_type.deref(context).shape() == [dialect_kernel::DYNAMIC_EXTENT]
+        && view.dynamic_extent(context, 0) == Some(guard.physical_extent(context))
 }
 
 fn remainder_bound_is_proven(index: Value, extent: IndexExpr, context: &Context) -> bool {

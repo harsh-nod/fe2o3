@@ -374,6 +374,9 @@
   "crates/fe2o3-device/src/read_only_allocation.rs": {
     "block": 3
   },
+  "crates/fe2o3-device/src/static_publication.rs": {
+    "block": 5
+  },
   "crates/fe2o3-device/src/sync.rs": {
     "block": 4,
     "function": 11

@@ -3641,6 +3641,8 @@ const fn terminal_expansion_tag_for_schema_v1(
         ProductionTerminalExpansionV1::DisjointSliceIntoReadOnly => 122,
         ProductionTerminalExpansionV1::ReadOnlyAllocationLen => 123,
         ProductionTerminalExpansionV1::ReadOnlyAllocationLoadOr => 124,
+        ProductionTerminalExpansionV1::StaticPublication128PublishF32 => 125,
+        ProductionTerminalExpansionV1::StaticPublication128TryReadF32 => 126,
         ProductionTerminalExpansionV1::ThreadIndexCheckedRowStriped2d => 59,
         ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut => 60,
         ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent => 61,

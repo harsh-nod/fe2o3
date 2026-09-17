@@ -40,17 +40,18 @@ use dialect_kernel::{
     IndexType, IndexUnknownOp, IndexUnsignedCastOp, InvocationIndexOp,
     MAX_COLLECTIVE_SEMANTIC_STEPS_V1, MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK,
     MemorySpaceAttr, OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr,
-    PipelineCreateOp, PipelineEventKindAttr, PipelineEventOp, RankedAccessOp, RankedViewOp,
-    RankedViewType, RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
-    RequirePermutationGatherOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr,
-    SemanticBinaryOp, SemanticConstantOp, SemanticCoverageBindingAttr, SemanticEvaluationOrderAttr,
-    SemanticExceptionalValueAttr, SemanticIeeeRoundingAttr, SemanticNumericalPolicyAttr,
-    SemanticOverflowAttr, SemanticScalarKindAttr, SemanticSymbolOp, SemanticTypedBinaryKindAttr,
-    SemanticTypedBinaryOp, SemanticTypedCastKindAttr, SemanticTypedCastOp,
-    SemanticTypedCompareKindAttr, SemanticTypedCompareOp, SemanticTypedConstantOp,
-    SemanticTypedExpressionRootOp, SemanticTypedScalarV1, SemanticTypedSelectOp,
-    SemanticTypedSymbolOp, SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp, TensorConvergenceAttr,
-    TensorLayoutOp, TensorResultComponentOp, TrapOp, is_supported_allocation_effect_contract_v1,
+    PipelineCreateOp, PipelineEventKindAttr, PipelineEventOp, PublicationReadGuardOp,
+    RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, RequireFiniteFoldOp,
+    RequireFiniteRecurrenceOp, RequirePermutationGatherOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
+    SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp, SemanticCoverageBindingAttr,
+    SemanticEvaluationOrderAttr, SemanticExceptionalValueAttr, SemanticIeeeRoundingAttr,
+    SemanticNumericalPolicyAttr, SemanticOverflowAttr, SemanticScalarKindAttr, SemanticSymbolOp,
+    SemanticTypedBinaryKindAttr, SemanticTypedBinaryOp, SemanticTypedCastKindAttr,
+    SemanticTypedCastOp, SemanticTypedCompareKindAttr, SemanticTypedCompareOp,
+    SemanticTypedConstantOp, SemanticTypedExpressionRootOp, SemanticTypedScalarV1,
+    SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp,
+    TensorConvergenceAttr, TensorLayoutOp, TensorResultComponentOp, TrapOp,
+    is_supported_allocation_effect_contract_v1,
 };
 use dialect_proof::{
     AbsoluteErrorF64BitsAttr, CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp,
@@ -904,6 +905,12 @@ pub fn normalized_effect_refinement_hash_for_kernel_v2(
                 {
                     unmodeled_matching_write = true;
                 }
+                ProductionRankedOperationV1::PublicationAtomicStoreU32 { view, index, .. }
+                    if *view == contract.view
+                        && [*index].as_slice() == contract.indices.as_slice() =>
+                {
+                    unmodeled_matching_write = true;
+                }
                 ProductionRankedOperationV1::AtomicValueAccess {
                     kind,
                     ordering,
@@ -1040,6 +1047,11 @@ pub fn normalized_tensor_refinement_hash_for_kernel_v1(
                 }
                 ProductionRankedOperationV1::AtomicValueAccess { kind, view, .. }
                     if kind.writes_memory() && *view == contract.output_view =>
+                {
+                    return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                }
+                ProductionRankedOperationV1::PublicationAtomicStoreU32 { view, .. }
+                    if *view == contract.output_view =>
                 {
                     return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
                 }
@@ -1659,6 +1671,27 @@ pub enum ProductionRankedOperationV1 {
         indices: Vec<ProductionRankedValueV1>,
         value: ProductionRankedValueV1,
     },
+    /// Exact System Release of REQUEST=1 or READY=2, with no detached value claim.
+    PublicationAtomicStoreU32 {
+        view: ProductionRankedValueV1,
+        index: ProductionRankedValueV1,
+        value: u32,
+    },
+    /// Actual zero-extended u32 System Acquire result, retaining its address.
+    PublicationAtomicLoadU32 {
+        result: ProductionRankedValueIdV1,
+        view: ProductionRankedValueV1,
+        index: ProductionRankedValueV1,
+    },
+    /// Structural `index < physical_extent && acquired == READY` predicate.
+    /// Source custody and the publication happens-before proof remain separate.
+    PublicationReadGuard {
+        result: ProductionRankedValueIdV1,
+        success: ProductionRankedValueIdV1,
+        index: ProductionRankedValueV1,
+        physical_extent: ProductionRankedValueV1,
+        acquired: ProductionRankedValueV1,
+    },
     /// Requests a workload-neutral proof of write ownership across invocation,
     /// subgroup, workgroup, and grid scopes for one global output view.
     OwnershipContract {
@@ -2239,6 +2272,17 @@ impl ProductionRankedKernelV1 {
                         },
                     )?;
                 }
+                if let ProductionRankedOperationV1::PublicationAtomicStoreU32 { index, .. }
+                | ProductionRankedOperationV1::PublicationAtomicLoadU32 { index, .. } = operation
+                    && let ProductionRankedValueV1::Local(index) = index
+                    && predicated_indices.contains_key(index)
+                {
+                    return Err(
+                        ProductionRankedKernelErrorV1::InvalidPredicatedAccessIndexUse {
+                            index: *index,
+                        },
+                    );
+                }
                 if let Some((identity, kind)) = result {
                     let expected = u32::try_from(locals.len()).map_err(|_| {
                         ProductionRankedKernelErrorV1::ResourceLimit {
@@ -2267,6 +2311,12 @@ impl ProductionRankedKernelV1 {
                             success,
                             physical_extent,
                             ..
+                        }
+                        | ProductionRankedOperationV1::PublicationReadGuard {
+                            result,
+                            success,
+                            physical_extent,
+                            ..
                         } => Some((*result, *success, *physical_extent)),
                         _ => None,
                     };
@@ -2287,6 +2337,10 @@ impl ProductionRankedKernelV1 {
                         locals.push(RecipeValueKindV1::CheckedAccessSuccess {
                             index: ProductionRankedValueV1::Local(index),
                             physical_extent,
+                            publication: matches!(
+                                operation,
+                                ProductionRankedOperationV1::PublicationReadGuard { .. }
+                            ),
                         });
                         local_definition_blocks.push(block_index);
                         predicated_success_uses.insert(success, 0);
@@ -2947,6 +3001,10 @@ impl Error for ProductionRankedKernelErrorV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RecipeValueKindV1 {
     Index,
+    PublicationAcquiredU32 {
+        view: ProductionRankedValueV1,
+        index: ProductionRankedValueV1,
+    },
     Pipeline {
         buffers: u32,
         prefetch_distance: u32,
@@ -2954,6 +3012,7 @@ enum RecipeValueKindV1 {
     CheckedAccessSuccess {
         index: ProductionRankedValueV1,
         physical_extent: ProductionRankedValueV1,
+        publication: bool,
     },
     Semantic,
     TypedSemantic {
@@ -2962,6 +3021,7 @@ enum RecipeValueKindV1 {
     },
     View {
         rank: usize,
+        element_width: u32,
         writable: bool,
         dynamic_extent: Option<ProductionRankedValueV1>,
         memory_space: MemorySpaceAttr,
@@ -3000,7 +3060,7 @@ fn require_index(
 ) -> Result<(), ProductionRankedKernelErrorV1> {
     if matches!(
         require_value(value, argument_count, locals)?,
-        RecipeValueKindV1::Index
+        RecipeValueKindV1::Index | RecipeValueKindV1::PublicationAcquiredU32 { .. }
     ) {
         Ok(())
     } else {
@@ -3016,6 +3076,7 @@ fn require_view(
     match require_value(value, argument_count, locals)? {
         RecipeValueKindV1::View { rank, writable, .. } => Ok((rank, writable)),
         RecipeValueKindV1::Index
+        | RecipeValueKindV1::PublicationAcquiredU32 { .. }
         | RecipeValueKindV1::Pipeline { .. }
         | RecipeValueKindV1::CheckedAccessSuccess { .. }
         | RecipeValueKindV1::Semantic
@@ -3108,6 +3169,7 @@ fn validate_operation(
                 *result,
                 RecipeValueKindV1::View {
                     rank: shape.len(),
+                    element_width: *element_width,
                     writable: *writable,
                     dynamic_extent: (shape.as_slice() == [DYNAMIC_EXTENT])
                         .then(|| dynamic_extents[0]),
@@ -3405,7 +3467,22 @@ fn validate_operation(
                 RecipeValueKindV1::CheckedAccessSuccess {
                     index: expected_index,
                     physical_extent,
-                } if expected_index == *index && physical_extent == view_extent => Ok(None),
+                    publication,
+                } if expected_index == *index
+                    && physical_extent == view_extent
+                    && (!publication
+                        || (*kind == AccessKindAttr::Read
+                            && matches!(
+                                view_kind,
+                                RecipeValueKindV1::View {
+                                    element_width: 32,
+                                    memory_space: MemorySpaceAttr::Global,
+                                    ..
+                                }
+                            ))) =>
+                {
+                    Ok(None)
+                }
                 _ => Err(ProductionRankedKernelErrorV1::InvalidShape),
             }
         }
@@ -3447,6 +3524,11 @@ fn validate_operation(
             validate_access(*kind, *view, indices, argument_count, locals)?;
             require_semantic(*value, argument_count, locals)?;
             Ok(None)
+        }
+        ProductionRankedOperationV1::PublicationAtomicStoreU32 { .. }
+        | ProductionRankedOperationV1::PublicationAtomicLoadU32 { .. }
+        | ProductionRankedOperationV1::PublicationReadGuard { .. } => {
+            validate_publication_recipe_v1(operation, argument_count, locals)
         }
         ProductionRankedOperationV1::OwnershipContract { view, .. } => {
             let (_, writable) = require_view(*view, argument_count, locals)?;
@@ -3851,6 +3933,21 @@ fn validate_scoped_operation_values_v1(
             validate(*view)?;
             validate(*index)?;
             validate(*success)?;
+        }
+        ProductionRankedOperationV1::PublicationAtomicStoreU32 { view, index, .. }
+        | ProductionRankedOperationV1::PublicationAtomicLoadU32 { view, index, .. } => {
+            validate(*view)?;
+            validate(*index)?;
+        }
+        ProductionRankedOperationV1::PublicationReadGuard {
+            index,
+            physical_extent,
+            acquired,
+            ..
+        } => {
+            validate(*index)?;
+            validate(*physical_extent)?;
+            validate(*acquired)?;
         }
         ProductionRankedOperationV1::ValueAccess {
             view,
@@ -4330,6 +4427,7 @@ fn production_analysis_resource_error_v1(
 }
 
 include!("ranked/custody_rejection_trace_v1.rs");
+include!("ranked/publication_v1.rs");
 
 fn classify_replay_failure_v1(error: ProductionSessionErrorV1) -> ProductionSessionErrorV1 {
     match error {
@@ -5432,6 +5530,11 @@ fn materialize_operation(
                 )
             })?;
             (op.get_operation(), None)
+        }
+        ProductionRankedOperationV1::PublicationAtomicStoreU32 { .. }
+        | ProductionRankedOperationV1::PublicationAtomicLoadU32 { .. }
+        | ProductionRankedOperationV1::PublicationReadGuard { .. } => {
+            materialize_publication_recipe_v1(context, recipe, arguments, locals, block_arguments)?
         }
         ProductionRankedOperationV1::AtomicAccess {
             kind,

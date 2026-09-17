@@ -197,6 +197,16 @@ impl BoundsEdgeTransportV1<'_> {
         fact: LessThanFact,
         budget: &mut RankedBoundsBudget,
     ) -> Result<bool, RankedBoundsFindingV1> {
+        self.proves_relation(block, fact, false, budget)
+    }
+
+    fn proves_relation(
+        &self,
+        block: usize,
+        fact: LessThanFact,
+        literal_equality: bool,
+        budget: &mut RankedBoundsBudget,
+    ) -> Result<bool, RankedBoundsFindingV1> {
         budget.work(1)?;
         if block >= self.blocks.len() || self.predecessors.len() != self.blocks.len() {
             return Err(RankedBoundsFindingV1::StructuralVerificationFailed);
@@ -233,6 +243,21 @@ impl BoundsEdgeTransportV1<'_> {
                 budget.work(BOUNDS_TRANSPORT_ROW_ITEMS_V1)?;
                 if guard == Some(fact)
                     || matches!((fact.lhs, fact.rhs), (IndexExpr::Constant(a), IndexExpr::Constant(b)) if a < b)
+                {
+                    continue;
+                }
+                if literal_equality
+                    && let Some(guard) = guard
+                    && guard.lhs == fact.lhs
+                    && matches!(guard.rhs, IndexExpr::Constant(_))
+                    && self.proves_equal_literal(
+                        edge.block,
+                        LessThanFact {
+                            lhs: fact.rhs,
+                            rhs: guard.rhs,
+                        },
+                        budget,
+                    )?
                 {
                     continue;
                 }
@@ -279,6 +304,16 @@ impl BoundsEdgeTransportV1<'_> {
         edge: &PredecessorEdge,
         budget: &mut RankedBoundsBudget,
     ) -> Result<(LessThanFact, Option<LessThanFact>), RankedBoundsFindingV1> {
+        self.pull_back_relation(obligation, edge, false, budget)
+    }
+
+    fn pull_back_relation(
+        &self,
+        obligation: BoundsTransportObligationV1,
+        edge: &PredecessorEdge,
+        equality: bool,
+        budget: &mut RankedBoundsBudget,
+    ) -> Result<(LessThanFact, Option<LessThanFact>), RankedBoundsFindingV1> {
         budget.work(16)?;
         let target = self.blocks[obligation.block];
         let terminator = self.blocks[edge.block]
@@ -287,7 +322,9 @@ impl BoundsEdgeTransportV1<'_> {
             .ok_or(RankedBoundsFindingV1::StructuralVerificationFailed)?;
         let control = ControlViewV1::observe(self.context, terminator)
             .map_err(|_| RankedBoundsFindingV1::StructuralVerificationFailed)?;
-        let edge = control.edge(edge.successor)
+        let successor = edge.successor;
+        let edge = control
+            .edge(successor)
             .map_err(|_| RankedBoundsFindingV1::StructuralVerificationFailed)?;
         if edge.target() != target {
             return Err(RankedBoundsFindingV1::StructuralVerificationFailed);
@@ -299,7 +336,24 @@ impl BoundsEdgeTransportV1<'_> {
             lhs: map(obligation.fact.lhs, budget)?,
             rhs: map(obligation.fact.rhs, budget)?,
         };
-        let guard = if let Some((lhs, rhs)) = edge.index_less_than_guard() {
+        let operands = if equality {
+            budget.work(8)?;
+            if successor == 0
+                && (Operation::is_op::<IndexEqualBranchOp>(terminator, self.context)
+                    || Operation::is_op::<IndexEqualBranchArgsOp>(terminator, self.context))
+            {
+                let raw = terminator.deref(self.context);
+                if raw.get_num_operands() < 2 {
+                    return Err(RankedBoundsFindingV1::StructuralVerificationFailed);
+                }
+                Some((raw.get_operand(0), raw.get_operand(1)))
+            } else {
+                None
+            }
+        } else {
+            edge.index_less_than_guard()
+        };
+        let guard = if let Some((lhs, rhs)) = operands {
             Some(LessThanFact {
                 lhs: self.canonical(lhs, budget)?,
                 rhs: self.canonical(rhs, budget)?,
@@ -330,7 +384,8 @@ impl BoundsEdgeTransportV1<'_> {
         let index = value
             .try_find_index(self.context)
             .map_err(|_| RankedBoundsFindingV1::StructuralVerificationFailed)?;
-        let (incoming, parameter) = edge.argument_at(index)
+        let (incoming, parameter) = edge
+            .argument_at(index)
             .map_err(|_| RankedBoundsFindingV1::StructuralVerificationFailed)?;
         if parameter != value {
             return Err(RankedBoundsFindingV1::StructuralVerificationFailed);

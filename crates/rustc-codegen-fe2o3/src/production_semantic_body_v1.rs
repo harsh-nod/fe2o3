@@ -2343,6 +2343,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::WorkgroupPipelineDiscard
         | ProductionTerminalExpansionV1::WorkgroupPipelineRelease => Some(2),
         ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32
+        | ProductionTerminalExpansionV1::StaticPublication128TryReadF32
         | ProductionTerminalExpansionV1::ReadOnlyAllocationLoadOr
         | ProductionTerminalExpansionV1::WorkgroupPipelineRead
         | ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum
@@ -2351,6 +2352,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWrite
         | ProductionTerminalExpansionV1::WriteOnlyDisjointSliceWriteDisjoint => Some(3),
         ProductionTerminalExpansionV1::MathF32(function) => Some(function.arity() + 1),
+        ProductionTerminalExpansionV1::StaticPublication128PublishF32 => Some(4),
         ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate

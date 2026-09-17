@@ -1002,7 +1002,14 @@
                 | ProductionRankedOperationV1::AtomicAccess { kind, .. }
                 | ProductionRankedOperationV1::AtomicValueAccess { kind, .. }
                 | ProductionRankedOperationV1::AllocationEffect { kind, .. } => Some(*kind),
+                ProductionRankedOperationV1::PublicationAtomicStoreU32 { .. } => {
+                    Some(AccessKindAttr::AtomicWrite)
+                }
+                ProductionRankedOperationV1::PublicationAtomicLoadU32 { .. } => {
+                    Some(AccessKindAttr::AtomicRead)
+                }
                 ProductionRankedOperationV1::View { .. }
+                | ProductionRankedOperationV1::PublicationReadGuard { .. }
                 | ProductionRankedOperationV1::ExecutionLayout { .. }
                 | ProductionRankedOperationV1::ViewInSpace { .. }
                 | ProductionRankedOperationV1::PipelineCreate { .. }

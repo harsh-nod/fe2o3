@@ -23,7 +23,7 @@ use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
 
 use super::{
-    ProductionMiddleEndEvidenceV5, ProductionMirPlironSemanticContractReportV1,
+    ProductionMirPlironSemanticContractReportV1,
     ProductionRankedKernelLoweringInputV1, ProductionRankedOperationV1, ProductionRankedValueV1,
 };
 
@@ -239,7 +239,7 @@ impl Error for ProductionParallelReferenceContractErrorV1 {
 /// independently derived facts.
 pub struct ProductionParallelReferenceContractBuilderV1<'a> {
     ranked: &'a ProductionRankedKernelLoweringInputV1,
-    evidence: &'a ProductionMiddleEndEvidenceV5,
+    evidence: &'a dyn super::ProductionMiddleEndEvidenceViewV1,
     semantics: ProductionMirPlironSemanticContractReportV1,
     semantic_contract: &'a MirPlironSemanticContractV1,
 }
@@ -247,7 +247,7 @@ pub struct ProductionParallelReferenceContractBuilderV1<'a> {
 impl<'a> ProductionParallelReferenceContractBuilderV1<'a> {
     pub fn new(
         ranked: &'a ProductionRankedKernelLoweringInputV1,
-        evidence: &'a ProductionMiddleEndEvidenceV5,
+        evidence: &'a dyn super::ProductionMiddleEndEvidenceViewV1,
         semantics: ProductionMirPlironSemanticContractReportV1,
         semantic_contract: &'a MirPlironSemanticContractV1,
     ) -> Result<Self, ProductionParallelReferenceContractErrorV1> {
@@ -281,7 +281,7 @@ impl<'a> ProductionParallelReferenceContractBuilderV1<'a> {
 /// compiler-owned facts, then independently reconciles the result.
 pub fn derive_and_require_parallel_reference_contract_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
-    evidence: &ProductionMiddleEndEvidenceV5,
+    evidence: &dyn super::ProductionMiddleEndEvidenceViewV1,
     semantics: ProductionMirPlironSemanticContractReportV1,
     semantic_contract: &MirPlironSemanticContractV1,
 ) -> Result<
@@ -465,7 +465,7 @@ pub fn derive_and_require_parallel_reference_contract_v1(
 
 fn require_parallel_boundary_subjects_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
-    evidence: &ProductionMiddleEndEvidenceV5,
+    evidence: &dyn super::ProductionMiddleEndEvidenceViewV1,
     semantics: ProductionMirPlironSemanticContractReportV1,
     semantic_contract: &MirPlironSemanticContractV1,
 ) -> Result<(), ProductionParallelReferenceContractErrorV1> {
@@ -571,7 +571,7 @@ impl LiveOutputFactsIndexV1 {
 
 fn derive_live_output_bindings_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
-    evidence: &ProductionMiddleEndEvidenceV5,
+    evidence: &dyn super::ProductionMiddleEndEvidenceViewV1,
     semantic_contract: &MirPlironSemanticContractV1,
 ) -> Result<Vec<LiveOutputBindingV1>, ProductionParallelReferenceContractErrorV1> {
     let mut bindings = Vec::with_capacity(semantic_contract.outputs().len());
@@ -724,7 +724,7 @@ fn derive_live_output_bindings_v1(
 #[allow(clippy::too_many_arguments)]
 fn output_ownership_identity_v1(
     semantic_contract: &MirPlironSemanticContractV1,
-    evidence: &ProductionMiddleEndEvidenceV5,
+    evidence: &dyn super::ProductionMiddleEndEvidenceViewV1,
     output: &SemanticOutputContractV1,
     ranked_view_identity: DigestV1,
     policy_checked_staging_identity: DigestV1,
@@ -756,7 +756,7 @@ fn output_ownership_identity_v1(
 // declaration contributes evidence to this digest.
 fn output_frame_identity_v1(
     semantic_contract: &MirPlironSemanticContractV1,
-    evidence: &ProductionMiddleEndEvidenceV5,
+    evidence: &dyn super::ProductionMiddleEndEvidenceViewV1,
     output: &SemanticOutputContractV1,
     ranked_view_identity: DigestV1,
     policy_checked_staging_identity: DigestV1,
@@ -787,7 +787,7 @@ fn output_frame_identity_v1(
 
 fn output_product_identity_v1(
     semantic_contract: &MirPlironSemanticContractV1,
-    evidence: &ProductionMiddleEndEvidenceV5,
+    evidence: &dyn super::ProductionMiddleEndEvidenceViewV1,
     bindings: &[LiveOutputBindingV1],
 ) -> DigestV1 {
     let mut digest = Sha256::new();
@@ -850,7 +850,7 @@ fn digest_blob(digest: &mut Sha256, bytes: &[u8]) {
 #[allow(clippy::too_many_lines)]
 pub fn require_parallel_reference_contract_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
-    evidence: &ProductionMiddleEndEvidenceV5,
+    evidence: &dyn super::ProductionMiddleEndEvidenceViewV1,
     semantics: ProductionMirPlironSemanticContractReportV1,
     semantic_contract: &MirPlironSemanticContractV1,
     expected: &ParallelReferenceContractV1,

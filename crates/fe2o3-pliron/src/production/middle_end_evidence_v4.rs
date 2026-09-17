@@ -871,6 +871,9 @@ fn hash_functional_refinement_graph_operation(
 
 fn functional_refinement_graph_operation_tag(operation: &ProductionRankedOperationV1) -> u8 {
     match operation {
+        ProductionRankedOperationV1::PublicationAtomicStoreU32 { .. } => 40,
+        ProductionRankedOperationV1::PublicationAtomicLoadU32 { .. } => 41,
+        ProductionRankedOperationV1::PublicationReadGuard { .. } => 42,
         ProductionRankedOperationV1::ExecutionLayout { .. } => 1,
         ProductionRankedOperationV1::View { .. } => 2,
         ProductionRankedOperationV1::ViewInSpace { .. } => 3,
@@ -1011,6 +1014,28 @@ fn hash_numerical_refinement_contract(
 
 fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperationV1) {
     match operation {
+        ProductionRankedOperationV1::PublicationAtomicStoreU32 { view, index, value } => {
+            digest.update([40]);
+            hash_value(digest, *view);
+            hash_value(digest, *index);
+            digest.update(value.to_le_bytes());
+        }
+        ProductionRankedOperationV1::PublicationAtomicLoadU32 { result, view, index } => {
+            digest.update([41]);
+            digest.update(result.get().to_le_bytes());
+            hash_value(digest, *view);
+            hash_value(digest, *index);
+        }
+        ProductionRankedOperationV1::PublicationReadGuard {
+            result, success, index, physical_extent, acquired,
+        } => {
+            digest.update([42]);
+            digest.update(result.get().to_le_bytes());
+            digest.update(success.get().to_le_bytes());
+            for value in [index, physical_extent, acquired] {
+                hash_value(digest, *value);
+            }
+        }
         ProductionRankedOperationV1::ExecutionLayout {
             grid_identity,
             global_extents,
