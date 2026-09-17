@@ -1,10 +1,12 @@
-//! Construction-only allocation metadata. No lineage or reuse authority yet.
+//! Opt-in allocation and host-write metadata. No lineage or reuse authority yet.
 
 use super::*;
 use fe2o3_runtime_model::{
     ContextAllocationEnrollmentV1, ContextAllocationKeyV1, ContextAllocationReferenceV1,
     ContextJournalDeviceKeyV1, ContextVersionJournalErrorV1, ContextVersionJournalV1,
 };
+
+mod writers;
 
 /// Bounded journal metadata counts, not residency, initializedness or data versions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,6 +57,14 @@ pub(super) struct ContextVersionsV1 {
 
 // Dropping this move-only ticket never removes its Context-owned record.
 pub(super) struct AllocationEnrollmentV1(ContextAllocationReferenceV1);
+
+// A move-only preflight, consumed only after the exact backend disposal succeeds.
+pub(super) struct AllocationDisposalV1 {
+    id: RuntimeAllocationIdV1,
+    record: AllocationRecordV1,
+    member: fe2o3_runtime_model::ContextAllocationWriteV1,
+    writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
+}
 
 impl AllocationEnrollmentV1 {
     pub(super) fn reference(&self) -> ContextAllocationReferenceV1 {
@@ -210,10 +220,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// Each capacity must be in 1..=1_048_576; invalid bounds reject before
     /// enumeration. Other failures return the possibly enumeration-entered backend.
     ///
-    /// This development profile tracks allocation custody only. It exposes no
-    /// content lineage, input lease or reuse permission: writers, backend aliases,
-    /// ordered mutations and Unknown recovery are not yet integrated. Ordinary
-    /// writes/launches remain unrestricted; the default `open` path is unchanged.
+    /// This development profile tracks allocation custody and synchronous host
+    /// writes. Writer capacity and unresolved writes gate further host writes.
+    /// Launches, copies and backend aliases remain untracked, so no content
+    /// lineage, input lease or reuse permission is exposed. Unknown host writes
+    /// permit only confirmed allocation disposal, not content recovery.
+    /// The default `open` path is unchanged.
     pub fn open_with_version_journal_v1(
         backend: B,
         allocation_capacity: usize,
@@ -224,6 +236,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
 
     pub fn version_journal_usage_v1(&self) -> Option<RuntimeContextJournalUsageV1> {
         self.versions.as_ref().map(ContextVersionsV1::usage)
+    }
+
+    /// Retained writer metadata, not completion or resource-reuse authority.
+    pub fn version_journal_writer_records_v1(&self) -> Option<usize> {
+        self.versions
+            .as_ref()
+            .map(ContextVersionsV1::retained_writers)
     }
 
     pub(super) fn preflight_journal_capacity_v1(
@@ -298,34 +317,33 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         });
     }
 
-    pub(super) fn validate_journal_allocation_v1(
-        &mut self,
-        id: RuntimeAllocationIdV1,
-        record: &AllocationRecordV1,
-    ) -> Result<(), RuntimeValidationErrorV1> {
-        let result = match &self.versions {
-            Some(versions) => versions
-                .validate_live(id, record)
-                .and_then(|reference| versions.validate_retirement(&[reference])),
-            None if record.journal.is_none() => Ok(()),
-            None => Err(ContextVersionJournalErrorV1::InvalidState),
-        };
-        self.journal_result_v1(result)
-    }
-
     pub(super) fn finish_allocation_disposal_v1(
         &mut self,
         id: RuntimeAllocationIdV1,
         record: AllocationRecordV1,
+        plan: Option<AllocationDisposalV1>,
     ) {
         self.guard_journal_unwind_v1(|context| {
+            let exact = match (&plan, &context.versions) {
+                (Some(plan), Some(_)) => {
+                    plan.id == id
+                        && plan.record == record
+                        && context.allocations.get(&id) == Some(&record)
+                }
+                (None, None) => record.journal.is_none(),
+                _ => false,
+            };
+            if !exact {
+                context.terminal = true;
+                panic!("allocation disposal plan identity invariant");
+            }
             context.dispose_allocation_credits_v1(id);
-            if let Some(reference) = record.journal {
+            if let Some(plan) = plan {
                 let result = context
                     .versions
                     .as_mut()
                     .expect("configured journal")
-                    .retire(&[reference]);
+                    .retire_after_disposal(plan);
                 context
                     .journal_result_v1(result)
                     .expect("allocation journal disposal invariant");

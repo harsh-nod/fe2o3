@@ -913,6 +913,7 @@ pub struct RuntimeCleanupReportV1<E> {
     graph_reserved: bool,
     allocation_credit_records: usize,
     allocation_journal_records: usize,
+    writer_journal_records: usize,
 }
 
 impl<E> RuntimeCleanupReportV1<E> {
@@ -934,6 +935,7 @@ impl<E> RuntimeCleanupReportV1<E> {
             && self.retained.is_empty()
             && self.allocation_credit_records == 0
             && self.allocation_journal_records == 0
+            && self.writer_journal_records == 0
     }
 
     pub const fn is_graph_reserved(&self) -> bool {
@@ -949,6 +951,11 @@ impl<E> RuntimeCleanupReportV1<E> {
     /// Opt-in journal records, including attempts with no returned handle.
     pub const fn allocation_journal_records_v1(&self) -> usize {
         self.allocation_journal_records
+    }
+
+    /// Retained writer metadata; this is not an available-data count.
+    pub const fn writer_journal_records_v1(&self) -> usize {
+        self.writer_journal_records
     }
 }
 
@@ -968,7 +975,7 @@ struct StreamRecordV1 {
     generated: Option<u64>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AllocationRecordV1 {
     backend_allocation: u64,
     device: RuntimeDeviceIdV1,
@@ -1423,12 +1430,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         allocation_ids.sort_unstable();
         for id in allocation_ids {
             let record = self.allocations[&id];
-            if self.validate_journal_allocation_v1(id, &record).is_err() {
-                return self.cleanup_report(failures);
-            }
+            let journal = match self.prepare_journal_disposal_v1(id, &record) {
+                Ok(plan) => plan,
+                Err(
+                    RuntimeValidationErrorV1::ContextReserved
+                    | RuntimeValidationErrorV1::Unsupported,
+                ) => continue,
+                Err(_) => return self.cleanup_report(failures),
+            };
             match self.release_admitted_allocation_backend_v1(id, record.backend_allocation) {
                 Ok(()) => {
-                    self.finish_allocation_disposal_v1(id, record);
+                    self.finish_allocation_disposal_v1(id, record, journal);
                 }
                 Err(failure) => {
                     let terminal = matches!(failure, RuntimeBackendFailureV1::Terminal(_));
@@ -1484,6 +1496,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .versions
                 .as_ref()
                 .map_or(0, ContextVersionsV1::retained_records),
+            writer_journal_records: self
+                .versions
+                .as_ref()
+                .map_or(0, ContextVersionsV1::retained_writers),
         }
     }
 
@@ -1926,11 +1942,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .allocations
             .get(&allocation)
             .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
-        self.validate_journal_allocation_v1(allocation, &record)?;
+        let journal = self.prepare_journal_disposal_v1(allocation, &record)?;
         let result =
             self.release_admitted_allocation_backend_v1(allocation, record.backend_allocation);
         self.backend_result(result)?;
-        self.finish_allocation_disposal_v1(allocation, record);
+        self.finish_allocation_disposal_v1(allocation, record, journal);
         Ok(())
     }
 
@@ -1946,6 +1962,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .get(&allocation)
             .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
         validate_byte_range(record.byte_len, byte_offset, bytes.len())?;
+        if let Some(ticket) = self.begin_journal_host_write_v1(allocation, &record)? {
+            return self.write_with_journal_v1(ticket, &record, byte_offset, bytes);
+        }
         let result =
             self.backend
                 .write_allocation_v1(record.backend_allocation, byte_offset, bytes);

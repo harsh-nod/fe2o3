@@ -1,4 +1,7 @@
 use super::*;
+
+#[path = "host_write_classification_tests.rs"]
+mod classification;
 use crate::kfd_backend::kfd_backend_sdma_seam::ScriptedTerminalCustodyV1;
 use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};

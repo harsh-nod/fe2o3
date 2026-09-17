@@ -1,4 +1,6 @@
 use super::*;
+
+mod writer_tests;
 use crate::{RuntimeResourceKindV1 as K, RuntimeResourceVectorV1};
 use std::sync::{
     Arc,
@@ -36,6 +38,30 @@ struct AllocationOnlyBackend {
     diagnostic: Option<Box<Diagnostic>>,
     panic_before_outcome: bool,
     attempts: usize,
+    write_failure: MockMemoryFailure,
+    write_diagnostic: Option<Box<Diagnostic>>,
+    write_prefix: usize,
+    write_calls: usize,
+    release_failure: MockMemoryFailure,
+    release_diagnostic: Option<Box<Diagnostic>>,
+    release_calls: usize,
+}
+
+fn diagnostic_failure(
+    failure: MockMemoryFailure,
+    diagnostic: &mut Option<Box<Diagnostic>>,
+) -> Result<(), RuntimeBackendFailureV1<Box<Diagnostic>>> {
+    if failure == MockMemoryFailure::None {
+        return Ok(());
+    }
+    let error = diagnostic.take().expect("scripted diagnostic");
+    match failure {
+        MockMemoryFailure::Rejected => Err(RuntimeBackendFailureV1::Rejected(error)),
+        MockMemoryFailure::Quiescent => Err(RuntimeBackendFailureV1::Quiescent(error)),
+        MockMemoryFailure::Terminal => Err(RuntimeBackendFailureV1::Terminal(error)),
+        MockMemoryFailure::Panic => std::panic::resume_unwind(error),
+        MockMemoryFailure::None => unreachable!(),
+    }
 }
 
 impl RuntimeBackendV1 for AllocationOnlyBackend {
@@ -88,6 +114,11 @@ impl RuntimeBackendV1 for AllocationOnlyBackend {
         &mut self,
         allocation: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.release_calls += 1;
+        diagnostic_failure(
+            core::mem::take(&mut self.release_failure),
+            &mut self.release_diagnostic,
+        )?;
         self.inner.release_allocation_v1(allocation).unwrap();
         Ok(())
     }
@@ -100,19 +131,35 @@ impl RuntimeBackendV1 for AllocationOnlyBackend {
     }
     fn write_allocation_v1(
         &mut self,
-        _: u64,
-        _: u64,
-        _: &[u8],
+        allocation: u64,
+        offset: u64,
+        bytes: &[u8],
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
-        unreachable!()
+        self.write_calls += 1;
+        let failure = core::mem::take(&mut self.write_failure);
+        if failure == MockMemoryFailure::Rejected {
+            return diagnostic_failure(failure, &mut self.write_diagnostic);
+        }
+        let length = if failure == MockMemoryFailure::None {
+            bytes.len()
+        } else {
+            self.write_prefix.min(bytes.len())
+        };
+        self.inner
+            .write_allocation_v1(allocation, offset, &bytes[..length])
+            .unwrap();
+        diagnostic_failure(failure, &mut self.write_diagnostic)
     }
     fn read_allocation_v1(
         &mut self,
-        _: u64,
-        _: u64,
-        _: &mut [u8],
+        allocation: u64,
+        offset: u64,
+        bytes: &mut [u8],
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
-        unreachable!()
+        self.inner
+            .read_allocation_v1(allocation, offset, bytes)
+            .unwrap();
+        Ok(())
     }
     fn load_module_v1(
         &mut self,

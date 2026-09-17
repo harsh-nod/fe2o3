@@ -83,6 +83,14 @@ pub struct ContextWriterNoEffectEvidenceV1 {
     pub writer: ContextWriterReferenceV1,
 }
 
+/// Inert premise that every exact member has been disposed. This is neither
+/// native disposal authority nor successful content-settlement evidence.
+#[derive(Debug)]
+pub struct ContextWriterDisposalEvidenceV1<'a> {
+    pub writer: ContextWriterReferenceV1,
+    pub allocations: &'a [ContextAllocationWriteV1],
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContextAllocationStateV1 {
     pub device: ContextJournalDeviceKeyV1,

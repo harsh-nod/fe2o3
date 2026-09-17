@@ -1,10 +1,12 @@
 # Context Journal Allocation Foundation
 
-This V5 development increment joins the bounded journal model to actual Context
+The V5 development increment joins the bounded journal model to actual Context
 allocation lifecycles. It does not complete V5/V6, A1/A2, #182 or HIP/HSA parity.
 Accepted checkpoints remain Native R125 CPU/test, Admission R118B C1-C3 and
 Resources R116/V3. Qualification is recorded in
 [the development receipt](evidence/dev-v5-allocation-journal-2026-09-17/README.md).
+The subsequent [V6 host-write increment](runtime-context-version-journal-host-write-v1.md)
+extends this profile without changing that historical receipt or its proof scope.
 
 ## Public Boundary
 
@@ -18,9 +20,10 @@ caller-selected identity API. Default `open` behavior is unchanged.
 
 The only journal observation is metadata usage. It grants no initializedness,
 content version, native currentness, input lease, reuse or execution authority.
-Writes, launches, copies and backend aliases remain unrestricted. Their effects
-are not journaled yet, so no globally valid lineage can be read even after a
-successful operation. Writer slots are preallocated but not issued here.
+At the V5 checkpoint, writes, launches, copies and backend aliases were
+unrestricted and writer slots were preallocated but not issued. V6 now gates
+synchronous host writes on writer capacity and unresolved membership. Launches,
+copies and aliases remain untracked; no globally valid lineage is exposed.
 
 ## Ownership
 
@@ -40,7 +43,9 @@ successful operation. Writer slots are preallocated but not issued here.
   journal references before disposal. Only confirmed disposal returns slots.
   Credit disposal precedes journal retirement and removal of Context handles.
   Internal invariant failure seals and retains metadata rather than retrying an
-  already-disposed backend object. Pending/Unknown model membership cannot retire.
+  already-disposed backend object. Pending membership cannot retire. V6 adds a
+  separate whole-writer disposal transition for one-member synchronous Unknown;
+  it does not settle or recover that writer's contents.
 - Cleanup counts unidentified journal records independently of allocation credits;
   it cannot return the backend while an ambiguous no-handle attempt remains.
 
@@ -61,11 +66,13 @@ remain inert and are not production disposal authority.
 
 ## Remaining Work
 
-V6 must join genuine writer IDs and authenticated Success/NoEffect/Unknown
-settlement before callbacks. Full mutation coverage includes failed disposal
+V6 joins genuine synchronous host-write IDs and contracted Success/NoEffect/Unknown
+outcomes. Full mutation coverage and authenticated production correspondence
+remain open, including failed disposal
 that changes bytes, generated DATA adoption, all launch/copy families, completion
-and cancellation paths, and backend aliases. Ordered writers, explicit Unknown
-disposal/recovery, input leases and aggregate residency remain separate work.
+and cancellation paths, and backend aliases. Ordered writers, multi-member
+Unknown disposal, content recovery, input leases and aggregate residency remain
+separate work.
 
 New allocation transitions and this Rust adapter have executable tests and static
 review, not mechanically proved correspondence. Existing V4-J1 proof bytes are

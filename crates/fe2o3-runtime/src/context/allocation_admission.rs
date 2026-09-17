@@ -101,7 +101,7 @@ impl ContextAllocationAdmissionV1 {
         Ok(())
     }
 
-    fn quarantine(&mut self, id: RuntimeAllocationIdV1) {
+    pub(in crate::context) fn quarantine(&mut self, id: RuntimeAllocationIdV1) {
         if let Some(credits) = self.retained.remove(&id) {
             credits.quarantine();
         }

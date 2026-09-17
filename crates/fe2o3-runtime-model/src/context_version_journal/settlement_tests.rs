@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "disposal_tests.rs"]
+mod disposal;
+
 type Write = ContextAllocationWriteV1;
 type Success = ContextWriterSuccessEvidenceV1;
 type NoEffect = ContextWriterNoEffectEvidenceV1;

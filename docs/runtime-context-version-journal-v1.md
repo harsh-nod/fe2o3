@@ -6,8 +6,10 @@ R108 locally accepts VER-1A.2a's bounded writer-issuance model, with
 [retained source/test evidence](evidence/local-r108-context-writer-issuance-2026-09-12/README.md).
 The [V5 allocation foundation](runtime-context-version-journal-allocation-v1.md)
 adds a construction-only production allocation-metadata consumer. It does not
-yet track writers or expose trustworthy lineage. No new formal theorem or
-cross-run lease implementation is claimed.
+expose trustworthy lineage. The [V6 host-write increment](runtime-context-version-journal-host-write-v1.md)
+adds synchronous writer tracking and exact single-writer disposal, but other
+mutation paths remain untracked. No new formal theorem or cross-run lease
+implementation is claimed.
 Existing R65 graph versions remain graph-local history. This journal records
 mutation lineage, not initialized contents, native currentness, disposal
 authority or successful kernel semantics.

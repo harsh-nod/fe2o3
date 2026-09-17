@@ -6080,12 +6080,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         } else {
             let destination = Arc::make_mut(&mut record.bytes)
                 .get_mut(offset..end)
-                .ok_or_else(|| {
-                    Self::rejected(
-                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
-                        "allocation write is out of bounds",
-                    )
-                })?;
+                .expect("preflighted host-write range remains valid after upload");
             destination.copy_from_slice(bytes);
             record.content_sha256 = None;
         }
@@ -10152,9 +10147,8 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
                         self.terminal_error(format!("XGMI write read-modify: {error}"))
                     })?,
                 _ => {
-                    return Err(Self::rejected(
-                        KfdRuntimeBackendErrorKindV1::Busy,
-                        "XGMI allocation authority unavailable",
+                    return Err(self.terminal_error(
+                        "XGMI allocation authority unavailable after successful unmap",
                     ));
                 }
             }
@@ -10213,10 +10207,9 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
             .expect("validated XGMI allocation remains indexed");
         let device = record.device;
         let Some(XgmiAllocationAuthorityV1::Unmapped(lease)) = record.authority.as_ref() else {
-            return Err(Self::rejected(
-                KfdRuntimeBackendErrorKindV1::Busy,
-                "XGMI allocation authority unavailable",
-            ));
+            return Err(
+                self.terminal_error("XGMI allocation authority unavailable after successful unmap")
+            );
         };
         let bytes = self.sessions[device]
             .read_gfx942_xgmi_device_memory(lease)
@@ -19854,7 +19847,8 @@ mod tests {
     fn scripted_sdma_chunk_n_upload_and_zero_failures_mark_device_shadow_dirty() {
         let first = GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1;
         let byte_len = usize::try_from(first).unwrap() + 1;
-        for zero in [false, true] {
+        for operation in 0..3 {
+            let zero = operation == 0;
             let mut steps = scripted_sync_copy_steps_v1(
                 Gfx942PersistentSdmaDirectionV1::HostToDevice,
                 0,
@@ -19880,6 +19874,8 @@ mod tests {
                 .fill(if zero { 0xa5 } else { 0 });
             let result = if zero {
                 backend.zero_sdma_range_v1(device, byte_len as u64)
+            } else if operation == 2 {
+                backend.write_allocation_v1(device, 0, &vec![0x5a; byte_len])
             } else {
                 backend.upload_sdma_range_v1(device, 0, &vec![0x5a; byte_len])
             };

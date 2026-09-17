@@ -1,0 +1,2150 @@
+diff --git a/crates/fe2o3-runtime-model/src/context_version_journal.rs b/crates/fe2o3-runtime-model/src/context_version_journal.rs
+index 9ec02574d..6f7674882 100644
+--- a/crates/fe2o3-runtime-model/src/context_version_journal.rs
++++ b/crates/fe2o3-runtime-model/src/context_version_journal.rs
+@@ -83,6 +83,14 @@ pub struct ContextWriterNoEffectEvidenceV1 {
+     pub writer: ContextWriterReferenceV1,
+ }
+ 
++/// Inert premise that every exact member has been disposed. This is neither
++/// native disposal authority nor successful content-settlement evidence.
++#[derive(Debug)]
++pub struct ContextWriterDisposalEvidenceV1<'a> {
++    pub writer: ContextWriterReferenceV1,
++    pub allocations: &'a [ContextAllocationWriteV1],
++}
++
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+ pub struct ContextAllocationStateV1 {
+     pub device: ContextJournalDeviceKeyV1,
+diff --git a/crates/fe2o3-runtime-model/src/context_version_journal/disposal_tests.rs b/crates/fe2o3-runtime-model/src/context_version_journal/disposal_tests.rs
+new file mode 100644
+index 000000000..0ac929fb3
+--- /dev/null
++++ b/crates/fe2o3-runtime-model/src/context_version_journal/disposal_tests.rs
+@@ -0,0 +1,244 @@
++use super::*;
++
++fn dispose(j: &mut Journal, writer: Reference, roster: &[Write]) -> Result<(), Error> {
++    j.dispose_unknown(
++        writer,
++        &ContextWriterDisposalEvidenceV1 {
++            writer,
++            allocations: roster,
++        },
++    )
++}
++
++fn assert_rejected(j: &mut Journal, writer: Reference, roster: &[Write], error: Error) {
++    let before = snapshot(j);
++    assert_eq!(j.validate_unknown_disposal(writer, roster), Err(error));
++    assert_eq!(dispose(j, writer, roster), Err(error));
++    assert_eq!(snapshot(j), before);
++}
++
++#[test]
++fn complete_unknown_disposal_removes_exact_roster_and_preserves_unrelated_state() {
++    for count in [0, 1, 3, 8] {
++        for kind in [Kind::Synchronous, Kind::Submission] {
++            let (mut j, writer, roster) = pending_kind(count, kind);
++            j.mark_unknown(writer).unwrap();
++            if count == 3 {
++                let neighbor = j
++                    .writers
++                    .iter()
++                    .enumerate()
++                    .find_map(|(slot, entry)| {
++                        if let Some(WriterEntryV1::Reserved(key)) = entry {
++                            Some(Reference { slot, key: *key })
++                        } else {
++                            None
++                        }
++                    })
++                    .unwrap();
++                j.begin_write(neighbor, &roster[3..5]).unwrap();
++                if kind == Kind::Submission {
++                    j.mark_unknown(neighbor).unwrap();
++                }
++            }
++            let mut expected = snapshot(&j);
++            let slots = chain(&j, writer);
++            for slot in slots {
++                let member = expected.members[slot].take().unwrap();
++                expected.allocations[member.allocation.slot] = None;
++                expected.allocation_free.push(member.allocation.slot);
++                expected.member_free.push(slot);
++            }
++            expected.writers[writer.slot] = None;
++            expected.free.push(writer.slot);
++            j.validate_unknown_disposal(writer, &roster[..count])
++                .unwrap();
++            dispose(&mut j, writer, &roster[..count]).unwrap();
++            assert_eq!(snapshot(&j), expected);
++            audit(&j);
++            for destination in &roster[..count] {
++                assert_eq!(
++                    j.lookup_allocation(destination.allocation),
++                    Err(Error::InvalidAllocationReference)
++                );
++            }
++            assert_rejected(&mut j, writer, &roster[..count], Error::InvalidReference);
++        }
++    }
++}
++
++#[test]
++fn disposal_requires_unknown_and_exact_writer_evidence() {
++    for kind in [Kind::Synchronous, Kind::Submission] {
++        let (mut j, writer, roster) = reserved_kind(8, 4, kind);
++        assert_rejected(&mut j, writer, &roster[..3], Error::InvalidReference);
++        j.begin_write(writer, &roster[..3]).unwrap();
++        assert_rejected(&mut j, writer, &roster[..3], Error::InvalidState);
++        j.mark_unknown(writer).unwrap();
++        for coordinate in 0..4 {
++            let mut other = writer;
++            match coordinate {
++                0 => other.slot = usize::MAX,
++                1 => other.key.local += 1,
++                2 => other.key.context_generation += 1,
++                _ => {
++                    other.key.kind = if kind == Kind::Synchronous {
++                        Kind::Submission
++                    } else {
++                        Kind::Synchronous
++                    }
++                }
++            }
++            assert_rejected(&mut j, other, &roster[..3], Error::InvalidReference);
++            let before = snapshot(&j);
++            assert_eq!(
++                j.dispose_unknown(
++                    writer,
++                    &ContextWriterDisposalEvidenceV1 {
++                        writer: other,
++                        allocations: &roster[..3],
++                    }
++                ),
++                Err(Error::SettlementEvidenceMismatch)
++            );
++            assert_eq!(snapshot(&j), before);
++        }
++    }
++}
++
++#[test]
++fn disposal_rejects_partial_reordered_and_substituted_rosters_atomically() {
++    let (mut j, writer, roster) = pending(3);
++    j.mark_unknown(writer).unwrap();
++    for count in [0, 1, 2, 4, 8] {
++        assert_rejected(
++            &mut j,
++            writer,
++            &roster[..count],
++            Error::SettlementEvidenceMismatch,
++        );
++    }
++    for index in 0..3 {
++        for coordinate in 0..8 {
++            let mut changed = roster[..3].to_vec();
++            match coordinate {
++                0 => changed[index].allocation.slot = usize::MAX,
++                1 => changed[index].allocation.key.local += 1,
++                2 => changed[index].allocation.key.context_generation += 1,
++                3 => changed[index].device.local += 1,
++                4 => changed[index].device.context_generation += 1,
++                5 => changed[index].byte_extent += 1,
++                6 => changed.swap(index, (index + 1) % 3),
++                _ => changed[index] = changed[(index + 1) % 3],
++            }
++            assert_rejected(&mut j, writer, &changed, Error::SettlementEvidenceMismatch);
++        }
++    }
++    audit(&j);
++}
++
++#[test]
++fn disposal_checks_every_member_backlink_epoch_and_chain_before_mutation() {
++    for index in 0..3 {
++        for corruption in 0..8 {
++            let (mut j, writer, roster) = pending(3);
++            j.mark_unknown(writer).unwrap();
++            let slots = chain(&j, writer);
++            let slot = slots[index];
++            let allocation = j.members[slot].unwrap().allocation.slot;
++            match corruption {
++                0 => j.members[slot] = None,
++                1 => j.members[slot].as_mut().unwrap().next = Some(slot),
++                2 => j.members[slot].as_mut().unwrap().allocation.slot = usize::MAX,
++                3 => j.members[slot].as_mut().unwrap().writer.key.local += 1,
++                4 => j.members[slot].as_mut().unwrap().attempt_epoch += 1,
++                5 => j.members[slot].as_mut().unwrap().prior_lineage += 1,
++                6 => j.allocations[allocation].as_mut().unwrap().pending_member = None,
++                _ => j.allocations[allocation] = None,
++            }
++            assert_rejected(&mut j, writer, &roster[..3], Error::InvalidState);
++        }
++    }
++}
++
++#[test]
++fn disposal_preflights_all_return_stacks_and_scratch_without_allocating() {
++    for corruption in 0..8 {
++        let (mut j, writer, roster) = pending(3);
++        j.mark_unknown(writer).unwrap();
++        match corruption {
++            0 => j.free = core::mem::take(&mut j.free).into_boxed_slice().into_vec(),
++            1 => {
++                j.member_free = core::mem::take(&mut j.member_free)
++                    .into_boxed_slice()
++                    .into_vec()
++            }
++            2 => {
++                j.allocation_free = core::mem::take(&mut j.allocation_free)
++                    .into_boxed_slice()
++                    .into_vec()
++            }
++            3 => {
++                j.free.reserve_exact(j.writer_capacity + 1);
++                j.free.resize(j.writer_capacity, usize::MAX);
++            }
++            4 => {
++                j.member_free.reserve_exact(j.allocation_capacity + 3);
++                j.member_free.resize(j.allocation_capacity, usize::MAX);
++            }
++            5 => {
++                j.allocation_free.reserve_exact(j.allocation_capacity + 3);
++                j.allocation_free.resize(j.allocation_capacity, usize::MAX);
++            }
++            6 => j.scratch.truncate(2),
++            _ => {
++                let slot = chain(&j, writer)[2];
++                let member = j.members[slot].unwrap();
++                j.scratch[2] = Some(BeginMemberPlanV1 {
++                    member_slot: slot,
++                    allocation: member.allocation,
++                    prior_lineage: member.prior_lineage,
++                    attempt_epoch: member.attempt_epoch,
++                });
++            }
++        }
++        assert_rejected(&mut j, writer, &roster[..3], Error::InvalidState);
++    }
++}
++
++#[test]
++fn disposed_identity_cannot_alias_reused_writer_allocation_or_member_slots() {
++    let (mut j, old, roster) = pending(3);
++    j.mark_unknown(old).unwrap();
++    let old_slots = chain(&j, old);
++    dispose(&mut j, old, &roster[..3]).unwrap();
++    let new = j.register_writer(key(old.key.local + 1)).unwrap();
++    assert_eq!(new.slot, old.slot);
++    let mut replacement = Vec::new();
++    for (index, prior) in roster[..3].iter().enumerate() {
++        let allocation = j
++            .enroll_allocation(
++                ContextAllocationKeyV1 {
++                    context_generation: 7,
++                    local: 50_000 + index as u64,
++                },
++                prior.device,
++                prior.byte_extent,
++            )
++            .unwrap();
++        assert_eq!(allocation.slot, roster[2 - index].allocation.slot);
++        replacement.push(Write {
++            allocation,
++            ..*prior
++        });
++    }
++    j.begin_write(new, &replacement).unwrap();
++    let mut expected_slots = old_slots;
++    expected_slots.reverse();
++    assert_eq!(chain(&j, new), expected_slots);
++    j.mark_unknown(new).unwrap();
++    assert_rejected(&mut j, old, &roster[..3], Error::InvalidReference);
++    assert_rejected(&mut j, new, &roster[..3], Error::SettlementEvidenceMismatch);
++    dispose(&mut j, new, &replacement).unwrap();
++    audit(&j);
++}
+diff --git a/crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs b/crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs
+index fe4e8ce70..ddf3b8b13 100644
+--- a/crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs
++++ b/crates/fe2o3-runtime-model/src/context_version_journal/settlement.rs
+@@ -1,5 +1,7 @@
+ use super::*;
+ 
++mod disposal;
++
+ impl ContextVersionJournalV1 {
+     /// Settles a complete retained writer using an inert success premise.
+     pub fn settle_success(
+diff --git a/crates/fe2o3-runtime-model/src/context_version_journal/settlement/disposal.rs b/crates/fe2o3-runtime-model/src/context_version_journal/settlement/disposal.rs
+new file mode 100644
+index 000000000..d943f58eb
+--- /dev/null
++++ b/crates/fe2o3-runtime-model/src/context_version_journal/settlement/disposal.rs
+@@ -0,0 +1,109 @@
++use super::*;
++
++impl ContextVersionJournalV1 {
++    /// Preflights the complete Unknown roster without authorizing native effects.
++    /// Partial disposal must remain retained by the production owner until every
++    /// member is confirmed gone. This model never clears a successful prefix.
++    pub fn validate_unknown_disposal(
++        &self,
++        writer: ContextWriterReferenceV1,
++        canonical: &[ContextAllocationWriteV1],
++    ) -> Result<(), ContextVersionJournalErrorV1> {
++        self.unknown_disposal_plan(writer, canonical).map(|_| ())
++    }
++
++    /// Retires an exact Unknown writer and all its allocations atomically.
++    /// No allocation becomes available, and no successful lineage is published.
++    /// Writer issuance history remains burned. Callers must not reuse disposed
++    /// allocation keys. This operation is O(k), with no allocation or callback;
++    /// partition preservation assumes a valid prestate.
++    pub fn dispose_unknown(
++        &mut self,
++        writer: ContextWriterReferenceV1,
++        evidence: &ContextWriterDisposalEvidenceV1<'_>,
++    ) -> Result<(), ContextVersionJournalErrorV1> {
++        self.retained_header(writer, true)?;
++        if evidence.writer != writer {
++            return Err(ContextVersionJournalErrorV1::SettlementEvidenceMismatch);
++        }
++        let (mut head, count) = self.unknown_disposal_plan(writer, evidence.allocations)?;
++        for index in 0..count {
++            let slot = head.expect("validated complete Unknown chain");
++            let member = self.members[slot].expect("validated Unknown member");
++            self.store_plan(
++                index,
++                BeginMemberPlanV1 {
++                    member_slot: slot,
++                    allocation: member.allocation,
++                    prior_lineage: member.prior_lineage,
++                    attempt_epoch: member.attempt_epoch,
++                },
++            );
++            head = member.next;
++        }
++        // Disposal removes membership and allocation together. It does not pass
++        // through a state that could be mistaken for recovered content.
++        for index in 0..count {
++            let plan = self.scratch[index].take().expect("complete disposal plan");
++            self.allocations[plan.allocation.slot] = None;
++            self.allocation_free.push(plan.allocation.slot);
++            self.members[plan.member_slot] = None;
++            self.member_free.push(plan.member_slot);
++        }
++        self.store_slot(writer.slot, None);
++        self.push_free(writer.slot);
++        Ok(())
++    }
++
++    fn unknown_disposal_plan(
++        &self,
++        writer: ContextWriterReferenceV1,
++        canonical: &[ContextAllocationWriteV1],
++    ) -> Result<(Option<usize>, usize), ContextVersionJournalErrorV1> {
++        use ContextVersionJournalErrorV1 as E;
++        let (head, count, unknown) = self.retained_header(writer, true)?;
++        if !unknown {
++            return Err(E::InvalidState);
++        }
++        if canonical.len() != count {
++            return Err(E::SettlementEvidenceMismatch);
++        }
++        self.validate_retained_chain(writer, head, count)?;
++        let mut cursor = head;
++        for destination in canonical {
++            let slot = cursor.ok_or(E::InvalidState)?;
++            let member = self.members[slot].ok_or(E::InvalidState)?;
++            let allocation = self.exact_allocation(member.allocation)?;
++            if destination.allocation != member.allocation
++                || destination.device != allocation.device
++                || destination.byte_extent != allocation.byte_extent
++            {
++                return Err(E::SettlementEvidenceMismatch);
++            }
++            cursor = member.next;
++        }
++        let writer_returns = self.free.len().checked_add(1).ok_or(E::InvalidState)?;
++        let member_returns = self
++            .member_free
++            .len()
++            .checked_add(count)
++            .ok_or(E::InvalidState)?;
++        let allocation_returns = self
++            .allocation_free
++            .len()
++            .checked_add(count)
++            .ok_or(E::InvalidState)?;
++        if writer_returns > self.writer_capacity
++            || writer_returns > self.free.capacity()
++            || member_returns > self.allocation_capacity
++            || member_returns > self.member_free.capacity()
++            || allocation_returns > self.allocation_capacity
++            || allocation_returns > self.allocation_free.capacity()
++            || count > self.scratch.len()
++            || self.scratch[..count].iter().any(Option::is_some)
++        {
++            return Err(E::InvalidState);
++        }
++        Ok((head, count))
++    }
++}
+diff --git a/crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs b/crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs
+index a529181b1..5851454c1 100644
+--- a/crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs
++++ b/crates/fe2o3-runtime-model/src/context_version_journal/settlement_tests.rs
+@@ -1,5 +1,8 @@
+ use super::*;
+ 
++#[path = "disposal_tests.rs"]
++mod disposal;
++
+ type Write = ContextAllocationWriteV1;
+ type Success = ContextWriterSuccessEvidenceV1;
+ type NoEffect = ContextWriterNoEffectEvidenceV1;
+diff --git a/crates/fe2o3-runtime/src/context.rs b/crates/fe2o3-runtime/src/context.rs
+index 2d8225d30..7c9ddff94 100644
+--- a/crates/fe2o3-runtime/src/context.rs
++++ b/crates/fe2o3-runtime/src/context.rs
+@@ -913,6 +913,7 @@ pub struct RuntimeCleanupReportV1<E> {
+     graph_reserved: bool,
+     allocation_credit_records: usize,
+     allocation_journal_records: usize,
++    writer_journal_records: usize,
+ }
+ 
+ impl<E> RuntimeCleanupReportV1<E> {
+@@ -934,6 +935,7 @@ impl<E> RuntimeCleanupReportV1<E> {
+             && self.retained.is_empty()
+             && self.allocation_credit_records == 0
+             && self.allocation_journal_records == 0
++            && self.writer_journal_records == 0
+     }
+ 
+     pub const fn is_graph_reserved(&self) -> bool {
+@@ -950,6 +952,11 @@ impl<E> RuntimeCleanupReportV1<E> {
+     pub const fn allocation_journal_records_v1(&self) -> usize {
+         self.allocation_journal_records
+     }
++
++    /// Retained writer metadata; this is not an available-data count.
++    pub const fn writer_journal_records_v1(&self) -> usize {
++        self.writer_journal_records
++    }
+ }
+ 
+ fn map_backend_error<E>(error: RuntimeBackendFailureV1<E>) -> RuntimeErrorV1<E> {
+@@ -968,7 +975,7 @@ struct StreamRecordV1 {
+     generated: Option<u64>,
+ }
+ 
+-#[derive(Clone, Copy, Debug)]
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+ struct AllocationRecordV1 {
+     backend_allocation: u64,
+     device: RuntimeDeviceIdV1,
+@@ -1423,12 +1430,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         allocation_ids.sort_unstable();
+         for id in allocation_ids {
+             let record = self.allocations[&id];
+-            if self.validate_journal_allocation_v1(id, &record).is_err() {
+-                return self.cleanup_report(failures);
+-            }
++            let journal = match self.prepare_journal_disposal_v1(id, &record) {
++                Ok(plan) => plan,
++                Err(
++                    RuntimeValidationErrorV1::ContextReserved
++                    | RuntimeValidationErrorV1::Unsupported,
++                ) => continue,
++                Err(_) => return self.cleanup_report(failures),
++            };
+             match self.release_admitted_allocation_backend_v1(id, record.backend_allocation) {
+                 Ok(()) => {
+-                    self.finish_allocation_disposal_v1(id, record);
++                    self.finish_allocation_disposal_v1(id, record, journal);
+                 }
+                 Err(failure) => {
+                     let terminal = matches!(failure, RuntimeBackendFailureV1::Terminal(_));
+@@ -1484,6 +1496,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                 .versions
+                 .as_ref()
+                 .map_or(0, ContextVersionsV1::retained_records),
++            writer_journal_records: self
++                .versions
++                .as_ref()
++                .map_or(0, ContextVersionsV1::retained_writers),
+         }
+     }
+ 
+@@ -1926,11 +1942,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             .allocations
+             .get(&allocation)
+             .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
+-        self.validate_journal_allocation_v1(allocation, &record)?;
++        let journal = self.prepare_journal_disposal_v1(allocation, &record)?;
+         let result =
+             self.release_admitted_allocation_backend_v1(allocation, record.backend_allocation);
+         self.backend_result(result)?;
+-        self.finish_allocation_disposal_v1(allocation, record);
++        self.finish_allocation_disposal_v1(allocation, record, journal);
+         Ok(())
+     }
+ 
+@@ -1946,6 +1962,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             .get(&allocation)
+             .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
+         validate_byte_range(record.byte_len, byte_offset, bytes.len())?;
++        if let Some(ticket) = self.begin_journal_host_write_v1(allocation, &record)? {
++            return self.write_with_journal_v1(ticket, &record, byte_offset, bytes);
++        }
+         let result =
+             self.backend
+                 .write_allocation_v1(record.backend_allocation, byte_offset, bytes);
+diff --git a/crates/fe2o3-runtime/src/context/allocation_admission.rs b/crates/fe2o3-runtime/src/context/allocation_admission.rs
+index c60e77187..96e18aae7 100644
+--- a/crates/fe2o3-runtime/src/context/allocation_admission.rs
++++ b/crates/fe2o3-runtime/src/context/allocation_admission.rs
+@@ -101,7 +101,7 @@ impl ContextAllocationAdmissionV1 {
+         Ok(())
+     }
+ 
+-    fn quarantine(&mut self, id: RuntimeAllocationIdV1) {
++    pub(in crate::context) fn quarantine(&mut self, id: RuntimeAllocationIdV1) {
+         if let Some(credits) = self.retained.remove(&id) {
+             credits.quarantine();
+         }
+diff --git a/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests.rs b/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests.rs
+index d4b82b05c..675a821f1 100644
+--- a/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests.rs
++++ b/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests.rs
+@@ -1,4 +1,6 @@
+ use super::*;
++
++mod writer_tests;
+ use crate::{RuntimeResourceKindV1 as K, RuntimeResourceVectorV1};
+ use std::sync::{
+     Arc,
+@@ -36,6 +38,30 @@ struct AllocationOnlyBackend {
+     diagnostic: Option<Box<Diagnostic>>,
+     panic_before_outcome: bool,
+     attempts: usize,
++    write_failure: MockMemoryFailure,
++    write_diagnostic: Option<Box<Diagnostic>>,
++    write_prefix: usize,
++    write_calls: usize,
++    release_failure: MockMemoryFailure,
++    release_diagnostic: Option<Box<Diagnostic>>,
++    release_calls: usize,
++}
++
++fn diagnostic_failure(
++    failure: MockMemoryFailure,
++    diagnostic: &mut Option<Box<Diagnostic>>,
++) -> Result<(), RuntimeBackendFailureV1<Box<Diagnostic>>> {
++    if failure == MockMemoryFailure::None {
++        return Ok(());
++    }
++    let error = diagnostic.take().expect("scripted diagnostic");
++    match failure {
++        MockMemoryFailure::Rejected => Err(RuntimeBackendFailureV1::Rejected(error)),
++        MockMemoryFailure::Quiescent => Err(RuntimeBackendFailureV1::Quiescent(error)),
++        MockMemoryFailure::Terminal => Err(RuntimeBackendFailureV1::Terminal(error)),
++        MockMemoryFailure::Panic => std::panic::resume_unwind(error),
++        MockMemoryFailure::None => unreachable!(),
++    }
+ }
+ 
+ impl RuntimeBackendV1 for AllocationOnlyBackend {
+@@ -88,6 +114,11 @@ impl RuntimeBackendV1 for AllocationOnlyBackend {
+         &mut self,
+         allocation: u64,
+     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
++        self.release_calls += 1;
++        diagnostic_failure(
++            core::mem::take(&mut self.release_failure),
++            &mut self.release_diagnostic,
++        )?;
+         self.inner.release_allocation_v1(allocation).unwrap();
+         Ok(())
+     }
+@@ -100,19 +131,35 @@ impl RuntimeBackendV1 for AllocationOnlyBackend {
+     }
+     fn write_allocation_v1(
+         &mut self,
+-        _: u64,
+-        _: u64,
+-        _: &[u8],
++        allocation: u64,
++        offset: u64,
++        bytes: &[u8],
+     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+-        unreachable!()
++        self.write_calls += 1;
++        let failure = core::mem::take(&mut self.write_failure);
++        if failure == MockMemoryFailure::Rejected {
++            return diagnostic_failure(failure, &mut self.write_diagnostic);
++        }
++        let length = if failure == MockMemoryFailure::None {
++            bytes.len()
++        } else {
++            self.write_prefix.min(bytes.len())
++        };
++        self.inner
++            .write_allocation_v1(allocation, offset, &bytes[..length])
++            .unwrap();
++        diagnostic_failure(failure, &mut self.write_diagnostic)
+     }
+     fn read_allocation_v1(
+         &mut self,
+-        _: u64,
+-        _: u64,
+-        _: &mut [u8],
++        allocation: u64,
++        offset: u64,
++        bytes: &mut [u8],
+     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+-        unreachable!()
++        self.inner
++            .read_allocation_v1(allocation, offset, bytes)
++            .unwrap();
++        Ok(())
+     }
+     fn load_module_v1(
+         &mut self,
+diff --git a/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests/writer_tests.rs b/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests/writer_tests.rs
+new file mode 100644
+index 000000000..b8e5f1779
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests/writer_tests.rs
+@@ -0,0 +1,626 @@
++use super::*;
++use fe2o3_runtime_model::{ContextAllocationStateV1, ContextWriterKindV1, ContextWriterStateV1};
++
++type Context = RuntimeContextV1<AllocationOnlyBackend>;
++type Failure = MockMemoryFailure;
++
++fn fixture(
++    credits: bool,
++    writers: usize,
++) -> (Context, RuntimeAllocationIdV1, RuntimeAllocationIdV1) {
++    let mut context =
++        Context::open_with_version_journal_v1(AllocationOnlyBackend::default(), 2, writers)
++            .unwrap();
++    let device = context.devices()[0].id();
++    if credits {
++        context
++            .configure_allocation_admission_v1(device, 16, 2)
++            .unwrap();
++    }
++    let a = context
++        .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
++        .unwrap();
++    let b = context
++        .allocate(device, RuntimeMemoryKindV1::HostVisible, 8, 8)
++        .unwrap();
++    (context, a, b)
++}
++
++fn state(context: &Context, id: RuntimeAllocationIdV1) -> ContextAllocationStateV1 {
++    context
++        .versions
++        .as_ref()
++        .unwrap()
++        .journal_for_test()
++        .lookup_allocation(context.allocations[&id].journal.unwrap())
++        .unwrap()
++}
++
++fn diagnostic(
++    context: &mut Context,
++    failure: Failure,
++    release: bool,
++) -> (*const Diagnostic, Arc<AtomicUsize>) {
++    let drops = Arc::new(AtomicUsize::new(0));
++    let error = Box::new(Diagnostic {
++        drops: drops.clone(),
++    });
++    let pointer = &*error as *const Diagnostic;
++    if release {
++        context.backend.release_failure = failure;
++        context.backend.release_diagnostic = Some(error);
++    } else {
++        context.backend.write_failure = failure;
++        context.backend.write_diagnostic = Some(error);
++        context.backend.write_prefix = 2;
++    }
++    (pointer, drops)
++}
++
++fn assert_diagnostic(
++    result: std::thread::Result<Result<(), RuntimeErrorV1<Box<Diagnostic>>>>,
++    failure: Failure,
++    pointer: *const Diagnostic,
++    drops: &AtomicUsize,
++) {
++    assert_eq!(drops.load(Ordering::SeqCst), 0);
++    let error = match (failure, result) {
++        (Failure::Rejected, Ok(Err(RuntimeErrorV1::BackendRejected(error))))
++        | (Failure::Quiescent, Ok(Err(RuntimeErrorV1::BackendQuiescent(error))))
++        | (Failure::Terminal, Ok(Err(RuntimeErrorV1::BackendTerminal(error)))) => error,
++        (Failure::Panic, Err(payload)) => payload.downcast::<Diagnostic>().unwrap(),
++        _ => panic!("wrong failure class"),
++    };
++    assert_eq!(&*error as *const Diagnostic, pointer);
++    drop(error);
++    assert_eq!(drops.load(Ordering::SeqCst), 1);
++}
++
++fn make_unknown(context: &mut Context, allocation: RuntimeAllocationIdV1) {
++    let (pointer, drops) = diagnostic(context, Failure::Quiescent, false);
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        context.write_allocation(allocation, 2, &[0x5a; 4])
++    }));
++    assert_diagnostic(result, Failure::Quiescent, pointer, &drops);
++}
++
++#[test]
++fn synchronous_writes_burn_genuine_ids_and_epochs_but_rejections_preserve_lineage() {
++    let (mut context, a, _) = fixture(true, 1);
++    for (epoch, failure, lineage) in [
++        (1, Failure::None, 1),
++        (2, Failure::Rejected, 1),
++        (3, Failure::None, 3),
++    ] {
++        let next = context.next_identity;
++        let memory = context.backend.inner.memory.clone();
++        let credits = context
++            .allocation_admission_usage_v1(context.devices()[0].id())
++            .unwrap();
++        if failure == Failure::None {
++            context.write_allocation(a, 0, &[epoch as u8; 8]).unwrap();
++        } else {
++            let (pointer, drops) = diagnostic(&mut context, failure, false);
++            let result = catch_unwind(AssertUnwindSafe(|| {
++                context.write_allocation(a, 0, &[epoch as u8; 8])
++            }));
++            assert_diagnostic(result, failure, pointer, &drops);
++            assert_eq!(context.backend.inner.memory, memory);
++        }
++        let observed = state(&context, a);
++        assert_eq!(
++            (
++                observed.attempt_epoch,
++                observed.content_lineage,
++                observed.pending_writer
++            ),
++            (epoch, lineage, None)
++        );
++        assert_eq!(context.next_identity, next + 1);
++        assert_eq!(
++            context
++                .versions
++                .as_ref()
++                .unwrap()
++                .journal_for_test()
++                .registration_watermark(),
++            next
++        );
++        assert_eq!(context.version_journal_writer_records_v1(), Some(0));
++        assert_eq!(
++            context
++                .allocation_admission_usage_v1(context.devices()[0].id())
++                .unwrap(),
++            credits
++        );
++    }
++    assert_eq!(context.backend.write_calls, 3);
++    assert!(context.cleanup().is_complete());
++}
++
++#[test]
++fn invalid_write_range_foreign_id_and_exhausted_id_reject_before_writer_or_backend() {
++    let (mut context, a, _) = fixture(false, 1);
++    for (allocation, offset, bytes, expected) in [
++        (a, 0, &[][..], RuntimeValidationErrorV1::InvalidRange),
++        (a, 7, &[1, 2][..], RuntimeValidationErrorV1::InvalidRange),
++        (
++            a,
++            u64::MAX,
++            &[1][..],
++            RuntimeValidationErrorV1::InvalidRange,
++        ),
++        (
++            RuntimeAllocationIdV1 {
++                context_generation: a.context_generation + 1,
++                ..a
++            },
++            0,
++            &[1][..],
++            RuntimeValidationErrorV1::UnknownAllocation,
++        ),
++    ] {
++        let before = (
++            context.next_identity,
++            state(&context, a),
++            context.backend.inner.memory.clone(),
++        );
++        assert!(
++            matches!(context.write_allocation(allocation, offset, bytes), Err(RuntimeErrorV1::Validation(error)) if error == expected)
++        );
++        assert_eq!(
++            (
++                context.next_identity,
++                state(&context, a),
++                context.backend.inner.memory.clone()
++            ),
++            before
++        );
++    }
++    context.next_identity = u64::MAX;
++    let before = state(&context, a);
++    assert!(matches!(
++        context.write_allocation(a, 0, &[1]),
++        Err(RuntimeErrorV1::Validation(
++            RuntimeValidationErrorV1::Capacity
++        ))
++    ));
++    assert_eq!(context.next_identity, u64::MAX);
++    assert_eq!(state(&context, a), before);
++    assert_eq!(context.version_journal_writer_records_v1(), Some(0));
++    assert_eq!(context.backend.write_calls, 0);
++    assert!(!context.is_terminal());
++}
++
++#[test]
++fn ambiguous_partial_writes_preserve_payload_neighbors_and_unknown_ownership() {
++    for credits in [false, true] {
++        for failure in [Failure::Quiescent, Failure::Terminal, Failure::Panic] {
++            let (mut context, a, b) = fixture(credits, 2);
++            context.write_allocation(a, 0, &[0x31; 8]).unwrap();
++            context.write_allocation(b, 0, &[0x72; 8]).unwrap();
++            let a_record = context.allocations[&a];
++            let b_state = state(&context, b);
++            let next = context.next_identity;
++            let (pointer, drops) = diagnostic(&mut context, failure, false);
++            let result = catch_unwind(AssertUnwindSafe(|| {
++                context.write_allocation(a, 2, &[0x5a; 4])
++            }));
++            assert_diagnostic(result, failure, pointer, &drops);
++            let terminal = failure != Failure::Quiescent;
++            assert_eq!(context.is_terminal(), terminal);
++            assert_eq!(context.allocations[&a], a_record);
++            assert_eq!(
++                context.backend.inner.memory[&a_record.backend_allocation],
++                [0x31, 0x31, 0x5a, 0x5a, 0x31, 0x31, 0x31, 0x31]
++            );
++            assert_eq!(
++                context.backend.inner.memory[&context.allocations[&b].backend_allocation],
++                [0x72; 8]
++            );
++            assert_eq!(state(&context, b), b_state);
++            let observed = state(&context, a);
++            assert_eq!((observed.attempt_epoch, observed.content_lineage), (2, 1));
++            let writer = observed.pending_writer.unwrap();
++            assert_eq!(
++                (
++                    writer.key.context_generation,
++                    writer.key.local,
++                    writer.key.kind
++                ),
++                (
++                    context.context_generation,
++                    next,
++                    ContextWriterKindV1::Synchronous
++                )
++            );
++            assert_eq!(
++                context
++                    .versions
++                    .as_ref()
++                    .unwrap()
++                    .journal_for_test()
++                    .lookup_writer(writer),
++                Ok(ContextWriterStateV1::Unknown { member_count: 1 })
++            );
++            assert_eq!(context.version_journal_writer_records_v1(), Some(1));
++            let expected = if terminal {
++                RuntimeValidationErrorV1::ContextTerminal
++            } else {
++                RuntimeValidationErrorV1::ContextReserved
++            };
++            assert!(
++                matches!(context.write_allocation(a, 0, &[9]), Err(RuntimeErrorV1::Validation(error)) if error == expected)
++            );
++            assert_eq!(context.backend.write_calls, 3);
++            assert_eq!(context.next_identity, next + 1);
++            if credits {
++                let usage = context
++                    .allocation_admission_usage_v1(context.devices()[0].id())
++                    .unwrap()
++                    .unwrap();
++                assert_eq!(usage.retained_records, if terminal { 1 } else { 2 });
++                assert_eq!(usage.quarantined_records, usize::from(terminal));
++                assert_eq!(
++                    usage.used,
++                    RuntimeResourceVectorV1::ZERO
++                        .with(K::RequestedAllocationBytes, 16)
++                        .with(K::AllocationRecords, 2)
++                );
++            }
++            if terminal {
++                let report = context.cleanup();
++                assert!(!report.is_complete());
++                assert_eq!(report.writer_journal_records_v1(), 1);
++                assert_eq!(context.backend.release_calls, 0);
++            }
++        }
++    }
++}
++
++#[test]
++fn unknown_writer_capacity_returns_only_after_confirmed_disposal() {
++    let (mut context, a, b) = fixture(true, 1);
++    make_unknown(&mut context, a);
++    let before = (
++        context.next_identity,
++        state(&context, b),
++        context.backend.write_calls,
++    );
++    assert!(matches!(
++        context.write_allocation(b, 0, &[1]),
++        Err(RuntimeErrorV1::Validation(
++            RuntimeValidationErrorV1::Capacity
++        ))
++    ));
++    assert_eq!(
++        (
++            context.next_identity,
++            state(&context, b),
++            context.backend.write_calls
++        ),
++        before
++    );
++    context.release_allocation(a).unwrap();
++    assert_eq!(context.version_journal_writer_records_v1(), Some(0));
++    assert_eq!(
++        context
++            .version_journal_usage_v1()
++            .unwrap()
++            .allocation_records,
++        1
++    );
++    context.write_allocation(b, 0, &[3]).unwrap();
++    assert_eq!(state(&context, b).content_lineage, 1);
++    assert!(context.cleanup().is_complete());
++}
++
++#[test]
++fn unknown_disposal_retries_retain_exact_handles_and_credits_until_success() {
++    for credits in [false, true] {
++        for cleanup in [false, true] {
++            for failure in [Failure::Rejected, Failure::Quiescent] {
++                let (mut context, a, b) = fixture(credits, 1);
++                context.release_allocation(b).unwrap();
++                make_unknown(&mut context, a);
++                let record = context.allocations[&a];
++                let before = state(&context, a);
++                let usage = context
++                    .allocation_admission_usage_v1(context.devices()[0].id())
++                    .unwrap();
++                let (pointer, drops) = diagnostic(&mut context, failure, true);
++                if cleanup {
++                    let mut report = context.cleanup();
++                    assert!(!report.is_complete());
++                    assert_eq!(report.writer_journal_records_v1(), 1);
++                    assert_eq!(report.allocation_journal_records_v1(), 1);
++                    assert_eq!(report.failures.len(), 1);
++                    let error = match report.failures.pop().unwrap().failure {
++                        RuntimeBackendFailureV1::Rejected(error)
++                            if failure == Failure::Rejected =>
++                        {
++                            error
++                        }
++                        RuntimeBackendFailureV1::Quiescent(error)
++                            if failure == Failure::Quiescent =>
++                        {
++                            error
++                        }
++                        _ => panic!("wrong disposal failure"),
++                    };
++                    assert_eq!(&*error as *const Diagnostic, pointer);
++                    drop(error);
++                    assert_eq!(drops.load(Ordering::SeqCst), 1);
++                } else {
++                    let result = catch_unwind(AssertUnwindSafe(|| context.release_allocation(a)));
++                    assert_diagnostic(result, failure, pointer, &drops);
++                }
++                assert!(!context.is_terminal());
++                assert_eq!(context.allocations[&a], record);
++                assert_eq!(state(&context, a), before);
++                assert!(
++                    context
++                        .backend
++                        .inner
++                        .memory
++                        .contains_key(&record.backend_allocation)
++                );
++                assert_eq!(
++                    context
++                        .allocation_admission_usage_v1(context.devices()[0].id())
++                        .unwrap(),
++                    usage
++                );
++                if cleanup {
++                    assert!(context.cleanup().is_complete());
++                } else {
++                    context.release_allocation(a).unwrap();
++                }
++                assert!(
++                    !context
++                        .backend
++                        .inner
++                        .memory
++                        .contains_key(&record.backend_allocation)
++                );
++                assert_eq!(context.version_journal_writer_records_v1(), Some(0));
++                assert_eq!(
++                    context
++                        .version_journal_usage_v1()
++                        .unwrap()
++                        .allocation_records,
++                    0
++                );
++                assert_eq!(context.backend.release_calls, 3);
++                assert!(context.cleanup().is_complete());
++                assert_eq!(context.backend.release_calls, 3);
++                if credits {
++                    assert_eq!(
++                        context
++                            .allocation_admission_usage_v1(context.devices()[0].id())
++                            .unwrap()
++                            .unwrap()
++                            .used,
++                        RuntimeResourceVectorV1::ZERO
++                    );
++                }
++            }
++        }
++    }
++}
++
++#[test]
++fn terminal_or_panicking_unknown_disposal_retains_custody_and_blocks_retries() {
++    for credits in [false, true] {
++        for failure in [Failure::Terminal, Failure::Panic] {
++            let (mut context, a, _) = fixture(credits, 1);
++            make_unknown(&mut context, a);
++            let before = state(&context, a);
++            let memory = context.backend.inner.memory.clone();
++            let (pointer, drops) = diagnostic(&mut context, failure, true);
++            let result = catch_unwind(AssertUnwindSafe(|| context.release_allocation(a)));
++            assert_diagnostic(result, failure, pointer, &drops);
++            assert!(context.is_terminal());
++            assert_eq!(state(&context, a), before);
++            assert_eq!(context.backend.inner.memory, memory);
++            assert!(matches!(
++                context.release_allocation(a),
++                Err(RuntimeErrorV1::Validation(
++                    RuntimeValidationErrorV1::ContextTerminal
++                ))
++            ));
++            assert_eq!(context.cleanup().writer_journal_records_v1(), 1);
++            assert_eq!(context.backend.release_calls, 1);
++            if credits {
++                let usage = context
++                    .allocation_admission_usage_v1(context.devices()[0].id())
++                    .unwrap()
++                    .unwrap();
++                assert_eq!((usage.retained_records, usage.quarantined_records), (1, 1));
++            }
++        }
++    }
++}
++
++#[test]
++fn pending_host_write_blocks_its_disposal_but_cleanup_continues_unrelated_allocations() {
++    let (mut context, a, b) = fixture(true, 1);
++    let record = context.allocations[&a];
++    let _ticket = context
++        .begin_journal_host_write_v1(a, &record)
++        .unwrap()
++        .unwrap();
++    assert!(matches!(
++        context.release_allocation(a),
++        Err(RuntimeErrorV1::Validation(
++            RuntimeValidationErrorV1::ContextReserved
++        ))
++    ));
++    assert_eq!(context.backend.release_calls, 0);
++    let report = context.cleanup();
++    assert!(!report.is_complete());
++    assert!(!context.is_terminal());
++    assert_eq!(report.writer_journal_records_v1(), 1);
++    assert_eq!(report.allocation_journal_records_v1(), 1);
++    assert!(context.allocations.contains_key(&a));
++    assert!(!context.allocations.contains_key(&b));
++    assert_eq!(context.backend.release_calls, 1);
++}
++
++#[test]
++fn disabled_journal_preserves_write_ids_and_legacy_panic_behavior() {
++    for failure in [
++        Failure::None,
++        Failure::Rejected,
++        Failure::Quiescent,
++        Failure::Terminal,
++        Failure::Panic,
++    ] {
++        let mut context = Context::open(AllocationOnlyBackend::default()).unwrap();
++        let device = context.devices()[0].id();
++        let a = context
++            .allocate(device, RuntimeMemoryKindV1::HostVisible, 8, 8)
++            .unwrap();
++        let next = context.next_identity;
++        if failure == Failure::None {
++            context.write_allocation(a, 0, &[1; 8]).unwrap();
++        } else {
++            let (pointer, drops) = diagnostic(&mut context, failure, false);
++            let result = catch_unwind(AssertUnwindSafe(|| context.write_allocation(a, 0, &[1; 8])));
++            assert_diagnostic(result, failure, pointer, &drops);
++        }
++        assert_eq!(context.next_identity, next);
++        assert_eq!(context.version_journal_writer_records_v1(), None);
++        assert_eq!(context.is_terminal(), failure == Failure::Terminal);
++    }
++}
++
++#[test]
++fn unsupported_unknown_rosters_keep_all_members_while_cleanup_releases_unrelated_ids() {
++    for (kind, count) in [
++        (ContextWriterKindV1::Synchronous, 2),
++        (ContextWriterKindV1::Submission, 1),
++    ] {
++        let mut context =
++            Context::open_with_version_journal_v1(AllocationOnlyBackend::default(), 3, 1).unwrap();
++        let device = context.devices()[0].id();
++        context
++            .configure_allocation_admission_v1(device, 24, 3)
++            .unwrap();
++        let ids: Vec<_> = (0..3)
++            .map(|_| {
++                context
++                    .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
++                    .unwrap()
++            })
++            .collect();
++        let writer = context.retain_test_writer_v1(&ids[..count], kind);
++        let expected: Vec<_> = ids[..count]
++            .iter()
++            .map(|id| (*id, context.allocations[id], state(&context, *id)))
++            .collect();
++        let next = context.next_identity;
++        let memory = context.backend.inner.memory.clone();
++        let credits = context.allocation_admission_usage_v1(device).unwrap();
++        for id in &ids[..count] {
++            assert!(matches!(
++                context.release_allocation(*id),
++                Err(RuntimeErrorV1::Validation(
++                    RuntimeValidationErrorV1::Unsupported
++                ))
++            ));
++        }
++        assert_eq!(context.backend.release_calls, 0);
++        assert_eq!(context.backend.inner.memory, memory);
++        assert_eq!(
++            context.allocation_admission_usage_v1(device).unwrap(),
++            credits
++        );
++        for _ in 0..2 {
++            let report = context.cleanup();
++            assert!(!report.is_complete());
++            assert!(report.failures.is_empty());
++            assert!(!context.is_terminal());
++            assert_eq!(report.writer_journal_records_v1(), 1);
++            assert_eq!(report.allocation_journal_records_v1(), count);
++            assert_eq!(context.backend.release_calls, 3 - count);
++            assert_eq!(context.next_identity, next);
++            assert_eq!(
++                context
++                    .versions
++                    .as_ref()
++                    .unwrap()
++                    .journal_for_test()
++                    .lookup_writer(writer),
++                Ok(ContextWriterStateV1::Unknown {
++                    member_count: count
++                })
++            );
++            for (id, record, before) in &expected {
++                assert_eq!(context.allocations[id], *record);
++                assert_eq!(state(&context, *id), *before);
++                assert_eq!(
++                    context.backend.inner.memory[&record.backend_allocation],
++                    memory[&record.backend_allocation]
++                );
++            }
++            let usage = context
++                .allocation_admission_usage_v1(device)
++                .unwrap()
++                .unwrap();
++            assert_eq!(usage.retained_records, count);
++            assert_eq!(
++                usage.used,
++                RuntimeResourceVectorV1::ZERO
++                    .with(K::RequestedAllocationBytes, 8 * count as u64)
++                    .with(K::AllocationRecords, count as u64)
++            );
++        }
++    }
++}
++
++#[test]
++fn disabled_journal_with_inconsistent_allocation_reference_seals_before_backend_write() {
++    let (tracked, tracked_a, _) = fixture(false, 1);
++    let mut context = Context::open(AllocationOnlyBackend::default()).unwrap();
++    let device = context.devices()[0].id();
++    let a = context
++        .allocate(device, RuntimeMemoryKindV1::HostVisible, 8, 8)
++        .unwrap();
++    context.allocations.get_mut(&a).unwrap().journal = tracked.allocations[&tracked_a].journal;
++    assert!(matches!(
++        context.write_allocation(a, 0, &[1]),
++        Err(RuntimeErrorV1::Validation(
++            RuntimeValidationErrorV1::InvalidBackendDescription
++        ))
++    ));
++    assert!(context.is_terminal());
++    assert_eq!(context.backend.write_calls, 0);
++}
++
++#[test]
++fn empty_unknown_writer_prevents_false_complete_cleanup_or_backend_return() {
++    let (mut context, _, _) = fixture(true, 1);
++    let writer = context.retain_test_writer_v1(&[], ContextWriterKindV1::Submission);
++    let report = context.cleanup();
++    assert!(!report.is_complete());
++    assert!(!context.is_terminal());
++    assert_eq!(report.allocation_journal_records_v1(), 0);
++    assert_eq!(report.allocation_credit_records_v1(), 0);
++    assert_eq!(report.writer_journal_records_v1(), 1);
++    assert_eq!(context.backend.release_calls, 2);
++    assert_eq!(
++        context
++            .versions
++            .as_ref()
++            .unwrap()
++            .journal_for_test()
++            .lookup_writer(writer),
++        Ok(ContextWriterStateV1::Unknown { member_count: 0 })
++    );
++    let Err(failure) = context.shutdown() else {
++        panic!("retained writer permitted backend return");
++    };
++    assert_eq!(failure.report.writer_journal_records_v1(), 1);
++    assert_eq!(failure.context.backend.release_calls, 2);
++}
+diff --git a/crates/fe2o3-runtime/src/context/versions.rs b/crates/fe2o3-runtime/src/context/versions.rs
+index 980376936..03a07b837 100644
+--- a/crates/fe2o3-runtime/src/context/versions.rs
++++ b/crates/fe2o3-runtime/src/context/versions.rs
+@@ -1,4 +1,4 @@
+-//! Construction-only allocation metadata. No lineage or reuse authority yet.
++//! Opt-in allocation and host-write metadata. No lineage or reuse authority yet.
+ 
+ use super::*;
+ use fe2o3_runtime_model::{
+@@ -6,6 +6,8 @@ use fe2o3_runtime_model::{
+     ContextJournalDeviceKeyV1, ContextVersionJournalErrorV1, ContextVersionJournalV1,
+ };
+ 
++mod writers;
++
+ /// Bounded journal metadata counts, not residency, initializedness or data versions.
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+ pub struct RuntimeContextJournalUsageV1 {
+@@ -56,6 +58,14 @@ pub(super) struct ContextVersionsV1 {
+ // Dropping this move-only ticket never removes its Context-owned record.
+ pub(super) struct AllocationEnrollmentV1(ContextAllocationReferenceV1);
+ 
++// A move-only preflight, consumed only after the exact backend disposal succeeds.
++pub(super) struct AllocationDisposalV1 {
++    id: RuntimeAllocationIdV1,
++    record: AllocationRecordV1,
++    member: fe2o3_runtime_model::ContextAllocationWriteV1,
++    writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
++}
++
+ impl AllocationEnrollmentV1 {
+     pub(super) fn reference(&self) -> ContextAllocationReferenceV1 {
+         self.0
+@@ -210,10 +220,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+     /// Each capacity must be in 1..=1_048_576; invalid bounds reject before
+     /// enumeration. Other failures return the possibly enumeration-entered backend.
+     ///
+-    /// This development profile tracks allocation custody only. It exposes no
+-    /// content lineage, input lease or reuse permission: writers, backend aliases,
+-    /// ordered mutations and Unknown recovery are not yet integrated. Ordinary
+-    /// writes/launches remain unrestricted; the default `open` path is unchanged.
++    /// This development profile tracks allocation custody and synchronous host
++    /// writes. Writer capacity and unresolved writes gate further host writes.
++    /// Launches, copies and backend aliases remain untracked, so no content
++    /// lineage, input lease or reuse permission is exposed. Unknown host writes
++    /// permit only confirmed allocation disposal, not content recovery.
++    /// The default `open` path is unchanged.
+     pub fn open_with_version_journal_v1(
+         backend: B,
+         allocation_capacity: usize,
+@@ -226,6 +238,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         self.versions.as_ref().map(ContextVersionsV1::usage)
+     }
+ 
++    /// Retained writer metadata, not completion or resource-reuse authority.
++    pub fn version_journal_writer_records_v1(&self) -> Option<usize> {
++        self.versions
++            .as_ref()
++            .map(ContextVersionsV1::retained_writers)
++    }
++
+     pub(super) fn preflight_journal_capacity_v1(
+         &self,
+         count: usize,
+@@ -298,34 +317,33 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         });
+     }
+ 
+-    pub(super) fn validate_journal_allocation_v1(
+-        &mut self,
+-        id: RuntimeAllocationIdV1,
+-        record: &AllocationRecordV1,
+-    ) -> Result<(), RuntimeValidationErrorV1> {
+-        let result = match &self.versions {
+-            Some(versions) => versions
+-                .validate_live(id, record)
+-                .and_then(|reference| versions.validate_retirement(&[reference])),
+-            None if record.journal.is_none() => Ok(()),
+-            None => Err(ContextVersionJournalErrorV1::InvalidState),
+-        };
+-        self.journal_result_v1(result)
+-    }
+-
+     pub(super) fn finish_allocation_disposal_v1(
+         &mut self,
+         id: RuntimeAllocationIdV1,
+         record: AllocationRecordV1,
++        plan: Option<AllocationDisposalV1>,
+     ) {
+         self.guard_journal_unwind_v1(|context| {
++            let exact = match (&plan, &context.versions) {
++                (Some(plan), Some(_)) => {
++                    plan.id == id
++                        && plan.record == record
++                        && context.allocations.get(&id) == Some(&record)
++                }
++                (None, None) => record.journal.is_none(),
++                _ => false,
++            };
++            if !exact {
++                context.terminal = true;
++                panic!("allocation disposal plan identity invariant");
++            }
+             context.dispose_allocation_credits_v1(id);
+-            if let Some(reference) = record.journal {
++            if let Some(plan) = plan {
+                 let result = context
+                     .versions
+                     .as_mut()
+                     .expect("configured journal")
+-                    .retire(&[reference]);
++                    .retire_after_disposal(plan);
+                 context
+                     .journal_result_v1(result)
+                     .expect("allocation journal disposal invariant");
+diff --git a/crates/fe2o3-runtime/src/context/versions/writers.rs b/crates/fe2o3-runtime/src/context/versions/writers.rs
+new file mode 100644
+index 000000000..a809ae356
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/context/versions/writers.rs
+@@ -0,0 +1,335 @@
++use super::*;
++use fe2o3_runtime_model::{
++    ContextAllocationWriteV1, ContextWriterDisposalEvidenceV1, ContextWriterKeyV1,
++    ContextWriterKindV1, ContextWriterNoEffectEvidenceV1, ContextWriterReferenceV1,
++    ContextWriterStateV1, ContextWriterSuccessEvidenceV1,
++};
++
++// These tickets never escape Context. Dropping one does not abort its writer.
++pub(in crate::context) struct HostWriteTicketV1 {
++    id: RuntimeAllocationIdV1,
++    writer: ContextWriterReferenceV1,
++    member: ContextAllocationWriteV1,
++}
++
++enum HostWriteOutcomeV1 {
++    Success,
++    NoEffect,
++    Unknown,
++}
++
++impl ContextVersionsV1 {
++    fn retained_writer(
++        &self,
++        writer: ContextWriterReferenceV1,
++    ) -> Result<ContextWriterStateV1, ContextVersionJournalErrorV1> {
++        let state = self.journal.lookup_writer(writer)?;
++        match state {
++            ContextWriterStateV1::Pending { member_count }
++            | ContextWriterStateV1::Unknown { member_count }
++                if member_count > 0 && member_count <= self.journal.allocation_capacity() =>
++            {
++                Ok(state)
++            }
++            _ => Err(ContextVersionJournalErrorV1::InvalidState),
++        }
++    }
++
++    pub(in crate::context) fn retained_writers(&self) -> usize {
++        self.journal.writer_capacity() - self.journal.remaining_writer_slots()
++    }
++
++    #[cfg(test)]
++    pub(in crate::context) fn journal_for_test(&self) -> &ContextVersionJournalV1 {
++        &self.journal
++    }
++
++    fn whole_allocation(
++        &self,
++        id: RuntimeAllocationIdV1,
++        record: &AllocationRecordV1,
++    ) -> Result<ContextAllocationWriteV1, ContextVersionJournalErrorV1> {
++        let allocation = self.validate_live(id, record)?;
++        let projection = enrollment(id, record.device, record.byte_len);
++        Ok(ContextAllocationWriteV1 {
++            allocation,
++            device: projection.device,
++            byte_extent: projection.byte_extent,
++        })
++    }
++
++    pub(super) fn retire_after_disposal(
++        &mut self,
++        plan: AllocationDisposalV1,
++    ) -> Result<(), ContextVersionJournalErrorV1> {
++        if self.whole_allocation(plan.id, &plan.record)? != plan.member {
++            return Err(ContextVersionJournalErrorV1::InvalidAllocationReference);
++        }
++        if let Some(writer) = plan.writer {
++            self.journal.dispose_unknown(
++                writer,
++                &ContextWriterDisposalEvidenceV1 {
++                    writer,
++                    allocations: &[plan.member],
++                },
++            )?;
++            self.phases[plan.member.allocation.slot] = None;
++        } else {
++            self.retire(&[plan.member.allocation])?;
++        }
++        Ok(())
++    }
++}
++
++impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
++    #[cfg(test)]
++    pub(in crate::context) fn retain_test_writer_v1(
++        &mut self,
++        ids: &[RuntimeAllocationIdV1],
++        kind: ContextWriterKindV1,
++    ) -> ContextWriterReferenceV1 {
++        // Exercise unsupported model states with genuine Context identities;
++        // this supplies no backend completion or disposal premise.
++        let members: Vec<_> = ids
++            .iter()
++            .map(|id| {
++                self.versions
++                    .as_ref()
++                    .unwrap()
++                    .whole_allocation(*id, &self.allocations[id])
++                    .unwrap()
++            })
++            .collect();
++        let key = ContextWriterKeyV1 {
++            context_generation: self.context_generation,
++            local: self.next_id().unwrap(),
++            kind,
++        };
++        let journal = &mut self.versions.as_mut().unwrap().journal;
++        let writer = journal.register_writer(key).unwrap();
++        journal.begin_write(writer, &members).unwrap();
++        journal.mark_unknown(writer).unwrap();
++        writer
++    }
++
++    pub(in crate::context) fn begin_journal_host_write_v1(
++        &mut self,
++        id: RuntimeAllocationIdV1,
++        record: &AllocationRecordV1,
++    ) -> Result<Option<HostWriteTicketV1>, RuntimeValidationErrorV1> {
++        self.guard_journal_unwind_v1(|context| {
++            let Some(versions) = context.versions.as_ref() else {
++                return if record.journal.is_none() {
++                    Ok(None)
++                } else {
++                    context.journal_result_v1(Err(ContextVersionJournalErrorV1::InvalidState))
++                };
++            };
++            let result = versions.whole_allocation(id, record).and_then(|member| {
++                versions
++                    .journal
++                    .lookup_allocation(member.allocation)
++                    .map(|state| (member, state))
++            });
++            let (member, state) = context.journal_result_v1(result)?;
++            if let Some(writer) = state.pending_writer {
++                let result = context
++                    .versions
++                    .as_ref()
++                    .expect("configured journal")
++                    .retained_writer(writer);
++                context.journal_result_v1(result)?;
++                return Err(RuntimeValidationErrorV1::ContextReserved);
++            }
++            if state.attempt_epoch == u64::MAX
++                || context
++                    .versions
++                    .as_ref()
++                    .expect("configured journal")
++                    .journal
++                    .remaining_writer_slots()
++                    == 0
++            {
++                return Err(RuntimeValidationErrorV1::Capacity);
++            }
++            let key = ContextWriterKeyV1 {
++                context_generation: context.context_generation,
++                local: context.next_id()?,
++                kind: ContextWriterKindV1::Synchronous,
++            };
++            let result = context
++                .versions
++                .as_mut()
++                .expect("configured journal")
++                .journal
++                .register_writer(key);
++            let writer = context.journal_result_v1(result)?;
++            let result = context
++                .versions
++                .as_mut()
++                .expect("configured journal")
++                .journal
++                .begin_write(writer, &[member]);
++            if result.is_err() {
++                let abort = context
++                    .versions
++                    .as_mut()
++                    .expect("configured journal")
++                    .journal
++                    .abort_reserved(writer);
++                context.journal_result_v1(abort)?;
++            }
++            context.journal_result_v1(result)?;
++            Ok(Some(HostWriteTicketV1 { id, writer, member }))
++        })
++    }
++
++    // Secondary bookkeeping failure seals Context but must not replace an
++    // original backend diagnostic or panic payload, including during Drop.
++    fn finish_host_write_v1(
++        &mut self,
++        ticket: HostWriteTicketV1,
++        outcome: HostWriteOutcomeV1,
++    ) -> Result<(), RuntimeValidationErrorV1> {
++        let settled = catch_unwind(AssertUnwindSafe(|| {
++            let journal = &mut self.versions.as_mut().expect("configured journal").journal;
++            if journal
++                .lookup_allocation(ticket.member.allocation)?
++                .pending_writer
++                != Some(ticket.writer)
++            {
++                return Err(ContextVersionJournalErrorV1::InvalidState);
++            }
++            match outcome {
++                HostWriteOutcomeV1::Success => journal.settle_success(
++                    ticket.writer,
++                    &ContextWriterSuccessEvidenceV1 {
++                        writer: ticket.writer,
++                    },
++                ),
++                HostWriteOutcomeV1::NoEffect => journal.settle_no_effect(
++                    ticket.writer,
++                    &ContextWriterNoEffectEvidenceV1 {
++                        writer: ticket.writer,
++                    },
++                ),
++                HostWriteOutcomeV1::Unknown => journal.mark_unknown(ticket.writer),
++            }
++        }));
++        let result = match settled {
++            Ok(result) => self.journal_result_v1(result),
++            Err(payload) => {
++                self.terminal = true;
++                core::mem::forget(payload);
++                Err(RuntimeValidationErrorV1::InvalidBackendDescription)
++            }
++        };
++        if self.terminal
++            && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
++                self.allocation_admission.quarantine(ticket.id);
++            }))
++        {
++            core::mem::forget(payload);
++        }
++        result
++    }
++
++    pub(in crate::context) fn write_with_journal_v1(
++        &mut self,
++        ticket: HostWriteTicketV1,
++        record: &AllocationRecordV1,
++        byte_offset: u64,
++        bytes: &[u8],
++    ) -> Result<(), RuntimeErrorV1<B::Error>> {
++        let outcome = catch_unwind(AssertUnwindSafe(|| {
++            self.backend
++                .write_allocation_v1(record.backend_allocation, byte_offset, bytes)
++        }));
++        match outcome {
++            Ok(result) => {
++                if matches!(&result, Err(RuntimeBackendFailureV1::Terminal(_))) {
++                    self.terminal = true;
++                }
++                let disposition = match &result {
++                    Ok(()) => HostWriteOutcomeV1::Success,
++                    // A semantic SPI premise at this exact synchronous boundary,
++                    // not transferable verifier, lease or reuse authority.
++                    Err(RuntimeBackendFailureV1::Rejected(_)) => HostWriteOutcomeV1::NoEffect,
++                    Err(_) => HostWriteOutcomeV1::Unknown,
++                };
++                let settlement = self.finish_host_write_v1(ticket, disposition);
++                if result.is_ok() {
++                    settlement?;
++                }
++                self.backend_result(result)
++            }
++            Err(payload) => {
++                self.terminal = true;
++                let _ = self.finish_host_write_v1(ticket, HostWriteOutcomeV1::Unknown);
++                std::panic::resume_unwind(payload);
++            }
++        }
++    }
++
++    pub(in crate::context) fn prepare_journal_disposal_v1(
++        &mut self,
++        id: RuntimeAllocationIdV1,
++        record: &AllocationRecordV1,
++    ) -> Result<Option<AllocationDisposalV1>, RuntimeValidationErrorV1> {
++        self.guard_journal_unwind_v1(|context| {
++            let Some(versions) = context.versions.as_ref() else {
++                return if record.journal.is_none() {
++                    Ok(None)
++                } else {
++                    context.journal_result_v1(Err(ContextVersionJournalErrorV1::InvalidState))
++                };
++            };
++            let result = versions.whole_allocation(id, record).and_then(|member| {
++                let state = versions.journal.lookup_allocation(member.allocation)?;
++                let writer = state
++                    .pending_writer
++                    .map(|writer| {
++                        versions
++                            .retained_writer(writer)
++                            .map(|state| (writer, state))
++                    })
++                    .transpose()?;
++                Ok((member, writer))
++            });
++            let (member, pending) = context.journal_result_v1(result)?;
++            let versions = context.versions.as_ref().expect("configured journal");
++            let writer = match pending {
++                None => {
++                    let result = versions.validate_retirement(&[member.allocation]);
++                    context.journal_result_v1(result)?;
++                    None
++                }
++                Some((_, ContextWriterStateV1::Pending { .. })) => {
++                    return Err(RuntimeValidationErrorV1::ContextReserved);
++                }
++                Some((writer, ContextWriterStateV1::Unknown { member_count: 1 }))
++                    if writer.key.kind == ContextWriterKindV1::Synchronous =>
++                {
++                    let result = versions
++                        .journal
++                        .validate_unknown_disposal(writer, &[member]);
++                    context.journal_result_v1(result)?;
++                    Some(writer)
++                }
++                Some((_, ContextWriterStateV1::Unknown { .. })) => {
++                    return Err(RuntimeValidationErrorV1::Unsupported);
++                }
++                Some((_, ContextWriterStateV1::Reserved)) => {
++                    return context
++                        .journal_result_v1(Err(ContextVersionJournalErrorV1::InvalidState));
++                }
++            };
++            Ok(Some(AllocationDisposalV1 {
++                id,
++                record: *record,
++                member,
++                writer,
++            }))
++        })
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_backend.rs b/crates/fe2o3-runtime/src/kfd_backend.rs
+index c7d1fa74d..564a09fb3 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend.rs
+@@ -6080,12 +6080,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
+         } else {
+             let destination = Arc::make_mut(&mut record.bytes)
+                 .get_mut(offset..end)
+-                .ok_or_else(|| {
+-                    Self::rejected(
+-                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+-                        "allocation write is out of bounds",
+-                    )
+-                })?;
++                .expect("preflighted host-write range remains valid after upload");
+             destination.copy_from_slice(bytes);
+             record.content_sha256 = None;
+         }
+@@ -10152,9 +10147,8 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
+                         self.terminal_error(format!("XGMI write read-modify: {error}"))
+                     })?,
+                 _ => {
+-                    return Err(Self::rejected(
+-                        KfdRuntimeBackendErrorKindV1::Busy,
+-                        "XGMI allocation authority unavailable",
++                    return Err(self.terminal_error(
++                        "XGMI allocation authority unavailable after successful unmap",
+                     ));
+                 }
+             }
+@@ -10213,10 +10207,9 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
+             .expect("validated XGMI allocation remains indexed");
+         let device = record.device;
+         let Some(XgmiAllocationAuthorityV1::Unmapped(lease)) = record.authority.as_ref() else {
+-            return Err(Self::rejected(
+-                KfdRuntimeBackendErrorKindV1::Busy,
+-                "XGMI allocation authority unavailable",
+-            ));
++            return Err(
++                self.terminal_error("XGMI allocation authority unavailable after successful unmap")
++            );
+         };
+         let bytes = self.sessions[device]
+             .read_gfx942_xgmi_device_memory(lease)
+@@ -19854,7 +19847,8 @@ mod tests {
+     fn scripted_sdma_chunk_n_upload_and_zero_failures_mark_device_shadow_dirty() {
+         let first = GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1;
+         let byte_len = usize::try_from(first).unwrap() + 1;
+-        for zero in [false, true] {
++        for operation in 0..3 {
++            let zero = operation == 0;
+             let mut steps = scripted_sync_copy_steps_v1(
+                 Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                 0,
+@@ -19880,6 +19874,8 @@ mod tests {
+                 .fill(if zero { 0xa5 } else { 0 });
+             let result = if zero {
+                 backend.zero_sdma_range_v1(device, byte_len as u64)
++            } else if operation == 2 {
++                backend.write_allocation_v1(device, 0, &vec![0x5a; byte_len])
+             } else {
+                 backend.upload_sdma_range_v1(device, 0, &vec![0x5a; byte_len])
+             };
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/tests/host_write_classification_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/tests/host_write_classification_tests.rs
+new file mode 100644
+index 000000000..fb87756e4
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/tests/host_write_classification_tests.rs
+@@ -0,0 +1,199 @@
++use super::*;
++use crate::kfd_backend::tests::sdma_allocation_tests::{capacity, reject};
++
++#[test]
++fn post_effect_classification_preserves_exact_diagnostic_storage() {
++    for class in 0..3 {
++        let error = KfdRuntimeBackendErrorV1::new(
++            KfdRuntimeBackendErrorKindV1::Capacity,
++            "unique post-effect diagnostic",
++        );
++        let pointer = error.detail().as_ptr();
++        let failure = match class {
++            0 => RuntimeBackendFailureV1::Rejected(error),
++            1 => RuntimeBackendFailureV1::Quiescent(error),
++            _ => RuntimeBackendFailureV1::Terminal(error),
++        };
++        let error = match KfdRuntimeBackendV1::after_possible_host_mutation(failure) {
++            RuntimeBackendFailureV1::Quiescent(error) if class < 2 => error,
++            RuntimeBackendFailureV1::Terminal(error) if class == 2 => error,
++            _ => panic!("post-effect failure was incorrectly classified"),
++        };
++        assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Capacity);
++        assert_eq!(error.detail(), "unique post-effect diagnostic");
++        assert_eq!(error.detail().as_ptr(), pointer);
++    }
++}
++
++#[test]
++fn rejected_host_write_range_preserves_bytes_owners_and_driver_state() {
++    let (backend, _, host, device) = fixture(8, []);
++    let mut backend = ManuallyDrop::new(backend);
++    let before = snapshot(&backend, host, device);
++    for allocation in [host, device] {
++        for offset in [7, u64::MAX] {
++            assert!(matches!(
++                backend.write_allocation_v1(allocation, offset, &[1, 2]),
++                Err(RuntimeBackendFailureV1::Rejected(_))
++            ));
++            assert_eq!(snapshot(&backend, host, device), before);
++        }
++    }
++    let driver = backend.scripted_sdma.as_ref().unwrap();
++    assert_eq!(
++        (
++            driver.remaining_steps(),
++            driver.live_owner_count(),
++            driver.unexpected_drops()
++        ),
++        (0, 2, 0)
++    );
++    discard_scripted_fixture(backend);
++}
++
++#[test]
++fn public_host_write_after_reconciliation_never_promotes_capacity_to_no_effect() {
++    for reconciled in [false, true] {
++        let mut steps = Vec::new();
++        if reconciled {
++            steps.extend(scripted_sync_copy_steps_v1(
++                Gfx942PersistentSdmaDirectionV1::DeviceToHost,
++                0,
++                8,
++                ScriptedFailureModeV1::Success,
++            ));
++        }
++        steps.push(reject(
++            RuntimeMemoryKindV1::HostVisible,
++            if reconciled { 4 } else { 8 },
++            false,
++        ));
++        let (backend, _, host, device) = fixture(8, steps);
++        let mut backend = ManuallyDrop::new(backend);
++        let record = backend.allocations.get_mut(&device).unwrap();
++        let KfdRuntimeSdmaStorageV1::Device(owner) = &mut record.sdma_storage else {
++            unreachable!()
++        };
++        owner.scripted_bytes_mut().unwrap().fill(0xa5);
++        record.sdma_shadow_dirty = true;
++        let prior_digest = Sha256::digest(&*record.bytes).into();
++        record.content_sha256 = Some(prior_digest);
++        record.last_full_host_write = Some((Arc::clone(&record.bytes), prior_digest));
++        let before = snapshot(&backend, host, device);
++        let Err(RuntimeBackendFailureV1::Quiescent(error)) =
++            backend.write_allocation_v1(device, 2, &[0x5a; 4])
++        else {
++            panic!("post-effect capacity must be quiescent");
++        };
++        assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Capacity);
++        assert_eq!(
++            error.detail(),
++            format!(
++                "KFD {} staging: {}",
++                if reconciled { "upload" } else { "download" },
++                capacity(RuntimeMemoryKindV1::HostVisible, false).detail
++            )
++        );
++        let after = snapshot(&backend, host, device);
++        assert_eq!(after.device, before.device);
++        assert_eq!(
++            (
++                after.host,
++                after.host_shadow,
++                after.host_shadow_address,
++                after.host_digest
++            ),
++            (
++                before.host,
++                before.host_shadow,
++                before.host_shadow_address,
++                before.host_digest
++            )
++        );
++        assert_eq!(
++            (
++                after.next_handle,
++                after.staged_bytes,
++                after.allocations,
++                after.events
++            ),
++            (
++                before.next_handle,
++                before.staged_bytes,
++                before.allocations,
++                before.events
++            )
++        );
++        let record = &backend.allocations[&device];
++        assert_eq!(record.sdma_shadow_dirty, !reconciled);
++        assert!(record.content_sha256.is_none());
++        assert!(record.last_full_host_write.is_none());
++        assert_eq!(
++            &*record.bytes,
++            if reconciled {
++                &[0xa5; 8]
++            } else {
++                &*before.device_shadow
++            }
++        );
++        assert!(!backend.terminal);
++        assert!(backend.terminal_sdma_custody.is_none());
++        let driver = backend.scripted_sdma.as_ref().unwrap();
++        assert_eq!(
++            (
++                driver.remaining_steps(),
++                driver.live_owner_count(),
++                driver.unexpected_drops()
++            ),
++            (0, 2, 0)
++        );
++        discard_scripted_fixture(backend);
++    }
++}
++
++#[test]
++fn native_host_write_and_xgmi_post_effect_branches_cannot_report_rejected() {
++    // Wiring coverage only: no native XGMI session or disposal authority is forged.
++    let source = include_str!("../../kfd_backend.rs");
++    let ordinary = source
++        .split("impl RuntimeBackendV1 for KfdRuntimeBackendV1 {")
++        .nth(1)
++        .unwrap()
++        .split("    fn write_allocation_v1(")
++        .nth(1)
++        .unwrap()
++        .split("    fn read_allocation_v1(")
++        .next()
++        .unwrap();
++    let post_effect = ordinary
++        .split("self.prepare_compute_caches_for_host_write_v1")
++        .nth(1)
++        .unwrap();
++    assert!(!post_effect.contains("Self::rejected("));
++    assert_eq!(
++        post_effect
++            .matches(".map_err(Self::after_possible_host_mutation)")
++            .count(),
++        5
++    );
++    assert!(post_effect.contains("preflighted host-write range remains valid after upload"));
++    let xgmi = source
++        .split("impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {")
++        .nth(1)
++        .unwrap();
++    for (start, end) in [
++        ("    fn write_allocation_v1(", "    fn read_allocation_v1("),
++        ("    fn read_allocation_v1(", "    fn load_module_v1("),
++    ] {
++        let body = xgmi.split(start).nth(1).unwrap().split(end).next().unwrap();
++        let post_unmap = body
++            .split("self.ensure_allocation_unmapped(allocation)?;")
++            .nth(1)
++            .unwrap();
++        assert!(!post_unmap.contains("Self::rejected("));
++        assert!(post_unmap.contains("self.terminal_error("));
++        assert!(
++            post_unmap.contains("XGMI allocation authority unavailable after successful unmap")
++        );
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_write_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_write_tests.rs
+index 5d8d95c68..0801a8c81 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_write_tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/tests/sdma_host_write_tests.rs
+@@ -1,4 +1,7 @@
+ use super::*;
++
++#[path = "host_write_classification_tests.rs"]
++mod classification;
+ use crate::kfd_backend::kfd_backend_sdma_seam::ScriptedTerminalCustodyV1;
+ use std::mem::ManuallyDrop;
+ use std::panic::{AssertUnwindSafe, catch_unwind};
+diff --git a/docs/runtime-context-version-journal-allocation-v1.md b/docs/runtime-context-version-journal-allocation-v1.md
+index 6701f522d..da7488fbd 100644
+--- a/docs/runtime-context-version-journal-allocation-v1.md
++++ b/docs/runtime-context-version-journal-allocation-v1.md
+@@ -1,10 +1,12 @@
+ # Context Journal Allocation Foundation
+ 
+-This V5 development increment joins the bounded journal model to actual Context
++The V5 development increment joins the bounded journal model to actual Context
+ allocation lifecycles. It does not complete V5/V6, A1/A2, #182 or HIP/HSA parity.
+ Accepted checkpoints remain Native R125 CPU/test, Admission R118B C1-C3 and
+ Resources R116/V3. Qualification is recorded in
+ [the development receipt](evidence/dev-v5-allocation-journal-2026-09-17/README.md).
++The subsequent [V6 host-write increment](runtime-context-version-journal-host-write-v1.md)
++extends this profile without changing that historical receipt or its proof scope.
+ 
+ ## Public Boundary
+ 
+@@ -18,9 +20,10 @@ caller-selected identity API. Default `open` behavior is unchanged.
+ 
+ The only journal observation is metadata usage. It grants no initializedness,
+ content version, native currentness, input lease, reuse or execution authority.
+-Writes, launches, copies and backend aliases remain unrestricted. Their effects
+-are not journaled yet, so no globally valid lineage can be read even after a
+-successful operation. Writer slots are preallocated but not issued here.
++At the V5 checkpoint, writes, launches, copies and backend aliases were
++unrestricted and writer slots were preallocated but not issued. V6 now gates
++synchronous host writes on writer capacity and unresolved membership. Launches,
++copies and aliases remain untracked; no globally valid lineage is exposed.
+ 
+ ## Ownership
+ 
+@@ -40,7 +43,9 @@ successful operation. Writer slots are preallocated but not issued here.
+   journal references before disposal. Only confirmed disposal returns slots.
+   Credit disposal precedes journal retirement and removal of Context handles.
+   Internal invariant failure seals and retains metadata rather than retrying an
+-  already-disposed backend object. Pending/Unknown model membership cannot retire.
++  already-disposed backend object. Pending membership cannot retire. V6 adds a
++  separate whole-writer disposal transition for one-member synchronous Unknown;
++  it does not settle or recover that writer's contents.
+ - Cleanup counts unidentified journal records independently of allocation credits;
+   it cannot return the backend while an ambiguous no-handle attempt remains.
+ 
+@@ -61,11 +66,13 @@ remain inert and are not production disposal authority.
+ 
+ ## Remaining Work
+ 
+-V6 must join genuine writer IDs and authenticated Success/NoEffect/Unknown
+-settlement before callbacks. Full mutation coverage includes failed disposal
++V6 joins genuine synchronous host-write IDs and contracted Success/NoEffect/Unknown
++outcomes. Full mutation coverage and authenticated production correspondence
++remain open, including failed disposal
+ that changes bytes, generated DATA adoption, all launch/copy families, completion
+-and cancellation paths, and backend aliases. Ordered writers, explicit Unknown
+-disposal/recovery, input leases and aggregate residency remain separate work.
++and cancellation paths, and backend aliases. Ordered writers, multi-member
++Unknown disposal, content recovery, input leases and aggregate residency remain
++separate work.
+ 
+ New allocation transitions and this Rust adapter have executable tests and static
+ review, not mechanically proved correspondence. Existing V4-J1 proof bytes are
+diff --git a/docs/runtime-context-version-journal-host-write-v1.md b/docs/runtime-context-version-journal-host-write-v1.md
+new file mode 100644
+index 000000000..c4fc3a2fe
+--- /dev/null
++++ b/docs/runtime-context-version-journal-host-write-v1.md
+@@ -0,0 +1,79 @@
++# Context Journal Synchronous Host Writes
++
++This V6 development increment extends the opt-in V5 allocation journal. It does
++not close V5/V6, A1/A2, #182, protected native composition or HIP/HSA parity.
++Accepted checkpoints remain Native R125 CPU/test, Admission R118B C1-C3 and
++Resources R116/V3. No new solver proof, GPU qualification or performance claim
++is supplied by this increment.
++CPU qualification is recorded in the
++[development receipt](evidence/dev-v6-host-writes-2026-09-17/README.md).
++
++## Writer Boundary
++
++Only `RuntimeContextV1::write_allocation` joins this projection. After the usual
++Context, allocation and byte-range checks, it checks exact journal membership,
++writer capacity and epoch headroom before consuming the genuine Context ID.
++The private move-only ticket binds that ID, Synchronous kind, full allocation
++reference, device and whole extent. Begin precedes backend entry; dropping the
++ticket does not release membership. Writes to another allocation may proceed
++while capacity remains; writes to a Pending or Unknown allocation reject.
++
++The exact synchronous SPI result supplies the settlement premise:
++
++- `Ok` advances this projection's content lineage and returns writer capacity.
++- `Rejected` burns the attempt epoch but preserves prior lineage and returns
++  writer capacity. Its contract requires no device-visible mutation and no
++  changed custody from this call.
++- `Quiescent` retains Unknown membership and the original allocation owner.
++- `Terminal` or panic retains Unknown, seals Context and quarantines that
++  allocation's request credits. Secondary bookkeeping failure cannot replace
++  the original backend diagnostic or unwind payload.
++
++These are **Contracted SPI premises**, not authenticated machine-refinement
++evidence. The safe public backend/codec traits can be implemented incorrectly;
++classification alone is not transferable verifier, lease or reuse authority.
++Default `open` does not consume new writer IDs or change legacy panic behavior.
++The writer-count accessor and cleanup count report metadata only, not completion.
++
++## Disposal Is Not Settlement
++
++An exact one-member Synchronous Unknown can be disposed through explicit
++release or cleanup. A private preflight binds the original allocation ID,
++backend handle, full record, member and writer. Only backend disposal `Ok`
++permits credit refund and joint removal of the allocation/member/writer.
++Rejected or Quiescent disposal retains all of them for retry; Terminal or panic
++retains them and seals Context. A post-disposal bookkeeping failure seals Context
++and never retries the consumed native owner.
++
++Pending disposal rejects before effects. Multi-member or non-Synchronous Unknown
++disposal is Unsupported at this production boundary. Cleanup skips such retained
++allocations while continuing unrelated ones, and its writer count prevents a
++false complete report, including an empty retained writer.
++
++The model's `dispose_unknown` accepts an inert exact full-roster premise. It
++validates every reference/device/extent, chain, return-stack capacity and scratch
++entry before mutation; commit removes all allocations and members and returns
++the writer last. It never makes an allocation available or asserts successful
++content. Work is O(k), with no allocation or callback, assuming a valid global
++prestate. Writer issuance history stays burned; the model does not tombstone
++disposed allocation keys. Context supplies fresh nonwrapping allocation IDs.
++Model multi-member support does not authorize production partial disposal:
++that needs retained successful-prefix receipts and retry progress.
++
++## KFD Classification
++
++The ordinary KFD host-write tail no longer returns Rejected for an impossible
++range mismatch after upload. The range is checked before effects; violation
++afterward is an invariant panic, handled as Unknown/terminal by the journal path.
++Missing XGMI authority after successful unmap now seals that backend and returns
++Terminal, for both read and write. Genuine pre-effect unmap rejection is unchanged.
++Scripted copy tests and source guards are not native XGMI qualification.
++
++## Remaining Integration
++
++Launches, copies, generated DATA adoption, failed disposals that mutate bytes,
++completion/cancellation and backend aliases still need complete writer hooks.
++Ordered writers, input leases, aggregate residency, content recovery and native
++qualification remain open. No public lineage query or cross-run reuse API is
++exposed. The existing V4-J1 issuance proof is unchanged and proves neither the
++new disposal transition nor this Rust adapter's correspondence.
+diff --git a/docs/runtime-context-version-journal-v1.md b/docs/runtime-context-version-journal-v1.md
+index edee80635..c5076997b 100644
+--- a/docs/runtime-context-version-journal-v1.md
++++ b/docs/runtime-context-version-journal-v1.md
+@@ -6,8 +6,10 @@ R108 locally accepts VER-1A.2a's bounded writer-issuance model, with
+ [retained source/test evidence](evidence/local-r108-context-writer-issuance-2026-09-12/README.md).
+ The [V5 allocation foundation](runtime-context-version-journal-allocation-v1.md)
+ adds a construction-only production allocation-metadata consumer. It does not
+-yet track writers or expose trustworthy lineage. No new formal theorem or
+-cross-run lease implementation is claimed.
++expose trustworthy lineage. The [V6 host-write increment](runtime-context-version-journal-host-write-v1.md)
++adds synchronous writer tracking and exact single-writer disposal, but other
++mutation paths remain untracked. No new formal theorem or cross-run lease
++implementation is claimed.
+ Existing R65 graph versions remain graph-local history. This journal records
+ mutation lineage, not initialized contents, native currentness, disposal
+ authority or successful kernel semantics.

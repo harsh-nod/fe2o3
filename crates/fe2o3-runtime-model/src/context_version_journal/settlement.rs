@@ -1,5 +1,7 @@
 use super::*;
 
+mod disposal;
+
 impl ContextVersionJournalV1 {
     /// Settles a complete retained writer using an inert success premise.
     pub fn settle_success(
