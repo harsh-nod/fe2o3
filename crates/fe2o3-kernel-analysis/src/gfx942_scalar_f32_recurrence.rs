@@ -7,6 +7,8 @@
 //! executable candidate semantics for the required separate multiply then add step through the
 //! workspace-pinned LLVM APFloat port. This does not establish general machine provenance or the
 //! loop-carried recurrence across machine CFG backedges.
+//! Selected arithmetic and traversed register copies independently reconcile their four-byte
+//! encodings with operand roles and canonical LLVM/MC effects. This is structural validation.
 //!
 //! The checked artifact remains inert. In particular, this module does not prove AMDGPU opcode
 //! semantics, MODE/denormal behavior, NaN conformance of gfx942, KIR/LLVM-to-machine simulation,
@@ -17,7 +19,8 @@ use crate::{
     AuthenticatedPhysicalMachineAnalysisReceiptIdentityV1, Gfx942InstructionRegisterFactsV1,
     Gfx942MachineDataflowErrorV1, Gfx942MachineDataflowV1, Gfx942ReachingDefinitionV1,
     Gfx942RegisterFactsErrorV1, Gfx942RegisterUnitV1, PhysicalMachineBranchKindV1,
-    PhysicalMachineInstructionTraceV1, PhysicalMachineMemoryAccessV1,
+    PhysicalMachineEffectRequestV1, PhysicalMachineInstructionTraceV1,
+    PhysicalMachineMemoryAccessV1, PhysicalMachineTraceEvidenceV1,
 };
 use rustc_apfloat::ieee::Single;
 use rustc_apfloat::{Float, Round, Status};
@@ -509,7 +512,12 @@ pub fn check_authenticated_gfx942_scalar_f32_recurrence_step_v1(
     AuthenticatedGfx942ScalarF32RecurrenceStepAnalysisV1,
     Gfx942ScalarF32RecurrenceStepAnalysisFailureV1,
 > {
-    match analyze_recurrence_step(&execution, kernel_symbol) {
+    match analyze_recurrence_step(
+        execution.identity(),
+        execution.request(),
+        execution.analysis().trace(),
+        kernel_symbol,
+    ) {
         Ok(artifact) => Ok(AuthenticatedGfx942ScalarF32RecurrenceStepAnalysisV1 {
             execution,
             artifact,
@@ -537,7 +545,12 @@ pub fn verify_authenticated_gfx942_scalar_f32_recurrence_step_artifact_v1(
     let result = Gfx942ScalarF32RecurrenceStepArtifactV1::decode_canonical(artifact_bytes)
         .map_err(Gfx942ScalarF32RecurrenceStepAnalysisErrorV1::Artifact)
         .and_then(|decoded| {
-            let derived = analyze_recurrence_step(&execution, kernel_symbol)?;
+            let derived = analyze_recurrence_step(
+                execution.identity(),
+                execution.request(),
+                execution.analysis().trace(),
+                kernel_symbol,
+            )?;
             if decoded.canonical_bytes() != derived.canonical_bytes() {
                 return Err(Gfx942ScalarF32RecurrenceStepAnalysisErrorV1::ArtifactMismatch);
             }
@@ -556,14 +569,15 @@ pub fn verify_authenticated_gfx942_scalar_f32_recurrence_step_artifact_v1(
 }
 
 fn analyze_recurrence_step(
-    execution: &AuthenticatedPhysicalMachineAnalysisExecutionV1,
+    execution_identity: AuthenticatedPhysicalMachineAnalysisReceiptIdentityV1,
+    request: &PhysicalMachineEffectRequestV1,
+    trace: &PhysicalMachineTraceEvidenceV1,
     kernel_symbol: &str,
 ) -> Result<Gfx942ScalarF32RecurrenceStepArtifactV1, Gfx942ScalarF32RecurrenceStepAnalysisErrorV1> {
     if !valid_symbol(kernel_symbol) {
         return Err(Gfx942ScalarF32RecurrenceStepAnalysisErrorV1::InvalidKernelSymbol);
     }
-    if execution
-        .request()
+    if request
         .entries()
         .iter()
         .filter(|entry| entry.symbol() == kernel_symbol)
@@ -572,7 +586,6 @@ fn analyze_recurrence_step(
     {
         return Err(Gfx942ScalarF32RecurrenceStepAnalysisErrorV1::KernelNotRequested);
     }
-    let trace = execution.analysis().trace();
     let instructions = trace
         .instructions()
         .iter()
@@ -660,7 +673,6 @@ fn analyze_recurrence_step(
         None,
     )?;
 
-    let execution_identity = execution.identity();
     let trace_identity = trace.identity();
     let mut artifact = Gfx942ScalarF32RecurrenceStepArtifactV1 {
         authenticated_execution_sha256: execution_identity.sha256(),
@@ -696,16 +708,39 @@ struct ArithmeticShapeV1 {
 fn arithmetic_shape(
     instruction: &PhysicalMachineInstructionTraceV1,
 ) -> Result<ArithmeticShapeV1, Gfx942ScalarF32RecurrenceStepAnalysisErrorV1> {
-    if instruction.branch_target().is_some()
-        || instruction.flags().is_terminator()
-        || instruction.flags().may_trap()
+    let invalid = || Gfx942ScalarF32RecurrenceStepAnalysisErrorV1::InvalidArithmeticInstruction {
+        offset: instruction.instruction_offset(),
+    };
+    let opcode = match instruction.opcode() {
+        "V_MUL_F32_e32_vi" => 5,
+        "V_ADD_F32_e32_vi" => 1,
+        _ => return Err(invalid()),
+    };
+    let encoding: [u8; 4] = instruction.encoding().try_into().map_err(|_| invalid())?;
+    let word = u32::from_le_bytes(encoding);
+    // CDNA3 ISA 13.3.1; LLVM 22.1.8 VOP2Instructions.td (VOP2e and VI opcodes).
+    // SRC0 must encode a VGPR, excluding SGPRs, literals, SDWA and DPP extensions.
+    // WorkerMachineEffect.cpp sorts MC implicit register names (EXEC before MODE).
+    // Its six serialized flags are zero here; isConvergent and FP exceptions are
+    // not serialized flags and are not established by this structural check.
+    if word >> 25 != opcode
+        || word & 0x100 == 0
+        || instruction.branch_kind() != PhysicalMachineBranchKindV1::None
+        || instruction.branch_target().is_some()
+        || instruction.flags().bits() != 0
         || instruction.memory_access() != PhysicalMachineMemoryAccessV1::None
+        || instruction
+            .operands()
+            .iter()
+            .any(|operand| operand.tied_to().is_some())
+        || !instruction.implicit_definitions().is_empty()
+        || !instruction
+            .implicit_uses()
+            .iter()
+            .map(String::as_str)
+            .eq(["EXEC", "MODE"])
     {
-        return Err(
-            Gfx942ScalarF32RecurrenceStepAnalysisErrorV1::InvalidArithmeticInstruction {
-                offset: instruction.instruction_offset(),
-            },
-        );
+        return Err(invalid());
     }
     let facts = Gfx942InstructionRegisterFactsV1::derive(instruction)?;
     if facts.explicit_definition_count() != 1 || facts.operand_aliases().len() != 3 {
@@ -729,6 +764,15 @@ fn arithmetic_shape(
                 offset: instruction.instruction_offset(),
             },
         )?;
+    if destination != Gfx942RegisterUnitV1::Vgpr(((word >> 17) & 0xff) as u16)
+        || sources
+            != [
+                Gfx942RegisterUnitV1::Vgpr((word & 0xff) as u16),
+                Gfx942RegisterUnitV1::Vgpr(((word >> 9) & 0xff) as u16),
+            ]
+    {
+        return Err(invalid());
+    }
     Ok(ArithmeticShapeV1 {
         destination,
         sources,
@@ -820,20 +864,35 @@ fn admitted_register_copy_source(
     instruction: &PhysicalMachineInstructionTraceV1,
     expected_destination: Gfx942RegisterUnitV1,
 ) -> Result<Option<Gfx942RegisterUnitV1>, Gfx942ScalarF32RecurrenceStepAnalysisErrorV1> {
-    if instruction.opcode() != "V_MOV_B32_e32"
+    if !matches!(instruction.opcode(), "V_MOV_B32_e32" | "V_MOV_B32_e32_vi")
         || instruction.branch_kind() != PhysicalMachineBranchKindV1::None
         || instruction.branch_target().is_some()
         || instruction.flags().bits() != 0
         || instruction.memory_access() != PhysicalMachineMemoryAccessV1::None
+        || instruction
+            .operands()
+            .iter()
+            .any(|operand| operand.tied_to().is_some())
+        || !instruction.implicit_definitions().is_empty()
+        || !instruction
+            .implicit_uses()
+            .iter()
+            .map(String::as_str)
+            .eq(["EXEC"])
     {
         return Ok(None);
     }
+    let Ok(encoding) = <[u8; 4]>::try_from(instruction.encoding()) else {
+        return Ok(None);
+    };
+    let word = u32::from_le_bytes(encoding);
+    // CDNA3 ISA 13.3.2; LLVM 22.1.8 VOP1Instructions.td. The native MC spelling
+    // has the _vi suffix; both names denote only this unmodified VGPR copy.
+    if word & 0xfe01_fe00 != 0x7e00_0200 || word & 0x100 == 0 {
+        return Ok(None);
+    }
     let facts = Gfx942InstructionRegisterFactsV1::derive(instruction)?;
-    if facts.explicit_definition_count() != 1
-        || facts.operand_aliases().len() != 2
-        || !facts.implicit_definitions().is_empty()
-        || !facts.implicit_uses().is_empty()
-    {
+    if facts.explicit_definition_count() != 1 || facts.operand_aliases().len() != 2 {
         return Ok(None);
     }
     let Some(destination) = single_vgpr(facts.operand_aliases()[0].as_ref()) else {
@@ -842,7 +901,10 @@ fn admitted_register_copy_source(
     let Some(source) = single_vgpr(facts.operand_aliases()[1].as_ref()) else {
         return Ok(None);
     };
-    Ok((destination == expected_destination).then_some(source))
+    Ok((destination == expected_destination
+        && destination == Gfx942RegisterUnitV1::Vgpr(((word >> 17) & 0xff) as u16)
+        && source == Gfx942RegisterUnitV1::Vgpr((word & 0xff) as u16))
+    .then_some(source))
 }
 
 fn is_fused_f32_opcode(opcode: &str) -> bool {
@@ -1117,6 +1179,9 @@ fn domain_hash(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     digest.update(bytes);
     digest.finalize().into()
 }
+
+#[cfg(test)]
+mod encoding_tests;
 
 #[cfg(test)]
 mod tests {

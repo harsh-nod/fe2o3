@@ -22,6 +22,8 @@ const START: u64 = 8;
 enum Operand {
     Register(&'static str),
     Immediate(i64),
+    SingleFloat(u32),
+    Expression(i64),
 }
 
 #[derive(Clone)]
@@ -99,6 +101,59 @@ fn mask(opcode: &'static str, destination: u8, left: u8, right: u8) -> Instructi
     }
 }
 
+fn register32(code: u8) -> &'static str {
+    match code {
+        0 => "SGPR0",
+        1 => "SGPR1",
+        2 => "SGPR2",
+        3 => "SGPR3",
+        4 => "SGPR4",
+        5 => "SGPR5",
+        100 => "SGPR100",
+        101 => "SGPR101",
+        _ => panic!("unsupported test word register"),
+    }
+}
+
+fn source32(code: u8) -> Operand {
+    match code {
+        128..=192 => Operand::Immediate(i64::from(code) - 128),
+        193..=208 => Operand::Immediate(192 - i64::from(code)),
+        _ => Operand::Register(register32(code)),
+    }
+}
+
+fn arithmetic(opcode: &'static str, destination: u8, left: u8, right: u8) -> Instruction {
+    let base = match opcode {
+        "S_ADD_U32_vi" => 0x8000_0000,
+        "S_SUB_U32_vi" => 0x8080_0000,
+        "S_ADDC_U32_vi" => 0x8200_0000,
+        "S_SUBB_U32_vi" => 0x8280_0000,
+        _ => panic!("unsupported test arithmetic"),
+    };
+    Instruction {
+        opcode,
+        word: base | (u32::from(destination) << 16) | (u32::from(right) << 8) | u32::from(left),
+        extra_word: None,
+        definitions: 1,
+        operands: vec![
+            Operand::Register(register32(destination)),
+            source32(left),
+            source32(right),
+        ],
+        implicit_definitions: vec!["SCC"],
+        implicit_uses: if matches!(opcode, "S_ADDC_U32_vi" | "S_SUBB_U32_vi") {
+            vec!["SCC"]
+        } else {
+            vec![]
+        },
+        branch: 0,
+        flags: 0,
+        target_override: None,
+        tied_operand: None,
+    }
+}
+
 fn branch(opcode: &'static str, displacement: i16) -> Instruction {
     let (base, kind) = match opcode {
         "S_BRANCH_vi" => (0xbf82_0000, 2),
@@ -156,6 +211,15 @@ fn finish_length(output: &mut [u8], domain_len: usize) {
 }
 
 fn trace(body: &[Instruction]) -> PhysicalMachineTraceEvidenceV1 {
+    try_trace(body).unwrap()
+}
+
+fn try_trace(
+    body: &[Instruction],
+) -> Result<
+    PhysicalMachineTraceEvidenceV1,
+    fe2o3_kernel_analysis::PhysicalMachineTraceEvidenceErrorV1,
+> {
     let mut instructions = body.to_vec();
     instructions.push(end());
     let mut payload = vec![0; START as usize];
@@ -285,6 +349,8 @@ fn trace(body: &[Instruction]) -> PhysicalMachineTraceEvidenceV1 {
             trace.push(match operand {
                 Operand::Register(_) => 1,
                 Operand::Immediate(_) => 2,
+                Operand::SingleFloat(_) => 3,
+                Operand::Expression(_) => 5,
             });
             push16(
                 &mut trace,
@@ -297,6 +363,8 @@ fn trace(body: &[Instruction]) -> PhysicalMachineTraceEvidenceV1 {
             match operand {
                 Operand::Register(name) => text(&mut trace, name),
                 Operand::Immediate(value) => push64(&mut trace, *value as u64),
+                Operand::SingleFloat(value) => push32(&mut trace, *value),
+                Operand::Expression(value) => push64(&mut trace, *value as u64),
             }
         }
         for names in [
@@ -324,7 +392,7 @@ fn trace(body: &[Instruction]) -> PhysicalMachineTraceEvidenceV1 {
         push16(&mut trace, 0);
     }
     finish_length(&mut trace, PHYSICAL_MACHINE_TRACE_EVIDENCE_DOMAIN_V1.len());
-    PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &effects, &trace).unwrap()
+    PhysicalMachineTraceEvidenceV1::decode_canonical_for(&request, &effects, &trace)
 }
 
 fn run(
@@ -795,4 +863,424 @@ fn destination_aliases_the_second_source_and_special_masks() {
     assert_eq!(result.final_state().exec(), Some(0xaa));
     assert_eq!(result.final_state().vcc(), Some(0xaa));
     assert_eq!(result.final_state().scc(), Some(true));
+}
+
+#[test]
+fn llvm22_sop2_bytes_and_unsigned_boundary_results() {
+    // LLVM llvmorg-22.1.8 llvm/test/MC/AMDGPU/sop2.s, GCN checks for s1, s2, s3.
+    // https://github.com/llvm/llvm-project/blob/llvmorg-22.1.8/llvm/test/MC/AMDGPU/sop2.s
+    for (opcode, bytes, expected) in [
+        ("S_ADD_U32_vi", [0x02, 0x03, 0x01, 0x80], 10),
+        ("S_SUB_U32_vi", [0x02, 0x03, 0x81, 0x80], 4),
+        ("S_ADDC_U32_vi", [0x02, 0x03, 0x01, 0x82], 11),
+        ("S_SUBB_U32_vi", [0x02, 0x03, 0x81, 0x82], 3),
+    ] {
+        let mut instruction = arithmetic(opcode, 1, 2, 3);
+        instruction.word = u32::from_le_bytes(bytes);
+        let mut state = Gfx942ExecStateV1::default();
+        state.set_sgpr(2, 7).unwrap();
+        state.set_sgpr(3, 3).unwrap();
+        state.set_scc(true);
+        let observed = run(&[instruction], &state).unwrap();
+        assert_eq!(observed.final_state().sgpr(1), Some(expected));
+        assert_eq!(observed.final_state().scc(), Some(false));
+    }
+
+    let max = u32::MAX;
+    for (opcode, left, right, incoming, expected, scc) in [
+        ("S_ADD_U32_vi", 0, 0, true, 0, false),
+        ("S_ADD_U32_vi", 0x7fff_ffff, 1, true, 0x8000_0000, false),
+        ("S_ADD_U32_vi", max, 0, true, max, false),
+        ("S_ADD_U32_vi", max, 1, false, 0, true),
+        ("S_ADD_U32_vi", max, max, false, max - 1, true),
+        ("S_ADDC_U32_vi", 0, 0, true, 1, false),
+        ("S_ADDC_U32_vi", max, 0, false, max, false),
+        ("S_ADDC_U32_vi", max, 0, true, 0, true),
+        ("S_ADDC_U32_vi", 0, max, true, 0, true),
+        ("S_ADDC_U32_vi", max, max, true, max, true),
+        ("S_ADDC_U32_vi", 0x7fff_ffff, 0, true, 0x8000_0000, false),
+        ("S_SUB_U32_vi", 0, 0, true, 0, false),
+        ("S_SUB_U32_vi", max, max, true, 0, false),
+        ("S_SUB_U32_vi", 0, 1, false, max, true),
+        ("S_SUB_U32_vi", 0, max, false, 1, true),
+        ("S_SUB_U32_vi", 0x8000_0000, 1, true, 0x7fff_ffff, false),
+        ("S_SUBB_U32_vi", 0, 0, false, 0, false),
+        ("S_SUBB_U32_vi", 0, 0, true, max, true),
+        ("S_SUBB_U32_vi", 1, 0, true, 0, false),
+        ("S_SUBB_U32_vi", max, max, true, max, true),
+        ("S_SUBB_U32_vi", 0, max, true, 0, true),
+        ("S_SUBB_U32_vi", max, max - 1, true, 0, false),
+    ] {
+        let mut state = Gfx942ExecStateV1::default();
+        state.set_sgpr(0, left).unwrap();
+        state.set_sgpr(1, 0xa5a5_a5a5).unwrap();
+        state.set_sgpr(2, right).unwrap();
+        state.set_exec(0);
+        state.set_vcc(0x9876_5432_1234_5678);
+        state.set_scc(incoming);
+        let original = state.clone();
+        let observed = run(&[arithmetic(opcode, 0, 0, 2)], &state).unwrap();
+        assert_eq!(observed.final_state().sgpr(0), Some(expected), "{opcode}");
+        assert_eq!(observed.final_state().sgpr(1), Some(0xa5a5_a5a5));
+        assert_eq!(observed.final_state().scc(), Some(scc), "{opcode}");
+        assert_eq!(observed.final_state().exec(), state.exec());
+        assert_eq!(observed.final_state().vcc(), state.vcc());
+        assert_eq!(observed.steps()[0].scc_before, Some(incoming));
+        assert_eq!(observed.steps()[0].scc_after, Some(scc));
+        assert_eq!(state, original);
+        assert!(observed.is_conditional_on_supplied_live_ins());
+        assert!(!observed.establishes_kernel_entry_state());
+        assert!(!observed.establishes_compiler_refinement());
+        assert!(!observed.grants_runtime_authority());
+    }
+}
+
+#[test]
+fn arithmetic_inline_integers_and_last_sgpr_preserve_other_pair_members() {
+    for selector in 128..=208 {
+        let expected = if selector <= 192 {
+            u32::from(selector) - 128
+        } else {
+            (192 - i32::from(selector)) as u32
+        };
+        for (left, right) in [(selector, 128), (128, selector)] {
+            let initial = Gfx942ExecStateV1::default();
+            let observed = run(&[arithmetic("S_ADD_U32_vi", 101, left, right)], &initial).unwrap();
+            assert_eq!(observed.final_state().sgpr(101), Some(expected));
+            assert_eq!(observed.final_state().sgpr(100), None);
+            assert_eq!(observed.final_state().sgpr(0), None);
+            assert_eq!(observed.final_state().scc(), Some(false));
+        }
+    }
+    let mut initial = Gfx942ExecStateV1::default();
+    pair(&mut initial, 100, 0x0000_0000_ffff_ffff);
+    let observed = run(
+        &[
+            arithmetic("S_ADD_U32_vi", 100, 100, 129),
+            arithmetic("S_ADDC_U32_vi", 101, 101, 128),
+            mask("S_MOV_B64_vi", 0, 100, 0),
+        ],
+        &initial,
+    )
+    .unwrap();
+    assert_eq!(get_pair(observed.final_state(), 100), 0x1_0000_0000);
+    assert_eq!(get_pair(observed.final_state(), 0), 0x1_0000_0000);
+}
+
+#[test]
+fn address_carry_chains_alias_either_source_and_feed_existing_pair_reads() {
+    for (left, right) in [
+        (0_u64, 0_u64),
+        (0xffff_ffff, 1),
+        (0x1_0000_0000, 1),
+        (0, 1),
+        (u64::MAX, 1),
+        (u64::MAX, u64::MAX),
+        (0x1234_5678_ffff_ffff, 0x0fed_cba9_0000_0001),
+    ] {
+        for (low_op, high_op, expected, scc) in [
+            (
+                "S_ADD_U32_vi",
+                "S_ADDC_U32_vi",
+                left.overflowing_add(right).0,
+                left.overflowing_add(right).1,
+            ),
+            (
+                "S_SUB_U32_vi",
+                "S_SUBB_U32_vi",
+                left.overflowing_sub(right).0,
+                left.overflowing_sub(right).1,
+            ),
+        ] {
+            for destination in [0, 2] {
+                let mut initial = Gfx942ExecStateV1::default();
+                pair(&mut initial, 0, left);
+                pair(&mut initial, 2, right);
+                let observed = run(
+                    &[
+                        arithmetic(low_op, destination, 0, 2),
+                        arithmetic(high_op, destination + 1, 1, 3),
+                        mask("S_MOV_B64_vi", 126, destination, 0),
+                    ],
+                    &initial,
+                )
+                .unwrap();
+                assert_eq!(
+                    get_pair(observed.final_state(), u16::from(destination)),
+                    expected
+                );
+                assert_eq!(observed.final_state().exec(), Some(expected));
+                assert_eq!(observed.final_state().scc(), Some(scc));
+                assert_eq!(observed.steps()[0].scc_before, None);
+                assert_eq!(
+                    observed.steps()[1].scc_before,
+                    observed.steps()[0].scc_after
+                );
+            }
+        }
+    }
+
+    let mut initial = Gfx942ExecStateV1::default();
+    pair(&mut initial, 0, 0x1234_5678_ffff_ffff);
+    let observed = run(&[arithmetic("S_ADD_U32_vi", 1, 0, 1)], &initial).unwrap();
+    assert_eq!(observed.final_state().sgpr(0), Some(u32::MAX));
+    assert_eq!(observed.final_state().sgpr(1), Some(0x1234_5677));
+    assert_eq!(observed.final_state().scc(), Some(true));
+    let observed = run(&[arithmetic("S_ADD_U32_vi", 0, 0, 0)], &initial).unwrap();
+    assert_eq!(get_pair(observed.final_state(), 0), 0x1234_5678_ffff_fffe);
+}
+
+#[test]
+fn arithmetic_requires_only_its_actual_live_ins() {
+    for opcode in [
+        "S_ADD_U32_vi",
+        "S_ADDC_U32_vi",
+        "S_SUB_U32_vi",
+        "S_SUBB_U32_vi",
+    ] {
+        for missing in [0, 1] {
+            let mut initial = Gfx942ExecStateV1::default();
+            initial.set_sgpr(1 - missing, 7).unwrap();
+            initial.set_scc(false);
+            let original = initial.clone();
+            assert_eq!(
+                run(&[arithmetic(opcode, 0, 0, 1)], &initial),
+                Err(Failure::UndefinedRegister {
+                    offset: START,
+                    register: Gfx942RegisterUnitV1::Sgpr(missing),
+                })
+            );
+            assert_eq!(initial, original);
+        }
+    }
+    for opcode in ["S_ADDC_U32_vi", "S_SUBB_U32_vi"] {
+        assert_eq!(
+            run(
+                &[arithmetic(opcode, 1, 128, 128)],
+                &Gfx942ExecStateV1::default()
+            ),
+            Err(Failure::UndefinedRegister {
+                offset: START,
+                register: Gfx942RegisterUnitV1::Scc,
+            })
+        );
+    }
+    for opcode in ["S_ADD_U32_vi", "S_SUB_U32_vi"] {
+        let result = run(
+            &[arithmetic(opcode, 1, 129, 129)],
+            &Gfx942ExecStateV1::default(),
+        )
+        .unwrap();
+        assert_eq!(result.final_state().sgpr(0), None);
+        assert_eq!(result.final_state().scc(), Some(false));
+        assert_eq!(result.final_state().exec(), None);
+        assert_eq!(result.final_state().vcc(), None);
+    }
+    let mut initial = Gfx942ExecStateV1::default();
+    initial.set_sgpr(1, 9).unwrap();
+    let result = run(&[arithmetic("S_ADD_U32_vi", 1, 1, 128)], &initial).unwrap();
+    assert_eq!(result.final_state().sgpr(1), Some(9));
+    assert_eq!(result.final_state().sgpr(0), None);
+}
+
+#[test]
+fn arithmetic_rejects_mismatched_bytes_operands_and_effects() {
+    for opcode in [
+        "S_ADD_U32_vi",
+        "S_ADDC_U32_vi",
+        "S_SUB_U32_vi",
+        "S_SUBB_U32_vi",
+    ] {
+        let valid = arithmetic(opcode, 0, 128, 129);
+        let mut cases = Vec::new();
+        for bit in [23, 24, 29, 30, 31] {
+            let mut instruction = valid.clone();
+            instruction.word ^= 1 << bit;
+            cases.push((instruction, Failure::InvalidEncoding { offset: START }));
+        }
+        for bit in [0, 8, 16] {
+            let mut instruction = valid.clone();
+            instruction.word ^= 1 << bit;
+            cases.push((instruction, Failure::InvalidOperands { offset: START }));
+        }
+        for index in 0..3 {
+            for name in [
+                "SGPR0_SGPR1",
+                "SGPR102",
+                "SGPR127",
+                "EXEC_LO",
+                "VCC_HI",
+                "SCC",
+                "VGPR0",
+            ] {
+                let mut instruction = valid.clone();
+                instruction.operands[index] = Operand::Register(name);
+                cases.push((instruction, Failure::InvalidOperands { offset: START }));
+            }
+        }
+        for index in [1, 2] {
+            for immediate in [-17, 65, i64::from(u32::MAX), 0x3f80_0000] {
+                let mut instruction = valid.clone();
+                instruction.operands[index] = Operand::Immediate(immediate);
+                cases.push((instruction, Failure::InvalidOperands { offset: START }));
+            }
+            for operand in [Operand::SingleFloat(0), Operand::Expression(0)] {
+                let mut instruction = valid.clone();
+                instruction.operands[index] = operand;
+                cases.push((instruction, Failure::InvalidOperands { offset: START }));
+            }
+            for selector in [102_u32, 106, 124, 126, 209, 240, 242, 253, 254, 255] {
+                let mut instruction = valid.clone();
+                let shift = (index - 1) * 8;
+                instruction.word = (instruction.word & !(0xff << shift)) | (selector << shift);
+                cases.push((instruction, Failure::InvalidOperands { offset: START }));
+            }
+        }
+        let mut instruction = valid.clone();
+        instruction.extra_word = Some(65);
+        instruction.word = (instruction.word & !0xff) | 255;
+        instruction.operands[1] = Operand::Immediate(65);
+        cases.push((instruction, Failure::InvalidEncoding { offset: START }));
+        for definitions in [0, 2] {
+            let mut instruction = arithmetic(opcode, 0, 0, 1);
+            instruction.definitions = definitions;
+            cases.push((instruction, Failure::InvalidOperands { offset: START }));
+        }
+        let mut instruction = valid.clone();
+        instruction.operands.pop();
+        cases.push((instruction, Failure::InvalidOperands { offset: START }));
+        let mut instruction = valid.clone();
+        instruction.operands.push(Operand::Immediate(0));
+        cases.push((instruction, Failure::InvalidOperands { offset: START }));
+        let mut instruction = arithmetic(opcode, 0, 0, 1);
+        instruction.tied_operand = Some((1, 0));
+        cases.push((instruction, Failure::InvalidOperands { offset: START }));
+        for definitions in [vec![], vec!["EXEC"], vec!["SCC", "VCC"]] {
+            let mut instruction = valid.clone();
+            instruction.implicit_definitions = definitions;
+            cases.push((instruction, Failure::InvalidEffects { offset: START }));
+        }
+        let mut instruction = valid.clone();
+        instruction.implicit_uses = if valid.implicit_uses.is_empty() {
+            vec!["SCC"]
+        } else {
+            vec![]
+        };
+        cases.push((instruction, Failure::InvalidEffects { offset: START }));
+        let mut instruction = valid.clone();
+        instruction.implicit_uses.push("EXEC");
+        instruction.implicit_uses.sort_unstable();
+        cases.push((instruction, Failure::InvalidEffects { offset: START }));
+        let mut instruction = valid.clone();
+        instruction.flags = 16;
+        cases.push((instruction, Failure::InvalidEffects { offset: START }));
+        for (instruction, expected) in cases {
+            assert_eq!(
+                run(&[instruction], &Gfx942ExecStateV1::default()),
+                Err(expected),
+                "{opcode}"
+            );
+        }
+    }
+}
+
+#[test]
+fn arithmetic_malformed_wire_operands_fail_the_existing_trace_reader() {
+    let valid = arithmetic("S_ADD_U32_vi", 0, 128, 129);
+    let mut non_register_destination = valid.clone();
+    non_register_destination.operands[0] = Operand::Immediate(0);
+    let mut tied_immediate = valid.clone();
+    tied_immediate.tied_operand = Some((1, 0));
+    let mut excess_definitions = valid;
+    excess_definitions.definitions = 4;
+    for instruction in [non_register_destination, tied_immediate, excess_definitions] {
+        assert_eq!(
+            try_trace(&[instruction]),
+            Err(fe2o3_kernel_analysis::PhysicalMachineTraceEvidenceErrorV1::InvalidOperand)
+        );
+    }
+}
+
+#[test]
+fn arithmetic_preflight_checks_untaken_paths_and_keeps_opcode_scope_closed() {
+    for opcode in [
+        "S_ADD_I32_vi",
+        "S_SUB_I32_vi",
+        "S_ADD_U32",
+        "S_ADD_U32_gfx10",
+        "S_MOV_B32_vi",
+    ] {
+        let mut instruction = arithmetic("S_ADD_U32_vi", 0, 128, 128);
+        instruction.opcode = opcode;
+        assert_eq!(
+            run(&[instruction], &Gfx942ExecStateV1::default()),
+            Err(Failure::UnsupportedInstruction { offset: START })
+        );
+    }
+    let mut invalid = arithmetic("S_ADDC_U32_vi", 0, 128, 128);
+    invalid.implicit_uses.clear();
+    let mut initial = Gfx942ExecStateV1::default();
+    initial.set_exec(0);
+    assert_eq!(
+        run(&[branch("S_CBRANCH_EXECZ_vi", 1), invalid], &initial),
+        Err(Failure::InvalidEffects { offset: START + 4 })
+    );
+}
+
+#[test]
+fn arithmetic_chains_charge_exact_steps_observations_and_trace_budgets() {
+    let body = [
+        arithmetic("S_ADD_U32_vi", 0, 193, 129),
+        arithmetic("S_ADDC_U32_vi", 1, 128, 128),
+        arithmetic("S_SUB_U32_vi", 0, 0, 129),
+        arithmetic("S_SUBB_U32_vi", 1, 1, 128),
+    ];
+    let trace = trace(&body);
+    let slice = Gfx942ExecSliceV1::new(FUNCTION, START, START + 16).unwrap();
+    let initial = Gfx942ExecStateV1::default();
+    let result = execute_gfx942_exec_slice_v1(
+        &trace,
+        slice,
+        &initial,
+        Gfx942ExecLimitsV1::new(4, 5, 4).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(get_pair(result.final_state(), 0), 0xffff_ffff);
+    assert_eq!(result.final_state().scc(), Some(false));
+    assert_eq!(result.steps().len(), 4);
+    for completed in [0, 3] {
+        for (limits, failure) in [
+            (
+                Gfx942ExecLimitsV1::new(completed, 5, 4).unwrap(),
+                Failure::StepLimit {
+                    completed,
+                    maximum: completed,
+                },
+            ),
+            (
+                Gfx942ExecLimitsV1::new(4, 5, completed).unwrap(),
+                Failure::ObservationLimit {
+                    completed,
+                    maximum: completed,
+                },
+            ),
+        ] {
+            assert_eq!(
+                execute_gfx942_exec_slice_v1(&trace, slice, &initial, limits),
+                Err(failure)
+            );
+        }
+    }
+    for maximum in [0, 4] {
+        assert_eq!(
+            execute_gfx942_exec_slice_v1(
+                &trace,
+                slice,
+                &initial,
+                Gfx942ExecLimitsV1::new(4, maximum, 4).unwrap()
+            ),
+            Err(Failure::TraceInstructionLimit { actual: 5, maximum })
+        );
+    }
+    assert_eq!(initial, Gfx942ExecStateV1::default());
 }

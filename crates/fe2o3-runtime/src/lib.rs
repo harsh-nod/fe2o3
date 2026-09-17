@@ -560,14 +560,12 @@ fn validate_resources(
             "cluster launch",
         ));
     }
+    validate_workgroup(
+        geometry,
+        resources.required_workgroup_size(),
+        resources.max_flat_workgroup_size(),
+    )?;
     let workgroup = geometry.workgroup().map(u32::from);
-    if resources
-        .required_workgroup_size()
-        .is_some_and(|required| required != workgroup)
-        || workgroup.into_iter().product::<u32>() > resources.max_flat_workgroup_size()
-    {
-        return Err(Gfx942RuntimePreparationErrorV1::WorkgroupMismatch);
-    }
     let grid = geometry.grid();
     for (axis, maximum) in resources.max_workgroups().into_iter().enumerate() {
         let count = ceil_div_u32(grid[axis], workgroup[axis]);
@@ -587,6 +585,21 @@ fn validate_resources(
     let alignment = resources.kernarg_segment_alignment();
     if alignment == 0 || alignment > 4096 || !alignment.is_power_of_two() {
         return Err(Gfx942RuntimePreparationErrorV1::KernargLayout);
+    }
+    Ok(())
+}
+
+fn validate_workgroup(
+    geometry: AqlDispatchGeometryV1,
+    required_workgroup: Option<[u32; 3]>,
+    max_flat_workgroup_size: u32,
+) -> Result<(), Gfx942RuntimePreparationErrorV1> {
+    let workgroup = geometry.workgroup();
+    let flat_workgroup_size = workgroup.into_iter().map(u64::from).product::<u64>();
+    if required_workgroup.is_some_and(|required| required != workgroup.map(u32::from))
+        || flat_workgroup_size > u64::from(max_flat_workgroup_size)
+    {
+        return Err(Gfx942RuntimePreparationErrorV1::WorkgroupMismatch);
     }
     Ok(())
 }
@@ -760,6 +773,36 @@ mod tests {
 
     fn geometry() -> AqlDispatchGeometryV1 {
         AqlDispatchGeometryV1::new([130, 4, 1], [64, 2, 1]).unwrap()
+    }
+
+    #[test]
+    fn resource_validation_rejects_oversized_multidimensional_workgroups_without_panic() {
+        for workgroup in [[32, 32, 2], [u32::from(u16::MAX); 3]] {
+            let geometry = AqlDispatchGeometryV1::new(workgroup, workgroup).unwrap();
+            for required in [None, Some(workgroup)] {
+                assert!(matches!(
+                    validate_workgroup(geometry, required, 1024),
+                    Err(Gfx942RuntimePreparationErrorV1::WorkgroupMismatch)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn resource_validation_checks_workgroup_limit_and_required_shape() {
+        let workgroup = [8, 8, 16];
+        let geometry = AqlDispatchGeometryV1::new(workgroup, workgroup).unwrap();
+        for required in [None, Some(workgroup)] {
+            validate_workgroup(geometry, required, 1024).unwrap();
+            assert!(matches!(
+                validate_workgroup(geometry, required, 1023),
+                Err(Gfx942RuntimePreparationErrorV1::WorkgroupMismatch)
+            ));
+        }
+        assert!(matches!(
+            validate_workgroup(geometry, Some([16, 8, 8]), 1024),
+            Err(Gfx942RuntimePreparationErrorV1::WorkgroupMismatch)
+        ));
     }
 
     #[test]

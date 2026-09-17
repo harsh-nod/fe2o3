@@ -17,13 +17,14 @@ use fe2o3_aql::{
 
 use super::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1,
-    KfdTargetRuntimeDebugQueueV1, QueueExceptionWaitObservationV1,
+    GFX942_DESTROYED_QUEUE_RELEASED_RESOURCE_COUNT_V1, KfdTargetRuntimeDebugQueueV1,
+    QueueExceptionWaitObservationV1,
 };
 use crate::queue_linux::LinuxKfdRuntimeEnabledV1;
 use crate::shared_memory::{
     ExecutableGttV1, GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1,
-    HostVisibleCoherentGttV1, KernargGttV1, SharedGttAllocationV1, SharedGttMappedResourceFactsV1,
-    SharedGttMemorySessionV1,
+    HostVisibleCoherentGttV1, KernargGttV1, MAX_SHARED_GTT_ALLOCATIONS_V1, SharedGttAllocationV1,
+    SharedGttMappedResourceFactsV1, SharedGttMemorySessionV1,
 };
 use crate::wait::MonotonicWaitV1;
 use crate::{
@@ -34,7 +35,11 @@ use crate::{
 
 const KERNEL_DESCRIPTOR_BYTES: u64 = 64;
 const POINTER_BYTES: usize = 8;
-const MAX_BUFFERS_V1: usize = 57;
+// Dispatch retains executable, kernarg and signal allocations alongside the queue resources.
+const FIXED_DISPATCH_ALLOCATIONS_V1: usize = 3;
+const MAX_BUFFERS_V1: usize = MAX_SHARED_GTT_ALLOCATIONS_V1
+    - GFX942_DESTROYED_QUEUE_RELEASED_RESOURCE_COUNT_V1 as usize
+    - FIXED_DISPATCH_ALLOCATIONS_V1;
 const MAX_POINTER_FIXUPS_V1: usize = 256;
 const MAX_KERNARG_BYTES_V1: usize = 64 * 1024;
 const MAX_EXECUTABLE_OR_BUFFER_BYTES_V1: usize = 1 << 31;
@@ -1030,9 +1035,9 @@ fn validate_request(
     let workgroup_size = geometry
         .workgroup()
         .into_iter()
-        .map(u32::from)
-        .product::<u32>();
-    if workgroup_size > MAX_GFX942_FLAT_WORKGROUP_SIZE_V1 {
+        .map(u64::from)
+        .product::<u64>();
+    if workgroup_size > u64::from(MAX_GFX942_FLAT_WORKGROUP_SIZE_V1) {
         return Err(Gfx942KfdDispatchRequestErrorV1::WorkgroupTooLarge);
     }
     if private_segment_size != 0 {
@@ -1101,6 +1106,60 @@ mod tests {
         let request = valid_request().unwrap();
         assert_eq!(request.executable_image.len(), 128);
         assert_eq!(request.buffers.len(), 1);
+    }
+
+    #[test]
+    fn admits_56_buffers_and_rejects_57_before_native_work() {
+        for buffer_count in [56, 57] {
+            let request = valid_request().unwrap();
+            let buffers = (0..buffer_count)
+                .map(|_| Gfx942KfdDispatchBufferV1::new(vec![0; 64]).unwrap())
+                .collect();
+            let result = Gfx942KfdDispatchRequestV1::new(
+                request.executable_image,
+                request.descriptor_offset,
+                request.kernarg_template,
+                request.kernarg_alignment,
+                buffers,
+                request.pointer_fixups,
+                request.geometry,
+                request.private_segment_size,
+                request.group_segment_size,
+                request.timeout_milliseconds,
+            );
+            if buffer_count == 56 {
+                assert_eq!(result.unwrap().buffers.len(), buffer_count);
+            } else {
+                assert_eq!(
+                    result.unwrap_err(),
+                    Gfx942KfdDispatchRequestErrorV1::TooManyBuffers
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_oversized_multidimensional_workgroups_without_native_work() {
+        for workgroup in [[32, 32, 2], [u32::from(u16::MAX); 3]] {
+            let request = valid_request().unwrap();
+            let geometry = AqlDispatchGeometryV1::new(workgroup, workgroup).unwrap();
+            assert_eq!(
+                Gfx942KfdDispatchRequestV1::new(
+                    request.executable_image,
+                    request.descriptor_offset,
+                    request.kernarg_template,
+                    request.kernarg_alignment,
+                    request.buffers,
+                    request.pointer_fixups,
+                    geometry,
+                    request.private_segment_size,
+                    request.group_segment_size,
+                    request.timeout_milliseconds,
+                )
+                .unwrap_err(),
+                Gfx942KfdDispatchRequestErrorV1::WorkgroupTooLarge
+            );
+        }
     }
 
     #[test]

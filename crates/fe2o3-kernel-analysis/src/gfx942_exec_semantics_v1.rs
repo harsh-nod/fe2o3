@@ -1,15 +1,19 @@
-//! Conditional, bounded execution of gfx942 scalar mask/control instructions.
+//! Conditional, bounded execution of gfx942 scalar mask/control and address-carry instructions.
 //!
 //! Inputs are the existing exact-byte machine trace and explicit register live-ins, not a
 //! claimed kernel-entry state. All instructions in the selected interval are checked, including
 //! paths not taken in this observation. The exclusive stop offset must be another instruction
-//! in the same function; that instruction is not executed. Memory, numeric instructions,
+//! in the same function; that instruction is not executed. Memory, other numeric instructions,
 //! termination, and source-to-machine refinement are outside this component.
 //!
 //! ISA: AMD Instinct MI300/CDNA3 reference, sections 12.1, 12.3, 12.5 and 13.1.
 //! https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf
 //! MC operand/effect forms follow LLVM 22.1.8 SOPInstructions.td. Only four-byte encodings,
-//! ordinary aligned SGPR pairs, EXEC/VCC, and inline integer constants are supported.
+//! ordinary aligned SGPR pairs, EXEC/VCC, and inline integer constants are supported for masks.
+//! The U32 ADD/ADDC/SUB/SUBB subset accepts only individual s0..s101 and inline -16..64.
+//! SCC is carry-out for addition, borrow-out for subtraction (zero means no borrow).
+//! Literals, special-register U32 operands, modifiers, and S_MOV_B32 are not admitted.
+//! https://github.com/llvm/llvm-project/blob/llvmorg-22.1.8/llvm/lib/Target/AMDGPU/SOPInstructions.td
 
 use crate::{
     AuthenticatedPhysicalMachineAnalysisExecutionV1,
@@ -457,6 +461,13 @@ fn exact_names(actual: &[String], expected: &[&str]) -> bool {
         .eq(expected.iter().copied())
 }
 
+fn is_u32_arithmetic(opcode: &str) -> bool {
+    matches!(
+        opcode,
+        "S_ADD_U32_vi" | "S_ADDC_U32_vi" | "S_SUB_U32_vi" | "S_SUBB_U32_vi"
+    )
+}
+
 fn validate_instruction(
     instruction: &PhysicalMachineInstructionTraceV1,
 ) -> Result<(), Gfx942ExecExecutionErrorV1> {
@@ -467,6 +478,10 @@ fn validate_instruction(
         return Err(Gfx942ExecExecutionErrorV1::InvalidOperands { offset });
     }
     let (encoding, sources, saved, branch) = match instruction.opcode() {
+        "S_ADD_U32_vi" => (0x8000_0000, 2, false, None),
+        "S_SUB_U32_vi" => (0x8080_0000, 2, false, None),
+        "S_ADDC_U32_vi" => (0x8200_0000, 2, false, None),
+        "S_SUBB_U32_vi" => (0x8280_0000, 2, false, None),
         "S_MOV_B64_vi" => (0xbe80_0100, 1, false, None),
         "S_AND_SAVEEXEC_B64_vi" => (0xbe80_2000, 1, true, None),
         "S_ANDN2_SAVEEXEC_B64_vi" => (0xbe80_2300, 1, true, None),
@@ -532,12 +547,17 @@ fn validate_instruction(
     if instruction.explicit_definition_count() != 1 || operands.len() != sources + 1 {
         return Err(Gfx942ExecExecutionErrorV1::InvalidOperands { offset });
     }
-    let destination = register_selector(operands[0].value(), offset)?;
+    let scalar32 = is_u32_arithmetic(instruction.opcode());
+    let destination = if scalar32 {
+        sgpr32_selector(operands[0].value(), offset)?
+    } else {
+        register_selector(operands[0].value(), offset)?
+    };
     if (saved && destination > 100) || destination != ((word >> 16) & 0x7f) as u8 {
         return Err(Gfx942ExecExecutionErrorV1::InvalidOperands { offset });
     }
     for (index, operand) in operands[1..].iter().enumerate() {
-        let selector = source_selector(operand.value(), offset)?;
+        let selector = source_selector(operand.value(), offset, scalar32)?;
         if selector != ((word >> (index * 8)) & 0xff) as u8 {
             return Err(Gfx942ExecExecutionErrorV1::InvalidOperands { offset });
         }
@@ -549,19 +569,38 @@ fn validate_instruction(
     } else {
         &["SCC"]
     };
+    let uses: &[&str] = if saved {
+        &["EXEC"]
+    } else if matches!(instruction.opcode(), "S_ADDC_U32_vi" | "S_SUBB_U32_vi") {
+        &["SCC"]
+    } else {
+        &[]
+    };
     if instruction.branch_kind() != PhysicalMachineBranchKindV1::None
         || instruction.branch_target().is_some()
         || instruction.flags().bits() != 0
         || instruction.memory_access() != PhysicalMachineMemoryAccessV1::None
         || !exact_names(instruction.implicit_definitions(), definitions)
-        || !exact_names(
-            instruction.implicit_uses(),
-            if saved { &["EXEC"] } else { &[] },
-        )
+        || !exact_names(instruction.implicit_uses(), uses)
     {
         return Err(Gfx942ExecExecutionErrorV1::InvalidEffects { offset });
     }
     Ok(())
+}
+
+fn sgpr32_selector(
+    value: &PhysicalMachineOperandValueV1,
+    offset: u64,
+) -> Result<u8, Gfx942ExecExecutionErrorV1> {
+    let PhysicalMachineOperandValueV1::Register(name) = value else {
+        return Err(Gfx942ExecExecutionErrorV1::InvalidOperands { offset });
+    };
+    let alias = Gfx942RegisterAliasV1::decode(name)
+        .map_err(|_| Gfx942ExecExecutionErrorV1::InvalidOperands { offset })?;
+    match alias.units() {
+        [Gfx942RegisterUnitV1::Sgpr(index)] if usize::from(*index) < SGPR_WORDS => Ok(*index as u8),
+        _ => Err(Gfx942ExecExecutionErrorV1::InvalidOperands { offset }),
+    }
 }
 
 fn register_selector(
@@ -590,6 +629,7 @@ fn register_selector(
 fn source_selector(
     value: &PhysicalMachineOperandValueV1,
     offset: u64,
+    scalar32: bool,
 ) -> Result<u8, Gfx942ExecExecutionErrorV1> {
     match value {
         PhysicalMachineOperandValueV1::SignedImmediate(value) if (0..=64).contains(value) => {
@@ -598,8 +638,24 @@ fn source_selector(
         PhysicalMachineOperandValueV1::SignedImmediate(value) if (-16..=-1).contains(value) => {
             Ok((192 - value) as u8)
         }
+        _ if scalar32 => sgpr32_selector(value, offset),
         _ => register_selector(value, offset),
     }
+}
+
+fn read_source32(
+    value: &PhysicalMachineOperandValueV1,
+    state: &Gfx942ExecStateV1,
+    offset: u64,
+) -> Result<u32, Gfx942ExecExecutionErrorV1> {
+    if let PhysicalMachineOperandValueV1::SignedImmediate(value) = value {
+        return Ok(*value as u32);
+    }
+    let index = sgpr32_selector(value, offset)?;
+    state.sgpr[usize::from(index)].ok_or(Gfx942ExecExecutionErrorV1::UndefinedRegister {
+        offset,
+        register: Gfx942RegisterUnitV1::Sgpr(u16::from(index)),
+    })
 }
 
 fn read_source(
@@ -654,6 +710,30 @@ fn execute_instruction(
         });
     }
     let operands = instruction.operands();
+    if is_u32_arithmetic(opcode) {
+        let destination = sgpr32_selector(operands[0].value(), offset)?;
+        // Snapshot both words and incoming SCC before writing any aliased pair member.
+        let left = read_source32(operands[1].value(), state, offset)?;
+        let right = read_source32(operands[2].value(), state, offset)?;
+        let carry_or_borrow = if matches!(opcode, "S_ADDC_U32_vi" | "S_SUBB_U32_vi") {
+            state
+                .scc
+                .ok_or(Gfx942ExecExecutionErrorV1::UndefinedRegister {
+                    offset,
+                    register: Gfx942RegisterUnitV1::Scc,
+                })?
+        } else {
+            false
+        };
+        let (value, scc) = if matches!(opcode, "S_ADD_U32_vi" | "S_ADDC_U32_vi") {
+            gfx942_exec_transition_v1!(add_u32, left, right, carry_or_borrow)
+        } else {
+            gfx942_exec_transition_v1!(sub_u32, left, right, carry_or_borrow)
+        };
+        state.sgpr[usize::from(destination)] = Some(value);
+        state.scc = Some(scc);
+        return Ok(next);
+    }
     let destination = register_selector(operands[0].value(), offset)?;
     // Every source, including old EXEC, is snapshotted before any destination write.
     let left = read_source(operands[1].value(), state, offset)?;

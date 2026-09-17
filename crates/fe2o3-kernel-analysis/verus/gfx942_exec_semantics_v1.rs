@@ -3,6 +3,17 @@
 // Verify this file with the pinned Verus and --cfg verus_keep_ghost. No assume/external_body.
 
 macro_rules! gfx942_exec_transition_v1 {
+    (add_u32, $left:expr, $right:expr, $carry:expr) => {{
+        let carry = if $carry { 1u64 } else { 0u64 };
+        let sum = ($left as u64) + ($right as u64) + carry;
+        (sum as u32, sum >= 0x1_0000_0000u64)
+    }};
+    (sub_u32, $left:expr, $right:expr, $borrow:expr) => {{
+        let borrow = if $borrow { 1u64 } else { 0u64 };
+        // The bias avoids host underflow, including MAX + borrow on the right.
+        let difference = 0x1_0000_0000u64 + ($left as u64) - ($right as u64) - borrow;
+        (difference as u32, ($left as u64) < ($right as u64) + borrow)
+    }};
     (mov, $source:expr, $scc:expr) => {
         ($source, $scc, None::<u64>)
     };
@@ -40,6 +51,51 @@ mod conditional_lemmas {
     use vstd::prelude::*;
 
     verus! {
+    pub open spec fn add_u32(left: u32, right: u32, carry: bool) -> (u32, bool) {
+        gfx942_exec_transition_v1!(add_u32, left, right, carry)
+    }
+    pub open spec fn sub_u32(left: u32, right: u32, borrow: bool) -> (u32, bool) {
+        gfx942_exec_transition_v1!(sub_u32, left, right, borrow)
+    }
+
+    pub proof fn addition_word_and_carry_reconstruct_sum(left: u32, right: u32, carry: bool)
+        ensures
+            (add_u32(left, right, carry).0 as u64
+                | ((if add_u32(left, right, carry).1 { 1u64 } else { 0u64 }) << 32))
+                == ((left as u64 + right as u64
+                    + (if carry { 1u64 } else { 0u64 })) as u64),
+    {
+        let incoming: u64 = if carry { 1 } else { 0 };
+        assert(incoming <= 1);
+        assert(
+            (((left as u64 + right as u64 + incoming) as u32) as u64
+                | ((if left as u64 + right as u64 + incoming >= 0x1_0000_0000u64 {
+                    1u64
+                } else { 0u64 }) << 32))
+                == ((left as u64 + right as u64 + incoming) as u64)
+        ) by(bit_vector) requires incoming <= 1;
+    }
+
+    pub proof fn subtraction_word_and_no_borrow_reconstruct_biased_difference(
+        left: u32, right: u32, borrow: bool,
+    )
+        ensures
+            sub_u32(left, right, borrow).1
+                == ((left as u64) < right as u64 + (if borrow { 1u64 } else { 0u64 })),
+            (sub_u32(left, right, borrow).0 as u64
+                | ((if sub_u32(left, right, borrow).1 { 0u64 } else { 1u64 }) << 32))
+                == ((0x1_0000_0000u64 + left as u64 - right as u64
+                    - (if borrow { 1u64 } else { 0u64 })) as u64),
+    {
+        let incoming: u64 = if borrow { 1 } else { 0 };
+        assert(incoming <= 1);
+        assert(
+            (((0x1_0000_0000u64 + left as u64 - right as u64 - incoming) as u32) as u64
+                | ((if (left as u64) < right as u64 + incoming { 0u64 } else { 1u64 }) << 32))
+                == ((0x1_0000_0000u64 + left as u64 - right as u64 - incoming) as u64)
+        ) by(bit_vector) requires incoming <= 1;
+    }
+
     pub open spec fn and_save(source: u64, exec: u64) -> (u64, Option<bool>, Option<u64>) {
         gfx942_exec_transition_v1!(and_save, source, exec)
     }
