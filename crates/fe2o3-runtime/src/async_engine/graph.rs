@@ -390,7 +390,7 @@ pub(super) trait EngineGraphV1<B: RuntimeBackendV1>: Send {
 }
 
 enum PreparedGraphActionV1 {
-    Ordinary(PreparedContextGraphActionV1),
+    Ordinary(Box<PreparedContextGraphActionV1>),
     Generated(RuntimeAsyncReservedTicketV1),
 }
 
@@ -544,7 +544,7 @@ impl<B: RuntimeBackendV1> Graph<B> {
                 _ => None,
             };
             self.actions
-                .push(action.map(PreparedGraphActionV1::Ordinary));
+                .push(action.map(|action| PreparedGraphActionV1::Ordinary(Box::new(action))));
             self.ids.push(node.id());
             self.node_streams.push(request.streams[&node.stream()]);
             self.issued.push(false);
@@ -770,7 +770,7 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
                 }
             }
             Some(PreparedGraphActionV1::Ordinary(action)) => {
-                match context.submit_graph_action_v1(self.token.unwrap(), action) {
+                match context.submit_graph_action_v1(self.token.unwrap(), *action) {
                     Ok(submission) => self
                         .active
                         .push_back(ActiveGraphActionV1::Ordinary(index, submission, None)),

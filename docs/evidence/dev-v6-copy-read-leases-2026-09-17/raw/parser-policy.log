@@ -1,0 +1,11 @@
+rejected missing_package
+rejected duplicate_summary
+rejected duplicate_row
+rejected wrong_count
+rejected measured
+rejected filtered
+rejected unknown_status
+rejected wrong_package
+rejected wrong_target
+rejected missing_row
+accepted both complete baseline rosters; rejected all 10 mutations

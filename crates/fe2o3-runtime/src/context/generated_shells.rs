@@ -170,7 +170,12 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
         }
         let result = self.prepare_generated_shell_retirement_v1(plan);
-        let ticket = self.journal_result_v1(result)?;
+        let ticket = match result {
+            Err(fe2o3_runtime_model::ContextVersionJournalErrorV1::AllocationBusy) => {
+                return Err(RuntimeValidationErrorV1::ContextReserved.into());
+            }
+            result => self.journal_result_v1(result)?,
+        };
         self.guard_journal_unwind_v1(|context| {
             context.backend.dispose_generated_shells_v1(&plan);
             let result = context.finish_generated_shell_retirement_v1(ticket);

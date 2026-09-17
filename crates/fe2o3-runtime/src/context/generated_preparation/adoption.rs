@@ -106,6 +106,10 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 };
             }
             let plan = self.generated_plan_for_hold_v1(hold)?;
+            let unread = self.generated_shells_unread_v1(&plan);
+            if !self.journal_result_v1(unread)? {
+                return Err(RuntimeValidationErrorV1::ContextReserved.into());
+            }
             self.backend
                 .retire_generated_data_v1(&plan)
                 .map_err(map_backend_error)?;

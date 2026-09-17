@@ -141,6 +141,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     .map(|state| (member, state))
             });
             let (member, state) = context.journal_result_v1(result)?;
+            let result = context
+                .versions
+                .as_ref()
+                .expect("configured journal")
+                .journal
+                .reader_count(member.allocation);
+            if context.journal_result_v1(result)? != 0 {
+                return Err(RuntimeValidationErrorV1::ContextReserved);
+            }
             if let Some(writer) = state.pending_writer {
                 let result = context
                     .versions
@@ -306,6 +315,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 Ok((member, writer))
             });
             let (member, pending) = context.journal_result_v1(result)?;
+            let result = context
+                .versions
+                .as_ref()
+                .expect("configured journal")
+                .journal
+                .reader_count(member.allocation);
+            if context.journal_result_v1(result)? != 0 {
+                return Err(RuntimeValidationErrorV1::ContextReserved);
+            }
             let versions = context.versions.as_ref().expect("configured journal");
             let kind = match pending {
                 None => {

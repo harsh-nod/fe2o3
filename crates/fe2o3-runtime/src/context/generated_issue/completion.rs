@@ -71,6 +71,10 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             let id = token.id;
             let backend_submission = token.backend_submission;
             let expected_writer = attempt.expected_writer;
+            let unread = self.generated_shells_unread_v1(&plan);
+            if !self.journal_result_v1(unread)? {
+                return Err(RuntimeValidationErrorV1::ContextReserved.into());
+            }
             let uid = self.generated_issue_device_uid_v1(plan.binding.backend_device)?;
             self.generated_issues
                 .get_mut(&hold.stream())

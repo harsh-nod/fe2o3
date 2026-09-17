@@ -3,7 +3,7 @@ use fe2o3_runtime_model::{ContextAllocationStateV1, ContextWriterKindV1, Context
 
 type Context = RuntimeContextV1<MockBackend>;
 
-fn fixture(
+pub(super) fn fixture(
     writers: usize,
 ) -> (
     Context,
@@ -28,7 +28,7 @@ fn fixture(
     (context, stream, allocation, kernel)
 }
 
-fn state(context: &Context, id: RuntimeAllocationIdV1) -> ContextAllocationStateV1 {
+pub(super) fn state(context: &Context, id: RuntimeAllocationIdV1) -> ContextAllocationStateV1 {
     context
         .versions
         .as_ref()
@@ -38,7 +38,7 @@ fn state(context: &Context, id: RuntimeAllocationIdV1) -> ContextAllocationState
         .unwrap()
 }
 
-fn writer_state(context: &Context, id: RuntimeAllocationIdV1) -> ContextWriterStateV1 {
+pub(super) fn writer_state(context: &Context, id: RuntimeAllocationIdV1) -> ContextWriterStateV1 {
     context
         .versions
         .as_ref()
@@ -428,6 +428,7 @@ fn initial_no_handle_failures_settle_only_definite_rejection() {
                 stream,
                 record,
                 &[allocation],
+                None,
                 None,
                 |backend| {
                     backend.submit_count += 1;

@@ -212,6 +212,11 @@ fn free_slots(capacity: usize) -> Result<Vec<usize>, ContextVersionJournalErrorV
 }
 
 impl ContextVersionJournalV1 {
+    #[cfg(test)]
+    pub(crate) fn reset_access_count_for_test_v1(&self) {
+        self.indexed_accesses.set(0);
+    }
+
     /// Models construction-only opt-in, with a fixed zero initial watermark.
     pub fn new(
         context_generation: u64,

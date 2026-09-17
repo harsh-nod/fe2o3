@@ -10,7 +10,15 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest development (2026-09-17): [generated writer journal integration](runtime-context-version-journal-generated-v1.md)
+Latest development (2026-09-17): [copy-source read leases](runtime-context-copy-read-leases-v1.md)
+retain original local/peer copy sources through exact quiescence and exclude
+source mutation and retirement while readers remain. The owning bounded model
+keeps the original issuance proof's scope separate from unproved reader
+composition. See the [qualification receipt](evidence/dev-v6-copy-read-leases-2026-09-17/README.md).
+Initialized inputs, general kernel reads, native/formal/performance acceptance
+and A1/A2 remain open; accepted checkpoints are unchanged.
+
+Preceding development: [generated writer journal integration](runtime-context-version-journal-generated-v1.md)
 binds protected ISSUE to original writable allocation IDs and separates generic
 observations from protected completion. Successful protected settlement precedes
 shell retirement; Stop disposes the complete Unknown writer and independent

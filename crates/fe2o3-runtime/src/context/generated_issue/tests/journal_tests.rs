@@ -37,6 +37,84 @@ fn access_rosters() -> [[Access; 3]; 3] {
 }
 
 #[test]
+fn generated_shell_readers_block_whole_batch_retirement_before_any_shell_disposal() {
+    use fe2o3_runtime_model::{
+        ContextAllocationReadV1, ContextReadQuiescenceEvidenceV1, ContextWriterKeyV1,
+        ContextWriterKindV1,
+    };
+    for index in 0..3 {
+        let mut context = context_with_journal(2);
+        let (hold, plan, _, _) = install_with_access(&mut context, false, [ReadOnly; 3]);
+        let before = states(&context, &plan);
+        let member = plan.members[index].unwrap();
+        let reference = context.allocations[&member.logical].journal.unwrap();
+        let state = before[index];
+        let consumer = ContextWriterKeyV1 {
+            context_generation: context.context_generation,
+            local: 900,
+            kind: ContextWriterKindV1::Submission,
+        };
+        let mut output = [None];
+        // Inert model premise only: private shell IDs do not escape the public API.
+        context
+            .versions
+            .as_mut()
+            .unwrap()
+            .read_leases_for_test_v1()
+            .acquire_reads(
+                consumer,
+                &[ContextAllocationReadV1 {
+                    allocation: reference,
+                    device: state.device,
+                    byte_extent: state.byte_extent,
+                    byte_offset: 0,
+                    byte_len: state.byte_extent,
+                    attempt_epoch: state.attempt_epoch,
+                    content_lineage: state.content_lineage,
+                }],
+                &mut output,
+            )
+            .unwrap();
+        let credits = context
+            .allocation_admission_usage_v1(plan.binding.device)
+            .unwrap();
+        assert_eq!(context.generated_shells_unread_v1(&plan), Ok(false));
+        assert!(matches!(
+            context.retire_generated_shells_v1(&hold),
+            Err(RuntimeErrorV1::Validation(
+                RuntimeValidationErrorV1::ContextReserved
+            ))
+        ));
+        assert_eq!(states(&context, &plan), before);
+        assert_eq!(
+            context
+                .allocation_admission_usage_v1(plan.binding.device)
+                .unwrap(),
+            credits
+        );
+        assert_eq!(context.generated_plan_for_hold_v1(&hold).unwrap(), plan);
+        assert_eq!(context.version_journal_read_records_v1(), Some(1));
+        assert!(!context.is_terminal());
+        context
+            .versions
+            .as_mut()
+            .unwrap()
+            .read_leases_for_test_v1()
+            .release_reads(
+                consumer,
+                &[output[0].unwrap()],
+                &ContextReadQuiescenceEvidenceV1 { consumer },
+            )
+            .unwrap();
+        assert_eq!(context.generated_shells_unread_v1(&plan), Ok(true));
+        context.retire_generated_shells_v1(&hold).unwrap();
+        assert!(context.allocations.is_empty());
+        context.release_unpublished_hold_v1(&hold).unwrap();
+        assert!(context.cleanup().is_complete());
+    }
+}
+
+#[test]
 fn generated_journal_begin_binds_only_original_writable_members() {
     for accesses in access_rosters() {
         let mut context = context_with_journal(2);

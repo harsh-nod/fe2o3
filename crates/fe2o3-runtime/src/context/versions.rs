@@ -1,12 +1,15 @@
 //! Opt-in allocation and host-write metadata. No lineage or reuse authority yet.
 
 use super::*;
+#[cfg(test)]
+use fe2o3_runtime_model::ContextVersionJournalV1;
 use fe2o3_runtime_model::{
     ContextAllocationEnrollmentV1, ContextAllocationKeyV1, ContextAllocationReferenceV1,
-    ContextJournalDeviceKeyV1, ContextVersionJournalErrorV1, ContextVersionJournalV1,
+    ContextJournalDeviceKeyV1, ContextReadLeasedJournalV1, ContextVersionJournalErrorV1,
 };
 
 mod generated;
+mod readers;
 mod submission_disposal;
 mod submissions;
 mod writers;
@@ -56,7 +59,7 @@ enum AllocationPhaseV1 {
 }
 
 pub(super) struct ContextVersionsV1 {
-    journal: ContextVersionJournalV1,
+    journal: ContextReadLeasedJournalV1,
     phases: Vec<Option<AllocationPhaseV1>>,
     submission_writers: HashMap<RuntimeSubmissionIdV1, submissions::RetainedSubmissionWriterV1>,
 }
@@ -111,7 +114,7 @@ impl ContextVersionsV1 {
         allocations: usize,
         writers: usize,
     ) -> Result<Self, ContextVersionJournalErrorV1> {
-        let journal = ContextVersionJournalV1::new(generation, allocations, writers)?;
+        let journal = ContextReadLeasedJournalV1::new(generation, allocations, writers, writers)?;
         let mut phases = Vec::new();
         phases
             .try_reserve_exact(allocations)
@@ -248,7 +251,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// writable buffers of protected generated attempts. Generated settlement
     /// requires protected completion or whole-batch Stop disposal, never generic
     /// polling. Writer capacity and unresolved writes gate subsequent writes.
-    /// Backend aliases and input leases remain outside this profile;
+    /// Built-in copies also retain bounded source read leases, with reader
+    /// capacity equal to writer capacity. Source writes and retirement reject
+    /// while any copy reader remains. Backend aliases and initialized-input
+    /// authority remain outside this profile;
     /// no content lineage or reuse permission is exposed. Unknown async writers
     /// retain their journal metadata and credits, even after submission metadata
     /// is released, until every original destination owner has been disposed.

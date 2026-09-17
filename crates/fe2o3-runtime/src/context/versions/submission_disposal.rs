@@ -39,6 +39,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .ok_or(E::InvalidReference)?;
         if root.writer != writer
             || root.domain != SubmissionWriterDomainV1::Ordinary
+            || root.copy_source.is_some()
             || root.journal_disposed
             || root.allocations.len() != root.members.len()
             || root.disposed_count >= root.allocations.len()

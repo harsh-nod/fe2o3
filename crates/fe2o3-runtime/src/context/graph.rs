@@ -21,7 +21,14 @@ pub(crate) struct PreparedContextCopyV1 {
     pub(super) source: BackendMemoryRegionV1,
     pub(super) destination: BackendMemoryRegionV1,
     pub(super) journal_destination: RuntimeAllocationIdV1,
+    pub(super) journal_source: ContextCopySourceV1,
     pub(super) backend_dependencies: Vec<u64>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ContextCopySourceV1 {
+    pub(super) region: RuntimeMemoryRegionV1,
+    pub(super) record: AllocationRecordV1,
 }
 
 pub(crate) enum PreparedContextGraphActionV1 {

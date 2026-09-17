@@ -13,6 +13,29 @@ pub(in crate::context) struct GeneratedShellRetirementV1 {
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+    // Check before native DATA/submission retirement, not only shell disposal.
+    pub(in crate::context) fn generated_shells_unread_v1(
+        &self,
+        plan: &GeneratedShellPlanV1,
+    ) -> Result<bool, ContextVersionJournalErrorV1> {
+        use ContextVersionJournalErrorV1 as E;
+        let Some(versions) = self.versions.as_ref() else {
+            return Ok(true);
+        };
+        for member in plan.members.get(..plan.count).ok_or(E::InvalidState)? {
+            let member = member.ok_or(E::InvalidAllocationReference)?;
+            let record = self
+                .allocations
+                .get(&member.logical)
+                .ok_or(E::InvalidAllocationReference)?;
+            let reference = versions.validate_live(member.logical, record)?;
+            if versions.journal.reader_count(reference)? != 0 {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub(in crate::context) fn validate_generated_writer_v1(
         &self,
         id: RuntimeSubmissionIdV1,
@@ -32,11 +55,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         {
             return Err(E::InvalidReference);
         }
-        if self
-            .submissions
-            .get(&id)
-            .is_some_and(|record| record.journal_writer != expected)
-        {
+        if self.submissions.get(&id).is_some_and(|record| {
+            record.journal_writer != expected || record.journal_read.is_some()
+        }) {
             return Err(E::InvalidReference);
         }
         let Some(versions) = self.versions.as_ref() else {
@@ -70,6 +91,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || root.disposal_started
             || root.disposed_count != 0
             || root.journal_disposed
+            || root.copy_source.is_some()
             || root.allocations.len() != writable
             || root.members.len() != writable
             || writer.key.context_generation != id.context_generation
@@ -201,6 +223,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
             if let Some(versions) = self.versions.as_ref() {
                 let reference = versions.validate_live(member.logical, record)?;
+                if versions.journal.reader_count(reference)? != 0 {
+                    return Err(E::AllocationBusy);
+                }
                 let writer = ticket
                     .writer
                     .map(|id| versions.submission_writers[&id].writer);

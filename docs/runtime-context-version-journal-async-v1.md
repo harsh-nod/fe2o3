@@ -88,7 +88,11 @@ its own original writable roster, closing currentness, checked readback and
 native-retirement settlement path. That CPU-qualified integration does not supply
 production verifier/refinement evidence or native protected qualification.
 
-Backend aliases, input/read leases, ordered overlapping writers, cross-run version
+The subsequent [copy-source leases](runtime-context-copy-read-leases-v1.md) retain
+built-in copy sources and exclude mutation until exact consumer quiescence.
+They do not establish initialized inputs or general kernel read effects.
+
+Backend aliases, available-input leases, ordered overlapping writers, cross-run version
 consumption, content recovery and aggregate native-residency disposal remain open.
 Pending or Unknown membership currently rejects a later writer even if an event
 dependency or stream order would otherwise serialize it. No public lineage or

@@ -1011,6 +1011,7 @@ struct SubmissionRecordV1 {
     quiescent: bool,
     status: RuntimeCompletionStatusV1,
     journal_writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
+    journal_read: Option<fe2o3_runtime_model::ContextReadLeaseReferenceV1>,
 }
 
 type RuntimeCompletionCallbackV1 =
@@ -1555,6 +1556,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         } else {
             SubmissionWriterOutcomeV1::Unknown
         };
+        self.release_copy_source_v1(submission)?;
         self.settle_submission_writer_v1(submission, outcome)?;
         self.publish_submission_status_v1(submission, status)
     }
@@ -2421,6 +2423,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             stream_record,
             &journal_destinations,
             None,
+            None,
             |backend| {
                 submit(
                     backend,
@@ -2977,6 +2980,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let stream_record = *self.unheld_stream_v1(stream)?;
         let peer_contract_identity = peer_copy_contract_identity(stream, source, destination);
         let journal_destination = destination.allocation;
+        let journal_source = ContextCopySourceV1 {
+            region: source,
+            record: *self
+                .allocations
+                .get(&source.allocation)
+                .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?,
+        };
         let translate = |region: RuntimeMemoryRegionV1| -> Result<
             (BackendMemoryRegionV1, RuntimeDeviceIdV1),
             RuntimeValidationErrorV1,
@@ -3046,6 +3056,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             Some(PeerTransferMechanismV1::DeclaredPeerCopy {
                 contract_identity: peer_contract_identity,
             }),
+            Some(journal_source),
             |backend| {
                 backend.peer_copy_v1(
                     stream_record.backend_stream,
@@ -3104,6 +3115,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(RuntimeValidationErrorV1::InvalidRange.into());
         }
         let journal_destination = destination.allocation;
+        let journal_source = ContextCopySourceV1 {
+            region: source,
+            record: *self
+                .allocations
+                .get(&source.allocation)
+                .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?,
+        };
         let translate = |region: RuntimeMemoryRegionV1| -> Result<
             (BackendMemoryRegionV1, RuntimeDeviceIdV1),
             RuntimeValidationErrorV1,
@@ -3163,6 +3181,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             source,
             destination,
             journal_destination,
+            journal_source,
             backend_dependencies,
         })
     }
@@ -3186,6 +3205,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             source,
             destination,
             journal_destination,
+            journal_source,
             backend_dependencies,
         } = prepared;
         self.submit_context_operation_v1(
@@ -3193,6 +3213,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             stream_record,
             &[journal_destination],
             None,
+            Some(journal_source),
             |backend| {
                 backend.copy_async_v1(
                     stream_record.backend_stream,
@@ -3242,6 +3263,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         };
         match cancellation {
             BackendCancellationV1::Cancelled => {
+                self.release_copy_source_v1(submission.id)?;
                 self.settle_submission_writer_v1(
                     submission.id,
                     SubmissionWriterOutcomeV1::NoEffect,
@@ -3486,6 +3508,7 @@ mod tests {
     mod allocation_admission_tests;
     mod allocation_outcome_tests;
     mod async_journal_tests;
+    mod copy_source_lease_tests;
     mod submission_identity_tests;
     mod version_journal_tests;
 
@@ -3591,6 +3614,12 @@ mod tests {
         device_target_len: usize,
         handle_override: Option<(MockHandleKind, u64)>,
         cancel_before_publication: bool,
+        deferred_copies: bool,
+        pending_copies: HashMap<u64, (u64, BackendMemoryRegionV1, BackendMemoryRegionV1)>,
+        copy_failure: MockMemoryFailure,
+        copy_call_count: usize,
+        write_call_count: usize,
+        cancel_failure: MockMemoryFailure,
         execution_capabilities: RuntimeExecutionCapabilitiesV1,
         submit_count: usize,
         poll_call_count: usize,
@@ -3767,6 +3796,55 @@ mod tests {
     }
 
     impl MockBackend {
+        fn apply_copy(
+            &mut self,
+            source: BackendMemoryRegionV1,
+            destination: BackendMemoryRegionV1,
+        ) {
+            let start = source.byte_offset as usize;
+            let bytes =
+                self.memory[&source.allocation][start..start + source.byte_len as usize].to_vec();
+            let start = destination.byte_offset as usize;
+            self.memory.get_mut(&destination.allocation).unwrap()[start..start + bytes.len()]
+                .copy_from_slice(&bytes);
+        }
+
+        fn finish_copy(&mut self, submission: u64, success: bool) {
+            if let Some((_, source, destination)) = self.pending_copies.remove(&submission)
+                && success
+            {
+                self.apply_copy(source, destination);
+            }
+        }
+
+        fn submit_copy(
+            &mut self,
+            stream: u64,
+            source: BackendMemoryRegionV1,
+            destination: BackendMemoryRegionV1,
+            dependencies: &[u64],
+        ) -> Result<u64, RuntimeBackendFailureV1<MockError>> {
+            self.copy_call_count += 1;
+            self.last_dependency_count = dependencies.len();
+            let failure = core::mem::take(&mut self.copy_failure);
+            if failure == MockMemoryFailure::Rejected {
+                mock_memory_failure_v1(failure)?;
+            }
+            let identity = self.handle(MockHandleKind::Submission);
+            self.polls.insert(identity, 0);
+            if self.deferred_copies {
+                self.pending_copies
+                    .insert(identity, (stream, source, destination));
+                if failure == MockMemoryFailure::Quiescent {
+                    self.finish_copy(identity, true);
+                }
+            } else {
+                self.apply_copy(source, destination);
+            }
+            mock_memory_failure_v1(failure)?;
+            Ok(identity)
+        }
+
         fn identity(&mut self) -> u64 {
             self.next += 1;
             self.next
@@ -3849,6 +3927,14 @@ mod tests {
                 self.cleanup_failure = MockCleanupFailure::None;
                 return Err(RuntimeBackendFailureV1::Rejected(MockError("busy")));
             }
+            let copies: Vec<_> = self
+                .pending_copies
+                .iter()
+                .filter_map(|(&id, (owner, _, _))| (*owner == stream).then_some(id))
+                .collect();
+            for id in copies {
+                self.finish_copy(id, true);
+            }
             if self.cleanup_failure == MockCleanupFailure::QuiescentStreamOnce {
                 self.cleanup_failure = MockCleanupFailure::None;
                 return Err(RuntimeBackendFailureV1::Quiescent(MockError(
@@ -3894,6 +3980,7 @@ mod tests {
             byte_offset: u64,
             bytes: &[u8],
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            self.write_call_count += 1;
             let memory = self.memory.get_mut(&allocation).unwrap();
             let start = byte_offset as usize;
             memory[start..start + bytes.len()].copy_from_slice(bytes);
@@ -3962,6 +4049,7 @@ mod tests {
             Ok(if *polls == 1 {
                 BackendPollV1::Pending
             } else {
+                self.finish_copy(submission, true);
                 BackendPollV1::Succeeded
             })
         }
@@ -3983,6 +4071,7 @@ mod tests {
                         )));
                     }
                     MockWaitFailure::QuiescentFirst => {
+                        self.finish_copy(submission, false);
                         return Err(RuntimeBackendFailureV1::Quiescent(MockError(
                             "wait quiescent",
                         )));
@@ -3994,13 +4083,18 @@ mod tests {
                     }
                 }
             }
-            Ok(self.wait_observation.unwrap_or(BackendPollV1::Succeeded))
+            let observation = self.wait_observation.unwrap_or(BackendPollV1::Succeeded);
+            if observation != BackendPollV1::Pending {
+                self.finish_copy(submission, observation == BackendPollV1::Succeeded);
+            }
+            Ok(observation)
         }
 
         fn release_submission_v1(
             &mut self,
             submission: u64,
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+            assert!(!self.pending_copies.contains_key(&submission));
             self.cleanup_log
                 .push((MockCleanupKind::Submission, submission));
             self.polls.remove(&submission);
@@ -4033,44 +4127,24 @@ mod tests {
 
         fn peer_copy_v1(
             &mut self,
-            _stream: u64,
+            stream: u64,
             source: BackendMemoryRegionV1,
             destination: BackendMemoryRegionV1,
             dependencies: &[u64],
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
-            self.last_dependency_count = dependencies.len();
-            let source_start = source.byte_offset as usize;
-            let source_end = source_start + source.byte_len as usize;
-            let bytes = self.memory[&source.allocation][source_start..source_end].to_vec();
-            let destination_start = destination.byte_offset as usize;
-            self.memory.get_mut(&destination.allocation).unwrap()
-                [destination_start..destination_start + bytes.len()]
-                .copy_from_slice(&bytes);
-            let identity = self.handle(MockHandleKind::Submission);
-            self.polls.insert(identity, 0);
-            Ok(identity)
+            self.submit_copy(stream, source, destination, dependencies)
         }
     }
 
     impl RuntimeAsyncCopyBackendV1 for MockBackend {
         fn copy_async_v1(
             &mut self,
-            _stream: u64,
+            stream: u64,
             source: BackendMemoryRegionV1,
             destination: BackendMemoryRegionV1,
             dependencies: &[u64],
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
-            self.last_dependency_count = dependencies.len();
-            let source_start = source.byte_offset as usize;
-            let source_end = source_start + source.byte_len as usize;
-            let bytes = self.memory[&source.allocation][source_start..source_end].to_vec();
-            let destination_start = destination.byte_offset as usize;
-            self.memory.get_mut(&destination.allocation).unwrap()
-                [destination_start..destination_start + bytes.len()]
-                .copy_from_slice(&bytes);
-            let identity = self.handle(MockHandleKind::Submission);
-            self.polls.insert(identity, 0);
-            Ok(identity)
+            self.submit_copy(stream, source, destination, dependencies)
         }
     }
 
@@ -4109,12 +4183,18 @@ mod tests {
         ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
             self.cancel_call_count += 1;
             self.last_cancelled_submission = Some(submission);
+            let failure = core::mem::take(&mut self.cancel_failure);
+            if failure == MockMemoryFailure::Quiescent {
+                self.finish_copy(submission, false);
+            }
+            mock_memory_failure_v1(failure)?;
             if !self.polls.contains_key(&submission) {
                 return Err(RuntimeBackendFailureV1::Rejected(MockError(
                     "unknown submission",
                 )));
             }
             Ok(if self.cancel_before_publication {
+                self.finish_copy(submission, false);
                 BackendCancellationV1::Cancelled
             } else {
                 BackendCancellationV1::TooLate

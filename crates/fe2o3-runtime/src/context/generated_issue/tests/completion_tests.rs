@@ -254,6 +254,7 @@ pub(super) fn assert_submission_retained(
     assert_eq!(after.quiescent, before.quiescent);
     assert_eq!(after.status, before.status);
     assert_eq!(after.journal_writer, before.journal_writer);
+    assert_eq!(after.journal_read, before.journal_read);
 }
 
 #[test]

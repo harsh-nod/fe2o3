@@ -187,6 +187,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 quiescent: false,
                 status: RuntimeCompletionStatusV1::Pending,
                 journal_writer,
+                journal_read: None,
             },
         );
         assert!(self.backend_submissions.insert(backend_submission));
@@ -315,6 +316,10 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 .backend
                 .generated_submission_can_retire_v1(backend_submission)
             {
+                return Ok(());
+            }
+            let unread = self.generated_shells_unread_v1(&plan);
+            if !self.journal_result_v1(unread)? {
                 return Ok(());
             }
             self.backend
