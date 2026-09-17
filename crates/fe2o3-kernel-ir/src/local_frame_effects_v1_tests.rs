@@ -4,21 +4,25 @@ use crate::{
     Signature, ValueDef, analyze_interprocedural_effects_v1, verify_module_ref,
 };
 
-const FLOOR: usize = 17;
+pub(super) const FLOOR: usize = 17;
 
-fn scalar() -> Type {
+pub(super) fn scalar() -> Type {
     Type::Scalar(ScalarType::U32)
 }
-fn pointer(element: Type) -> Type {
+pub(super) fn pointer(element: Type) -> Type {
     Type::pointer(element, AddressSpace::Private, AccessMode::ReadWrite)
 }
-fn constant(id: u32, value: Constant) -> Operation {
+pub(super) fn constant(id: u32, value: Constant) -> Operation {
     Operation::effect_free(
         ValueDef::new(ValueId(id), value.ty()),
         OperationKind::Constant(value),
     )
 }
-fn function(name: &str, operations: Vec<Operation>, result: Option<(ValueId, Type)>) -> Function {
+pub(super) fn function(
+    name: &str,
+    operations: Vec<Operation>,
+    result: Option<(ValueId, Type)>,
+) -> Function {
     let mut block = BasicBlock::new(BlockId(7));
     block.operations = operations;
     block.terminator = Some(Terminator::Return {
@@ -31,7 +35,7 @@ fn function(name: &str, operations: Vec<Operation>, result: Option<(ValueId, Typ
         vec![block],
     )
 }
-fn module(functions: Vec<Function>) -> Module {
+pub(super) fn module(functions: Vec<Function>) -> Module {
     let mut module = Module::new("local_frame_effects");
     module.functions = functions;
     module
@@ -468,10 +472,10 @@ fn effect_audit_component_does_not_confuse_empty_physical_effects_with_ordering(
     assert_eq!(budget.storage(), 0);
 }
 
-fn header_bytes() -> usize {
+pub(super) fn header_bytes() -> usize {
     size_of::<Workspace<'_>>() + size_of::<CheckedLocalFrameV1<'_, '_>>()
 }
-fn capacity_bytes<T>(count: usize) -> usize {
+pub(super) fn capacity_bytes<T>(count: usize) -> usize {
     let mut rows: Vec<T> = Vec::new();
     rows.try_reserve_exact(count).unwrap();
     rows.capacity() * size_of::<T>()

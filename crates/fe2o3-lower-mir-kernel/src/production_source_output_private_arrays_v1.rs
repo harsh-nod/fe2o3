@@ -40,7 +40,7 @@ enum SourceOutputArrayPlacementV1 {
 
 #[derive(Clone, Copy, Debug)]
 struct SourceOutputArrayRowV1 {
-    key: [u32; 6],
+    key: [u32; 7],
     original_effect: usize,
     original_slot: usize,
     placement: SourceOutputArrayPlacementV1,
@@ -52,10 +52,11 @@ fn source_output_array_key_v1(
     block: u32,
     statement: u32,
     role: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+    component: u32,
     budget: &mut AssertOriginBudgetV1<'_>,
-) -> Result<[u32; 6], ProductionSourceOutputErrorV1> {
+) -> Result<[u32; 7], ProductionSourceOutputErrorV1> {
     budget
-        .charge_work(1)
+        .charge_work(2)
         .map_err(ProductionSourceOutputErrorV1::Resource)?;
     let (class, ordinal) = private_array_role_key_v1(role).ok_or(
         ProductionSourceOutputErrorV1::Invalid("unsupported array source role"),
@@ -67,6 +68,7 @@ fn source_output_array_key_v1(
         statement,
         u32::from(class),
         ordinal,
+        component,
     ])
 }
 
@@ -182,6 +184,7 @@ fn source_output_array_rows_v1(
                 effect.semantic_block,
                 effect.semantic_statement,
                 effect.role,
+                effect.original_index.component(),
                 budget,
             )?;
             let slot_index = private_array_binary_search_v1(
@@ -291,18 +294,27 @@ fn source_output_array_rows_v1(
     if rows.len() != count {
         return Err(Error::Invalid("array source placement census changed"));
     }
-    assert_origin_sort_v1(&mut rows, budget, |a, b, budget| {
-        budget.charge_work(6)?;
+    source_output_array_check_keys_v1(&mut rows, budget)?;
+    Ok((rows, payload))
+}
+
+fn source_output_array_check_keys_v1(
+    rows: &mut [SourceOutputArrayRowV1],
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    assert_origin_sort_v1(rows, budget, |a, b, budget| {
+        budget.charge_work(7)?;
         Ok(a.key.cmp(&b.key))
     })
     .map_err(Error::SourceOrigin)?;
     for pair in rows.windows(2) {
-        budget.charge_work(6).map_err(Error::Resource)?;
+        budget.charge_work(7).map_err(Error::Resource)?;
         if pair[0].key == pair[1].key {
             return Err(Error::Invalid("duplicate array source occurrence"));
         }
     }
-    Ok((rows, payload))
+    Ok(())
 }
 
 fn source_output_operation_v1<'o>(
@@ -453,7 +465,7 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
             return Err(Error::Invalid("array source statement is absent"));
         };
         let key =
-            source_output_array_key_v1(owner, function, block.get(), statement, role, budget)?;
+            source_output_array_key_v1(owner, function, block.get(), statement, role, 0, budget)?;
         let ordinal = private_array_binary_search_v1(
             &self.private_arrays,
             |row| row.key.map(|value| value as usize),
@@ -479,9 +491,10 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
             effect.semantic_block,
             effect.semantic_statement,
             effect.role,
+            effect.original_index.component(),
             budget,
         )?;
-        budget.charge_work(9).map_err(Error::Resource)?;
+        budget.charge_work(10).map_err(Error::Resource)?;
         if actual_key != key
             || slot.owner != owner
             || slot.function != function

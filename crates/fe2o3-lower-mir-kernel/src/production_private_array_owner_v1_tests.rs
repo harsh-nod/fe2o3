@@ -16,6 +16,7 @@ enum ArrayCase {
     ValueRead {
         local_index: bool,
     },
+    RetainedValueRead,
     Initializer {
         values: [u32; 8],
         repetitions: usize,
@@ -140,6 +141,34 @@ fn array_owner_at_body(case: ArrayCase, helper: bool) -> ProductionPreRankedKirO
                 3,
                 ARRAY_SCALAR,
                 SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(array_place(local_index))),
+            ));
+        }
+        ArrayCase::RetainedValueRead => {
+            statements.push(assignment(
+                1,
+                ARRAY_TYPE,
+                SemanticRvalueKindV1::Aggregate(
+                    SemanticAggregateRvalueV1::new(
+                        SemanticAggregateKindV1::Array,
+                        vec![constant(ARRAY_SCALAR, 11, 4); 8],
+                    )
+                    .unwrap(),
+                ),
+            ));
+            statements.push(SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    array_place(true),
+                    SemanticRvalueV1::new(
+                        ARRAY_SCALAR,
+                        SemanticRvalueKindV1::Use(constant(ARRAY_SCALAR, 99, 4)),
+                    ),
+                )),
+            ));
+            statements.push(assignment(
+                3,
+                ARRAY_SCALAR,
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(array_place(true))),
             ));
         }
         ArrayCase::Initializer { values, repetitions, .. } => {

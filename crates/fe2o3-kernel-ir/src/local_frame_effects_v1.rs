@@ -7,14 +7,20 @@ use std::{
 };
 
 use crate::{
-    AddressSpace, BlockId, CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    AddressSpace, BasicBlock, BlockId, CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as ResourceError, CastKind, Constant, Function,
     KirLocalMemoryEffectRefV1, Module, Operation, OperationKind, ScalarType, Terminator, Type,
     ValueId, VerifiedKernelIrModuleV1, valid_scalar_cast, verification_bounded_sort_by_v1,
     verification_find_last_by_v1,
 };
 
-/// The first local-frame rule set deliberately excludes calls and control flow.
+mod chain_v1;
+pub use chain_v1::{
+    CheckedLocalFrameChainV1, LocalFrameControlKindV1, LocalFrameControlV1,
+    LocalFrameEdgeBindingV1, with_checked_local_frame_chain_function_v1,
+};
+
+/// Closed leaf rules exclude live calls, loops and unresolved control choices.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalFrameRefusalReasonV1 {
     Function,
@@ -418,11 +424,12 @@ fn constant_index(
     value: ValueId,
     function: usize,
     at: usize,
+    sequence: usize,
     budget: &mut Budget<'_>,
 ) -> Result<u64, LocalFrameErrorV1> {
     let row = &definitions[find(definitions, value, budget)?];
     budget.charge_work(3)?;
-    let Some(ordinal) = row.operation.filter(|ordinal| *ordinal < at) else {
+    let Some(ordinal) = row.operation.filter(|ordinal| *ordinal < sequence) else {
         return Err(refusal(
             function,
             Some(at),
@@ -437,15 +444,17 @@ fn constant_index(
             return Ok(fact.bits);
         }
     }
-    let value = match &operations[ordinal].kind {
-        OperationKind::Constant(Constant::U8(value)) => Some(u64::from(*value)),
-        OperationKind::Constant(Constant::U16(value)) => Some(u64::from(*value)),
-        OperationKind::Constant(Constant::U32(value)) => Some(u64::from(*value)),
-        OperationKind::Constant(Constant::U64(value) | Constant::Index(value)) => Some(*value),
-        OperationKind::Constant(Constant::I8(value)) => u64::try_from(*value).ok(),
-        OperationKind::Constant(Constant::I16(value)) => u64::try_from(*value).ok(),
-        OperationKind::Constant(Constant::I32(value)) => u64::try_from(*value).ok(),
-        OperationKind::Constant(Constant::I64(value)) => u64::try_from(*value).ok(),
+    let value = match operations.get(ordinal).map(|operation| &operation.kind) {
+        Some(OperationKind::Constant(Constant::U8(value))) => Some(u64::from(*value)),
+        Some(OperationKind::Constant(Constant::U16(value))) => Some(u64::from(*value)),
+        Some(OperationKind::Constant(Constant::U32(value))) => Some(u64::from(*value)),
+        Some(OperationKind::Constant(Constant::U64(value) | Constant::Index(value))) => {
+            Some(*value)
+        }
+        Some(OperationKind::Constant(Constant::I8(value))) => u64::try_from(*value).ok(),
+        Some(OperationKind::Constant(Constant::I16(value))) => u64::try_from(*value).ok(),
+        Some(OperationKind::Constant(Constant::I32(value))) => u64::try_from(*value).ok(),
+        Some(OperationKind::Constant(Constant::I64(value))) => u64::try_from(*value).ok(),
         _ => None,
     };
     value.ok_or_else(|| refusal(function, Some(at), LocalFrameRefusalReasonV1::Index))
@@ -602,8 +611,24 @@ fn derive<'module>(
         }
     }
 
+    derive_block(function_ordinal, block, 0, false, workspace, budget)?;
+    audit_return(function_ordinal, block, workspace, budget)?;
+    finish_cells(function_ordinal, workspace, budget)?;
+    Ok(function)
+}
+
+fn derive_block(
+    function_ordinal: usize,
+    block: &BasicBlock,
+    start: usize,
+    checked_control: bool,
+    workspace: &mut Workspace<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<(), LocalFrameErrorV1> {
+    use LocalFrameRefusalReasonV1 as Reason;
     for (at, operation) in block.operations.iter().enumerate() {
         budget.charge_work(4)?;
+        let sequence = start.checked_add(at).ok_or(ResourceError::Arithmetic)?;
         match operation.kind {
             OperationKind::Constant(_)
             | OperationKind::Unary { .. }
@@ -625,7 +650,10 @@ fn derive<'module>(
         operation.kind.try_visit_operands(|value| {
             budget.charge_work(2)?;
             let row = &workspace.definitions[find(&workspace.definitions, value, budget)?];
-            if row.operation.is_some_and(|definition| definition >= at) {
+            if row
+                .operation
+                .is_some_and(|definition| definition >= sequence)
+            {
                 return Err(refusal(function_ordinal, Some(at), Reason::Definition));
             }
             if matches!(row.ty, Type::Pointer(_)) {
@@ -683,6 +711,23 @@ fn derive<'module>(
                 let result = find(&workspace.definitions, operation.results[0].id, budget)?;
                 workspace.definitions[result].constant = fact;
             }
+            OperationKind::Compare {
+                predicate,
+                lhs,
+                rhs,
+            } if checked_control => {
+                budget.charge_work(12)?;
+                let lhs = find(&workspace.definitions, *lhs, budget)?;
+                let rhs = find(&workspace.definitions, *rhs, budget)?;
+                let fact = chain_v1::checked_compare_fact(
+                    *predicate,
+                    &workspace.definitions[lhs],
+                    &workspace.definitions[rhs],
+                    &operation.results[0].ty,
+                )?;
+                let result = find(&workspace.definitions, operation.results[0].id, budget)?;
+                workspace.definitions[result].constant = fact;
+            }
             OperationKind::Alloca {
                 element,
                 count,
@@ -700,10 +745,15 @@ fn derive<'module>(
                 let count = match count {
                     Some(count) => constant_index(
                         &workspace.definitions,
-                        &block.operations,
+                        if checked_control {
+                            &[]
+                        } else {
+                            &block.operations
+                        },
                         *count,
                         function_ordinal,
                         at,
+                        sequence,
                         budget,
                     )?,
                     None => 1,
@@ -743,10 +793,15 @@ fn derive<'module>(
                 }
                 let cell = constant_index(
                     &workspace.definitions,
-                    &block.operations,
+                    if checked_control {
+                        &[]
+                    } else {
+                        &block.operations
+                    },
                     *offset,
                     function_ordinal,
                     at,
+                    sequence,
                     budget,
                 )?;
                 if cell >= workspace.allocations[origin.allocation].count {
@@ -835,6 +890,15 @@ fn derive<'module>(
             _ => {}
         }
     }
+    Ok(())
+}
+
+fn audit_return(
+    function_ordinal: usize,
+    block: &BasicBlock,
+    workspace: &Workspace<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<(), LocalFrameErrorV1> {
     budget.charge_work(1)?;
     block
         .terminator
@@ -844,10 +908,22 @@ fn derive<'module>(
             budget.charge_work(1)?;
             let row = &workspace.definitions[find(&workspace.definitions, value, budget)?];
             if !matches!(row.ty, Type::Scalar(_) | Type::Unit) {
-                return Err(refusal(function_ordinal, None, Reason::PointerUse));
+                return Err(refusal(
+                    function_ordinal,
+                    None,
+                    LocalFrameRefusalReasonV1::PointerUse,
+                ));
             }
             Ok(())
         })?;
+    Ok(())
+}
+
+fn finish_cells(
+    function_ordinal: usize,
+    workspace: &mut Workspace<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<(), LocalFrameErrorV1> {
     verification_bounded_sort_by_v1(&mut workspace.cells, 3, budget, |left, right| {
         (left.allocation, left.cell, left.access).cmp(&(right.allocation, right.cell, right.access))
     })?;
@@ -868,14 +944,14 @@ fn derive<'module>(
                     return Err(refusal(
                         function_ordinal,
                         Some(access.location.operation),
-                        Reason::UninitializedRead,
+                        LocalFrameRefusalReasonV1::UninitializedRead,
                     ));
                 }
                 access.initializing_store = last_store;
             }
         }
     }
-    Ok(function)
+    Ok(())
 }
 
 /// Classifies one verified function without changing raw summaries or callers.
