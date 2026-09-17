@@ -47,8 +47,8 @@ const HELPER_WORK: usize = 4 + 2 + 2 + 2 + 2;
 const MATERIALIZATION_WORK: usize = COMPLETE_WORK + ORIGIN_WORK + HELPER_WORK;
 
 fn empty_helper_payload() -> usize {
-    // Four empty Vec headers, the helper receipt, and the checked owner subtotal.
-    4 * std::mem::size_of::<Vec<()>>()
+    // Six empty Vec headers, the helper receipt, and the checked owner subtotal.
+    6 * std::mem::size_of::<Vec<()>>()
         + std::mem::size_of::<fe2o3_lower_mir_kernel::ProductionHelperMemoryStorageV1>()
         + std::mem::size_of::<usize>()
 }

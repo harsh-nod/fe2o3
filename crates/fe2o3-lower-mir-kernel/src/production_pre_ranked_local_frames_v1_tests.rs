@@ -74,6 +74,8 @@ fn genuine_shared_helpers_keep_every_source_association_and_true_empty_membershi
         );
         assert!(owner.helper_memory.allocations.is_empty());
         assert!(owner.helper_memory.accesses.is_empty());
+        assert!(owner.helper_memory.control.is_empty());
+        assert!(owner.helper_memory.edge_bindings.is_empty());
         let empty = owner.empty_effect_helpers().iter().collect::<Vec<_>>();
         assert_eq!(empty.len(), helper_rows.len());
         for ((_, expected), actual) in helper_rows.iter().zip(empty) {
@@ -84,7 +86,9 @@ fn genuine_shared_helpers_keep_every_source_association_and_true_empty_membershi
             + rows.functions.capacity() * std::mem::size_of::<RetainedHelperKindV1>()
             + rows.associations.capacity() * std::mem::size_of::<RetainedHelperAssociationV1>()
             + rows.allocations.capacity() * std::mem::size_of::<RetainedLocalAllocationV1>()
-            + rows.accesses.capacity() * std::mem::size_of::<RetainedLocalAccessV1>();
+            + rows.accesses.capacity() * std::mem::size_of::<RetainedLocalAccessV1>()
+            + rows.control.capacity() * std::mem::size_of::<RetainedLocalControlV1>()
+            + rows.edge_bindings.capacity() * std::mem::size_of::<RetainedLocalEdgeBindingV1>();
         assert_eq!(rows.storage.retained_storage(), expected_bytes);
         assert!(std::ptr::eq(
             owner.executable().verified_module_ref_v1().module(),
@@ -160,6 +164,8 @@ fn no_helper_census_has_source_derived_work_header_and_cached_sum_boundaries() {
                         && rows.associations.is_empty()
                         && rows.allocations.is_empty()
                         && rows.accesses.is_empty()
+                        && rows.control.is_empty()
+                        && rows.edge_bindings.is_empty()
                 );
                 assert_eq!(budget.work(), exact);
                 assert_eq!(budget.peak_storage(), FLOOR + header);
@@ -706,26 +712,32 @@ fn verified_physical_components_copy_full_local_obligations_without_purity() {
                     CanonicalKirCallEffectDecisionV1::CompleteNonempty
                 );
             }
-            let (allocations, accesses) = derive_retained_helper_physical_rows_v1(
-                executable,
-                inventory,
-                effects,
-                &mut states,
-                &mut budget,
-            )
-            .unwrap();
+            let (allocations, accesses, control, edge_bindings) =
+                derive_retained_helper_physical_rows_v1(
+                    executable,
+                    inventory,
+                    effects,
+                    &mut states,
+                    &mut budget,
+                )
+                .unwrap();
             let a = if cast { 2 } else { 1 };
             let m = if cast { 4 } else { 2 };
             assert_eq!((allocations.len(), accesses.len()), (2 * a, 2 * m));
+            assert_eq!((control.len(), edge_bindings.len()), (2, 0));
             let bytes = allocations.capacity() * std::mem::size_of::<RetainedLocalAllocationV1>()
-                + accesses.capacity() * std::mem::size_of::<RetainedLocalAccessV1>();
+                + accesses.capacity() * std::mem::size_of::<RetainedLocalAccessV1>()
+                + control.capacity() * std::mem::size_of::<RetainedLocalControlV1>()
+                + edge_bindings.capacity() * std::mem::size_of::<RetainedLocalEdgeBindingV1>();
             assert_eq!(budget.storage(), FLOOR + bytes);
             for ordinal in 0..2 {
                 assert_eq!(
                     states[ordinal],
                     RetainedHelperKindV1::Local {
                         allocations: (ordinal * a, (ordinal + 1) * a),
-                        accesses: (ordinal * m, (ordinal + 1) * m)
+                        accesses: (ordinal * m, (ordinal + 1) * m),
+                        control: (ordinal, ordinal + 1),
+                        edge_bindings: (0, 0),
                     }
                 );
                 for allocation in &allocations[ordinal * a..(ordinal + 1) * a] {
@@ -742,7 +754,15 @@ fn verified_physical_components_copy_full_local_obligations_without_purity() {
                     assert_eq!(accesses[ordinal * m + 2].cell(), 1);
                     assert_eq!(accesses[ordinal * m + 2].allocation(), 1);
                 }
+                assert_eq!(control[ordinal].function_ordinal(), ordinal);
+                assert_eq!(control[ordinal].block(), BlockId(7));
+                assert_eq!(
+                    control[ordinal].kind(),
+                    fe2o3_kernel_ir::LocalFrameControlKindV1::Return
+                );
             }
+            drop(edge_bindings);
+            drop(control);
             drop(accesses);
             drop(allocations);
             budget.release_storage(bytes).unwrap();
@@ -809,11 +829,16 @@ fn physical_census_cannot_skip_real_helpers_and_typed_refusal_keeps_location() {
 #[test]
 fn physical_copy_meter_has_literal_partial_copy_and_final_check_boundaries() {
     with_physical_component(local_component(false), |executable, inventory, effects| {
-        // Role4 + decision1 + body4 + block1 + operations12 + reserve6 + row1
-        // + producer225 + callback8 + queries5/6 + copies3/4/4 + final3.
-        const EXACT: usize = 4 + 1 + 4 + 1 + 12 + 6 + 1 + 225 + 8 + 5 + 6 + 3 + 4 + 4 + 3;
-        assert_eq!(EXACT, 287);
-        for limit in [283, EXACT - 1, EXACT] {
+        // Core: wrapper/lookup/chain16 + signature1 + census9 + reserve14 +
+        // publish15 + sort/window26 + visit/lookup9 + epochs23 + four ops123 +
+        // dispatch4 + return6 + block census1 + cell sort/scan34 = 281.
+        // Retention: role4 + decision1 + body6 + block3 + operations12 +
+        // reserve12 + row1 + callback12 + queries5/6/5/4 + copies3/4/4/3 + final5.
+        const CORE: usize = 16 + 1 + 9 + 14 + 15 + 26 + 9 + 23 + 123 + 4 + 6 + 1 + 34;
+        const EXACT: usize =
+            4 + 1 + 6 + 3 + 12 + 12 + 1 + CORE + 12 + 5 + 6 + 5 + 4 + 3 + 4 + 4 + 3 + 5;
+        assert_eq!((CORE, EXACT), (281, 371));
+        for limit in [362, EXACT - 1, EXACT] {
             let mut work = Work::new(limit);
             let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
             budget.reserve_storage(FLOOR).unwrap();
@@ -826,18 +851,18 @@ fn physical_copy_meter_has_literal_partial_copy_and_final_check_boundaries() {
             );
             match (limit, result) {
                 (
-                    283,
+                    362,
                     Err(ProductionPreRankedKirErrorV1::LocalFrame(LocalFrameErrorV1::Resource(
                         ArgumentResourceV1::Work(error),
                     ))),
                 ) => {
                     assert_eq!(
                         (error.actual(), error.limit(), budget.work()),
-                        (284, 283, 280)
+                        (363, 362, 359)
                     );
                 }
                 (
-                    286,
+                    370,
                     Err(ProductionPreRankedKirErrorV1::Lowering(
                         ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
                             ArgumentResourceV1::Work(error),
@@ -846,14 +871,17 @@ fn physical_copy_meter_has_literal_partial_copy_and_final_check_boundaries() {
                 ) => {
                     assert_eq!(
                         (error.actual(), error.limit(), budget.work()),
-                        (287, 286, 284)
+                        (371, 370, 366)
                     );
                 }
-                (287, Ok((allocations, accesses))) => {
+                (371, Ok((allocations, accesses, control, edge_bindings))) => {
                     assert_eq!(
                         (allocations.len(), accesses.len(), budget.work()),
                         (1, 2, EXACT)
                     );
+                    assert_eq!((control.len(), edge_bindings.len()), (1, 0));
+                    drop(edge_bindings);
+                    drop(control);
                     drop(accesses);
                     drop(allocations);
                 }
@@ -878,17 +906,17 @@ fn physical_output_capacity_is_reserved_before_entering_the_local_classifier() {
         let actual_allocation_bytes =
             probe.capacity() * std::mem::size_of::<RetainedLocalAllocationV1>();
         drop(probe);
-        // Census22 precedes reservation3; the second reservation adds3.
+        // Census26 precedes reservation3; the second reservation adds3.
         for (limit, work_expected, attempted, retained) in [
             (
                 FLOOR + allocation_bytes - 1,
-                25,
+                29,
                 FLOOR + allocation_bytes,
                 0,
             ),
             (
                 FLOOR + actual_allocation_bytes + access_bytes - 1,
-                28,
+                32,
                 FLOOR + actual_allocation_bytes + access_bytes,
                 actual_allocation_bytes,
             ),
@@ -921,3 +949,6 @@ fn physical_output_capacity_is_reserved_before_entering_the_local_classifier() {
         }
     });
 }
+
+#[path = "production_pre_ranked_local_frame_chain_v1_tests.rs"]
+mod chain_tests;
