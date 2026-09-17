@@ -8,6 +8,10 @@ mod group_currentness;
 #[cfg(feature = "engineering-gfx950")]
 pub(crate) use group_currentness::check_engineering_group_currentness;
 
+#[cfg(feature = "engineering-gfx950")]
+#[path = "device_gfx950_asrock.rs"]
+mod asrock;
+
 pub const GFX950_ADMITTED_KERNEL_RELEASE_V1: &str = "6.8.0-124-generic";
 pub const GFX950_ADMITTED_AMDGPU_MODULE_VERSION_V1: &str = "6.16.13";
 pub const GFX950_ADMITTED_AMDGPU_MODULE_SRCVERSION_V1: &str = "703B1127E578BC5D4BD6615";
@@ -42,7 +46,8 @@ pub const GFX950_DEVICE_OBSERVATION_PROFILE_MANIFEST_V1: &str = concat!(
     "authority=checked-observation-only,no-model-admission,no-explicit-vm-acquisition,no-vm-authority,no-memory,no-queue,no-dispatch,no-gfx942-conversion\n",
 );
 
-/// SHA-256 of the canonical checked-observation profile.
+/// SHA-256 of the original canonical checked-observation profile.
+/// For a bound device, use its selected observation-profile accessor instead.
 pub fn gfx950_device_observation_profile_sha256_v1() -> [u8; 32] {
     Sha256::digest(GFX950_DEVICE_OBSERVATION_PROFILE_MANIFEST_V1).into()
 }
@@ -80,6 +85,7 @@ pub struct CheckedGfx950XnackMinusDevice {
     topology: HostTopologySnapshot,
     apertures: Vec<ProcessApertureObservation>,
     observation: DeviceBindingObservation,
+    profile_manifest: &'static str,
     process: ProcessIncarnationObservation,
     reset_fence: crate::currentness::ResetEventFence,
     currentness_poisoned: bool,
@@ -98,6 +104,11 @@ impl fmt::Debug for CheckedGfx950XnackMinusDevice {
 }
 
 impl CheckedGfx950XnackMinusDevice {
+    /// Identifies this binding's selected source contract, not runtime authority.
+    pub fn observation_profile_sha256_v1(&self) -> [u8; 32] {
+        Sha256::digest(self.profile_manifest).into()
+    }
+
     #[cfg(feature = "engineering-gfx950")]
     pub(crate) fn kfd_fd(&self) -> std::os::fd::BorrowedFd<'_> {
         use std::os::fd::AsFd;
@@ -296,7 +307,7 @@ impl KfdWithAdmittedUapi {
             self.opened.node_observation(),
         )?;
         let snapshot = topology::discover_default_topology_for_target(topology::GfxTarget::Gfx950)?;
-        validate_platform(
+        let profile_manifest = validate_platform(
             snapshot.kernel_release().as_str(),
             snapshot.amdgpu_module().version(),
             snapshot.amdgpu_module().srcversion(),
@@ -378,6 +389,7 @@ impl KfdWithAdmittedUapi {
             topology: snapshot,
             apertures,
             observation,
+            profile_manifest,
             process: process_before,
             reset_fence,
             currentness_poisoned: false,
@@ -390,7 +402,11 @@ fn validate_platform(
     kernel: &str,
     version: Option<&str>,
     source: Option<&str>,
-) -> Result<(), DeviceBindingError> {
+) -> Result<&'static str, DeviceBindingError> {
+    #[cfg(feature = "engineering-gfx950")]
+    if let Some(manifest) = asrock::match_platform(kernel, version, source) {
+        return Ok(manifest);
+    }
     if kernel != GFX950_ADMITTED_KERNEL_RELEASE_V1 {
         return Err(DeviceBindingError::UnsupportedKernelRelease(
             kernel.to_owned(),
@@ -406,7 +422,7 @@ fn validate_platform(
             source.map(str::to_owned),
         ));
     }
-    Ok(())
+    Ok(GFX950_DEVICE_OBSERVATION_PROFILE_MANIFEST_V1)
 }
 
 #[derive(Clone, Copy)]
@@ -598,7 +614,10 @@ mod tests {
         let kernel = GFX950_ADMITTED_KERNEL_RELEASE_V1;
         let version = Some(GFX950_ADMITTED_AMDGPU_MODULE_VERSION_V1);
         let source = Some(GFX950_ADMITTED_AMDGPU_MODULE_SRCVERSION_V1);
-        validate_platform(kernel, version, source).unwrap();
+        assert_eq!(
+            validate_platform(kernel, version, source).unwrap(),
+            GFX950_DEVICE_OBSERVATION_PROFILE_MANIFEST_V1
+        );
         for changed in ["", "6.8.0-123-generic", "6.8.0-124-generic-extra"] {
             assert!(validate_platform(changed, version, source).is_err());
         }
@@ -608,6 +627,19 @@ mod tests {
         for changed in [None, Some(ADMITTED_AMDGPU_MODULE_SRCVERSION_V1), Some("")] {
             assert!(validate_platform(kernel, version, changed).is_err());
         }
+    }
+
+    #[cfg(not(feature = "engineering-gfx950"))]
+    #[test]
+    fn asrock_is_not_admitted_without_engineering_feature() {
+        assert!(
+            validate_platform(
+                "5.15.160+",
+                Some("6.16.15"),
+                Some("9462451703604FCD7EC2365"),
+            )
+            .is_err()
+        );
     }
 
     #[test]
