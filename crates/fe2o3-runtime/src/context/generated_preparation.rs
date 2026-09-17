@@ -98,6 +98,18 @@ impl<E: Error + 'static> Error for RuntimeGfx942PreparationErrorV1<E> {
 }
 
 impl RuntimeContextV1<KfdRuntimeBackendV1> {
+    pub(in crate::context) fn gfx942_prepared_matches_plan_v1<T>(
+        &self,
+        prepared: &RuntimeGfx942PreparedV1<T>,
+        plan: &crate::kfd_backend::GeneratedShellPlanV1,
+    ) -> bool {
+        prepared.binding.matches_context(
+            plan.binding.context_generation,
+            plan.binding.device,
+            plan.binding.backend_device,
+        ) && prepared.binding.matches_native(plan.binding.native_device)
+    }
+
     pub(crate) fn register_gfx942_generated_shells_v1<T: crate::RuntimeGfx942GeneratedCarrierV1>(
         &mut self,
         prepared: &mut RuntimeGfx942PreparedV1<T>,

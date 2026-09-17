@@ -15,6 +15,7 @@ pub(crate) use graph::*;
 mod allocation_admission;
 mod drain;
 mod drain_capture;
+mod generated_issue;
 mod generated_preparation;
 mod generated_shells;
 mod unpublished;
@@ -1036,6 +1037,7 @@ pub struct RuntimeContextV1<B: RuntimeBackendV1> {
     backend_events: HashSet<u64>,
     submissions: HashMap<RuntimeSubmissionIdV1, SubmissionRecordV1>,
     backend_submissions: HashSet<u64>,
+    generated_issues: HashMap<RuntimeStreamIdV1, generated_issue::GeneratedIssueV1>,
     completion_callbacks: HashMap<RuntimeSubmissionIdV1, Vec<RuntimeCompletionCallbackV1>>,
     completion_callback_count: usize,
     completion_callback_panic_count: u64,
@@ -1180,6 +1182,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             events: HashMap::new(),
             backend_events: HashSet::new(),
             submissions: HashMap::new(),
+            generated_issues: HashMap::new(),
             backend_submissions: HashSet::new(),
             completion_callbacks: HashMap::new(),
             completion_callback_count: 0,

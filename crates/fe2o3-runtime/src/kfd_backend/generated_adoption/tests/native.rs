@@ -7,6 +7,13 @@ use fe2o3_amdhsa_loader::{AdmittedProfile, KernelGlobalBufferAbiV1, validate};
 use fe2o3_hsaco::ArgumentAccess;
 
 fn install(backend: &mut KfdRuntimeBackendV1, stream: u64) -> GeneratedShellPlanV1 {
+    install_with_roster(backend, stream).0
+}
+
+fn install_with_roster(
+    backend: &mut KfdRuntimeBackendV1,
+    stream: u64,
+) -> (GeneratedShellPlanV1, GeneratedHostRosterV1) {
     let admitted = admit_gfx942_vecadd_qualification_v1().unwrap();
     let uid = backend.description.backend_device;
     let model = backend
@@ -103,11 +110,21 @@ fn install(backend: &mut KfdRuntimeBackendV1, stream: u64) -> GeneratedShellPlan
     backend
         .adopt_generated_data_v1(&plan, &roster, program, &buffers)
         .unwrap();
-    plan
+    (plan, roster)
 }
 
 fn retire(backend: &mut KfdRuntimeBackendV1, plan: &GeneratedShellPlanV1) {
     backend.retire_generated_data_v1(plan).unwrap();
+    let submission = backend.generated_shells[&plan.key]
+        .native
+        .as_ref()
+        .unwrap()
+        .submission
+        .as_ref()
+        .map(|submission| submission.id);
+    if let Some(submission) = submission {
+        backend.release_submission_v1(submission).unwrap();
+    }
     assert!(backend.validate_generated_shell_disposal_v1(plan));
     assert_eq!(
         backend.generated_shells[&plan.key]
@@ -189,4 +206,173 @@ fn generated_native_cold_primary_auxiliary_rebound_abort_and_shutdown() {
 #[ignore = "requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID"]
 fn generated_native_bootstrap_primary_auxiliary_rebound_abort_and_shutdown() {
     run(true);
+}
+
+fn run_issue(bootstrap: bool) {
+    assert_eq!(
+        std::env::var("FE2O3_TEST_NATIVE_ISOLATED").as_deref(),
+        Ok("1")
+    );
+    let raw = std::env::var("FE2O3_TEST_NATIVE_UNIQUE_ID").expect("explicit device UID");
+    let uid = u64::from_str_radix(raw.strip_prefix("0x").unwrap_or(&raw), 16).unwrap();
+    let mut backend = KfdRuntimeBackendV1::open_gfx942_vecadd_qualification_v1(uid).unwrap();
+    if bootstrap {
+        let allocation = backend
+            .allocate_v1(uid, RuntimeMemoryKindV1::HostVisible, 4096, 4096)
+            .unwrap();
+        backend.release_allocation_v1(allocation).unwrap();
+        assert!(backend.queue.is_some());
+        assert!(backend.native_compute_lanes.iter().all(Option::is_none));
+    } else {
+        assert!(backend.queue.is_none());
+    }
+    let first = backend.create_stream_v1(uid).unwrap();
+    let second = backend.create_stream_v1(uid).unwrap();
+    let (first_plan, first_roster) = install_with_roster(&mut backend, first);
+    let primary = backend.native_compute_lanes[0].unwrap();
+    assert_eq!(
+        backend.generated_shells[&first_plan.key]
+            .native
+            .as_ref()
+            .unwrap()
+            .native_lane,
+        Some(primary)
+    );
+    let (second_plan, second_roster) = install_with_roster(&mut backend, second);
+    let auxiliary = backend.native_compute_lanes[1].unwrap();
+    assert_ne!(primary, auxiliary);
+    assert_eq!(
+        backend.generated_shells[&second_plan.key]
+            .native
+            .as_ref()
+            .unwrap()
+            .native_lane,
+        Some(auxiliary)
+    );
+    let (_, _, _, expected) = admit_gfx942_vecadd_qualification_v1()
+        .unwrap()
+        .host_buffers()
+        .unwrap()
+        .into_parts();
+    let first_id = backend
+        .prepare_generated_issue_v1(&first_plan, &first_roster)
+        .unwrap();
+    let second_id = backend
+        .prepare_generated_issue_v1(&second_plan, &second_roster)
+        .unwrap();
+    assert_ne!(first_id, second_id);
+    for (plan, id) in [(&first_plan, first_id), (&second_plan, second_id)] {
+        assert_eq!(backend.poll_v1(id).unwrap(), BackendPollV1::Pending);
+        assert!(matches!(
+            backend.generated_shells[&plan.key]
+                .native
+                .as_ref()
+                .unwrap()
+                .submission
+                .as_ref()
+                .unwrap()
+                .receipt,
+            ReceiptV1::Ready
+        ));
+        assert!(matches!(
+            backend.release_submission_v1(id),
+            Err(RuntimeBackendFailureV1::Rejected(_))
+        ));
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut complete = [false; 2];
+    while !complete.iter().all(|done| *done) {
+        for (index, (plan, id)) in [(&first_plan, first_id), (&second_plan, second_id)]
+            .into_iter()
+            .enumerate()
+        {
+            if !complete[index] {
+                complete[index] = backend.advance_generated_issue_v1(plan, id).unwrap();
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "generated fixture completion deadline"
+        );
+        std::thread::yield_now();
+    }
+    for (plan, id) in [(&first_plan, first_id), (&second_plan, second_id)] {
+        assert!(matches!(
+            backend.poll_v1(id),
+            Err(RuntimeBackendFailureV1::Quiescent(_))
+        ));
+        let handle = backend.generated_shells[&plan.key]
+            .native
+            .as_ref()
+            .unwrap()
+            .native_lane
+            .unwrap();
+        let mut output = vec![0; expected.len()];
+        backend
+            .queue
+            .as_mut()
+            .unwrap()
+            .with_compute_lane_v1(handle, |lane| {
+                let generation = lane.recycled_fixed_dispatch_generation()?;
+                lane.read_recycled_fixed_dispatch_data_into(
+                    fe2o3_kfd::Gfx942CompletedDispatchReadRequestV1::new(
+                        generation,
+                        2,
+                        0,
+                        output.len() as u64,
+                    ),
+                    &mut output,
+                )
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(output, expected);
+        retire(&mut backend, plan);
+    }
+    // A fresh generation on the same original primary, not cross-run input reuse.
+    let (rebound, roster) = install_with_roster(&mut backend, first);
+    assert_eq!(backend.native_compute_lanes[0], Some(primary));
+    assert_eq!(backend.native_compute_lanes[1], Some(auxiliary));
+    assert_eq!(
+        backend.generated_shells[&rebound.key]
+            .native
+            .as_ref()
+            .unwrap()
+            .native_lane,
+        Some(primary)
+    );
+    let id = backend
+        .prepare_generated_issue_v1(&rebound, &roster)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !backend.advance_generated_issue_v1(&rebound, id).unwrap() {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    retire(&mut backend, &rebound);
+    assert!(backend.generated_submissions.is_empty());
+    assert!(backend.generated_shells.is_empty());
+    assert!(backend.allocations.is_empty());
+    assert!(backend.submissions.is_empty());
+    assert!(backend.stream_compute_lanes.is_empty());
+    assert!(!backend.any_compute_active_v1());
+    backend.destroy_stream_v1(first).unwrap();
+    backend.destroy_stream_v1(second).unwrap();
+    backend.shutdown_native_v1().unwrap();
+    assert!(backend.queue.is_none());
+    eprintln!(
+        "I2 native fixture: bootstrap={bootstrap}, primary/AUX exact output, rebound completion, 9 DATA disposals, shutdown complete; no protected Worker/carrier or typed reply claim"
+    );
+}
+
+#[test]
+#[ignore = "requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+fn generated_native_cold_issue_complete_readback_retire() {
+    run_issue(false);
+}
+
+#[test]
+#[ignore = "requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+fn generated_native_bootstrap_issue_complete_readback_retire() {
+    run_issue(true);
 }

@@ -1175,6 +1175,7 @@ pub struct KfdRuntimeBackendV1 {
     streams: HashMap<u64, u64>,
     allocations: AllocationTableV1,
     generated_shells: HashMap<u64, generated_shells::GeneratedShellRecordV1>,
+    generated_submissions: HashMap<u64, u64>,
     modules: HashMap<u64, ModuleRecordV1>,
     kernels: HashMap<u64, KernelRecordV1>,
     submissions: HashMap<u64, SubmissionRecordV1>,
@@ -1540,6 +1541,7 @@ impl KfdRuntimeBackendV1 {
             streams: HashMap::new(),
             allocations: AllocationTableV1::default(),
             generated_shells: HashMap::new(),
+            generated_submissions: HashMap::new(),
             modules: HashMap::new(),
             kernels: HashMap::new(),
             submissions: HashMap::new(),
@@ -2064,6 +2066,7 @@ impl KfdRuntimeBackendV1 {
             .submissions
             .len()
             .checked_add(self.compute_completion_reservations)
+            .and_then(|live| live.checked_add(self.generated_submissions.len()))
             .and_then(|live| live.checked_add(self.sdma_completion_reservations))
             .ok_or_else(|| Self::capacity("KFD submission count overflow"))?;
         if live >= MAX_RUNTIME_SUBMISSIONS_V1 {
@@ -2494,6 +2497,7 @@ impl KfdRuntimeBackendV1 {
 
     fn any_compute_active_v1(&self) -> bool {
         self.active.is_some()
+            || !self.generated_submissions.is_empty()
             || !self.compute_pipeline.is_empty()
             || self
                 .auxiliary_compute_lanes
@@ -6554,6 +6558,9 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         submission: u64,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        if self.generated_submissions.contains_key(&submission) {
+            return self.poll_generated_submission_v1(submission);
+        }
         if self.quiescent_sdma_submissions.contains(&submission) {
             debug_assert!(self.submissions.contains_key(&submission));
             return Err(Self::quiescent_error(
@@ -6747,6 +6754,9 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         submission: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        if self.generated_submissions.contains_key(&submission) {
+            return self.release_generated_submission_v1(submission);
+        }
         if self.active_compute_lane_v1(submission).is_some() {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,

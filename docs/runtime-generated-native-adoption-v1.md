@@ -4,11 +4,18 @@ Status: implemented development integration, not accepted N5 or R126 qualificati
 R125 remains the last accepted Native CPU/test checkpoint. A1/A2, #182 and
 HIP/HSA parity remain open.
 
+The subsequent [private I2 integration](runtime-generated-issue-v1.md) extends
+the adopted state with publication, physical completion and Stop-only disposal.
+The adoption packet and its original evidence below remain distinct; current
+qualification is recorded in the linked I2 receipt.
+
 ## Ownership
 
 The generated preparation driver now installs its private nonpublishing DATA
 hooks. Public preparation and reservation remain nonexecuting; activation is
-still private until ISSUE and COMPLETE have real adapters.
+still private until COMPLETE supplies output/readback delivery. The original
+N5 packet described here did not implement ISSUE; the later I2 adapter is linked
+above.
 
 Context joins its original preparation binding, stream hold, exact source roster,
 allocation records and credits to the existing backend shell. The source handoff
@@ -94,3 +101,8 @@ no remote scratch, workload or cleanup was created by this packet. Native route
 success, native failure matrices, production carrier/async composition, formal
 correspondence, aggregate accounting and matched performance remain open. N5
 must not be accepted from compiled probes or CPU ownership tests alone.
+
+The subsequent [I2 receipt](evidence/dev-i2-generated-issue-2026-09-17/README.md)
+records both N5 native probes passing during a later idle-device window, along
+with two new native publication/completion probes. Those bounded route-success
+results do not supply the missing failure, protected-composition or formal gates.

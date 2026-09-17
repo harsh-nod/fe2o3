@@ -5,6 +5,10 @@ use crate::generated_source::GeneratedHostRosterV1;
 use generated_shells::GeneratedShellPlanV1;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+mod issue;
+mod receipt;
+use receipt::ReceiptV1;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PhaseV1 {
     Entering,
@@ -19,6 +23,7 @@ pub(super) struct GeneratedNativeAdoptionV1 {
     native_lane: Option<ComputeAqlQueueLaneV1>,
     data: Vec<Gfx942FixedDispatchDataV1>,
     returned: ReturnedDataV1<Gfx942FixedDispatchDataV1>,
+    submission: Option<issue::GeneratedSubmissionV1>,
 }
 
 // The lower consuming release owns the current item on failure. This root keeps
@@ -60,7 +65,7 @@ impl<T> ReturnedDataV1<T> {
 
 impl GeneratedNativeAdoptionV1 {
     pub(super) fn disposed_count(&self) -> Option<usize> {
-        self.is_retired().then_some(self.returned.completed)
+        (self.is_retired() && self.submission.is_none()).then_some(self.returned.completed)
     }
 
     pub(super) fn is_retired(&self) -> bool {
@@ -206,6 +211,7 @@ impl KfdRuntimeBackendV1 {
             native_lane: self.native_compute_lanes[lane],
             data,
             returned: ReturnedDataV1::empty(),
+            submission: None,
         });
         self.lease_compute_lane_v1(plan.binding.backend_stream, lane);
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -428,7 +434,18 @@ impl KfdRuntimeBackendV1 {
                 ))
             };
         };
-        if native.phase != PhaseV1::Adopted || !self.generated_lease_matches_v1(plan) {
+        let recycled = native
+            .submission
+            .as_ref()
+            .is_some_and(|submission| matches!(submission.receipt, ReceiptV1::Recycled));
+        let unpublished = native
+            .submission
+            .as_ref()
+            .is_none_or(|submission| matches!(submission.receipt, ReceiptV1::Ready));
+        if native.phase != PhaseV1::Adopted
+            || (!recycled && !unpublished)
+            || !self.generated_lease_matches_v1(plan)
+        {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "generated retirement phase or lease mismatch",
@@ -456,9 +473,12 @@ impl KfdRuntimeBackendV1 {
                 .as_mut()
                 .expect("retained generated queue")
                 .with_compute_lane_v1(handle, |lane| {
-                    native
-                        .returned
-                        .install(lane.abort_unpublished_fixed_dispatch_v1()?);
+                    let data = if recycled {
+                        lane.detach_recycled_fixed_dispatch()?.into_data()
+                    } else {
+                        lane.abort_unpublished_fixed_dispatch_v1()?
+                    };
+                    native.returned.install(data);
                     if native
                         .returned
                         .remaining

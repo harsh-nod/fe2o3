@@ -75,6 +75,21 @@ impl<'a, E> RuntimeGfx942GeneratedSourceV1<'a, E> {
             .map_err(|_| RuntimeGfx942GeneratedReservationErrorV1::AuthorityNotCurrent)
     }
 
+    pub(crate) fn with_current_source_v1<F>(
+        &self,
+        device_unique_id: u64,
+        expected: &GeneratedHostRosterV1,
+        callback: impl FnOnce() -> Result<(), F>,
+    ) -> Result<Result<(), F>, RuntimeGfx942GeneratedReservationErrorV1> {
+        if !self.validate(device_unique_id)?.matches(expected) {
+            return Err(RuntimeGfx942GeneratedReservationErrorV1::InvalidRoster);
+        }
+        self.revalidate()?;
+        let result = callback();
+        self.revalidate()?;
+        Ok(result)
+    }
+
     /// Borrows complete original inputs without moving or reconstructing control.
     /// A callback entering native work must root the exact packet, lane and every
     /// admitted prefix in its backend. Closing failure cannot dispose or retry it.
@@ -265,6 +280,7 @@ pub(crate) struct GeneratedBufferSlotV1 {
 }
 
 // Retained descriptive metadata for the next native adoption transition, not a permit.
+#[derive(Clone)]
 pub(crate) struct GeneratedHostRosterV1 {
     pub source_identity: std::sync::Arc<()>,
     pub buffers: [Option<GeneratedBufferSlotV1>; GFX942_MAX_FIXED_DISPATCH_DATA_V1],

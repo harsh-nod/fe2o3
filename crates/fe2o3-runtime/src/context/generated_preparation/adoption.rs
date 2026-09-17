@@ -88,6 +88,9 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         hold: &ContextUnpublishedHoldV1,
     ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
         self.validate_unpublished_hold_v1(hold)?;
+        if self.generated_issues.contains_key(&hold.stream()) {
+            return Err(RuntimeValidationErrorV1::ContextReserved.into());
+        }
         let result = catch_unwind(AssertUnwindSafe(|| {
             let stream = *self.streams.get(&hold.stream()).expect("exact held stream");
             if stream.generated.is_none() {
@@ -109,7 +112,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         self.finish_gfx942_adoption_v1(result)
     }
 
-    fn finish_gfx942_adoption_v1(
+    pub(in crate::context) fn finish_gfx942_adoption_v1(
         &mut self,
         result: std::thread::Result<Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>>>,
     ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {

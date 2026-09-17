@@ -1,0 +1,2222 @@
+diff --git a/crates/fe2o3-runtime/src/async_engine/generated_operation.rs b/crates/fe2o3-runtime/src/async_engine/generated_operation.rs
+index 22400f4af..1e58912ad 100644
+--- a/crates/fe2o3-runtime/src/async_engine/generated_operation.rs
++++ b/crates/fe2o3-runtime/src/async_engine/generated_operation.rs
+@@ -116,6 +116,7 @@ struct PreparationDriver<B: RuntimeBackendV1, P, E> {
+     completion: Option<owned::Reply<()>>,
+     adoption: Option<adoption::AdoptionHooksV1<B, P>>,
+     unpublished: Option<adoption::UnpublishedAdoptionV1>,
++    observations_stopped: bool,
+ }
+ 
+ impl<B: RuntimeBackendV1 + 'static, P: 'static, E: Send + 'static> EngineOperationFactoryV1<B>
+@@ -140,6 +141,7 @@ impl<B: RuntimeBackendV1 + 'static, P: 'static, E: Send + 'static> EngineOperati
+             completion: None,
+             adoption: self.adoption,
+             unpublished: None,
++            observations_stopped: false,
+         })
+     }
+ 
+@@ -262,6 +264,7 @@ impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P,
+     }
+ 
+     fn reject(&mut self, error: RuntimeAsyncEngineCallErrorV1) {
++        self.observations_stopped |= matches!(error, RuntimeAsyncEngineCallErrorV1::EngineStopped);
+         stop_reply(&mut self.reply, Some(&self.control), error);
+         stop_reply(&mut self.completion, None, error);
+         drop(self.prepare.take());
+@@ -399,6 +402,10 @@ impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
+                 ready: RuntimeContextV1::gfx942_adoption_ready_v1,
+                 adopt: RuntimeContextV1::adopt_gfx942_prepared_v1::<P>,
+                 retire: RuntimeContextV1::retire_gfx942_adoption_v1,
++                issue: Some(adoption::IssueHooksV1 {
++                    progress: RuntimeContextV1::progress_gfx942_issue_v1::<P>,
++                    retire_stopped: RuntimeContextV1::retire_gfx942_issued_v1,
++                }),
+             }),
+         )
+     }
+diff --git a/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs b/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs
+index dbe65d0e1..0fbe20ded 100644
+--- a/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs
++++ b/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs
+@@ -25,6 +25,29 @@ type AdoptionReadyV1<B> = fn(
+     &ContextUnpublishedHoldV1,
+ ) -> Result<bool, RuntimeErrorV1<<B as RuntimeBackendV1>::Error>>;
+ 
++type IssuedRetireV1<B> = fn(
++    &mut RuntimeContextV1<B>,
++    &ContextUnpublishedHoldV1,
++) -> Result<bool, RuntimeErrorV1<<B as RuntimeBackendV1>::Error>>;
++type IssueProgressV1<B, P> = fn(
++    &mut RuntimeContextV1<B>,
++    &mut P,
++    &crate::generated_source::GeneratedHostRosterV1,
++    &ContextUnpublishedHoldV1,
++) -> Result<bool, RuntimeErrorV1<<B as RuntimeBackendV1>::Error>>;
++
++pub(in crate::async_engine) struct IssueHooksV1<B: RuntimeBackendV1, P> {
++    pub progress: IssueProgressV1<B, P>,
++    pub retire_stopped: IssuedRetireV1<B>,
++}
++
++impl<B: RuntimeBackendV1, P> Copy for IssueHooksV1<B, P> {}
++impl<B: RuntimeBackendV1, P> Clone for IssueHooksV1<B, P> {
++    fn clone(&self) -> Self {
++        *self
++    }
++}
++
+ pub(in crate::async_engine) struct AdoptionHooksV1<B: RuntimeBackendV1, P> {
+     // Metadata/currentness only: no allocation checkout or native custody transfer.
+     pub preflight: AdoptionPreflightV1<B, P>,
+@@ -35,6 +58,7 @@ pub(in crate::async_engine) struct AdoptionHooksV1<B: RuntimeBackendV1, P> {
+     // Must accept an empty prefix when Stop precedes the first adoption advance.
+     // Success establishes conclusive disposal, including closing currentness.
+     pub retire: AdoptionRetireV1<B>,
++    pub issue: Option<IssueHooksV1<B, P>>,
+ }
+ 
+ impl<B: RuntimeBackendV1, P> Copy for AdoptionHooksV1<B, P> {}
+@@ -48,6 +72,8 @@ impl<B: RuntimeBackendV1, P> Clone for AdoptionHooksV1<B, P> {
+ enum PhaseV1 {
+     Adopting,
+     Adopted,
++    Issued,
++    PhysicallySettled,
+     Retiring,
+     Retired,
+     Quarantined,
+@@ -100,6 +126,26 @@ impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
+                 Ok(()) if !context.is_terminal() => owner.phase = PhaseV1::Adopted,
+                 _ => context.quarantine_after_async_command_panic_v1(),
+             }
++        } else if matches!(owner.phase, PhaseV1::Adopted | PhaseV1::Issued)
++            && let Some(issue) = self.adoption.as_ref().expect("admitted hooks").issue
++        {
++            owner.phase = PhaseV1::Quarantined;
++            let result = (issue.progress)(
++                context,
++                self.prepared.as_mut().expect("retained payload"),
++                self.roster.as_ref().expect("retained roster"),
++                &owner.hold,
++            );
++            match result {
++                Ok(complete) if !context.is_terminal() => {
++                    owner.phase = if complete {
++                        PhaseV1::PhysicallySettled
++                    } else {
++                        PhaseV1::Issued
++                    }
++                }
++                _ => context.quarantine_after_async_command_panic_v1(),
++            }
+         }
+         false
+     }
+@@ -111,6 +157,29 @@ impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
+         let Some(owner) = self.unpublished.as_mut() else {
+             return Ok(false);
+         };
++        if matches!(owner.phase, PhaseV1::Issued | PhaseV1::PhysicallySettled) {
++            // Drain observes the accepted prefix without cancelling output.
++            // Only actual Stop, after stopping the reserved completion observer,
++            // permits destructive disposal before C4 output delivery exists.
++            if !self.observations_stopped {
++                return Ok(false);
++            }
++            let phase = owner.phase;
++            owner.phase = PhaseV1::Quarantined;
++            let issue = self
++                .adoption
++                .as_ref()
++                .expect("admitted hooks")
++                .issue
++                .expect("issued hooks");
++            if !(issue.retire_stopped)(context, &owner.hold)? {
++                owner.phase = phase;
++                return Ok(false);
++            }
++            context.release_unpublished_hold_v1(&owner.hold)?;
++            owner.phase = PhaseV1::Retired;
++            return Ok(true);
++        }
+         if !matches!(owner.phase, PhaseV1::Adopting | PhaseV1::Adopted) {
+             return Err(RuntimeValidationErrorV1::ContextTerminal.into());
+         }
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs
+index e073fcf34..6871bcb67 100644
+--- a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs
+@@ -3,6 +3,8 @@ use crate::{RuntimeAccessV1, RuntimeMemoryRegionV1};
+ use crate::{RuntimeGfx942GeneratedReservationErrorV1, RuntimeValidationErrorV1};
+ use generated_operation::adoption::{ActivationErrorV1, AdoptionHooksV1};
+ 
++mod issue_tests;
++
+ struct Payload {
+     _local: LocalPayload,
+     source: Vec<u8>,
+@@ -11,6 +13,7 @@ struct Payload {
+     state: Arc<Mutex<MockState>>,
+     mode: u8,
+     stream: Option<RuntimeStreamIdV1>,
++    issue_advances: usize,
+ }
+ 
+ impl Drop for Payload {
+@@ -112,6 +115,7 @@ fn reserve<B: RuntimeBackendV1>(
+ 
+ fn hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
+     AdoptionHooksV1 {
++        issue: None,
+         ready: |context, _| context.backend().adoption_ready(),
+         preflight: |context, payload, _, _| {
+             payload
+@@ -182,6 +186,16 @@ pub(super) fn preparation<B: RetireBackend + 'static>(
+     drops: Arc<AtomicUsize>,
+     mode: u8,
+     enabled: bool,
++) -> RuntimeAsyncPreparationV1<()> {
++    preparation_with_hooks(handle, state, drops, mode, enabled.then(hooks))
++}
++
++fn preparation_with_hooks<B: RetireBackend + 'static>(
++    handle: &RuntimeAsyncProgressHandleV1<B>,
++    state: Arc<Mutex<MockState>>,
++    drops: Arc<AtomicUsize>,
++    mode: u8,
++    hooks: Option<AdoptionHooksV1<B, Payload>>,
+ ) -> RuntimeAsyncPreparationV1<()> {
+     handle
+         .enqueue_preparation_with_adoption_v1(
+@@ -199,10 +213,11 @@ pub(super) fn preparation<B: RetireBackend + 'static>(
+                     state,
+                     mode,
+                     stream: None,
++                    issue_advances: 0,
+                 })
+             }),
+             Some(reserve),
+-            enabled.then(hooks),
++            hooks,
+         )
+         .unwrap()
+ }
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs
+new file mode 100644
+index 000000000..bb2fcb235
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs
+@@ -0,0 +1,259 @@
++use super::*;
++use generated_operation::adoption::IssueHooksV1;
++
++fn issue_hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
++    let mut hooks: AdoptionHooksV1<B, Payload> = hooks();
++    hooks.issue = Some(IssueHooksV1 {
++        progress: |_, payload: &mut Payload, _, _| {
++            payload.issue_advances += 1;
++            payload
++                .state
++                .lock()
++                .unwrap()
++                .adoption_order
++                .push(if payload.issue_advances == 1 {
++                    "issue"
++                } else {
++                    "poll"
++                });
++            match payload.mode {
++                10 => Err(RuntimeValidationErrorV1::Unsupported.into()),
++                11 => panic!("issue hook panic after retained attempt"),
++                12 => Ok(false),
++                _ => Ok(payload.issue_advances == 2),
++            }
++        },
++        retire_stopped: |context, hold| {
++            if !context.backend().adoption_ready()? {
++                return Ok(false);
++            }
++            context
++                .backend_mut_for_test_v1()
++                .retire_adoption(hold.stream())?;
++            Ok(true)
++        },
++    });
++    hooks
++}
++
++fn reserved_issue(
++    h: &mut Harness,
++    drops: Arc<AtomicUsize>,
++    mode: u8,
++) -> (RuntimeAsyncReservedTicketV1, RuntimeStreamIdV1) {
++    let stream = h
++        .context
++        .create_stream(h.context.devices()[0].id())
++        .unwrap();
++    let future =
++        preparation_with_hooks(&h.handle, h.state.clone(), drops, mode, Some(issue_hooks()));
++    h.command();
++    h.advance();
++    let ticket = ready(future).unwrap().unwrap();
++    let future = h.handle.try_reserve_prepared_v1(ticket).unwrap();
++    h.command();
++    (ready(future).unwrap().unwrap(), stream)
++}
++
++#[test]
++fn issued_and_physically_settled_work_remains_owned_during_drain() {
++    for mode in [0, 12] {
++        let mut h = Harness::new(1, 2, true);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let (ticket, stream) = reserved_issue(&mut h, drops.clone(), mode);
++        activate(&mut h, ticket, stream);
++        h.advance(); // Adopt.
++        for _ in 0..6 {
++            h.advance();
++            h.registry.retire_unpublished_v1(&mut h.context, 1);
++        }
++        assert_eq!(h.registry.active_len(), 1);
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
++        assert!(h.context.destroy_stream(stream).is_err());
++        let state = h.state.lock().unwrap();
++        assert_eq!(state.adoption_retire_calls, 0);
++        assert_eq!(
++            state
++                .adoption_order
++                .iter()
++                .filter(|v| **v == "issue")
++                .count(),
++            1
++        );
++        if mode == 0 {
++            assert_eq!(
++                state
++                    .adoption_order
++                    .iter()
++                    .filter(|v| **v == "poll")
++                    .count(),
++                1
++            );
++        }
++        drop(state);
++        assert!(!h.registry.stop_observations());
++        h.registry.retire_unpublished_v1(&mut h.context, 1);
++        assert_eq!(h.registry.active_len(), 0);
++        assert_eq!(drops.load(Ordering::SeqCst), 1);
++        assert_eq!(h.state.lock().unwrap().adoption_retire_calls, 1);
++        h.context.destroy_stream(stream).unwrap();
++    }
++}
++
++#[test]
++fn issued_stop_pending_retains_carrier_hold_and_never_reissues() {
++    let mut h = Harness::new(1, 2, true);
++    let drops = Arc::new(AtomicUsize::new(0));
++    let (ticket, stream) = reserved_issue(&mut h, drops.clone(), 12);
++    activate(&mut h, ticket, stream);
++    h.advance();
++    h.advance();
++    h.state.lock().unwrap().adoption_ready_mode = 1;
++    assert!(!h.registry.stop_observations());
++    for _ in 0..3 {
++        h.registry.retire_unpublished_v1(&mut h.context, 1);
++    }
++    assert_eq!(h.registry.active_len(), 1);
++    assert_eq!(drops.load(Ordering::SeqCst), 0);
++    assert!(h.context.destroy_stream(stream).is_err());
++    let state = h.state.lock().unwrap();
++    assert_eq!(state.adoption_order, ["preflight", "adopt", "issue"]);
++    assert_eq!(state.adoption_retire_calls, 0);
++    drop(state);
++    core::mem::forget(h.registry);
++}
++
++#[test]
++fn issue_and_stopped_retirement_faults_never_retry_or_drop() {
++    for (mode, retire_mode) in [(10, 0), (11, 0), (0, 1), (0, 2)] {
++        let mut h = Harness::new(1, 2, true);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let (ticket, stream) = reserved_issue(&mut h, drops.clone(), mode);
++        activate(&mut h, ticket, stream);
++        h.advance();
++        h.advance();
++        h.state.lock().unwrap().adoption_retire_mode = retire_mode;
++        h.registry.stop_observations();
++        h.registry.retire_unpublished_v1(&mut h.context, 1);
++        assert!(h.context.is_terminal());
++        let order = h.state.lock().unwrap().adoption_order.clone();
++        for _ in 0..3 {
++            h.advance();
++            h.registry.retire_unpublished_v1(&mut h.context, 1);
++        }
++        assert_eq!(h.state.lock().unwrap().adoption_order, order);
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        assert_eq!(h.registry.active_len(), 1);
++        core::mem::forget(h.registry);
++    }
++}
++
++#[test]
++fn transferable_engine_cannot_activate_generated_issue() {
++    let mut h = Harness::new(1, 2, true);
++    let drops = Arc::new(AtomicUsize::new(0));
++    let (ticket, stream) = reserved_issue(&mut h, drops.clone(), 0);
++    let key = ticket.key.clone();
++    let mut nonowned = operation::OperationRegistryV1::new(1, false);
++    let mut ticket = Some(ticket);
++    let failure = nonowned
++        .activate_reserved(&mut h.context, &mut ticket, stream)
++        .unwrap_err();
++    assert!(matches!(
++        failure,
++        ActivationErrorV1::Engine(RuntimeAsyncEngineCallErrorV1::EngineStopped)
++    ));
++    assert!(Arc::ptr_eq(&key, &ticket.as_ref().unwrap().key));
++    assert!(h.state.lock().unwrap().adoption_order.is_empty());
++    h.context.destroy_stream(stream).unwrap();
++    assert!(h.registry.discard_reserved(&key));
++    assert_eq!(drops.load(Ordering::SeqCst), 1);
++}
++
++#[test]
++fn owned_generated_drain_does_not_cancel_a_physically_settled_result() {
++    let state = Arc::new(Mutex::new(MockState::default()));
++    let trace = Arc::new(Mutex::new(OwnerTrace::default()));
++    let drops = Arc::new(AtomicUsize::new(0));
++    let (engine, handle) = start(state.clone(), trace);
++    let stream = handle
++        .observer
++        .try_with_context(|c| c.create_stream(c.devices()[0].id()).unwrap())
++        .unwrap();
++    let ticket = join(preparation_with_hooks(
++        &handle,
++        state.clone(),
++        drops.clone(),
++        0,
++        Some(issue_hooks()),
++    ))
++    .unwrap()
++    .unwrap();
++    let ticket = join(handle.try_reserve_prepared_v1(ticket).unwrap())
++        .unwrap()
++        .unwrap();
++    join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
++        .unwrap()
++        .unwrap();
++    let deadline = Instant::now() + Duration::from_secs(5);
++    loop {
++        if state.lock().unwrap().adoption_order.contains(&"poll") {
++            break;
++        }
++        assert!(Instant::now() < deadline);
++        thread::yield_now();
++    }
++    let report = join(handle.begin_drain(8).unwrap()).unwrap();
++    assert_eq!(report.outcome, RuntimeAsyncDrainOutcomeV1::BudgetExhausted);
++    assert_eq!(report.operations_remaining, 1);
++    assert_eq!(drops.load(Ordering::SeqCst), 0);
++    assert_eq!(state.lock().unwrap().adoption_retire_calls, 0);
++    // Exhausted drain already seals the Context; Stop cannot reopen it.
++    assert_eq!(
++        engine.shutdown().unwrap().disposition,
++        RuntimeAsyncOwnedDispositionV1::RetainedUntilProcessExit
++    );
++    assert_eq!(drops.load(Ordering::SeqCst), 0);
++}
++
++#[test]
++fn owned_stop_retires_settled_work_without_claiming_successful_output() {
++    let state = Arc::new(Mutex::new(MockState::default()));
++    let trace = Arc::new(Mutex::new(OwnerTrace::default()));
++    let drops = Arc::new(AtomicUsize::new(0));
++    let (engine, handle) = start(state.clone(), trace);
++    let stream = handle
++        .observer
++        .try_with_context(|c| c.create_stream(c.devices()[0].id()).unwrap())
++        .unwrap();
++    let ticket = join(preparation_with_hooks(
++        &handle,
++        state.clone(),
++        drops.clone(),
++        0,
++        Some(issue_hooks()),
++    ))
++    .unwrap()
++    .unwrap();
++    let ticket = join(handle.try_reserve_prepared_v1(ticket).unwrap())
++        .unwrap()
++        .unwrap();
++    join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
++        .unwrap()
++        .unwrap();
++    let deadline = Instant::now() + Duration::from_secs(5);
++    loop {
++        if state.lock().unwrap().adoption_order.contains(&"poll") {
++            break;
++        }
++        assert!(Instant::now() < deadline);
++        thread::yield_now();
++    }
++    assert_eq!(
++        engine.shutdown().unwrap().disposition,
++        RuntimeAsyncOwnedDispositionV1::Released
++    );
++    assert_eq!(drops.load(Ordering::SeqCst), 1);
++    assert_eq!(state.lock().unwrap().adoption_retire_calls, 1);
++}
+diff --git a/crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs b/crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs
+index 27eaafcac..2f7d44923 100644
+--- a/crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs
++++ b/crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs
+@@ -198,6 +198,80 @@ fn rejected_error() -> crate::KfdRuntimeBackendErrorV1 {
+     }
+ }
+ 
++#[test]
++fn generated_issue_source_rejects_substitution_before_entering_attempt() {
++    let (hsaco, projection) = source_projection();
++    let authority = source_authority(&projection);
++    let source = RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority);
++    let expected = source.validate(7).unwrap();
++    for axis in 0..5 {
++        let mut wrong = expected.clone();
++        match axis {
++            0 => wrong.source_identity = std::sync::Arc::new(()),
++            1 => wrong.dispatch_contract_sha256[0] ^= 1,
++            2 => wrong.buffers[0].as_mut().unwrap().bytes += 1,
++            3 => {
++                wrong.buffers[0].as_mut().unwrap().access =
++                    crate::Gfx942RuntimeBufferAccessV1::ReadOnly
++            }
++            _ => wrong.count -= 1,
++        }
++        assert!(matches!(
++            source.with_current_source_v1(7, &wrong, || -> Result<(), ()> {
++                panic!("substituted issue source entered")
++            }),
++            Err(SourceError::InvalidRoster)
++        ));
++    }
++}
++
++#[test]
++fn generated_issue_closing_currentness_failure_does_not_dispose_entered_owner() {
++    let (hsaco, projection) = source_projection();
++    let authority = source_authority(&projection);
++    let source = RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority);
++    let expected = source.validate(7).unwrap();
++    let owner = Box::new([7_u8; 32]);
++    let identity = owner.as_ptr();
++    let mut retained = None;
++    let result = source.with_current_source_v1(7, &expected, || {
++        retained = Some(owner);
++        authority.current.set(false);
++        Ok::<(), ()>(())
++    });
++    assert!(matches!(result, Err(SourceError::AuthorityNotCurrent)));
++    assert_eq!(retained.as_ref().unwrap().as_ptr(), identity);
++    assert!(matches!(
++        source.with_current_source_v1(7, &expected, || -> Result<(), ()> {
++            panic!("stale source retried")
++        }),
++        Err(SourceError::AuthorityNotCurrent)
++    ));
++}
++
++#[test]
++fn generated_issue_source_preserves_callback_error_and_panic() {
++    let (hsaco, projection) = source_projection();
++    let authority = source_authority(&projection);
++    let source = RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority);
++    let expected = source.validate(7).unwrap();
++    assert_eq!(
++        source
++            .with_current_source_v1(7, &expected, || Err(17_u32))
++            .unwrap(),
++        Err(17)
++    );
++    let mut entered = false;
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        source.with_current_source_v1(7, &expected, || -> Result<(), ()> {
++            entered = true;
++            std::panic::panic_any(23_u32);
++        })
++    }));
++    assert!(entered);
++    assert_eq!(*result.unwrap_err().downcast::<u32>().unwrap(), 23);
++}
++
+ #[test]
+ fn generated_native_inputs_preserve_each_callback_failure_class_after_closing_check() {
+     let (hsaco, projection) = source_projection();
+diff --git a/crates/fe2o3-runtime/src/context.rs b/crates/fe2o3-runtime/src/context.rs
+index 58fa2e909..dae6bcb75 100644
+--- a/crates/fe2o3-runtime/src/context.rs
++++ b/crates/fe2o3-runtime/src/context.rs
+@@ -15,6 +15,7 @@ pub(crate) use graph::*;
+ mod allocation_admission;
+ mod drain;
+ mod drain_capture;
++mod generated_issue;
+ mod generated_preparation;
+ mod generated_shells;
+ mod unpublished;
+@@ -1036,6 +1037,7 @@ pub struct RuntimeContextV1<B: RuntimeBackendV1> {
+     backend_events: HashSet<u64>,
+     submissions: HashMap<RuntimeSubmissionIdV1, SubmissionRecordV1>,
+     backend_submissions: HashSet<u64>,
++    generated_issues: HashMap<RuntimeStreamIdV1, generated_issue::GeneratedIssueV1>,
+     completion_callbacks: HashMap<RuntimeSubmissionIdV1, Vec<RuntimeCompletionCallbackV1>>,
+     completion_callback_count: usize,
+     completion_callback_panic_count: u64,
+@@ -1180,6 +1182,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             events: HashMap::new(),
+             backend_events: HashSet::new(),
+             submissions: HashMap::new(),
++            generated_issues: HashMap::new(),
+             backend_submissions: HashSet::new(),
+             completion_callbacks: HashMap::new(),
+             completion_callback_count: 0,
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue.rs b/crates/fe2o3-runtime/src/context/generated_issue.rs
+new file mode 100644
+index 000000000..e01c7b15b
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/context/generated_issue.rs
+@@ -0,0 +1,316 @@
++//! First-run mutation attempts. No journal-backed reuse or typed completion.
++
++use super::*;
++use crate::generated_source::GeneratedHostRosterV1;
++use crate::kfd_backend::GeneratedShellPlanV1;
++use crate::{KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1, RuntimeGfx942GeneratedCarrierV1};
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++enum PhaseV1 {
++    Entering,
++    Active,
++    PhysicallyComplete,
++    DisposedWithoutResult,
++    Unknown,
++}
++
++pub(super) struct GeneratedIssueV1 {
++    id: RuntimeSubmissionIdV1,
++    plan: GeneratedShellPlanV1,
++    roster: GeneratedHostRosterV1,
++    phase: PhaseV1,
++    // The original hold/carrier remain in the owner-only async registry. Owned
++    // shutdown retains that registry and this Context together on any failure.
++    submission: Option<RuntimeSubmissionV1<()>>,
++}
++
++impl RuntimeContextV1<KfdRuntimeBackendV1> {
++    fn generated_issue_token_v1(
++        &self,
++        hold: &ContextUnpublishedHoldV1,
++        plan: &GeneratedShellPlanV1,
++    ) -> Result<&RuntimeSubmissionV1<()>, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        self.validate_unpublished_hold_v1(hold)?;
++        let attempt = self
++            .generated_issues
++            .get(&hold.stream())
++            .ok_or(RuntimeValidationErrorV1::InvalidBackendDescription)?;
++        let token = attempt
++            .submission
++            .as_ref()
++            .ok_or(RuntimeValidationErrorV1::InvalidBackendDescription)?;
++        if attempt.plan != *plan
++            || token.id != attempt.id
++            || token.stream != hold.stream()
++            || token.stream != plan.binding.stream
++            || token.device != plan.binding.device
++        {
++            return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
++        }
++        self.live_submission_record(token)?;
++        Ok(token)
++    }
++
++    fn begin_generated_issue_v1(
++        &mut self,
++        hold: &ContextUnpublishedHoldV1,
++        plan: GeneratedShellPlanV1,
++        roster: &GeneratedHostRosterV1,
++    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        if self.generated_plan_for_hold_v1(hold)? != plan
++            || self.generated_issues.contains_key(&hold.stream())
++            || plan.count != roster.count
++            || plan.members[..plan.count]
++                .iter()
++                .enumerate()
++                .any(|(index, member)| {
++                    member.is_none_or(|member| {
++                        roster.buffers[index].is_none_or(|slot| {
++                            slot.ordinal != index || slot.bytes != member.description.byte_len
++                        })
++                    })
++                })
++        {
++            return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
++        }
++        if self.next_identity == 0 || self.submissions.len() >= MAX_RUNTIME_SUBMISSIONS_V1 {
++            return Err(RuntimeValidationErrorV1::Capacity.into());
++        }
++        self.generated_issues
++            .try_reserve(1)
++            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
++        self.submissions
++            .try_reserve(1)
++            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
++        self.backend_submissions
++            .try_reserve(1)
++            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
++        let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
++        self.generated_issues.insert(
++            hold.stream(),
++            GeneratedIssueV1 {
++                id,
++                plan,
++                roster: roster.clone(),
++                phase: PhaseV1::Entering,
++                submission: None,
++            },
++        );
++        Ok(())
++    }
++
++    fn install_generated_submission_v1(
++        &mut self,
++        hold: &ContextUnpublishedHoldV1,
++        backend_submission: u64,
++    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        let protocol = self.backend_handle_protocol_error(
++            RuntimeBackendResourceKindV1::Submission,
++            backend_submission,
++        );
++        let attempt = self
++            .generated_issues
++            .get_mut(&hold.stream())
++            .expect("rooted mutation attempt");
++        assert!(attempt.submission.is_none());
++        let id = attempt.id;
++        let device = attempt.plan.binding.device;
++        attempt.submission = Some(RuntimeSubmissionV1 {
++            id,
++            backend_submission,
++            stream: hold.stream(),
++            device,
++            completion: None,
++            peer_transfer: None,
++            marker: PhantomData,
++        });
++        // Returned identity is rooted even when protocol validation rejects it.
++        self.seal_backend_protocol(protocol, ())?;
++        self.submissions.insert(
++            id,
++            SubmissionRecordV1 {
++                backend_submission,
++                stream: hold.stream(),
++                device,
++                quiescent: false,
++                status: RuntimeCompletionStatusV1::Pending,
++            },
++        );
++        assert!(self.backend_submissions.insert(backend_submission));
++        Ok(())
++    }
++
++    pub(crate) fn progress_gfx942_issue_v1<T: RuntimeGfx942GeneratedCarrierV1>(
++        &mut self,
++        prepared: &mut RuntimeGfx942PreparedV1<T>,
++        roster: &GeneratedHostRosterV1,
++        hold: &ContextUnpublishedHoldV1,
++    ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        let mut complete = false;
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            self.validate_gfx942_prepared_v1(prepared)?;
++            let plan = self.generated_plan_for_hold_v1(hold)?;
++            if !self.gfx942_prepared_matches_plan_v1(prepared, &plan) {
++                return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
++            }
++            let uid = self.generated_issue_device_uid_v1(plan.binding.backend_device)?;
++            prepared
++                .value()
++                .source()
++                .with_current_source_v1(
++                    uid,
++                    roster,
++                    || -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++                        if let Some(attempt) = self.generated_issues.get(&hold.stream()) {
++                            if attempt.plan != plan
++                                || !attempt.roster.matches(roster)
++                                || !matches!(
++                                    attempt.phase,
++                                    PhaseV1::Active | PhaseV1::PhysicallyComplete
++                                )
++                            {
++                                return Err(
++                                    RuntimeValidationErrorV1::InvalidBackendDescription.into()
++                                );
++                            }
++                            self.generated_issue_token_v1(hold, &plan)?;
++                            if attempt.phase == PhaseV1::PhysicallyComplete {
++                                complete = true;
++                                return Ok(());
++                            }
++                        } else {
++                            self.begin_generated_issue_v1(hold, plan, roster)?;
++                            let handle = self
++                                .backend
++                                .prepare_generated_issue_v1(&plan, roster)
++                                .map_err(map_backend_error)?;
++                            self.install_generated_submission_v1(hold, handle)?;
++                        }
++                        let attempt = self
++                            .generated_issues
++                            .get_mut(&hold.stream())
++                            .expect("retained attempt");
++                        // This is the first non-reusing mutation hook. It remains Unknown
++                        // until closing authority checks succeed; physical completion
++                        // alone never settles a successful output version.
++                        attempt.phase = PhaseV1::Unknown;
++                        let handle = attempt
++                            .submission
++                            .as_ref()
++                            .expect("rooted token")
++                            .backend_submission;
++                        complete = self
++                            .backend
++                            .advance_generated_issue_v1(&plan, handle)
++                            .map_err(map_backend_error)?;
++                        Ok(())
++                    },
++                )
++                .map_err(|_| {
++                    RuntimeErrorV1::Validation(RuntimeValidationErrorV1::InvalidBackendDescription)
++                })??;
++            self.generated_issues
++                .get_mut(&hold.stream())
++                .expect("retained attempt")
++                .phase = if complete {
++                PhaseV1::PhysicallyComplete
++            } else {
++                PhaseV1::Active
++            };
++            Ok(())
++        }));
++        self.finish_generated_issue_v1(hold, result)?;
++        Ok(complete)
++    }
++
++    // Called only after the async engine stops observers. It never retries ISSUE.
++    pub(crate) fn retire_gfx942_issued_v1(
++        &mut self,
++        hold: &ContextUnpublishedHoldV1,
++    ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        self.validate_unpublished_hold_v1(hold)?;
++        let mut retired = false;
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            let plan = self.generated_plan_for_hold_v1(hold)?;
++            let attempt = self
++                .generated_issues
++                .get(&hold.stream())
++                .ok_or(RuntimeValidationErrorV1::InvalidBackendDescription)?;
++            if attempt.plan != plan
++                || !matches!(attempt.phase, PhaseV1::Active | PhaseV1::PhysicallyComplete)
++            {
++                return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
++            }
++            let token = self.generated_issue_token_v1(hold, &plan)?;
++            let id = token.id;
++            let backend_submission = token.backend_submission;
++            // At most two lower steps: observe and recycle, with no waiting or
++            // publication. A still-pending packet remains owned after Stop.
++            for _ in 0..2 {
++                if self
++                    .backend
++                    .generated_submission_can_retire_v1(backend_submission)
++                {
++                    break;
++                }
++                self.backend
++                    .progress_generated_submission_v1(backend_submission)
++                    .map_err(map_backend_error)?;
++            }
++            if !self
++                .backend
++                .generated_submission_can_retire_v1(backend_submission)
++            {
++                return Ok(());
++            }
++            self.backend
++                .retire_generated_data_v1(&plan)
++                .map_err(map_backend_error)?;
++            self.backend
++                .release_submission_v1(backend_submission)
++                .map_err(map_backend_error)?;
++            self.generated_issues
++                .get_mut(&hold.stream())
++                .expect("retained attempt")
++                .phase = PhaseV1::DisposedWithoutResult;
++            self.transition_submission_status(
++                id,
++                RuntimeCompletionStatusV1::QuiescentWithoutResult,
++            );
++            self.submissions.remove(&id);
++            self.backend_submissions.remove(&backend_submission);
++            self.retire_generated_shells_v1(hold)?;
++            self.require_live()?;
++            self.generated_issues.remove(&hold.stream());
++            retired = true;
++            Ok(())
++        }));
++        self.finish_generated_issue_v1(hold, result)?;
++        Ok(retired)
++    }
++
++    fn generated_issue_device_uid_v1(
++        &mut self,
++        device: u64,
++    ) -> Result<u64, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        self.backend
++            .with_retained_preparation_device_v1(device, |owner| owner.observation().unique_id())
++            .map_err(map_backend_error)
++    }
++
++    fn finish_generated_issue_v1(
++        &mut self,
++        hold: &ContextUnpublishedHoldV1,
++        result: std::thread::Result<Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>>>,
++    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        if !matches!(result, Ok(Ok(())))
++            && let Some(attempt) = self.generated_issues.get_mut(&hold.stream())
++        {
++            attempt.phase = PhaseV1::Unknown;
++        }
++        self.finish_gfx942_adoption_v1(result)
++    }
++}
++
++#[cfg(test)]
++mod tests;
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue/tests.rs b/crates/fe2o3-runtime/src/context/generated_issue/tests.rs
+new file mode 100644
+index 000000000..d2355ab28
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/context/generated_issue/tests.rs
+@@ -0,0 +1,250 @@
++use super::*;
++use crate::RuntimeGfx942GeneratedSourceMutV1;
++use crate::authorized_execution::tests::{source_authority, source_projection};
++
++fn install(
++    context: &mut RuntimeContextV1<KfdRuntimeBackendV1>,
++) -> (
++    ContextUnpublishedHoldV1,
++    GeneratedShellPlanV1,
++    GeneratedHostRosterV1,
++) {
++    let (binding, _) = RuntimeContextV1::generated_shell_test_binding_v1(&mut context.backend);
++    context
++        .backend
++        .destroy_stream_v1(binding.backend_stream)
++        .unwrap();
++    let device = context.devices()[0].id();
++    let stream = context.create_stream(device).unwrap();
++    let hold = context.hold_unpublished_stream_v1(stream).unwrap();
++    let (hsaco, projection) = source_projection();
++    let authority = source_authority(&projection);
++    let roster = GeneratedHostRosterV1::from_projection(&projection).unwrap();
++    let mut storage = projection.into_generated_storage_v1();
++    let mut source = RuntimeGfx942GeneratedSourceMutV1::new(&mut storage, &hsaco, &authority);
++    context
++        .install_generated_shells_v1(device, binding.native_device, &hold, &mut source, &roster)
++        .unwrap();
++    let plan = context.generated_plan_for_hold_v1(&hold).unwrap();
++    (hold, plan, roster)
++}
++
++fn context() -> RuntimeContextV1<KfdRuntimeBackendV1> {
++    let mut context = RuntimeContextV1::open(KfdRuntimeBackendV1::mock()).unwrap();
++    context
++        .configure_allocation_admission_v1(context.devices()[0].id(), 120, 6)
++        .unwrap();
++    context
++}
++
++#[test]
++fn attempt_roots_one_logical_identity_and_full_mutation_roster_before_backend_return() {
++    let mut context = context();
++    let (hold, plan, roster) = install(&mut context);
++    let next = context.next_identity;
++    let usage = context
++        .allocation_admission_usage_v1(plan.binding.device)
++        .unwrap();
++    context
++        .begin_generated_issue_v1(&hold, plan, &roster)
++        .unwrap();
++    let attempt = &context.generated_issues[&hold.stream()];
++    assert_eq!(
++        attempt.id,
++        RuntimeSubmissionIdV1::new(context.context_generation, next)
++    );
++    assert_eq!(attempt.plan, plan);
++    assert!(attempt.roster.matches(&roster));
++    assert!(attempt.submission.is_none());
++    assert_eq!(attempt.phase, PhaseV1::Entering);
++    assert!(context.submissions.is_empty());
++    assert!(
++        context
++            .begin_generated_issue_v1(&hold, plan, &roster)
++            .is_err()
++    );
++    assert_eq!(context.next_identity, next + 1);
++    let cleanup = context.cleanup();
++    assert!(!cleanup.is_complete());
++    assert_eq!(
++        context
++            .allocation_admission_usage_v1(plan.binding.device)
++            .unwrap(),
++        usage
++    );
++    assert!(
++        context.generated_issues[&hold.stream()]
++            .submission
++            .is_none()
++    );
++}
++
++#[test]
++fn issue_preflight_rejects_changed_roster_hold_and_exhausted_ids_without_attempt() {
++    let mut context = context();
++    let (hold, plan, roster) = install(&mut context);
++    let (other_hold, _, _) = install(&mut context);
++    let next = context.next_identity;
++    let mut wrong = roster.clone();
++    wrong.buffers[0].as_mut().unwrap().bytes += 1;
++    assert!(
++        context
++            .begin_generated_issue_v1(&hold, plan, &wrong)
++            .is_err()
++    );
++    assert!(
++        context
++            .begin_generated_issue_v1(&other_hold, plan, &roster)
++            .is_err()
++    );
++    assert!(context.generated_issues.is_empty());
++    assert_eq!(context.next_identity, next);
++    for exhausted in [0, u64::MAX] {
++        context.next_identity = exhausted;
++        assert!(
++            context
++                .begin_generated_issue_v1(&hold, plan, &roster)
++                .is_err()
++        );
++        assert_eq!(context.next_identity, exhausted);
++        assert!(context.generated_issues.is_empty());
++    }
++}
++
++#[test]
++fn attempt_failure_before_backend_identity_is_sticky_unknown_with_credits_retained() {
++    for panic in [false, true] {
++        let mut context = context();
++        let (hold, plan, roster) = install(&mut context);
++        let usage = context
++            .allocation_admission_usage_v1(plan.binding.device)
++            .unwrap();
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            context.begin_generated_issue_v1(&hold, plan, &roster)?;
++            if panic {
++                panic!("backend preparation unwind before handle");
++            }
++            Err(RuntimeValidationErrorV1::Capacity.into())
++        }));
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            context.finish_generated_issue_v1(&hold, result)
++        }));
++        assert!(if panic {
++            result.is_err()
++        } else {
++            result.unwrap().is_err()
++        });
++        assert!(context.is_terminal());
++        let next = context.next_identity;
++        let attempt = &context.generated_issues[&hold.stream()];
++        assert_eq!(attempt.phase, PhaseV1::Unknown);
++        assert!(attempt.submission.is_none());
++        assert!(context.retire_gfx942_issued_v1(&hold).is_err());
++        assert_eq!(context.next_identity, next);
++        assert_eq!(
++            context
++                .allocation_admission_usage_v1(plan.binding.device)
++                .unwrap(),
++            usage
++        );
++        assert!(!context.cleanup().is_complete());
++        core::mem::forget(context);
++    }
++}
++
++#[test]
++fn invalid_returned_backend_identity_is_rooted_before_protocol_terminalization() {
++    for backend in [0, 900] {
++        let mut context = context();
++        let (hold, plan, roster) = install(&mut context);
++        context
++            .begin_generated_issue_v1(&hold, plan, &roster)
++            .unwrap();
++        if backend != 0 {
++            context.backend_submissions.insert(backend);
++        }
++        let result = context.install_generated_submission_v1(&hold, backend);
++        assert!(result.is_err());
++        assert!(
++            context
++                .finish_generated_issue_v1(&hold, Ok(result))
++                .is_err()
++        );
++        let attempt = &context.generated_issues[&hold.stream()];
++        assert_eq!(
++            attempt.submission.as_ref().unwrap().backend_submission,
++            backend
++        );
++        assert_eq!(attempt.submission.as_ref().unwrap().id, attempt.id);
++        assert_eq!(attempt.phase, PhaseV1::Unknown);
++        assert!(context.submissions.is_empty());
++        assert!(!context.cleanup().is_complete());
++        core::mem::forget(context);
++    }
++}
++
++#[test]
++fn a_different_live_token_cannot_authorize_generated_progress_or_retirement() {
++    let mut context = context();
++    let (first, first_plan, first_roster) = install(&mut context);
++    let (second, second_plan, second_roster) = install(&mut context);
++    for (hold, plan, roster, backend) in [
++        (&first, first_plan, &first_roster, 900),
++        (&second, second_plan, &second_roster, 901),
++    ] {
++        context
++            .begin_generated_issue_v1(hold, plan, roster)
++            .unwrap();
++        context
++            .install_generated_submission_v1(hold, backend)
++            .unwrap();
++        context
++            .generated_issues
++            .get_mut(&hold.stream())
++            .unwrap()
++            .phase = PhaseV1::Active;
++        assert!(context.generated_issue_token_v1(hold, &plan).is_ok());
++    }
++    let mut other = context.generated_issues.remove(&second.stream()).unwrap();
++    core::mem::swap(
++        &mut context
++            .generated_issues
++            .get_mut(&first.stream())
++            .unwrap()
++            .submission,
++        &mut other.submission,
++    );
++    context.generated_issues.insert(second.stream(), other);
++    assert!(
++        context
++            .live_submission_record(
++                context.generated_issues[&first.stream()]
++                    .submission
++                    .as_ref()
++                    .unwrap()
++            )
++            .is_ok()
++    );
++    assert!(
++        context
++            .generated_issue_token_v1(&first, &first_plan)
++            .is_err()
++    );
++    let before = context
++        .allocation_admission_usage_v1(first_plan.binding.device)
++        .unwrap();
++    assert!(context.retire_gfx942_issued_v1(&first).is_err());
++    assert_eq!(context.submissions.len(), 2);
++    assert_eq!(context.allocations.len(), 6);
++    assert_eq!(
++        context
++            .allocation_admission_usage_v1(first_plan.binding.device)
++            .unwrap(),
++        before
++    );
++    assert_eq!(
++        context.generated_issues[&first.stream()].phase,
++        PhaseV1::Unknown
++    );
++    core::mem::forget(context);
++}
+diff --git a/crates/fe2o3-runtime/src/context/generated_preparation.rs b/crates/fe2o3-runtime/src/context/generated_preparation.rs
+index 4e85cf25e..2b9ee116a 100644
+--- a/crates/fe2o3-runtime/src/context/generated_preparation.rs
++++ b/crates/fe2o3-runtime/src/context/generated_preparation.rs
+@@ -98,6 +98,18 @@ impl<E: Error + 'static> Error for RuntimeGfx942PreparationErrorV1<E> {
+ }
+ 
+ impl RuntimeContextV1<KfdRuntimeBackendV1> {
++    pub(in crate::context) fn gfx942_prepared_matches_plan_v1<T>(
++        &self,
++        prepared: &RuntimeGfx942PreparedV1<T>,
++        plan: &crate::kfd_backend::GeneratedShellPlanV1,
++    ) -> bool {
++        prepared.binding.matches_context(
++            plan.binding.context_generation,
++            plan.binding.device,
++            plan.binding.backend_device,
++        ) && prepared.binding.matches_native(plan.binding.native_device)
++    }
++
+     pub(crate) fn register_gfx942_generated_shells_v1<T: crate::RuntimeGfx942GeneratedCarrierV1>(
+         &mut self,
+         prepared: &mut RuntimeGfx942PreparedV1<T>,
+diff --git a/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs b/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs
+index 8e207ddbd..601e3813b 100644
+--- a/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs
++++ b/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs
+@@ -88,6 +88,9 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+         hold: &ContextUnpublishedHoldV1,
+     ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+         self.validate_unpublished_hold_v1(hold)?;
++        if self.generated_issues.contains_key(&hold.stream()) {
++            return Err(RuntimeValidationErrorV1::ContextReserved.into());
++        }
+         let result = catch_unwind(AssertUnwindSafe(|| {
+             let stream = *self.streams.get(&hold.stream()).expect("exact held stream");
+             if stream.generated.is_none() {
+@@ -109,7 +112,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+         self.finish_gfx942_adoption_v1(result)
+     }
+ 
+-    fn finish_gfx942_adoption_v1(
++    pub(in crate::context) fn finish_gfx942_adoption_v1(
+         &mut self,
+         result: std::thread::Result<Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>>>,
+     ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+diff --git a/crates/fe2o3-runtime/src/generated_source.rs b/crates/fe2o3-runtime/src/generated_source.rs
+index 5e2b8301b..3b9561e6e 100644
+--- a/crates/fe2o3-runtime/src/generated_source.rs
++++ b/crates/fe2o3-runtime/src/generated_source.rs
+@@ -75,6 +75,21 @@ impl<'a, E> RuntimeGfx942GeneratedSourceV1<'a, E> {
+             .map_err(|_| RuntimeGfx942GeneratedReservationErrorV1::AuthorityNotCurrent)
+     }
+ 
++    pub(crate) fn with_current_source_v1<F>(
++        &self,
++        device_unique_id: u64,
++        expected: &GeneratedHostRosterV1,
++        callback: impl FnOnce() -> Result<(), F>,
++    ) -> Result<Result<(), F>, RuntimeGfx942GeneratedReservationErrorV1> {
++        if !self.validate(device_unique_id)?.matches(expected) {
++            return Err(RuntimeGfx942GeneratedReservationErrorV1::InvalidRoster);
++        }
++        self.revalidate()?;
++        let result = callback();
++        self.revalidate()?;
++        Ok(result)
++    }
++
+     /// Borrows complete original inputs without moving or reconstructing control.
+     /// A callback entering native work must root the exact packet, lane and every
+     /// admitted prefix in its backend. Closing failure cannot dispose or retry it.
+@@ -265,6 +280,7 @@ pub(crate) struct GeneratedBufferSlotV1 {
+ }
+ 
+ // Retained descriptive metadata for the next native adoption transition, not a permit.
++#[derive(Clone)]
+ pub(crate) struct GeneratedHostRosterV1 {
+     pub source_identity: std::sync::Arc<()>,
+     pub buffers: [Option<GeneratedBufferSlotV1>; GFX942_MAX_FIXED_DISPATCH_DATA_V1],
+diff --git a/crates/fe2o3-runtime/src/kfd_backend.rs b/crates/fe2o3-runtime/src/kfd_backend.rs
+index 52766c211..c7d1fa74d 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend.rs
+@@ -1175,6 +1175,7 @@ pub struct KfdRuntimeBackendV1 {
+     streams: HashMap<u64, u64>,
+     allocations: AllocationTableV1,
+     generated_shells: HashMap<u64, generated_shells::GeneratedShellRecordV1>,
++    generated_submissions: HashMap<u64, u64>,
+     modules: HashMap<u64, ModuleRecordV1>,
+     kernels: HashMap<u64, KernelRecordV1>,
+     submissions: HashMap<u64, SubmissionRecordV1>,
+@@ -1540,6 +1541,7 @@ impl KfdRuntimeBackendV1 {
+             streams: HashMap::new(),
+             allocations: AllocationTableV1::default(),
+             generated_shells: HashMap::new(),
++            generated_submissions: HashMap::new(),
+             modules: HashMap::new(),
+             kernels: HashMap::new(),
+             submissions: HashMap::new(),
+@@ -2064,6 +2066,7 @@ impl KfdRuntimeBackendV1 {
+             .submissions
+             .len()
+             .checked_add(self.compute_completion_reservations)
++            .and_then(|live| live.checked_add(self.generated_submissions.len()))
+             .and_then(|live| live.checked_add(self.sdma_completion_reservations))
+             .ok_or_else(|| Self::capacity("KFD submission count overflow"))?;
+         if live >= MAX_RUNTIME_SUBMISSIONS_V1 {
+@@ -2494,6 +2497,7 @@ impl KfdRuntimeBackendV1 {
+ 
+     fn any_compute_active_v1(&self) -> bool {
+         self.active.is_some()
++            || !self.generated_submissions.is_empty()
+             || !self.compute_pipeline.is_empty()
+             || self
+                 .auxiliary_compute_lanes
+@@ -6554,6 +6558,9 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
+         submission: u64,
+     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+         self.require_live()?;
++        if self.generated_submissions.contains_key(&submission) {
++            return self.poll_generated_submission_v1(submission);
++        }
+         if self.quiescent_sdma_submissions.contains(&submission) {
+             debug_assert!(self.submissions.contains_key(&submission));
+             return Err(Self::quiescent_error(
+@@ -6747,6 +6754,9 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
+         submission: u64,
+     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+         self.require_live()?;
++        if self.generated_submissions.contains_key(&submission) {
++            return self.release_generated_submission_v1(submission);
++        }
+         if self.active_compute_lane_v1(submission).is_some() {
+             return Err(Self::rejected(
+                 KfdRuntimeBackendErrorKindV1::Busy,
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs
+index 5aa03d11a..d3395b186 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs
+@@ -5,6 +5,10 @@ use crate::generated_source::GeneratedHostRosterV1;
+ use generated_shells::GeneratedShellPlanV1;
+ use std::panic::{AssertUnwindSafe, catch_unwind};
+ 
++mod issue;
++mod receipt;
++use receipt::ReceiptV1;
++
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+ enum PhaseV1 {
+     Entering,
+@@ -19,6 +23,7 @@ pub(super) struct GeneratedNativeAdoptionV1 {
+     native_lane: Option<ComputeAqlQueueLaneV1>,
+     data: Vec<Gfx942FixedDispatchDataV1>,
+     returned: ReturnedDataV1<Gfx942FixedDispatchDataV1>,
++    submission: Option<issue::GeneratedSubmissionV1>,
+ }
+ 
+ // The lower consuming release owns the current item on failure. This root keeps
+@@ -60,7 +65,7 @@ impl<T> ReturnedDataV1<T> {
+ 
+ impl GeneratedNativeAdoptionV1 {
+     pub(super) fn disposed_count(&self) -> Option<usize> {
+-        self.is_retired().then_some(self.returned.completed)
++        (self.is_retired() && self.submission.is_none()).then_some(self.returned.completed)
+     }
+ 
+     pub(super) fn is_retired(&self) -> bool {
+@@ -206,6 +211,7 @@ impl KfdRuntimeBackendV1 {
+             native_lane: self.native_compute_lanes[lane],
+             data,
+             returned: ReturnedDataV1::empty(),
++            submission: None,
+         });
+         self.lease_compute_lane_v1(plan.binding.backend_stream, lane);
+         let result = catch_unwind(AssertUnwindSafe(|| {
+@@ -428,7 +434,18 @@ impl KfdRuntimeBackendV1 {
+                 ))
+             };
+         };
+-        if native.phase != PhaseV1::Adopted || !self.generated_lease_matches_v1(plan) {
++        let recycled = native
++            .submission
++            .as_ref()
++            .is_some_and(|submission| matches!(submission.receipt, ReceiptV1::Recycled));
++        let unpublished = native
++            .submission
++            .as_ref()
++            .is_none_or(|submission| matches!(submission.receipt, ReceiptV1::Ready));
++        if native.phase != PhaseV1::Adopted
++            || (!recycled && !unpublished)
++            || !self.generated_lease_matches_v1(plan)
++        {
+             return Err(Self::rejected(
+                 KfdRuntimeBackendErrorKindV1::Busy,
+                 "generated retirement phase or lease mismatch",
+@@ -456,9 +473,12 @@ impl KfdRuntimeBackendV1 {
+                 .as_mut()
+                 .expect("retained generated queue")
+                 .with_compute_lane_v1(handle, |lane| {
+-                    native
+-                        .returned
+-                        .install(lane.abort_unpublished_fixed_dispatch_v1()?);
++                    let data = if recycled {
++                        lane.detach_recycled_fixed_dispatch()?.into_data()
++                    } else {
++                        lane.abort_unpublished_fixed_dispatch_v1()?
++                    };
++                    native.returned.install(data);
+                     if native
+                         .returned
+                         .remaining
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/issue.rs b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/issue.rs
+new file mode 100644
+index 000000000..25f417352
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/issue.rs
+@@ -0,0 +1,281 @@
++//! Private first-run publication and physical settlement, without output delivery.
++
++use super::*;
++use fe2o3_kfd::Gfx942CompletedDispatchBatchV1;
++
++pub(super) struct GeneratedSubmissionV1 {
++    pub(super) id: u64,
++    pub(super) receipt: ReceiptV1<Gfx942DispatchBatchV1<1>, Gfx942CompletedDispatchBatchV1<1>>,
++}
++
++impl KfdRuntimeBackendV1 {
++    pub(crate) fn prepare_generated_issue_v1(
++        &mut self,
++        plan: &GeneratedShellPlanV1,
++        roster: &GeneratedHostRosterV1,
++    ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        self.require_live()?;
++        if !self.validate_generated_shell_records_v1(plan)
++            || !self.generated_lease_matches_v1(plan)
++            || !self.generated_shells.get(&plan.key).is_some_and(|record| {
++                Arc::ptr_eq(&record.source_identity, &roster.source_identity)
++                    && record.native.as_ref().is_some_and(|native| {
++                        native.phase == PhaseV1::Adopted && native.submission.is_none()
++                    })
++            })
++        {
++            return Err(Self::rejected(
++                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
++                "generated issue identity or phase mismatch",
++            ));
++        }
++        self.require_submission_capacity_v1()?;
++        self.generated_submissions
++            .try_reserve(1)
++            .map_err(|_| Self::capacity("generated submission index capacity"))?;
++        let id = self.next_handle;
++        let next = id
++            .checked_add(1)
++            .filter(|_| id != 0)
++            .ok_or_else(|| Self::capacity("generated submission identity exhausted"))?;
++        self.next_handle = next;
++        let native = self
++            .generated_shells
++            .get_mut(&plan.key)
++            .expect("validated shell")
++            .native
++            .as_mut()
++            .expect("adopted native owner");
++        native.submission = Some(GeneratedSubmissionV1 {
++            id,
++            receipt: ReceiptV1::Ready,
++        });
++        assert!(self.generated_submissions.insert(id, plan.key).is_none());
++        Ok(id)
++    }
++
++    fn generated_submission_plan_v1(
++        &self,
++        submission: u64,
++    ) -> Result<GeneratedShellPlanV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        self.require_live()?;
++        let plan = self
++            .generated_submissions
++            .get(&submission)
++            .and_then(|key| self.generated_shells.get(key))
++            .filter(|record| {
++                record.native.as_ref().is_some_and(|native| {
++                    native.phase == PhaseV1::Adopted
++                        && native
++                            .submission
++                            .as_ref()
++                            .is_some_and(|owner| owner.id == submission)
++                })
++            })
++            .map(|record| record.plan)
++            .ok_or_else(|| {
++                Self::rejected(
++                    KfdRuntimeBackendErrorKindV1::UnknownHandle,
++                    "unknown generated submission",
++                )
++            })?;
++        if !self.validate_generated_shell_records_v1(&plan)
++            || !self.generated_lease_matches_v1(&plan)
++        {
++            return Err(Self::rejected(
++                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
++                "generated submission owner mismatch",
++            ));
++        }
++        Ok(plan)
++    }
++
++    // Only the authority-bracketed Context driver calls this. Generic poll,
++    // cleanup, wait and Stop are observation-only, including a Ready receipt.
++    pub(crate) fn advance_generated_issue_v1(
++        &mut self,
++        plan: &GeneratedShellPlanV1,
++        submission: u64,
++    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        if self.generated_submission_plan_v1(submission)? != *plan {
++            return Err(Self::rejected(
++                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
++                "generated issue plan mismatch",
++            ));
++        }
++        let ready = matches!(
++            self.generated_shells[&plan.key]
++                .native
++                .as_ref()
++                .expect("native owner")
++                .submission
++                .as_ref()
++                .expect("submission")
++                .receipt,
++            ReceiptV1::Ready
++        );
++        if !ready {
++            return self.progress_generated_submission_v1(submission);
++        }
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            self.check_generated_device_v1(plan)?;
++            let native = self
++                .generated_shells
++                .get_mut(&plan.key)
++                .expect("rooted shell")
++                .native
++                .as_mut()
++                .expect("native owner");
++            let handle = native.native_lane.expect("exact lane");
++            let receipt = &mut native.submission.as_mut().expect("submission").receipt;
++            let result = self
++                .queue
++                .as_mut()
++                .expect("retained queue")
++                .with_compute_lane_v1(handle, |lane| {
++                    receipt.issue(|| lane.submit_fixed_dispatch_classified_v1::<1>())
++                })
++                .and_then(core::convert::identity);
++            result.map_err(|error| self.generated_native_error_v1("issue", error))?;
++            self.check_generated_device_v1(plan)
++        }));
++        self.finish_generated_native_call_v1(result)?;
++        Ok(false)
++    }
++
++    #[allow(
++        clippy::result_large_err,
++        reason = "returned linear completion custody must stay inline without post-effect allocation"
++    )]
++    pub(crate) fn progress_generated_submission_v1(
++        &mut self,
++        submission: u64,
++    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        let plan = self.generated_submission_plan_v1(submission)?;
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            self.check_generated_device_v1(&plan)?;
++            let native = self
++                .generated_shells
++                .get_mut(&plan.key)
++                .expect("rooted shell")
++                .native
++                .as_mut()
++                .expect("native owner");
++            let handle = native.native_lane.expect("exact lane");
++            let receipt = &mut native.submission.as_mut().expect("submission").receipt;
++            let result = self
++                .queue
++                .as_mut()
++                .expect("retained queue")
++                .with_compute_lane_v1(handle, |lane| match receipt {
++                    ReceiptV1::Ready | ReceiptV1::Recycled => Ok(()),
++                    ReceiptV1::Published(_) => receipt.poll(|batch| {
++                        lane.poll_fixed_dispatch(batch).map(|poll| match poll {
++                            Gfx942DispatchPollV1::Pending(batch) => receipt::PollV1::Pending(batch),
++                            Gfx942DispatchPollV1::Ready(completed) => {
++                                receipt::PollV1::Completed(completed)
++                            }
++                        })
++                    }),
++                    ReceiptV1::Completed(_) => receipt
++                        .recycle(|completed| {
++                            lane.recycle_fixed_dispatch(completed)
++                                .map(|_| ())
++                                .map_err(|failure| failure.into_parts())
++                        })
++                        .map(|_| ()),
++                    ReceiptV1::HandedToLower(stage) => {
++                        let _ = stage;
++                        Err(fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract(
++                            "generated consuming handoff cannot retry",
++                        ))
++                    }
++                })
++                .and_then(core::convert::identity);
++            result.map_err(|error| self.generated_native_error_v1("completion", error))?;
++            self.check_generated_device_v1(&plan)
++        }));
++        self.finish_generated_native_call_v1(result)?;
++        Ok(matches!(
++            self.generated_shells[&plan.key]
++                .native
++                .as_ref()
++                .expect("native owner")
++                .submission
++                .as_ref()
++                .expect("submission")
++                .receipt,
++            ReceiptV1::Recycled
++        ))
++    }
++
++    pub(crate) fn generated_submission_can_retire_v1(&self, submission: u64) -> bool {
++        self.generated_submissions
++            .get(&submission)
++            .and_then(|key| self.generated_shells.get(key))
++            .and_then(|record| record.native.as_ref())
++            .is_some_and(|native| {
++                native.phase == PhaseV1::Adopted
++                    && native.submission.as_ref().is_some_and(|owner| {
++                        owner.id == submission
++                            && matches!(owner.receipt, ReceiptV1::Ready | ReceiptV1::Recycled)
++                    })
++            })
++    }
++
++    pub(in crate::kfd_backend) fn poll_generated_submission_v1(
++        &mut self,
++        submission: u64,
++    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        if self.progress_generated_submission_v1(submission)? {
++            // Physical retirement is not successful generated readback/decoding.
++            Err(Self::quiescent_error(
++                KfdRuntimeBackendErrorKindV1::Native,
++                "generated dispatch physically complete without delivered result",
++            ))
++        } else {
++            Ok(BackendPollV1::Pending)
++        }
++    }
++
++    pub(in crate::kfd_backend) fn release_generated_submission_v1(
++        &mut self,
++        submission: u64,
++    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        self.require_live()?;
++        let key = self.generated_submissions[&submission];
++        let native = self
++            .generated_shells
++            .get_mut(&key)
++            .and_then(|record| record.native.as_mut())
++            .expect("indexed native owner");
++        if !native.is_retired()
++            || !native.submission.as_ref().is_some_and(|owner| {
++                owner.id == submission
++                    && matches!(owner.receipt, ReceiptV1::Ready | ReceiptV1::Recycled)
++            })
++        {
++            return Err(Self::rejected(
++                KfdRuntimeBackendErrorKindV1::Busy,
++                "generated submission retains native DATA",
++            ));
++        }
++        native.submission = None;
++        self.generated_submissions.remove(&submission);
++        Ok(())
++    }
++
++    fn check_generated_device_v1(
++        &mut self,
++        plan: &GeneratedShellPlanV1,
++    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        let current = self
++            .with_retained_preparation_device_v1(plan.binding.backend_device, |device| {
++                device.model_admission()
++            })?;
++        if current != plan.binding.native_device || !self.generated_lease_matches_v1(plan) {
++            return Err(self.terminal_error("generated issue/completion device or lease mismatch"));
++        }
++        Ok(())
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/receipt.rs b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/receipt.rs
+new file mode 100644
+index 000000000..dc56d2d65
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/receipt.rs
+@@ -0,0 +1,85 @@
++//! In-place custody across consuming lower operations. No token is reconstructed.
++
++use super::*;
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub(super) enum HandoffV1 {
++    Issue,
++    Poll,
++    Recycle,
++}
++
++pub(super) enum ReceiptV1<P, C> {
++    Ready,
++    Published(P),
++    Completed(C),
++    Recycled,
++    // The original queue retains native resources when a consuming call does
++    // not return custody. This marker is not a replacement completion token.
++    HandedToLower(HandoffV1),
++}
++
++pub(super) enum PollV1<P, C> {
++    Pending(P),
++    Completed(C),
++}
++
++impl<P, C> ReceiptV1<P, C> {
++    pub(super) fn issue(
++        &mut self,
++        issue: impl FnOnce() -> Result<P, Gfx942FixedDispatchSubmissionFailureV1>,
++    ) -> Result<(), fe2o3_kfd::ComputeAqlQueueSessionErrorV1> {
++        assert!(matches!(self, Self::Ready));
++        *self = Self::HandedToLower(HandoffV1::Issue);
++        match issue() {
++            Ok(batch) => *self = Self::Published(batch),
++            Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(_)) => {
++                *self = Self::Ready;
++            }
++            Err(failure) => return Err(failure.into_error()),
++        }
++        Ok(())
++    }
++
++    pub(super) fn poll<E>(
++        &mut self,
++        poll: impl FnOnce(P) -> Result<PollV1<P, C>, E>,
++    ) -> Result<(), E> {
++        assert!(matches!(self, Self::Published(_)));
++        let Self::Published(batch) = core::mem::replace(self, Self::HandedToLower(HandoffV1::Poll))
++        else {
++            unreachable!()
++        };
++        *self = match poll(batch)? {
++            PollV1::Completed(completed) => Self::Completed(completed),
++            PollV1::Pending(pending) => Self::Published(pending),
++        };
++        Ok(())
++    }
++
++    pub(super) fn recycle<E>(
++        &mut self,
++        recycle: impl FnOnce(C) -> Result<(), (E, Option<C>)>,
++    ) -> Result<bool, E> {
++        assert!(matches!(self, Self::Completed(_)));
++        let Self::Completed(completed) =
++            core::mem::replace(self, Self::HandedToLower(HandoffV1::Recycle))
++        else {
++            unreachable!()
++        };
++        match recycle(completed) {
++            Ok(()) => *self = Self::Recycled,
++            Err((error, returned)) => {
++                if let Some(completed) = returned {
++                    *self = Self::Completed(completed);
++                    return Ok(false);
++                }
++                return Err(error);
++            }
++        }
++        Ok(true)
++    }
++}
++
++#[cfg(test)]
++mod tests;
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/receipt/tests.rs b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/receipt/tests.rs
+new file mode 100644
+index 000000000..be5f67ce0
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/receipt/tests.rs
+@@ -0,0 +1,190 @@
++use super::*;
++use std::sync::{
++    Arc,
++    atomic::{AtomicUsize, Ordering},
++};
++
++struct Token(Arc<AtomicUsize>);
++impl Drop for Token {
++    fn drop(&mut self) {
++        self.0.fetch_add(1, Ordering::SeqCst);
++    }
++}
++
++fn token() -> (Token, Arc<AtomicUsize>) {
++    let drops = Arc::new(AtomicUsize::new(0));
++    (Token(drops.clone()), drops)
++}
++
++fn lower_error() -> fe2o3_kfd::ComputeAqlQueueSessionErrorV1 {
++    fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract("injected receipt failure")
++}
++
++#[test]
++fn returned_publication_is_rooted_before_closing_unwind() {
++    let (batch, drops) = token();
++    let mut receipt: ReceiptV1<Token, Token> = ReceiptV1::Ready;
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        receipt.issue(|| Ok(batch)).unwrap();
++        panic!("closing lane/currentness failure");
++    }));
++    assert!(result.is_err());
++    assert!(matches!(receipt, ReceiptV1::Published(_)));
++    assert_eq!(drops.load(Ordering::SeqCst), 0);
++    let again = catch_unwind(AssertUnwindSafe(|| {
++        receipt.issue(|| panic!("must not reissue"))
++    }));
++    assert!(again.is_err());
++    assert!(matches!(receipt, ReceiptV1::Published(_)));
++    drop(receipt);
++    assert_eq!(drops.load(Ordering::SeqCst), 1);
++}
++
++#[test]
++fn only_explicit_before_effect_retry_restores_ready() {
++    let mut receipt: ReceiptV1<(), ()> = ReceiptV1::Ready;
++    for _ in 0..3 {
++        receipt.issue(|| Err(Gfx942FixedDispatchSubmissionFailureV1::RetryableBeforeSideEffect(lower_error()))).unwrap();
++        assert!(matches!(receipt, ReceiptV1::Ready));
++    }
++    receipt.issue(|| Ok(())).unwrap();
++    assert!(matches!(receipt, ReceiptV1::Published(())));
++    for terminal in [false, true] {
++        let mut receipt: ReceiptV1<(), ()> = ReceiptV1::Ready;
++        assert!(
++            receipt
++                .issue(|| Err(if terminal {
++                    Gfx942FixedDispatchSubmissionFailureV1::Terminal(lower_error())
++                } else {
++                    Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(lower_error())
++                }))
++                .is_err()
++        );
++        assert!(matches!(
++            receipt,
++            ReceiptV1::HandedToLower(HandoffV1::Issue)
++        ));
++    }
++}
++
++#[test]
++fn publication_panic_retains_unknown_handoff_not_a_retry_permit() {
++    let mut receipt: ReceiptV1<(), ()> = ReceiptV1::Ready;
++    assert!(
++        catch_unwind(AssertUnwindSafe(
++            || receipt.issue(|| panic!("publication unknown"))
++        ))
++        .is_err()
++    );
++    assert!(matches!(
++        receipt,
++        ReceiptV1::HandedToLower(HandoffV1::Issue)
++    ));
++}
++
++#[test]
++fn returned_pending_and_completed_tokens_survive_closing_unwind() {
++    for completed in [false, true] {
++        let (batch, drops) = token();
++        let mut receipt = ReceiptV1::Published(batch);
++        assert!(
++            catch_unwind(AssertUnwindSafe(|| {
++                receipt
++                    .poll::<()>(|batch| {
++                        Ok(if completed {
++                            PollV1::Completed(batch)
++                        } else {
++                            PollV1::Pending(batch)
++                        })
++                    })
++                    .unwrap();
++                panic!("closing observation failure");
++            }))
++            .is_err()
++        );
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        if completed {
++            assert!(matches!(receipt, ReceiptV1::Completed(_)));
++        } else {
++            assert!(matches!(receipt, ReceiptV1::Published(_)));
++        }
++        drop(receipt);
++        assert_eq!(drops.load(Ordering::SeqCst), 1);
++    }
++}
++
++#[test]
++fn consuming_poll_failure_retains_exact_lower_handoff() {
++    for panic in [false, true] {
++        let (batch, drops) = token();
++        let mut receipt: ReceiptV1<Token, Token> = ReceiptV1::Published(batch);
++        let mut lower = None;
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            receipt.poll(|batch| {
++                lower = Some(batch);
++                if panic {
++                    panic!("lower poll panic");
++                }
++                Err(())
++            })
++        }));
++        assert!(if panic {
++            result.is_err()
++        } else {
++            result.unwrap().is_err()
++        });
++        assert!(matches!(receipt, ReceiptV1::HandedToLower(HandoffV1::Poll)));
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        assert!(lower.is_some());
++    }
++}
++
++#[test]
++fn recycle_retains_returned_completed_before_reporting_error() {
++    let (completed, drops) = token();
++    let mut receipt: ReceiptV1<Token, Token> = ReceiptV1::Completed(completed);
++    assert!(
++        !receipt
++            .recycle(|completed| Err(((), Some(completed))))
++            .unwrap()
++    );
++    assert!(matches!(receipt, ReceiptV1::Completed(_)));
++    assert_eq!(drops.load(Ordering::SeqCst), 0);
++    receipt
++        .recycle::<()>(|completed| {
++            drop(completed);
++            Ok(())
++        })
++        .unwrap();
++    assert!(matches!(receipt, ReceiptV1::Recycled));
++    assert_eq!(drops.load(Ordering::SeqCst), 1);
++}
++
++#[test]
++fn recycle_failure_without_returned_owner_never_fabricates_completion() {
++    for panic in [false, true] {
++        let (completed, drops) = token();
++        let mut receipt: ReceiptV1<Token, Token> = ReceiptV1::Completed(completed);
++        let mut lower = None;
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            receipt.recycle(|completed| {
++                lower = Some(completed);
++                if panic {
++                    panic!("lower recycle panic");
++                }
++                Err(((), None))
++            })
++        }));
++        assert!(if panic {
++            result.is_err()
++        } else {
++            result.unwrap().is_err()
++        });
++        assert!(matches!(
++            receipt,
++            ReceiptV1::HandedToLower(HandoffV1::Recycle)
++        ));
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        assert!(lower.is_some());
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs
+index a11c1ccd9..fdf0d76f3 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs
+@@ -30,10 +30,55 @@ fn native_state(phase: PhaseV1, lane: usize) -> GeneratedNativeAdoptionV1 {
+         native_lane: None,
+         data: Vec::new(),
+         returned: ReturnedDataV1::empty(),
++        submission: None,
+     }
+ }
+ 
+ struct Item(usize, Rc<RefCell<Vec<usize>>>);
++
++#[test]
++fn generated_submission_capacity_and_cold_sdma_exclusion_include_the_index() {
++    let mut backend = KfdRuntimeBackendV1::mock();
++    // Index metadata only: no native lane or completion token is fabricated.
++    backend.generated_submissions.insert(100, 101);
++    backend.compute_completion_reservations = MAX_RUNTIME_SUBMISSIONS_V1 - 1;
++    assert!(backend.require_submission_capacity_v1().is_err());
++    assert!(backend.any_compute_active_v1());
++    backend.native_available = true;
++    assert!(matches!(backend.ensure_sdma_queue_v1(),
++        Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::Busy));
++    assert!(backend.queue.is_none());
++    assert!(!backend.sdma_enabled);
++    backend.generated_submissions.clear();
++    assert!(backend.require_submission_capacity_v1().is_ok());
++    assert!(!backend.any_compute_active_v1());
++    backend.compute_completion_reservations = 0;
++}
++
++#[test]
++fn generated_submission_release_cannot_discard_unretired_custody() {
++    let (mut backend, plan) = shells();
++    let mut native = native_state(PhaseV1::Adopted, 0);
++    native.submission = Some(issue::GeneratedSubmissionV1 {
++        id: 100,
++        receipt: ReceiptV1::Ready,
++    });
++    backend.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
++    backend.generated_submissions.insert(100, plan.key);
++    for _ in 0..3 {
++        assert!(matches!(
++            backend.release_submission_v1(100),
++            Err(RuntimeBackendFailureV1::Rejected(_))
++        ));
++        assert_eq!(backend.generated_submissions.get(&100), Some(&plan.key));
++        assert!(!backend.validate_generated_shell_disposal_v1(&plan));
++        assert!(!backend.terminal);
++    }
++    // Metadata-only test disposal, not a native release receipt.
++    backend.generated_shells.get_mut(&plan.key).unwrap().native = None;
++    backend.generated_submissions.clear();
++    backend.dispose_generated_shells_v1(&plan);
++}
+ impl Drop for Item {
+     fn drop(&mut self) {
+         self.1.borrow_mut().push(self.0);
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests/native.rs b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests/native.rs
+index 971d289b0..960f1041b 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests/native.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests/native.rs
+@@ -7,6 +7,13 @@ use fe2o3_amdhsa_loader::{AdmittedProfile, KernelGlobalBufferAbiV1, validate};
+ use fe2o3_hsaco::ArgumentAccess;
+ 
+ fn install(backend: &mut KfdRuntimeBackendV1, stream: u64) -> GeneratedShellPlanV1 {
++    install_with_roster(backend, stream).0
++}
++
++fn install_with_roster(
++    backend: &mut KfdRuntimeBackendV1,
++    stream: u64,
++) -> (GeneratedShellPlanV1, GeneratedHostRosterV1) {
+     let admitted = admit_gfx942_vecadd_qualification_v1().unwrap();
+     let uid = backend.description.backend_device;
+     let model = backend
+@@ -103,11 +110,21 @@ fn install(backend: &mut KfdRuntimeBackendV1, stream: u64) -> GeneratedShellPlan
+     backend
+         .adopt_generated_data_v1(&plan, &roster, program, &buffers)
+         .unwrap();
+-    plan
++    (plan, roster)
+ }
+ 
+ fn retire(backend: &mut KfdRuntimeBackendV1, plan: &GeneratedShellPlanV1) {
+     backend.retire_generated_data_v1(plan).unwrap();
++    let submission = backend.generated_shells[&plan.key]
++        .native
++        .as_ref()
++        .unwrap()
++        .submission
++        .as_ref()
++        .map(|submission| submission.id);
++    if let Some(submission) = submission {
++        backend.release_submission_v1(submission).unwrap();
++    }
+     assert!(backend.validate_generated_shell_disposal_v1(plan));
+     assert_eq!(
+         backend.generated_shells[&plan.key]
+@@ -190,3 +207,172 @@ fn generated_native_cold_primary_auxiliary_rebound_abort_and_shutdown() {
+ fn generated_native_bootstrap_primary_auxiliary_rebound_abort_and_shutdown() {
+     run(true);
+ }
++
++fn run_issue(bootstrap: bool) {
++    assert_eq!(
++        std::env::var("FE2O3_TEST_NATIVE_ISOLATED").as_deref(),
++        Ok("1")
++    );
++    let raw = std::env::var("FE2O3_TEST_NATIVE_UNIQUE_ID").expect("explicit device UID");
++    let uid = u64::from_str_radix(raw.strip_prefix("0x").unwrap_or(&raw), 16).unwrap();
++    let mut backend = KfdRuntimeBackendV1::open_gfx942_vecadd_qualification_v1(uid).unwrap();
++    if bootstrap {
++        let allocation = backend
++            .allocate_v1(uid, RuntimeMemoryKindV1::HostVisible, 4096, 4096)
++            .unwrap();
++        backend.release_allocation_v1(allocation).unwrap();
++        assert!(backend.queue.is_some());
++        assert!(backend.native_compute_lanes.iter().all(Option::is_none));
++    } else {
++        assert!(backend.queue.is_none());
++    }
++    let first = backend.create_stream_v1(uid).unwrap();
++    let second = backend.create_stream_v1(uid).unwrap();
++    let (first_plan, first_roster) = install_with_roster(&mut backend, first);
++    let primary = backend.native_compute_lanes[0].unwrap();
++    assert_eq!(
++        backend.generated_shells[&first_plan.key]
++            .native
++            .as_ref()
++            .unwrap()
++            .native_lane,
++        Some(primary)
++    );
++    let (second_plan, second_roster) = install_with_roster(&mut backend, second);
++    let auxiliary = backend.native_compute_lanes[1].unwrap();
++    assert_ne!(primary, auxiliary);
++    assert_eq!(
++        backend.generated_shells[&second_plan.key]
++            .native
++            .as_ref()
++            .unwrap()
++            .native_lane,
++        Some(auxiliary)
++    );
++    let (_, _, _, expected) = admit_gfx942_vecadd_qualification_v1()
++        .unwrap()
++        .host_buffers()
++        .unwrap()
++        .into_parts();
++    let first_id = backend
++        .prepare_generated_issue_v1(&first_plan, &first_roster)
++        .unwrap();
++    let second_id = backend
++        .prepare_generated_issue_v1(&second_plan, &second_roster)
++        .unwrap();
++    assert_ne!(first_id, second_id);
++    for (plan, id) in [(&first_plan, first_id), (&second_plan, second_id)] {
++        assert_eq!(backend.poll_v1(id).unwrap(), BackendPollV1::Pending);
++        assert!(matches!(
++            backend.generated_shells[&plan.key]
++                .native
++                .as_ref()
++                .unwrap()
++                .submission
++                .as_ref()
++                .unwrap()
++                .receipt,
++            ReceiptV1::Ready
++        ));
++        assert!(matches!(
++            backend.release_submission_v1(id),
++            Err(RuntimeBackendFailureV1::Rejected(_))
++        ));
++    }
++    let deadline = Instant::now() + Duration::from_secs(10);
++    let mut complete = [false; 2];
++    while !complete.iter().all(|done| *done) {
++        for (index, (plan, id)) in [(&first_plan, first_id), (&second_plan, second_id)]
++            .into_iter()
++            .enumerate()
++        {
++            if !complete[index] {
++                complete[index] = backend.advance_generated_issue_v1(plan, id).unwrap();
++            }
++        }
++        assert!(
++            Instant::now() < deadline,
++            "generated fixture completion deadline"
++        );
++        std::thread::yield_now();
++    }
++    for (plan, id) in [(&first_plan, first_id), (&second_plan, second_id)] {
++        assert!(matches!(
++            backend.poll_v1(id),
++            Err(RuntimeBackendFailureV1::Quiescent(_))
++        ));
++        let handle = backend.generated_shells[&plan.key]
++            .native
++            .as_ref()
++            .unwrap()
++            .native_lane
++            .unwrap();
++        let mut output = vec![0; expected.len()];
++        backend
++            .queue
++            .as_mut()
++            .unwrap()
++            .with_compute_lane_v1(handle, |lane| {
++                let generation = lane.recycled_fixed_dispatch_generation()?;
++                lane.read_recycled_fixed_dispatch_data_into(
++                    fe2o3_kfd::Gfx942CompletedDispatchReadRequestV1::new(
++                        generation,
++                        2,
++                        0,
++                        output.len() as u64,
++                    ),
++                    &mut output,
++                )
++            })
++            .unwrap()
++            .unwrap();
++        assert_eq!(output, expected);
++        retire(&mut backend, plan);
++    }
++    // A fresh generation on the same original primary, not cross-run input reuse.
++    let (rebound, roster) = install_with_roster(&mut backend, first);
++    assert_eq!(backend.native_compute_lanes[0], Some(primary));
++    assert_eq!(backend.native_compute_lanes[1], Some(auxiliary));
++    assert_eq!(
++        backend.generated_shells[&rebound.key]
++            .native
++            .as_ref()
++            .unwrap()
++            .native_lane,
++        Some(primary)
++    );
++    let id = backend
++        .prepare_generated_issue_v1(&rebound, &roster)
++        .unwrap();
++    let deadline = Instant::now() + Duration::from_secs(10);
++    while !backend.advance_generated_issue_v1(&rebound, id).unwrap() {
++        assert!(Instant::now() < deadline);
++        std::thread::yield_now();
++    }
++    retire(&mut backend, &rebound);
++    assert!(backend.generated_submissions.is_empty());
++    assert!(backend.generated_shells.is_empty());
++    assert!(backend.allocations.is_empty());
++    assert!(backend.submissions.is_empty());
++    assert!(backend.stream_compute_lanes.is_empty());
++    assert!(!backend.any_compute_active_v1());
++    backend.destroy_stream_v1(first).unwrap();
++    backend.destroy_stream_v1(second).unwrap();
++    backend.shutdown_native_v1().unwrap();
++    assert!(backend.queue.is_none());
++    eprintln!(
++        "I2 native fixture: bootstrap={bootstrap}, primary/AUX exact output, rebound completion, 9 DATA disposals, shutdown complete; no protected Worker/carrier or typed reply claim"
++    );
++}
++
++#[test]
++#[ignore = "requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID"]
++fn generated_native_cold_issue_complete_readback_retire() {
++    run_issue(false);
++}
++
++#[test]
++#[ignore = "requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID"]
++fn generated_native_bootstrap_issue_complete_readback_retire() {
++    run_issue(true);
++}

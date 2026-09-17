@@ -1,0 +1,35 @@
+    Blocking waiting for file lock on build directory
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-runtime/src/kfd_backend/generated_adoption/issue.rs:169:61
+    |
+169 |                           lane.poll_fixed_dispatch(batch).map(|poll| match poll {
+    |  _____________________________________________________________^
+170 | |                             Gfx942DispatchPollV1::Pending(batch) => Err(batch),
+171 | |                             Gfx942DispatchPollV1::Ready(completed) => Ok(completed),
+172 | |                         })
+    | |_________________________^ the `Err`-variant is at least 200 bytes
+    |
+    = help: try reducing the size of `fe2o3_kfd::Gfx942DispatchBatchV1<1>`, for example by boxing large elements or replacing it with `Box<fe2o3_kfd::Gfx942DispatchBatchV1<1>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-runtime/src/kfd_backend/generated_adoption/issue.rs:175:34
+    |
+175 |                           .recycle(|completed| {
+    |  __________________________________^
+176 | |                             lane.recycle_fixed_dispatch(completed)
+177 | |                                 .map(|_| ())
+178 | |                                 .map_err(|failure| failure.into_parts())
+179 | |                         })
+    | |_________________________^ the `Err`-variant is at least 288 bytes
+    |
+    = help: try reducing the size of `(fe2o3_kfd::ComputeAqlQueueSessionErrorV1, std::option::Option<fe2o3_kfd::Gfx942CompletedDispatchBatchV1<1>>)`, for example by boxing large elements or replacing it with `Box<(fe2o3_kfd::ComputeAqlQueueSessionErrorV1, std::option::Option<fe2o3_kfd::Gfx942CompletedDispatchBatchV1<1>>)>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: could not compile `fe2o3-runtime` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `fe2o3-runtime` (lib test) due to 2 previous errors

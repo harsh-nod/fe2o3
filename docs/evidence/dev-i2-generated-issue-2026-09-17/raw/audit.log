@@ -1,0 +1,21 @@
+crates/fe2o3-runtime/src/async_engine/generated_operation.rs: OK
+crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs: OK
+crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs: OK
+crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs: OK
+crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs: OK
+crates/fe2o3-runtime/src/context.rs: OK
+crates/fe2o3-runtime/src/context/generated_issue.rs: OK
+crates/fe2o3-runtime/src/context/generated_issue/tests.rs: OK
+crates/fe2o3-runtime/src/context/generated_preparation.rs: OK
+crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs: OK
+crates/fe2o3-runtime/src/generated_source.rs: OK
+crates/fe2o3-runtime/src/kfd_backend.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption/issue.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption/receipt.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption/receipt/tests.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests/native.rs: OK
+target/debug/deps/fe2o3_runtime-d209755ce6df5405: OK
+target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-6cd4f20cb887eaec: OK
+PASS: 18 source files; GNU/musl 892 passed + 15 ignored; 4 exact native probes; owned cleanup verified.

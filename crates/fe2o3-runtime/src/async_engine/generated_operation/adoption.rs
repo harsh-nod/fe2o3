@@ -25,6 +25,29 @@ type AdoptionReadyV1<B> = fn(
     &ContextUnpublishedHoldV1,
 ) -> Result<bool, RuntimeErrorV1<<B as RuntimeBackendV1>::Error>>;
 
+type IssuedRetireV1<B> = fn(
+    &mut RuntimeContextV1<B>,
+    &ContextUnpublishedHoldV1,
+) -> Result<bool, RuntimeErrorV1<<B as RuntimeBackendV1>::Error>>;
+type IssueProgressV1<B, P> = fn(
+    &mut RuntimeContextV1<B>,
+    &mut P,
+    &crate::generated_source::GeneratedHostRosterV1,
+    &ContextUnpublishedHoldV1,
+) -> Result<bool, RuntimeErrorV1<<B as RuntimeBackendV1>::Error>>;
+
+pub(in crate::async_engine) struct IssueHooksV1<B: RuntimeBackendV1, P> {
+    pub progress: IssueProgressV1<B, P>,
+    pub retire_stopped: IssuedRetireV1<B>,
+}
+
+impl<B: RuntimeBackendV1, P> Copy for IssueHooksV1<B, P> {}
+impl<B: RuntimeBackendV1, P> Clone for IssueHooksV1<B, P> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
 pub(in crate::async_engine) struct AdoptionHooksV1<B: RuntimeBackendV1, P> {
     // Metadata/currentness only: no allocation checkout or native custody transfer.
     pub preflight: AdoptionPreflightV1<B, P>,
@@ -35,6 +58,7 @@ pub(in crate::async_engine) struct AdoptionHooksV1<B: RuntimeBackendV1, P> {
     // Must accept an empty prefix when Stop precedes the first adoption advance.
     // Success establishes conclusive disposal, including closing currentness.
     pub retire: AdoptionRetireV1<B>,
+    pub issue: Option<IssueHooksV1<B, P>>,
 }
 
 impl<B: RuntimeBackendV1, P> Copy for AdoptionHooksV1<B, P> {}
@@ -48,6 +72,8 @@ impl<B: RuntimeBackendV1, P> Clone for AdoptionHooksV1<B, P> {
 enum PhaseV1 {
     Adopting,
     Adopted,
+    Issued,
+    PhysicallySettled,
     Retiring,
     Retired,
     Quarantined,
@@ -100,6 +126,26 @@ impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
                 Ok(()) if !context.is_terminal() => owner.phase = PhaseV1::Adopted,
                 _ => context.quarantine_after_async_command_panic_v1(),
             }
+        } else if matches!(owner.phase, PhaseV1::Adopted | PhaseV1::Issued)
+            && let Some(issue) = self.adoption.as_ref().expect("admitted hooks").issue
+        {
+            owner.phase = PhaseV1::Quarantined;
+            let result = (issue.progress)(
+                context,
+                self.prepared.as_mut().expect("retained payload"),
+                self.roster.as_ref().expect("retained roster"),
+                &owner.hold,
+            );
+            match result {
+                Ok(complete) if !context.is_terminal() => {
+                    owner.phase = if complete {
+                        PhaseV1::PhysicallySettled
+                    } else {
+                        PhaseV1::Issued
+                    }
+                }
+                _ => context.quarantine_after_async_command_panic_v1(),
+            }
         }
         false
     }
@@ -111,6 +157,29 @@ impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
         let Some(owner) = self.unpublished.as_mut() else {
             return Ok(false);
         };
+        if matches!(owner.phase, PhaseV1::Issued | PhaseV1::PhysicallySettled) {
+            // Drain observes the accepted prefix without cancelling output.
+            // Only actual Stop, after stopping the reserved completion observer,
+            // permits destructive disposal before C4 output delivery exists.
+            if !self.observations_stopped {
+                return Ok(false);
+            }
+            let phase = owner.phase;
+            owner.phase = PhaseV1::Quarantined;
+            let issue = self
+                .adoption
+                .as_ref()
+                .expect("admitted hooks")
+                .issue
+                .expect("issued hooks");
+            if !(issue.retire_stopped)(context, &owner.hold)? {
+                owner.phase = phase;
+                return Ok(false);
+            }
+            context.release_unpublished_hold_v1(&owner.hold)?;
+            owner.phase = PhaseV1::Retired;
+            return Ok(true);
+        }
         if !matches!(owner.phase, PhaseV1::Adopting | PhaseV1::Adopted) {
             return Err(RuntimeValidationErrorV1::ContextTerminal.into());
         }

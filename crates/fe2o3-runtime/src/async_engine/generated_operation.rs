@@ -116,6 +116,7 @@ struct PreparationDriver<B: RuntimeBackendV1, P, E> {
     completion: Option<owned::Reply<()>>,
     adoption: Option<adoption::AdoptionHooksV1<B, P>>,
     unpublished: Option<adoption::UnpublishedAdoptionV1>,
+    observations_stopped: bool,
 }
 
 impl<B: RuntimeBackendV1 + 'static, P: 'static, E: Send + 'static> EngineOperationFactoryV1<B>
@@ -140,6 +141,7 @@ impl<B: RuntimeBackendV1 + 'static, P: 'static, E: Send + 'static> EngineOperati
             completion: None,
             adoption: self.adoption,
             unpublished: None,
+            observations_stopped: false,
         })
     }
 
@@ -262,6 +264,7 @@ impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P,
     }
 
     fn reject(&mut self, error: RuntimeAsyncEngineCallErrorV1) {
+        self.observations_stopped |= matches!(error, RuntimeAsyncEngineCallErrorV1::EngineStopped);
         stop_reply(&mut self.reply, Some(&self.control), error);
         stop_reply(&mut self.completion, None, error);
         drop(self.prepare.take());
@@ -399,6 +402,10 @@ impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
                 ready: RuntimeContextV1::gfx942_adoption_ready_v1,
                 adopt: RuntimeContextV1::adopt_gfx942_prepared_v1::<P>,
                 retire: RuntimeContextV1::retire_gfx942_adoption_v1,
+                issue: Some(adoption::IssueHooksV1 {
+                    progress: RuntimeContextV1::progress_gfx942_issue_v1::<P>,
+                    retire_stopped: RuntimeContextV1::retire_gfx942_issued_v1,
+                }),
             }),
         )
     }

@@ -199,6 +199,80 @@ fn rejected_error() -> crate::KfdRuntimeBackendErrorV1 {
 }
 
 #[test]
+fn generated_issue_source_rejects_substitution_before_entering_attempt() {
+    let (hsaco, projection) = source_projection();
+    let authority = source_authority(&projection);
+    let source = RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority);
+    let expected = source.validate(7).unwrap();
+    for axis in 0..5 {
+        let mut wrong = expected.clone();
+        match axis {
+            0 => wrong.source_identity = std::sync::Arc::new(()),
+            1 => wrong.dispatch_contract_sha256[0] ^= 1,
+            2 => wrong.buffers[0].as_mut().unwrap().bytes += 1,
+            3 => {
+                wrong.buffers[0].as_mut().unwrap().access =
+                    crate::Gfx942RuntimeBufferAccessV1::ReadOnly
+            }
+            _ => wrong.count -= 1,
+        }
+        assert!(matches!(
+            source.with_current_source_v1(7, &wrong, || -> Result<(), ()> {
+                panic!("substituted issue source entered")
+            }),
+            Err(SourceError::InvalidRoster)
+        ));
+    }
+}
+
+#[test]
+fn generated_issue_closing_currentness_failure_does_not_dispose_entered_owner() {
+    let (hsaco, projection) = source_projection();
+    let authority = source_authority(&projection);
+    let source = RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority);
+    let expected = source.validate(7).unwrap();
+    let owner = Box::new([7_u8; 32]);
+    let identity = owner.as_ptr();
+    let mut retained = None;
+    let result = source.with_current_source_v1(7, &expected, || {
+        retained = Some(owner);
+        authority.current.set(false);
+        Ok::<(), ()>(())
+    });
+    assert!(matches!(result, Err(SourceError::AuthorityNotCurrent)));
+    assert_eq!(retained.as_ref().unwrap().as_ptr(), identity);
+    assert!(matches!(
+        source.with_current_source_v1(7, &expected, || -> Result<(), ()> {
+            panic!("stale source retried")
+        }),
+        Err(SourceError::AuthorityNotCurrent)
+    ));
+}
+
+#[test]
+fn generated_issue_source_preserves_callback_error_and_panic() {
+    let (hsaco, projection) = source_projection();
+    let authority = source_authority(&projection);
+    let source = RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority);
+    let expected = source.validate(7).unwrap();
+    assert_eq!(
+        source
+            .with_current_source_v1(7, &expected, || Err(17_u32))
+            .unwrap(),
+        Err(17)
+    );
+    let mut entered = false;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        source.with_current_source_v1(7, &expected, || -> Result<(), ()> {
+            entered = true;
+            std::panic::panic_any(23_u32);
+        })
+    }));
+    assert!(entered);
+    assert_eq!(*result.unwrap_err().downcast::<u32>().unwrap(), 23);
+}
+
+#[test]
 fn generated_native_inputs_preserve_each_callback_failure_class_after_closing_check() {
     let (hsaco, projection) = source_projection();
     let authority = source_authority(&projection);

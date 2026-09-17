@@ -1,0 +1,1 @@
+ssh -o BatchMode=yes -o ConnectTimeout=10 mi300x bash /tmp/fe2o3-i2-harsh-20260917.mUcACc/native-guard.sh 46d233f46b5ae8eb6c5d09a98ff1ec8e682a591c703462c46fee0d8e52b7db9e kfd_backend::generated_adoption::tests::native::generated_native_bootstrap_issue_complete_readback_retire 

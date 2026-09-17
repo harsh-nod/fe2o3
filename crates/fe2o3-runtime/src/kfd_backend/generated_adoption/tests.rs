@@ -30,10 +30,55 @@ fn native_state(phase: PhaseV1, lane: usize) -> GeneratedNativeAdoptionV1 {
         native_lane: None,
         data: Vec::new(),
         returned: ReturnedDataV1::empty(),
+        submission: None,
     }
 }
 
 struct Item(usize, Rc<RefCell<Vec<usize>>>);
+
+#[test]
+fn generated_submission_capacity_and_cold_sdma_exclusion_include_the_index() {
+    let mut backend = KfdRuntimeBackendV1::mock();
+    // Index metadata only: no native lane or completion token is fabricated.
+    backend.generated_submissions.insert(100, 101);
+    backend.compute_completion_reservations = MAX_RUNTIME_SUBMISSIONS_V1 - 1;
+    assert!(backend.require_submission_capacity_v1().is_err());
+    assert!(backend.any_compute_active_v1());
+    backend.native_available = true;
+    assert!(matches!(backend.ensure_sdma_queue_v1(),
+        Err(RuntimeBackendFailureV1::Rejected(error)) if error.kind() == KfdRuntimeBackendErrorKindV1::Busy));
+    assert!(backend.queue.is_none());
+    assert!(!backend.sdma_enabled);
+    backend.generated_submissions.clear();
+    assert!(backend.require_submission_capacity_v1().is_ok());
+    assert!(!backend.any_compute_active_v1());
+    backend.compute_completion_reservations = 0;
+}
+
+#[test]
+fn generated_submission_release_cannot_discard_unretired_custody() {
+    let (mut backend, plan) = shells();
+    let mut native = native_state(PhaseV1::Adopted, 0);
+    native.submission = Some(issue::GeneratedSubmissionV1 {
+        id: 100,
+        receipt: ReceiptV1::Ready,
+    });
+    backend.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
+    backend.generated_submissions.insert(100, plan.key);
+    for _ in 0..3 {
+        assert!(matches!(
+            backend.release_submission_v1(100),
+            Err(RuntimeBackendFailureV1::Rejected(_))
+        ));
+        assert_eq!(backend.generated_submissions.get(&100), Some(&plan.key));
+        assert!(!backend.validate_generated_shell_disposal_v1(&plan));
+        assert!(!backend.terminal);
+    }
+    // Metadata-only test disposal, not a native release receipt.
+    backend.generated_shells.get_mut(&plan.key).unwrap().native = None;
+    backend.generated_submissions.clear();
+    backend.dispose_generated_shells_v1(&plan);
+}
 impl Drop for Item {
     fn drop(&mut self) {
         self.1.borrow_mut().push(self.0);

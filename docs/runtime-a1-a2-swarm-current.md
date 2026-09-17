@@ -172,6 +172,16 @@ reclaim rejection, first-panic precedence and inert retry. They do not execute
 native CREATE_QUEUE or qualify additional teardown profiles. This remains R126
 development; R125, R118B C1/C2/C3 and R116/V3 remain the accepted checkpoints.
 
+The subsequent [private I2 development](runtime-generated-issue-v1.md) connects
+the existing owned generated driver to exact Context/backend submission IDs,
+classified native publication, retained poll/recycle receipts and Stop-only
+disposal. Generic polling cannot publish deferred work. Physical completion
+does not deliver a generated result; ordinary drain retains the operation until
+C4 exists. The [development receipt](evidence/dev-i2-generated-issue-2026-09-17/README.md)
+separates CPU, exact-fixture native and still-missing protected composition
+evidence. This is not I2/N5/R126 acceptance; C4/C5/C6, journal integration,
+formal correspondence, aggregate memory and performance remain open.
+
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,865 tests with

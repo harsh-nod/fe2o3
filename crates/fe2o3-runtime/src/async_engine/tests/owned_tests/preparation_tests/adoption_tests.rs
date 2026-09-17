@@ -3,6 +3,8 @@ use crate::{RuntimeAccessV1, RuntimeMemoryRegionV1};
 use crate::{RuntimeGfx942GeneratedReservationErrorV1, RuntimeValidationErrorV1};
 use generated_operation::adoption::{ActivationErrorV1, AdoptionHooksV1};
 
+mod issue_tests;
+
 struct Payload {
     _local: LocalPayload,
     source: Vec<u8>,
@@ -11,6 +13,7 @@ struct Payload {
     state: Arc<Mutex<MockState>>,
     mode: u8,
     stream: Option<RuntimeStreamIdV1>,
+    issue_advances: usize,
 }
 
 impl Drop for Payload {
@@ -112,6 +115,7 @@ fn reserve<B: RuntimeBackendV1>(
 
 fn hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
     AdoptionHooksV1 {
+        issue: None,
         ready: |context, _| context.backend().adoption_ready(),
         preflight: |context, payload, _, _| {
             payload
@@ -183,6 +187,16 @@ pub(super) fn preparation<B: RetireBackend + 'static>(
     mode: u8,
     enabled: bool,
 ) -> RuntimeAsyncPreparationV1<()> {
+    preparation_with_hooks(handle, state, drops, mode, enabled.then(hooks))
+}
+
+fn preparation_with_hooks<B: RetireBackend + 'static>(
+    handle: &RuntimeAsyncProgressHandleV1<B>,
+    state: Arc<Mutex<MockState>>,
+    drops: Arc<AtomicUsize>,
+    mode: u8,
+    hooks: Option<AdoptionHooksV1<B, Payload>>,
+) -> RuntimeAsyncPreparationV1<()> {
     handle
         .enqueue_preparation_with_adoption_v1(
             Box::new(move |_| {
@@ -199,10 +213,11 @@ pub(super) fn preparation<B: RetireBackend + 'static>(
                     state,
                     mode,
                     stream: None,
+                    issue_advances: 0,
                 })
             }),
             Some(reserve),
-            enabled.then(hooks),
+            hooks,
         )
         .unwrap()
 }

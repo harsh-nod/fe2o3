@@ -1,0 +1,41 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.66s
+   Doc-tests fe2o3_runtime
+
+running 33 tests
+test crates/fe2o3-runtime/src/async_engine/graph.rs - async_engine::graph::RuntimeGraphExecutionIdentityV1 (line 89) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/generated_operation.rs - async_engine::generated_operation::RuntimeAsyncPreparedTicketV1 (line 36) - compile fail ... ok
+test crates/fe2o3-runtime/src/context/drain_capture.rs - context::drain_capture::BackendHostCaptureV1 (line 87) - compile fail ... ok
+test crates/fe2o3-runtime/src/context/generated_preparation.rs - context::generated_preparation::RuntimeGfx942PreparedV1 (line 49) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/drain_capture_storage.rs - async_engine::drain_capture_storage::RuntimeAsyncCapturedBytesV1 (line 95) - compile fail ... ok
+test crates/fe2o3-runtime/src/context/generated_preparation.rs - context::generated_preparation::RuntimeGfx942PreparedV1 (line 39) - compile fail ... ok
+test crates/fe2o3-runtime/src/context/drain_capture.rs - context::drain_capture::RuntimeHostCaptureSourceV1 (line 36) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs - async_engine::generated_operation::reservation::RuntimeAsyncReservedTicketV1 (line 12) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/generated_operation.rs - async_engine::generated_operation::RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1>::try_prepare_gfx942_v1 (line 418) - compile fail ... ok
+test crates/fe2o3-runtime/src/authorized_execution.rs - authorized_execution::WorkerV3Gfx942ExecutionAuthorityV1 (line 34) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs - async_engine::generated_operation::reservation::RuntimeAsyncReservedTicketV1 (line 8) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/generated_operation.rs - async_engine::generated_operation::RuntimeAsyncPreparedTicketV1 (line 32) - compile fail ... ok
+test crates/fe2o3-runtime/src/kfd_backend.rs - kfd_backend::KfdRuntimeLaunchAuthorityV1 (line 468) - compile fail ... ok
+test crates/fe2o3-runtime/src/generated_source.rs - generated_source::RuntimeGfx942GeneratedSourceMutV1 (line 161) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/owned.rs - async_engine::owned::RuntimeAsyncOwnedEngineV1 (line 232) - compile fail ... ok
+test crates/fe2o3-runtime/src/context/generated_preparation.rs - context::generated_preparation::RuntimeContextV1<KfdRuntimeBackendV1>::with_gfx942_preparation_device_v1 (line 207) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/generated_operation.rs - async_engine::generated_operation::RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1>::try_prepare_gfx942_v1 (line 425) - compile fail ... ok
+test crates/fe2o3-runtime/src/persistent_projection.rs - persistent_projection::PreparedGfx942PersistentDispatchV1 (line 21) - compile fail ... ok
+test crates/fe2o3-runtime/src/persistent_projection.rs - persistent_projection::GeneratedGfx942PersistentStorageV1 (line 220) - compile fail ... ok
+test crates/fe2o3-runtime/src/worker.rs - worker::RuntimeWorkerV1ImmediateProgressBackendV1 (line 1378) - compile fail ... ok
+test crates/fe2o3-runtime/src/context/generated_preparation.rs - context::generated_preparation::RuntimeGfx942PreparedV1 (line 44) - compile fail ... ok
+test crates/fe2o3-runtime/src/worker.rs - worker::RuntimeWorkerV1ImmediateProgressBackendV1 (line 1390) - compile fail ... ok
+test crates/fe2o3-runtime/src/generated_source.rs - generated_source::RuntimeGfx942GeneratedSourceMutV1 (line 155) - compile fail ... ok
+test crates/fe2o3-runtime/src/worker.rs - worker::RuntimeWorkerBackendV4 (line 2323) - compile fail ... ok
+test crates/fe2o3-runtime/src/persistent_projection.rs - persistent_projection::PreparedGfx942PersistentDispatchV1 (line 25) - compile fail ... ok
+test crates/fe2o3-runtime/src/generated_source.rs - generated_source::RuntimeGfx942GeneratedSourceMutV1 (line 151) - compile fail ... ok
+test crates/fe2o3-runtime/src/async_engine/drain_capture_storage.rs - async_engine::drain_capture_storage::RuntimeAsyncCapturedBytesV1 (line 102) - compile fail ... ok
+test crates/fe2o3-runtime/src/worker.rs - worker::RuntimeWorkerBackendV1 (line 2197) - compile fail ... ok
+test crates/fe2o3-runtime/src/persistent_projection.rs - persistent_projection::GeneratedGfx942PersistentStorageV1 (line 216) - compile fail ... ok
+test crates/fe2o3-runtime/src/worker.rs - worker::RuntimeWorkerV1ImmediateProgressBackendV1 (line 1384) - compile fail ... ok
+test crates/fe2o3-runtime/src/persistent_projection.rs - persistent_projection::GeneratedGfx942PersistentStorageV1 (line 228) - compile fail ... ok
+test crates/fe2o3-runtime/src/context/generated_preparation.rs - context::generated_preparation::RuntimeContextV1<KfdRuntimeBackendV1>::with_gfx942_preparation_device_v1 (line 213) - compile fail ... ok
+test crates/fe2o3-runtime/src/persistent_projection.rs - persistent_projection::GeneratedGfx942PersistentStorageV1 (line 224) - compile fail ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+
