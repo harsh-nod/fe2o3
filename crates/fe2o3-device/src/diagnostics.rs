@@ -103,6 +103,21 @@ device_operation!(__gpu_printf_1_v1, "fe2o3_device_gpu_printf_1_v1", (format_id:
 device_operation!(__gpu_printf_2_v1, "fe2o3_device_gpu_printf_2_v1", (format_id: u32, value0: u32, value1: u32) -> ());
 device_operation!(__gpu_assert_fail_v1, "fe2o3_device_gpu_assert_fail_v1", (site_id: u32, line: u32) -> ());
 device_operation!(clock32, "fe2o3_device_clock32_v1", () -> u32);
+
+/// Observes the gfx950 64-bit realtime counter for diagnostic instrumentation.
+///
+/// Each call is an observable, nondeterministic counter read. The returned ticks
+/// have no admitted host-clock conversion or cross-CU epoch correlation. This is
+/// not a memory fence, completion wait, or barrier: synchronize the measured work
+/// explicitly. Independent arithmetic and memory operations may still move with
+/// respect to the observation under the target's optimizer and execution rules.
+/// This function is available only through the checked gfx950 compiler path.
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_realtime64_v1"]
+pub fn realtime64() -> u64 {
+    unreachable!("realtime64 must be lowered by the fe2o3 backend")
+}
+
 device_operation!(trap, "fe2o3_device_trap_v1", () -> !);
 device_operation!(debugtrap, "fe2o3_device_debugtrap_v1", () -> ());
 device_operation!(__profiling_marker_v1, "fe2o3_device_profiling_marker_v1", (marker: u32) -> ());

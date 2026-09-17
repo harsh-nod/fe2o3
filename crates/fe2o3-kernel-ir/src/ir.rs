@@ -823,6 +823,8 @@ pub fn gfx950_xnack_minus_target_capability() -> TargetCapability {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AmdGpuDiagnosticOperation {
     Clock32,
+    /// A nondeterministic 64-bit observation, with no memory-completion guarantee.
+    Realtime64,
     Trap,
     DebugTrap,
     ProfilingMarker {
@@ -841,6 +843,7 @@ pub enum AmdGpuDiagnosticOperation {
 #[derive(Clone, Copy)]
 pub(crate) enum AmdGpuDiagnosticIntrinsicDescriptorV1 {
     Clock32,
+    Realtime64,
     Trap,
     DebugTrap,
     ProfilingMarker,
@@ -848,7 +851,11 @@ pub(crate) enum AmdGpuDiagnosticIntrinsicDescriptorV1 {
     AssertFail,
 }
 
-const AMDGPU_DIAGNOSTIC_INTRINSICS_V1: [(&str, AmdGpuDiagnosticIntrinsicDescriptorV1); 8] = [
+const AMDGPU_DIAGNOSTIC_INTRINSICS_V1: [(&str, AmdGpuDiagnosticIntrinsicDescriptorV1); 9] = [
+    (
+        "__fe2o3_ir_amdgpu_diagnostics_gfx950_v1_realtime64",
+        AmdGpuDiagnosticIntrinsicDescriptorV1::Realtime64,
+    ),
     (
         "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_clock32",
         AmdGpuDiagnosticIntrinsicDescriptorV1::Clock32,
@@ -886,7 +893,7 @@ const AMDGPU_DIAGNOSTIC_INTRINSICS_V1: [(&str, AmdGpuDiagnosticIntrinsicDescript
 impl AmdGpuDiagnosticIntrinsicDescriptorV1 {
     pub(crate) const fn arity(self) -> usize {
         match self {
-            Self::Clock32 | Self::Trap | Self::DebugTrap => 0,
+            Self::Clock32 | Self::Realtime64 | Self::Trap | Self::DebugTrap => 0,
             Self::ProfilingMarker => 1,
             Self::Print { arguments } => arguments + 1,
             Self::AssertFail => 2,
@@ -894,13 +901,14 @@ impl AmdGpuDiagnosticIntrinsicDescriptorV1 {
     }
 
     pub(crate) const fn has_result(self) -> bool {
-        matches!(self, Self::Clock32)
+        matches!(self, Self::Clock32 | Self::Realtime64)
     }
 
     fn operation(self) -> AmdGpuDiagnosticOperation {
         let values = [ValueId(0), ValueId(1), ValueId(2)];
         match self {
             Self::Clock32 => AmdGpuDiagnosticOperation::Clock32,
+            Self::Realtime64 => AmdGpuDiagnosticOperation::Realtime64,
             Self::Trap => AmdGpuDiagnosticOperation::Trap,
             Self::DebugTrap => AmdGpuDiagnosticOperation::DebugTrap,
             Self::ProfilingMarker => {
@@ -949,9 +957,17 @@ impl AmdGpuDiagnosticOperation {
         matches!(self, Self::Trap | Self::AssertFail { .. })
     }
 
+    /// Counter reads are observable even though they do not access Rust memory.
+    /// They must not be deleted, commoned, or treated as uniform pure values.
+    /// The ordinary call bridge preserves their occurrence order; this does not
+    /// fence independent arithmetic or complete pending memory transactions.
+    pub const fn is_nondeterministic_observation(&self) -> bool {
+        matches!(self, Self::Clock32 | Self::Realtime64)
+    }
+
     pub fn operands(&self) -> Vec<ValueId> {
         match self {
-            Self::Clock32 | Self::Trap | Self::DebugTrap => Vec::new(),
+            Self::Clock32 | Self::Realtime64 | Self::Trap | Self::DebugTrap => Vec::new(),
             Self::ProfilingMarker { marker } => vec![*marker],
             Self::Print {
                 format_id,
@@ -967,16 +983,21 @@ impl AmdGpuDiagnosticOperation {
     }
 
     pub fn required_capabilities(&self) -> BTreeSet<TargetCapability> {
-        BTreeSet::from([TargetCapability::Extension {
+        let mut capabilities = BTreeSet::from([TargetCapability::Extension {
             namespace: AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
             name: AMDGPU_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
-        }])
+        }]);
+        if matches!(self, Self::Realtime64) {
+            capabilities.insert(gfx950_xnack_minus_target_capability());
+        }
+        capabilities
     }
 
     /// Closed semantic identity carried through the existing call node.
     pub fn intrinsic_function_id(&self) -> FunctionId {
         FunctionId::new(match self {
             Self::Clock32 => "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_clock32",
+            Self::Realtime64 => "__fe2o3_ir_amdgpu_diagnostics_gfx950_v1_realtime64",
             Self::Trap => "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_trap",
             Self::DebugTrap => "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_debugtrap",
             Self::ProfilingMarker { .. } => {
@@ -995,6 +1016,7 @@ impl AmdGpuDiagnosticOperation {
     pub fn result_type(&self) -> Option<Type> {
         match self {
             Self::Clock32 => Some(Type::Scalar(ScalarType::U32)),
+            Self::Realtime64 => Some(Type::Scalar(ScalarType::U64)),
             Self::Trap
             | Self::DebugTrap
             | Self::ProfilingMarker { .. }
@@ -1041,7 +1063,7 @@ impl AmdGpuDiagnosticOperation {
         }
         let mut diagnostic = descriptor.operation();
         match &mut diagnostic {
-            Self::Clock32 | Self::Trap | Self::DebugTrap => {}
+            Self::Clock32 | Self::Realtime64 | Self::Trap | Self::DebugTrap => {}
             Self::ProfilingMarker { marker } => *marker = arguments[0],
             Self::Print {
                 format_id,

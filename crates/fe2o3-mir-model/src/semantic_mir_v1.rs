@@ -46,6 +46,8 @@ pub const INERT_SEMANTIC_MIR_VERSION_V15: u16 = 15;
 // for the independently coordinated numerical-relation contract.
 pub const INERT_SEMANTIC_MIR_VERSION_V28: u16 = 28;
 pub const INERT_SEMANTIC_MIR_VERSION_V29: u16 = 29;
+// V30/V31 are reserved by independently published semantic extensions.
+pub const INERT_SEMANTIC_MIR_VERSION_V32: u16 = 32;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -70,6 +72,7 @@ pub enum SemanticMirWireVersionV1 {
     V15,
     V28,
     V29,
+    V32,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -91,6 +94,7 @@ impl SemanticMirWireVersionV1 {
             Self::V15 => INERT_SEMANTIC_MIR_VERSION_V15,
             Self::V28 => INERT_SEMANTIC_MIR_VERSION_V28,
             Self::V29 => INERT_SEMANTIC_MIR_VERSION_V29,
+            Self::V32 => INERT_SEMANTIC_MIR_VERSION_V32,
         }
     }
 
@@ -112,6 +116,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V15 => Some(Self::V15),
             INERT_SEMANTIC_MIR_VERSION_V28 => Some(Self::V28),
             INERT_SEMANTIC_MIR_VERSION_V29 => Some(Self::V29),
+            INERT_SEMANTIC_MIR_VERSION_V32 => Some(Self::V32),
             _ => None,
         }
     }
@@ -5347,6 +5352,8 @@ pub enum SemanticWriteOnlyDisjointWriteKindV1 {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticCompilerIntrinsicOperationV1 {
+    /// One ordered, nondeterministic diagnostic observation, not a memory fence.
+    Realtime64,
     /// Inert execution lifecycle descriptors; production requires checked KIR materialization.
     Execution(SemanticExecutionOperationV29),
     ThreadIndex(SemanticAxisV1),
@@ -6268,6 +6275,15 @@ impl InertSemanticMirRequestV1 {
         limits: SemanticMirLimitsV1,
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V29, limits)
+    }
+
+    /// Admits the V28 production grammar plus diagnostic realtime observations.
+    /// V29 execution capabilities remain outside this wire schema.
+    pub fn admit_exact_v32(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V32, limits)
     }
 
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
@@ -7912,6 +7928,7 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
         | SemanticCompilerIntrinsicOperationV1::GridDimension(_)
         | SemanticCompilerIntrinsicOperationV1::Trap
+        | SemanticCompilerIntrinsicOperationV1::Realtime64
         | SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::DynamicLdsIntoCollectiveRawParts { .. }
@@ -8084,6 +8101,9 @@ fn compiler_intrinsic_signature_matches(
                     request.types[output.0 as usize].shape,
                     SemanticTypeShapeV1::Never
                 )
+        }
+        SemanticCompilerIntrinsicOperationV1::Realtime64 => {
+            inputs.is_empty() && is_unsigned_integer_with_bits(request, output, 64)
         }
         SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
             inputs.is_empty()
@@ -15833,6 +15853,7 @@ fn enqueue_compiler_intrinsic_type_references(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
         | SemanticCompilerIntrinsicOperationV1::GridDimension(_)
         | SemanticCompilerIntrinsicOperationV1::Trap
+        | SemanticCompilerIntrinsicOperationV1::Realtime64
         | SemanticCompilerIntrinsicOperationV1::ColdPath
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
@@ -16706,6 +16727,17 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
         })
     {
         return SemanticMirWireVersionV1::V29;
+    }
+    if request.callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::Realtime64,
+                ..
+            }
+        )
+    }) {
+        return SemanticMirWireVersionV1::V32;
     }
     let uses_pipeline = uses_workgroup_pipeline(request);
     let uses_bf16 = uses_bf16_conversion(request);
@@ -17779,6 +17811,14 @@ fn encode_compiler_intrinsic_operation(
     operation: SemanticCompilerIntrinsicOperationV1,
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
+    if matches!(operation, SemanticCompilerIntrinsicOperationV1::Realtime64)
+        && wire_version != SemanticMirWireVersionV1::V32
+    {
+        return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+            requested: wire_version,
+            required: SemanticMirWireVersionV1::V32,
+        });
+    }
     if matches!(
         operation,
         SemanticCompilerIntrinsicOperationV1::Execution(_)
@@ -17792,7 +17832,9 @@ fn encode_compiler_intrinsic_operation(
     // Both versions inherit the frozen legacy intrinsic grammar unchanged.
     let wire_version = if matches!(
         wire_version,
-        SemanticMirWireVersionV1::V28 | SemanticMirWireVersionV1::V29
+        SemanticMirWireVersionV1::V28
+            | SemanticMirWireVersionV1::V29
+            | SemanticMirWireVersionV1::V32
     ) {
         SemanticMirWireVersionV1::V15
     } else {
@@ -17800,6 +17842,7 @@ fn encode_compiler_intrinsic_operation(
     };
     match operation {
         SemanticCompilerIntrinsicOperationV1::Execution(operation) => operation.encode(writer),
+        SemanticCompilerIntrinsicOperationV1::Realtime64 => writer.u8(87),
         SemanticCompilerIntrinsicOperationV1::ThreadIndex(axis) => {
             writer.u8(0)?;
             encode_axis(writer, axis)

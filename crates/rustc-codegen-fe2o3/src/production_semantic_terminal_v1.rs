@@ -12,6 +12,10 @@ use crate::trusted_device_items::{
     self, TrustedAmdGpuDiagnosticOperation, TrustedDeviceItem, TrustedHalfOperation,
 };
 
+#[cfg(test)]
+#[path = "production_terminal_identity_v32_tests.rs"]
+pub(crate) mod identity_tests_v32;
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProductionBf16ConversionV1 {
     FromBits,
@@ -120,6 +124,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     Gfx950LdsTransposeReadB8,
     /// Terminates the current lane by executing the target's canonical trap instruction.
     Trap,
+    Realtime64,
     /// Rust's effect-free hint that the current path is unlikely to execute.
     ColdPath,
 }
@@ -474,6 +479,9 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap) => {
                 Self::Expand(ProductionTerminalExpansionV1::Trap)
             }
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Realtime64) => {
+                Self::Expand(ProductionTerminalExpansionV1::Realtime64)
+            }
             TrustedDeviceItem::MemoryVolatileLoad => {
                 Self::Expand(ProductionTerminalExpansionV1::MemoryVolatileLoad)
             }
@@ -799,6 +807,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::Trap) => {
                 TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap)
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Realtime64) => {
+                TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Realtime64)
             }
             Self::Expand(ProductionTerminalExpansionV1::MemoryVolatileLoad) => {
                 TrustedDeviceItem::MemoryVolatileLoad

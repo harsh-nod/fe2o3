@@ -48,10 +48,10 @@ fn canonical_and_cargo_vendor_materializations_preserve_actual_identities() {
         .unwrap();
     let mut definitions = Vec::new();
     for (vendored, expected) in [
-        (false, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1),
+        (false, super::REVIEWED_REALTIME_SOURCE_CLOSURE_V32),
         (
             true,
-            super::REVIEWED_SAFE_EXECUTION_CARGO_VENDOR_SOURCE_CLOSURE_V1,
+            super::REVIEWED_REALTIME_CARGO_VENDOR_SOURCE_CLOSURE_V32,
         ),
     ] {
         let fixture = reviewed_materialization_fixture(vendored);

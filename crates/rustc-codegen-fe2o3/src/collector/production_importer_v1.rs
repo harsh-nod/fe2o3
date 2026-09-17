@@ -1149,6 +1149,13 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
+        ProductionTerminalExpansionV1::Realtime64
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && matches!(rust_output.kind(), TyKind::Uint(UintTy::U64)) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::Realtime64)
+        }
         ProductionTerminalExpansionV1::Trap
             if inputs.is_empty()
                 && rust_inputs.is_empty()
@@ -2828,6 +2835,7 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8
         | ProductionTerminalExpansionV1::MemoryVolatileLoad
         | ProductionTerminalExpansionV1::Trap
+        | ProductionTerminalExpansionV1::Realtime64
         | ProductionTerminalExpansionV1::ColdPath
         | ProductionTerminalExpansionV1::WorkgroupBarrier => {
             Err(body_owner_table_mismatch_v1("terminal callable ABI"))
@@ -4155,6 +4163,7 @@ const fn terminal_operation_tag_for_schema_v1(
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4 => 84,
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8 => 85,
         ProductionTerminalExpansionV1::Trap => 86,
+        ProductionTerminalExpansionV1::Realtime64 => 122,
         ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate => 87,
         ProductionTerminalExpansionV1::DynamicLdsExactCurrent => 88,
         ProductionTerminalExpansionV1::WorkgroupReduceSum => 89,
@@ -4429,6 +4438,18 @@ mod typed_default_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn realtime_v32_current_terminal_identity_tags_are_exhaustively_distinct() {
+        crate::production_semantic_terminal_v1::identity_tests_v32::assert_current_tags(
+            |expansion| {
+                terminal_operation_tag_for_schema_v1(
+                    expansion,
+                    TerminalIdentitySchemaV1::CombinedV4,
+                )
+            },
+        );
+    }
 
     #[test]
     fn tiled_geometry_requires_finite_equal_products() {

@@ -2006,7 +2006,9 @@ impl DiagnosticRequirements {
                     continue;
                 };
                 match diagnostic {
-                    AmdGpuDiagnosticOperation::Clock32 => requirements.clock = true,
+                    AmdGpuDiagnosticOperation::Clock32 | AmdGpuDiagnosticOperation::Realtime64 => {
+                        requirements.clock = true;
+                    }
                     AmdGpuDiagnosticOperation::Trap
                     | AmdGpuDiagnosticOperation::AssertFail { .. } => requirements.trap = true,
                     AmdGpuDiagnosticOperation::DebugTrap => requirements.debugtrap = true,
@@ -5037,13 +5039,24 @@ impl<'a> FunctionLowerer<'a> {
         if self.target == LoweringTarget::Gfx950XnackMinusV1
             && !matches!(
                 diagnostic,
-                AmdGpuDiagnosticOperation::Trap | AmdGpuDiagnosticOperation::AssertFail { .. }
+                AmdGpuDiagnosticOperation::Trap
+                    | AmdGpuDiagnosticOperation::AssertFail { .. }
+                    | AmdGpuDiagnosticOperation::Realtime64
             )
         {
             return Err(LoweringErrors::one(
                 location.clone(),
                 LoweringDiagnosticCode::UnsupportedDiagnosticOperation,
-                "the exact gfx950 profile admits only terminating trap diagnostics",
+                "the exact gfx950 profile admits only traps and realtime64 diagnostics",
+            ));
+        }
+        if matches!(diagnostic, AmdGpuDiagnosticOperation::Realtime64)
+            && self.target != LoweringTarget::Gfx950XnackMinusV1
+        {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedDiagnosticOperation,
+                "realtime64 requires the exact gfx950 profile",
             ));
         }
         let require_constant = |value, field: &str| {
@@ -5087,6 +5100,7 @@ impl<'a> FunctionLowerer<'a> {
                 }
             }
             AmdGpuDiagnosticOperation::Clock32
+            | AmdGpuDiagnosticOperation::Realtime64
             | AmdGpuDiagnosticOperation::Trap
             | AmdGpuDiagnosticOperation::DebugTrap => {}
         }
@@ -8313,6 +8327,12 @@ impl<'a> FunctionLowerer<'a> {
         diagnostic: &AmdGpuDiagnosticOperation,
     ) {
         match diagnostic {
+            AmdGpuDiagnosticOperation::Realtime64 => {
+                let result = result.expect("validated realtime64 result");
+                // LLVM's pinned intrinsic has side effects: never attach pure or
+                // speculatable attributes, and never substitute a cached read.
+                writeln!(output, "  {result} = call i64 @llvm.amdgcn.s.memrealtime()").unwrap();
+            }
             AmdGpuDiagnosticOperation::Clock32 => {
                 let result = result.expect("validated clock result");
                 writeln!(

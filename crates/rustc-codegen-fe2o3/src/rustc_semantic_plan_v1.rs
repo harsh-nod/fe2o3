@@ -3675,6 +3675,7 @@ const fn terminal_expansion_tag_for_schema_v1(
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4 => 84,
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8 => 85,
         ProductionTerminalExpansionV1::Trap => 86,
+        ProductionTerminalExpansionV1::Realtime64 => 122,
         ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate => 87,
         ProductionTerminalExpansionV1::DynamicLdsExactCurrent => 88,
         ProductionTerminalExpansionV1::WorkgroupReduceSum => 89,
@@ -3764,4 +3765,16 @@ const fn f32_math_tag_v1(function: fe2o3_kernel_ir::F32MathFunction) -> u8 {
 #[cfg(test)]
 mod tests {
     include!("rustc_semantic_plan_v1/tests.rs");
+
+    #[test]
+    fn realtime_v32_current_terminal_identity_tags_are_exhaustively_distinct() {
+        crate::production_semantic_terminal_v1::identity_tests_v32::assert_current_tags(
+            |expansion| {
+                terminal_expansion_tag_for_schema_v1(
+                    expansion,
+                    TerminalIdentitySchemaV1::CombinedV4,
+                )
+            },
+        );
+    }
 }

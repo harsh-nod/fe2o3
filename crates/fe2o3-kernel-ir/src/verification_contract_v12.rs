@@ -150,6 +150,15 @@ impl Operation {
     pub fn compiler_ordering_effects_v12(&self) -> CompilerOrderingEffectSummaryV12 {
         match &self.kind {
             OperationKind::Execution(_) => CompilerOrderingEffectSummaryV12::ordered_execution(),
+            OperationKind::Call { callee, arguments }
+                if arguments.is_empty()
+                    && matches!(
+                        crate::AmdGpuDiagnosticOperation::intrinsic_descriptor_v1(callee),
+                        Some(crate::AmdGpuDiagnosticIntrinsicDescriptorV1::Realtime64)
+                    ) =>
+            {
+                CompilerOrderingEffectSummaryV12::ordered_execution()
+            }
             OperationKind::VerificationContract(_) => {
                 CompilerOrderingEffectSummaryV12::ordered_verification_contract()
             }

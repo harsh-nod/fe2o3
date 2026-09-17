@@ -1,17 +1,23 @@
 use crate::{
     AMDGPU_DIAGNOSTICS_CAPABILITY_NAME, AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE,
-    AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME, AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE,
-    AmdGpuDiagnosticIntrinsicDescriptorV1, AmdGpuDiagnosticOperation,
-    CanonicalKernelIrVerificationResourceBudgetV1, CanonicalKernelIrVerificationResourceErrorV1,
-    DiagnosticCode, FloatIntrinsicCapabilityV1, FloatIntrinsicDescriptorV1, FloatOperation,
-    Function, FunctionId, FunctionRole, ScalarType, TargetCapability, Type,
-    VerificationDiagnosticCollectorV1, VerificationDiagnosticLocationV1,
+    AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME,
+    AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE,
+    AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME, AmdGpuDiagnosticIntrinsicDescriptorV1,
+    AmdGpuDiagnosticOperation, CanonicalKernelIrVerificationResourceBudgetV1,
+    CanonicalKernelIrVerificationResourceErrorV1, DiagnosticCode, FloatIntrinsicCapabilityV1,
+    FloatIntrinsicDescriptorV1, FloatOperation, Function, FunctionId, FunctionRole, ScalarType,
+    TargetCapability, Type, VerificationDiagnosticCollectorV1, VerificationDiagnosticLocationV1,
     clone_diagnostic_location_v1, emit_dynamic_v1, identifier_message_work_v1,
     verification_types_equal_v1,
 };
 
-const DIAGNOSTIC_PREFIX_V1: &str = "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_";
+const DIAGNOSTIC_FAMILY_PREFIX_V1: &str = "__fe2o3_ir_amdgpu_diagnostics_gfx";
 const FLOAT_PREFIX_V1: &str = "__fe2o3_ir_float_v1_";
+
+fn diagnostic_prefix_v1(name: &str) -> bool {
+    name.strip_prefix(DIAGNOSTIC_FAMILY_PREFIX_V1)
+        .is_some_and(|suffix| suffix.starts_with("942_v1_") || suffix.starts_with("950_v1_"))
+}
 
 #[cfg(test)]
 #[path = "verification_reserved_call_effects_v1_tests.rs"]
@@ -33,7 +39,7 @@ impl crate::Operation {
             ));
         };
         charge_prefix_comparisons_v1(callee, budget)?;
-        if callee.as_str().starts_with(DIAGNOSTIC_PREFIX_V1) {
+        if diagnostic_prefix_v1(callee.as_str()) {
             charge_diagnostic_lookup_v1(callee, budget)?;
             return Ok(AmdGpuDiagnosticOperation::intrinsic_descriptor_v1(callee)
                 .is_some_and(|descriptor| descriptor.arity() == arguments.len()));
@@ -51,6 +57,8 @@ fn charge_prefix_comparisons_v1(
     id: &FunctionId,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+    // Factoring the longer diagnostic family prefix keeps both exact suffix
+    // comparisons plus the shorter float prefix within two full-name scans.
     budget.charge_work(
         id.as_str()
             .len()
@@ -87,7 +95,7 @@ pub(crate) fn verify_reserved_function_declaration_v1(
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
     charge_prefix_comparisons_v1(&function.id, budget)?;
-    if function.id.as_str().starts_with(DIAGNOSTIC_PREFIX_V1) {
+    if diagnostic_prefix_v1(function.id.as_str()) {
         charge_diagnostic_lookup_v1(&function.id, budget)?;
         let valid = match AmdGpuDiagnosticOperation::intrinsic_descriptor_v1(&function.id) {
             Some(descriptor) => diagnostic_declaration_matches_v1(function, descriptor, budget)?,
@@ -141,6 +149,12 @@ fn diagnostic_declaration_matches_v1(
             .checked_add(6)
             .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?,
     )?;
+    if matches!(
+        descriptor,
+        AmdGpuDiagnosticIntrinsicDescriptorV1::Realtime64
+    ) {
+        return realtime_declaration_matches_v32(function, budget);
+    }
     let capability_matches = if function.required_capabilities.len() == 1 {
         let capability = function
             .required_capabilities
@@ -182,6 +196,48 @@ fn diagnostic_declaration_matches_v1(
             .first()
             .is_none_or(|ty| *ty == Type::Scalar(ScalarType::U32))
         && capability_matches)
+}
+
+fn realtime_declaration_matches_v32(
+    function: &Function,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<bool, CanonicalKernelIrVerificationResourceErrorV1> {
+    if function.role != FunctionRole::ExternalImport
+        || function.body.is_some()
+        || !function.signature.parameters.is_empty()
+        || function.signature.results.as_slice() != [Type::Scalar(ScalarType::U64)]
+        || function.required_capabilities.len() != 2
+    {
+        return Ok(false);
+    }
+    let mut diagnostic = false;
+    let mut exact_target = false;
+    for capability in &function.required_capabilities {
+        let TargetCapability::Extension { namespace, name } = capability else {
+            budget.charge_work(1)?;
+            return Ok(false);
+        };
+        budget.charge_work(
+            namespace
+                .len()
+                .checked_add(name.len())
+                .and_then(|work| work.checked_add(4))
+                .and_then(|work| work.checked_mul(2))
+                .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?,
+        )?;
+        if namespace == AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE
+            && name == AMDGPU_DIAGNOSTICS_CAPABILITY_NAME
+        {
+            diagnostic = true;
+        } else if namespace == AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE
+            && name == AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME
+        {
+            exact_target = true;
+        } else {
+            return Ok(false);
+        }
+    }
+    Ok(diagnostic && exact_target)
 }
 
 fn float_declaration_matches_v1(
@@ -240,7 +296,7 @@ pub(crate) fn verify_reserved_call_shape_v1(
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
     charge_prefix_comparisons_v1(callee, budget)?;
-    let invalid = if callee.as_str().starts_with(DIAGNOSTIC_PREFIX_V1) {
+    let invalid = if diagnostic_prefix_v1(callee.as_str()) {
         charge_diagnostic_lookup_v1(callee, budget)?;
         AmdGpuDiagnosticOperation::intrinsic_descriptor_v1(callee)
             .is_none_or(|descriptor| descriptor.arity() != argument_count)
@@ -252,7 +308,7 @@ pub(crate) fn verify_reserved_call_shape_v1(
         false
     };
     if invalid {
-        let (code, prefix) = if callee.as_str().starts_with(DIAGNOSTIC_PREFIX_V1) {
+        let (code, prefix) = if diagnostic_prefix_v1(callee.as_str()) {
             (
                 DiagnosticCode::InvalidAmdGpuDiagnosticOperation,
                 "reserved AMDGPU diagnostic intrinsic call",
@@ -281,7 +337,7 @@ pub(crate) fn reserved_diagnostic_call_is_terminating_v1(
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<bool, CanonicalKernelIrVerificationResourceErrorV1> {
     charge_prefix_comparisons_v1(callee, budget)?;
-    if !callee.as_str().starts_with(DIAGNOSTIC_PREFIX_V1) {
+    if !diagnostic_prefix_v1(callee.as_str()) {
         return Ok(false);
     }
     charge_diagnostic_lookup_v1(callee, budget)?;

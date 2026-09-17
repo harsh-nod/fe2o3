@@ -2299,6 +2299,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::ThreadIndex1d
         | ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent
         | ProductionTerminalExpansionV1::Trap
+        | ProductionTerminalExpansionV1::Realtime64
         | ProductionTerminalExpansionV1::ColdPath => Some(0),
         ProductionTerminalExpansionV1::ThreadIndexGet
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorZero

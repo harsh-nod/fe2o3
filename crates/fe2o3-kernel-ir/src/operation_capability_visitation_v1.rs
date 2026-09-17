@@ -677,13 +677,22 @@ impl Operation {
                 ))?;
             }
             OperationKind::Call { callee, arguments } => {
-                if AmdGpuDiagnosticOperation::intrinsic_descriptor_v1(callee)
-                    .is_some_and(|descriptor| descriptor.arity() == arguments.len())
+                if let Some(descriptor) = AmdGpuDiagnosticOperation::intrinsic_descriptor_v1(callee)
+                    && descriptor.arity() == arguments.len()
                 {
                     visitor(TargetCapabilityRefV1::extension(
                         AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE,
                         AMDGPU_DIAGNOSTICS_CAPABILITY_NAME,
                     ))?;
+                    if matches!(
+                        descriptor,
+                        crate::AmdGpuDiagnosticIntrinsicDescriptorV1::Realtime64
+                    ) {
+                        visitor(TargetCapabilityRefV1::extension(
+                            AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE,
+                            AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+                        ))?;
+                    }
                 } else if let Some(descriptor) = FloatOperation::intrinsic_descriptor_v1(callee)
                     && descriptor.arity() == arguments.len()
                 {

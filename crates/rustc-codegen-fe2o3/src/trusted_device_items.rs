@@ -45,9 +45,19 @@ const REVIEWED_SAFE_EXECUTION_CARGO_VENDOR_SOURCE_CLOSURE_V1: [u8; 32] = [
     0x6e, 0xf4, 0x61, 0xd2, 0x97, 0x68, 0x2f, 0xfb, 0xa7, 0xff, 0x21, 0x83, 0x3b, 0x7a, 0x4e, 0x37,
     0x3c, 0x8a, 0xf1, 0xbd, 0x4c, 0x01, 0x0d, 0x51, 0xee, 0xe9, 0xf6, 0x90, 0x44, 0x35, 0x23, 0xc2,
 ];
-const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1: [[u8; 32]; 2] = [
+const REVIEWED_REALTIME_SOURCE_CLOSURE_V32: [u8; 32] = [
+    0xde, 0x90, 0xb1, 0x92, 0x0d, 0xb6, 0xfc, 0x31, 0xb0, 0xe0, 0xb4, 0x21, 0xe5, 0x1b, 0x3b, 0xfb,
+    0x5e, 0xcc, 0x43, 0xd8, 0x1d, 0xee, 0xb4, 0xf1, 0xcc, 0x50, 0xcc, 0xdc, 0x0c, 0x60, 0xe7, 0xe2,
+];
+const REVIEWED_REALTIME_CARGO_VENDOR_SOURCE_CLOSURE_V32: [u8; 32] = [
+    0x32, 0x9f, 0x62, 0xdd, 0x8a, 0xcc, 0x8b, 0xd3, 0x32, 0x98, 0xdb, 0xc2, 0x87, 0x98, 0x0f, 0xcb,
+    0x21, 0xae, 0x9a, 0xc0, 0xbb, 0x70, 0x06, 0x9d, 0x20, 0x76, 0xdc, 0x9a, 0x9d, 0xf1, 0x04, 0x00,
+];
+const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1: [[u8; 32]; 4] = [
     REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
     REVIEWED_SAFE_EXECUTION_CARGO_VENDOR_SOURCE_CLOSURE_V1,
+    REVIEWED_REALTIME_SOURCE_CLOSURE_V32,
+    REVIEWED_REALTIME_CARGO_VENDOR_SOURCE_CLOSURE_V32,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -182,6 +192,7 @@ pub(crate) enum TrustedAmdGpuDiagnosticOperation {
     Print2,
     AssertFail,
     Clock32,
+    Realtime64,
     Trap,
     DebugTrap,
     ProfilingMarker,
@@ -1358,6 +1369,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::diagnostics::__gpu_assert_fail_v1",
     ),
     (
+        TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Realtime64),
+        "fe2o3_device_realtime64_v1",
+        "fe2o3_device::diagnostics::realtime64",
+    ),
+    (
         TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Clock32),
         "fe2o3_device_clock32_v1",
         "fe2o3_device::diagnostics::clock32",
@@ -1589,6 +1605,9 @@ fn validate_reviewed_fe2o3_device_provider_definition_v1(
 }
 fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option<&'static str> {
     match item {
+        TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Realtime64) => {
+            Some("fe2o3_device::diagnostics::realtime64")
+        }
         TrustedDeviceItem::KernelError => Some("fe2o3_device::kernel_result::KernelError"),
         TrustedDeviceItem::DisjointSlice => Some("fe2o3_device::DisjointSlice"),
         TrustedDeviceItem::WriteOnlyDisjointSlice => Some("fe2o3_device::WriteOnlyDisjointSlice"),
@@ -3412,7 +3431,7 @@ mod tests {
             WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
         )
         .unwrap();
-        assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
+        assert_eq!(closure, super::REVIEWED_REALTIME_SOURCE_CLOSURE_V32);
 
         let definition = semantic_definition("thread::thread_idx_x", [5; 32], [6; 32]);
         assert_eq!(
@@ -3457,9 +3476,9 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("e0c7d0a9a995fc336a5a75e143d748eb51194646cbe54fa359a2584893018516")
+            digest("de90b1920db6fc31b0e0b421e51b3bfb5ecc43d81deeb4f1cc50ccdc0c60e7e2")
         );
-        assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
+        assert_eq!(closure, super::REVIEWED_REALTIME_SOURCE_CLOSURE_V32);
     }
 
     #[test]
@@ -4058,6 +4077,7 @@ mod tests {
             TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Print2),
             TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::AssertFail),
             TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Clock32),
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Realtime64),
             TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap),
             TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::DebugTrap),
             TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::ProfilingMarker),
@@ -4118,6 +4138,32 @@ mod tests {
         for index in 0..markers.len() {
             assert!(!markers[..index].contains(&markers[index]));
             assert!(!paths[..index].contains(&paths[index]));
+        }
+    }
+
+    #[test]
+    fn realtime_v32_provider_requires_exact_definition_path_and_reviewed_closure() {
+        let item =
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Realtime64);
+        assert_eq!(
+            exact_provider_compiler_definition_path_v1(item),
+            Some("fe2o3_device::diagnostics::realtime64")
+        );
+        for closure in [
+            super::REVIEWED_REALTIME_SOURCE_CLOSURE_V32,
+            super::REVIEWED_REALTIME_CARGO_VENDOR_SOURCE_CLOSURE_V32,
+        ] {
+            let exact = semantic_definition("diagnostics::realtime64", closure, [6; 32]);
+            validate_reviewed_fe2o3_device_provider_definition_v1(item, &exact).unwrap();
+            for path in ["realtime64", "diagnostics::clock32", "other::realtime64"] {
+                let wrong = semantic_definition(path, closure, [6; 32]);
+                assert!(
+                    validate_reviewed_fe2o3_device_provider_definition_v1(item, &wrong).is_err()
+                );
+            }
+            let mut wrong = exact.clone();
+            wrong.source_closure_identity[0] ^= 1;
+            assert!(validate_reviewed_fe2o3_device_provider_definition_v1(item, &wrong).is_err());
         }
     }
 

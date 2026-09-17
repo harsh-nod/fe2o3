@@ -15768,6 +15768,19 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             self.prepare_call_destination_v1(block, destination.place(), operations)?;
         let mut runtime_guard = None;
         let binding = match operation {
+            SemanticCompilerIntrinsicOperationV1::Realtime64 => {
+                self.require_call_argument_count(block, call, 0)?;
+                let ty = Type::Scalar(ScalarType::U64);
+                let id = self.emit_id(
+                    operations,
+                    ty.clone(),
+                    OperationKind::Call {
+                        callee: AmdGpuDiagnosticOperation::Realtime64.intrinsic_function_id(),
+                        arguments: Vec::new(),
+                    },
+                )?;
+                SemanticValueBindingV1::Value { id, ty }
+            }
             SemanticCompilerIntrinsicOperationV1::Execution(_) => {
                 return Err(unsupported(
                     0,

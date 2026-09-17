@@ -357,6 +357,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes exact V32 diagnostic observations; V29 capabilities stay closed.
+    pub fn decode_exact_v32_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V32),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -398,6 +410,7 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V14
                         | SemanticMirWireVersionV1::V15
                         | SemanticMirWireVersionV1::V28
+                        | SemanticMirWireVersionV1::V32
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -1670,7 +1683,9 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V29 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V32 {
+            87
+        } else if self.wire_version == SemanticMirWireVersionV1::V29 {
             86
         } else if self.wire_version >= SemanticMirWireVersionV1::V15 {
             68
@@ -1698,7 +1713,9 @@ impl<'a> CanonicalDecoderV1<'a> {
         let offset = self.offset;
         let tag = self.tagged("compiler intrinsic", maximum_tag)?;
         // Historical capability drafts and synthetic scope exit are not callable grammar.
-        if matches!(tag, 69..=80 | 83) {
+        if matches!(tag, 69..=80 | 83)
+            || (self.wire_version == SemanticMirWireVersionV1::V32 && (81..=86).contains(&tag))
+        {
             return Err(SemanticMirDecodeErrorV1::InvalidTag {
                 context: "compiler intrinsic",
                 offset,
@@ -1706,6 +1723,7 @@ impl<'a> CanonicalDecoderV1<'a> {
             });
         }
         Ok(match tag {
+            87 => SemanticCompilerIntrinsicOperationV1::Realtime64,
             81 => SemanticCompilerIntrinsicOperationV1::Execution(
                 SemanticExecutionOperationV29::ContextIssue {
                     context: SemanticTypeIdV1(self.u32()?),
@@ -2756,6 +2774,7 @@ mod tests {
 
     mod capability_v29_tests;
     mod frozen_v15;
+    mod realtime_v32_tests;
     mod rust_call_local_tests;
 
     fn identity(tag: u8) -> [u8; 32] {

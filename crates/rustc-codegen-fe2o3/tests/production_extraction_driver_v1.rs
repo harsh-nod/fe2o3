@@ -15,6 +15,7 @@ use fe2o3_verifier::{
 mod inert_invocation_v3;
 
 include!("production_extraction_driver_v1/generative_provider_tests.rs");
+include!("production_extraction_driver_v1/realtime_v32_tests.rs");
 
 struct ScratchTarget {
     path: PathBuf,
