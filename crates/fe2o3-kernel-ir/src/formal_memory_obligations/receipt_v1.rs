@@ -12,6 +12,10 @@ use crate::{
     MAX_TEXT_BYTES_V1,
 };
 
+#[path = "receipt_v3.rs"]
+mod receipt_v3;
+pub use receipt_v3::*;
+
 /// Canonical formal-memory obligation receipt version.
 pub const FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V1: u16 = 1;
 /// Additive receipt version admitting compiler-derived write-only allocations.
@@ -1109,7 +1113,9 @@ pub enum FormalMemoryReceiptErrorV1 {
 impl fmt::Display for FormalMemoryReceiptErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnsupportedGuardedRepresentation => formatter.write_str("guarded formal-memory obligations are not representable by receipt V1/V2"),
+            Self::UnsupportedGuardedRepresentation => formatter.write_str(
+                "guarded formal-memory obligations are not representable by receipt V1/V2",
+            ),
             Self::TooLarge { max } => {
                 write!(formatter, "formal-memory receipt exceeds {max} bytes")
             }
@@ -1492,14 +1498,18 @@ mod tests {
             runtime_alias_requirements: vec![RuntimeAliasRequirement {
                 left: super::super::FormalAllocationIdentity { parameter_index: 0 },
                 right: super::super::FormalAllocationIdentity { parameter_index: 1 },
-                left_accessed_bytes: FormalAliasRegionV1::FixedBytes(super::super::FormalByteRange {
-                    start: 20,
-                    end_exclusive: 88,
-                }),
-                right_accessed_bytes: FormalAliasRegionV1::FixedBytes(super::super::FormalByteRange {
-                    start: 2,
-                    end_exclusive: 152,
-                }),
+                left_accessed_bytes: FormalAliasRegionV1::FixedBytes(
+                    super::super::FormalByteRange {
+                        start: 20,
+                        end_exclusive: 88,
+                    },
+                ),
+                right_accessed_bytes: FormalAliasRegionV1::FixedBytes(
+                    super::super::FormalByteRange {
+                        start: 2,
+                        end_exclusive: 152,
+                    },
+                ),
             }],
             inter_invocation_conflicts: vec![InterInvocationConflictRequirement {
                 left: location(2, 8),
@@ -1946,8 +1956,10 @@ mod tests {
         );
         assert_rejected(
             |value| {
-                fixed(&mut value.runtime_alias_requirements[0].right_accessed_bytes).start = fixed(&mut value.runtime_alias_requirements[0].right_accessed_bytes).end_exclusive
-                    + 1;
+                fixed(&mut value.runtime_alias_requirements[0].right_accessed_bytes).start =
+                    fixed(&mut value.runtime_alias_requirements[0].right_accessed_bytes)
+                        .end_exclusive
+                        + 1;
             },
             FormalMemoryReceiptErrorV1::InvalidRange {
                 field: "runtime alias accessed bytes",

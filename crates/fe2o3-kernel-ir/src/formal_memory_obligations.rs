@@ -802,7 +802,11 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                             None,
                             &mut context,
                         ) {
-                            Ok(access) => guarded_access_v1::report_push(&mut context.guarded, &mut accesses, access)?,
+                            Ok(access) => guarded_access_v1::report_push(
+                                &mut context.guarded,
+                                &mut accesses,
+                                access,
+                            )?,
                             Err(AccessDerivationError::Incomplete(reason)) => {
                                 reasons.insert(reason);
                             }
@@ -825,10 +829,17 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                             FormalMemoryAccessKind::Write,
                             *access,
                             invocations,
-                            match operation.kind { OperationKind::GuardedStore { predicate, .. } => Some(predicate), _ => None },
+                            match operation.kind {
+                                OperationKind::GuardedStore { predicate, .. } => Some(predicate),
+                                _ => None,
+                            },
                             &mut context,
                         ) {
-                            Ok(access) => guarded_access_v1::report_push(&mut context.guarded, &mut accesses, access)?,
+                            Ok(access) => guarded_access_v1::report_push(
+                                &mut context.guarded,
+                                &mut accesses,
+                                access,
+                            )?,
                             Err(AccessDerivationError::Incomplete(reason)) => {
                                 reasons.insert(reason);
                             }
@@ -848,7 +859,10 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                 OperationKind::GuardedLoad { access, .. }
                     if access.address_space == AddressSpace::Private => {}
                 OperationKind::GuardedLoad {
-                    pointer, access, predicate, ..
+                    pointer,
+                    access,
+                    predicate,
+                    ..
                 } => {
                     let mut checked_guard = false;
                     if let Some(invocations) = access_invocations {
@@ -862,27 +876,42 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                             &mut context,
                         ) {
                             Ok(access) => {
-                                checked_guard = matches!(access.domain, FormalAccessDomainV1::SliceBounded(_));
-                                guarded_access_v1::report_push(&mut context.guarded, &mut accesses, access)?;
+                                checked_guard =
+                                    matches!(access.domain, FormalAccessDomainV1::SliceBounded(_));
+                                guarded_access_v1::report_push(
+                                    &mut context.guarded,
+                                    &mut accesses,
+                                    access,
+                                )?;
                             }
-                            Err(AccessDerivationError::Incomplete(exact_reason)) => match derive_conservative_guarded_access(
-                                location,
-                                *pointer,
-                                *access,
-                                invocations,
-                                &mut context,
-                            ) {
-                                Ok(access) => guarded_access_v1::report_push(&mut context.guarded, &mut accesses, access)?,
-                                Err(_) => {
-                                    reasons.insert(exact_reason);
+                            Err(AccessDerivationError::Incomplete(exact_reason)) => {
+                                match derive_conservative_guarded_access(
+                                    location,
+                                    *pointer,
+                                    *access,
+                                    invocations,
+                                    &mut context,
+                                ) {
+                                    Ok(access) => guarded_access_v1::report_push(
+                                        &mut context.guarded,
+                                        &mut accesses,
+                                        access,
+                                    )?,
+                                    Err(_) => {
+                                        reasons.insert(exact_reason);
+                                    }
                                 }
-                            },
+                            }
                             Err(AccessDerivationError::Resource(error)) => return Err(error.into()),
                         }
                     }
-                    if !checked_guard { reasons.insert(
-                        FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { location },
-                    ); }
+                    if !checked_guard {
+                        reasons.insert(
+                            FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof {
+                                location,
+                            },
+                        );
+                    }
                 }
                 OperationKind::Atomic(atomic) => {
                     if let Some(invocations) = access_invocations {
@@ -895,7 +924,11 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                             None,
                             &mut context,
                         ) {
-                            Ok(access) => guarded_access_v1::report_push(&mut context.guarded, &mut accesses, access)?,
+                            Ok(access) => guarded_access_v1::report_push(
+                                &mut context.guarded,
+                                &mut accesses,
+                                access,
+                            )?,
                             Err(AccessDerivationError::Incomplete(reason)) => {
                                 reasons.insert(reason);
                             }
