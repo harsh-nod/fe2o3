@@ -8,7 +8,8 @@ readonly SCRIPT_DIR
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly REPO_ROOT
 readonly DEFAULT_MANIFEST="${REPO_ROOT}/examples/vecadd/Cargo.toml"
-readonly FILL_REQUEST="${REPO_ROOT}/scripts/quickstart/fill-request.json"
+readonly FILL_REQUEST="${REPO_ROOT}/scripts/quickstart/fill-canary-request.json"
+readonly FILL_EXPECTATION="${REPO_ROOT}/scripts/quickstart/fill-canary-expectation.json"
 readonly FIXTURE_KIR="${REPO_ROOT}/crates/fe2o3-kir-sim-cli/tutorial/fill-v1/kernel.kir"
 readonly FIXTURE_REQUEST="${REPO_ROOT}/crates/fe2o3-kir-sim-cli/tutorial/fill-v1/request.json"
 readonly EXPORT_TARGET_DIR="${CARGO_TARGET_DIR:-${REPO_ROOT}/target}/fe2o3-sim-export"
@@ -36,12 +37,15 @@ Commands:
 
   no-gpu
       Export examples/fill from ordinary #[kernel] Rust source and simulate it
-      on the CPU. The bundle is extraction-only evidence, not GPU equivalence.
+      on the CPU, checking exact output and untouched canaries. The bundle is
+      extraction-only evidence, not GPU equivalence.
 
   simulate-source --crate NAME --request FILE [--target gfx942|gfx950]
-      [--bundle-version 1|5] [--output BUNDLE] -- <Cargo package/feature/target selection>
+      [--bundle-version 1|5] [--output BUNDLE] [--expectation FILE]
+      -- <Cargo package/feature/target selection>
       Export and simulate any admitted kernel crate through the same general
       source/MIR/KIR path. A temporary bundle is removed unless --output is set.
+      With --expectation, publish result JSON only after exact output comparison.
 
   source-check [MANIFEST]
       Run binding-only check and host tests for an ordinary fe2o3 Cargo project.
@@ -99,11 +103,11 @@ run_exact_kir_fixture() {
 }
 
 run_simulate_source() {
-  local crate_name='' request='' output='' target=gfx942 bundle_version=1
+  local crate_name='' request='' output='' expectation='' target=gfx942 bundle_version=1
   local -a cargo_args=()
   while (($# > 0)); do
     case "$1" in
-      --crate | --request | --output | --target | --bundle-version)
+      --crate | --request | --output | --target | --bundle-version | --expectation)
         (($# >= 2)) || {
           printf 'quickstart: %s requires a value\n' "$1" >&2
           return 2
@@ -114,6 +118,13 @@ run_simulate_source() {
           --output) output="$2" ;;
           --target) target="$2" ;;
           --bundle-version) bundle_version="$2" ;;
+          --expectation)
+            [[ -n "$2" && -z "${expectation}" ]] || {
+              printf '%s\n' 'quickstart: --expectation requires one nonempty value' >&2
+              return 2
+            }
+            expectation="$2"
+            ;;
         esac
         shift 2
         ;;
@@ -145,6 +156,14 @@ run_simulate_source() {
     printf 'quickstart: request is not a regular file: %s\n' "${request}" >&2
     return 2
   }
+  if [[ -n "${expectation}" ]]; then
+    command -v python3 >/dev/null 2>&1 || {
+      printf '%s\n' 'quickstart: python3 is required with --expectation' >&2
+      return 2
+    }
+    python3 -I -B "${SCRIPT_DIR}/check-simulation-expectation.py" \
+      --expectation "${expectation}" --validate-only
+  fi
 
   local temporary_root='' bundle='' remove_bundle=0
   if [[ -n "${output}" ]]; then
@@ -160,18 +179,21 @@ run_simulate_source() {
       printf 'quickstart: --output already exists: %s\n' "${bundle}" >&2
       return 2
     }
-  else
+  fi
+  if [[ -z "${output}" || -n "${expectation}" ]]; then
     SIMULATE_TEMP_ROOT="$(
       mktemp -d "${TMPDIR:-/tmp}/fe2o3-quickstart.XXXXXXXX"
     )"
     temporary_root="${SIMULATE_TEMP_ROOT}"
     chmod 700 "${temporary_root}"
+  fi
+  if [[ -z "${output}" ]]; then
     bundle="${temporary_root}/kernel.fe2sim"
     remove_bundle=1
   fi
 
   cargo_workspace build --locked --quiet -p rustc-codegen-fe2o3 \
-    --bin fe2o3-rustc-extract
+    --bin fe2o3-rustc-extract >&2
   local simulator_input=--bundle
   if [[ "${bundle_version}" == 5 ]]; then
     simulator_input=--bundle-v5
@@ -180,15 +202,24 @@ run_simulate_source() {
     --bin fe2o3-export-sim -- \
     --crate "${crate_name}" --output "${bundle}" --target "${target}" \
     --bundle-version "${bundle_version}" --target-dir "${EXPORT_TARGET_DIR}" -- \
-    "${cargo_args[@]}"
-  cargo_workspace run --locked --quiet -p fe2o3-kir-sim-cli \
-    --bin fe2o3-kir-sim -- "${simulator_input}" "${bundle}" --request "${request}"
+    "${cargo_args[@]}" >&2
+  if [[ -n "${expectation}" ]]; then
+    local result="${temporary_root}/result.json"
+    cargo_workspace run --locked --quiet -p fe2o3-kir-sim-cli \
+      --bin fe2o3-kir-sim -- "${simulator_input}" "${bundle}" --request "${request}" \
+      >"${result}"
+    python3 -I -B "${SCRIPT_DIR}/check-simulation-expectation.py" \
+      --expectation "${expectation}" --result "${result}"
+    cat -- "${result}"
+  else
+    cargo_workspace run --locked --quiet -p fe2o3-kir-sim-cli \
+      --bin fe2o3-kir-sim -- "${simulator_input}" "${bundle}" --request "${request}"
+  fi
 
   if ((remove_bundle == 0)); then
     printf 'quickstart: retained extraction-only simulation bundle: %s\n' "${bundle}" >&2
-  else
-    cleanup_simulate_source
   fi
+  cleanup_simulate_source
 }
 
 run_no_gpu() {
@@ -197,6 +228,7 @@ run_no_gpu() {
   run_simulate_source \
     --crate fe2o3_fill \
     --request "${FILL_REQUEST}" \
+    --expectation "${FILL_EXPECTATION}" \
     --target gfx942 \
     -- --package fe2o3-fill --lib
 }

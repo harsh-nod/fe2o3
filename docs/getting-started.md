@@ -73,9 +73,45 @@ source/MIR/KIR stages and executes the resulting bundle on the CPU:
 bash scripts/quickstart.sh no-gpu
 ```
 
-The script creates its bundle in a private temporary directory and removes it
-on success or failure. It does not publish HSACO, load a device, dispatch a
-kernel, or establish CPU/GPU equivalence.
+The script checks four exact `f32` outputs of `42.5`, two untouched trailing
+canary elements, and the complete initialization state against a committed
+independent expectation. It prints the simulator JSON only after the comparison
+passes. The bundle and result are staged in a private temporary directory and
+removed on success or failure. This does not publish HSACO, load a device,
+dispatch a kernel, authenticate source execution, or establish CPU/GPU equivalence.
+
+The same checker works with any admitted source kernel's complete output:
+
+```console
+bash scripts/quickstart.sh simulate-source \
+  --crate fe2o3_fill --request scripts/quickstart/fill-request.json \
+  --expectation scripts/quickstart/fill-expectation.json \
+  -- --package fe2o3-fill --lib
+```
+
+An expectation uses schema `fe2o3-simulation-expectation-v1` and contains exactly
+`schema`, `arguments`, and `shared_buffers`. The last two fields specify the
+complete returned values, including immutable inputs, buffer metadata, bytes,
+and initialization bits. Scalar, buffer, view, and shared-buffer values use
+the existing simulation Result V1 shapes. Comparisons are exact, including JSON
+types; no floating-point tolerance or partial-output match is inferred. Generate
+expectations from an independent reference or algorithm contract, not by copying
+the result being tested. Without `--expectation`, `simulate-source` preserves
+its existing execution-only behavior and performs no numerical comparison.
+
+To check an already captured result without invoking a compiler:
+
+```console
+python3 -I -B scripts/check-simulation-expectation.py \
+  --expectation expectation.json --result result.json
+```
+
+The checker rejects duplicate keys, malformed or non-finite JSON, non-regular
+or symlink input files, oversized documents, incomplete outputs, and simulator
+responses that do not explicitly report observation-only CPU execution.
+Expectation files are limited to 16 MiB and result files to 64 MiB. A successful
+comparison is an output observation, not compiler, proof, artifact, or launch
+authorization. It does not qualify the pending SIMT/tile tutorial pairs.
 
 ## Run the exact KIR fixture
 

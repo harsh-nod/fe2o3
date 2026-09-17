@@ -8446,8 +8446,8 @@
         "requestSha256": "96e73033fe03d03a58ec92111ed84b0a75b0bc6421c86b6226ef37fd0fc9f659",
         "requestBytes": 222,
         "expectationPath": "scripts/quickstart/fill-expectation.json",
-        "expectationSha256": "94a96879d612f6c03536bded966fe3d1c15977806b9f6e1792ce684e2abc9309",
-        "expectationBytes": 316,
+        "expectationSha256": "ae9e8124fbb545be51eab9ab9b9be02d67ede9ec9d897e3026ddc19f10eb2476",
+        "expectationBytes": 326,
         "bundleVersion": 7,
         "canonicalKirVersion": 12,
         "status": "pending-reconciliation"
