@@ -11,6 +11,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         backend_device: u64,
         backend_stream: u64,
         native_device: ModelDeviceAdmissionV1,
+        count: usize,
     ) -> (
         crate::kfd_backend::GeneratedShellBindingV1,
         Vec<RuntimeAllocationIdV1>,
@@ -27,8 +28,8 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 backend_stream,
                 native_device,
             },
-            (0..3)
-                .map(|id| RuntimeAllocationIdV1::new(1, backend_stream * 4 + id))
+            (0..count)
+                .map(|id| RuntimeAllocationIdV1::new(1, backend_stream * 16 + id as u64))
                 .collect(),
         )
     }

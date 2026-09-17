@@ -7,7 +7,7 @@ use std::rc::Rc;
 #[cfg(feature = "hardware-qualification")]
 mod native;
 
-fn shells() -> (KfdRuntimeBackendV1, GeneratedShellPlanV1) {
+pub(super) fn shells() -> (KfdRuntimeBackendV1, GeneratedShellPlanV1) {
     let mut backend = KfdRuntimeBackendV1::mock();
     let (binding, logical) = crate::RuntimeContextV1::generated_shell_test_binding_v1(&mut backend);
     let (hsaco, projection) = source_projection();
@@ -58,9 +58,11 @@ fn generated_submission_capacity_and_cold_sdma_exclusion_include_the_index() {
 #[test]
 fn generated_submission_release_cannot_discard_unretired_custody() {
     let (mut backend, plan) = shells();
+    let (_, projection) = source_projection();
     let mut native = native_state(PhaseV1::Adopted, 0);
     native.submission = Some(issue::GeneratedSubmissionV1 {
         id: 100,
+        roster: GeneratedHostRosterV1::from_projection(&projection).unwrap(),
         receipt: ReceiptV1::Ready,
     });
     backend.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);

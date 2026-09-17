@@ -1,0 +1,20 @@
+crates/fe2o3-kfd/src/queue.rs: OK
+crates/fe2o3-kfd/src/queue_dispatch_binding.rs: OK
+crates/fe2o3-kfd/src/queue_live.rs: OK
+crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs: OK
+crates/fe2o3-kfd/src/semantic_observation.rs: OK
+crates/fe2o3-runtime/src/context/generated_preparation/tests.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption/issue.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption/readback.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption/readback/tests.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests/native.rs: OK
+crates/fe2o3-service-host/src/queue.rs: OK
+/home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/fe2o3_kfd-f9eea0dcd3ca45b2: OK
+/home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/fe2o3_runtime-21f716eca27caec8: OK
+/home/harsh/.codex-tmp/fe2o3-r61-execution/target/debug/deps/fe2o3_service_host-36e5860334892478: OK
+/home/harsh/.codex-tmp/fe2o3-r61-execution/target/x86_64-unknown-linux-musl/debug/deps/fe2o3_kfd-cc3350f492315de2: OK
+/home/harsh/.codex-tmp/fe2o3-r61-execution/target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-1e67dbc4ddf4b5aa: OK
+/home/harsh/.codex-tmp/fe2o3-r61-execution/target/x86_64-unknown-linux-musl/debug/deps/fe2o3_service_host-71265eea4ac9ac35: OK
+PASS: corrected 13-file source; GNU/musl each 1403 KFD + 896 runtime + 45 service-host passes; 17 native ignores; four separately qualified native reruns; owned cleanup. Initial manifest failures and first-batch native accounting failure remain historical.

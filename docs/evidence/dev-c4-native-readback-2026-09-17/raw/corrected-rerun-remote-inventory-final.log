@@ -1,0 +1,5 @@
+total 210696
+drwx------     2 harsh harsh      4096 Sep 17 07:28 .
+drwxrwxrwt 31674 root  root    6397952 Sep 17 07:28 ..
+-rw-r--r--     1 harsh harsh      2084 Sep 17 07:28 native-guard.sh
+-rwxr-xr-x     1 harsh harsh 209333264 Sep 17 07:28 runtime

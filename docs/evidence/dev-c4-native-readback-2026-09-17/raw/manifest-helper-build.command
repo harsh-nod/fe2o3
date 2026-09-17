@@ -1,0 +1,1 @@
+rustc --edition=2024 docs/evidence/dev-c4-native-readback-2026-09-17/manifest-digests.rs -L dependency=target/debug/deps --extern syn=target/debug/deps/libsyn-e88717dc26683466.rlib --extern sha2=target/debug/deps/libsha2-e723b5654dfadf07.rlib -o target/c4-manifest-digests 

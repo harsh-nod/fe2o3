@@ -6,6 +6,7 @@ use generated_shells::GeneratedShellPlanV1;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 mod issue;
+mod readback;
 mod receipt;
 use receipt::ReceiptV1;
 

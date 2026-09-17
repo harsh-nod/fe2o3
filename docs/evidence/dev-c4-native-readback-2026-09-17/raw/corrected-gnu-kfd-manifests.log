@@ -1,0 +1,29 @@
+
+running 24 tests
+test debug_trap::tests::debug_session_manifest_is_frozen ... ok
+test device::tests::profile_manifest_digest_is_frozen ... ok
+test memory::tests::memory_profile_manifest_is_frozen ... ok
+test persistent_compute::tests::coexistence_manifest_has_its_own_frozen_identity ... ok
+test persistent_compute::tests::manifest_digest_is_frozen ... ok
+test persistent_directional_sdma::tests::manifest_digest_is_frozen ... ok
+test persistent_directional_sdma::tests::window_manifest_digest_is_frozen ... ok
+test persistent_same_device_sdma::tests::same_device_window_manifest_digest_is_frozen ... ok
+test persistent_sdma::tests::adapter_manifest_digest_is_frozen ... ok
+test queue::completion::dependency_event::tests::event_custody_manifest_digest_is_frozen ... ok
+test queue::completion::tests::completion_manifest_digest_is_frozen ... ok
+test queue::dependency::tests::dependency_publisher_foundation_manifest_digest_is_frozen ... ok
+test queue::device_content::tests::manifest_digest_is_frozen ... ok
+test queue::dispatch_binding::tests::manifest_digest_is_frozen ... ok
+test queue::live::dispatch::tests::manifest_digest_is_current ... ok
+test queue::live::tests::session_manifest_digest_is_frozen ... ok
+test queue::tests::manifest_digest_is_exact ... ok
+test sdma::tests::logical_mux_manifest_digest_and_exclusions_are_frozen ... ok
+test sdma::tests::sdma_copy_manifest_digest_is_frozen ... ok
+test semantic_observation::tests::manifest_digest_matches ... ok
+test shared_memory::tests::device_memory_profile_manifest_and_layout_are_frozen ... ok
+test shared_memory::tests::shared_profile_manifest_is_frozen ... ok
+test stopped_state_v1::tests::manifest_digest_and_bounds_are_frozen ... ok
+test topology::tests::sdma_topology_capability_manifest_is_frozen ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 1379 filtered out; finished in 0.02s
+

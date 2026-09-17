@@ -719,8 +719,9 @@ pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
     "geometry=block-count-floor-grid-div-workgroup,remainder-grid-mod-workgroup,inactive-dimensions-count-and-group-one-remainder-zero,uniform-workgroup-rejects-any-nonzero-remainder\n",
     "data=1-through-16-actual-linear-mapped-device-local-or-host-visible-coherent-authorities,exact-device-vm-and-allocation-generation,complete-device-local-live-set,all-authorities-retained-even-when-no-packet-references-them,checked-bounded-referenced-subranges,inspected-actual-access-derived-internally-only-for-referenced-authorities,read-or-readwrite-requires-sealed-full-extent-initialization,write-only-admits-uninitialized-exclusive-storage,optional-enclosing-snapshot-requires-coherent-full-initialization\n",
     "batch=1-through-8192,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,all-program-code-owners,N-distinct-kernarg-slices,every-public-fixed-recipe-packet-must-wait-for-prior,one-immutable-recipe-with-one-globally-minted-nonzero-occurrence-and-one-preallocated-64-slot-epoch-table,each-accepted-epoch-binds-exact-queue-recipe-slot-slot-generation-dispatch-generation-roster-completion-occurrence-and-packet-interval,one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-one-signal-per-packet-composition\n",
-    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-every-exact-ready-and-recycle,unreferenced-data-has-no-inspected-effect-or-readback-authority,ordinary-and-returning-destroy-require-all-64-epoch-slots-vacant,returning-destroy-uses-the-monotonic-maximum-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,replacement-owner-seeded-from-exact-recycled-predecessor-and-strictly-advances-before-publication,one-full-range-persistent-owner-may-retain-immutable-code-mapped-kernarg-packet-premise-and-recycled-generation-while-detaching-only-its-exact-data-authority,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
+    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-every-exact-ready-and-recycle,unreferenced-data-has-no-inspected-effect-or-inspected-writable-readback-authority,ordinary-and-returning-destroy-require-all-64-epoch-slots-vacant,returning-destroy-uses-the-monotonic-maximum-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,replacement-owner-seeded-from-exact-recycled-predecessor-and-strictly-advances-before-publication,one-full-range-persistent-owner-may-retain-immutable-code-mapped-kernarg-packet-premise-and-recycled-generation-while-detaching-only-its-exact-data-authority,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
     "readback=owned-byte-copy-only-when-all-64-epoch-slots-are-vacant-after-exact-completion-and-signal-recycle,exact-dispatch-generation-and-retained-host-visible-allocation-authority,ordinary-request-must-be-contained-in-exactly-one-metadata-inspected-write-or-readwrite-binding;optional-snapshot-request-must-exactly-match-one-retained-strictly-enclosing-initialized-range-with-one-isolated-inspected-writable-interior;device-local-readonly-unwritten-out-of-range-overlapping-subrange-and-stale-requests-rejected,no-initialization-promotion\n",
+    "initialized-observation=distinct-caller-owned-destination-copy-after-exact-recycled-generation-and-all-epoch-slots-vacant,retained-coherent-host-authority-and-sealed-fully-initialized-extent,checked-nonempty-bounds-and-exact-destination-length,includes-unreferenced-and-readonly-data,no-write-coverage-or-initialization-or-reuse-authority\n",
     "queue-transfer=ordinary-path-still-rejects-device-memory,dispatch-path-requires-exact-complete-distinct-set-of-every-live-mapped-c3-lease-before-model-mutation\n",
     "failure=all-layout-ordering-capacity-and-identity-validation-before-native-preparation,65th-live-epoch-rejects-without-mutation,completion-signal-or-ring-capacity-rejection-cancels-only-the-exact-reserved-epoch-and-burns-global-and-slot-generations,persistent-control-replay-requires-exact-queue-code-abi-packet-kernarg-role-layout-storage-and-recycled-predecessor-identity;post-side-effect-failure,currentness,publication,completion,timeout,recycle-release-or-unwind-ambiguity-poisons-and-requires-teardown\n",
     "authority=public-linear-addressless-construction-submit-poll-wait-recycle-and-returning-destroy,no-address-handle-pointer-fd-packet-template-signal-or-mmio-export\n",
@@ -731,7 +732,7 @@ pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1`].
 pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1: &str =
-    "854c96e2293317e3e70879b7af332ea953f6edfe00329f45b6f1b70dc743cb6d";
+    "d4265552e99fcfefcfdcb094b0927647edd0f50a948a8a970d91e3636ae7b694";
 
 type CodeAuthority = SharedGttQueueResourceAuthorityV1<
     AqlDispatchCodeResourceRoleV1,
@@ -2646,6 +2647,34 @@ impl DispatchResourceOwnerV1 {
         })
     }
 
+    pub(super) fn read_completed_initialized_host_visible_into(
+        &self,
+        memory: &mut SharedGttMemorySessionV1,
+        request: Gfx942CompletedDispatchReadRequestV1,
+        destination: &mut [u8],
+    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        validate_completed_initialized_read_request(
+            &self.generation,
+            &self.data_premises,
+            request,
+        )?;
+        validate_completed_read_destination(request, destination.len())?;
+        let Some(DispatchDataAuthorityV1::HostVisible(authority)) =
+            self.data.get(request.data_index)
+        else {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "initialized read requires retained coherent host-visible storage",
+            });
+        };
+        memory.copy_completed_dispatch_host_data_subrange_into(
+            authority,
+            request.offset,
+            destination,
+        )?;
+        Ok(())
+    }
+
     pub(super) fn overwrite_recycled_host_visible(
         &mut self,
         memory: &mut SharedGttMemorySessionV1,
@@ -2999,6 +3028,40 @@ fn validate_completed_read_destination(
         });
     }
     Ok(())
+}
+
+fn validate_completed_initialized_read_request(
+    generation_owner: &DispatchGenerationOwnerV1,
+    premises: &[RetainedDataPremiseV1],
+    request: Gfx942CompletedDispatchReadRequestV1,
+) -> Result<u64, Gfx942DispatchBindingErrorV1> {
+    let generation = generation_owner.returned_generation()?;
+    if request.dispatch_generation == 0 || request.dispatch_generation != generation {
+        return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
+    }
+    let premise =
+        premises
+            .get(request.data_index)
+            .ok_or(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: request.data_index,
+                detail: "initialized read data ordinal",
+            })?;
+    // This distinct observation uses sealed initialization, not a writable
+    // effect. Unreferenced initialized inputs remain part of the retained roster.
+    if premise.layout.kind() != Gfx942FixedDispatchDataKindV1::HostVisibleCoherent
+        || !premise.fully_initialized
+        || request.byte_len == 0
+        || request
+            .offset
+            .checked_add(request.byte_len)
+            .is_none_or(|end| end > premise.valid_bytes)
+    {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+            index: request.data_index,
+            detail: "initialized read requires a bounded sealed coherent extent",
+        });
+    }
+    Ok(generation)
 }
 
 fn validate_completed_snapshot_request(
@@ -6957,6 +7020,126 @@ mod tests {
             interior_byte_len: 64,
         }]);
         premise
+    }
+
+    #[test]
+    fn initialized_readback_requires_recycle_exact_generation_and_all_epochs_vacant() {
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
+        let generation = owner.next().unwrap();
+        let mut premise = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::ReadOnly,
+            &[],
+        );
+        premise.fully_initialized = true;
+        let premises = [premise];
+        let request = Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 0, 256);
+        assert!(validate_completed_initialized_read_request(&owner, &premises, request).is_err());
+        owner.commit_begin(generation);
+        assert!(validate_completed_initialized_read_request(&owner, &premises, request).is_err());
+        owner.complete(generation).unwrap();
+        assert!(validate_completed_initialized_read_request(&owner, &premises, request).is_err());
+        owner.recycle(generation).unwrap();
+        assert_eq!(
+            validate_completed_initialized_read_request(&owner, &premises, request).unwrap(),
+            generation
+        );
+        for index in 0..GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1 {
+            owner.slots[index].phase = DispatchEpochPhaseV1::Reserved {
+                dispatch_generation: generation + 1,
+                expected_roster: test_completion_roster_v1(generation + 1),
+            };
+            assert!(
+                validate_completed_initialized_read_request(&owner, &premises, request).is_err()
+            );
+            owner.slots[index].phase = DispatchEpochPhaseV1::Vacant;
+        }
+        let next = owner.next().unwrap();
+        owner.commit_begin(next);
+        owner.complete(next).unwrap();
+        owner.recycle(next).unwrap();
+        assert!(validate_completed_initialized_read_request(&owner, &premises, request).is_err());
+        let current = Gfx942CompletedDispatchReadRequestV1::new(next, 0, 0, 256);
+        assert!(validate_completed_initialized_read_request(&owner, &premises, current).is_ok());
+        owner.poison();
+        assert!(validate_completed_initialized_read_request(&owner, &premises, current).is_err());
+    }
+
+    #[test]
+    fn initialized_readback_uses_sealed_extent_without_promoting_inspected_effects() {
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
+        let generation = owner.next().unwrap();
+        owner.commit_begin(generation);
+        owner.complete(generation).unwrap();
+        owner.recycle(generation).unwrap();
+        let request = Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 0, 256);
+        for effect in [
+            None,
+            Some(DeviceDataEffectV1::ReadOnly),
+            Some(DeviceDataEffectV1::ReadWrite),
+            Some(DeviceDataEffectV1::WriteOnly),
+        ] {
+            for kind in [
+                Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+                Gfx942FixedDispatchDataKindV1::DeviceLocal,
+            ] {
+                for initialized in [false, true] {
+                    let mut premise = readback_premise(kind, DeviceDataEffectV1::ReadOnly, &[]);
+                    premise.effect = effect;
+                    premise.fully_initialized = initialized;
+                    let premises = [premise];
+                    let before = (premises[0].effect, premises[0].fully_initialized);
+                    assert_eq!(
+                        validate_completed_initialized_read_request(&owner, &premises, request)
+                            .is_ok(),
+                        kind == Gfx942FixedDispatchDataKindV1::HostVisibleCoherent && initialized
+                    );
+                    assert!(validate_completed_read_request(&owner, &premises, request).is_err());
+                    assert_eq!(before, (premises[0].effect, premises[0].fully_initialized));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn initialized_readback_rejects_stale_ordinals_lengths_and_overflow() {
+        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
+        let generation = owner.next().unwrap();
+        owner.commit_begin(generation);
+        owner.complete(generation).unwrap();
+        owner.recycle(generation).unwrap();
+        let mut premise = readback_premise(
+            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
+            DeviceDataEffectV1::ReadOnly,
+            &[],
+        );
+        premise.fully_initialized = true;
+        let premises = [premise];
+        for (epoch, index, offset, length) in [
+            (0, 0, 0, 256),
+            (generation + 1, 0, 0, 256),
+            (generation, 1, 0, 256),
+            (generation, 0, 0, 0),
+            (generation, 0, 0, 257),
+            (generation, 0, 256, 1),
+            (generation, 0, u64::MAX, 2),
+            (generation, 0, 1, u64::MAX),
+        ] {
+            assert!(
+                validate_completed_initialized_read_request(
+                    &owner,
+                    &premises,
+                    Gfx942CompletedDispatchReadRequestV1::new(epoch, index, offset, length)
+                )
+                .is_err()
+            );
+        }
+        let request = Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 63, 193);
+        assert!(validate_completed_initialized_read_request(&owner, &premises, request).is_ok());
+        for length in [0, 192, 194, usize::MAX] {
+            assert!(validate_completed_read_destination(request, length).is_err());
+        }
+        assert!(validate_completed_read_destination(request, 193).is_ok());
     }
 
     #[test]

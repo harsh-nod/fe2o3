@@ -85,3 +85,26 @@ only the native behavior explicitly recorded in the receipt. Compilation is
 not execution. Formal correspondence, native failure matrices, protected Worker
 authority, C4 readback/decoding/reply, C5 public typed API, C6 generated graph/drain,
 production journal/reuse, aggregate memory and matched performance remain open.
+
+### C4 Native Readback Prerequisite
+
+The subsequent [initialized readback packet](evidence/dev-c4-native-readback-2026-09-17/README.md)
+adds an allocation-free native copy into caller-owned destinations after exact
+recycle. Unlike the existing inspected-writable readback, this distinct operation
+uses the retained coherent allocation and sealed full initialization premise.
+It can observe read-only and unreferenced inputs and initialized bytes outside a
+writable binding. It does not establish GPU write coverage or authorize reuse.
+
+Generated submissions now retain their complete original source roster. Backend
+readback joins that roster to the exact plan, submission, recycled generation,
+native DATA cardinality and lane lease. All destination lengths, capacities and
+access modes are checked before copying; no destination allocation or ownership
+transfer is added. Errors or panics after native entry retain the existing owner
+and copied prefix and terminalize the backend. Opening/closing currentness remains
+mandatory. The prior writable and declared-snapshot restrictions are unchanged.
+
+This is the real native prerequisite, not finished C4 delivery. The next join
+must lend the original installed host readback owner without extracting it,
+revalidate source/currentness, settle native/Context/hold custody, consume the
+existing R85 decoder exactly once, then resolve the original completion cell.
+Native readback tests do not supply protected Worker authority or prove that join.

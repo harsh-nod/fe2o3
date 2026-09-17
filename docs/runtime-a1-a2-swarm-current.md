@@ -182,6 +182,17 @@ separates CPU, exact-fixture native and still-missing protected composition
 evidence. This is not I2/N5/R126 acceptance; C4/C5/C6, journal integration,
 formal correspondence, aggregate memory and performance remain open.
 
+The following [C4 native readback prerequisite](evidence/dev-c4-native-readback-2026-09-17/README.md)
+observes every original initialized coherent DATA member into existing
+destinations, including unused read-only inputs and initialized but unwritten
+output bytes. Exact roster/plan/submission/generation/cardinality checks precede
+copying. Corrected GNU/musl each pass 1,403 KFD, 896 runtime and 45 service-host
+tests, with seventeen native ignores. Four separate MI300X lower-fixture reruns
+pass with equal pre/post VRAM and owned scratch cleanup. Initial manifest and
+native accounting failures remain preserved and excluded. The host decoder,
+Context settlement and original completion-cell join remain next; this is not
+C4 or milestone acceptance.
+
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,865 tests with

@@ -346,7 +346,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "aql_completion_schema_sha256=485b21257623afce41573b27922350f125bcd7f5d339f8a89cf9a2c7c6ca77f1\n",
     "compute_event_custody_schema_sha256=3b235c35d117c198fcb21f65197431a47de78ed5081b95b459bbde61c6410e9a\n",
     "compute_dependency_publisher_schema_sha256=f988416cc136b8c09f3716af33a50207a929b3e53459e0a6de04abdb930008f7\n",
-    "dispatch_binding_schema_sha256=854c96e2293317e3e70879b7af332ea953f6edfe00329f45b6f1b70dc743cb6d\n",
+    "dispatch_binding_schema_sha256=d4265552e99fcfefcfdcb094b0927647edd0f50a948a8a970d91e3636ae7b694\n",
     "event_schema_sha256=bdde2e2d9b03690d6a63dba3d91074da214d87ece9ae1894c4d7a160bced58b8\n",
     "runtime_enable_schema_sha256=fa47481b10ea4bd89438d10b82bd8197088906e55f5f0c827dc7aa5aba906288\n",
     "source.rocr.queues.c=b7ead541340ac996c2305b2e9660cb3176edcd61ee509d4880f02659fbb6f32b\n",
@@ -372,6 +372,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "liveness-probe=three-public-consuming-checked-device-entries-select-production-gfx942-executable-one-span-diagnostic-plain-executable-one-span-or-diagnostic-userptr-writable-executable-coherent-uncached-no-substitute-one-span-ring,selected-backing-and-exact-ring-span-bound-into-plan-and-configuration,selected-backing-bound-into-every-redacted-outcome,typed-nonzero-bounded-polls-validated-before-device-consumption,diagnostic-backings-not-selectable-by-reusable-or-dispatch-queue-APIs,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-or-device-consumed-invalid1-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue-and-precedes-userptr-control-registration-entry,TerminalCreation-covers-every-error-at-or-after-userptr-control-registration-entry-every-create-result-not-explicitly-failed-no-effect-and-every-post-create-failure-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
     "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set-retained-even-when-unreferenced-by-current-batch,referenced-subset-only-inspected-access-and-sealed-initialization-gates,one-immutable-physical-lane-recipe-requires-wait-for-prior-on-every-packet-and-admits-up-to-64-simultaneous-host-retained-publication-epochs-with-exact-recipe-slot-slot-generation-dispatch-completion-and-packet-occurrences,ordinary-release-readback-mutation-detach-rebind-effect-promotion-and-teardown-require-every-epoch-slot-vacant\n",
     "readback=coherent-host-data-only,owned-bounded-copy-or-exact-caller-owned-destination-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
+    "initialized-observation=separate-coherent-fully-initialized-bounded-copy-into-caller-storage,exact-recycled-generation-all-epochs-vacant-and-no-persistent-attachment,includes-readonly-and-unreferenced-data,not-inspected-write-coverage-or-input-reuse-authority\n",
     "rebinding=all-epoch-slots-vacant-after-every-exact-completion-and-signal-recycle-before-detach,ordinary-detach-releases-code-and-kernarg,one-full-range-persistent-control-detach-retains-immutable-code-mapped-kernarg-packet-premise-and-maximum-recycled-generation-while-returning-only-the-exact-data-authority-for-directional-sdma,initial-persistent-control-open-and-explicit-release-use-full-currentness,its-exact-retained-control-replay-uses-operational-currentness-and-requires-exact-same-queue-vm-code-abi-packet-kernarg-role-layout-storage-and-predecessor-generation,live-rebind-retains-queue-ring-signal-event-doorbell-and-runtime,quiescent-rollover-confirms-old-native-destroy-before-new-queue-creation,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,preflighted-device-or-host-insertion-at-exact-ordinal-and-release-gated-removal-or-replacement-while-unbound,exact-identity-kind-and-bounds-checked-in-place-initialized-coherent-overwrite-only-while-all-epochs-vacant,attached-recycled-exact-shape-resubmission-advances-generation-without-code-kernarg-or-data-detach,replacement-owner-seeded-from-exact-predecessor-and-next-publication-strictly-advances-dispatch-generation-across-live-rebind-or-queue-rollover,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-ring-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest,all-live-shared-memory-lifecycle-model-mutation-including-public-prepare-data-and-three-persistent-manual-paths-use-one-central-certificate-custody-envelope\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=runtime-enable,event-create,queue-create;all-64-dispatch-epoch-slots-vacant-and-all-completion-batches-observed-and-recycled-and-event-reader-ledgers-empty;queue-destroy,event-destroy,immediate-payload-zero-protect-unmap,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;debug-runtime-authority-leaves-token-before-event-and-create-lifecycle-mutation-with-no-post-handoff-restoration;published-owners-no-drop-ioctl-store-munmap-or-free;armed-unpublished-payload-guard-drop-zero-protect-unmap\n",
@@ -387,7 +388,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "421064a18734a53bfc41e627a2abeb1d402e2b3fcf4a98b1a456f9dc3c1b7be0";
+    "c51feb1d7e373f4f2c20c2f193b990af4892c34ab4e6ab290192a7fbb954c790";
 
 type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -2511,6 +2512,7 @@ struct DetachedReturningDestroyPreflightV1 {
 enum GenericRecycledDispatchAccessV1 {
     Read,
     ReadInto,
+    InitializedReadInto,
     Snapshot,
     Overwrite,
 }
@@ -4560,6 +4562,21 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
         self.session
             .read_recycled_fixed_dispatch_data_into(request, destination)
+    }
+
+    pub fn read_recycled_fixed_dispatch_initialized_data_into(
+        &mut self,
+        request: Gfx942CompletedDispatchReadRequestV1,
+        destination: &mut [u8],
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.session
+            .read_recycled_fixed_dispatch_initialized_data_into(request, destination)
+    }
+
+    pub fn recycled_fixed_dispatch_data_shape_v1(
+        &self,
+    ) -> Result<(u64, usize), ComputeAqlQueueSessionErrorV1> {
+        self.session.recycled_fixed_dispatch_data_shape_v1()
     }
 
     pub fn overwrite_recycled_fixed_dispatch_host_data(
@@ -15505,6 +15522,7 @@ mod tests {
         for operation in [
             GenericRecycledDispatchAccessV1::Read,
             GenericRecycledDispatchAccessV1::ReadInto,
+            GenericRecycledDispatchAccessV1::InitializedReadInto,
             GenericRecycledDispatchAccessV1::Snapshot,
             GenericRecycledDispatchAccessV1::Overwrite,
         ] {
@@ -18816,7 +18834,7 @@ mod tests {
         )));
         assert_eq!(
             super::super::dispatch_binding::GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1,
-            "854c96e2293317e3e70879b7af332ea953f6edfe00329f45b6f1b70dc743cb6d"
+            "d4265552e99fcfefcfdcb094b0927647edd0f50a948a8a970d91e3636ae7b694"
         );
         assert!(GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1.contains(&format!(
             "dispatch_binding_schema_sha256={}\n",

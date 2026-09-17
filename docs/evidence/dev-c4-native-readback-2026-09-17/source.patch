@@ -1,0 +1,995 @@
+diff --git a/crates/fe2o3-kfd/src/queue_dispatch_binding.rs b/crates/fe2o3-kfd/src/queue_dispatch_binding.rs
+index 3fccb9256..02c89e9bf 100644
+--- a/crates/fe2o3-kfd/src/queue_dispatch_binding.rs
++++ b/crates/fe2o3-kfd/src/queue_dispatch_binding.rs
+@@ -719,8 +719,9 @@ pub const GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1: &str = concat!(
+     "geometry=block-count-floor-grid-div-workgroup,remainder-grid-mod-workgroup,inactive-dimensions-count-and-group-one-remainder-zero,uniform-workgroup-rejects-any-nonzero-remainder\n",
+     "data=1-through-16-actual-linear-mapped-device-local-or-host-visible-coherent-authorities,exact-device-vm-and-allocation-generation,complete-device-local-live-set,all-authorities-retained-even-when-no-packet-references-them,checked-bounded-referenced-subranges,inspected-actual-access-derived-internally-only-for-referenced-authorities,read-or-readwrite-requires-sealed-full-extent-initialization,write-only-admits-uninitialized-exclusive-storage,optional-enclosing-snapshot-requires-coherent-full-initialization\n",
+     "batch=1-through-8192,aql-fixed-batch-v2,minimum-ring-packet-capacity-checked,all-program-code-owners,N-distinct-kernarg-slices,every-public-fixed-recipe-packet-must-wait-for-prior,one-immutable-recipe-with-one-globally-minted-nonzero-occurrence-and-one-preallocated-64-slot-epoch-table,each-accepted-epoch-binds-exact-queue-recipe-slot-slot-generation-dispatch-generation-roster-completion-occurrence-and-packet-interval,one-reservation-one-write-counter-fetch-add-one-final-doorbell-and-one-signal-per-packet-composition\n",
+-    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-every-exact-ready-and-recycle,unreferenced-data-has-no-inspected-effect-or-readback-authority,ordinary-and-returning-destroy-require-all-64-epoch-slots-vacant,returning-destroy-uses-the-monotonic-maximum-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,replacement-owner-seeded-from-exact-recycled-predecessor-and-strictly-advances-before-publication,one-full-range-persistent-owner-may-retain-immutable-code-mapped-kernarg-packet-premise-and-recycled-generation-while-detaching-only-its-exact-data-authority,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
++    "retention=queue-owns-all-code-kernarg-and-data-authorities-through-every-exact-ready-and-recycle,unreferenced-data-has-no-inspected-effect-or-inspected-writable-readback-authority,ordinary-and-returning-destroy-require-all-64-epoch-slots-vacant,returning-destroy-uses-the-monotonic-maximum-exact-recycled-generation-and-returns-actual-mapped-authorities-with-owning-memory-session,replacement-owner-seeded-from-exact-recycled-predecessor-and-strictly-advances-before-publication,one-full-range-persistent-owner-may-retain-immutable-code-mapped-kernarg-packet-premise-and-recycled-generation-while-detaching-only-its-exact-data-authority,fully-initialized-state-preserved-without-stale-current-content-digest,initially-uninitialized-remains-uninitialized\n",
+     "readback=owned-byte-copy-only-when-all-64-epoch-slots-are-vacant-after-exact-completion-and-signal-recycle,exact-dispatch-generation-and-retained-host-visible-allocation-authority,ordinary-request-must-be-contained-in-exactly-one-metadata-inspected-write-or-readwrite-binding;optional-snapshot-request-must-exactly-match-one-retained-strictly-enclosing-initialized-range-with-one-isolated-inspected-writable-interior;device-local-readonly-unwritten-out-of-range-overlapping-subrange-and-stale-requests-rejected,no-initialization-promotion\n",
++    "initialized-observation=distinct-caller-owned-destination-copy-after-exact-recycled-generation-and-all-epoch-slots-vacant,retained-coherent-host-authority-and-sealed-fully-initialized-extent,checked-nonempty-bounds-and-exact-destination-length,includes-unreferenced-and-readonly-data,no-write-coverage-or-initialization-or-reuse-authority\n",
+     "queue-transfer=ordinary-path-still-rejects-device-memory,dispatch-path-requires-exact-complete-distinct-set-of-every-live-mapped-c3-lease-before-model-mutation\n",
+     "failure=all-layout-ordering-capacity-and-identity-validation-before-native-preparation,65th-live-epoch-rejects-without-mutation,completion-signal-or-ring-capacity-rejection-cancels-only-the-exact-reserved-epoch-and-burns-global-and-slot-generations,persistent-control-replay-requires-exact-queue-code-abi-packet-kernarg-role-layout-storage-and-recycled-predecessor-identity;post-side-effect-failure,currentness,publication,completion,timeout,recycle-release-or-unwind-ambiguity-poisons-and-requires-teardown\n",
+     "authority=public-linear-addressless-construction-submit-poll-wait-recycle-and-returning-destroy,no-address-handle-pointer-fd-packet-template-signal-or-mmio-export\n",
+@@ -2646,6 +2647,34 @@ impl DispatchResourceOwnerV1 {
+         })
+     }
+ 
++    pub(super) fn read_completed_initialized_host_visible_into(
++        &self,
++        memory: &mut SharedGttMemorySessionV1,
++        request: Gfx942CompletedDispatchReadRequestV1,
++        destination: &mut [u8],
++    ) -> Result<(), Gfx942DispatchBindingErrorV1> {
++        validate_completed_initialized_read_request(
++            &self.generation,
++            &self.data_premises,
++            request,
++        )?;
++        validate_completed_read_destination(request, destination.len())?;
++        let Some(DispatchDataAuthorityV1::HostVisible(authority)) =
++            self.data.get(request.data_index)
++        else {
++            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
++                index: request.data_index,
++                detail: "initialized read requires retained coherent host-visible storage",
++            });
++        };
++        memory.copy_completed_dispatch_host_data_subrange_into(
++            authority,
++            request.offset,
++            destination,
++        )?;
++        Ok(())
++    }
++
+     pub(super) fn overwrite_recycled_host_visible(
+         &mut self,
+         memory: &mut SharedGttMemorySessionV1,
+@@ -3001,6 +3030,40 @@ fn validate_completed_read_destination(
+     Ok(())
+ }
+ 
++fn validate_completed_initialized_read_request(
++    generation_owner: &DispatchGenerationOwnerV1,
++    premises: &[RetainedDataPremiseV1],
++    request: Gfx942CompletedDispatchReadRequestV1,
++) -> Result<u64, Gfx942DispatchBindingErrorV1> {
++    let generation = generation_owner.returned_generation()?;
++    if request.dispatch_generation == 0 || request.dispatch_generation != generation {
++        return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration);
++    }
++    let premise =
++        premises
++            .get(request.data_index)
++            .ok_or(Gfx942DispatchBindingErrorV1::InvalidData {
++                index: request.data_index,
++                detail: "initialized read data ordinal",
++            })?;
++    // This distinct observation uses sealed initialization, not a writable
++    // effect. Unreferenced initialized inputs remain part of the retained roster.
++    if premise.layout.kind() != Gfx942FixedDispatchDataKindV1::HostVisibleCoherent
++        || !premise.fully_initialized
++        || request.byte_len == 0
++        || request
++            .offset
++            .checked_add(request.byte_len)
++            .is_none_or(|end| end > premise.valid_bytes)
++    {
++        return Err(Gfx942DispatchBindingErrorV1::InvalidData {
++            index: request.data_index,
++            detail: "initialized read requires a bounded sealed coherent extent",
++        });
++    }
++    Ok(generation)
++}
++
+ fn validate_completed_snapshot_request(
+     generation_owner: &DispatchGenerationOwnerV1,
+     premises: &[RetainedDataPremiseV1],
+@@ -6959,6 +7022,126 @@ mod tests {
+         premise
+     }
+ 
++    #[test]
++    fn initialized_readback_requires_recycle_exact_generation_and_all_epochs_vacant() {
++        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
++        let generation = owner.next().unwrap();
++        let mut premise = readback_premise(
++            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
++            DeviceDataEffectV1::ReadOnly,
++            &[],
++        );
++        premise.fully_initialized = true;
++        let premises = [premise];
++        let request = Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 0, 256);
++        assert!(validate_completed_initialized_read_request(&owner, &premises, request).is_err());
++        owner.commit_begin(generation);
++        assert!(validate_completed_initialized_read_request(&owner, &premises, request).is_err());
++        owner.complete(generation).unwrap();
++        assert!(validate_completed_initialized_read_request(&owner, &premises, request).is_err());
++        owner.recycle(generation).unwrap();
++        assert_eq!(
++            validate_completed_initialized_read_request(&owner, &premises, request).unwrap(),
++            generation
++        );
++        for index in 0..GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1 {
++            owner.slots[index].phase = DispatchEpochPhaseV1::Reserved {
++                dispatch_generation: generation + 1,
++                expected_roster: test_completion_roster_v1(generation + 1),
++            };
++            assert!(
++                validate_completed_initialized_read_request(&owner, &premises, request).is_err()
++            );
++            owner.slots[index].phase = DispatchEpochPhaseV1::Vacant;
++        }
++        let next = owner.next().unwrap();
++        owner.commit_begin(next);
++        owner.complete(next).unwrap();
++        owner.recycle(next).unwrap();
++        assert!(validate_completed_initialized_read_request(&owner, &premises, request).is_err());
++        let current = Gfx942CompletedDispatchReadRequestV1::new(next, 0, 0, 256);
++        assert!(validate_completed_initialized_read_request(&owner, &premises, current).is_ok());
++        owner.poison();
++        assert!(validate_completed_initialized_read_request(&owner, &premises, current).is_err());
++    }
++
++    #[test]
++    fn initialized_readback_uses_sealed_extent_without_promoting_inspected_effects() {
++        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
++        let generation = owner.next().unwrap();
++        owner.commit_begin(generation);
++        owner.complete(generation).unwrap();
++        owner.recycle(generation).unwrap();
++        let request = Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 0, 256);
++        for effect in [
++            None,
++            Some(DeviceDataEffectV1::ReadOnly),
++            Some(DeviceDataEffectV1::ReadWrite),
++            Some(DeviceDataEffectV1::WriteOnly),
++        ] {
++            for kind in [
++                Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
++                Gfx942FixedDispatchDataKindV1::DeviceLocal,
++            ] {
++                for initialized in [false, true] {
++                    let mut premise = readback_premise(kind, DeviceDataEffectV1::ReadOnly, &[]);
++                    premise.effect = effect;
++                    premise.fully_initialized = initialized;
++                    let premises = [premise];
++                    let before = (premises[0].effect, premises[0].fully_initialized);
++                    assert_eq!(
++                        validate_completed_initialized_read_request(&owner, &premises, request)
++                            .is_ok(),
++                        kind == Gfx942FixedDispatchDataKindV1::HostVisibleCoherent && initialized
++                    );
++                    assert!(validate_completed_read_request(&owner, &premises, request).is_err());
++                    assert_eq!(before, (premises[0].effect, premises[0].fully_initialized));
++                }
++            }
++        }
++    }
++
++    #[test]
++    fn initialized_readback_rejects_stale_ordinals_lengths_and_overflow() {
++        let mut owner = DispatchGenerationOwnerV1::new().unwrap();
++        let generation = owner.next().unwrap();
++        owner.commit_begin(generation);
++        owner.complete(generation).unwrap();
++        owner.recycle(generation).unwrap();
++        let mut premise = readback_premise(
++            Gfx942FixedDispatchDataKindV1::HostVisibleCoherent,
++            DeviceDataEffectV1::ReadOnly,
++            &[],
++        );
++        premise.fully_initialized = true;
++        let premises = [premise];
++        for (epoch, index, offset, length) in [
++            (0, 0, 0, 256),
++            (generation + 1, 0, 0, 256),
++            (generation, 1, 0, 256),
++            (generation, 0, 0, 0),
++            (generation, 0, 0, 257),
++            (generation, 0, 256, 1),
++            (generation, 0, u64::MAX, 2),
++            (generation, 0, 1, u64::MAX),
++        ] {
++            assert!(
++                validate_completed_initialized_read_request(
++                    &owner,
++                    &premises,
++                    Gfx942CompletedDispatchReadRequestV1::new(epoch, index, offset, length)
++                )
++                .is_err()
++            );
++        }
++        let request = Gfx942CompletedDispatchReadRequestV1::new(generation, 0, 63, 193);
++        assert!(validate_completed_initialized_read_request(&owner, &premises, request).is_ok());
++        for length in [0, 192, 194, usize::MAX] {
++            assert!(validate_completed_read_destination(request, length).is_err());
++        }
++        assert!(validate_completed_read_destination(request, 193).is_ok());
++    }
++
+     #[test]
+     fn completed_read_requests_reject_phase_generation_effect_bounds_and_overlap() {
+         let writable = readback_premise(
+diff --git a/crates/fe2o3-kfd/src/queue_live.rs b/crates/fe2o3-kfd/src/queue_live.rs
+index f98707741..33777536f 100644
+--- a/crates/fe2o3-kfd/src/queue_live.rs
++++ b/crates/fe2o3-kfd/src/queue_live.rs
+@@ -372,6 +372,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
+     "liveness-probe=three-public-consuming-checked-device-entries-select-production-gfx942-executable-one-span-diagnostic-plain-executable-one-span-or-diagnostic-userptr-writable-executable-coherent-uncached-no-substitute-one-span-ring,selected-backing-and-exact-ring-span-bound-into-plan-and-configuration,selected-backing-bound-into-every-redacted-outcome,typed-nonzero-bounded-polls-validated-before-device-consumption,diagnostic-backings-not-selectable-by-reusable-or-dispatch-queue-APIs,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-or-device-consumed-invalid1-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue-and-precedes-userptr-control-registration-entry,TerminalCreation-covers-every-error-at-or-after-userptr-control-registration-entry-every-create-result-not-explicitly-failed-no-effect-and-every-post-create-failure-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
+     "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set-retained-even-when-unreferenced-by-current-batch,referenced-subset-only-inspected-access-and-sealed-initialization-gates,one-immutable-physical-lane-recipe-requires-wait-for-prior-on-every-packet-and-admits-up-to-64-simultaneous-host-retained-publication-epochs-with-exact-recipe-slot-slot-generation-dispatch-completion-and-packet-occurrences,ordinary-release-readback-mutation-detach-rebind-effect-promotion-and-teardown-require-every-epoch-slot-vacant\n",
+     "readback=coherent-host-data-only,owned-bounded-copy-or-exact-caller-owned-destination-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
++    "initialized-observation=separate-coherent-fully-initialized-bounded-copy-into-caller-storage,exact-recycled-generation-all-epochs-vacant-and-no-persistent-attachment,includes-readonly-and-unreferenced-data,not-inspected-write-coverage-or-input-reuse-authority\n",
+     "rebinding=all-epoch-slots-vacant-after-every-exact-completion-and-signal-recycle-before-detach,ordinary-detach-releases-code-and-kernarg,one-full-range-persistent-control-detach-retains-immutable-code-mapped-kernarg-packet-premise-and-maximum-recycled-generation-while-returning-only-the-exact-data-authority-for-directional-sdma,initial-persistent-control-open-and-explicit-release-use-full-currentness,its-exact-retained-control-replay-uses-operational-currentness-and-requires-exact-same-queue-vm-code-abi-packet-kernarg-role-layout-storage-and-predecessor-generation,live-rebind-retains-queue-ring-signal-event-doorbell-and-runtime,quiescent-rollover-confirms-old-native-destroy-before-new-queue-creation,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,preflighted-device-or-host-insertion-at-exact-ordinal-and-release-gated-removal-or-replacement-while-unbound,exact-identity-kind-and-bounds-checked-in-place-initialized-coherent-overwrite-only-while-all-epochs-vacant,attached-recycled-exact-shape-resubmission-advances-generation-without-code-kernarg-or-data-detach,replacement-owner-seeded-from-exact-predecessor-and-next-publication-strictly-advances-dispatch-generation-across-live-rebind-or-queue-rollover,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-ring-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest,all-live-shared-memory-lifecycle-model-mutation-including-public-prepare-data-and-three-persistent-manual-paths-use-one-central-certificate-custody-envelope\n",
+     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
+     "lifecycle=runtime-enable,event-create,queue-create;all-64-dispatch-epoch-slots-vacant-and-all-completion-batches-observed-and-recycled-and-event-reader-ledgers-empty;queue-destroy,event-destroy,immediate-payload-zero-protect-unmap,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;debug-runtime-authority-leaves-token-before-event-and-create-lifecycle-mutation-with-no-post-handoff-restoration;published-owners-no-drop-ioctl-store-munmap-or-free;armed-unpublished-payload-guard-drop-zero-protect-unmap\n",
+@@ -2511,6 +2512,7 @@ struct DetachedReturningDestroyPreflightV1 {
+ enum GenericRecycledDispatchAccessV1 {
+     Read,
+     ReadInto,
++    InitializedReadInto,
+     Snapshot,
+     Overwrite,
+ }
+@@ -4562,6 +4564,21 @@ impl ComputeAqlQueueLaneDispatchV1<'_> {
+             .read_recycled_fixed_dispatch_data_into(request, destination)
+     }
+ 
++    pub fn read_recycled_fixed_dispatch_initialized_data_into(
++        &mut self,
++        request: Gfx942CompletedDispatchReadRequestV1,
++        destination: &mut [u8],
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        self.session
++            .read_recycled_fixed_dispatch_initialized_data_into(request, destination)
++    }
++
++    pub fn recycled_fixed_dispatch_data_shape_v1(
++        &self,
++    ) -> Result<(u64, usize), ComputeAqlQueueSessionErrorV1> {
++        self.session.recycled_fixed_dispatch_data_shape_v1()
++    }
++
+     pub fn overwrite_recycled_fixed_dispatch_host_data(
+         &mut self,
+         request: Gfx942RecycledDispatchWriteRequestV1,
+@@ -15505,6 +15522,7 @@ mod tests {
+         for operation in [
+             GenericRecycledDispatchAccessV1::Read,
+             GenericRecycledDispatchAccessV1::ReadInto,
++            GenericRecycledDispatchAccessV1::InitializedReadInto,
+             GenericRecycledDispatchAccessV1::Snapshot,
+             GenericRecycledDispatchAccessV1::Overwrite,
+         ] {
+diff --git a/crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs b/crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs
+index 585b42fee..0f968bc78 100644
+--- a/crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs
++++ b/crates/fe2o3-kfd/src/queue_live/fixed_dispatch.rs
+@@ -5095,6 +5095,60 @@ impl ComputeAqlQueueSessionV1 {
+         result.map_err(Into::into)
+     }
+ 
++    /// Copies retained, fully initialized coherent data after exact recycle.
++    ///
++    /// Unlike writable-output readback, this also permits read-only and
++    /// unreferenced initialized inputs. The sealed initialization premise, exact
++    /// dispatch generation, vacant epoch slots, native allocation authority and
++    /// bounds are required. No mapped borrow, initialization promotion, inspected
++    /// write coverage or permission to reuse the input is returned.
++    pub fn read_recycled_fixed_dispatch_initialized_data_into(
++        &mut self,
++        request: Gfx942CompletedDispatchReadRequestV1,
++        destination: &mut [u8],
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        admit_generic_recycled_dispatch_access(
++            self.terminal_poisoned,
++            self.has_any_persistent_compute_attachment_v1(),
++            GenericRecycledDispatchAccessV1::InitializedReadInto,
++        )?;
++        let dispatch = self
++            .dispatch
++            .as_ref()
++            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;
++        let memory = &mut self
++            .engine
++            .as_mut()
++            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
++                "missing queue engine",
++            ))?
++            .backend
++            .session;
++        let result =
++            dispatch.read_completed_initialized_host_visible_into(memory, request, destination);
++        if matches!(result, Err(Gfx942DispatchBindingErrorV1::Memory(_))) {
++            self.poison_terminal();
++        }
++        result.map_err(Into::into)
++    }
++
++    /// Returns exact recycled generation and retained DATA cardinality.
++    /// No storage authority or permission to publish is transferred.
++    pub fn recycled_fixed_dispatch_data_shape_v1(
++        &self,
++    ) -> Result<(u64, usize), ComputeAqlQueueSessionErrorV1> {
++        admit_generic_recycled_dispatch_access(
++            self.terminal_poisoned,
++            self.has_any_persistent_compute_attachment_v1(),
++            GenericRecycledDispatchAccessV1::InitializedReadInto,
++        )?;
++        self.dispatch
++            .as_ref()
++            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
++            .recycled_data_shape_v1()
++            .map_err(Into::into)
++    }
++
+     /// Overwrites one initialized coherent range while the attached dispatch
+     /// is exactly completed, recycled, and ready for another generation.
+     pub fn overwrite_recycled_fixed_dispatch_host_data(
+diff --git a/crates/fe2o3-runtime/src/context/generated_preparation/tests.rs b/crates/fe2o3-runtime/src/context/generated_preparation/tests.rs
+index f3cad692d..e716aa3e8 100644
+--- a/crates/fe2o3-runtime/src/context/generated_preparation/tests.rs
++++ b/crates/fe2o3-runtime/src/context/generated_preparation/tests.rs
+@@ -11,6 +11,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+         backend_device: u64,
+         backend_stream: u64,
+         native_device: ModelDeviceAdmissionV1,
++        count: usize,
+     ) -> (
+         crate::kfd_backend::GeneratedShellBindingV1,
+         Vec<RuntimeAllocationIdV1>,
+@@ -27,8 +28,8 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+                 backend_stream,
+                 native_device,
+             },
+-            (0..3)
+-                .map(|id| RuntimeAllocationIdV1::new(1, backend_stream * 4 + id))
++            (0..count)
++                .map(|id| RuntimeAllocationIdV1::new(1, backend_stream * 16 + id as u64))
+                 .collect(),
+         )
+     }
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs
+index d3395b186..76bce241c 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs
+@@ -6,6 +6,7 @@ use generated_shells::GeneratedShellPlanV1;
+ use std::panic::{AssertUnwindSafe, catch_unwind};
+ 
+ mod issue;
++mod readback;
+ mod receipt;
+ use receipt::ReceiptV1;
+ 
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/issue.rs b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/issue.rs
+index 25f417352..5f7229abe 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/issue.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/issue.rs
+@@ -5,6 +5,7 @@ use fe2o3_kfd::Gfx942CompletedDispatchBatchV1;
+ 
+ pub(super) struct GeneratedSubmissionV1 {
+     pub(super) id: u64,
++    pub(super) roster: GeneratedHostRosterV1,
+     pub(super) receipt: ReceiptV1<Gfx942DispatchBatchV1<1>, Gfx942CompletedDispatchBatchV1<1>>,
+ }
+ 
+@@ -16,6 +17,7 @@ impl KfdRuntimeBackendV1 {
+     ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+         self.require_live()?;
+         if !self.validate_generated_shell_records_v1(plan)
++            || !readback::roster_matches_plan_v1(plan, roster)
+             || !self.generated_lease_matches_v1(plan)
+             || !self.generated_shells.get(&plan.key).is_some_and(|record| {
+                 Arc::ptr_eq(&record.source_identity, &roster.source_identity)
+@@ -48,13 +50,14 @@ impl KfdRuntimeBackendV1 {
+             .expect("adopted native owner");
+         native.submission = Some(GeneratedSubmissionV1 {
+             id,
++            roster: roster.clone(),
+             receipt: ReceiptV1::Ready,
+         });
+         assert!(self.generated_submissions.insert(id, plan.key).is_none());
+         Ok(id)
+     }
+ 
+-    fn generated_submission_plan_v1(
++    pub(super) fn generated_submission_plan_v1(
+         &self,
+         submission: u64,
+     ) -> Result<GeneratedShellPlanV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+@@ -265,7 +268,7 @@ impl KfdRuntimeBackendV1 {
+         Ok(())
+     }
+ 
+-    fn check_generated_device_v1(
++    pub(super) fn check_generated_device_v1(
+         &mut self,
+         plan: &GeneratedShellPlanV1,
+     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/readback.rs b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/readback.rs
+new file mode 100644
+index 000000000..4f45a43c2
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/readback.rs
+@@ -0,0 +1,150 @@
++//! Complete copies into already-owned destinations, without result publication.
++
++use super::*;
++use crate::Gfx942RuntimeBufferAccessV1;
++
++#[derive(Debug, Eq, PartialEq)]
++enum ReadbackErrorV1<E> {
++    Roster,
++    Copy(E),
++}
++
++pub(super) fn roster_matches_plan_v1(
++    plan: &GeneratedShellPlanV1,
++    roster: &GeneratedHostRosterV1,
++) -> bool {
++    plan.count > 0
++        && plan.count <= plan.members.len()
++        && plan.count == roster.count
++        && plan.members[..plan.count]
++            .iter()
++            .enumerate()
++            .all(|(ordinal, member)| {
++                member.is_some_and(|member| {
++                    roster.buffers[ordinal].is_some_and(|slot| {
++                        slot.ordinal == ordinal && slot.bytes == member.description.byte_len
++                    })
++                })
++            })
++}
++
++fn read_roster_v1<E>(
++    roster: &GeneratedHostRosterV1,
++    destinations: &mut [(Gfx942RuntimeBufferAccessV1, Vec<u8>)],
++    mut copy: impl FnMut(usize, &mut [u8]) -> Result<(), E>,
++) -> Result<(), ReadbackErrorV1<E>> {
++    if roster.count == 0
++        || roster.count > roster.buffers.len()
++        || destinations.len() != roster.count
++        || roster.buffers[roster.count..].iter().any(Option::is_some)
++    {
++        return Err(ReadbackErrorV1::Roster);
++    }
++    let mut total = 0u64;
++    // Validate the whole destination roster before modifying even its first byte.
++    for (ordinal, (access, bytes)) in destinations.iter().enumerate() {
++        let slot = roster.buffers[ordinal].ok_or(ReadbackErrorV1::Roster)?;
++        if slot.ordinal != ordinal
++            || slot.bytes == 0
++            || slot.access != *access
++            || u64::try_from(bytes.len()).ok() != Some(slot.bytes)
++            || bytes.capacity() != bytes.len()
++        {
++            return Err(ReadbackErrorV1::Roster);
++        }
++        total = total
++            .checked_add(slot.bytes)
++            .ok_or(ReadbackErrorV1::Roster)?;
++    }
++    if total != roster.readback_bytes {
++        return Err(ReadbackErrorV1::Roster);
++    }
++    for (ordinal, (_, bytes)) in destinations.iter_mut().enumerate() {
++        copy(ordinal, bytes).map_err(ReadbackErrorV1::Copy)?;
++    }
++    Ok(())
++}
++
++impl KfdRuntimeBackendV1 {
++    #[allow(
++        dead_code,
++        reason = "C4 native readback; Context/host completion is the next join"
++    )]
++    pub(crate) fn read_generated_submission_v1(
++        &mut self,
++        plan: &GeneratedShellPlanV1,
++        submission: u64,
++        roster: &GeneratedHostRosterV1,
++        destinations: &mut [(Gfx942RuntimeBufferAccessV1, Vec<u8>)],
++    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        if self.generated_submission_plan_v1(submission)? != *plan {
++            return Err(Self::rejected(
++                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
++                "generated readback plan mismatch",
++            ));
++        }
++        let native = self.generated_shells[&plan.key]
++            .native
++            .as_ref()
++            .expect("native owner");
++        let owner = native.submission.as_ref().expect("indexed submission");
++        if !owner.roster.matches(roster)
++            || !roster_matches_plan_v1(plan, roster)
++            || !matches!(owner.receipt, ReceiptV1::Recycled)
++        {
++            return Err(Self::rejected(
++                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
++                "generated readback requires exact recycled submission and source",
++            ));
++        }
++        let handle = native.native_lane.expect("exact lane");
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            self.check_generated_device_v1(plan)?;
++            let copied = self
++                .queue
++                .as_mut()
++                .expect("retained queue")
++                .with_compute_lane_v1(handle, |lane| {
++                    let (generation, count) = lane
++                        .recycled_fixed_dispatch_data_shape_v1()
++                        .map_err(ReadbackErrorV1::Copy)?;
++                    if count != plan.count {
++                        return Err(ReadbackErrorV1::Roster);
++                    }
++                    read_roster_v1(roster, destinations, |ordinal, bytes| {
++                        let request = fe2o3_kfd::Gfx942CompletedDispatchReadRequestV1::new(
++                            generation,
++                            ordinal,
++                            0,
++                            bytes.len() as u64,
++                        );
++                        // N5 initialized every complete DATA extent, including
++                        // unused inputs and bytes outside a writable binding.
++                        // This observes bytes, not proof that the GPU wrote them.
++                        lane.read_recycled_fixed_dispatch_initialized_data_into(request, bytes)
++                    })
++                })
++                .map_err(ReadbackErrorV1::Copy)
++                .and_then(core::convert::identity);
++            match copied {
++                Ok(()) => {}
++                Err(ReadbackErrorV1::Roster) => {
++                    return Err(Self::rejected(
++                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
++                        "generated readback destination roster mismatch",
++                    ));
++                }
++                Err(ReadbackErrorV1::Copy(error)) => {
++                    return Err(self.generated_native_error_v1("readback", error));
++                }
++            }
++            self.check_generated_device_v1(plan)
++        }));
++        // The caller retains every destination, including a partially copied
++        // prefix. Neither a copy nor a closing-check failure permits retry.
++        self.finish_generated_native_call_v1(result)
++    }
++}
++
++#[cfg(test)]
++mod tests;
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/readback/tests.rs b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/readback/tests.rs
+new file mode 100644
+index 000000000..587622226
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/readback/tests.rs
+@@ -0,0 +1,146 @@
++use super::*;
++use crate::authorized_execution::tests::source_projection;
++
++fn fixture() -> (
++    GeneratedHostRosterV1,
++    Vec<(Gfx942RuntimeBufferAccessV1, Vec<u8>)>,
++) {
++    let (_, projection) = source_projection();
++    let mut roster = GeneratedHostRosterV1::from_projection(&projection).unwrap();
++    // Descriptive copy-driver fixture, not compiler or Worker authority.
++    for (slot, access) in roster.buffers.iter_mut().zip([
++        Gfx942RuntimeBufferAccessV1::ReadOnly,
++        Gfx942RuntimeBufferAccessV1::WriteOnly,
++        Gfx942RuntimeBufferAccessV1::ReadWrite,
++    ]) {
++        slot.as_mut().unwrap().access = access;
++    }
++    let destinations = roster.buffers[..roster.count]
++        .iter()
++        .map(|slot| {
++            let slot = slot.unwrap();
++            (slot.access, vec![0xa5; slot.bytes as usize])
++        })
++        .collect();
++    (roster, destinations)
++}
++
++#[test]
++fn full_roster_copy_preserves_every_destination_owner_and_copies_readonly_bytes() {
++    let (roster, mut destinations) = fixture();
++    assert_eq!(destinations[0].0, Gfx942RuntimeBufferAccessV1::ReadOnly);
++    let pointers: Vec<_> = destinations
++        .iter()
++        .map(|(_, bytes)| (bytes.as_ptr(), bytes.capacity()))
++        .collect();
++    let mut calls = Vec::new();
++    read_roster_v1(&roster, &mut destinations, |ordinal, bytes| {
++        calls.push(ordinal);
++        bytes.fill(ordinal as u8);
++        Ok::<_, ()>(())
++    })
++    .unwrap();
++    assert_eq!(calls, (0..roster.count).collect::<Vec<_>>());
++    for (ordinal, (_, bytes)) in destinations.iter().enumerate() {
++        assert_eq!((bytes.as_ptr(), bytes.capacity()), pointers[ordinal]);
++        assert!(bytes.iter().all(|byte| *byte == ordinal as u8));
++    }
++}
++
++#[test]
++fn malformed_full_roster_rejects_before_any_destination_is_written() {
++    for fault in 0..11 {
++        let (mut roster, mut destinations) = fixture();
++        let last = roster.count - 1;
++        match fault {
++            0 => roster.count = 0,
++            1 => roster.count = roster.buffers.len() + 1,
++            2 => {
++                destinations.pop();
++            }
++            3 => roster.buffers[last] = None,
++            4 => roster.buffers[last].as_mut().unwrap().ordinal = 0,
++            5 => roster.buffers[last].as_mut().unwrap().bytes += 1,
++            6 => roster.buffers[last].as_mut().unwrap().bytes = 0,
++            7 => destinations[last].0 = Gfx942RuntimeBufferAccessV1::ReadOnly,
++            8 => {
++                destinations[last].1.reserve_exact(1);
++            }
++            9 => roster.readback_bytes += 1,
++            10 => roster.buffers[roster.count] = roster.buffers[0],
++            _ => unreachable!(),
++        }
++        let before = destinations.clone();
++        assert_eq!(
++            read_roster_v1(&roster, &mut destinations, |_, _| -> Result<(), ()> {
++                panic!("no copy before complete validation")
++            }),
++            Err(ReadbackErrorV1::Roster),
++            "fault={fault}"
++        );
++        assert_eq!(destinations, before);
++    }
++}
++
++#[test]
++fn copy_error_or_unwind_preserves_exact_prefix_suffix_and_original_allocations() {
++    for panic in [false, true] {
++        for failed in 0..3 {
++            let (roster, mut destinations) = fixture();
++            assert_eq!(roster.count, 3);
++            let pointers: Vec<_> = destinations
++                .iter()
++                .map(|(_, bytes)| (bytes.as_ptr(), bytes.capacity()))
++                .collect();
++            let mut calls = Vec::new();
++            let result = catch_unwind(AssertUnwindSafe(|| {
++                read_roster_v1(&roster, &mut destinations, |ordinal, bytes| {
++                    calls.push(ordinal);
++                    bytes.fill(ordinal as u8);
++                    if ordinal == failed {
++                        if panic {
++                            std::panic::panic_any(ordinal);
++                        }
++                        return Err(ordinal);
++                    }
++                    Ok(())
++                })
++            }));
++            if panic {
++                assert_eq!(*result.unwrap_err().downcast::<usize>().unwrap(), failed);
++            } else {
++                assert_eq!(result.unwrap(), Err(ReadbackErrorV1::Copy(failed)));
++            }
++            assert_eq!(calls, (0..=failed).collect::<Vec<_>>());
++            for (ordinal, (_, bytes)) in destinations.iter().enumerate() {
++                assert_eq!((bytes.as_ptr(), bytes.capacity()), pointers[ordinal]);
++                assert!(bytes.iter().all(|byte| *byte
++                    == if ordinal <= failed {
++                        ordinal as u8
++                    } else {
++                        0xa5
++                    }));
++            }
++        }
++    }
++}
++
++#[test]
++fn readback_plan_requires_complete_cardinality_and_every_member_extent() {
++    let (mut backend, plan) = super::super::tests::shells();
++    let (roster, _) = fixture();
++    assert!(roster_matches_plan_v1(&plan, &roster));
++    for fault in 0..5 {
++        let mut changed = roster.clone();
++        match fault {
++            0 => changed.count -= 1,
++            1 => changed.count += 1,
++            2 => changed.buffers[2] = None,
++            3 => changed.buffers[2].as_mut().unwrap().bytes += 1,
++            4 => changed.buffers[2].as_mut().unwrap().ordinal = 0,
++            _ => unreachable!(),
++        }
++        assert!(!roster_matches_plan_v1(&plan, &changed));
++    }
++    backend.dispose_generated_shells_v1(&plan);
++}
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs
+index fdf0d76f3..a4c43f4df 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs
+@@ -7,7 +7,7 @@ use std::rc::Rc;
+ #[cfg(feature = "hardware-qualification")]
+ mod native;
+ 
+-fn shells() -> (KfdRuntimeBackendV1, GeneratedShellPlanV1) {
++pub(super) fn shells() -> (KfdRuntimeBackendV1, GeneratedShellPlanV1) {
+     let mut backend = KfdRuntimeBackendV1::mock();
+     let (binding, logical) = crate::RuntimeContextV1::generated_shell_test_binding_v1(&mut backend);
+     let (hsaco, projection) = source_projection();
+@@ -58,9 +58,11 @@ fn generated_submission_capacity_and_cold_sdma_exclusion_include_the_index() {
+ #[test]
+ fn generated_submission_release_cannot_discard_unretired_custody() {
+     let (mut backend, plan) = shells();
++    let (_, projection) = source_projection();
+     let mut native = native_state(PhaseV1::Adopted, 0);
+     native.submission = Some(issue::GeneratedSubmissionV1 {
+         id: 100,
++        roster: GeneratedHostRosterV1::from_projection(&projection).unwrap(),
+         receipt: ReceiptV1::Ready,
+     });
+     backend.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests/native.rs b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests/native.rs
+index 960f1041b..f25be8b21 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests/native.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests/native.rs
+@@ -13,33 +13,53 @@ fn install(backend: &mut KfdRuntimeBackendV1, stream: u64) -> GeneratedShellPlan
+ fn install_with_roster(
+     backend: &mut KfdRuntimeBackendV1,
+     stream: u64,
++) -> (GeneratedShellPlanV1, GeneratedHostRosterV1) {
++    install_roster(backend, stream, false)
++}
++
++fn install_roster(
++    backend: &mut KfdRuntimeBackendV1,
++    stream: u64,
++    full_roster: bool,
+ ) -> (GeneratedShellPlanV1, GeneratedHostRosterV1) {
+     let admitted = admit_gfx942_vecadd_qualification_v1().unwrap();
+     let uid = backend.description.backend_device;
+     let model = backend
+         .with_retained_preparation_device_v1(uid, |device| device.model_admission())
+         .unwrap();
+-    let (binding, logical) = RuntimeContextV1::generated_native_test_ids_v1(uid, stream, model);
+-    let (left, right, output, _expected) = admitted.host_buffers().unwrap().into_parts();
+-    let buffers: Vec<_> = [left, right, output]
++    let (left, right, mut output, _expected) = admitted.host_buffers().unwrap().into_parts();
++    if full_roster {
++        output.extend_from_slice(&[0x7b; 16]);
++    }
++    let mut buffers: Vec<_> = [left, right, output]
+         .into_iter()
+         .map(|bytes| crate::Gfx942KfdDispatchBufferV1::new(bytes).unwrap())
+         .collect();
++    if full_roster {
++        buffers.push(crate::Gfx942KfdDispatchBufferV1::new(vec![0x5a; 80]).unwrap());
++    }
++    let (binding, logical) =
++        RuntimeContextV1::generated_native_test_ids_v1(uid, stream, model, buffers.len());
+     let roster = GeneratedHostRosterV1 {
+         source_identity: Arc::new(()),
+         buffers: core::array::from_fn(|index| {
+-            (index < 3).then_some(crate::generated_source::GeneratedBufferSlotV1 {
+-                ordinal: index,
+-                bytes: GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as u64,
+-                access: if index < 2 {
+-                    crate::Gfx942RuntimeBufferAccessV1::ReadOnly
+-                } else {
+-                    crate::Gfx942RuntimeBufferAccessV1::WriteOnly
+-                },
+-            })
++            buffers
++                .get(index)
++                .map(|buffer| crate::generated_source::GeneratedBufferSlotV1 {
++                    ordinal: index,
++                    bytes: buffer.bytes().len() as u64,
++                    access: if index != 2 {
++                        crate::Gfx942RuntimeBufferAccessV1::ReadOnly
++                    } else {
++                        crate::Gfx942RuntimeBufferAccessV1::WriteOnly
++                    },
++                })
+         }),
+-        count: 3,
+-        readback_bytes: 3 * GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as u64,
++        count: buffers.len(),
++        readback_bytes: buffers
++            .iter()
++            .map(|buffer| buffer.bytes().len() as u64)
++            .sum(),
+         fixup_count: 3,
+         dispatch_contract_sha256: admitted.signature(),
+     };
+@@ -133,7 +153,7 @@ fn retire(backend: &mut KfdRuntimeBackendV1, plan: &GeneratedShellPlanV1) {
+             .unwrap()
+             .returned
+             .completed,
+-        3
++        plan.count
+     );
+     backend.dispose_generated_shells_v1(plan);
+ }
+@@ -208,7 +228,7 @@ fn generated_native_bootstrap_primary_auxiliary_rebound_abort_and_shutdown() {
+     run(true);
+ }
+ 
+-fn run_issue(bootstrap: bool) {
++fn run_issue(bootstrap: bool, full_roster: bool) {
+     assert_eq!(
+         std::env::var("FE2O3_TEST_NATIVE_ISOLATED").as_deref(),
+         Ok("1")
+@@ -228,7 +248,7 @@ fn run_issue(bootstrap: bool) {
+     }
+     let first = backend.create_stream_v1(uid).unwrap();
+     let second = backend.create_stream_v1(uid).unwrap();
+-    let (first_plan, first_roster) = install_with_roster(&mut backend, first);
++    let (first_plan, first_roster) = install_roster(&mut backend, first, full_roster);
+     let primary = backend.native_compute_lanes[0].unwrap();
+     assert_eq!(
+         backend.generated_shells[&first_plan.key]
+@@ -238,7 +258,7 @@ fn run_issue(bootstrap: bool) {
+             .native_lane,
+         Some(primary)
+     );
+-    let (second_plan, second_roster) = install_with_roster(&mut backend, second);
++    let (second_plan, second_roster) = install_roster(&mut backend, second, full_roster);
+     let auxiliary = backend.native_compute_lanes[1].unwrap();
+     assert_ne!(primary, auxiliary);
+     assert_eq!(
+@@ -278,6 +298,21 @@ fn run_issue(bootstrap: bool) {
+             backend.release_submission_v1(id),
+             Err(RuntimeBackendFailureV1::Rejected(_))
+         ));
++        if full_roster {
++            let roster = if id == first_id {
++                &first_roster
++            } else {
++                &second_roster
++            };
++            let mut destinations = destinations(roster);
++            let before = destinations.clone();
++            assert!(matches!(
++                backend.read_generated_submission_v1(plan, id, roster, &mut destinations),
++                Err(RuntimeBackendFailureV1::Rejected(_))
++            ));
++            assert_eq!(destinations, before);
++            assert!(!backend.terminal);
++        }
+     }
+     let deadline = Instant::now() + Duration::from_secs(10);
+     let mut complete = [false; 2];
+@@ -301,6 +336,16 @@ fn run_issue(bootstrap: bool) {
+             backend.poll_v1(id),
+             Err(RuntimeBackendFailureV1::Quiescent(_))
+         ));
++        if full_roster {
++            let roster = if id == first_id {
++                &first_roster
++            } else {
++                &second_roster
++            };
++            check_full_roster(&mut backend, plan, id, roster);
++            retire(&mut backend, plan);
++            continue;
++        }
+         let handle = backend.generated_shells[&plan.key]
+             .native
+             .as_ref()
+@@ -330,7 +375,7 @@ fn run_issue(bootstrap: bool) {
+         retire(&mut backend, plan);
+     }
+     // A fresh generation on the same original primary, not cross-run input reuse.
+-    let (rebound, roster) = install_with_roster(&mut backend, first);
++    let (rebound, roster) = install_roster(&mut backend, first, full_roster);
+     assert_eq!(backend.native_compute_lanes[0], Some(primary));
+     assert_eq!(backend.native_compute_lanes[1], Some(auxiliary));
+     assert_eq!(
+@@ -349,6 +394,9 @@ fn run_issue(bootstrap: bool) {
+         assert!(Instant::now() < deadline);
+         std::thread::yield_now();
+     }
++    if full_roster {
++        check_full_roster(&mut backend, &rebound, id, &roster);
++    }
+     retire(&mut backend, &rebound);
+     assert!(backend.generated_submissions.is_empty());
+     assert!(backend.generated_shells.is_empty());
+@@ -361,18 +409,79 @@ fn run_issue(bootstrap: bool) {
+     backend.shutdown_native_v1().unwrap();
+     assert!(backend.queue.is_none());
+     eprintln!(
+-        "I2 native fixture: bootstrap={bootstrap}, primary/AUX exact output, rebound completion, 9 DATA disposals, shutdown complete; no protected Worker/carrier or typed reply claim"
++        "generated native fixture: bootstrap={bootstrap}, full_roster={full_roster}, primary/AUX/rebound, {} DATA disposals, shutdown complete; no protected Worker/carrier or typed reply claim",
++        if full_roster { 12 } else { 9 }
+     );
+ }
+ 
++fn destinations(
++    roster: &GeneratedHostRosterV1,
++) -> Vec<(crate::Gfx942RuntimeBufferAccessV1, Vec<u8>)> {
++    roster.buffers[..roster.count]
++        .iter()
++        .map(|slot| {
++            let slot = slot.unwrap();
++            (slot.access, vec![0xa5; slot.bytes as usize])
++        })
++        .collect()
++}
++
++fn check_full_roster(
++    backend: &mut KfdRuntimeBackendV1,
++    plan: &GeneratedShellPlanV1,
++    id: u64,
++    roster: &GeneratedHostRosterV1,
++) {
++    let (left, right, _, mut output) = admit_gfx942_vecadd_qualification_v1()
++        .unwrap()
++        .host_buffers()
++        .unwrap()
++        .into_parts();
++    output.extend_from_slice(&[0x7b; 16]);
++    let expected = [left, right, output, vec![0x5a; 80]];
++    let mut destinations = destinations(roster);
++    let pointers: Vec<_> = destinations
++        .iter()
++        .map(|(_, bytes)| (bytes.as_ptr(), bytes.capacity()))
++        .collect();
++    let mut foreign = roster.clone();
++    foreign.source_identity = Arc::new(());
++    let before = destinations.clone();
++    assert!(matches!(
++        backend.read_generated_submission_v1(plan, id, &foreign, &mut destinations),
++        Err(RuntimeBackendFailureV1::Rejected(_))
++    ));
++    assert_eq!(before, destinations);
++    backend
++        .read_generated_submission_v1(plan, id, roster, &mut destinations)
++        .unwrap();
++    for (ordinal, ((_, bytes), expected)) in destinations.iter().zip(expected).enumerate() {
++        assert_eq!(bytes, &expected, "complete DATA ordinal {ordinal}");
++        assert_eq!((bytes.as_ptr(), bytes.capacity()), pointers[ordinal]);
++    }
++    assert!(!backend.terminal);
++}
++
+ #[test]
+ #[ignore = "requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+ fn generated_native_cold_issue_complete_readback_retire() {
+-    run_issue(false);
++    run_issue(false, false);
+ }
+ 
+ #[test]
+ #[ignore = "requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+ fn generated_native_bootstrap_issue_complete_readback_retire() {
+-    run_issue(true);
++    run_issue(true, false);
++}
++
++#[test]
++#[ignore = "requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID"]
++fn generated_native_cold_full_roster_readback() {
++    run_issue(false, true);
++}
++
++#[test]
++#[ignore = "requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID"]
++fn generated_native_bootstrap_full_roster_readback() {
++    run_issue(true, true);
+ }

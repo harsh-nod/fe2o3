@@ -5095,6 +5095,60 @@ impl ComputeAqlQueueSessionV1 {
         result.map_err(Into::into)
     }
 
+    /// Copies retained, fully initialized coherent data after exact recycle.
+    ///
+    /// Unlike writable-output readback, this also permits read-only and
+    /// unreferenced initialized inputs. The sealed initialization premise, exact
+    /// dispatch generation, vacant epoch slots, native allocation authority and
+    /// bounds are required. No mapped borrow, initialization promotion, inspected
+    /// write coverage or permission to reuse the input is returned.
+    pub fn read_recycled_fixed_dispatch_initialized_data_into(
+        &mut self,
+        request: Gfx942CompletedDispatchReadRequestV1,
+        destination: &mut [u8],
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        admit_generic_recycled_dispatch_access(
+            self.terminal_poisoned,
+            self.has_any_persistent_compute_attachment_v1(),
+            GenericRecycledDispatchAccessV1::InitializedReadInto,
+        )?;
+        let dispatch = self
+            .dispatch
+            .as_ref()
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;
+        let memory = &mut self
+            .engine
+            .as_mut()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing queue engine",
+            ))?
+            .backend
+            .session;
+        let result =
+            dispatch.read_completed_initialized_host_visible_into(memory, request, destination);
+        if matches!(result, Err(Gfx942DispatchBindingErrorV1::Memory(_))) {
+            self.poison_terminal();
+        }
+        result.map_err(Into::into)
+    }
+
+    /// Returns exact recycled generation and retained DATA cardinality.
+    /// No storage authority or permission to publish is transferred.
+    pub fn recycled_fixed_dispatch_data_shape_v1(
+        &self,
+    ) -> Result<(u64, usize), ComputeAqlQueueSessionErrorV1> {
+        admit_generic_recycled_dispatch_access(
+            self.terminal_poisoned,
+            self.has_any_persistent_compute_attachment_v1(),
+            GenericRecycledDispatchAccessV1::InitializedReadInto,
+        )?;
+        self.dispatch
+            .as_ref()
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
+            .recycled_data_shape_v1()
+            .map_err(Into::into)
+    }
+
     /// Overwrites one initialized coherent range while the attached dispatch
     /// is exactly completed, recycled, and ready for another generation.
     pub fn overwrite_recycled_fixed_dispatch_host_data(

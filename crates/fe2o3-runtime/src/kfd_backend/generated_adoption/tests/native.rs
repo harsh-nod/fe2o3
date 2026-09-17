@@ -14,32 +14,52 @@ fn install_with_roster(
     backend: &mut KfdRuntimeBackendV1,
     stream: u64,
 ) -> (GeneratedShellPlanV1, GeneratedHostRosterV1) {
+    install_roster(backend, stream, false)
+}
+
+fn install_roster(
+    backend: &mut KfdRuntimeBackendV1,
+    stream: u64,
+    full_roster: bool,
+) -> (GeneratedShellPlanV1, GeneratedHostRosterV1) {
     let admitted = admit_gfx942_vecadd_qualification_v1().unwrap();
     let uid = backend.description.backend_device;
     let model = backend
         .with_retained_preparation_device_v1(uid, |device| device.model_admission())
         .unwrap();
-    let (binding, logical) = RuntimeContextV1::generated_native_test_ids_v1(uid, stream, model);
-    let (left, right, output, _expected) = admitted.host_buffers().unwrap().into_parts();
-    let buffers: Vec<_> = [left, right, output]
+    let (left, right, mut output, _expected) = admitted.host_buffers().unwrap().into_parts();
+    if full_roster {
+        output.extend_from_slice(&[0x7b; 16]);
+    }
+    let mut buffers: Vec<_> = [left, right, output]
         .into_iter()
         .map(|bytes| crate::Gfx942KfdDispatchBufferV1::new(bytes).unwrap())
         .collect();
+    if full_roster {
+        buffers.push(crate::Gfx942KfdDispatchBufferV1::new(vec![0x5a; 80]).unwrap());
+    }
+    let (binding, logical) =
+        RuntimeContextV1::generated_native_test_ids_v1(uid, stream, model, buffers.len());
     let roster = GeneratedHostRosterV1 {
         source_identity: Arc::new(()),
         buffers: core::array::from_fn(|index| {
-            (index < 3).then_some(crate::generated_source::GeneratedBufferSlotV1 {
-                ordinal: index,
-                bytes: GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as u64,
-                access: if index < 2 {
-                    crate::Gfx942RuntimeBufferAccessV1::ReadOnly
-                } else {
-                    crate::Gfx942RuntimeBufferAccessV1::WriteOnly
-                },
-            })
+            buffers
+                .get(index)
+                .map(|buffer| crate::generated_source::GeneratedBufferSlotV1 {
+                    ordinal: index,
+                    bytes: buffer.bytes().len() as u64,
+                    access: if index != 2 {
+                        crate::Gfx942RuntimeBufferAccessV1::ReadOnly
+                    } else {
+                        crate::Gfx942RuntimeBufferAccessV1::WriteOnly
+                    },
+                })
         }),
-        count: 3,
-        readback_bytes: 3 * GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as u64,
+        count: buffers.len(),
+        readback_bytes: buffers
+            .iter()
+            .map(|buffer| buffer.bytes().len() as u64)
+            .sum(),
         fixup_count: 3,
         dispatch_contract_sha256: admitted.signature(),
     };
@@ -133,7 +153,7 @@ fn retire(backend: &mut KfdRuntimeBackendV1, plan: &GeneratedShellPlanV1) {
             .unwrap()
             .returned
             .completed,
-        3
+        plan.count
     );
     backend.dispose_generated_shells_v1(plan);
 }
@@ -208,7 +228,7 @@ fn generated_native_bootstrap_primary_auxiliary_rebound_abort_and_shutdown() {
     run(true);
 }
 
-fn run_issue(bootstrap: bool) {
+fn run_issue(bootstrap: bool, full_roster: bool) {
     assert_eq!(
         std::env::var("FE2O3_TEST_NATIVE_ISOLATED").as_deref(),
         Ok("1")
@@ -228,7 +248,7 @@ fn run_issue(bootstrap: bool) {
     }
     let first = backend.create_stream_v1(uid).unwrap();
     let second = backend.create_stream_v1(uid).unwrap();
-    let (first_plan, first_roster) = install_with_roster(&mut backend, first);
+    let (first_plan, first_roster) = install_roster(&mut backend, first, full_roster);
     let primary = backend.native_compute_lanes[0].unwrap();
     assert_eq!(
         backend.generated_shells[&first_plan.key]
@@ -238,7 +258,7 @@ fn run_issue(bootstrap: bool) {
             .native_lane,
         Some(primary)
     );
-    let (second_plan, second_roster) = install_with_roster(&mut backend, second);
+    let (second_plan, second_roster) = install_roster(&mut backend, second, full_roster);
     let auxiliary = backend.native_compute_lanes[1].unwrap();
     assert_ne!(primary, auxiliary);
     assert_eq!(
@@ -278,6 +298,21 @@ fn run_issue(bootstrap: bool) {
             backend.release_submission_v1(id),
             Err(RuntimeBackendFailureV1::Rejected(_))
         ));
+        if full_roster {
+            let roster = if id == first_id {
+                &first_roster
+            } else {
+                &second_roster
+            };
+            let mut destinations = destinations(roster);
+            let before = destinations.clone();
+            assert!(matches!(
+                backend.read_generated_submission_v1(plan, id, roster, &mut destinations),
+                Err(RuntimeBackendFailureV1::Rejected(_))
+            ));
+            assert_eq!(destinations, before);
+            assert!(!backend.terminal);
+        }
     }
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut complete = [false; 2];
@@ -301,6 +336,16 @@ fn run_issue(bootstrap: bool) {
             backend.poll_v1(id),
             Err(RuntimeBackendFailureV1::Quiescent(_))
         ));
+        if full_roster {
+            let roster = if id == first_id {
+                &first_roster
+            } else {
+                &second_roster
+            };
+            check_full_roster(&mut backend, plan, id, roster);
+            retire(&mut backend, plan);
+            continue;
+        }
         let handle = backend.generated_shells[&plan.key]
             .native
             .as_ref()
@@ -330,7 +375,7 @@ fn run_issue(bootstrap: bool) {
         retire(&mut backend, plan);
     }
     // A fresh generation on the same original primary, not cross-run input reuse.
-    let (rebound, roster) = install_with_roster(&mut backend, first);
+    let (rebound, roster) = install_roster(&mut backend, first, full_roster);
     assert_eq!(backend.native_compute_lanes[0], Some(primary));
     assert_eq!(backend.native_compute_lanes[1], Some(auxiliary));
     assert_eq!(
@@ -349,6 +394,9 @@ fn run_issue(bootstrap: bool) {
         assert!(Instant::now() < deadline);
         std::thread::yield_now();
     }
+    if full_roster {
+        check_full_roster(&mut backend, &rebound, id, &roster);
+    }
     retire(&mut backend, &rebound);
     assert!(backend.generated_submissions.is_empty());
     assert!(backend.generated_shells.is_empty());
@@ -361,18 +409,79 @@ fn run_issue(bootstrap: bool) {
     backend.shutdown_native_v1().unwrap();
     assert!(backend.queue.is_none());
     eprintln!(
-        "I2 native fixture: bootstrap={bootstrap}, primary/AUX exact output, rebound completion, 9 DATA disposals, shutdown complete; no protected Worker/carrier or typed reply claim"
+        "generated native fixture: bootstrap={bootstrap}, full_roster={full_roster}, primary/AUX/rebound, {} DATA disposals, shutdown complete; no protected Worker/carrier or typed reply claim",
+        if full_roster { 12 } else { 9 }
     );
+}
+
+fn destinations(
+    roster: &GeneratedHostRosterV1,
+) -> Vec<(crate::Gfx942RuntimeBufferAccessV1, Vec<u8>)> {
+    roster.buffers[..roster.count]
+        .iter()
+        .map(|slot| {
+            let slot = slot.unwrap();
+            (slot.access, vec![0xa5; slot.bytes as usize])
+        })
+        .collect()
+}
+
+fn check_full_roster(
+    backend: &mut KfdRuntimeBackendV1,
+    plan: &GeneratedShellPlanV1,
+    id: u64,
+    roster: &GeneratedHostRosterV1,
+) {
+    let (left, right, _, mut output) = admit_gfx942_vecadd_qualification_v1()
+        .unwrap()
+        .host_buffers()
+        .unwrap()
+        .into_parts();
+    output.extend_from_slice(&[0x7b; 16]);
+    let expected = [left, right, output, vec![0x5a; 80]];
+    let mut destinations = destinations(roster);
+    let pointers: Vec<_> = destinations
+        .iter()
+        .map(|(_, bytes)| (bytes.as_ptr(), bytes.capacity()))
+        .collect();
+    let mut foreign = roster.clone();
+    foreign.source_identity = Arc::new(());
+    let before = destinations.clone();
+    assert!(matches!(
+        backend.read_generated_submission_v1(plan, id, &foreign, &mut destinations),
+        Err(RuntimeBackendFailureV1::Rejected(_))
+    ));
+    assert_eq!(before, destinations);
+    backend
+        .read_generated_submission_v1(plan, id, roster, &mut destinations)
+        .unwrap();
+    for (ordinal, ((_, bytes), expected)) in destinations.iter().zip(expected).enumerate() {
+        assert_eq!(bytes, &expected, "complete DATA ordinal {ordinal}");
+        assert_eq!((bytes.as_ptr(), bytes.capacity()), pointers[ordinal]);
+    }
+    assert!(!backend.terminal);
 }
 
 #[test]
 #[ignore = "requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID"]
 fn generated_native_cold_issue_complete_readback_retire() {
-    run_issue(false);
+    run_issue(false, false);
 }
 
 #[test]
 #[ignore = "requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID"]
 fn generated_native_bootstrap_issue_complete_readback_retire() {
-    run_issue(true);
+    run_issue(true, false);
+}
+
+#[test]
+#[ignore = "requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+fn generated_native_cold_full_roster_readback() {
+    run_issue(false, true);
+}
+
+#[test]
+#[ignore = "requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+fn generated_native_bootstrap_full_roster_readback() {
+    run_issue(true, true);
 }

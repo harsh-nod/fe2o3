@@ -5,6 +5,7 @@ use fe2o3_kfd::Gfx942CompletedDispatchBatchV1;
 
 pub(super) struct GeneratedSubmissionV1 {
     pub(super) id: u64,
+    pub(super) roster: GeneratedHostRosterV1,
     pub(super) receipt: ReceiptV1<Gfx942DispatchBatchV1<1>, Gfx942CompletedDispatchBatchV1<1>>,
 }
 
@@ -16,6 +17,7 @@ impl KfdRuntimeBackendV1 {
     ) -> Result<u64, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
         if !self.validate_generated_shell_records_v1(plan)
+            || !readback::roster_matches_plan_v1(plan, roster)
             || !self.generated_lease_matches_v1(plan)
             || !self.generated_shells.get(&plan.key).is_some_and(|record| {
                 Arc::ptr_eq(&record.source_identity, &roster.source_identity)
@@ -48,13 +50,14 @@ impl KfdRuntimeBackendV1 {
             .expect("adopted native owner");
         native.submission = Some(GeneratedSubmissionV1 {
             id,
+            roster: roster.clone(),
             receipt: ReceiptV1::Ready,
         });
         assert!(self.generated_submissions.insert(id, plan.key).is_none());
         Ok(id)
     }
 
-    fn generated_submission_plan_v1(
+    pub(super) fn generated_submission_plan_v1(
         &self,
         submission: u64,
     ) -> Result<GeneratedShellPlanV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
@@ -265,7 +268,7 @@ impl KfdRuntimeBackendV1 {
         Ok(())
     }
 
-    fn check_generated_device_v1(
+    pub(super) fn check_generated_device_v1(
         &mut self,
         plan: &GeneratedShellPlanV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
