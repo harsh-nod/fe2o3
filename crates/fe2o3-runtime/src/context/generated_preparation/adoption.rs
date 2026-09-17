@@ -30,8 +30,24 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             }
             Ok(())
         })??;
+        Ok(())
+    }
+
+    pub(crate) fn gfx942_adoption_ready_v1(
+        &self,
+        hold: &ContextUnpublishedHoldV1,
+    ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+        self.validate_unpublished_hold_v1(hold)?;
+        let stream = self.streams.get(&hold.stream()).expect("exact held stream");
+        if stream.generated.is_some()
+            || !self
+                .backend
+                .generated_empty_prefix_v1(stream.backend_stream)
+        {
+            return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
+        }
         self.backend
-            .preflight_generated_lane_v1()
+            .generated_lane_ready_v1()
             .map_err(map_backend_error)
     }
 

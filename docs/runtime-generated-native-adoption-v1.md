@@ -56,10 +56,22 @@ preserves the first panic even if poisoning panics. Metadata-only disposal
 rejects Entering, Adopted and Retiring records. A retired record must have the
 complete disposed DATA count and no remaining control or DATA owner.
 
-Lane availability is checked before activation and again at adoption. The first
-check is not a reservation across async scheduling. Contention after activation
-is conservatively quarantined by the existing driver; healthy queued retry and
-rollback of partially constructed native owners are not claimed.
+Activation validates the original binding/source and installs the stream hold;
+it does not require a free lane. A private immutable, payload-free readiness hook
+checks the exact hold, empty native prefix, backend health and lane availability
+on each advancement. Lane contention or persistent-compute exclusion leaves the
+driver pending with its original carrier, ticket and hold. It neither repeats
+source hashing nor registers shells, charges native allocations, transfers the
+control packet or polls native work. Existing round-robin progress remains
+responsible for the occupying operation; waiting has no bounded-liveness claim.
+
+Readiness and adoption run in the same owner turn without scheduler interleaving.
+The backend still rechecks capacity at native entry. Readiness errors and panics
+are terminal, not retryable capacity outcomes; the phase is armed before calling
+the hook. Stop and drain can retire an indefinitely waiting operation's authentic
+empty prefix. Rollback of partially constructed native owners is not claimed.
+The [readiness receipt](evidence/dev-n5-adoption-readiness-2026-09-17/README.md)
+records the additional CPU-only regression campaign.
 
 ## Qualification Boundary
 

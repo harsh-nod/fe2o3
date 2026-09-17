@@ -396,6 +396,7 @@ impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
             Some(RuntimeContextV1::reserve_gfx942_prepared_v1::<P>),
             Some(adoption::AdoptionHooksV1 {
                 preflight: RuntimeContextV1::preflight_gfx942_adoption_v1::<P>,
+                ready: RuntimeContextV1::gfx942_adoption_ready_v1,
                 adopt: RuntimeContextV1::adopt_gfx942_prepared_v1::<P>,
                 retire: RuntimeContextV1::retire_gfx942_adoption_v1,
             }),

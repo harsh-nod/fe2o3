@@ -20,10 +20,17 @@ type AdoptionRetireV1<B> = fn(
     &mut RuntimeContextV1<B>,
     &ContextUnpublishedHoldV1,
 ) -> Result<(), RuntimeErrorV1<<B as RuntimeBackendV1>::Error>>;
+type AdoptionReadyV1<B> = fn(
+    &RuntimeContextV1<B>,
+    &ContextUnpublishedHoldV1,
+) -> Result<bool, RuntimeErrorV1<<B as RuntimeBackendV1>::Error>>;
 
 pub(in crate::async_engine) struct AdoptionHooksV1<B: RuntimeBackendV1, P> {
     // Metadata/currentness only: no allocation checkout or native custody transfer.
     pub preflight: AdoptionPreflightV1<B, P>,
+    // Readiness cannot access the carrier or transfer native ownership. False
+    // means lane contention or exclusion; errors mean invalid identity or health.
+    pub ready: AdoptionReadyV1<B>,
     pub adopt: AdoptV1<B, P>,
     // Must accept an empty prefix when Stop precedes the first adoption advance.
     // Success establishes conclusive disposal, including closing currentness.
@@ -72,6 +79,17 @@ impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
         if owner.phase == PhaseV1::Adopting {
             // No error or unwind may make this effect callable a second time.
             owner.phase = PhaseV1::Quarantined;
+            match (self.adoption.as_ref().expect("admitted hooks").ready)(context, &owner.hold) {
+                Ok(false) if !context.is_terminal() => {
+                    owner.phase = PhaseV1::Adopting;
+                    return false;
+                }
+                Ok(true) if !context.is_terminal() => {}
+                _ => {
+                    context.quarantine_after_async_command_panic_v1();
+                    return false;
+                }
+            }
             let result = (self.adoption.as_ref().expect("admitted hooks").adopt)(
                 context,
                 self.prepared.as_mut().expect("retained payload"),

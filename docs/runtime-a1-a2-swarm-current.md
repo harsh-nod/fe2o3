@@ -158,6 +158,13 @@ probes are separated in its evidence receipt. All eight MI300X GPUs were occupie
 native route/failure and production carrier/async qualification remain open.
 This does not complete N5 or advance the accepted milestones.
 
+The subsequent [N5 readiness correction](evidence/dev-n5-adoption-readiness-2026-09-17/README.md)
+defers accepted adoption while lanes are occupied or persistent compute excludes
+it. Read-only checks retain the original payload/ticket/hold, preserve ordinary
+round-robin progress, and allow empty-prefix Stop/drain. Only clean contention is
+retryable; identity/health errors and panics remain terminal. This is CPU-tested
+development work, not native or N5 acceptance.
+
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,865 tests with

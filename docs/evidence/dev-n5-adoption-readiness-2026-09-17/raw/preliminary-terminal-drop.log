@@ -1,0 +1,3 @@
+
+running 1 test
+test kfd_backend::generated_adoption::tests::generated_readiness_waits_for_leases_without_mutation_or_poison ... 

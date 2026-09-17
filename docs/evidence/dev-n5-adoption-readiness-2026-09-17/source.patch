@@ -1,0 +1,523 @@
+diff --git a/crates/fe2o3-runtime/src/async_engine.rs b/crates/fe2o3-runtime/src/async_engine.rs
+index e22670e31..c5a98db76 100644
+--- a/crates/fe2o3-runtime/src/async_engine.rs
++++ b/crates/fe2o3-runtime/src/async_engine.rs
+@@ -2101,6 +2101,8 @@ mod tests {
+ 
+     #[derive(Default)]
+     struct MockState {
++        adoption_ready_calls: usize,
++        adoption_ready_mode: u8,
+         adoption_retire_calls: usize,
+         adoption_retire_mode: u8,
+         adoption_order: Vec<&'static str>,
+diff --git a/crates/fe2o3-runtime/src/async_engine/generated_operation.rs b/crates/fe2o3-runtime/src/async_engine/generated_operation.rs
+index f907e2a8a..22400f4af 100644
+--- a/crates/fe2o3-runtime/src/async_engine/generated_operation.rs
++++ b/crates/fe2o3-runtime/src/async_engine/generated_operation.rs
+@@ -396,6 +396,7 @@ impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
+             Some(RuntimeContextV1::reserve_gfx942_prepared_v1::<P>),
+             Some(adoption::AdoptionHooksV1 {
+                 preflight: RuntimeContextV1::preflight_gfx942_adoption_v1::<P>,
++                ready: RuntimeContextV1::gfx942_adoption_ready_v1,
+                 adopt: RuntimeContextV1::adopt_gfx942_prepared_v1::<P>,
+                 retire: RuntimeContextV1::retire_gfx942_adoption_v1,
+             }),
+diff --git a/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs b/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs
+index 79d85c707..dbe65d0e1 100644
+--- a/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs
++++ b/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs
+@@ -20,10 +20,17 @@ type AdoptionRetireV1<B> = fn(
+     &mut RuntimeContextV1<B>,
+     &ContextUnpublishedHoldV1,
+ ) -> Result<(), RuntimeErrorV1<<B as RuntimeBackendV1>::Error>>;
++type AdoptionReadyV1<B> = fn(
++    &RuntimeContextV1<B>,
++    &ContextUnpublishedHoldV1,
++) -> Result<bool, RuntimeErrorV1<<B as RuntimeBackendV1>::Error>>;
+ 
+ pub(in crate::async_engine) struct AdoptionHooksV1<B: RuntimeBackendV1, P> {
+     // Metadata/currentness only: no allocation checkout or native custody transfer.
+     pub preflight: AdoptionPreflightV1<B, P>,
++    // Readiness cannot access the carrier or transfer native ownership. False
++    // means lane contention or exclusion; errors mean invalid identity or health.
++    pub ready: AdoptionReadyV1<B>,
+     pub adopt: AdoptV1<B, P>,
+     // Must accept an empty prefix when Stop precedes the first adoption advance.
+     // Success establishes conclusive disposal, including closing currentness.
+@@ -72,6 +79,17 @@ impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
+         if owner.phase == PhaseV1::Adopting {
+             // No error or unwind may make this effect callable a second time.
+             owner.phase = PhaseV1::Quarantined;
++            match (self.adoption.as_ref().expect("admitted hooks").ready)(context, &owner.hold) {
++                Ok(false) if !context.is_terminal() => {
++                    owner.phase = PhaseV1::Adopting;
++                    return false;
++                }
++                Ok(true) if !context.is_terminal() => {}
++                _ => {
++                    context.quarantine_after_async_command_panic_v1();
++                    return false;
++                }
++            }
+             let result = (self.adoption.as_ref().expect("admitted hooks").adopt)(
+                 context,
+                 self.prepared.as_mut().expect("retained payload"),
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs
+index 1e88b75f7..e073fcf34 100644
+--- a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs
+@@ -24,12 +24,28 @@ impl Drop for Payload {
+ }
+ 
+ pub(super) trait RetireBackend: RuntimeBackendV1<Error = MockError> {
++    fn adoption_ready(&self) -> Result<bool, RuntimeErrorV1<MockError>>;
++
+     fn retire_adoption(
+         &mut self,
+         stream: RuntimeStreamIdV1,
+     ) -> Result<(), RuntimeErrorV1<MockError>>;
+ }
+ 
++fn readiness(state: &Mutex<MockState>) -> Result<bool, RuntimeErrorV1<MockError>> {
++    let mode = {
++        let mut state = state.lock().unwrap();
++        state.adoption_ready_calls += 1;
++        state.adoption_ready_mode
++    };
++    match mode {
++        0 => Ok(true),
++        1 => Ok(false),
++        2 => Err(RuntimeValidationErrorV1::Unsupported.into()),
++        _ => panic!("adoption readiness panic"),
++    }
++}
++
+ fn retire(
+     state: &Mutex<MockState>,
+     stream: RuntimeStreamIdV1,
+@@ -55,6 +71,10 @@ fn retire(
+ }
+ 
+ impl RetireBackend for MockBackend {
++    fn adoption_ready(&self) -> Result<bool, RuntimeErrorV1<MockError>> {
++        readiness(&self.state)
++    }
++
+     fn retire_adoption(
+         &mut self,
+         stream: RuntimeStreamIdV1,
+@@ -63,6 +83,11 @@ impl RetireBackend for MockBackend {
+     }
+ }
+ impl RetireBackend for ThreadBoundBackend {
++    fn adoption_ready(&self) -> Result<bool, RuntimeErrorV1<MockError>> {
++        self.record("adoption_ready");
++        readiness(&self.inner.state)
++    }
++
+     fn retire_adoption(
+         &mut self,
+         stream: RuntimeStreamIdV1,
+@@ -87,6 +112,7 @@ fn reserve<B: RuntimeBackendV1>(
+ 
+ fn hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
+     AdoptionHooksV1 {
++        ready: |context, _| context.backend().adoption_ready(),
+         preflight: |context, payload, _, _| {
+             payload
+                 .state
+@@ -486,6 +512,160 @@ impl operation::EngineOperationV1<MockBackend> for PendingCounter {
+     fn reject(&mut self, _: RuntimeAsyncEngineCallErrorV1) {}
+ }
+ 
++#[test]
++fn adoption_readiness_waits_fairly_without_repeating_preflight_or_transferring_payload() {
++    for ordinary_first in [false, true] {
++        let mut h = Harness::new(2, 2, true);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let polls = Arc::new(AtomicUsize::new(0));
++        let (ticket, stream) = reserved(&mut h, drops.clone(), 0, true);
++        let key = ticket.key.clone();
++        h.state.lock().unwrap().adoption_ready_mode = 1;
++        if ordinary_first {
++            h.registry.insert(Box::new(PendingCounter(polls.clone())));
++        }
++        activate(&mut h, ticket, stream);
++        if !ordinary_first {
++            h.registry.insert(Box::new(PendingCounter(polls.clone())));
++        }
++        assert_eq!(h.state.lock().unwrap().adoption_ready_calls, 0);
++        for _ in 0..6 {
++            operation::advance_operations_v1(
++                &mut h.context,
++                &mut h.registry,
++                1,
++                1,
++                flush_stream_v1::<MockBackend>,
++            );
++        }
++        assert_eq!(polls.load(Ordering::SeqCst), 3);
++        {
++            let state = h.state.lock().unwrap();
++            assert_eq!(state.adoption_ready_calls, 3);
++            assert_eq!(state.adoption_order, ["preflight"]);
++            assert!(state.adoption_completed.is_empty());
++            assert!(state.issues.is_empty());
++            assert!(state.flush_calls.is_empty());
++        }
++        assert!(!h.context.is_terminal());
++        assert_eq!((h.registry.len(), h.registry.active_len()), (2, 2));
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
++        assert!(!h.registry.discard_reserved(&key));
++        assert!(h.context.destroy_stream(stream).is_err());
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        h.state.lock().unwrap().adoption_ready_mode = 0;
++        for _ in 0..6 {
++            operation::advance_operations_v1(
++                &mut h.context,
++                &mut h.registry,
++                1,
++                1,
++                flush_stream_v1::<MockBackend>,
++            );
++        }
++        assert_eq!(polls.load(Ordering::SeqCst), 6);
++        assert_eq!(h.state.lock().unwrap().adoption_ready_calls, 4);
++        assert_eq!(
++            h.state.lock().unwrap().adoption_order,
++            ["preflight", "adopt"]
++        );
++        assert_eq!(h.state.lock().unwrap().adoption_completed.len(), 1);
++        h.registry.retire_unpublished_v1(&mut h.context, 2);
++        assert_eq!(h.registry.len(), 1);
++        assert_eq!(drops.load(Ordering::SeqCst), 1);
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++        h.context.destroy_stream(stream).unwrap();
++    }
++}
++
++#[test]
++fn adoption_readiness_error_or_panic_retains_custody_without_retry() {
++    for mode in [2, 3] {
++        let mut h = Harness::new(1, 2, true);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let (ticket, stream) = reserved(&mut h, drops.clone(), 0, true);
++        h.state.lock().unwrap().adoption_ready_mode = mode;
++        activate(&mut h, ticket, stream);
++        h.advance();
++        assert!(h.context.is_terminal());
++        h.state.lock().unwrap().adoption_ready_mode = 0;
++        h.advance();
++        h.registry.retire_unpublished_v1(&mut h.context, 1);
++        let state = h.state.lock().unwrap();
++        assert_eq!(state.adoption_ready_calls, 1);
++        assert_eq!(state.adoption_order, ["preflight"]);
++        assert_eq!(state.adoption_retire_calls, 0);
++        assert_eq!(h.registry.len(), 1);
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
++        drop(state);
++        assert_eq!(h.context.cleanup().retained().streams, 1);
++    }
++}
++
++#[test]
++fn adoption_readiness_owned_waiting_stop_and_drain_retire_empty_prefix() {
++    for drain in [false, true] {
++        let state = Arc::new(Mutex::new(MockState {
++            adoption_ready_mode: 1,
++            ..MockState::default()
++        }));
++        let trace = Arc::new(Mutex::new(OwnerTrace::default()));
++        let drops = Arc::new(AtomicUsize::new(0));
++        let (engine, handle) = start(state.clone(), trace.clone());
++        let stream = handle
++            .observer
++            .try_with_context(|c| c.create_stream(c.devices()[0].id()).unwrap())
++            .unwrap();
++        let ticket = join(preparation(&handle, state.clone(), drops.clone(), 0, true))
++            .unwrap()
++            .unwrap();
++        let ticket = join(handle.try_reserve_prepared_v1(ticket).unwrap())
++            .unwrap()
++            .unwrap();
++        join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
++            .unwrap()
++            .unwrap();
++        let deadline = Instant::now() + Duration::from_secs(5);
++        while state.lock().unwrap().adoption_ready_calls == 0 {
++            assert!(Instant::now() < deadline, "waiting driver was not polled");
++            thread::yield_now();
++        }
++        if drain {
++            let report = join(handle.begin_drain(16).unwrap()).unwrap();
++            assert_eq!(report.outcome, RuntimeAsyncDrainOutcomeV1::Quiescent);
++            assert_eq!(report.operations_remaining, 0);
++        }
++        assert_eq!(
++            engine.shutdown().unwrap().disposition,
++            RuntimeAsyncOwnedDispositionV1::Released
++        );
++        assert_eq!(drops.load(Ordering::SeqCst), 1);
++        let state = state.lock().unwrap();
++        assert_eq!(
++            state.adoption_order,
++            ["preflight", "retire", "payload_drop"]
++        );
++        assert_eq!(state.adoption_retire_calls, 1);
++        assert!(state.adoption_completed.is_empty());
++        assert!(state.issues.is_empty());
++        assert!(state.adoption_payload_drops[0].0.is_none());
++        let trace = trace.lock().unwrap();
++        assert!(
++            trace
++                .calls
++                .iter()
++                .position(|v| v.0 == "adoption_retire")
++                .unwrap()
++                < trace
++                    .calls
++                    .iter()
++                    .position(|v| v.0 == "destroy_stream_v1")
++                    .unwrap()
++        );
++    }
++}
++
+ #[test]
+ fn adoption_and_ordinary_progress_do_not_starve_with_unit_drain_budget() {
+     for ordinary_first in [false, true] {
+diff --git a/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs b/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs
+index 95688f0f4..8e207ddbd 100644
+--- a/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs
++++ b/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs
+@@ -30,8 +30,24 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+             }
+             Ok(())
+         })??;
++        Ok(())
++    }
++
++    pub(crate) fn gfx942_adoption_ready_v1(
++        &self,
++        hold: &ContextUnpublishedHoldV1,
++    ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        self.validate_unpublished_hold_v1(hold)?;
++        let stream = self.streams.get(&hold.stream()).expect("exact held stream");
++        if stream.generated.is_some()
++            || !self
++                .backend
++                .generated_empty_prefix_v1(stream.backend_stream)
++        {
++            return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
++        }
+         self.backend
+-            .preflight_generated_lane_v1()
++            .generated_lane_ready_v1()
+             .map_err(map_backend_error)
+     }
+ 
+diff --git a/crates/fe2o3-runtime/src/context/generated_preparation/tests/shell_tests.rs b/crates/fe2o3-runtime/src/context/generated_preparation/tests/shell_tests.rs
+index 3b4050400..145f01724 100644
+--- a/crates/fe2o3-runtime/src/context/generated_preparation/tests/shell_tests.rs
++++ b/crates/fe2o3-runtime/src/context/generated_preparation/tests/shell_tests.rs
+@@ -82,6 +82,47 @@ impl Fixture {
+     }
+ }
+ 
++#[test]
++fn generated_readiness_requires_exact_empty_hold_without_changing_credits() {
++    let mut fixture = Fixture::new(Some((60, 3)));
++    let foreign = Fixture::new(Some((60, 3)));
++    let initial = fixture.snapshot();
++    for _ in 0..3 {
++        assert!(
++            fixture
++                .context
++                .gfx942_adoption_ready_v1(&fixture.hold)
++                .unwrap()
++        );
++        assert!(
++            fixture
++                .context
++                .gfx942_adoption_ready_v1(&foreign.hold)
++                .is_err()
++        );
++        assert_eq!(fixture.snapshot(), initial);
++    }
++    fixture.install().unwrap();
++    let installed = fixture.snapshot();
++    assert!(
++        fixture
++            .context
++            .gfx942_adoption_ready_v1(&fixture.hold)
++            .is_err()
++    );
++    assert_eq!(fixture.snapshot(), installed);
++    assert!(!fixture.context.is_terminal());
++    fixture.retire();
++    let retired = fixture.snapshot();
++    assert!(
++        fixture
++            .context
++            .gfx942_adoption_ready_v1(&fixture.hold)
++            .is_err()
++    );
++    assert_eq!(fixture.snapshot(), retired);
++}
++
+ #[test]
+ fn shell_registration_retains_exact_roster_and_refunds_only_after_retirement() {
+     for configured in [false, true] {
+diff --git a/crates/fe2o3-runtime/src/kfd_backend.rs b/crates/fe2o3-runtime/src/kfd_backend.rs
+index bae0b7436..52766c211 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend.rs
+@@ -16958,6 +16958,14 @@ mod tests {
+         assert!(backend.persistent_compute_is_active_v1());
+         assert_eq!(backend.free_compute_lane_v1(), Some(1));
+ 
++        let leases = backend.stream_compute_lanes.clone();
++        for _ in 0..3 {
++            assert!(!backend.generated_lane_ready_v1().unwrap());
++            assert_eq!(backend.active.as_ref().unwrap().id, persistent);
++            assert_eq!(backend.stream_compute_lanes, leases);
++            assert!(!backend.terminal);
++        }
++
+         let ordinary = submit_scripted_read_v1(
+             &mut backend,
+             ordinary_stream,
+@@ -16978,6 +16986,7 @@ mod tests {
+         assert!(backend.pending_compute.contains_key(&ordinary));
+         assert!(backend.active.is_none());
+         assert!(backend.auxiliary_compute_lanes[0].active.is_none());
++        assert!(backend.generated_lane_ready_v1().unwrap());
+ 
+         backend.flush_stream_v1(ordinary_stream).unwrap();
+         assert_eq!(
+@@ -20550,6 +20559,48 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn generated_readiness_observes_both_active_and_pipeline_lanes_without_progress() {
++        let mut backend = KfdRuntimeBackendV1::mock();
++        for pipelined in [false, true] {
++            if pipelined {
++                backend
++                    .compute_pipeline
++                    .insert_published(pipelined_active_for_test_v1(10))
++                    .unwrap();
++                backend.auxiliary_compute_lanes[0]
++                    .pipeline
++                    .insert_published(pipelined_active_for_test_v1(11))
++                    .unwrap();
++            } else {
++                backend.active = Some(pipelined_active_for_test_v1(10));
++                backend.auxiliary_compute_lanes[0].active = Some(pipelined_active_for_test_v1(11));
++            }
++            for _ in 0..3 {
++                assert!(!backend.generated_lane_ready_v1().unwrap());
++                assert!(!backend.terminal);
++                assert_eq!(backend.active_compute_lane_v1(10), Some(0));
++                assert_eq!(backend.active_compute_lane_v1(11), Some(1));
++            }
++            if pipelined {
++                backend.compute_pipeline.take_commit_frontier().unwrap();
++            } else {
++                backend.active = None;
++            }
++            assert!(backend.generated_lane_ready_v1().unwrap());
++            assert_eq!(backend.active_compute_lane_v1(11), Some(1));
++            if pipelined {
++                backend.auxiliary_compute_lanes[0]
++                    .pipeline
++                    .take_commit_frontier()
++                    .unwrap();
++            } else {
++                backend.auxiliary_compute_lanes[0].active = None;
++            }
++        }
++        backend.shutdown_native_v1().unwrap();
++    }
++
+     #[test]
+     fn host_visible_write_cache_retention_requires_full_write_and_global_compute_quiescence() {
+         let mut backend = KfdRuntimeBackendV1::mock();
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs
+index 99c522375..5aa03d11a 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs
+@@ -86,8 +86,7 @@ impl KfdRuntimeBackendV1 {
+     pub(crate) fn preflight_generated_lane_v1(
+         &self,
+     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+-        self.require_live()?;
+-        if self.persistent_compute_is_active_v1() || self.free_compute_lane_v1().is_none() {
++        if !self.generated_lane_ready_v1()? {
+             return Err(Self::rejected(
+                 KfdRuntimeBackendErrorKindV1::Busy,
+                 "generated compute lane unavailable",
+@@ -96,6 +95,13 @@ impl KfdRuntimeBackendV1 {
+         Ok(())
+     }
+ 
++    pub(crate) fn generated_lane_ready_v1(
++        &self,
++    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        self.require_live()?;
++        Ok(!self.persistent_compute_is_active_v1() && self.free_compute_lane_v1().is_some())
++    }
++
+     pub(crate) fn quarantine_generated_adoption_v1(&mut self) {
+         self.poison_terminal_v1();
+     }
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs
+index b93694ec2..a11c1ccd9 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs
+@@ -40,6 +40,42 @@ impl Drop for Item {
+     }
+ }
+ 
++#[test]
++fn generated_readiness_waits_for_leases_without_mutation_or_poison() {
++    let mut backend = KfdRuntimeBackendV1::mock();
++    let first = backend.create_stream_v1(7).unwrap();
++    let second = backend.create_stream_v1(7).unwrap();
++    assert!(backend.generated_lane_ready_v1().unwrap());
++    backend.lease_compute_lane_v1(first, 0);
++    assert!(backend.generated_lane_ready_v1().unwrap());
++    backend.lease_compute_lane_v1(second, 1);
++    let leases = backend.stream_compute_lanes.clone();
++    for _ in 0..3 {
++        assert!(!backend.generated_lane_ready_v1().unwrap());
++        assert!(matches!(
++            backend.preflight_generated_lane_v1(),
++            Err(RuntimeBackendFailureV1::Rejected(error))
++                if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
++        ));
++        assert_eq!(backend.stream_compute_lanes, leases);
++        assert!(!backend.terminal);
++        assert!(backend.generated_shells.is_empty());
++        assert!(backend.allocations.is_empty());
++    }
++    backend.release_compute_lane_lease_v1(first, 0);
++    assert!(backend.generated_lane_ready_v1().unwrap());
++    backend.release_compute_lane_lease_v1(second, 1);
++    backend.destroy_stream_v1(first).unwrap();
++    backend.destroy_stream_v1(second).unwrap();
++    backend.poison_terminal_v1();
++    assert!(matches!(
++        backend.generated_lane_ready_v1(),
++        Err(RuntimeBackendFailureV1::Terminal(_))
++    ));
++    // Production retains a terminal backend instead of invoking fail-closed Drop.
++    core::mem::forget(backend);
++}
++
+ #[test]
+ fn generated_returned_data_retains_exact_suffix_and_lower_handoff_on_each_failure() {
+     for panic in [false, true] {

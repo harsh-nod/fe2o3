@@ -83,6 +83,47 @@ impl Fixture {
 }
 
 #[test]
+fn generated_readiness_requires_exact_empty_hold_without_changing_credits() {
+    let mut fixture = Fixture::new(Some((60, 3)));
+    let foreign = Fixture::new(Some((60, 3)));
+    let initial = fixture.snapshot();
+    for _ in 0..3 {
+        assert!(
+            fixture
+                .context
+                .gfx942_adoption_ready_v1(&fixture.hold)
+                .unwrap()
+        );
+        assert!(
+            fixture
+                .context
+                .gfx942_adoption_ready_v1(&foreign.hold)
+                .is_err()
+        );
+        assert_eq!(fixture.snapshot(), initial);
+    }
+    fixture.install().unwrap();
+    let installed = fixture.snapshot();
+    assert!(
+        fixture
+            .context
+            .gfx942_adoption_ready_v1(&fixture.hold)
+            .is_err()
+    );
+    assert_eq!(fixture.snapshot(), installed);
+    assert!(!fixture.context.is_terminal());
+    fixture.retire();
+    let retired = fixture.snapshot();
+    assert!(
+        fixture
+            .context
+            .gfx942_adoption_ready_v1(&fixture.hold)
+            .is_err()
+    );
+    assert_eq!(fixture.snapshot(), retired);
+}
+
+#[test]
 fn shell_registration_retains_exact_roster_and_refunds_only_after_retirement() {
     for configured in [false, true] {
         let mut fixture = Fixture::new(configured.then_some((60, 3)));

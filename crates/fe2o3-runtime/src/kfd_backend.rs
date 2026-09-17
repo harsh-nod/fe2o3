@@ -16958,6 +16958,14 @@ mod tests {
         assert!(backend.persistent_compute_is_active_v1());
         assert_eq!(backend.free_compute_lane_v1(), Some(1));
 
+        let leases = backend.stream_compute_lanes.clone();
+        for _ in 0..3 {
+            assert!(!backend.generated_lane_ready_v1().unwrap());
+            assert_eq!(backend.active.as_ref().unwrap().id, persistent);
+            assert_eq!(backend.stream_compute_lanes, leases);
+            assert!(!backend.terminal);
+        }
+
         let ordinary = submit_scripted_read_v1(
             &mut backend,
             ordinary_stream,
@@ -16978,6 +16986,7 @@ mod tests {
         assert!(backend.pending_compute.contains_key(&ordinary));
         assert!(backend.active.is_none());
         assert!(backend.auxiliary_compute_lanes[0].active.is_none());
+        assert!(backend.generated_lane_ready_v1().unwrap());
 
         backend.flush_stream_v1(ordinary_stream).unwrap();
         assert_eq!(
@@ -20548,6 +20557,48 @@ mod tests {
             performance: KfdRuntimeLaunchPerformanceV1::default(),
             execution: None,
         }
+    }
+
+    #[test]
+    fn generated_readiness_observes_both_active_and_pipeline_lanes_without_progress() {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        for pipelined in [false, true] {
+            if pipelined {
+                backend
+                    .compute_pipeline
+                    .insert_published(pipelined_active_for_test_v1(10))
+                    .unwrap();
+                backend.auxiliary_compute_lanes[0]
+                    .pipeline
+                    .insert_published(pipelined_active_for_test_v1(11))
+                    .unwrap();
+            } else {
+                backend.active = Some(pipelined_active_for_test_v1(10));
+                backend.auxiliary_compute_lanes[0].active = Some(pipelined_active_for_test_v1(11));
+            }
+            for _ in 0..3 {
+                assert!(!backend.generated_lane_ready_v1().unwrap());
+                assert!(!backend.terminal);
+                assert_eq!(backend.active_compute_lane_v1(10), Some(0));
+                assert_eq!(backend.active_compute_lane_v1(11), Some(1));
+            }
+            if pipelined {
+                backend.compute_pipeline.take_commit_frontier().unwrap();
+            } else {
+                backend.active = None;
+            }
+            assert!(backend.generated_lane_ready_v1().unwrap());
+            assert_eq!(backend.active_compute_lane_v1(11), Some(1));
+            if pipelined {
+                backend.auxiliary_compute_lanes[0]
+                    .pipeline
+                    .take_commit_frontier()
+                    .unwrap();
+            } else {
+                backend.auxiliary_compute_lanes[0].active = None;
+            }
+        }
+        backend.shutdown_native_v1().unwrap();
     }
 
     #[test]

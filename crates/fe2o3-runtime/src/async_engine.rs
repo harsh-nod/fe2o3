@@ -2101,6 +2101,8 @@ mod tests {
 
     #[derive(Default)]
     struct MockState {
+        adoption_ready_calls: usize,
+        adoption_ready_mode: u8,
         adoption_retire_calls: usize,
         adoption_retire_mode: u8,
         adoption_order: Vec<&'static str>,

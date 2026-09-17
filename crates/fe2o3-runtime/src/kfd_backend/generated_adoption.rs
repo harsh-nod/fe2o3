@@ -86,14 +86,20 @@ impl KfdRuntimeBackendV1 {
     pub(crate) fn preflight_generated_lane_v1(
         &self,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        self.require_live()?;
-        if self.persistent_compute_is_active_v1() || self.free_compute_lane_v1().is_none() {
+        if !self.generated_lane_ready_v1()? {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "generated compute lane unavailable",
             ));
         }
         Ok(())
+    }
+
+    pub(crate) fn generated_lane_ready_v1(
+        &self,
+    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_live()?;
+        Ok(!self.persistent_compute_is_active_v1() && self.free_compute_lane_v1().is_some())
     }
 
     pub(crate) fn quarantine_generated_adoption_v1(&mut self) {

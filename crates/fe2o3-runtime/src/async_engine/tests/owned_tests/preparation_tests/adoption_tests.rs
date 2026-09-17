@@ -24,10 +24,26 @@ impl Drop for Payload {
 }
 
 pub(super) trait RetireBackend: RuntimeBackendV1<Error = MockError> {
+    fn adoption_ready(&self) -> Result<bool, RuntimeErrorV1<MockError>>;
+
     fn retire_adoption(
         &mut self,
         stream: RuntimeStreamIdV1,
     ) -> Result<(), RuntimeErrorV1<MockError>>;
+}
+
+fn readiness(state: &Mutex<MockState>) -> Result<bool, RuntimeErrorV1<MockError>> {
+    let mode = {
+        let mut state = state.lock().unwrap();
+        state.adoption_ready_calls += 1;
+        state.adoption_ready_mode
+    };
+    match mode {
+        0 => Ok(true),
+        1 => Ok(false),
+        2 => Err(RuntimeValidationErrorV1::Unsupported.into()),
+        _ => panic!("adoption readiness panic"),
+    }
 }
 
 fn retire(
@@ -55,6 +71,10 @@ fn retire(
 }
 
 impl RetireBackend for MockBackend {
+    fn adoption_ready(&self) -> Result<bool, RuntimeErrorV1<MockError>> {
+        readiness(&self.state)
+    }
+
     fn retire_adoption(
         &mut self,
         stream: RuntimeStreamIdV1,
@@ -63,6 +83,11 @@ impl RetireBackend for MockBackend {
     }
 }
 impl RetireBackend for ThreadBoundBackend {
+    fn adoption_ready(&self) -> Result<bool, RuntimeErrorV1<MockError>> {
+        self.record("adoption_ready");
+        readiness(&self.inner.state)
+    }
+
     fn retire_adoption(
         &mut self,
         stream: RuntimeStreamIdV1,
@@ -87,6 +112,7 @@ fn reserve<B: RuntimeBackendV1>(
 
 fn hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
     AdoptionHooksV1 {
+        ready: |context, _| context.backend().adoption_ready(),
         preflight: |context, payload, _, _| {
             payload
                 .state
@@ -484,6 +510,160 @@ impl operation::EngineOperationV1<MockBackend> for PendingCounter {
         None
     }
     fn reject(&mut self, _: RuntimeAsyncEngineCallErrorV1) {}
+}
+
+#[test]
+fn adoption_readiness_waits_fairly_without_repeating_preflight_or_transferring_payload() {
+    for ordinary_first in [false, true] {
+        let mut h = Harness::new(2, 2, true);
+        let drops = Arc::new(AtomicUsize::new(0));
+        let polls = Arc::new(AtomicUsize::new(0));
+        let (ticket, stream) = reserved(&mut h, drops.clone(), 0, true);
+        let key = ticket.key.clone();
+        h.state.lock().unwrap().adoption_ready_mode = 1;
+        if ordinary_first {
+            h.registry.insert(Box::new(PendingCounter(polls.clone())));
+        }
+        activate(&mut h, ticket, stream);
+        if !ordinary_first {
+            h.registry.insert(Box::new(PendingCounter(polls.clone())));
+        }
+        assert_eq!(h.state.lock().unwrap().adoption_ready_calls, 0);
+        for _ in 0..6 {
+            operation::advance_operations_v1(
+                &mut h.context,
+                &mut h.registry,
+                1,
+                1,
+                flush_stream_v1::<MockBackend>,
+            );
+        }
+        assert_eq!(polls.load(Ordering::SeqCst), 3);
+        {
+            let state = h.state.lock().unwrap();
+            assert_eq!(state.adoption_ready_calls, 3);
+            assert_eq!(state.adoption_order, ["preflight"]);
+            assert!(state.adoption_completed.is_empty());
+            assert!(state.issues.is_empty());
+            assert!(state.flush_calls.is_empty());
+        }
+        assert!(!h.context.is_terminal());
+        assert_eq!((h.registry.len(), h.registry.active_len()), (2, 2));
+        assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
+        assert!(!h.registry.discard_reserved(&key));
+        assert!(h.context.destroy_stream(stream).is_err());
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        h.state.lock().unwrap().adoption_ready_mode = 0;
+        for _ in 0..6 {
+            operation::advance_operations_v1(
+                &mut h.context,
+                &mut h.registry,
+                1,
+                1,
+                flush_stream_v1::<MockBackend>,
+            );
+        }
+        assert_eq!(polls.load(Ordering::SeqCst), 6);
+        assert_eq!(h.state.lock().unwrap().adoption_ready_calls, 4);
+        assert_eq!(
+            h.state.lock().unwrap().adoption_order,
+            ["preflight", "adopt"]
+        );
+        assert_eq!(h.state.lock().unwrap().adoption_completed.len(), 1);
+        h.registry.retire_unpublished_v1(&mut h.context, 2);
+        assert_eq!(h.registry.len(), 1);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
+        h.context.destroy_stream(stream).unwrap();
+    }
+}
+
+#[test]
+fn adoption_readiness_error_or_panic_retains_custody_without_retry() {
+    for mode in [2, 3] {
+        let mut h = Harness::new(1, 2, true);
+        let drops = Arc::new(AtomicUsize::new(0));
+        let (ticket, stream) = reserved(&mut h, drops.clone(), 0, true);
+        h.state.lock().unwrap().adoption_ready_mode = mode;
+        activate(&mut h, ticket, stream);
+        h.advance();
+        assert!(h.context.is_terminal());
+        h.state.lock().unwrap().adoption_ready_mode = 0;
+        h.advance();
+        h.registry.retire_unpublished_v1(&mut h.context, 1);
+        let state = h.state.lock().unwrap();
+        assert_eq!(state.adoption_ready_calls, 1);
+        assert_eq!(state.adoption_order, ["preflight"]);
+        assert_eq!(state.adoption_retire_calls, 0);
+        assert_eq!(h.registry.len(), 1);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
+        drop(state);
+        assert_eq!(h.context.cleanup().retained().streams, 1);
+    }
+}
+
+#[test]
+fn adoption_readiness_owned_waiting_stop_and_drain_retire_empty_prefix() {
+    for drain in [false, true] {
+        let state = Arc::new(Mutex::new(MockState {
+            adoption_ready_mode: 1,
+            ..MockState::default()
+        }));
+        let trace = Arc::new(Mutex::new(OwnerTrace::default()));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let (engine, handle) = start(state.clone(), trace.clone());
+        let stream = handle
+            .observer
+            .try_with_context(|c| c.create_stream(c.devices()[0].id()).unwrap())
+            .unwrap();
+        let ticket = join(preparation(&handle, state.clone(), drops.clone(), 0, true))
+            .unwrap()
+            .unwrap();
+        let ticket = join(handle.try_reserve_prepared_v1(ticket).unwrap())
+            .unwrap()
+            .unwrap();
+        join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+            .unwrap()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while state.lock().unwrap().adoption_ready_calls == 0 {
+            assert!(Instant::now() < deadline, "waiting driver was not polled");
+            thread::yield_now();
+        }
+        if drain {
+            let report = join(handle.begin_drain(16).unwrap()).unwrap();
+            assert_eq!(report.outcome, RuntimeAsyncDrainOutcomeV1::Quiescent);
+            assert_eq!(report.operations_remaining, 0);
+        }
+        assert_eq!(
+            engine.shutdown().unwrap().disposition,
+            RuntimeAsyncOwnedDispositionV1::Released
+        );
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        let state = state.lock().unwrap();
+        assert_eq!(
+            state.adoption_order,
+            ["preflight", "retire", "payload_drop"]
+        );
+        assert_eq!(state.adoption_retire_calls, 1);
+        assert!(state.adoption_completed.is_empty());
+        assert!(state.issues.is_empty());
+        assert!(state.adoption_payload_drops[0].0.is_none());
+        let trace = trace.lock().unwrap();
+        assert!(
+            trace
+                .calls
+                .iter()
+                .position(|v| v.0 == "adoption_retire")
+                .unwrap()
+                < trace
+                    .calls
+                    .iter()
+                    .position(|v| v.0 == "destroy_stream_v1")
+                    .unwrap()
+        );
+    }
 }
 
 #[test]

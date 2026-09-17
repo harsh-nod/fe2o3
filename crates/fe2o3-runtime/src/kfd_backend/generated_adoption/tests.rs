@@ -41,6 +41,42 @@ impl Drop for Item {
 }
 
 #[test]
+fn generated_readiness_waits_for_leases_without_mutation_or_poison() {
+    let mut backend = KfdRuntimeBackendV1::mock();
+    let first = backend.create_stream_v1(7).unwrap();
+    let second = backend.create_stream_v1(7).unwrap();
+    assert!(backend.generated_lane_ready_v1().unwrap());
+    backend.lease_compute_lane_v1(first, 0);
+    assert!(backend.generated_lane_ready_v1().unwrap());
+    backend.lease_compute_lane_v1(second, 1);
+    let leases = backend.stream_compute_lanes.clone();
+    for _ in 0..3 {
+        assert!(!backend.generated_lane_ready_v1().unwrap());
+        assert!(matches!(
+            backend.preflight_generated_lane_v1(),
+            Err(RuntimeBackendFailureV1::Rejected(error))
+                if error.kind() == KfdRuntimeBackendErrorKindV1::Busy
+        ));
+        assert_eq!(backend.stream_compute_lanes, leases);
+        assert!(!backend.terminal);
+        assert!(backend.generated_shells.is_empty());
+        assert!(backend.allocations.is_empty());
+    }
+    backend.release_compute_lane_lease_v1(first, 0);
+    assert!(backend.generated_lane_ready_v1().unwrap());
+    backend.release_compute_lane_lease_v1(second, 1);
+    backend.destroy_stream_v1(first).unwrap();
+    backend.destroy_stream_v1(second).unwrap();
+    backend.poison_terminal_v1();
+    assert!(matches!(
+        backend.generated_lane_ready_v1(),
+        Err(RuntimeBackendFailureV1::Terminal(_))
+    ));
+    // Production retains a terminal backend instead of invoking fail-closed Drop.
+    core::mem::forget(backend);
+}
+
+#[test]
 fn generated_returned_data_retains_exact_suffix_and_lower_handoff_on_each_failure() {
     for panic in [false, true] {
         for failed in 0..3 {
