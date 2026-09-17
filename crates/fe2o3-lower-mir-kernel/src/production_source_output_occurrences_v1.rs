@@ -497,6 +497,7 @@ pub fn derive_source_output_occurrences_v1<'source, 'output>(
 fn source_output_replay_v1(
     source: &ProductionPreRankedKirOwnerV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
+    source.require_legacy_helper_policy_v1("source/output replay")?;
     source
         .semantic_ssa
         .verify_replay()

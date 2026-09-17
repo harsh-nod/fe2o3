@@ -39,18 +39,19 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticBf16ConversionKindV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBorrowKindV1,
     SemanticCallableDeclV1, SemanticCanonAbiV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
     SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
-    SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1, SemanticEnumVariantV1,
-    SemanticF32MathFunctionV1, SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
-    SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1,
-    SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1,
-    SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1,
-    SemanticMfmaStorageLayoutV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
-    SemanticPointerKindV1, SemanticPointerMetadataV1, SemanticProjectionKindV1,
-    SemanticProjectionV1, SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1,
-    SemanticScalarValueV1, SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1,
-    SemanticStatementKindV1, SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1,
-    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
-    SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
+    SemanticDisjointIndexSpaceV1, SemanticEdgeRoleV1, SemanticEnumEncodingV1,
+    SemanticEnumVariantV1, SemanticF32MathFunctionV1, SemanticFieldsShapeV1,
+    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionRoleV1,
+    SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1, SemanticLocalRoleV1,
+    SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1,
+    SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1,
+    SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1, SemanticPointerKindV1,
+    SemanticPointerMetadataV1, SemanticProjectionKindV1, SemanticProjectionV1,
+    SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticScalarValueV1,
+    SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
+    SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
+    SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
+    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
     SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
     SemanticWriteOnlyDisjointWriteKindV1, semantic_direct_enum_variant_v1,
     semantic_scalar_enum_variant_v1,
@@ -881,6 +882,11 @@ pub enum ProductionSemanticKirErrorV1 {
         /// Helper declaration provenance, not a caller or effect-operation span.
         declaration_source: Box<SemanticSourceProvenanceV1>,
     },
+    /// A later stage does not yet consume the checked source-local helper relation.
+    LocalHelperSourceConsumerUnavailable {
+        /// Exact consumer that refused to grant its own downstream authority.
+        consumer: &'static str,
+    },
     /// A semantic local is used before an SSA value is available on this path.
     MissingLocalDefinition {
         /// Source semantic function index.
@@ -1054,6 +1060,10 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
                 fmt_semantic_source_location_v1(formatter, **declaration_source)?;
                 formatter.write_str("\n  = lowering stopped before target IR or artifact emission")
             }
+            Self::LocalHelperSourceConsumerUnavailable { consumer } => write!(
+                formatter,
+                "{consumer} does not yet support checked source-local helpers",
+            ),
             Self::MissingLocalDefinition {
                 function,
                 block,
@@ -1164,6 +1174,7 @@ impl Error for ProductionSemanticKirErrorV1 {
             | Self::DefinedCallArgumentTypeMismatch { .. }
             | Self::FixedArrayIndexOutOfBounds { .. }
             | Self::HelperEffectsUnavailable { .. }
+            | Self::LocalHelperSourceConsumerUnavailable { .. }
             | Self::MissingLocalDefinition { .. }
             | Self::RetainedLocalStorage { .. }
             | Self::EnumPayloadUnavailable { .. }
@@ -10900,17 +10911,84 @@ fn lower_module_with_assert_origins_v1(
     authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
     assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
-    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
-        limits.max_argument_correspondence_work,
-    );
-    let mut budget = ArgumentBudgetV1::new(&mut work, limits.max_argument_correspondence_storage);
-    let result = lower_module_with_call_budget_v1(
+    lower_module_for_helper_admission_v1(
         owner,
         limits,
         authenticated_launch_roots,
         assert_origins,
-        &mut budget,
+        &mut HelperLoweringAdmissionV1::RawPure,
+    )
+}
+
+// A pending continuation is not admission: the final merged graph still needs
+// the independent physical and source/SSA helper checks before owner creation.
+enum HelperLoweringAdmissionV1 {
+    RawPure,
+    PendingUnitLocal { requires_source: bool },
+}
+
+struct PendingHelperSourceLoweringV1 {
+    module: Module,
+    correspondence: SemanticKirCorrespondenceV1,
+    requires_source: bool,
+}
+
+fn lower_pending_module_with_assert_origins_v1(
+    owner: &ProductionSemanticSsaOwnerV1,
+    limits: ProductionSemanticKirLimitsV1,
+    authenticated_launch_roots: &[RetainedRankedLaunchRootV1],
+    assert_origins: &mut AssertOriginEmissionV1<'_, '_>,
+) -> Result<PendingHelperSourceLoweringV1, ProductionSemanticKirErrorV1> {
+    let mut admission = HelperLoweringAdmissionV1::PendingUnitLocal {
+        requires_source: false,
+    };
+    let (module, correspondence) = lower_module_for_helper_admission_v1(
+        owner,
+        limits,
+        Some(authenticated_launch_roots),
+        Some(assert_origins),
+        &mut admission,
     )?;
+    let HelperLoweringAdmissionV1::PendingUnitLocal { requires_source } = admission else {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    };
+    Ok(PendingHelperSourceLoweringV1 {
+        module,
+        correspondence,
+        requires_source,
+    })
+}
+
+fn lower_module_for_helper_admission_v1(
+    owner: &ProductionSemanticSsaOwnerV1,
+    limits: ProductionSemanticKirLimitsV1,
+    authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
+    assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
+    admission: &mut HelperLoweringAdmissionV1,
+) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+        limits.max_argument_correspondence_work,
+    );
+    let mut budget = ArgumentBudgetV1::new(&mut work, limits.max_argument_correspondence_storage);
+    let result = match admission {
+        HelperLoweringAdmissionV1::RawPure => lower_module_with_call_budget_v1(
+            owner,
+            limits,
+            authenticated_launch_roots,
+            assert_origins,
+            &mut budget,
+        ),
+        HelperLoweringAdmissionV1::PendingUnitLocal { .. } => {
+            lower_module_with_call_budget_for_helper_admission_v1(
+                owner,
+                limits,
+                authenticated_launch_roots,
+                assert_origins,
+                &mut budget,
+                admission,
+            )
+        }
+    }?;
     if budget.storage()
         != CallReturnBufferV1::bytes(
             result.1.call_returns.len(),
@@ -10929,6 +11007,24 @@ fn lower_module_with_call_budget_v1(
     assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
     call_budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
+    lower_module_with_call_budget_for_helper_admission_v1(
+        owner,
+        limits,
+        authenticated_launch_roots,
+        assert_origins,
+        call_budget,
+        &mut HelperLoweringAdmissionV1::RawPure,
+    )
+}
+
+fn lower_module_with_call_budget_for_helper_admission_v1(
+    owner: &ProductionSemanticSsaOwnerV1,
+    limits: ProductionSemanticKirLimitsV1,
+    authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
+    assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
+    call_budget: &mut ArgumentBudgetV1<'_>,
+    admission: &mut HelperLoweringAdmissionV1,
+) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
     let floor = call_budget.storage();
     let result = lower_module_with_call_budget_inner_v1(
         owner,
@@ -10936,6 +11032,7 @@ fn lower_module_with_call_budget_v1(
         authenticated_launch_roots,
         assert_origins,
         call_budget,
+        admission,
     )
     .and_then(|(module, rows)| {
         validate_call_component_pool_v1(
@@ -10967,6 +11064,7 @@ fn lower_module_with_call_budget_inner_v1(
     authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
     mut assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
     call_budget: &mut ArgumentBudgetV1<'_>,
+    admission: &mut HelperLoweringAdmissionV1,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
     let semantic = owner.source_semantic();
     // Admission binds every execution role (including nested/ignored carriers) to V29.
@@ -11001,6 +11099,7 @@ fn lower_module_with_call_budget_inner_v1(
             &mut private_array_work,
             None,
             call_budget,
+            admission,
         )?;
         if correspondence.private_arrays.active {
             private_array_order_correspondence_v1(
@@ -11069,6 +11168,7 @@ fn lower_module_with_call_budget_inner_v1(
             &mut private_array_work,
             private_arrays.as_ref(),
             call_budget,
+            admission,
         )?;
         let [kernel] = root_module.kernels.as_slice() else {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
@@ -11513,6 +11613,89 @@ where
     Ok(ordered)
 }
 
+fn pending_unit_local_candidates_v1(
+    module: &Module,
+    plans: &[LoweredFunctionPlanV1],
+    effects: &fe2o3_kernel_ir::InterproceduralEffectAnalysisV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<bool, ProductionSemanticKirErrorV1> {
+    // Screen the whole roster before deferring its first legacy failure. This
+    // preserves that diagnostic for a nested call or another unsupported helper.
+    for plan in plans.iter().skip(1) {
+        let lookup_work = argument_sum_v1(&[plan.kernel_ir_function.as_str().len(), 1])?;
+        budget.charge_work(argument_product_v1(effects.functions().len(), lookup_work)?)?;
+        let Some(decision) = effects.function(&plan.kernel_ir_function) else {
+            return Ok(false);
+        };
+        if decision.is_complete_and_pure() {
+            continue;
+        }
+        if !decision.is_complete() {
+            return Ok(false);
+        }
+        let mut selected = None;
+        for function in &module.functions {
+            budget.charge_work(lookup_work)?;
+            if function.id == plan.kernel_ir_function {
+                selected = Some(function);
+                break;
+            }
+        }
+        let Some(function) = selected else {
+            return Ok(false);
+        };
+        budget.charge_work(4)?;
+        if !function.signature.parameters.is_empty() || !function.signature.results.is_empty() {
+            return Ok(false);
+        }
+        let Some(body) = &function.body else {
+            return Ok(false);
+        };
+        for block in &body.blocks {
+            budget.charge_work(3)?;
+            match &block.terminator {
+                Some(Terminator::Branch { .. } | Terminator::ConditionalBranch { .. }) => {}
+                Some(Terminator::Return { values }) if values.is_empty() => {}
+                Some(Terminator::Unreachable) if block.operations.len() == 1 => {}
+                _ => return Ok(false),
+            }
+            for operation in &block.operations {
+                budget.charge_work(2)?;
+                match &operation.kind {
+                    OperationKind::Constant(_)
+                    | OperationKind::Cast { .. }
+                    | OperationKind::Compare { .. }
+                    | OperationKind::Alloca { .. }
+                    | OperationKind::GetElementPointer { .. }
+                    | OperationKind::Load { .. }
+                    | OperationKind::Store { .. } => {}
+                    OperationKind::Call { callee, arguments }
+                        if arguments.is_empty()
+                            && operation.results.is_empty()
+                            && block.operations.len() == 1
+                            && matches!(block.terminator, Some(Terminator::Unreachable)) =>
+                    {
+                        // The V1 decoder scans eight fixed descriptors. Zero
+                        // arguments exclude every allocating Print descriptor.
+                        budget.charge_work(argument_sum_v1(&[
+                            argument_product_v1(argument_sum_v1(&[callee.as_str().len(), 2])?, 8)?,
+                            4,
+                        ])?)?;
+                        if !matches!(
+                            AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments),
+                            Some(AmdGpuDiagnosticOperation::Trap)
+                        ) {
+                            return Ok(false);
+                        }
+                    }
+                    _ => return Ok(false),
+                }
+            }
+        }
+    }
+    Ok(true)
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "Keep shared root budgets and outer retained storage independently borrowed"
@@ -11528,6 +11711,7 @@ fn lower_single_root_module(
     private_array_work: &mut PrivateArrayLazyBudgetV1,
     outer_private_arrays: Option<&PrivateArrayMergeV1>,
     call_budget: &mut ArgumentBudgetV1<'_>,
+    admission: &mut HelperLoweringAdmissionV1,
 ) -> Result<
     (Module, SemanticKirCorrespondenceV1, PrivateArrayPayloadV1),
     ProductionSemanticKirErrorV1,
@@ -12055,6 +12239,15 @@ fn lower_single_root_module(
             .function(&plan.kernel_ir_function)
             .is_some_and(|decision| decision.is_complete_and_pure())
         {
+            if let HelperLoweringAdmissionV1::PendingUnitLocal { requires_source } = admission {
+                let emission = assert_origins
+                    .as_mut()
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+                if pending_unit_local_candidates_v1(&module, &plans, &effects, emission.budget)? {
+                    *requires_source = true;
+                    break;
+                }
+            }
             let declaration_source = semantic
                 .functions()
                 .get(plan.semantic_function.index() as usize)

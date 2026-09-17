@@ -1170,3 +1170,21 @@ mod ledger_identity_tests;
 
 #[path = "production_pre_ranked_local_frame_chain_v1_tests.rs"]
 mod chain_tests;
+
+#[test]
+fn raw_empty_construction_does_not_install_source_capture_or_local_policy() {
+    for shared in [false, true] {
+        with_source(shared, |owner, _, _| {
+            assert!(matches!(
+                owner.helper_source_policy_v1(),
+                ProductionHelperSourcePolicyV1::RawEmpty
+            ));
+            assert!(matches!(
+                owner.helper_memory.capture,
+                HelperOccurrenceCaptureV1::Absent
+            ));
+            assert!(owner.semantic_ssa().occurrence_storage().is_none());
+            assert!(owner.helper_memory.unit_source.is_empty());
+        });
+    }
+}

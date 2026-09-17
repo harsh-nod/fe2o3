@@ -176,19 +176,17 @@ fn initializer_output_keeps_retained_read_promotion_and_helper_boundaries() {
             assert!(!result.grants_authority());
         },
     );
-    assert!(matches!(
+    local_helper_output_refusal_v1_tests::assert_source_output_refused(
         array_owner_at_body(
             ArrayCase::Initializer {
                 values: [11; 8],
                 repetitions: 1,
-                float: false
+                float: false,
             },
-            true
-        ),
-        Err(ProductionPreRankedKirErrorV1::Lowering(
-            ProductionSemanticKirErrorV1::HelperEffectsUnavailable { function: 1, .. }
-        ))
-    ));
+            true,
+        )
+        .unwrap(),
+    );
 }
 
 #[test]

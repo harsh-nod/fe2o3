@@ -1047,9 +1047,11 @@ fn geometric_pending_growth_charges_old_and_new_buffers_while_they_coexist() {
 
 #[test]
 fn production_materialization_origin_denials_drop_before_restoring_incoming_floor() {
+    // Occurrence-capture custody is checked before the existing origin charges.
+    const CAPTURE_PREFLIGHT: usize = 2;
     for (allowance, accepted, attempted) in [(0, 0, 1), (1, 1, 2), (2, 2, 3), (3, 3, 16)] {
         let (ssa, launch) = fixture(Fixture::Literal(true), false);
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(5 + allowance);
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(5 + CAPTURE_PREFLIGHT + allowance);
         work.charge_work(5).unwrap();
         let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, STORAGE);
         budget.reserve_storage(FLOOR).unwrap();
@@ -1064,9 +1066,10 @@ fn production_materialization_origin_denials_drop_before_restoring_incoming_floo
             ProductionSemanticKirErrorV1::AssertOrigin(SemanticKirAssertOriginErrorV1::Resource(
                 AssertOriginResourceV1::Work(error)
             ))
-        )) if error.actual() == 5 + attempted && error.limit() == 5 + allowance)
+        )) if error.actual() == 5 + CAPTURE_PREFLIGHT + attempted
+            && error.limit() == 5 + CAPTURE_PREFLIGHT + allowance)
         );
-        assert_eq!(budget.work(), 5 + accepted);
+        assert_eq!(budget.work(), 5 + CAPTURE_PREFLIGHT + accepted);
         assert_eq!(budget.storage(), FLOOR);
         assert_eq!(budget.failed_storage(), None);
     }

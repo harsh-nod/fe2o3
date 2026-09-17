@@ -42,17 +42,26 @@ const COMPLETE_WORK: usize = BEFORE_HASH + HASH_WORK;
 // function coverage1; assertion coverage1. No assertions means no definition scan.
 const ORIGIN_WORK: usize = 1 + 6 + 3 + 9 + 3 + 3 + 5 + 1 + 1;
 // Retained helper absence: entry4 + source row2 + physical row2 + absence2.
-// Sealing the immutable graph/origin/helper subtotal pays two checked additions.
-const HELPER_WORK: usize = 4 + 2 + 2 + 2 + 2;
-const MATERIALIZATION_WORK: usize = COMPLETE_WORK + ORIGIN_WORK + HELPER_WORK;
+// Final sealing pays source routing, custody and the two checked sums together.
+const HELPER_WORK: usize = 4 + 2 + 2 + 2 + 4;
+const CAPTURE_PREFLIGHT_WORK: usize = 2;
+const MATERIALIZATION_WORK: usize =
+    CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK + ORIGIN_WORK + HELPER_WORK;
 
 fn empty_helper_payload() -> usize {
-    // Six empty Vec headers, the helper receipt, and the checked owner subtotal.
-    6 * std::mem::size_of::<Vec<()>>()
+    // Mirror the private three-way custody tag, including its inhabited payload.
+    #[allow(dead_code)]
+    enum Capture {
+        Absent,
+        Preexisting(fe2o3_pliron::ProductionSemanticSsaOccurrenceStorageV1),
+        Transferred(fe2o3_pliron::ProductionSemanticSsaOccurrenceStorageV1),
+    }
+    // Six physical and six source Vec headers. Occurrence payload is separate.
+    12 * std::mem::size_of::<Vec<()>>()
+        + std::mem::size_of::<Capture>()
         + std::mem::size_of::<fe2o3_lower_mir_kernel::ProductionHelperMemoryStorageV1>()
         + std::mem::size_of::<usize>()
 }
-
 fn origin_retained_payload() -> usize {
     // Three Vec headers + receipt, four requested function-association rows.
     // Each association retains root/function/canonical ordinals plus RPO count.
@@ -229,8 +238,9 @@ fn pre_ranked_exact_canonical_envelope_preserves_nonzero_prefixes() {
     // Kernel IDs10 + domain2 + workgroup13 + capabilities4 = 29.
     assert_eq!(WIRE, (20 + 85 + 12) + (5 + 8 + 27 + 4) + (10 + 2 + 13 + 4));
     assert_eq!(ORIGIN_WORK, 32);
-    assert_eq!(HELPER_WORK, 12);
-    assert_eq!(MATERIALIZATION_WORK, 1_572);
+    assert_eq!(HELPER_WORK, 14);
+    assert_eq!(CAPTURE_PREFLIGHT_WORK, 2);
+    assert_eq!(MATERIALIZATION_WORK, 1_576);
     let exact = admit(MATERIALIZATION_WORK, complete_storage());
     let owner = exact
         .result
@@ -262,23 +272,35 @@ fn pre_ranked_exact_canonical_envelope_preserves_nonzero_prefixes() {
 
 #[test]
 fn pre_ranked_one_under_work_denies_hash_without_spending_rejected_chunk() {
-    let short = admit(COMPLETE_WORK - 1, complete_storage());
+    let short = admit(
+        CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK - 1,
+        complete_storage(),
+    );
     assert!(matches!(
         short.result,
         Err(ProductionPreRankedKirErrorV1::Canonical(CanonicalKernelIrReplayAdmissionErrorV12::Canonical(
             MeteredVerifiedCanonicalKernelIrErrorV12::WorkLimit(error)
-        ))) if error.actual() == WORK_PREFIX + COMPLETE_WORK
-            && error.limit() == WORK_PREFIX + COMPLETE_WORK - 1
+        ))) if error.actual() == WORK_PREFIX + CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK
+            && error.limit() == WORK_PREFIX + CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK - 1
     ));
-    assert_eq!(short.work, WORK_PREFIX + BEFORE_HASH);
+    assert_eq!(
+        short.work,
+        WORK_PREFIX + CAPTURE_PREFLIGHT_WORK + BEFORE_HASH
+    );
     assert_eq!(short.peak, STORAGE_PREFIX + complete_storage());
-    assert_eq!(short.rejected_work, Some(WORK_PREFIX + COMPLETE_WORK));
+    assert_eq!(
+        short.rejected_work,
+        Some(WORK_PREFIX + CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK)
+    );
     assert_eq!(short.rejected_storage, None);
 }
 
 #[test]
 fn pre_ranked_one_under_storage_denies_inverse_comparison_scratch() {
-    let short = admit(COMPLETE_WORK, complete_storage() - 1);
+    let short = admit(
+        CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK,
+        complete_storage() - 1,
+    );
     assert!(matches!(
         short.result,
         Err(ProductionPreRankedKirErrorV1::Canonical(CanonicalKernelIrReplayAdmissionErrorV12::Decode(
@@ -288,7 +310,10 @@ fn pre_ranked_one_under_storage_denies_inverse_comparison_scratch() {
     ));
     let encoder_peak =
         std::mem::size_of::<VerifiedCanonicalKernelIrV12>() + WIRE + role_tree_payload();
-    assert_eq!(short.work, WORK_PREFIX + BEFORE_INVERSE_SCRATCH);
+    assert_eq!(
+        short.work,
+        WORK_PREFIX + CAPTURE_PREFLIGHT_WORK + BEFORE_INVERSE_SCRATCH
+    );
     assert_eq!(
         short.peak,
         STORAGE_PREFIX + encoder_peak.max(retained_payload())
@@ -302,7 +327,7 @@ fn pre_ranked_one_under_storage_denies_inverse_comparison_scratch() {
 
 #[test]
 fn pre_ranked_one_under_complete_work_denies_origin_coverage_without_resetting_history() {
-    let origin_complete = COMPLETE_WORK + ORIGIN_WORK;
+    let origin_complete = CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK + ORIGIN_WORK;
     let short = admit(origin_complete - 1, complete_storage());
     assert!(
         matches!(short.result, Err(ProductionPreRankedKirErrorV1::Lowering(
@@ -319,7 +344,7 @@ fn pre_ranked_one_under_complete_work_denies_origin_coverage_without_resetting_h
 }
 
 #[test]
-fn pre_ranked_one_under_retained_total_denies_the_last_two_checked_additions() {
+fn pre_ranked_one_under_retained_total_denies_the_final_custody_chunk() {
     let short = admit(MATERIALIZATION_WORK - 1, complete_storage());
     assert!(matches!(short.result,
         Err(ProductionPreRankedKirErrorV1::Lowering(
@@ -329,7 +354,7 @@ fn pre_ranked_one_under_retained_total_denies_the_last_two_checked_additions() {
         )) if error.actual() == WORK_PREFIX + MATERIALIZATION_WORK
             && error.limit() == WORK_PREFIX + MATERIALIZATION_WORK - 1
     ));
-    assert_eq!(short.work, WORK_PREFIX + MATERIALIZATION_WORK - 2);
+    assert_eq!(short.work, WORK_PREFIX + MATERIALIZATION_WORK - 4);
     assert_eq!(
         short.rejected_work,
         Some(WORK_PREFIX + MATERIALIZATION_WORK)

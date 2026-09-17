@@ -1117,22 +1117,8 @@ fn private_array_initializer_query_floor_source_and_initial_work_prefix_are_exac
 }
 
 #[test]
-fn private_array_initializer_retained_helper_keeps_current_effect_refusal() {
-    let result = array_owner_at_body(
-        ArrayCase::Initializer {
-            values: [11; 8],
-            repetitions: 1,
-            float: false,
-        },
-        true,
-    );
-    assert!(matches!(
-        result,
-        Err(ProductionPreRankedKirErrorV1::Lowering(ProductionSemanticKirErrorV1::HelperEffectsUnavailable {
-            function: 1,
-            declaration_source,
-        })) if *declaration_source == SemanticSourceProvenanceV1::unavailable()
-    ));
+fn private_array_initializer_retained_helper_uses_checked_source_relation() {
+    local_helper_source_v1_tests::initializer_helper_source_relation();
 }
 
 #[test]
@@ -1174,3 +1160,6 @@ mod private_array_facts_v1_tests;
 
 #[path = "production_private_array_output_v1_tests.rs"]
 mod private_array_output_v1_tests;
+
+#[path = "production_local_helper_source_v1_tests.rs"]
+mod local_helper_source_v1_tests;

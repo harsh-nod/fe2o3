@@ -1,3 +1,11 @@
+include!("production_local_helper_relations_v1.rs");
+include!("production_local_helper_source_v1.rs");
+include!("production_local_helper_values_v1.rs");
+include!("production_local_helper_statements_v1.rs");
+include!("production_local_helper_memory_v1.rs");
+include!("production_local_helper_control_v1.rs");
+include!("production_local_helper_calls_v1.rs");
+
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceErrorV1 as HelperMemoryResourceV1,
     LocalFrameAccessV1 as RetainedLocalAccessV1,
@@ -36,6 +44,29 @@ struct RetainedHelperAssociationV1 {
     physical: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum HelperOccurrenceCaptureV1 {
+    Absent,
+    Preexisting(fe2o3_pliron::ProductionSemanticSsaOccurrenceStorageV1),
+    Transferred(fe2o3_pliron::ProductionSemanticSsaOccurrenceStorageV1),
+}
+
+impl HelperOccurrenceCaptureV1 {
+    fn preexisting_storage(self) -> usize {
+        match self {
+            Self::Preexisting(receipt) => receipt.retained_storage(),
+            Self::Absent | Self::Transferred(_) => 0,
+        }
+    }
+
+    fn transferred_storage(self) -> usize {
+        match self {
+            Self::Transferred(receipt) => receipt.retained_storage(),
+            Self::Absent | Self::Preexisting(_) => 0,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct SealedHelperMemoryV1 {
     functions: Vec<RetainedHelperKindV1>,
@@ -44,6 +75,8 @@ struct SealedHelperMemoryV1 {
     accesses: Vec<RetainedLocalAccessV1>,
     control: Vec<RetainedLocalControlV1>,
     edge_bindings: Vec<RetainedLocalEdgeBindingV1>,
+    unit_source: SealedUnitLocalSourceV1,
+    capture: HelperOccurrenceCaptureV1,
     storage: ProductionHelperMemoryStorageV1,
     analysis_storage: usize,
 }
@@ -101,10 +134,22 @@ impl SealedHelperMemoryV1 {
         subject: CanonicalCallSubjectV1<'_>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Self, ProductionPreRankedKirErrorV1> {
+        Self::derive_with_origins_v1(subject, None, budget)
+    }
+
+    fn derive_with_origins_v1(
+        subject: CanonicalCallSubjectV1<'_>,
+        origins: Option<&SealedAssertOriginsV1>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self, ProductionPreRankedKirErrorV1> {
         let floor = budget.storage();
+        let work_ledger = budget.work_ledger_identity_v1();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Self::build(subject, budget)
+            Self::build(subject, origins, budget)
         }));
+        if work_ledger != budget.work_ledger_identity_v1() {
+            return Err(HelperMemoryResourceV1::Accounting.into());
+        }
         let release = budget
             .storage()
             .checked_sub(floor)
@@ -118,6 +163,7 @@ impl SealedHelperMemoryV1 {
 
     fn build(
         subject: CanonicalCallSubjectV1<'_>,
+        origins: Option<&SealedAssertOriginsV1>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Self, ProductionPreRankedKirErrorV1> {
         use fe2o3_kernel_analysis::{CanonicalKirCallEffectsV1, CanonicalKirInventoryV1};
@@ -155,6 +201,8 @@ impl SealedHelperMemoryV1 {
                 accesses: Vec::new(),
                 control: Vec::new(),
                 edge_bindings: Vec::new(),
+                unit_source: SealedUnitLocalSourceV1::empty(),
+                capture: HelperOccurrenceCaptureV1::Absent,
                 storage: ProductionHelperMemoryStorageV1(std::mem::size_of::<Self>()),
                 analysis_storage: 0,
             });
@@ -179,46 +227,56 @@ impl SealedHelperMemoryV1 {
             .map_err(helper_memory_effect_error_v1)?;
         budget.reserve_storage(effect_storage.retained_storage())?;
 
-        with_canonical_call_scratch_v1(budget, |budget| {
-            let (groups, calls) = build_canonical_call_index_v1(subject, &inventory, budget)?;
-            budget.charge_work(argument_product_v1(groups.len(), 7)?)?;
-            for (index, group) in groups.iter().enumerate() {
-                let source = subject
-                    .correspondence
-                    .lowered_functions
-                    .get(index)
-                    .ok_or_else(mismatch)?;
-                let physical = group.function.canonical.coordinate.0 as usize;
-                if !std::ptr::eq(source, group.function.source)
-                    || !std::ptr::eq(
-                        subject
-                            .executable
-                            .module()
-                            .functions
-                            .get(physical)
-                            .ok_or_else(mismatch)?,
-                        group.function.canonical.function,
-                    )
-                    || associations.len() >= subject.correspondence.lowered_functions.len()
-                    || associations.len() == associations.capacity()
-                {
-                    return Err(mismatch());
-                }
-                if source.role == SemanticKirFunctionRoleV1::InternalHelper {
-                    let state = functions.get_mut(physical).ok_or_else(mismatch)?;
-                    if *state == RetainedHelperKindV1::NotHelper {
-                        *state = RetainedHelperKindV1::Pending;
-                    }
-                }
-                associations.push(RetainedHelperAssociationV1 { physical });
+        budget.charge_work(2)?;
+        let call_floor = budget.storage();
+        let call_ledger = budget.work_ledger_identity_v1();
+        let (groups, calls) = build_canonical_call_index_v1(subject, &inventory, budget)?;
+        let call_live = budget.storage();
+        let call_storage = call_live
+            .checked_sub(call_floor)
+            .ok_or(HelperMemoryResourceV1::Accounting)?;
+        budget.charge_work(argument_product_v1(groups.len(), 7)?)?;
+        for (index, group) in groups.iter().enumerate() {
+            let source = subject
+                .correspondence
+                .lowered_functions
+                .get(index)
+                .ok_or_else(mismatch)?;
+            let physical = group.function.canonical.coordinate.0 as usize;
+            if !std::ptr::eq(source, group.function.source)
+                || !std::ptr::eq(
+                    subject
+                        .executable
+                        .module()
+                        .functions
+                        .get(physical)
+                        .ok_or_else(mismatch)?,
+                    group.function.canonical.function,
+                )
+                || associations.len() >= subject.correspondence.lowered_functions.len()
+                || associations.len() == associations.capacity()
+            {
+                return Err(mismatch().into());
             }
-            if associations.len() != subject.correspondence.lowered_functions.len() {
-                return Err(mismatch());
+            if source.role == SemanticKirFunctionRoleV1::InternalHelper {
+                let state = functions.get_mut(physical).ok_or_else(mismatch)?;
+                if *state == RetainedHelperKindV1::NotHelper {
+                    *state = RetainedHelperKindV1::Pending;
+                }
             }
-            drop(calls);
-            drop(groups);
-            Ok(())
-        })?;
+            associations.push(RetainedHelperAssociationV1 { physical });
+        }
+        if associations.len() != subject.correspondence.lowered_functions.len() {
+            return Err(mismatch().into());
+        }
+        let mut prepared_calls = Some((groups, calls));
+        if origins.is_none() {
+            if call_ledger != budget.work_ledger_identity_v1() || budget.storage() != call_live {
+                return Err(HelperMemoryResourceV1::Accounting.into());
+            }
+            drop(prepared_calls.take());
+            budget.release_storage(call_storage)?;
+        }
 
         let (allocations, accesses, control, edge_bindings) =
             derive_retained_helper_physical_rows_v1(
@@ -228,6 +286,32 @@ impl SealedHelperMemoryV1 {
                 &mut functions,
                 budget,
             )?;
+        let unit_source = if let Some(origins) = origins {
+            let (groups, calls) = prepared_calls.as_ref().ok_or_else(mismatch)?;
+            let source = check_unit_local_source_v1(
+                subject,
+                &inventory,
+                origins,
+                UnitLocalPhysicalRowsV1 {
+                    functions: &functions,
+                    allocations: &allocations,
+                    accesses: &accesses,
+                    control: &control,
+                    edge_bindings: &edge_bindings,
+                },
+                groups,
+                calls,
+                budget,
+            )?;
+            if call_ledger != budget.work_ledger_identity_v1() || budget.storage() < call_live {
+                return Err(HelperMemoryResourceV1::Accounting.into());
+            }
+            drop(prepared_calls.take());
+            budget.release_storage(call_storage)?;
+            source
+        } else {
+            SealedUnitLocalSourceV1::empty()
+        };
         drop(effects);
         budget.release_storage(effect_storage.retained_storage())?;
         drop(inventory);
@@ -243,6 +327,8 @@ impl SealedHelperMemoryV1 {
             accesses,
             control,
             edge_bindings,
+            unit_source,
+            capture: HelperOccurrenceCaptureV1::Absent,
             storage: ProductionHelperMemoryStorageV1(storage),
             analysis_storage: 0,
         })
