@@ -578,6 +578,7 @@ fn missing_or_substituted_copy_marker_cannot_publish_completion() {
                     .journal_read
                     .as_mut()
                     .unwrap()
+                    .first
                     .incarnation += 1
             }
             _ => f

@@ -17,7 +17,9 @@ Begin and before backend entry. It binds the original submission ID, allocation
 reference, device, full extent, requested byte range, attempt epoch and content
 lineage. A fresh nonwrapping incarnation distinguishes repeated acquisitions,
 including the same consumer and unchanged source in a recycled lease slot.
-The submission marker and independent writer root retain the exact reference.
+The submission marker and independent reader root retain the exact reference;
+the [typed-input extension](runtime-context-kernel-read-leases-v1.md) generalizes
+the original writer-attached copy reference to a separate batched input root.
 
 Multiple readers may overlap. While any reader remains, host writes, writable
 launch bindings, copy destinations and allocation retirement reject for that
@@ -59,8 +61,9 @@ immutable inspection of it. Every mutation or retirement path capable of changin
 a leased allocation is guarded. Constructor-reserved lease slots, free slots and
 per-allocation reader counts are preserved without acquisition/release allocation.
 Canonical batches cost O(k) in touched requests; each built-in copy uses k=1.
-Runtime reader capacity equals writer capacity, because each copy also retains
-one destination writer. This is bounded metadata, not aggregate native residency.
+Runtime reader capacity equals writer capacity by constructor policy, but its
+occupancy is independent; read-only typed launches need no writer slot.
+This is bounded metadata, not aggregate native residency.
 Ordinary prepared graph actions store their larger identity snapshots behind
 one box, allocated during preparation, so generated and join nodes need not
 carry that payload inline. Non-graph copies need no additional box.
@@ -80,7 +83,8 @@ the backend's classification contract rather than manufacturing machine evidence
 
 Leases protect ownership and version stability, not initialized bytes. Lineage
 zero is allowed; even nonzero lineage does not prove that every byte was written.
-General kernel read effects, available-input authority, backend aliases, ordered
+The typed-input extension now adds ordinary pure-Read launch custody. General
+kernel effect authority, available-input authority, backend aliases, ordered
 writers, cross-run versions, content reuse, aggregate pools/residency and native
 high-depth/overlap/fault qualification remain open. Production Worker V3 and
 machine refinement, reader-composition proofs and matched HIP/HSA measurements

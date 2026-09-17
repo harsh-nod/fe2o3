@@ -15,7 +15,7 @@ Preparation sorts and deduplicates that roster, revalidates its live journal
 records immediately before issue, and covers each complete allocation, including
 partial-region writes. Read-only and empty rosters consume no writer slot.
 
-The helper reserves all three insertion indexes before minting the original
+The helper reserves facade and applicable ownership insertion indexes before minting the original
 Context submission ID. Hash-table insertion capacity is rechecked after prior
 removals; constructor-time reservation alone is insufficient. The exact same
 submission ID registers the model Submission writer, without a second ID or a
@@ -91,6 +91,10 @@ production verifier/refinement evidence or native protected qualification.
 The subsequent [copy-source leases](runtime-context-copy-read-leases-v1.md) retain
 built-in copy sources and exclude mutation until exact consumer quiescence.
 They do not establish initialized inputs or general kernel read effects.
+The later [typed-input extension](runtime-context-kernel-read-leases-v1.md) adds
+independent whole-allocation leases for ordinary pure-Read bindings, including
+read-only submissions with no writer slot. It still supplies no initialized-data
+or executable-effect authority.
 
 Backend aliases, available-input leases, ordered overlapping writers, cross-run version
 consumption, content recovery and aggregate native-residency disposal remain open.

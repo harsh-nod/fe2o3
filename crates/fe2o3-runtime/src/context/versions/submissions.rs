@@ -23,7 +23,6 @@ pub(super) struct RetainedSubmissionWriterV1 {
     pub(super) disposal_started: bool,
     pub(super) disposed_count: usize,
     pub(super) journal_disposed: bool,
-    pub(super) copy_source: Option<super::readers::RetainedCopySourceV1>,
 }
 
 pub(super) struct SubmissionWriterAllocationV1 {
@@ -221,7 +220,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     disposal_started: false,
                     disposed_count: 0,
                     journal_disposed: false,
-                    copy_source: None,
                 },
             );
             let result = versions
@@ -276,13 +274,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             let Some(versions) = self.versions.as_mut() else {
                 return absent;
             };
+            if versions.submission_readers.contains_key(&id)
+                || record.is_some_and(|record| record.journal_read.is_some())
+            {
+                return Err(ContextVersionJournalErrorV1::InvalidState);
+            }
             let Some(root) = versions.submission_writers.get(&id) else {
                 return absent;
             };
             let writer = root.writer;
-            if root.copy_source.is_some() {
-                return Err(ContextVersionJournalErrorV1::InvalidState);
-            }
             if root.domain != domain {
                 return Err(ContextVersionJournalErrorV1::InvalidReference);
             }
@@ -346,13 +346,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     core::mem::forget(payload);
                 }
             }
-            if let Some(source) = root.copy_source.as_ref()
-                && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+        }
+        for root in versions.submission_readers.values() {
+            for source in &root.sources {
+                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
                     self.allocation_admission
-                        .quarantine(source.source.region.allocation);
-                }))
-            {
-                core::mem::forget(payload);
+                        .quarantine(source.region.allocation);
+                })) {
+                    core::mem::forget(payload);
+                }
             }
         }
     }
@@ -379,11 +381,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         stream_record: StreamRecordV1,
         destinations: &[RuntimeAllocationIdV1],
         peer_transfer: Option<PeerTransferMechanismV1>,
-        copy_source: Option<ContextCopySourceV1>,
+        sources: &[ContextReadSourceV1],
         submit: impl FnOnce(&mut B) -> Result<u64, RuntimeBackendFailureV1<B::Error>>,
     ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<B::Error>> {
         let prepared = self.prepare_submission_writer_v1(destinations)?;
-        let read = self.prepare_copy_source_v1(copy_source)?;
+        let reads = self.prepare_submission_readers_v1(sources)?;
         self.submissions
             .try_reserve(1)
             .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
@@ -393,7 +395,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
         let journal_writer =
             self.begin_submission_writer_v1(id, prepared, SubmissionWriterDomainV1::Ordinary)?;
-        let journal_read = self.begin_copy_source_v1(id, read)?;
+        let journal_read = self.begin_submission_readers_v1(id, reads)?;
         let result = self.invoke_journal_backend_v1(submit);
         let backend_submission = match result {
             Ok(handle) => handle,
@@ -401,7 +403,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 if matches!(&failure, RuntimeBackendFailureV1::Terminal(_)) {
                     return self.backend_result(Err(failure));
                 }
-                let _ = self.release_copy_source_v1(id);
+                let _ = self.release_submission_readers_v1(id);
                 let outcome = if matches!(&failure, RuntimeBackendFailureV1::Rejected(_)) {
                     SubmissionWriterOutcomeV1::NoEffect
                 } else {

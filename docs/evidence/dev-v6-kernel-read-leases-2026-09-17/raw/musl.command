@@ -1,0 +1,1 @@
+env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_TERM_COLOR=never FE2O3_HIP_SYS_DISABLE=1 cargo test --locked --offline -p fe2o3-runtime-model -p fe2o3-runtime -p fe2o3-host --all-features --lib --target x86_64-unknown-linux-musl -- --test-threads=1 

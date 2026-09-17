@@ -1,0 +1,2507 @@
+diff --git a/crates/fe2o3-runtime/src/context.rs b/crates/fe2o3-runtime/src/context.rs
+index 567b1b6da..2d6f81827 100644
+--- a/crates/fe2o3-runtime/src/context.rs
++++ b/crates/fe2o3-runtime/src/context.rs
+@@ -24,7 +24,10 @@ use allocation_admission::ContextAllocationAdmissionV1;
+ pub use drain_capture::*;
+ pub use generated_preparation::*;
+ pub(crate) use unpublished::ContextUnpublishedHoldV1;
+-use versions::{ContextVersionsV1, SubmissionWriterDomainV1, SubmissionWriterOutcomeV1};
++use versions::{
++    ContextReadSourceV1, ContextVersionsV1, SubmissionReaderMarkerV1, SubmissionWriterDomainV1,
++    SubmissionWriterOutcomeV1,
++};
+ pub use versions::{RuntimeContextJournalUsageV1, RuntimeContextOpenFailureV1};
+ 
+ /// Maximum number of devices retained by one runtime context.
+@@ -914,6 +917,7 @@ pub struct RuntimeCleanupReportV1<E> {
+     allocation_credit_records: usize,
+     allocation_journal_records: usize,
+     writer_journal_records: usize,
++    reader_journal_records: usize,
+ }
+ 
+ impl<E> RuntimeCleanupReportV1<E> {
+@@ -936,6 +940,7 @@ impl<E> RuntimeCleanupReportV1<E> {
+             && self.allocation_credit_records == 0
+             && self.allocation_journal_records == 0
+             && self.writer_journal_records == 0
++            && self.reader_journal_records == 0
+     }
+ 
+     pub const fn is_graph_reserved(&self) -> bool {
+@@ -957,6 +962,11 @@ impl<E> RuntimeCleanupReportV1<E> {
+     pub const fn writer_journal_records_v1(&self) -> usize {
+         self.writer_journal_records
+     }
++
++    /// Retained input custody, including provisional roots without a returned handle.
++    pub const fn reader_journal_records_v1(&self) -> usize {
++        self.reader_journal_records
++    }
+ }
+ 
+ fn map_backend_error<E>(error: RuntimeBackendFailureV1<E>) -> RuntimeErrorV1<E> {
+@@ -1011,7 +1021,7 @@ struct SubmissionRecordV1 {
+     quiescent: bool,
+     status: RuntimeCompletionStatusV1,
+     journal_writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
+-    journal_read: Option<fe2o3_runtime_model::ContextReadLeaseReferenceV1>,
++    journal_read: Option<SubmissionReaderMarkerV1>,
+ }
+ 
+ type RuntimeCompletionCallbackV1 =
+@@ -1089,6 +1099,7 @@ pub(crate) struct PreparedContextLaunchV1 {
+     explicit_kernarg: Vec<u8>,
+     backend_bindings: Vec<BackendBindingV1>,
+     journal_destinations: Vec<RuntimeAllocationIdV1>,
++    journal_sources: Vec<ContextReadSourceV1>,
+     backend_dependencies: Vec<u64>,
+     geometry: RuntimeLaunchGeometryV1,
+     semantic_launch: BackendSemanticLaunchV1,
+@@ -1510,6 +1521,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                 .versions
+                 .as_ref()
+                 .map_or(0, ContextVersionsV1::retained_writers),
++            reader_journal_records: self
++                .versions
++                .as_ref()
++                .map_or(0, ContextVersionsV1::retained_readers),
+         }
+     }
+ 
+@@ -1556,7 +1571,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         } else {
+             SubmissionWriterOutcomeV1::Unknown
+         };
+-        self.release_copy_source_v1(submission)?;
++        self.release_submission_readers_v1(submission)?;
+         self.settle_submission_writer_v1(submission, outcome)?;
+         self.publish_submission_status_v1(submission, status)
+     }
+@@ -2302,10 +2317,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             return Err(RuntimeValidationErrorV1::TooManyBindings.into());
+         }
+         let mut backend_bindings = Vec::with_capacity(bindings.len());
++        let read_bindings = bindings
++            .iter()
++            .filter(|binding| binding.region.access == RuntimeAccessV1::Read)
++            .count();
++        let mut journal_sources = Vec::new();
++        journal_sources
++            .try_reserve_exact(read_bindings)
++            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+         let mut journal_destinations = Vec::new();
+         if self.versions.is_some() {
+             journal_destinations
+-                .try_reserve_exact(bindings.len())
++                .try_reserve_exact(bindings.len() - read_bindings)
+                 .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+         }
+         for binding in bindings {
+@@ -2357,15 +2380,36 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                 },
+                 kernarg_byte_offset: binding.kernarg_byte_offset,
+             });
+-            if self.versions.is_some()
+-                && matches!(
+-                    region.access,
+-                    RuntimeAccessV1::Write | RuntimeAccessV1::ReadWrite
+-                )
+-            {
+-                journal_destinations.push(region.allocation);
++            if matches!(
++                region.access,
++                RuntimeAccessV1::Write | RuntimeAccessV1::ReadWrite
++            ) {
++                if self.versions.is_some() {
++                    journal_destinations.push(region.allocation);
++                }
++            } else {
++                journal_sources.push(ContextReadSourceV1 {
++                    region: RuntimeMemoryRegionV1 {
++                        allocation: region.allocation,
++                        access: RuntimeAccessV1::Read,
++                        byte_offset: 0,
++                        byte_len: allocation.byte_len,
++                    },
++                    record: allocation,
++                });
+             }
+         }
++        journal_destinations.sort_unstable();
++        journal_destinations.dedup();
++        journal_sources.sort_unstable_by_key(|source| source.region.allocation);
++        journal_sources.dedup_by_key(|source| source.region.allocation);
++        // Journaled writable aliases already have exclusive whole-allocation custody.
++        // Without a journal, preserve every Read identity for prepared-issue validation.
++        journal_sources.retain(|source| {
++            journal_destinations
++                .binary_search(&source.region.allocation)
++                .is_err()
++        });
+         let mut backend_dependencies = Vec::with_capacity(dependencies.len());
+         for dependency in dependencies {
+             let event = *self
+@@ -2384,6 +2428,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             explicit_kernarg,
+             backend_bindings,
+             journal_destinations,
++            journal_sources,
+             backend_dependencies,
+             geometry,
+             semantic_launch,
+@@ -2414,6 +2459,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             explicit_kernarg,
+             backend_bindings,
+             journal_destinations,
++            journal_sources,
+             backend_dependencies,
+             geometry,
+             semantic_launch,
+@@ -2423,7 +2469,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             stream_record,
+             &journal_destinations,
+             None,
+-            None,
++            &journal_sources,
+             |backend| {
+                 submit(
+                     backend,
+@@ -2980,7 +3026,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         let stream_record = *self.unheld_stream_v1(stream)?;
+         let peer_contract_identity = peer_copy_contract_identity(stream, source, destination);
+         let journal_destination = destination.allocation;
+-        let journal_source = ContextCopySourceV1 {
++        let journal_source = ContextReadSourceV1 {
+             region: source,
+             record: *self
+                 .allocations
+@@ -3056,7 +3102,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             Some(PeerTransferMechanismV1::DeclaredPeerCopy {
+                 contract_identity: peer_contract_identity,
+             }),
+-            Some(journal_source),
++            &[journal_source],
+             |backend| {
+                 backend.peer_copy_v1(
+                     stream_record.backend_stream,
+@@ -3115,7 +3161,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             return Err(RuntimeValidationErrorV1::InvalidRange.into());
+         }
+         let journal_destination = destination.allocation;
+-        let journal_source = ContextCopySourceV1 {
++        let journal_source = ContextReadSourceV1 {
+             region: source,
+             record: *self
+                 .allocations
+@@ -3213,7 +3259,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             stream_record,
+             &[journal_destination],
+             None,
+-            Some(journal_source),
++            &[journal_source],
+             |backend| {
+                 backend.copy_async_v1(
+                     stream_record.backend_stream,
+@@ -3263,7 +3309,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         };
+         match cancellation {
+             BackendCancellationV1::Cancelled => {
+-                self.release_copy_source_v1(submission.id)?;
++                self.release_submission_readers_v1(submission.id)?;
+                 self.settle_submission_writer_v1(
+                     submission.id,
+                     SubmissionWriterOutcomeV1::NoEffect,
+@@ -3509,6 +3555,7 @@ mod tests {
+     mod allocation_outcome_tests;
+     mod async_journal_tests;
+     mod copy_source_lease_tests;
++    mod kernel_read_lease_tests;
+     mod submission_identity_tests;
+     mod version_journal_tests;
+ 
+@@ -3597,6 +3644,20 @@ mod tests {
+         }
+     }
+ 
++    #[derive(Clone, Debug, Eq, PartialEq)]
++    struct MockPendingKernelReads {
++        stream: u64,
++        bindings: Vec<BackendBindingV1>,
++    }
++
++    #[derive(Debug, Eq, PartialEq)]
++    struct MockObservedKernelRead {
++        submission: u64,
++        ordinal: usize,
++        binding: BackendBindingV1,
++        bytes: Vec<u8>,
++    }
++
+     #[derive(Debug, Default)]
+     struct MockBackend {
+         next: u64,
+@@ -3616,6 +3677,10 @@ mod tests {
+         cancel_before_publication: bool,
+         deferred_copies: bool,
+         pending_copies: HashMap<u64, (u64, BackendMemoryRegionV1, BackendMemoryRegionV1)>,
++        deferred_kernel_reads: bool,
++        pending_kernel_reads: HashMap<u64, MockPendingKernelReads>,
++        observed_kernel_reads: Vec<MockObservedKernelRead>,
++        launch_failure: MockMemoryFailure,
+         copy_failure: MockMemoryFailure,
+         copy_call_count: usize,
+         write_call_count: usize,
+@@ -3809,12 +3874,30 @@ mod tests {
+                 .copy_from_slice(&bytes);
+         }
+ 
+-        fn finish_copy(&mut self, submission: u64, success: bool) {
++        fn finish_submission(&mut self, submission: u64, success: bool) {
+             if let Some((_, source, destination)) = self.pending_copies.remove(&submission)
+                 && success
+             {
+                 self.apply_copy(source, destination);
+             }
++            if let Some(pending) = self.pending_kernel_reads.remove(&submission)
++                && success
++            {
++                for (ordinal, binding) in pending.bindings.into_iter().enumerate() {
++                    if binding.region.access == RuntimeAccessV1::Write {
++                        continue;
++                    }
++                    let start = binding.region.byte_offset as usize;
++                    let end = start + binding.region.byte_len as usize;
++                    let bytes = self.memory[&binding.region.allocation][start..end].to_vec();
++                    self.observed_kernel_reads.push(MockObservedKernelRead {
++                        submission,
++                        ordinal,
++                        binding,
++                        bytes,
++                    });
++                }
++            }
+         }
+ 
+         fn submit_copy(
+@@ -3836,7 +3919,7 @@ mod tests {
+                 self.pending_copies
+                     .insert(identity, (stream, source, destination));
+                 if failure == MockMemoryFailure::Quiescent {
+-                    self.finish_copy(identity, true);
++                    self.finish_submission(identity, true);
+                 }
+             } else {
+                 self.apply_copy(source, destination);
+@@ -3927,13 +4010,18 @@ mod tests {
+                 self.cleanup_failure = MockCleanupFailure::None;
+                 return Err(RuntimeBackendFailureV1::Rejected(MockError("busy")));
+             }
+-            let copies: Vec<_> = self
++            let submissions: Vec<_> = self
+                 .pending_copies
+                 .iter()
+                 .filter_map(|(&id, (owner, _, _))| (*owner == stream).then_some(id))
++                .chain(
++                    self.pending_kernel_reads
++                        .iter()
++                        .filter_map(|(&id, pending)| (pending.stream == stream).then_some(id)),
++                )
+                 .collect();
+-            for id in copies {
+-                self.finish_copy(id, true);
++            for id in submissions {
++                self.finish_submission(id, true);
+             }
+             if self.cleanup_failure == MockCleanupFailure::QuiescentStreamOnce {
+                 self.cleanup_failure = MockCleanupFailure::None;
+@@ -4034,8 +4122,25 @@ mod tests {
+             self.submit_count += 1;
+             self.last_dependency_count = launch.dependencies.len();
+             self.last_launch_geometry = Some(launch.geometry);
++            let failure = core::mem::take(&mut self.launch_failure);
++            if failure == MockMemoryFailure::Rejected {
++                mock_memory_failure_v1(failure)?;
++            }
+             let identity = self.handle(MockHandleKind::Submission);
+             self.polls.insert(identity, 0);
++            if self.deferred_kernel_reads {
++                self.pending_kernel_reads.insert(
++                    identity,
++                    MockPendingKernelReads {
++                        stream: launch.stream,
++                        bindings: launch.bindings.to_vec(),
++                    },
++                );
++                if failure == MockMemoryFailure::Quiescent {
++                    self.finish_submission(identity, true);
++                }
++            }
++            mock_memory_failure_v1(failure)?;
+             Ok(identity)
+         }
+ 
+@@ -4049,7 +4154,7 @@ mod tests {
+             Ok(if *polls == 1 {
+                 BackendPollV1::Pending
+             } else {
+-                self.finish_copy(submission, true);
++                self.finish_submission(submission, true);
+                 BackendPollV1::Succeeded
+             })
+         }
+@@ -4071,7 +4176,7 @@ mod tests {
+                         )));
+                     }
+                     MockWaitFailure::QuiescentFirst => {
+-                        self.finish_copy(submission, false);
++                        self.finish_submission(submission, false);
+                         return Err(RuntimeBackendFailureV1::Quiescent(MockError(
+                             "wait quiescent",
+                         )));
+@@ -4085,7 +4190,7 @@ mod tests {
+             }
+             let observation = self.wait_observation.unwrap_or(BackendPollV1::Succeeded);
+             if observation != BackendPollV1::Pending {
+-                self.finish_copy(submission, observation == BackendPollV1::Succeeded);
++                self.finish_submission(submission, observation == BackendPollV1::Succeeded);
+             }
+             Ok(observation)
+         }
+@@ -4095,6 +4200,7 @@ mod tests {
+             submission: u64,
+         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+             assert!(!self.pending_copies.contains_key(&submission));
++            assert!(!self.pending_kernel_reads.contains_key(&submission));
+             self.cleanup_log
+                 .push((MockCleanupKind::Submission, submission));
+             self.polls.remove(&submission);
+@@ -4185,7 +4291,7 @@ mod tests {
+             self.last_cancelled_submission = Some(submission);
+             let failure = core::mem::take(&mut self.cancel_failure);
+             if failure == MockMemoryFailure::Quiescent {
+-                self.finish_copy(submission, false);
++                self.finish_submission(submission, false);
+             }
+             mock_memory_failure_v1(failure)?;
+             if !self.polls.contains_key(&submission) {
+@@ -4194,7 +4300,7 @@ mod tests {
+                 )));
+             }
+             Ok(if self.cancel_before_publication {
+-                self.finish_copy(submission, false);
++                self.finish_submission(submission, false);
+                 BackendCancellationV1::Cancelled
+             } else {
+                 BackendCancellationV1::TooLate
+diff --git a/crates/fe2o3-runtime/src/context/graph.rs b/crates/fe2o3-runtime/src/context/graph.rs
+index 4cf84c9e7..e199e0467 100644
+--- a/crates/fe2o3-runtime/src/context/graph.rs
++++ b/crates/fe2o3-runtime/src/context/graph.rs
+@@ -21,16 +21,10 @@ pub(crate) struct PreparedContextCopyV1 {
+     pub(super) source: BackendMemoryRegionV1,
+     pub(super) destination: BackendMemoryRegionV1,
+     pub(super) journal_destination: RuntimeAllocationIdV1,
+-    pub(super) journal_source: ContextCopySourceV1,
++    pub(super) journal_source: ContextReadSourceV1,
+     pub(super) backend_dependencies: Vec<u64>,
+ }
+ 
+-#[derive(Clone, Copy, Debug)]
+-pub(crate) struct ContextCopySourceV1 {
+-    pub(super) region: RuntimeMemoryRegionV1,
+-    pub(super) record: AllocationRecordV1,
+-}
+-
+ pub(crate) enum PreparedContextGraphActionV1 {
+     Launch(PreparedContextLaunchV1),
+     Copy(PreparedContextCopyV1),
+diff --git a/crates/fe2o3-runtime/src/context/tests/async_journal_tests.rs b/crates/fe2o3-runtime/src/context/tests/async_journal_tests.rs
+index 1e6228768..cd411d488 100644
+--- a/crates/fe2o3-runtime/src/context/tests/async_journal_tests.rs
++++ b/crates/fe2o3-runtime/src/context/tests/async_journal_tests.rs
+@@ -429,7 +429,7 @@ fn initial_no_handle_failures_settle_only_definite_rejection() {
+                 record,
+                 &[allocation],
+                 None,
+-                None,
++                &[],
+                 |backend| {
+                     backend.submit_count += 1;
+                     mock_memory_failure_v1(failure).map(|()| 0)
+diff --git a/crates/fe2o3-runtime/src/context/tests/copy_source_lease_tests.rs b/crates/fe2o3-runtime/src/context/tests/copy_source_lease_tests.rs
+index 27e311a80..7b6e06521 100644
+--- a/crates/fe2o3-runtime/src/context/tests/copy_source_lease_tests.rs
++++ b/crates/fe2o3-runtime/src/context/tests/copy_source_lease_tests.rs
+@@ -578,6 +578,7 @@ fn missing_or_substituted_copy_marker_cannot_publish_completion() {
+                     .journal_read
+                     .as_mut()
+                     .unwrap()
++                    .first
+                     .incarnation += 1
+             }
+             _ => f
+diff --git a/crates/fe2o3-runtime/src/context/tests/kernel_read_lease_tests.rs b/crates/fe2o3-runtime/src/context/tests/kernel_read_lease_tests.rs
+new file mode 100644
+index 000000000..755d967da
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/context/tests/kernel_read_lease_tests.rs
+@@ -0,0 +1,1249 @@
++use super::async_journal_tests::{MixedArguments, region, state};
++use super::*;
++
++type Context = RuntimeContextV1<MockBackend>;
++
++struct Fixture {
++    context: Context,
++    stream: RuntimeStreamIdV1,
++    allocations: [RuntimeAllocationIdV1; 3],
++    kernel: TypedRuntimeKernelV1<MixedArguments>,
++}
++
++fn pattern(buffer: usize) -> Vec<u8> {
++    (0..64).map(|index| (buffer * 71 + index) as u8).collect()
++}
++
++impl Fixture {
++    fn new(readers: usize) -> Self {
++        Self::with_journal(readers, true)
++    }
++
++    fn with_journal(readers: usize, journal: bool) -> Self {
++        Self::configured(readers, journal, true)
++    }
++
++    fn configured(readers: usize, journal: bool, credits: bool) -> Self {
++        let backend = MockBackend {
++            next: 100,
++            deferred_kernel_reads: true,
++            ..MockBackend::default()
++        };
++        let mut context = if journal {
++            Context::open_with_version_journal_v1(backend, 16, readers).unwrap()
++        } else {
++            Context::open(backend).unwrap()
++        };
++        let device = context.devices()[0].id();
++        if credits {
++            context
++                .configure_allocation_admission_v1(device, 1024, 16)
++                .unwrap();
++        }
++        let stream = context.create_stream(device).unwrap();
++        let allocations = core::array::from_fn(|index| {
++            let allocation = context
++                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
++                .unwrap();
++            context
++                .write_allocation(allocation, 0, &pattern(index))
++                .unwrap();
++            allocation
++        });
++        let module = context.load_module(device, b"read-inputs").unwrap();
++        let kernel = context
++            .resolve_kernel::<MixedArguments>(module, "read")
++            .unwrap();
++        Self {
++            context,
++            stream,
++            allocations,
++            kernel,
++        }
++    }
++
++    fn launch(
++        &mut self,
++        regions: Vec<RuntimeMemoryRegionV1>,
++    ) -> RuntimeSubmissionV1<MixedArguments> {
++        self.context
++            .launch(
++                self.stream,
++                &self.kernel,
++                &MixedArguments(regions),
++                geometry(),
++                &[],
++            )
++            .unwrap()
++    }
++
++    fn reads(&self) -> MixedArguments {
++        MixedArguments(
++            self.allocations[..2]
++                .iter()
++                .map(|&id| region(id, RuntimeAccessV1::Read, 8))
++                .collect(),
++        )
++    }
++
++    fn backend_bindings(&self, args: &MixedArguments) -> Vec<BackendBindingV1> {
++        args.bindings_v1()
++            .iter()
++            .map(|binding| BackendBindingV1 {
++                region: BackendMemoryRegionV1 {
++                    allocation: self.context.allocations[&binding.region.allocation]
++                        .backend_allocation,
++                    access: binding.region.access,
++                    byte_offset: binding.region.byte_offset,
++                    byte_len: binding.region.byte_len,
++                },
++                kernarg_byte_offset: binding.kernarg_byte_offset,
++            })
++            .collect()
++    }
++
++    fn assert_observed(&self, submission: u64, args: &MixedArguments) {
++        let bindings = self.backend_bindings(args);
++        let expected: Vec<_> = args
++            .0
++            .iter()
++            .enumerate()
++            .filter_map(|(ordinal, region)| {
++                if region.access == RuntimeAccessV1::Write {
++                    return None;
++                }
++                let buffer = self
++                    .allocations
++                    .iter()
++                    .position(|&id| id == region.allocation)
++                    .unwrap();
++                let start = region.byte_offset as usize;
++                let end = start + region.byte_len as usize;
++                Some(MockObservedKernelRead {
++                    submission,
++                    ordinal,
++                    binding: bindings[ordinal],
++                    bytes: pattern(buffer)[start..end].to_vec(),
++                })
++            })
++            .collect();
++        let actual: Vec<_> = self
++            .context
++            .backend
++            .observed_kernel_reads
++            .iter()
++            .filter(|read| read.submission == submission)
++            .collect();
++        assert_eq!(actual, expected.iter().collect::<Vec<_>>());
++    }
++}
++
++fn reserved<T>(result: Result<T, RuntimeErrorV1<MockError>>) {
++    assert!(matches!(
++        result,
++        Err(RuntimeErrorV1::Validation(
++            RuntimeValidationErrorV1::ContextReserved
++        ))
++    ));
++}
++
++#[test]
++fn pure_read_batch_preserves_ordered_bindings_and_excludes_whole_allocation_writes() {
++    let mut f = Fixture::new(4);
++    let [a, b, c] = f.allocations;
++    let args = MixedArguments(vec![
++        region(b, RuntimeAccessV1::Read, 24),
++        region(a, RuntimeAccessV1::Read, 0),
++        region(a, RuntimeAccessV1::Read, 4),
++        region(a, RuntimeAccessV1::Read, 32),
++        region(b, RuntimeAccessV1::Read, 24),
++    ]);
++    let bindings = f.backend_bindings(&args);
++    let mut submission = f.launch(args.0.clone());
++    assert!(
++        f.context.submissions[&submission.id]
++            .journal_writer
++            .is_none()
++    );
++    assert_eq!(f.context.version_journal_writer_records_v1(), Some(0));
++    assert_eq!(f.context.version_journal_read_records_v1(), Some(2));
++    assert_eq!(
++        f.context.backend.pending_kernel_reads[&submission.backend_submission].bindings,
++        bindings
++    );
++    assert!(f.context.backend.observed_kernel_reads.is_empty());
++    let marker = f.context.submissions[&submission.id].journal_read.unwrap();
++    assert_eq!(marker.count, 2);
++    let lease = f
++        .context
++        .versions
++        .as_mut()
++        .unwrap()
++        .read_leases_for_test_v1()
++        .lookup_read(marker.first)
++        .unwrap();
++    assert_eq!(lease.allocation.key.local, a.local);
++    assert_eq!((lease.byte_offset, lease.byte_len), (0, 64));
++    let before = (
++        f.context.next_identity,
++        f.context.backend.submit_count,
++        f.context.backend.write_call_count,
++        f.context.backend.cleanup_log.clone(),
++    );
++    for id in [a, b] {
++        reserved(f.context.write_allocation(id, 56, &[9]));
++        reserved(f.context.release_allocation(id));
++        reserved(f.context.launch(
++            f.stream,
++            &f.kernel,
++            &MixedArguments(vec![region(id, RuntimeAccessV1::Write, 0)]),
++            geometry(),
++            &[],
++        ));
++        reserved(f.context.copy_async(
++            f.stream,
++            region(c, RuntimeAccessV1::Read, 0),
++            region(id, RuntimeAccessV1::Write, 0),
++            &[],
++        ));
++    }
++    assert_eq!(
++        (
++            f.context.next_identity,
++            f.context.backend.submit_count,
++            f.context.backend.write_call_count,
++            f.context.backend.cleanup_log.clone()
++        ),
++        before
++    );
++    assert_eq!(f.context.backend.copy_call_count, 0);
++    assert_eq!(
++        f.context.poll(&mut submission).unwrap(),
++        RuntimePollV1::Pending
++    );
++    assert!(f.context.backend.observed_kernel_reads.is_empty());
++    f.context.wait(&mut submission, Duration::ZERO).unwrap();
++    f.assert_observed(submission.backend_submission, &args);
++    assert_eq!(f.context.version_journal_read_records_v1(), Some(0));
++    f.context.write_allocation(a, 56, &[9]).unwrap();
++    assert!(f.context.cleanup().is_complete());
++}
++
++#[test]
++fn mixed_aliases_use_one_writer_and_only_independent_readers() {
++    for access in [RuntimeAccessV1::Write, RuntimeAccessV1::ReadWrite] {
++        let mut f = Fixture::new(1);
++        let [a, b, _] = f.allocations;
++        let args = MixedArguments(vec![
++            region(a, RuntimeAccessV1::Read, 0),
++            region(b, RuntimeAccessV1::Read, 8),
++            region(a, access, 16),
++        ]);
++        let mut submission = f.launch(args.0.clone());
++        assert_eq!(f.context.version_journal_writer_records_v1(), Some(1));
++        assert_eq!(f.context.version_journal_read_records_v1(), Some(1));
++        assert!(state(&f.context, a).pending_writer.is_some());
++        assert!(state(&f.context, b).pending_writer.is_none());
++        let reference = f.context.submissions[&submission.id]
++            .journal_read
++            .unwrap()
++            .first;
++        let lease = f
++            .context
++            .versions
++            .as_mut()
++            .unwrap()
++            .read_leases_for_test_v1()
++            .lookup_read(reference)
++            .unwrap();
++        assert_eq!(lease.allocation.key.local, b.local);
++        f.context.wait(&mut submission, Duration::ZERO).unwrap();
++        f.assert_observed(submission.backend_submission, &args);
++        assert_eq!(state(&f.context, a).content_lineage, 2);
++        assert_eq!(state(&f.context, b).content_lineage, 1);
++        assert!(f.context.cleanup().is_complete());
++    }
++}
++
++#[test]
++fn reader_capacity_is_independent_and_batch_exhaustion_is_pre_issue() {
++    let mut f = Fixture::new(2);
++    let [a, b, c] = f.allocations;
++    let mut writer = f.launch(vec![region(a, RuntimeAccessV1::Write, 0)]);
++    let args = MixedArguments(vec![
++        region(b, RuntimeAccessV1::Read, 0),
++        region(c, RuntimeAccessV1::Read, 8),
++    ]);
++    let mut reader = f.launch(args.0.clone());
++    assert_eq!(f.context.version_journal_writer_records_v1(), Some(1));
++    assert_eq!(f.context.version_journal_read_records_v1(), Some(2));
++    let device = f.context.devices()[0].id();
++    let before = (
++        f.context.next_identity,
++        f.context.backend.submit_count,
++        f.context.allocation_admission_usage_v1(device).unwrap(),
++        state(&f.context, b),
++    );
++    assert!(matches!(
++        f.context
++            .launch(f.stream, &f.kernel, &args, geometry(), &[]),
++        Err(RuntimeErrorV1::Validation(
++            RuntimeValidationErrorV1::Capacity
++        ))
++    ));
++    assert_eq!(
++        (
++            f.context.next_identity,
++            f.context.backend.submit_count,
++            f.context.allocation_admission_usage_v1(device).unwrap(),
++            state(&f.context, b)
++        ),
++        before
++    );
++    f.context.wait(&mut reader, Duration::ZERO).unwrap();
++    let mut retry = f.launch(args.0.clone());
++    assert_eq!(f.context.version_journal_writer_records_v1(), Some(1));
++    f.context.wait(&mut retry, Duration::ZERO).unwrap();
++    f.context.wait(&mut writer, Duration::ZERO).unwrap();
++    f.assert_observed(reader.backend_submission, &args);
++    f.assert_observed(retry.backend_submission, &args);
++    assert!(f.context.cleanup().is_complete());
++}
++
++#[test]
++fn out_of_order_shared_readers_survive_stream_destruction_and_old_observers() {
++    let mut f = Fixture::new(3);
++    let args = MixedArguments(vec![region(f.allocations[0], RuntimeAccessV1::Read, 8)]);
++    let original_stream = f.stream;
++    let mut first = f.launch(args.0.clone());
++    f.stream = f
++        .context
++        .create_stream(f.context.devices()[0].id())
++        .unwrap();
++    let second = f.launch(args.0.clone());
++    f.context.destroy_stream(f.stream).unwrap();
++    f.assert_observed(second.backend_submission, &args);
++    assert!(
++        f.context
++            .backend
++            .pending_kernel_reads
++            .contains_key(&first.backend_submission)
++    );
++    assert_eq!(f.context.version_journal_read_records_v1(), Some(1));
++    reserved(f.context.release_allocation(f.allocations[0]));
++    f.context.wait(&mut first, Duration::ZERO).unwrap();
++    f.stream = original_stream;
++    let mut third = f.launch(args.0.clone());
++    let calls = f.context.backend.wait_call_count;
++    f.context.wait(&mut first, Duration::ZERO).unwrap();
++    assert_eq!(f.context.backend.wait_call_count, calls);
++    assert_eq!(f.context.version_journal_read_records_v1(), Some(1));
++    reserved(f.context.write_allocation(f.allocations[0], 0, &[9]));
++    f.context.wait(&mut third, Duration::ZERO).unwrap();
++    f.assert_observed(first.backend_submission, &args);
++    f.assert_observed(third.backend_submission, &args);
++    assert!(f.context.cleanup().is_complete());
++}
++
++#[test]
++fn initial_read_only_failures_keep_original_diagnostics_and_exact_source_custody() {
++    for failure in [
++        MockMemoryFailure::Rejected,
++        MockMemoryFailure::Quiescent,
++        MockMemoryFailure::Terminal,
++        MockMemoryFailure::Panic,
++    ] {
++        let mut f = Fixture::new(2);
++        let args = f.reads();
++        f.context.backend.launch_failure = failure;
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            f.context
++                .launch(f.stream, &f.kernel, &args, geometry(), &[])
++        }));
++        match (failure, result) {
++            (MockMemoryFailure::Rejected, Ok(Err(RuntimeErrorV1::BackendRejected(error)))) => {
++                assert_eq!(error.0, "allocation rejected")
++            }
++            (MockMemoryFailure::Quiescent, Ok(Err(RuntimeErrorV1::BackendQuiescent(error)))) => {
++                assert_eq!(error.0, "allocation quiescent failure")
++            }
++            (MockMemoryFailure::Terminal, Ok(Err(RuntimeErrorV1::BackendTerminal(error)))) => {
++                assert_eq!(error.0, "allocation terminal failure")
++            }
++            (MockMemoryFailure::Panic, Err(payload)) => assert_eq!(
++                payload.downcast_ref::<&str>(),
++                Some(&"scripted allocation adapter panic")
++            ),
++            _ => panic!("original launch failure replaced"),
++        }
++        let retained = matches!(
++            failure,
++            MockMemoryFailure::Terminal | MockMemoryFailure::Panic
++        );
++        assert_eq!(f.context.is_terminal(), retained);
++        assert!(f.context.submissions.is_empty());
++        assert_eq!(f.context.version_journal_writer_records_v1(), Some(0));
++        assert_eq!(
++            f.context.version_journal_read_records_v1(),
++            Some(if retained { 2 } else { 0 })
++        );
++        let usage = f
++            .context
++            .allocation_admission_usage_v1(f.context.devices()[0].id())
++            .unwrap()
++            .unwrap();
++        assert_eq!(usage.quarantined_records, if retained { 2 } else { 0 });
++        assert_eq!(
++            usage
++                .used
++                .get(crate::RuntimeResourceKindV1::AllocationRecords),
++            3
++        );
++        assert_eq!(
++            usage
++                .used
++                .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
++            192
++        );
++        if retained {
++            let pending = f.context.backend.pending_kernel_reads.clone();
++            assert_eq!(pending.len(), 1);
++            assert_eq!(
++                pending.values().next().unwrap().bindings,
++                f.backend_bindings(&args)
++            );
++            assert!(f.context.backend.observed_kernel_reads.is_empty());
++            for _ in 0..2 {
++                let report = f.context.cleanup();
++                assert!(!report.is_complete());
++                assert_eq!(report.reader_journal_records_v1(), 2);
++            }
++            assert_eq!(f.context.backend.pending_kernel_reads, pending);
++            assert!(f.context.backend.cleanup_log.is_empty());
++        } else {
++            assert!(f.context.backend.pending_kernel_reads.is_empty());
++            if failure == MockMemoryFailure::Quiescent {
++                f.assert_observed(f.context.backend.next, &args);
++            } else {
++                assert!(f.context.backend.observed_kernel_reads.is_empty());
++                assert!(f.context.backend.polls.is_empty());
++            }
++            f.context
++                .write_allocation(f.allocations[0], 0, &[9])
++                .unwrap();
++            assert!(f.context.cleanup().is_complete());
++        }
++    }
++}
++
++#[test]
++fn every_exact_completion_route_releases_read_only_batch() {
++    for route in 0..7 {
++        let mut f = Fixture::new(2);
++        let args = f.reads();
++        let mut submission = f.launch(args.0.clone());
++        match route {
++            0 => {
++                f.context.poll(&mut submission).unwrap();
++                f.context.poll(&mut submission).unwrap();
++            }
++            1 => {
++                f.context.wait(&mut submission, Duration::ZERO).unwrap();
++            }
++            2 => {
++                let event = f.context.record_event(&submission).unwrap();
++                f.context.wait_event(event, Duration::ZERO).unwrap();
++            }
++            3 => {
++                f.context
++                    .drain(&mut submission, Instant::now() + Duration::from_secs(1))
++                    .unwrap();
++            }
++            4 => {
++                f.context
++                    .synchronize_stream(f.stream, Duration::ZERO)
++                    .unwrap();
++            }
++            5 => {
++                f.context.destroy_stream(f.stream).unwrap();
++            }
++            _ => {
++                f.context.backend.cleanup_failure = MockCleanupFailure::QuiescentStreamOnce;
++                assert!(matches!(
++                    f.context.destroy_stream(f.stream),
++                    Err(RuntimeErrorV1::BackendQuiescent(_))
++                ));
++            }
++        }
++        f.assert_observed(submission.backend_submission, &args);
++        assert_eq!(f.context.version_journal_read_records_v1(), Some(0));
++        f.context
++            .write_allocation(f.allocations[0], 0, &[9])
++            .unwrap();
++        assert!(f.context.cleanup().is_complete());
++    }
++}
++
++#[test]
++fn failed_quiescent_and_cancelled_readers_release_without_observing_inputs() {
++    for route in 0..4 {
++        let mut f = Fixture::new(2);
++        let args = f.reads();
++        let before = state(&f.context, f.allocations[0]);
++        let mut submission = f.launch(args.0.clone());
++        match route {
++            0 => {
++                f.context.backend.wait_observation = Some(BackendPollV1::Failed { code: -9 });
++                assert_eq!(
++                    f.context.wait(&mut submission, Duration::ZERO).unwrap(),
++                    RuntimePollV1::Failed { code: -9 }
++                );
++            }
++            1 => {
++                f.context.backend.first_wait_failure = MockWaitFailure::QuiescentFirst;
++                assert!(matches!(
++                    f.context.wait(&mut submission, Duration::ZERO),
++                    Err(RuntimeErrorV1::BackendQuiescent(_))
++                ));
++            }
++            2 => {
++                f.context.backend.cancel_failure = MockMemoryFailure::Quiescent;
++                assert!(matches!(
++                    f.context.cancel(&mut submission),
++                    Err(RuntimeErrorV1::BackendQuiescent(_))
++                ));
++            }
++            _ => {
++                f.context.backend.cancel_before_publication = true;
++                assert_eq!(
++                    f.context.cancel(&mut submission).unwrap(),
++                    RuntimeCancellationV1::Cancelled
++                );
++            }
++        }
++        assert_eq!(state(&f.context, f.allocations[0]), before);
++        assert_eq!(f.context.version_journal_read_records_v1(), Some(0));
++        assert!(f.context.backend.observed_kernel_reads.is_empty());
++        assert!(f.context.backend.pending_kernel_reads.is_empty());
++        assert!(f.context.cleanup().is_complete());
++    }
++}
++
++#[test]
++fn pending_rejected_and_too_late_observations_keep_read_only_inputs() {
++    let mut f = Fixture::new(2);
++    let args = f.reads();
++    let mut submission = f.launch(args.0.clone());
++    f.context.backend.first_wait_failure = MockWaitFailure::RejectFirst;
++    assert!(matches!(
++        f.context.wait(&mut submission, Duration::ZERO),
++        Err(RuntimeErrorV1::BackendRejected(_))
++    ));
++    f.context.backend.wait_observation = Some(BackendPollV1::Pending);
++    assert_eq!(
++        f.context.wait(&mut submission, Duration::ZERO).unwrap(),
++        RuntimePollV1::Pending
++    );
++    assert_eq!(
++        f.context.cancel(&mut submission).unwrap(),
++        RuntimeCancellationV1::TooLate
++    );
++    assert_eq!(f.context.version_journal_read_records_v1(), Some(2));
++    assert!(f.context.backend.observed_kernel_reads.is_empty());
++    reserved(f.context.write_allocation(f.allocations[0], 0, &[9]));
++    f.context.backend.wait_observation = None;
++    f.context.wait(&mut submission, Duration::ZERO).unwrap();
++    f.assert_observed(submission.backend_submission, &args);
++    assert!(f.context.cleanup().is_complete());
++}
++
++#[test]
++fn corrupted_batch_member_or_marker_retains_all_leases_atomically() {
++    for corruption in 0..6 {
++        let mut f = Fixture::new(3);
++        let args = MixedArguments(
++            f.allocations
++                .iter()
++                .map(|&id| region(id, RuntimeAccessV1::Read, 0))
++                .collect(),
++        );
++        let mut submission = f.launch(args.0.clone());
++        f.context
++            .on_completion(&submission, |_| panic!("must not notify corrupt reader"))
++            .unwrap();
++        match corruption {
++            0 => f
++                .context
++                .versions
++                .as_mut()
++                .unwrap()
++                .remove_submission_readers_for_test_v1(submission.id),
++            1 => {
++                f.context
++                    .submissions
++                    .get_mut(&submission.id)
++                    .unwrap()
++                    .journal_read
++                    .as_mut()
++                    .unwrap()
++                    .count -= 1
++            }
++            2 => {
++                f.context
++                    .submissions
++                    .get_mut(&submission.id)
++                    .unwrap()
++                    .journal_read
++                    .as_mut()
++                    .unwrap()
++                    .first
++                    .consumer
++                    .local += 1
++            }
++            index => f
++                .context
++                .versions
++                .as_mut()
++                .unwrap()
++                .corrupt_submission_read_reference_for_test_v1(submission.id, index - 3),
++        }
++        assert!(matches!(
++            f.context.wait(&mut submission, Duration::ZERO),
++            Err(RuntimeErrorV1::Validation(
++                RuntimeValidationErrorV1::InvalidBackendDescription
++            ))
++        ));
++        assert!(f.context.is_terminal());
++        assert_eq!(f.context.completion_callback_panic_count(), 0);
++        assert_eq!(f.context.version_journal_read_records_v1(), Some(3));
++        assert_eq!(
++            f.context.submissions[&submission.id].status,
++            RuntimeCompletionStatusV1::Pending
++        );
++        let report = f.context.cleanup();
++        assert!(!report.is_complete());
++        assert_eq!(report.reader_journal_records_v1(), 3);
++    }
++}
++
++#[test]
++fn prepared_reader_rejects_stale_identity_even_without_journal() {
++    for journal in [false, true] {
++        for writable_alias in [false, true] {
++            let mut f = Fixture::with_journal(2, journal);
++            let mut args = f.reads();
++            if writable_alias {
++                args.0
++                    .push(region(f.allocations[0], RuntimeAccessV1::Write, 16));
++            }
++            let action = f
++                .context
++                .prepare_graph_launch_v1(
++                    f.stream,
++                    &f.kernel,
++                    &args.encode_explicit_kernarg_v1(),
++                    &args.bindings_v1(),
++                    geometry(),
++                )
++                .unwrap();
++            let old = f.allocations[0];
++            let backend_id = f.context.allocations[&old].backend_allocation;
++            f.context.release_allocation(old).unwrap();
++            f.context.backend.handle_override = Some((MockHandleKind::Allocation, backend_id));
++            let replacement = f
++                .context
++                .allocate(
++                    f.context.devices()[0].id(),
++                    RuntimeMemoryKindV1::DeviceLocal,
++                    64,
++                    16,
++                )
++                .unwrap();
++            assert_ne!(old, replacement);
++            let token = f.context.reserve_graph_v1(1).unwrap();
++            let before = (f.context.next_identity, f.context.backend.submit_count);
++            assert!(matches!(
++                f.context.submit_graph_action_v1(token, action),
++                Err(RuntimeErrorV1::Validation(
++                    RuntimeValidationErrorV1::UnknownAllocation
++                ))
++            ));
++            assert_eq!(
++                (f.context.next_identity, f.context.backend.submit_count),
++                before
++            );
++            assert_eq!(
++                f.context.version_journal_read_records_v1(),
++                journal.then_some(0)
++            );
++            f.context.close_graph_issue_v1(token).unwrap();
++            f.context.release_graph_v1(token).unwrap();
++            assert!(f.context.cleanup().is_complete());
++        }
++    }
++}
++
++#[test]
++fn partial_reader_headroom_rejects_entire_batch_before_issue() {
++    let mut f = Fixture::new(2);
++    let [a, b, c] = f.allocations;
++    let mut held = f.launch(vec![region(a, RuntimeAccessV1::Read, 0)]);
++    let args = MixedArguments(vec![
++        region(b, RuntimeAccessV1::Read, 0),
++        region(c, RuntimeAccessV1::Read, 0),
++    ]);
++    let before = (
++        f.context.next_identity,
++        f.context.backend.submit_count,
++        f.context.version_journal_usage_v1(),
++    );
++    assert!(matches!(
++        f.context
++            .launch(f.stream, &f.kernel, &args, geometry(), &[]),
++        Err(RuntimeErrorV1::Validation(
++            RuntimeValidationErrorV1::Capacity
++        ))
++    ));
++    assert_eq!(
++        (
++            f.context.next_identity,
++            f.context.backend.submit_count,
++            f.context.version_journal_usage_v1()
++        ),
++        before
++    );
++    assert_eq!(f.context.version_journal_read_records_v1(), Some(1));
++    assert_eq!(f.context.submissions.len(), 1);
++    f.context.write_allocation(b, 0, &[9]).unwrap();
++    f.context.write_allocation(c, 0, &[9]).unwrap();
++    f.context.wait(&mut held, Duration::ZERO).unwrap();
++    assert!(f.context.cleanup().is_complete());
++}
++
++#[test]
++fn busy_middle_or_last_reader_rejects_batch_without_partial_custody() {
++    for index in [1, 2] {
++        for unknown in [false, true] {
++            let mut f = Fixture::new(4);
++            let busy = f.allocations[index];
++            let mut writer = f.launch(vec![region(busy, RuntimeAccessV1::Write, 0)]);
++            if unknown {
++                f.context.backend.wait_observation = Some(BackendPollV1::Failed { code: -1 });
++                f.context.wait(&mut writer, Duration::ZERO).unwrap();
++            }
++            let args = MixedArguments(
++                f.allocations
++                    .iter()
++                    .map(|&id| region(id, RuntimeAccessV1::Read, 0))
++                    .collect(),
++            );
++            let before = (
++                f.context.next_identity,
++                f.context.backend.submit_count,
++                f.context.version_journal_usage_v1(),
++                state(&f.context, busy),
++            );
++            reserved(
++                f.context
++                    .launch(f.stream, &f.kernel, &args, geometry(), &[]),
++            );
++            assert_eq!(
++                (
++                    f.context.next_identity,
++                    f.context.backend.submit_count,
++                    f.context.version_journal_usage_v1(),
++                    state(&f.context, busy)
++                ),
++                before
++            );
++            assert_eq!(f.context.version_journal_read_records_v1(), Some(0));
++            assert_eq!(f.context.version_journal_writer_records_v1(), Some(1));
++            for id in f.allocations {
++                if id != busy {
++                    f.context.write_allocation(id, 0, &[9]).unwrap();
++                }
++            }
++            if !unknown {
++                f.context.wait(&mut writer, Duration::ZERO).unwrap();
++            }
++            assert!(f.context.cleanup().is_complete());
++        }
++    }
++}
++
++#[test]
++fn unknown_writer_disposal_rejects_retained_reader_marker_without_root() {
++    let mut f = Fixture::new(2);
++    let [a, b, _] = f.allocations;
++    let mut submission = f.launch(vec![
++        region(a, RuntimeAccessV1::Write, 0),
++        region(b, RuntimeAccessV1::Read, 0),
++    ]);
++    let original_marker = f.context.submissions[&submission.id].journal_read;
++    f.context.backend.wait_observation = Some(BackendPollV1::Failed { code: -1 });
++    f.context.wait(&mut submission, Duration::ZERO).unwrap();
++    assert_eq!(f.context.version_journal_read_records_v1(), Some(0));
++    f.context
++        .submissions
++        .get_mut(&submission.id)
++        .unwrap()
++        .journal_read = original_marker;
++    let before = (
++        f.context.backend.cleanup_log.clone(),
++        f.context
++            .allocation_admission_usage_v1(f.context.devices()[0].id())
++            .unwrap()
++            .unwrap()
++            .used,
++        state(&f.context, a),
++    );
++    assert!(matches!(
++        f.context.release_allocation(a),
++        Err(RuntimeErrorV1::Validation(
++            RuntimeValidationErrorV1::InvalidBackendDescription
++        ))
++    ));
++    assert_eq!(
++        (
++            f.context.backend.cleanup_log.clone(),
++            f.context
++                .allocation_admission_usage_v1(f.context.devices()[0].id())
++                .unwrap()
++                .unwrap()
++                .used,
++            state(&f.context, a)
++        ),
++        before
++    );
++    assert!(f.context.is_terminal());
++    assert!(!f.context.cleanup().is_complete());
++}
++
++#[test]
++fn graph_reads_capture_version_at_issue_after_predecessor_settlement() {
++    let mut f = Fixture::new(2);
++    let a = f.allocations[0];
++    let args = MixedArguments(vec![region(a, RuntimeAccessV1::Read, 8)]);
++    let writer = MixedArguments(vec![region(a, RuntimeAccessV1::Write, 0)]);
++    let read_action = f
++        .context
++        .prepare_graph_launch_v1(
++            f.stream,
++            &f.kernel,
++            &args.encode_explicit_kernarg_v1(),
++            &args.bindings_v1(),
++            geometry(),
++        )
++        .unwrap();
++    let write_action = f
++        .context
++        .prepare_graph_launch_v1(
++            f.stream,
++            &f.kernel,
++            &writer.encode_explicit_kernarg_v1(),
++            &writer.bindings_v1(),
++            geometry(),
++        )
++        .unwrap();
++    let before = state(&f.context, a);
++    let reservation = f.context.reserve_graph_v1(2).unwrap();
++    let mut write = f
++        .context
++        .submit_graph_action_v1(reservation, write_action)
++        .unwrap();
++    assert_eq!(
++        f.context
++            .poll_with_graph_access_v1(&mut write, Some(reservation))
++            .unwrap(),
++        RuntimePollV1::Pending
++    );
++    assert_eq!(
++        f.context
++            .poll_with_graph_access_v1(&mut write, Some(reservation))
++            .unwrap(),
++        RuntimePollV1::Succeeded
++    );
++    f.context
++        .release_graph_submission_v1(reservation, &write)
++        .unwrap();
++    let after = state(&f.context, a);
++    assert_eq!(after.attempt_epoch, before.attempt_epoch + 1);
++    assert_eq!(after.content_lineage, before.content_lineage + 1);
++    let mut read = f
++        .context
++        .submit_graph_action_v1(reservation, read_action)
++        .unwrap();
++    let marker = f.context.submissions[&read.id].journal_read.unwrap();
++    let lease = f
++        .context
++        .versions
++        .as_mut()
++        .unwrap()
++        .read_leases_for_test_v1()
++        .lookup_read(marker.first)
++        .unwrap();
++    assert_eq!(lease.attempt_epoch, after.attempt_epoch);
++    assert_eq!(lease.content_lineage, after.content_lineage);
++    assert_eq!(
++        f.context
++            .poll_with_graph_access_v1(&mut read, Some(reservation))
++            .unwrap(),
++        RuntimePollV1::Pending
++    );
++    assert_eq!(
++        f.context
++            .poll_with_graph_access_v1(&mut read, Some(reservation))
++            .unwrap(),
++        RuntimePollV1::Succeeded
++    );
++    f.assert_observed(read.backend_submission, &args);
++    f.context
++        .release_graph_submission_v1(reservation, &read)
++        .unwrap();
++    f.context.close_graph_issue_v1(reservation).unwrap();
++    f.context.release_graph_v1(reservation).unwrap();
++    assert_eq!(f.context.version_journal_read_records_v1(), Some(0));
++    assert!(f.context.cleanup().is_complete());
++}
++
++impl RuntimeAtomicArgumentsV1 for MixedArguments {
++    const OPERATION_V1: RuntimeAtomicOperationV1 = RuntimeAtomicOperationV1::Add;
++    const SCOPE_V1: RuntimeMemoryScopeV1 = RuntimeMemoryScopeV1::Workgroup;
++    const ORDER_V1: RuntimeMemoryOrderV1 = RuntimeMemoryOrderV1::Relaxed;
++}
++
++impl RuntimeCollectiveArgumentsV1 for MixedArguments {
++    const OPERATION_V1: RuntimeCollectiveOperationV1 = RuntimeCollectiveOperationV1::ReduceSum;
++    const SCOPE_V1: RuntimeMemoryScopeV1 = RuntimeMemoryScopeV1::Workgroup;
++    const ORDER_V1: RuntimeMemoryOrderV1 = RuntimeMemoryOrderV1::AcquireRelease;
++}
++
++fn finish_forwarded<A>(
++    mut f: Fixture,
++    mut submission: RuntimeSubmissionV1<A>,
++    args: MixedArguments,
++) {
++    assert_eq!(f.context.version_journal_read_records_v1(), Some(2));
++    assert_eq!(
++        f.context.backend.pending_kernel_reads[&submission.backend_submission].bindings,
++        f.backend_bindings(&args)
++    );
++    reserved(f.context.write_allocation(f.allocations[0], 0, &[9]));
++    f.context.wait(&mut submission, Duration::ZERO).unwrap();
++    f.assert_observed(submission.backend_submission, &args);
++    assert_eq!(f.context.version_journal_read_records_v1(), Some(0));
++    assert!(f.context.cleanup().is_complete());
++}
++
++#[test]
++fn snapshot_atomic_and_collective_routes_forward_input_custody() {
++    let mut f = Fixture::new(2);
++    let args = f.reads();
++    let submission = f
++        .context
++        .launch_snapshot_v1(
++            f.stream,
++            &f.kernel,
++            &args.encode_explicit_kernarg_v1(),
++            &args.bindings_v1(),
++            geometry(),
++            &[],
++        )
++        .unwrap();
++    finish_forwarded(f, submission, args);
++
++    let mut f = Fixture::new(2);
++    f.context.backend.execution_capabilities.atomics = true;
++    let args = f.reads();
++    let contract = RuntimeAtomicLaunchContractV1 {
++        operation: RuntimeAtomicOperationV1::Add,
++        scope: RuntimeMemoryScopeV1::Workgroup,
++        order: RuntimeMemoryOrderV1::Relaxed,
++        failure_order: None,
++        weak: false,
++        geometry: geometry(),
++    };
++    let submission = f
++        .context
++        .launch_atomic(f.stream, &f.kernel, &args, contract, &[])
++        .unwrap();
++    assert_eq!(f.context.backend.last_atomic_contract, Some(contract));
++    finish_forwarded(f, submission, args);
++
++    let mut f = Fixture::new(2);
++    f.context.backend.execution_capabilities.collectives = true;
++    let args = f.reads();
++    let contract = RuntimeCollectiveLaunchContractV1 {
++        operation: RuntimeCollectiveOperationV1::ReduceSum,
++        scope: RuntimeMemoryScopeV1::Workgroup,
++        order: RuntimeMemoryOrderV1::AcquireRelease,
++        participants: 64,
++        geometry: geometry(),
++    };
++    let submission = f
++        .context
++        .launch_collective(f.stream, &f.kernel, &args, contract, &[])
++        .unwrap();
++    assert_eq!(f.context.backend.last_collective_contract, Some(contract));
++    finish_forwarded(f, submission, args);
++}
++
++#[test]
++fn malformed_read_only_handles_retain_all_consumers_and_charge_each_source_once() {
++    for duplicate in [false, true] {
++        let mut f = Fixture::new(4);
++        let args = f.reads();
++        let handle = if duplicate {
++            let first = f.launch(args.0.clone());
++            f.context
++                .on_completion(&first, |_| panic!("ambiguous handle must not notify"))
++                .unwrap();
++            first.backend_submission
++        } else {
++            0
++        };
++        f.context.backend.handle_override = Some((MockHandleKind::Submission, handle));
++        assert!(matches!(
++            f.context
++                .launch(f.stream, &f.kernel, &args, geometry(), &[]),
++            Err(RuntimeErrorV1::BackendProtocol(_))
++        ));
++        assert!(f.context.is_terminal());
++        assert_eq!(f.context.version_journal_writer_records_v1(), Some(0));
++        let retained = 2 * (1 + usize::from(duplicate));
++        assert_eq!(f.context.version_journal_read_records_v1(), Some(retained));
++        assert!(f.context.backend.observed_kernel_reads.is_empty());
++        let usage = f
++            .context
++            .allocation_admission_usage_v1(f.context.devices()[0].id())
++            .unwrap()
++            .unwrap();
++        assert_eq!(usage.quarantined_records, 2);
++        assert_eq!(
++            usage
++                .used
++                .get(crate::RuntimeResourceKindV1::AllocationRecords),
++            3
++        );
++        assert_eq!(
++            usage
++                .used
++                .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
++            192
++        );
++        let pending = f.context.backend.pending_kernel_reads.clone();
++        assert_eq!(pending[&handle].bindings, f.backend_bindings(&args));
++        for _ in 0..2 {
++            let report = f.context.cleanup();
++            assert!(!report.is_complete());
++            assert_eq!(report.reader_journal_records_v1(), retained);
++        }
++        assert_eq!(f.context.completion_callback_panic_count(), 0);
++        assert_eq!(f.context.backend.pending_kernel_reads, pending);
++        assert!(f.context.backend.cleanup_log.is_empty());
++    }
++}
++
++#[test]
++fn ambiguous_observation_keeps_pure_readers_with_or_without_admission_credits() {
++    for credits in [false, true] {
++        for route in 0..3 {
++            let mut f = Fixture::configured(2, true, credits);
++            let args = f.reads();
++            let mut submission = f.launch(args.0.clone());
++            let result = catch_unwind(AssertUnwindSafe(|| match route {
++                0 => {
++                    f.context.backend.first_wait_failure = MockWaitFailure::TerminalFirst;
++                    f.context.wait(&mut submission, Duration::ZERO).map(|_| ())
++                }
++                _ => {
++                    f.context.backend.cancel_failure = if route == 1 {
++                        MockMemoryFailure::Terminal
++                    } else {
++                        MockMemoryFailure::Panic
++                    };
++                    f.context.cancel(&mut submission).map(|_| ())
++                }
++            }));
++            match (route, result) {
++                (0, Ok(Err(RuntimeErrorV1::BackendTerminal(error)))) => {
++                    assert_eq!(error.0, "wait terminal")
++                }
++                (1, Ok(Err(RuntimeErrorV1::BackendTerminal(error)))) => {
++                    assert_eq!(error.0, "allocation terminal failure")
++                }
++                (2, Err(payload)) => assert_eq!(
++                    payload.downcast_ref::<&str>(),
++                    Some(&"scripted allocation adapter panic")
++                ),
++                _ => panic!("original observation failure was replaced"),
++            }
++            assert!(f.context.is_terminal());
++            assert_eq!(f.context.version_journal_read_records_v1(), Some(2));
++            assert_eq!(f.context.version_journal_writer_records_v1(), Some(0));
++            assert!(f.context.backend.observed_kernel_reads.is_empty());
++            let pending = f.context.backend.pending_kernel_reads.clone();
++            assert_eq!(
++                pending[&submission.backend_submission].bindings,
++                f.backend_bindings(&args)
++            );
++            let usage = f
++                .context
++                .allocation_admission_usage_v1(f.context.devices()[0].id())
++                .unwrap();
++            if credits {
++                let usage = usage.unwrap();
++                assert_eq!(usage.quarantined_records, 2);
++                assert_eq!(
++                    usage
++                        .used
++                        .get(crate::RuntimeResourceKindV1::AllocationRecords),
++                    3
++                );
++            } else {
++                assert!(usage.is_none());
++            }
++            assert!(!f.context.cleanup().is_complete());
++            assert!(!f.context.cleanup().is_complete());
++            assert_eq!(f.context.backend.pending_kernel_reads, pending);
++            assert!(f.context.backend.cleanup_log.is_empty());
++        }
++    }
++}
++
++#[test]
++fn callback_panic_and_repeated_observation_cannot_release_a_later_read_batch() {
++    let mut f = Fixture::new(2);
++    let args = f.reads();
++    let mut first = f.launch(args.0.clone());
++    f.context
++        .on_completion(&first, |status| {
++            assert_eq!(status, RuntimeCompletionStatusV1::Succeeded);
++            panic!("after kernel read completion");
++        })
++        .unwrap();
++    f.context.wait(&mut first, Duration::ZERO).unwrap();
++    f.assert_observed(first.backend_submission, &args);
++    assert_eq!(f.context.version_journal_read_records_v1(), Some(0));
++    assert_eq!(f.context.completion_callback_panic_count(), 1);
++    let mut next = f.launch(args.0.clone());
++    let calls = f.context.backend.wait_call_count;
++    f.context.wait(&mut first, Duration::ZERO).unwrap();
++    assert_eq!(f.context.backend.wait_call_count, calls);
++    assert_eq!(f.context.version_journal_read_records_v1(), Some(2));
++    assert_eq!(f.context.completion_callback_panic_count(), 1);
++    f.context.wait(&mut next, Duration::ZERO).unwrap();
++    f.assert_observed(next.backend_submission, &args);
++    assert!(f.context.cleanup().is_complete());
++}
++
++#[test]
++fn dropped_reader_token_keeps_inputs_until_cleanup_quiesces_its_stream() {
++    for credits in [false, true] {
++        let mut f = Fixture::configured(2, true, credits);
++        let args = f.reads();
++        let backend_submission = {
++            let submission = f.launch(args.0.clone());
++            submission.backend_submission
++        };
++        assert_eq!(f.context.version_journal_read_records_v1(), Some(2));
++        assert!(f.context.backend.observed_kernel_reads.is_empty());
++        reserved(f.context.release_allocation(f.allocations[0]));
++        let bindings = f.backend_bindings(&args);
++        let report = f.context.cleanup();
++        assert!(report.is_complete());
++        assert_eq!(report.reader_journal_records_v1(), 0);
++        assert!(f.context.backend.pending_kernel_reads.is_empty());
++        let expected: Vec<_> = bindings
++            .into_iter()
++            .enumerate()
++            .map(|(ordinal, binding)| MockObservedKernelRead {
++                submission: backend_submission,
++                ordinal,
++                binding,
++                bytes: pattern(ordinal)[8..16].to_vec(),
++            })
++            .collect();
++        assert_eq!(f.context.backend.observed_kernel_reads, expected);
++        assert!(f.context.backend.memory.is_empty());
++    }
++}
++
++#[test]
++fn stale_internal_preparation_retains_provisional_root_before_any_backend_submission() {
++    let mut f = Fixture::new(2);
++    let sources: Vec<_> = f.allocations[..2]
++        .iter()
++        .map(|&id| ContextReadSourceV1 {
++            region: RuntimeMemoryRegionV1 {
++                allocation: id,
++                access: RuntimeAccessV1::Read,
++                byte_offset: 0,
++                byte_len: 64,
++            },
++            record: f.context.allocations[&id],
++        })
++        .collect();
++    let prepared = f.context.prepare_submission_readers_v1(&sources).unwrap();
++    // Deliberately split the private preflight/Begin phases; no public race is claimed.
++    f.context
++        .write_allocation(f.allocations[0], 0, &[9])
++        .unwrap();
++    let neighbor = state(&f.context, f.allocations[2]);
++    let id = RuntimeSubmissionIdV1::new(f.context.context_generation, f.context.next_id().unwrap());
++    assert_eq!(
++        f.context
++            .begin_submission_readers_v1(id, prepared)
++            .unwrap_err(),
++        RuntimeValidationErrorV1::InvalidBackendDescription
++    );
++    assert!(f.context.is_terminal());
++    assert!(f.context.submissions.is_empty());
++    assert_eq!(f.context.backend.submit_count, 0);
++    assert_eq!(f.context.version_journal_read_records_v1(), Some(1));
++    assert_eq!(
++        f.context
++            .versions
++            .as_mut()
++            .unwrap()
++            .read_leases_for_test_v1()
++            .retained_read_count(),
++        0
++    );
++    let originals = f
++        .context
++        .versions
++        .as_ref()
++        .unwrap()
++        .submission_reader_sources_for_test_v1(id);
++    assert_eq!(originals.len(), sources.len());
++    for (actual, expected) in originals.iter().zip(&sources) {
++        assert_eq!(actual.region, expected.region);
++        assert_eq!(actual.record, expected.record);
++    }
++    let usage = f
++        .context
++        .allocation_admission_usage_v1(f.context.devices()[0].id())
++        .unwrap()
++        .unwrap();
++    assert_eq!(usage.quarantined_records, 2);
++    assert_eq!(
++        usage
++            .used
++            .get(crate::RuntimeResourceKindV1::AllocationRecords),
++        3
++    );
++    assert_eq!(
++        usage
++            .used
++            .get(crate::RuntimeResourceKindV1::RequestedAllocationBytes),
++        192
++    );
++    assert_eq!(state(&f.context, f.allocations[2]), neighbor);
++    for _ in 0..2 {
++        let report = f.context.cleanup();
++        assert!(!report.is_complete());
++        assert_eq!(report.reader_journal_records_v1(), 1);
++    }
++    assert!(f.context.backend.cleanup_log.is_empty());
++}
+diff --git a/crates/fe2o3-runtime/src/context/versions.rs b/crates/fe2o3-runtime/src/context/versions.rs
+index 0a85abe4d..a14d7aabc 100644
+--- a/crates/fe2o3-runtime/src/context/versions.rs
++++ b/crates/fe2o3-runtime/src/context/versions.rs
+@@ -13,6 +13,7 @@ mod readers;
+ mod submission_disposal;
+ mod submissions;
+ mod writers;
++pub(super) use readers::{ContextReadSourceV1, SubmissionReaderMarkerV1};
+ pub(super) use submissions::{SubmissionWriterDomainV1, SubmissionWriterOutcomeV1};
+ 
+ /// Bounded journal metadata counts, not residency, initializedness or data versions.
+@@ -62,6 +63,7 @@ pub(super) struct ContextVersionsV1 {
+     journal: ContextReadLeasedJournalV1,
+     phases: Vec<Option<AllocationPhaseV1>>,
+     submission_writers: HashMap<RuntimeSubmissionIdV1, submissions::RetainedSubmissionWriterV1>,
++    submission_readers: HashMap<RuntimeSubmissionIdV1, readers::RetainedSubmissionReadersV1>,
+ }
+ 
+ // Dropping this move-only ticket never removes its Context-owned record.
+@@ -124,10 +126,15 @@ impl ContextVersionsV1 {
+         submission_writers
+             .try_reserve(writers)
+             .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;
++        let mut submission_readers = HashMap::new();
++        submission_readers
++            .try_reserve(writers)
++            .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;
+         Ok(Self {
+             journal,
+             phases,
+             submission_writers,
++            submission_readers,
+         })
+     }
+ 
+@@ -251,14 +258,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+     /// writable buffers of protected generated attempts. Generated settlement
+     /// requires protected completion or whole-batch Stop disposal, never generic
+     /// polling. Writer capacity and unresolved writes gate subsequent writes.
+-    /// Built-in copies also retain bounded source read leases, with reader
+-    /// capacity equal to writer capacity. Source writes and retirement reject
+-    /// while any copy reader remains. Backend aliases and initialized-input
++    /// Built-in copies and pure Read typed bindings retain bounded source read
++    /// leases. Reader capacity equals writer capacity but its occupancy is
++    /// independent. A writable alias uses only exclusive writer custody.
++    /// Source writes and retirement reject while any reader remains.
++    /// Backend aliases and initialized-input
+     /// authority remain outside this profile;
+     /// no content lineage or reuse permission is exposed. Unknown async writers
+     /// retain their journal metadata and credits, even after submission metadata
+     /// is released, until every original destination owner has been disposed.
+-    /// The default `open` path is unchanged.
++    /// The default `open` path has no journal exclusion. Launch preparation still
++    /// retains original Read allocation identities for revalidation at issue;
++    /// its bounded metadata allocation can return Capacity before submission.
+     pub fn open_with_version_journal_v1(
+         backend: B,
+         allocation_capacity: usize,
+diff --git a/crates/fe2o3-runtime/src/context/versions/generated.rs b/crates/fe2o3-runtime/src/context/versions/generated.rs
+index 8a7250ec5..3f1e20fea 100644
+--- a/crates/fe2o3-runtime/src/context/versions/generated.rs
++++ b/crates/fe2o3-runtime/src/context/versions/generated.rs
+@@ -67,6 +67,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                 Err(E::InvalidState)
+             };
+         };
++        if versions.submission_readers.contains_key(&id) {
++            return Err(E::InvalidReference);
++        }
+         let writable =
+             roster.buffers[..roster.count]
+                 .iter()
+@@ -91,7 +94,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             || root.disposal_started
+             || root.disposed_count != 0
+             || root.journal_disposed
+-            || root.copy_source.is_some()
+             || root.allocations.len() != writable
+             || root.members.len() != writable
+             || writer.key.context_generation != id.context_generation
+diff --git a/crates/fe2o3-runtime/src/context/versions/readers.rs b/crates/fe2o3-runtime/src/context/versions/readers.rs
+index ba4cd3ee9..01d030b84 100644
+--- a/crates/fe2o3-runtime/src/context/versions/readers.rs
++++ b/crates/fe2o3-runtime/src/context/versions/readers.rs
+@@ -1,4 +1,4 @@
+-//! Built-in copy sources retain custody, not initializedness or input authority.
++//! Ordinary input custody, not initializedness or executable/reuse authority.
+ 
+ use super::*;
+ use fe2o3_runtime_model::{
+@@ -6,91 +6,186 @@ use fe2o3_runtime_model::{
+     ContextWriterKeyV1, ContextWriterKindV1,
+ };
+ 
+-pub(in crate::context) struct PreparedCopySourceV1 {
+-    source: ContextCopySourceV1,
+-    request: ContextAllocationReadV1,
++#[derive(Clone, Copy, Debug)]
++pub(in crate::context) struct ContextReadSourceV1 {
++    pub(in crate::context) region: RuntimeMemoryRegionV1,
++    pub(in crate::context) record: AllocationRecordV1,
+ }
+ 
+-pub(super) struct RetainedCopySourceV1 {
+-    pub(super) source: ContextCopySourceV1,
+-    request: ContextAllocationReadV1,
+-    reference: ContextReadLeaseReferenceV1,
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub(in crate::context) struct SubmissionReaderMarkerV1 {
++    pub(in crate::context) first: ContextReadLeaseReferenceV1,
++    pub(in crate::context) count: usize,
++}
++
++pub(in crate::context) struct PreparedSubmissionReadersV1 {
++    root: RetainedSubmissionReadersV1,
++    output: Vec<Option<ContextReadLeaseReferenceV1>>,
++}
++
++pub(super) struct RetainedSubmissionReadersV1 {
++    pub(super) sources: Vec<ContextReadSourceV1>,
++    requests: Vec<ContextAllocationReadV1>,
++    references: Vec<ContextReadLeaseReferenceV1>,
++    marker: Option<SubmissionReaderMarkerV1>,
+ }
+ 
+-#[cfg(test)]
+ impl ContextVersionsV1 {
++    pub(in crate::context) fn retained_readers(&self) -> usize {
++        self.journal.retained_read_count()
++            + self
++                .submission_readers
++                .values()
++                .filter(|root| root.marker.is_none())
++                .count()
++    }
++
++    #[cfg(test)]
+     pub(in crate::context) fn read_leases_for_test_v1(
+         &mut self,
+     ) -> &mut ContextReadLeasedJournalV1 {
+         &mut self.journal
+     }
++
++    #[cfg(test)]
++    pub(in crate::context) fn remove_submission_readers_for_test_v1(
++        &mut self,
++        id: RuntimeSubmissionIdV1,
++    ) {
++        self.submission_readers.remove(&id);
++    }
++
++    #[cfg(test)]
++    pub(in crate::context) fn corrupt_submission_read_reference_for_test_v1(
++        &mut self,
++        id: RuntimeSubmissionIdV1,
++        index: usize,
++    ) {
++        self.submission_readers.get_mut(&id).unwrap().references[index].incarnation += 1;
++    }
++
++    #[cfg(test)]
++    pub(in crate::context) fn submission_reader_sources_for_test_v1(
++        &self,
++        id: RuntimeSubmissionIdV1,
++    ) -> &[ContextReadSourceV1] {
++        &self.submission_readers[&id].sources
++    }
+ }
+ 
+ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+-    /// Retained copy-source pins, not data availability or reuse authority.
++    /// Active input leases plus provisional batch roots, not available-data counts
++    /// or reuse authority. A failed acquisition can retain a root with no lease.
+     pub fn version_journal_read_records_v1(&self) -> Option<usize> {
+         self.versions
+             .as_ref()
+-            .map(|versions| versions.journal.retained_read_count())
++            .map(ContextVersionsV1::retained_readers)
+     }
+ 
+-    pub(in crate::context) fn prepare_copy_source_v1(
++    pub(in crate::context) fn prepare_submission_readers_v1(
+         &mut self,
+-        source: Option<ContextCopySourceV1>,
+-    ) -> Result<Option<PreparedCopySourceV1>, RuntimeValidationErrorV1> {
+-        let Some(source) = source else {
+-            return Ok(None);
+-        };
+-        let id = source.region.allocation;
+-        let actual = self
+-            .allocations
+-            .get(&id)
+-            .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
+-        if *actual != source.record
+-            || !self
+-                .backend_allocations
+-                .contains(&source.record.backend_allocation)
+-        {
+-            return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+-        }
+-        let Some(versions) = self.versions.as_ref() else {
+-            return Ok(None);
+-        };
+-        let result = (|| {
+-            let allocation = versions.validate_live(id, &source.record)?;
+-            let state = versions.journal.lookup_allocation(allocation)?;
+-            let request = ContextAllocationReadV1 {
+-                allocation,
+-                device: state.device,
+-                byte_extent: state.byte_extent,
+-                byte_offset: source.region.byte_offset,
+-                byte_len: source.region.byte_len,
+-                attempt_epoch: state.attempt_epoch,
+-                content_lineage: state.content_lineage,
++        sources: &[ContextReadSourceV1],
++    ) -> Result<Option<PreparedSubmissionReadersV1>, RuntimeValidationErrorV1> {
++        self.guard_journal_unwind_v1(|context| {
++            let mut previous = None;
++            for source in sources {
++                let id = source.region.allocation;
++                let actual = context
++                    .allocations
++                    .get(&id)
++                    .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
++                if *actual != source.record
++                    || !context
++                        .backend_allocations
++                        .contains(&source.record.backend_allocation)
++                    || !context
++                        .allocation_admission
++                        .has_expected_credit(id, source.record.device)
++                    || previous.is_some_and(|prior| prior >= id)
++                {
++                    return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
++                }
++                previous = Some(id);
++            }
++            let Some(versions) = context.versions.as_ref() else {
++                return Ok(None);
+             };
+-            versions.journal.validate_read(&request)?;
+-            versions.journal.validate_read_capacity(1)?;
+-            Ok(request)
+-        })();
+-        let request = match result {
+-            Err(ContextVersionJournalErrorV1::AllocationBusy) => {
+-                return Err(RuntimeValidationErrorV1::ContextReserved);
++            if sources.is_empty() {
++                return Ok(None);
+             }
+-            Err(
+-                ContextVersionJournalErrorV1::MemberCapacity
+-                | ContextVersionJournalErrorV1::EpochExhausted,
+-            ) => return Err(RuntimeValidationErrorV1::Capacity),
+-            result => self.journal_result_v1(result)?,
+-        };
+-        Ok(Some(PreparedCopySourceV1 { source, request }))
++            let mut requests = Vec::new();
++            requests
++                .try_reserve_exact(sources.len())
++                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
++            let result = (|| {
++                versions.journal.validate_read_capacity(sources.len())?;
++                for source in sources {
++                    let allocation =
++                        versions.validate_live(source.region.allocation, &source.record)?;
++                    let state = versions.journal.lookup_allocation(allocation)?;
++                    let request = ContextAllocationReadV1 {
++                        allocation,
++                        device: state.device,
++                        byte_extent: state.byte_extent,
++                        byte_offset: source.region.byte_offset,
++                        byte_len: source.region.byte_len,
++                        attempt_epoch: state.attempt_epoch,
++                        content_lineage: state.content_lineage,
++                    };
++                    versions.journal.validate_read(&request)?;
++                    requests.push(request);
++                }
++                Ok(())
++            })();
++            match result {
++                Err(ContextVersionJournalErrorV1::AllocationBusy) => {
++                    return Err(RuntimeValidationErrorV1::ContextReserved);
++                }
++                Err(
++                    ContextVersionJournalErrorV1::MemberCapacity
++                    | ContextVersionJournalErrorV1::EpochExhausted,
++                ) => return Err(RuntimeValidationErrorV1::Capacity),
++                result => context.journal_result_v1(result)?,
++            }
++            let mut originals = Vec::new();
++            originals
++                .try_reserve_exact(sources.len())
++                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
++            originals.extend_from_slice(sources);
++            let mut output = Vec::new();
++            output
++                .try_reserve_exact(sources.len())
++                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
++            output.resize(sources.len(), None);
++            let mut references = Vec::new();
++            references
++                .try_reserve_exact(sources.len())
++                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
++            context
++                .versions
++                .as_mut()
++                .expect("configured journal")
++                .submission_readers
++                .try_reserve(1)
++                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
++            Ok(Some(PreparedSubmissionReadersV1 {
++                root: RetainedSubmissionReadersV1 {
++                    sources: originals,
++                    requests,
++                    references,
++                    marker: None,
++                },
++                output,
++            }))
++        })
+     }
+ 
+-    pub(in crate::context) fn begin_copy_source_v1(
++    pub(in crate::context) fn begin_submission_readers_v1(
+         &mut self,
+         id: RuntimeSubmissionIdV1,
+-        prepared: Option<PreparedCopySourceV1>,
+-    ) -> Result<Option<ContextReadLeaseReferenceV1>, RuntimeValidationErrorV1> {
+-        let Some(prepared) = prepared else {
++        prepared: Option<PreparedSubmissionReadersV1>,
++    ) -> Result<Option<SubmissionReaderMarkerV1>, RuntimeValidationErrorV1> {
++        let Some(mut prepared) = prepared else {
+             return Ok(None);
+         };
+         self.guard_journal_unwind_v1(|context| {
+@@ -99,40 +194,53 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                     .versions
+                     .as_mut()
+                     .ok_or(ContextVersionJournalErrorV1::InvalidState)?;
+-                let root = versions
+-                    .submission_writers
+-                    .get(&id)
+-                    .ok_or(ContextVersionJournalErrorV1::InvalidReference)?;
+-                if root.domain != SubmissionWriterDomainV1::Ordinary || root.copy_source.is_some() {
++                if versions.submission_readers.contains_key(&id)
++                    || versions
++                        .submission_writers
++                        .get(&id)
++                        .is_some_and(|root| root.domain != SubmissionWriterDomainV1::Ordinary)
++                {
+                     return Err(ContextVersionJournalErrorV1::InvalidState);
+                 }
++                assert!(
++                    versions.submission_readers.len() < versions.submission_readers.capacity(),
++                    "preallocated reader root"
++                );
++                // Root the complete original roster before the model can acquire any lease.
++                versions.submission_readers.insert(id, prepared.root);
++                let root = versions
++                    .submission_readers
++                    .get_mut(&id)
++                    .expect("retained readers");
+                 let consumer = ContextWriterKeyV1 {
+                     context_generation: id.context_generation,
+                     local: id.local,
+                     kind: ContextWriterKindV1::Submission,
+                 };
+-                let mut output = [None];
+                 versions
+                     .journal
+-                    .acquire_reads(consumer, &[prepared.request], &mut output)?;
+-                let reference = output[0].expect("complete read roster");
+-                versions
+-                    .submission_writers
+-                    .get_mut(&id)
+-                    .expect("retained writer")
+-                    .copy_source = Some(RetainedCopySourceV1 {
+-                    source: prepared.source,
+-                    request: prepared.request,
+-                    reference,
+-                });
+-                Ok(Some(reference))
++                    .acquire_reads(consumer, &root.requests, &mut prepared.output)?;
++                assert!(
++                    root.references.capacity() >= prepared.output.len(),
++                    "preallocated references"
++                );
++                for reference in prepared.output {
++                    root.references
++                        .push(reference.expect("complete read roster"));
++                }
++                let marker = SubmissionReaderMarkerV1 {
++                    first: root.references[0],
++                    count: root.references.len(),
++                };
++                root.marker = Some(marker);
++                Ok(Some(marker))
+             })();
+             context.journal_result_v1(result)
+         })
+     }
+ 
+     // Only exact submission quiescence or definite initial rejection calls here.
+-    pub(in crate::context) fn release_copy_source_v1(
++    pub(in crate::context) fn release_submission_readers_v1(
+         &mut self,
+         id: RuntimeSubmissionIdV1,
+     ) -> Result<(), RuntimeValidationErrorV1> {
+@@ -149,37 +257,69 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             let Some(versions) = self.versions.as_mut() else {
+                 return absent;
+             };
+-            let Some(root) = versions.submission_writers.get_mut(&id) else {
+-                return absent;
+-            };
+-            let Some(read) = root.copy_source.as_ref() else {
++            let Some(root) = versions.submission_readers.get(&id) else {
+                 return absent;
+             };
++            let marker = root.marker.ok_or(E::InvalidReference)?;
+             let consumer = ContextWriterKeyV1 {
+                 context_generation: id.context_generation,
+                 local: id.local,
+                 kind: ContextWriterKindV1::Submission,
+             };
+-            if root.domain != SubmissionWriterDomainV1::Ordinary
+-                || read.reference.consumer != consumer
+-                || record.is_some() && expected != Some(read.reference)
+-                || self.allocations.get(&read.source.region.allocation) != Some(&read.source.record)
+-                || !self
+-                    .backend_allocations
+-                    .contains(&read.source.record.backend_allocation)
+-                || !self
+-                    .allocation_admission
+-                    .has_expected_credit(read.source.region.allocation, read.source.record.device)
+-                || versions.journal.lookup_read(read.reference)? != read.request
++            if marker.count == 0
++                || marker.count != root.sources.len()
++                || marker.count != root.requests.len()
++                || marker.count != root.references.len()
++                || root.references[0] != marker.first
++                || marker.first.consumer != consumer
++                || record.is_some() && expected != Some(marker)
++                || record.is_some_and(|record| {
++                    record.journal_writer
++                        != versions.submission_writers.get(&id).map(|root| root.writer)
++                })
++                || versions
++                    .submission_writers
++                    .get(&id)
++                    .is_some_and(|root| root.domain != SubmissionWriterDomainV1::Ordinary)
+             {
+                 return Err(E::InvalidReference);
+             }
++            for (index, ((source, request), reference)) in root
++                .sources
++                .iter()
++                .zip(&root.requests)
++                .zip(&root.references)
++                .enumerate()
++            {
++                if reference.consumer != consumer
++                    || marker.first.incarnation.checked_add(index as u64)
++                        != Some(reference.incarnation)
++                    || source.region.allocation.context_generation
++                        != request.allocation.key.context_generation
++                    || source.region.allocation.local != request.allocation.key.local
++                    || source.region.byte_offset != request.byte_offset
++                    || source.region.byte_len != request.byte_len
++                    || source.record.byte_len != request.byte_extent
++                    || self.allocations.get(&source.region.allocation) != Some(&source.record)
++                    || !self
++                        .backend_allocations
++                        .contains(&source.record.backend_allocation)
++                    || !self
++                        .allocation_admission
++                        .has_expected_credit(source.region.allocation, source.record.device)
++                    || versions.validate_live(source.region.allocation, &source.record)?
++                        != request.allocation
++                    || versions.journal.lookup_read(*reference)? != *request
++                {
++                    return Err(E::InvalidReference);
++                }
++            }
+             versions.journal.release_reads(
+                 consumer,
+-                &[read.reference],
++                &root.references,
+                 &ContextReadQuiescenceEvidenceV1 { consumer },
+             )?;
+-            root.copy_source = None;
++            versions.submission_readers.remove(&id);
+             if let Some(record) = self.submissions.get_mut(&id) {
+                 record.journal_read = None;
+             }
+diff --git a/crates/fe2o3-runtime/src/context/versions/submission_disposal.rs b/crates/fe2o3-runtime/src/context/versions/submission_disposal.rs
+index 332c547ff..1eff185cf 100644
+--- a/crates/fe2o3-runtime/src/context/versions/submission_disposal.rs
++++ b/crates/fe2o3-runtime/src/context/versions/submission_disposal.rs
+@@ -12,10 +12,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         id: RuntimeSubmissionIdV1,
+         writer: ContextWriterReferenceV1,
+     ) -> Result<(), ContextVersionJournalErrorV1> {
+-        if self
+-            .submissions
+-            .get(&id)
+-            .is_some_and(|record| !record.quiescent || record.journal_writer != Some(writer))
++        if self.submissions.get(&id).is_some_and(|record| {
++            !record.quiescent
++                || record.journal_writer != Some(writer)
++                || record.journal_read.is_some()
++        }) || self
++            .versions
++            .as_ref()
++            .is_some_and(|versions| versions.submission_readers.contains_key(&id))
+         {
+             return Err(ContextVersionJournalErrorV1::InvalidReference);
+         }
+@@ -39,7 +43,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             .ok_or(E::InvalidReference)?;
+         if root.writer != writer
+             || root.domain != SubmissionWriterDomainV1::Ordinary
+-            || root.copy_source.is_some()
++            || versions.submission_readers.contains_key(&id)
+             || root.journal_disposed
+             || root.allocations.len() != root.members.len()
+             || root.disposed_count >= root.allocations.len()
+diff --git a/crates/fe2o3-runtime/src/context/versions/submissions.rs b/crates/fe2o3-runtime/src/context/versions/submissions.rs
+index 73c41ee48..b4c3eede7 100644
+--- a/crates/fe2o3-runtime/src/context/versions/submissions.rs
++++ b/crates/fe2o3-runtime/src/context/versions/submissions.rs
+@@ -23,7 +23,6 @@ pub(super) struct RetainedSubmissionWriterV1 {
+     pub(super) disposal_started: bool,
+     pub(super) disposed_count: usize,
+     pub(super) journal_disposed: bool,
+-    pub(super) copy_source: Option<super::readers::RetainedCopySourceV1>,
+ }
+ 
+ pub(super) struct SubmissionWriterAllocationV1 {
+@@ -221,7 +220,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                     disposal_started: false,
+                     disposed_count: 0,
+                     journal_disposed: false,
+-                    copy_source: None,
+                 },
+             );
+             let result = versions
+@@ -276,13 +274,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             let Some(versions) = self.versions.as_mut() else {
+                 return absent;
+             };
++            if versions.submission_readers.contains_key(&id)
++                || record.is_some_and(|record| record.journal_read.is_some())
++            {
++                return Err(ContextVersionJournalErrorV1::InvalidState);
++            }
+             let Some(root) = versions.submission_writers.get(&id) else {
+                 return absent;
+             };
+             let writer = root.writer;
+-            if root.copy_source.is_some() {
+-                return Err(ContextVersionJournalErrorV1::InvalidState);
+-            }
+             if root.domain != domain {
+                 return Err(ContextVersionJournalErrorV1::InvalidReference);
+             }
+@@ -346,13 +346,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                     core::mem::forget(payload);
+                 }
+             }
+-            if let Some(source) = root.copy_source.as_ref()
+-                && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
++        }
++        for root in versions.submission_readers.values() {
++            for source in &root.sources {
++                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                     self.allocation_admission
+-                        .quarantine(source.source.region.allocation);
+-                }))
+-            {
+-                core::mem::forget(payload);
++                        .quarantine(source.region.allocation);
++                })) {
++                    core::mem::forget(payload);
++                }
+             }
+         }
+     }
+@@ -379,11 +381,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         stream_record: StreamRecordV1,
+         destinations: &[RuntimeAllocationIdV1],
+         peer_transfer: Option<PeerTransferMechanismV1>,
+-        copy_source: Option<ContextCopySourceV1>,
++        sources: &[ContextReadSourceV1],
+         submit: impl FnOnce(&mut B) -> Result<u64, RuntimeBackendFailureV1<B::Error>>,
+     ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<B::Error>> {
+         let prepared = self.prepare_submission_writer_v1(destinations)?;
+-        let read = self.prepare_copy_source_v1(copy_source)?;
++        let reads = self.prepare_submission_readers_v1(sources)?;
+         self.submissions
+             .try_reserve(1)
+             .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+@@ -393,7 +395,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
+         let journal_writer =
+             self.begin_submission_writer_v1(id, prepared, SubmissionWriterDomainV1::Ordinary)?;
+-        let journal_read = self.begin_copy_source_v1(id, read)?;
++        let journal_read = self.begin_submission_readers_v1(id, reads)?;
+         let result = self.invoke_journal_backend_v1(submit);
+         let backend_submission = match result {
+             Ok(handle) => handle,
+@@ -401,7 +403,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                 if matches!(&failure, RuntimeBackendFailureV1::Terminal(_)) {
+                     return self.backend_result(Err(failure));
+                 }
+-                let _ = self.release_copy_source_v1(id);
++                let _ = self.release_submission_readers_v1(id);
+                 let outcome = if matches!(&failure, RuntimeBackendFailureV1::Rejected(_)) {
+                     SubmissionWriterOutcomeV1::NoEffect
+                 } else {
+diff --git a/docs/runtime-a1-a2-swarm-current.md b/docs/runtime-a1-a2-swarm-current.md
+index c2694fe02..025d19e64 100644
+--- a/docs/runtime-a1-a2-swarm-current.md
++++ b/docs/runtime-a1-a2-swarm-current.md
+@@ -10,7 +10,15 @@ Resources' V4-J1 proof handoff above the locally accepted
+ Its immediate assignments supersede the older checkpoint tables below, whose
+ detailed contracts and historical observations are retained.
+ 
+-Latest development (2026-09-17): [copy-source read leases](runtime-context-copy-read-leases-v1.md)
++Latest development (2026-09-17): [typed-kernel read leases](runtime-context-kernel-read-leases-v1.md)
++retain pure-Read input batches independently of writer roots, including all-read-only
++launches. Original identities are revalidated at issue; versions are captured after
++ordered predecessor settlement. The [qualification receipt](evidence/dev-v6-kernel-read-leases-2026-09-17/README.md)
++keeps CPU lifetime/forwarding evidence separate from initialized-input authority,
++native kernels, formal composition and performance. Accepted checkpoints and
++A1/A2 remain unchanged.
++
++Preceding development: [copy-source read leases](runtime-context-copy-read-leases-v1.md)
+ retain original local/peer copy sources through exact quiescence and exclude
+ source mutation and retirement while readers remain. The owning bounded model
+ keeps the original issuance proof's scope separate from unproved reader
+diff --git a/docs/runtime-context-copy-read-leases-v1.md b/docs/runtime-context-copy-read-leases-v1.md
+index a9d3d0f39..298fea1aa 100644
+--- a/docs/runtime-context-copy-read-leases-v1.md
++++ b/docs/runtime-context-copy-read-leases-v1.md
+@@ -17,7 +17,9 @@ Begin and before backend entry. It binds the original submission ID, allocation
+ reference, device, full extent, requested byte range, attempt epoch and content
+ lineage. A fresh nonwrapping incarnation distinguishes repeated acquisitions,
+ including the same consumer and unchanged source in a recycled lease slot.
+-The submission marker and independent writer root retain the exact reference.
++The submission marker and independent reader root retain the exact reference;
++the [typed-input extension](runtime-context-kernel-read-leases-v1.md) generalizes
++the original writer-attached copy reference to a separate batched input root.
+ 
+ Multiple readers may overlap. While any reader remains, host writes, writable
+ launch bindings, copy destinations and allocation retirement reject for that
+@@ -59,8 +61,9 @@ immutable inspection of it. Every mutation or retirement path capable of changin
+ a leased allocation is guarded. Constructor-reserved lease slots, free slots and
+ per-allocation reader counts are preserved without acquisition/release allocation.
+ Canonical batches cost O(k) in touched requests; each built-in copy uses k=1.
+-Runtime reader capacity equals writer capacity, because each copy also retains
+-one destination writer. This is bounded metadata, not aggregate native residency.
++Runtime reader capacity equals writer capacity by constructor policy, but its
++occupancy is independent; read-only typed launches need no writer slot.
++This is bounded metadata, not aggregate native residency.
+ Ordinary prepared graph actions store their larger identity snapshots behind
+ one box, allocated during preparation, so generated and join nodes need not
+ carry that payload inline. Non-graph copies need no additional box.
+@@ -80,7 +83,8 @@ the backend's classification contract rather than manufacturing machine evidence
+ 
+ Leases protect ownership and version stability, not initialized bytes. Lineage
+ zero is allowed; even nonzero lineage does not prove that every byte was written.
+-General kernel read effects, available-input authority, backend aliases, ordered
++The typed-input extension now adds ordinary pure-Read launch custody. General
++kernel effect authority, available-input authority, backend aliases, ordered
+ writers, cross-run versions, content reuse, aggregate pools/residency and native
+ high-depth/overlap/fault qualification remain open. Production Worker V3 and
+ machine refinement, reader-composition proofs and matched HIP/HSA measurements
+diff --git a/docs/runtime-context-kernel-read-leases-v1.md b/docs/runtime-context-kernel-read-leases-v1.md
+new file mode 100644
+index 000000000..b91f7dd1f
+--- /dev/null
++++ b/docs/runtime-context-kernel-read-leases-v1.md
+@@ -0,0 +1,97 @@
++# Context Typed-Kernel Read Leases V1
++
++Development toward A1/A2 in #182, extending the [copy-source contract](runtime-context-copy-read-leases-v1.md).
++Accepted checkpoints remain Native R125 CPU/test, Admission R118B C1-C3 and
++Resources R116/V3. This is not V6, A1/A2, native/formal or HIP/HSA acceptance.
++
++## Input Ownership
++
++The opt-in Context journal now retains independent input batches for ordinary
++typed launches, frozen snapshots, atomic/collective launch forwarding and prepared
++graph launches. It preserves the exact ordered backend binding roster and pointer
++patch offsets. Separately, pure `Read` bindings are sorted and deduplicated by
++original logical allocation ID into whole-allocation input leases. Overlapping,
++duplicate and disjoint read ranges on one allocation use one lease per consumer.
++Any allocation also bound `Write` or `ReadWrite` uses only its exclusive writer
++record, avoiding a self-conflicting reader.
++
++Each prepared read retains its original logical ID and exact allocation record.
++Before issue, Context revalidates the live record, backend index and applicable
++allocation credit. Epoch and lineage are captured at actual issue, not graph
++preparation, so a completed predecessor write can supply the next read's version.
++Pending and Unknown writers reject read admission; an event or same-stream order
++does not authorize premature access. Leases exclude whole-allocation writes and
++retirement, even outside the declared input subrange.
++
++Read-only launches need no writer slot. The reader arena's capacity still equals
++the constructor's writer capacity, but occupancy is independent. All source
++requests, output/reference vectors and ownership-map insertion headroom are
++reserved before the submission ID, writer Begin or backend call. Capacity or busy
++source rejection leaves the entire batch unacquired.
++
++The original source batch is rooted by the genuine Context submission ID before
++model acquisition. A failed acquisition or unwind can therefore retain its
++sources even without a returned handle or installed submission record. The
++root is independent of the writer and returned token. Active lease count plus
++provisional batch-root count is exposed for diagnostics and cleanup completeness;
++it is not an available-byte count.
++
++## Completion And Failure
++
++Copy and kernel inputs use the same batch settlement boundary. Initial Rejected
++or exact quiescence releases readers. Pending, rejected observations, TooLate,
++token drop and metadata lifetime alone do not. Terminal failures, panics and
++malformed handles retain input custody and quarantine source credits once per
++allocation, including all-read-only submissions and shared sources.
++
++Before releasing any lease, Context checks the installed first-reference/count
++marker, complete source/request/reference lengths, exact original consumer,
++contiguous fresh incarnations, live allocation records/indexes/credits, model
++requests and any coupled writer marker. The model validates and releases the
++entire batch atomically. Source release precedes writer settlement, status and
++callback notification. Repeated observations cannot release a later consumer.
++Unknown-writer disposal rejects either a retained reader root or installed reader
++marker before backend disposal and again before final model/credit retirement.
++
++The default `open` profile still has no journal exclusion or initialized-data
++authority. It now retains and revalidates explicit `Read` allocation identities
++at prepared issue, including a separate Read alias of a writable allocation.
++This requires bounded source metadata and can report Capacity before submission.
++A lone `ReadWrite` binding remains writer-only and does not acquire this default
++profile's Read identity check. Backend aliasing remains a separate boundary.
++
++## Cost And Evidence
++
++The new source/destination roster canonicalization costs O(b log b) for b bindings;
++this is not a complexity claim about the complete existing launch validator.
++Batch admission/release visits k distinct inputs with expected hash lookup costs,
++without scanning unrelated allocations. All batch vectors are allocated before
++issue; model acquire/release and reference installation do not grow them.
++Terminal quarantine traverses retained reader/writer roots. Cleanup diagnostics
++also scan reader roots for provisional batches. This is bounded metadata, not
++an aggregate native-memory budget or latency/throughput measurement.
++
++The opt-in deferred kernel mock retains only ordered descriptors at submission.
++Modeled successful completion samples their original backing memory and records
++exact ordinal, range, patch offset and bytes. Initial Quiescent can sample before
++returning failure. Failed/cancelled modeled paths discard descriptors without
++sampling. Distinct per-buffer/per-offset patterns catch source or range swaps.
++This mock performs no kernel arithmetic; atomic/collective tests establish
++contract forwarding and input lifetime, not atomic or collective execution.
++
++Qualification is recorded in the [kernel-input archive](evidence/dev-v6-kernel-read-leases-2026-09-17/README.md).
++The private stale-preparation test deliberately interleaves preflight and Begin
++to exercise provisional-root failure. It is not a publicly reachable race or
++native fault injection. The post-acquisition assertion/panic window is
++source-reviewed, not an injected execution path.
++
++## Remaining Acceptance
++
++Input leases preserve custody and version stability, not initialized bytes or
++admitted kernel effects. Lineage zero remains legal; nonzero lineage does not
++prove complete initialization. Production Worker V3 and machine refinement,
++backend aliases, initialized/available-input authority, ordered overlapping
++writers, cross-run version/reuse authority, aggregate pools/residency, native
++high-depth/overlap/failure campaigns and matched HIP/HSA measurements remain open.
++The existing model implementation is reused; no new solver proof or Rust/native
++reader-composition proof is supplied by this packet.
+diff --git a/docs/runtime-context-version-journal-async-v1.md b/docs/runtime-context-version-journal-async-v1.md
+index c3cc147a6..8c543aa30 100644
+--- a/docs/runtime-context-version-journal-async-v1.md
++++ b/docs/runtime-context-version-journal-async-v1.md
+@@ -15,7 +15,7 @@ Preparation sorts and deduplicates that roster, revalidates its live journal
+ records immediately before issue, and covers each complete allocation, including
+ partial-region writes. Read-only and empty rosters consume no writer slot.
+ 
+-The helper reserves all three insertion indexes before minting the original
++The helper reserves facade and applicable ownership insertion indexes before minting the original
+ Context submission ID. Hash-table insertion capacity is rechecked after prior
+ removals; constructor-time reservation alone is insufficient. The exact same
+ submission ID registers the model Submission writer, without a second ID or a
+@@ -91,6 +91,10 @@ production verifier/refinement evidence or native protected qualification.
+ The subsequent [copy-source leases](runtime-context-copy-read-leases-v1.md) retain
+ built-in copy sources and exclude mutation until exact consumer quiescence.
+ They do not establish initialized inputs or general kernel read effects.
++The later [typed-input extension](runtime-context-kernel-read-leases-v1.md) adds
++independent whole-allocation leases for ordinary pure-Read bindings, including
++read-only submissions with no writer slot. It still supplies no initialized-data
++or executable-effect authority.
+ 
+ Backend aliases, available-input leases, ordered overlapping writers, cross-run version
+ consumption, content recovery and aggregate native-residency disposal remain open.

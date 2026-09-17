@@ -13,6 +13,7 @@ mod readers;
 mod submission_disposal;
 mod submissions;
 mod writers;
+pub(super) use readers::{ContextReadSourceV1, SubmissionReaderMarkerV1};
 pub(super) use submissions::{SubmissionWriterDomainV1, SubmissionWriterOutcomeV1};
 
 /// Bounded journal metadata counts, not residency, initializedness or data versions.
@@ -62,6 +63,7 @@ pub(super) struct ContextVersionsV1 {
     journal: ContextReadLeasedJournalV1,
     phases: Vec<Option<AllocationPhaseV1>>,
     submission_writers: HashMap<RuntimeSubmissionIdV1, submissions::RetainedSubmissionWriterV1>,
+    submission_readers: HashMap<RuntimeSubmissionIdV1, readers::RetainedSubmissionReadersV1>,
 }
 
 // Dropping this move-only ticket never removes its Context-owned record.
@@ -124,10 +126,15 @@ impl ContextVersionsV1 {
         submission_writers
             .try_reserve(writers)
             .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;
+        let mut submission_readers = HashMap::new();
+        submission_readers
+            .try_reserve(writers)
+            .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;
         Ok(Self {
             journal,
             phases,
             submission_writers,
+            submission_readers,
         })
     }
 
@@ -251,14 +258,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// writable buffers of protected generated attempts. Generated settlement
     /// requires protected completion or whole-batch Stop disposal, never generic
     /// polling. Writer capacity and unresolved writes gate subsequent writes.
-    /// Built-in copies also retain bounded source read leases, with reader
-    /// capacity equal to writer capacity. Source writes and retirement reject
-    /// while any copy reader remains. Backend aliases and initialized-input
+    /// Built-in copies and pure Read typed bindings retain bounded source read
+    /// leases. Reader capacity equals writer capacity but its occupancy is
+    /// independent. A writable alias uses only exclusive writer custody.
+    /// Source writes and retirement reject while any reader remains.
+    /// Backend aliases and initialized-input
     /// authority remain outside this profile;
     /// no content lineage or reuse permission is exposed. Unknown async writers
     /// retain their journal metadata and credits, even after submission metadata
     /// is released, until every original destination owner has been disposed.
-    /// The default `open` path is unchanged.
+    /// The default `open` path has no journal exclusion. Launch preparation still
+    /// retains original Read allocation identities for revalidation at issue;
+    /// its bounded metadata allocation can return Capacity before submission.
     pub fn open_with_version_journal_v1(
         backend: B,
         allocation_capacity: usize,

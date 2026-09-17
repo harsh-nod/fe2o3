@@ -67,6 +67,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 Err(E::InvalidState)
             };
         };
+        if versions.submission_readers.contains_key(&id) {
+            return Err(E::InvalidReference);
+        }
         let writable =
             roster.buffers[..roster.count]
                 .iter()
@@ -91,7 +94,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || root.disposal_started
             || root.disposed_count != 0
             || root.journal_disposed
-            || root.copy_source.is_some()
             || root.allocations.len() != writable
             || root.members.len() != writable
             || writer.key.context_generation != id.context_generation

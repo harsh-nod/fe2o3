@@ -24,7 +24,10 @@ use allocation_admission::ContextAllocationAdmissionV1;
 pub use drain_capture::*;
 pub use generated_preparation::*;
 pub(crate) use unpublished::ContextUnpublishedHoldV1;
-use versions::{ContextVersionsV1, SubmissionWriterDomainV1, SubmissionWriterOutcomeV1};
+use versions::{
+    ContextReadSourceV1, ContextVersionsV1, SubmissionReaderMarkerV1, SubmissionWriterDomainV1,
+    SubmissionWriterOutcomeV1,
+};
 pub use versions::{RuntimeContextJournalUsageV1, RuntimeContextOpenFailureV1};
 
 /// Maximum number of devices retained by one runtime context.
@@ -914,6 +917,7 @@ pub struct RuntimeCleanupReportV1<E> {
     allocation_credit_records: usize,
     allocation_journal_records: usize,
     writer_journal_records: usize,
+    reader_journal_records: usize,
 }
 
 impl<E> RuntimeCleanupReportV1<E> {
@@ -936,6 +940,7 @@ impl<E> RuntimeCleanupReportV1<E> {
             && self.allocation_credit_records == 0
             && self.allocation_journal_records == 0
             && self.writer_journal_records == 0
+            && self.reader_journal_records == 0
     }
 
     pub const fn is_graph_reserved(&self) -> bool {
@@ -956,6 +961,11 @@ impl<E> RuntimeCleanupReportV1<E> {
     /// Retained writer metadata; this is not an available-data count.
     pub const fn writer_journal_records_v1(&self) -> usize {
         self.writer_journal_records
+    }
+
+    /// Retained input custody, including provisional roots without a returned handle.
+    pub const fn reader_journal_records_v1(&self) -> usize {
+        self.reader_journal_records
     }
 }
 
@@ -1011,7 +1021,7 @@ struct SubmissionRecordV1 {
     quiescent: bool,
     status: RuntimeCompletionStatusV1,
     journal_writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
-    journal_read: Option<fe2o3_runtime_model::ContextReadLeaseReferenceV1>,
+    journal_read: Option<SubmissionReaderMarkerV1>,
 }
 
 type RuntimeCompletionCallbackV1 =
@@ -1089,6 +1099,7 @@ pub(crate) struct PreparedContextLaunchV1 {
     explicit_kernarg: Vec<u8>,
     backend_bindings: Vec<BackendBindingV1>,
     journal_destinations: Vec<RuntimeAllocationIdV1>,
+    journal_sources: Vec<ContextReadSourceV1>,
     backend_dependencies: Vec<u64>,
     geometry: RuntimeLaunchGeometryV1,
     semantic_launch: BackendSemanticLaunchV1,
@@ -1510,6 +1521,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .versions
                 .as_ref()
                 .map_or(0, ContextVersionsV1::retained_writers),
+            reader_journal_records: self
+                .versions
+                .as_ref()
+                .map_or(0, ContextVersionsV1::retained_readers),
         }
     }
 
@@ -1556,7 +1571,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         } else {
             SubmissionWriterOutcomeV1::Unknown
         };
-        self.release_copy_source_v1(submission)?;
+        self.release_submission_readers_v1(submission)?;
         self.settle_submission_writer_v1(submission, outcome)?;
         self.publish_submission_status_v1(submission, status)
     }
@@ -2302,10 +2317,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(RuntimeValidationErrorV1::TooManyBindings.into());
         }
         let mut backend_bindings = Vec::with_capacity(bindings.len());
+        let read_bindings = bindings
+            .iter()
+            .filter(|binding| binding.region.access == RuntimeAccessV1::Read)
+            .count();
+        let mut journal_sources = Vec::new();
+        journal_sources
+            .try_reserve_exact(read_bindings)
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
         let mut journal_destinations = Vec::new();
         if self.versions.is_some() {
             journal_destinations
-                .try_reserve_exact(bindings.len())
+                .try_reserve_exact(bindings.len() - read_bindings)
                 .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
         }
         for binding in bindings {
@@ -2357,15 +2380,36 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 },
                 kernarg_byte_offset: binding.kernarg_byte_offset,
             });
-            if self.versions.is_some()
-                && matches!(
-                    region.access,
-                    RuntimeAccessV1::Write | RuntimeAccessV1::ReadWrite
-                )
-            {
-                journal_destinations.push(region.allocation);
+            if matches!(
+                region.access,
+                RuntimeAccessV1::Write | RuntimeAccessV1::ReadWrite
+            ) {
+                if self.versions.is_some() {
+                    journal_destinations.push(region.allocation);
+                }
+            } else {
+                journal_sources.push(ContextReadSourceV1 {
+                    region: RuntimeMemoryRegionV1 {
+                        allocation: region.allocation,
+                        access: RuntimeAccessV1::Read,
+                        byte_offset: 0,
+                        byte_len: allocation.byte_len,
+                    },
+                    record: allocation,
+                });
             }
         }
+        journal_destinations.sort_unstable();
+        journal_destinations.dedup();
+        journal_sources.sort_unstable_by_key(|source| source.region.allocation);
+        journal_sources.dedup_by_key(|source| source.region.allocation);
+        // Journaled writable aliases already have exclusive whole-allocation custody.
+        // Without a journal, preserve every Read identity for prepared-issue validation.
+        journal_sources.retain(|source| {
+            journal_destinations
+                .binary_search(&source.region.allocation)
+                .is_err()
+        });
         let mut backend_dependencies = Vec::with_capacity(dependencies.len());
         for dependency in dependencies {
             let event = *self
@@ -2384,6 +2428,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             explicit_kernarg,
             backend_bindings,
             journal_destinations,
+            journal_sources,
             backend_dependencies,
             geometry,
             semantic_launch,
@@ -2414,6 +2459,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             explicit_kernarg,
             backend_bindings,
             journal_destinations,
+            journal_sources,
             backend_dependencies,
             geometry,
             semantic_launch,
@@ -2423,7 +2469,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             stream_record,
             &journal_destinations,
             None,
-            None,
+            &journal_sources,
             |backend| {
                 submit(
                     backend,
@@ -2980,7 +3026,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let stream_record = *self.unheld_stream_v1(stream)?;
         let peer_contract_identity = peer_copy_contract_identity(stream, source, destination);
         let journal_destination = destination.allocation;
-        let journal_source = ContextCopySourceV1 {
+        let journal_source = ContextReadSourceV1 {
             region: source,
             record: *self
                 .allocations
@@ -3056,7 +3102,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             Some(PeerTransferMechanismV1::DeclaredPeerCopy {
                 contract_identity: peer_contract_identity,
             }),
-            Some(journal_source),
+            &[journal_source],
             |backend| {
                 backend.peer_copy_v1(
                     stream_record.backend_stream,
@@ -3115,7 +3161,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(RuntimeValidationErrorV1::InvalidRange.into());
         }
         let journal_destination = destination.allocation;
-        let journal_source = ContextCopySourceV1 {
+        let journal_source = ContextReadSourceV1 {
             region: source,
             record: *self
                 .allocations
@@ -3213,7 +3259,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             stream_record,
             &[journal_destination],
             None,
-            Some(journal_source),
+            &[journal_source],
             |backend| {
                 backend.copy_async_v1(
                     stream_record.backend_stream,
@@ -3263,7 +3309,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         };
         match cancellation {
             BackendCancellationV1::Cancelled => {
-                self.release_copy_source_v1(submission.id)?;
+                self.release_submission_readers_v1(submission.id)?;
                 self.settle_submission_writer_v1(
                     submission.id,
                     SubmissionWriterOutcomeV1::NoEffect,
@@ -3509,6 +3555,7 @@ mod tests {
     mod allocation_outcome_tests;
     mod async_journal_tests;
     mod copy_source_lease_tests;
+    mod kernel_read_lease_tests;
     mod submission_identity_tests;
     mod version_journal_tests;
 
@@ -3597,6 +3644,20 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    struct MockPendingKernelReads {
+        stream: u64,
+        bindings: Vec<BackendBindingV1>,
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct MockObservedKernelRead {
+        submission: u64,
+        ordinal: usize,
+        binding: BackendBindingV1,
+        bytes: Vec<u8>,
+    }
+
     #[derive(Debug, Default)]
     struct MockBackend {
         next: u64,
@@ -3616,6 +3677,10 @@ mod tests {
         cancel_before_publication: bool,
         deferred_copies: bool,
         pending_copies: HashMap<u64, (u64, BackendMemoryRegionV1, BackendMemoryRegionV1)>,
+        deferred_kernel_reads: bool,
+        pending_kernel_reads: HashMap<u64, MockPendingKernelReads>,
+        observed_kernel_reads: Vec<MockObservedKernelRead>,
+        launch_failure: MockMemoryFailure,
         copy_failure: MockMemoryFailure,
         copy_call_count: usize,
         write_call_count: usize,
@@ -3809,11 +3874,29 @@ mod tests {
                 .copy_from_slice(&bytes);
         }
 
-        fn finish_copy(&mut self, submission: u64, success: bool) {
+        fn finish_submission(&mut self, submission: u64, success: bool) {
             if let Some((_, source, destination)) = self.pending_copies.remove(&submission)
                 && success
             {
                 self.apply_copy(source, destination);
+            }
+            if let Some(pending) = self.pending_kernel_reads.remove(&submission)
+                && success
+            {
+                for (ordinal, binding) in pending.bindings.into_iter().enumerate() {
+                    if binding.region.access == RuntimeAccessV1::Write {
+                        continue;
+                    }
+                    let start = binding.region.byte_offset as usize;
+                    let end = start + binding.region.byte_len as usize;
+                    let bytes = self.memory[&binding.region.allocation][start..end].to_vec();
+                    self.observed_kernel_reads.push(MockObservedKernelRead {
+                        submission,
+                        ordinal,
+                        binding,
+                        bytes,
+                    });
+                }
             }
         }
 
@@ -3836,7 +3919,7 @@ mod tests {
                 self.pending_copies
                     .insert(identity, (stream, source, destination));
                 if failure == MockMemoryFailure::Quiescent {
-                    self.finish_copy(identity, true);
+                    self.finish_submission(identity, true);
                 }
             } else {
                 self.apply_copy(source, destination);
@@ -3927,13 +4010,18 @@ mod tests {
                 self.cleanup_failure = MockCleanupFailure::None;
                 return Err(RuntimeBackendFailureV1::Rejected(MockError("busy")));
             }
-            let copies: Vec<_> = self
+            let submissions: Vec<_> = self
                 .pending_copies
                 .iter()
                 .filter_map(|(&id, (owner, _, _))| (*owner == stream).then_some(id))
+                .chain(
+                    self.pending_kernel_reads
+                        .iter()
+                        .filter_map(|(&id, pending)| (pending.stream == stream).then_some(id)),
+                )
                 .collect();
-            for id in copies {
-                self.finish_copy(id, true);
+            for id in submissions {
+                self.finish_submission(id, true);
             }
             if self.cleanup_failure == MockCleanupFailure::QuiescentStreamOnce {
                 self.cleanup_failure = MockCleanupFailure::None;
@@ -4034,8 +4122,25 @@ mod tests {
             self.submit_count += 1;
             self.last_dependency_count = launch.dependencies.len();
             self.last_launch_geometry = Some(launch.geometry);
+            let failure = core::mem::take(&mut self.launch_failure);
+            if failure == MockMemoryFailure::Rejected {
+                mock_memory_failure_v1(failure)?;
+            }
             let identity = self.handle(MockHandleKind::Submission);
             self.polls.insert(identity, 0);
+            if self.deferred_kernel_reads {
+                self.pending_kernel_reads.insert(
+                    identity,
+                    MockPendingKernelReads {
+                        stream: launch.stream,
+                        bindings: launch.bindings.to_vec(),
+                    },
+                );
+                if failure == MockMemoryFailure::Quiescent {
+                    self.finish_submission(identity, true);
+                }
+            }
+            mock_memory_failure_v1(failure)?;
             Ok(identity)
         }
 
@@ -4049,7 +4154,7 @@ mod tests {
             Ok(if *polls == 1 {
                 BackendPollV1::Pending
             } else {
-                self.finish_copy(submission, true);
+                self.finish_submission(submission, true);
                 BackendPollV1::Succeeded
             })
         }
@@ -4071,7 +4176,7 @@ mod tests {
                         )));
                     }
                     MockWaitFailure::QuiescentFirst => {
-                        self.finish_copy(submission, false);
+                        self.finish_submission(submission, false);
                         return Err(RuntimeBackendFailureV1::Quiescent(MockError(
                             "wait quiescent",
                         )));
@@ -4085,7 +4190,7 @@ mod tests {
             }
             let observation = self.wait_observation.unwrap_or(BackendPollV1::Succeeded);
             if observation != BackendPollV1::Pending {
-                self.finish_copy(submission, observation == BackendPollV1::Succeeded);
+                self.finish_submission(submission, observation == BackendPollV1::Succeeded);
             }
             Ok(observation)
         }
@@ -4095,6 +4200,7 @@ mod tests {
             submission: u64,
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
             assert!(!self.pending_copies.contains_key(&submission));
+            assert!(!self.pending_kernel_reads.contains_key(&submission));
             self.cleanup_log
                 .push((MockCleanupKind::Submission, submission));
             self.polls.remove(&submission);
@@ -4185,7 +4291,7 @@ mod tests {
             self.last_cancelled_submission = Some(submission);
             let failure = core::mem::take(&mut self.cancel_failure);
             if failure == MockMemoryFailure::Quiescent {
-                self.finish_copy(submission, false);
+                self.finish_submission(submission, false);
             }
             mock_memory_failure_v1(failure)?;
             if !self.polls.contains_key(&submission) {
@@ -4194,7 +4300,7 @@ mod tests {
                 )));
             }
             Ok(if self.cancel_before_publication {
-                self.finish_copy(submission, false);
+                self.finish_submission(submission, false);
                 BackendCancellationV1::Cancelled
             } else {
                 BackendCancellationV1::TooLate

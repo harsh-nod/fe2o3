@@ -429,7 +429,7 @@ fn initial_no_handle_failures_settle_only_definite_rejection() {
                 record,
                 &[allocation],
                 None,
-                None,
+                &[],
                 |backend| {
                     backend.submit_count += 1;
                     mock_memory_failure_v1(failure).map(|()| 0)

@@ -12,10 +12,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         id: RuntimeSubmissionIdV1,
         writer: ContextWriterReferenceV1,
     ) -> Result<(), ContextVersionJournalErrorV1> {
-        if self
-            .submissions
-            .get(&id)
-            .is_some_and(|record| !record.quiescent || record.journal_writer != Some(writer))
+        if self.submissions.get(&id).is_some_and(|record| {
+            !record.quiescent
+                || record.journal_writer != Some(writer)
+                || record.journal_read.is_some()
+        }) || self
+            .versions
+            .as_ref()
+            .is_some_and(|versions| versions.submission_readers.contains_key(&id))
         {
             return Err(ContextVersionJournalErrorV1::InvalidReference);
         }
@@ -39,7 +43,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .ok_or(E::InvalidReference)?;
         if root.writer != writer
             || root.domain != SubmissionWriterDomainV1::Ordinary
-            || root.copy_source.is_some()
+            || versions.submission_readers.contains_key(&id)
             || root.journal_disposed
             || root.allocations.len() != root.members.len()
             || root.disposed_count >= root.allocations.len()
