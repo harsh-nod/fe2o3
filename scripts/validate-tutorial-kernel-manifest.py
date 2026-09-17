@@ -11,6 +11,10 @@ obligations. It references existing source entries instead of cloning fixtures.
 Consumers must use --require-curriculum; --site-inventory additionally checks
 the current runtime projection without requiring an unchanged site Git HEAD.
 Neither option upgrades a pending obligation to execution or launch evidence.
+
+--emit-kernel-pairs reports existing input selections and exact source cases,
+not completed pairs. Optional runtime display observations remain lexical;
+V2 has no per-kernel mode bindings or exhaustive runnable-kernel identity.
 """
 
 from __future__ import annotations
@@ -52,6 +56,7 @@ CURRICULUM_TAB_FIELDS = (
 CURRICULUM_TAB_KEYS = set(CURRICULUM_TAB_FIELDS) | {"sourceItem", "sourceItemStatus"}
 MAX_SITE_INVENTORY_BYTES = 16 * 1024 * 1024
 MAX_CURRICULUM_TABS = 1024
+MAX_KERNEL_PAIR_RECORDS = 4096
 ENTRY_KEYS = {
     "lessonId",
     "siteEvidenceKind",
@@ -1730,11 +1735,142 @@ def load_manifest(path: Path, maximum_bytes: int = MAX_CARGO_MANIFEST_BYTES) -> 
         fail(f"cannot read manifest: {error}")
 
 
+def _kernel_pair_report(
+    manifest: dict[str, Any], fixtures: dict[str, Any],
+    gaps: dict[str, list[str]], inventory: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Project already validated contracts without inferring variant custody."""
+    curriculum = manifest.get("curriculum")
+    if curriculum is None or curriculum["schema"] != CURRICULUM_SCHEMA_V2:
+        fail("kernel-pair reporting requires the V2 source-item curriculum")
+    entries = {entry["lessonId"]: entry for entry in manifest["entries"]}
+    lessons = curriculum["lessons"]
+    fixture_entries: dict[str, list[str]] = {key: [] for key in fixtures}
+    for entry in entries.values():
+        for fixture_id in entry["compilerFixtureIds"]:
+            fixture_entries[fixture_id].append(entry["lessonId"])
+
+    def selection(inputs: dict[str, Any], symbol: str, target: str) -> dict[str, Any]:
+        return {
+            **{key: inputs[key] for key in (
+                "packageManifest", "cargoTarget", "defaultFeatures", "features", "sourcePaths",
+            )},
+            "kernelSymbol": symbol, "target": target,
+        }
+
+    records = 0
+
+    def append(rows: list[dict[str, Any]], row: dict[str, Any]) -> None:
+        nonlocal records
+        if records >= MAX_KERNEL_PAIR_RECORDS:
+            fail("kernel-pair report exceeds its record bound")
+        records += 1
+        rows.append(row)
+
+    fixture_rows: list[dict[str, Any]] = []
+    for fixture_id, fixture in sorted(fixtures.items()):
+        inputs = fixture["compilerInput"]
+        scope_entries = sorted(fixture_entries[fixture_id])
+        scope_lessons = sorted(
+            lesson["lessonId"] for lesson in lessons
+            if set(lesson["sourceEntryIds"]) & set(scope_entries)
+        )
+        for symbol in inputs["kernelSymbols"]:
+            append(fixture_rows, {
+                "fixtureId": fixture_id,
+                "compilerInputContractSha256": inputs["contractSha256"],
+                "selection": selection(inputs, symbol, fixture["target"]),
+                "sourceEntryIds": scope_entries,
+                "scopeLessonIds": scope_lessons,
+            })
+
+    runtime = {} if inventory is None else {
+        lesson["id"]: lesson for lesson in inventory["lessons"]
+    }
+    source_cases: list[dict[str, Any]] = []
+    displays: list[dict[str, Any]] = []
+    requirements: list[dict[str, Any]] = []
+    lexical_count = 0
+    for lesson in lessons:
+        if lesson["role"] != "executable":
+            continue
+        lesson_id = lesson["lessonId"]
+        requirements.append({
+            "lessonId": lesson_id,
+            "modes": [variant["kind"] for variant in lesson["variants"]],
+            "status": "pending",
+        })
+        for tab in lesson["codeTabs"]:
+            if tab["kind"] != "kernel" or tab["language"] != "rust":
+                continue
+            names = None
+            if inventory is not None:
+                names = ordinary_attributed_kernel_names(
+                    runtime[lesson_id]["codeTabs"][tab["ordinal"]]["displayedCode"]
+                )
+                lexical_count += len(names)
+                if lexical_count > MAX_KERNEL_PAIR_RECORDS:
+                    fail("kernel-pair report exceeds its lexical declaration bound")
+            append(displays, {
+                "lessonId": lesson_id, "tabOrdinal": tab["ordinal"],
+                "sourcePath": tab["sourcePath"], "displayedSha256": tab["displayedSha256"],
+                "sourceItemStatus": tab["sourceItemStatus"], "lexicalKernelNames": names,
+            })
+            item = tab["sourceItem"]
+            if item is None:
+                continue
+            for ordinal, case in enumerate(item["cases"]):
+                append(source_cases, {
+                    "lessonId": lesson_id, "tabOrdinal": tab["ordinal"], "caseOrdinal": ordinal,
+                    "sourceItemContractSha256": item["contractSha256"],
+                    "selection": selection(
+                        {**item["compilerInput"], "features": case["features"]},
+                        case["kernelSymbol"], case["target"],
+                    ),
+                    "displayedFragmentOrdinal": case["displayedFragmentOrdinal"],
+                    "driver": item["driver"], "testFunction": case["testFunction"],
+                    "expectation": case["expectation"],
+                })
+    payload = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return {
+        "schema": "fe2o3-tutorial-kernel-pair-obligations-v1",
+        "sourceContractSha256": hashlib.sha256(payload.encode("ascii")).hexdigest(),
+        "qualified": False, "inventoryComplete": False,
+        "requiredPairCount": None, "qualifiedPairCount": 0,
+        "requiredModes": ["simt", "tile"],
+        "variantBindingStatus": "pending", "stageStatus": "not-evaluated",
+        "missingBindings": ["per-kernel-variant-sources", "per-variant-target-evidence", "exhaustive-kernel-identity"],
+        "productionContract": manifest["productionContract"],
+        "curriculumSite": curriculum["site"],
+        "runtimeProjectionSite": None if inventory is None else {
+            key: inventory["site"][key] for key in ("repository", "commit", "tree")
+        },
+        "lessonRequirements": requirements,
+        "fixtureSelections": fixture_rows,
+        "sourceDriverCases": source_cases,
+        "displayObservations": displays,
+        "sourceBindingGaps": gaps,
+    }
+
+
+def _encode_kernel_pair_report(report: dict[str, Any]) -> str:
+    chunks = []
+    size = 0
+    for chunk in json.JSONEncoder(sort_keys=True, ensure_ascii=True, allow_nan=False).iterencode(report):
+        size += len(chunk)
+        if size > MAX_SITE_INVENTORY_BYTES:
+            fail("kernel-pair report exceeds its output byte bound")
+        chunks.append(chunk)
+    return "".join(chunks)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--manifest", type=Path)
-    parser.add_argument("--emit-matrix", choices=sorted(ALLOWED_TARGETS))
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--emit-matrix", choices=sorted(ALLOWED_TARGETS))
+    output.add_argument("--emit-kernel-pairs", action="store_true")
     parser.add_argument("--require-qualified", action="store_true")
     parser.add_argument("--require-curriculum", action="store_true")
     parser.add_argument("--site-inventory", type=Path)
@@ -1743,17 +1879,18 @@ def main() -> None:
     manifest = load_manifest(arguments.manifest or root / "config/tutorial-kernel-manifest-v1.json")
     curriculum_gaps: dict[str, list[str]] = {}
     fixtures = validate_manifest(root, manifest, curriculum_gaps=curriculum_gaps)
-    if arguments.require_curriculum or arguments.site_inventory:
+    if arguments.require_curriculum or arguments.site_inventory or arguments.emit_kernel_pairs:
         if "curriculum" not in manifest:
             fail("the exhaustive curriculum extension is required")
+    inventory = None
     if arguments.site_inventory:
-        validate_site_inventory(
-            manifest["curriculum"],
-            load_manifest(arguments.site_inventory, MAX_SITE_INVENTORY_BYTES),
-        )
+        inventory = load_manifest(arguments.site_inventory, MAX_SITE_INVENTORY_BYTES)
+        validate_site_inventory(manifest["curriculum"], inventory)
     if arguments.require_qualified:
         fail("qualification receipts and policy/final-graph evidence are not implemented by source contracts")
-    if arguments.emit_matrix:
+    if arguments.emit_kernel_pairs:
+        print(_encode_kernel_pair_report(_kernel_pair_report(manifest, fixtures, curriculum_gaps, inventory)))
+    elif arguments.emit_matrix:
         records = [fixture for fixture in fixtures.values() if fixture["target"] == arguments.emit_matrix]
         if not records:
             fail("selected target has no compiler fixture obligations")
