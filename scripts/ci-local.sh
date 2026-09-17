@@ -1285,6 +1285,12 @@ run_rocm_compile() {
         --test production_extraction_driver_v1 \
         attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph -- \
         --ignored --exact
+  run_step rocm-production-extraction-memory-free-kernel \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_extraction_driver_v1 \
+        ordinary_memory_free_kernel_reaches_ranked_verification -- \
+        --ignored --exact
   run_step rocm-production-extraction-unsafe-rejection \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \
