@@ -2,6 +2,8 @@ use super::*;
 use fe2o3_kernel_analysis::check_canonical_kir_coordinate_preservation_v1;
 use fe2o3_pliron::{CheckedNeutralKernelIrOwnerV1, KirPlironGraphV12};
 
+include!("production_private_array_initializer_output_v1_tests.rs");
+
 fn optimize(
     input: &VerifiedCanonicalKernelIrModuleV12,
     budget: &mut AssertOriginBudgetV1<'_>,

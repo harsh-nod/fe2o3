@@ -437,7 +437,6 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
     ) -> Result<ProductionSourceOutputPrivateArrayAccessV1, ProductionSourceOutputErrorV1> {
         use ProductionSourceOutputErrorV1 as Error;
         use ProductionSourceOutputPrivateArrayAccessV1 as Outcome;
-        use fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1 as Definition;
         // Three known live-payload sums and the minimum floor comparison. B's
         // separate owner receipt remains a caller precondition, as in B0.
         budget.charge_work(4).map_err(Error::Resource)?;
@@ -517,6 +516,19 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
             }
             SourceOutputArrayPlacementV1::Retained(anchors) => anchors,
         };
+        self.private_array_retained_write_v1(slot, anchors, index, budget)
+    }
+
+    fn private_array_retained_write_v1(
+        &self,
+        slot: &PrivateArraySlotV1,
+        anchors: SourceOutputArrayAnchorsV1,
+        index: u64,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> Result<ProductionSourceOutputPrivateArrayAccessV1, ProductionSourceOutputErrorV1> {
+        use ProductionSourceOutputErrorV1 as Error;
+        use ProductionSourceOutputPrivateArrayAccessV1 as Outcome;
+        use fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1 as Definition;
         // Two result definitions (tag, operation triple, result ordinal),
         // one block pair, and the checked adjacency addition/comparison.
         budget.charge_work(14).map_err(Error::Resource)?;
@@ -614,3 +626,5 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
         })
     }
 }
+
+include!("production_source_output_initializer_v1.rs");
