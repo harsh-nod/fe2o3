@@ -1925,5 +1925,6 @@ mod legacy_scope_tests {
         }
     }
 
+    include!("private_array_checked_output_v1_tests.rs");
     include!("private_array_initializer_v1_tests.rs");
 }

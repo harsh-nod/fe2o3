@@ -435,6 +435,23 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
         role: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
         budget: &mut AssertOriginBudgetV1<'_>,
     ) -> Result<ProductionSourceOutputPrivateArrayAccessV1, ProductionSourceOutputErrorV1> {
+        self.private_array_write_with_offset_v1(owner, function, site, role, budget)
+            .map(|(outcome, _)| outcome)
+    }
+
+    // The offset was already proved by the unchanged source query. It is inert,
+    // and retained internally so omitted writes do not require a second query.
+    fn private_array_write_with_offset_v1(
+        &self,
+        owner: SemanticFunctionIdV1,
+        function: SemanticFunctionIdV1,
+        site: fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1,
+        role: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> Result<
+        (ProductionSourceOutputPrivateArrayAccessV1, Option<u64>),
+        ProductionSourceOutputErrorV1,
+    > {
         use ProductionSourceOutputErrorV1 as Error;
         use ProductionSourceOutputPrivateArrayAccessV1 as Outcome;
         // Preserve the three-sum/floor precharge; source's immutable graph,
@@ -455,7 +472,7 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
             .materialized_private_array_constant_index(owner, function, site, role, budget)
             .map_err(Error::PrivateArray)?
         else {
-            return Ok(Outcome::ProvenUnretained);
+            return Ok((Outcome::ProvenUnretained, None));
         };
         budget.charge_work(1).map_err(Error::Resource)?;
         let fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1::Statement { block, statement } =
@@ -511,11 +528,12 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                 ));
             }
             SourceOutputArrayPlacementV1::OmittedUnreachable => {
-                return Ok(Outcome::OmittedUnreachable);
+                return Ok((Outcome::OmittedUnreachable, Some(index)));
             }
             SourceOutputArrayPlacementV1::Retained(anchors) => anchors,
         };
         self.private_array_retained_write_v1(slot, anchors, index, budget)
+            .map(|outcome| (outcome, Some(index)))
     }
 
     fn private_array_retained_write_v1(
@@ -627,3 +645,5 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
 }
 
 include!("production_source_output_initializer_v1.rs");
+
+include!("production_source_output_private_array_ranked_v1.rs");
