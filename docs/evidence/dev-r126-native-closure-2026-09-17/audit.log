@@ -1,0 +1,10 @@
+probe-00: cold_allocation::native_runtime_cold_device_capacity_refunds_context_and_retries: PASS
+probe-01: cold_allocation::native_runtime_cold_host_capacity_refunds_context_and_retries: PASS
+probe-02: native_runtime_auxiliary_shutdown_retries_after_primary_capacity_rejection: PASS
+probe-03: native_runtime_allocates_while_primary_compute_is_pending: PASS
+probe-04: native_runtime_allocates_while_primary_and_auxiliary_compute_are_pending: PASS
+probe-05: native_runtime_allocation_shutdown_selects_retained_directional_release: PASS
+probe-06: native_runtime_device_promotion_roundtrip_and_retained_shutdown: PASS
+probe-07: native_runtime_zero_capacity_recycle_disposes_before_trim: PASS
+Eight native tests passed; ninth admission rejected; five planned test invocations did not run.
+All 54 native and 15 closure records match in serial order; remote binary and private directory removed.

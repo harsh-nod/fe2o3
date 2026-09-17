@@ -717,7 +717,9 @@ credits. GNU/musl each pass 816 runtime tests with six ignored. The synchronous
 core success path counts zero heap allocations in its scripted fixture; public
 readback still allocates its intermediate byte slice. See the
 [development receipt](evidence/dev-r126-runtime-synchronous-2026-09-16/README.md).
-Fresh native validation is pending while the shared MI300X is busy. Typed
+The later [native development receipt](evidence/dev-r126-native-closure-2026-09-17/README.md)
+validates successful copy/readback and cached/zero-cache disposal on the updated
+source. It does not execute the CPU-injected failure matrices on hardware. Typed
 capacity disposition and warm pending-compute allocation are implemented below.
 R125 is still the accepted CPU/test checkpoint.
 
@@ -752,7 +754,7 @@ Context credit behavior, exact terminal custody and chunk visibility. The
 [development receipt](evidence/dev-r126-sdma-allocation-disposition-2026-09-16/README.md)
 records validation and limitations. Scripted cold admission is not native queue
 creation; engine-less pool coverage is not a native fresh-allocation test.
-R126 acceptance, native pending-compute allocation, formal correspondence and
+R126 acceptance, broader native pending-compute profiles, formal correspondence and
 matched HIP/HSA performance remain open.
 
 ## Allocation During Pending Compute
@@ -784,8 +786,9 @@ require native allocations, unchanged real published-receipt commitments,
 full original readback, zeroed new bytes and eventual backing-account refunds.
 The new borrowed observer authenticates the exact lane/epoch using the existing
 lower checker, adds an ordinary/lane digest domain, and neither reads completion
-signals nor grants authority. The probes are not yet executed. Logical pending
-custody would not establish physical GPU overlap even on a successful run.
+signals nor grants authority. Both probes now pass on physical MI300X GPU 1 in
+the [native development receipt](evidence/dev-r126-native-closure-2026-09-17/README.md).
+Logical pending custody does not establish physical GPU overlap.
 
 See the [development receipt](evidence/dev-r126-pending-compute-allocation-2026-09-16/README.md).
 Scripted persistent execution does not instantiate the lower native attachment
@@ -822,9 +825,12 @@ Two opt-in native probes now cover the intended cold/warm/retry sequence for
 HostVisible and DeviceLocal allocation using deterministic session budgets.
 Their source requires exact Context/backing refunds, native owners and divergent
 native/shadow readback, zero-cache disposal and retained-root account observations.
-They require explicit device and isolation acknowledgement and remain unexecuted.
-See the [preparation receipt](evidence/dev-r126-native-cold-probes-2026-09-16/README.md);
-these are compiled qualification candidates, not native acceptance or benchmarks.
+They require explicit device and isolation acknowledgement. Both now pass at
+source `967a62dff` in the
+[native development receipt](evidence/dev-r126-native-closure-2026-09-17/README.md).
+The [preparation receipt](evidence/dev-r126-native-cold-probes-2026-09-16/README.md)
+retains the earlier compile-only evidence. These runs validate bounded native
+capacity behavior, not global allocation failure, full R126 acceptance or benchmarks.
 
 ## Auxiliary Queue Release
 
@@ -846,9 +852,10 @@ Runtime shutdown retires the exact matching auxiliary handle immediately after
 lower destruction succeeds, before profiler observation. A later quiescent
 primary-custody allocation failure can therefore retry shutdown without trying
 to destroy the old auxiliary generation again. A compiled, opt-in two-stream
-native probe covers that intended retry sequence and duplicate-destroy checks;
-it remains unexecuted. Both recorded isolation checks found every shared MI300X
-GPU occupied.
+native probe covers that intended retry sequence and duplicate-destroy checks.
+It now passes on physical MI300X GPU 1 in the
+[native development receipt](evidence/dev-r126-native-closure-2026-09-17/README.md).
+The earlier availability checks remain separate historical evidence.
 
 Constructed-owner CPU tests exercise successful auxiliary-then-primary cleanup,
 actual vacant-slot reconstruction, stale handles, rejection, destroy failures,
@@ -863,7 +870,8 @@ the accepted Native CPU/test checkpoint; R126, A1/A2 and #182 remain open.
 
 ## Remaining Qualification
 
-Allocation settlement still needs native cold-admission/failure qualification,
+Allocation settlement still needs native failure qualification beyond the two
+now-tested bounded Host/Device backing-capacity cases,
 formal implementation correspondence and a separately negotiated Worker protocol
 extension before its stronger guarantee can cross the process boundary.
 

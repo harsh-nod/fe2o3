@@ -88,8 +88,9 @@ are now implemented, with typed diagnostics and restoration into the original
 device box. Eighteen new tests cover exact owners, error/panic precedence and
 public read visibility; GNU/musl each pass 816 runtime tests with six ignored.
 See the [runtime synchronous receipt](evidence/dev-r126-runtime-synchronous-2026-09-16/README.md).
-Native validation of this delta remains pending while the shared MI300X is busy;
-the preceding lower-driver hardware results do not qualify this new source.
+Native validation was pending in that packet. The later native development
+receipt below checks successful copy/readback and pool disposal on the updated
+source; native failure matrices remain separate requirements.
 Typed backing-capacity disposition now crosses the lower/runtime boundary
 without string classification. Warm rejection refunds configured Context credit;
 cold rejection was quiescent and still quarantined that credit in that packet.
@@ -101,7 +102,7 @@ the allocation driver. Seven new CPU matrices cover ordinary primary/auxiliary,
 queued work and persistent prepared/published runtime custody, including exact
 capacity refunds and terminal initialization retention. Two opt-in native probes
 compare real retained ordinary receipt identities across HostVisible/DeviceLocal
-allocation; they remain unexecuted while the shared MI300X is occupied. See the
+allocation; both now pass in the later native development receipt below. See the
 [pending-allocation receipt](evidence/dev-r126-pending-compute-allocation-2026-09-16/README.md).
 Native/profile/pipeline qualification, formal correspondence and performance
 remain open. These are development packets, not R126 or A1/A2 acceptance; R125
@@ -118,20 +119,29 @@ for validation scope. This does not advance R126, A1/A2 or issue #182 acceptance
 Two native cold-capacity probes are now prepared for HostVisible and DeviceLocal
 Context allocation, with explicit isolation/device guards, cold and warm
 rejection checks, successful retry, native readback and exact zero-cache disposal
-observations. They remain unexecuted while the shared MI300X is occupied; see the
+observations. Both now pass in the later native development receipt below; see the
 [probe preparation receipt](evidence/dev-r126-native-cold-probes-2026-09-16/README.md).
-Compilation and the CPU guard test do not qualify their native assertions.
+The preparation receipt's compilation and CPU guard remain distinct evidence.
 
 Auxiliary teardown now retains the original slot and cleanup receipts through
 temporary model loan/retake, then publishes vacancy only after closing
 currentness. Runtime shutdown clears the exact destroyed auxiliary handle before
 later primary work, so a quiescent primary-custody allocation rejection can retry
 without a stale second destroy. Constructed-owner cleanup/reuse/failure tests and
-an unexecuted two-stream native retry probe are recorded in the
+a then-unexecuted two-stream native retry probe are recorded in the
 [auxiliary release receipt](evidence/dev-r126-auxiliary-release-2026-09-16/README.md).
 GNU/musl each pass 1,389 KFD and 842 runtime tests, with eleven native tests
 ignored; exact test rosters, source identities and post-run binaries match.
 This remains R126 development before N5 adoption, not a new accepted checkpoint.
+
+The [native development receipt](evidence/dev-r126-native-closure-2026-09-17/README.md)
+now records eight passing probes on physical MI300X GPU 1 at source `967a62dff`.
+These include both cold-capacity probes, both pending-compute allocation probes,
+auxiliary shutdown retry, and allocation/copy/pool shutdown regressions. A new
+workload then appeared on GPU 1; the guard stopped before the ninth test. The
+remaining five planned invocations are not counted as executed. Exact binary
+hashes and owned scratch cleanup are recorded. This is bounded native behavior
+evidence, not full R126 qualification, physical-overlap proof or a benchmark.
 
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
