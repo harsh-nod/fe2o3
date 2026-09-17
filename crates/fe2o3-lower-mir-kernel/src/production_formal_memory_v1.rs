@@ -468,6 +468,68 @@ fn derive_admitted_obligations(
     Ok(admitted.into_boxed_slice())
 }
 
+// Only this module constructs the view, next to its fresh analysis. Its rows
+// cannot be replaced by a serialized receipt or a sibling-supplied exception list.
+pub(crate) struct FreshFormalGuardedReportV1<'a> {
+    owner: &'a ProductionSemanticKirOwnerV1,
+    kernel: &'a fe2o3_kernel_ir::Kernel,
+    report: &'a FormalMemoryObligations,
+    witness_extents: [u64; 3],
+}
+
+impl FreshFormalGuardedReportV1<'_> {
+    pub(crate) fn kernel(&self) -> &fe2o3_kernel_ir::Kernel {
+        self.kernel
+    }
+
+    pub(crate) fn for_owner(
+        &self,
+        owner: &ProductionSemanticKirOwnerV1,
+    ) -> Option<(&FormalMemoryObligations, [u64; 3])> {
+        std::ptr::eq(self.owner, owner).then_some((self.report, self.witness_extents))
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn check_fresh_guarded_report_owner_binding_for_test(
+    owner: &ProductionSemanticKirOwnerV1,
+    foreign: &ProductionSemanticKirOwnerV1,
+) -> Result<(), crate::production_semantic_kir_v1::ProductionMemoryDischargeFailureV1> {
+    let kernel = &owner.module().kernels[0];
+    let extents = witness_extents(&kernel.domain);
+    let analysis = derive_kernel_memory_obligations_for_launch(
+        owner.module(),
+        &kernel.id,
+        ExplicitLaunchExtent::Exact {
+            rank: kernel.domain.rank(),
+            extents,
+        },
+        FormalIndexWidth::Bits64,
+    )
+    .unwrap();
+    let FormalMemoryObligationAnalysis::Incomplete { partial, reasons } = analysis else {
+        panic!("real mixed fixture must retain pending guarded reasons")
+    };
+    let locations = reasons
+        .iter()
+        .filter_map(|reason| match reason {
+            FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { location } => {
+                Some(*location)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let fresh = FreshFormalGuardedReportV1 {
+        owner,
+        kernel,
+        report: &partial,
+        witness_extents: extents,
+    };
+    assert!(fresh.for_owner(owner).is_some());
+    assert!(fresh.for_owner(foreign).is_none());
+    foreign.retained_generic_checks_discharge_guarded_accesses(&fresh, &locations)
+}
+
 fn derive_admitted_obligations_for_kernel(
     semantic_kir: &ProductionSemanticKirOwnerV1,
     kernel: &fe2o3_kernel_ir::Kernel,
@@ -556,7 +618,12 @@ fn derive_admitted_obligations_for_kernel(
             if !guarded_locations.is_empty()
                 && let Err(detail) = semantic_kir
                     .retained_generic_checks_discharge_guarded_accesses(
-                        kernel.id.as_str(),
+                        &FreshFormalGuardedReportV1 {
+                            owner: semantic_kir,
+                            kernel,
+                            report: &partial,
+                            witness_extents: witness_extents(domain),
+                        },
                         &guarded_locations,
                     )
             {

@@ -97,6 +97,13 @@ pub(crate) fn canonical_compiler_proof_inputs_v4(seed: u8) -> CanonicalCompilerP
     canonical_compiler_proof_inputs(seed, semantic_owner(seed), true)
 }
 
+#[allow(dead_code, reason = "shared guarded-domain public verifier fixture")]
+pub(crate) fn canonical_compiler_proof_inputs_v4_with_guarded_read(
+    seed: u8,
+) -> CanonicalCompilerProofInputsV3 {
+    canonical_compiler_proof_inputs(seed, semantic_guarded_owner(seed), true)
+}
+
 #[allow(
     dead_code,
     reason = "shared support is compiled by V3-only integration tests"
@@ -379,6 +386,326 @@ fn semantic_owner(seed: u8) -> ProductionSemanticMirOwnerV1 {
         vec![],
         vec![function],
         vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+    .admit_current_production(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+        .unwrap()
+}
+
+// A real admitted source intrinsic, not a substituted formal payload. The
+// lowerer retains the checked volatile read and its out-of-bounds trap.
+fn semantic_guarded_owner(seed: u8) -> ProductionSemanticMirOwnerV1 {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let u32_ty = SemanticTypeIdV1::from_index(1);
+    let u64_ty = SemanticTypeIdV1::from_index(2);
+    let marker = SemanticTypeIdV1::from_index(3);
+    let witness = SemanticTypeIdV1::from_index(4);
+    let slice = SemanticTypeIdV1::from_index(5);
+    let receiver = SemanticTypeIdV1::from_index(6);
+    let root = SemanticFunctionIdV1::from_index(0);
+    let layout = production_target_layout_identity();
+    let unavailable = SemanticSourceProvenanceV1::unavailable();
+    let integer = |bits, size| {
+        SemanticBackendScalarV1::initialized(
+            SemanticBackendPrimitiveV1::integer(false, bits, size),
+            SemanticScalarValidityRangeV1::new(
+                0,
+                if bits == 32 {
+                    u32::MAX.into()
+                } else {
+                    u64::MAX.into()
+                },
+            ),
+        )
+    };
+    let declaration = |tag, layout, shape| {
+        SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(tag, seed)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(tag, seed)),
+            layout,
+            shape,
+        )
+    };
+    let mut types = vec![unit_type(seed)];
+    for (tag, bits, size) in [(101, 32, 4), (102, 64, 8)] {
+        types.push(declaration(
+            tag,
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(size),
+                size,
+                SemanticBackendReprV1::scalar(integer(bits, size)),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits,
+            }),
+        ));
+    }
+    types.push(declaration(
+        103,
+        SemanticTypeLayoutV1::aggregate(
+            Some(0),
+            1,
+            SemanticAggregateLayoutV1::new(vec![], vec![]).unwrap(),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![]).unwrap()),
+    ));
+    types.push(declaration(
+        104,
+        SemanticTypeLayoutV1::aggregate_with_backend_repr(
+            Some(8),
+            8,
+            SemanticBackendReprV1::scalar(integer(64, 8)),
+            false,
+            SemanticAggregateLayoutV1::new(vec![0, 0], vec![]).unwrap(),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Aggregate(SemanticAggregateTypeV1::new(vec![u64_ty, marker]).unwrap()),
+    ));
+    types.push(declaration(
+        105,
+        SemanticTypeLayoutV1::with_exact_rustc_layout(
+            0,
+            4,
+            SemanticFieldsShapeV1::Array {
+                stride_bytes: 4,
+                count: 0,
+            },
+            SemanticRustcVariantsV1::Single { index: 0 },
+            SemanticBackendReprV1::memory(false),
+            None,
+            false,
+            None,
+            4,
+            0,
+            SemanticTypeLayoutDetailsV1::None,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Slice { element: u32_ty },
+    ));
+    types.push(
+        declaration(
+            106,
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(16),
+                8,
+                SemanticBackendReprV1::ScalarPair {
+                    first: SemanticBackendScalarV1::initialized(
+                        SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                        SemanticScalarValidityRangeV1::new(1, u64::MAX.into()),
+                    ),
+                    second: integer(64, 8),
+                },
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new_with_kind(
+                    slice,
+                    SemanticPointerKindV1::Reference,
+                    SemanticMutabilityV1::Immutable,
+                    0,
+                    64,
+                    SemanticPointerMetadataV1::SliceLength,
+                )
+                .unwrap(),
+            ),
+        )
+        .with_rustc_abi_properties(
+            SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+                Some(
+                    SemanticAbiPointeeInfoV1::new(
+                        SemanticAbiPointeeKindV1::SharedReference { frozen: true },
+                        0,
+                        4,
+                    )
+                    .unwrap(),
+                ),
+                None,
+            ),
+        ),
+    );
+    let attributes = |reference| {
+        SemanticAbiValueAttributesV1::new(
+            SemanticAbiRegularAttributesV1::new(
+                reference,
+                reference.then_some(SemanticAbiPointerCaptureV1::CapturesReadOnly),
+                reference,
+                reference,
+                false,
+                true,
+            ),
+            SemanticAbiExtensionV1::None,
+            0,
+            if reference { Some(4) } else { None },
+        )
+        .unwrap()
+    };
+    let direct = |ty| SemanticAbiValueV1::new(ty, SemanticAbiPassModeV1::Direct(attributes(false)));
+    let pair = || {
+        SemanticAbiValueV1::new(
+            receiver,
+            SemanticAbiPassModeV1::Pair {
+                first: attributes(true),
+                second: attributes(false),
+            },
+        )
+    };
+    let place =
+        |index, ty| SemanticPlaceV1::new(SemanticLocalIdV1::from_index(index), vec![], ty).unwrap();
+    let call = |callee, arguments, local, ty, target| {
+        SemanticTerminatorKindV1::Call(
+            SemanticDirectCallV1::new_callable(
+                SemanticCallableIdV1::from_index(callee),
+                arguments,
+                Some(SemanticCallDestinationV1::new(
+                    place(local, ty),
+                    SemanticControlFlowEdgeV1::new(
+                        SemanticEdgeRoleV1::CallReturn,
+                        SemanticBlockIdV1::from_index(target),
+                    ),
+                )),
+                SemanticUnwindActionV1::Unreachable,
+            )
+            .unwrap(),
+        )
+    };
+    let index = SemanticOperandV1::Copy(
+        SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(2),
+            vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), u64_ty).unwrap()],
+            u64_ty,
+        )
+        .unwrap(),
+    );
+    let blocks = vec![
+        block(10, seed, vec![], call(1, vec![], 2, witness, 1)),
+        block(
+            11,
+            seed,
+            vec![],
+            call(
+                2,
+                vec![SemanticOperandV1::Copy(place(1, receiver)), index],
+                3,
+                u32_ty,
+                2,
+            ),
+        ),
+        block(12, seed, vec![], SemanticTerminatorKindV1::Return),
+    ];
+    let abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(2, seed)),
+        layout,
+        SemanticCanonAbiV1::GpuKernel,
+        SemanticExternAbiV1::GpuKernel,
+        false,
+        false,
+        1,
+        vec![SemanticAbiArgumentV1::source(pair())],
+        SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+    )
+    .unwrap()
+    .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::SharedBorrow])
+    .unwrap();
+    let locals = [
+        (unit, SemanticLocalRoleV1::Return),
+        (receiver, SemanticLocalRoleV1::Argument(0)),
+        (witness, SemanticLocalRoleV1::Temporary),
+        (u32_ty, SemanticLocalRoleV1::Temporary),
+    ];
+    let function = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(2, seed)),
+        SemanticFunctionRoleV1::KernelRoot,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(2, seed)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(2, seed)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(2, seed)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(2, seed)),
+        unavailable,
+        abi,
+        locals
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, (ty, role))| {
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256(bytes(20 + ordinal as u8, seed)),
+                    ty,
+                    role,
+                    unavailable,
+                )
+            })
+            .collect(),
+        SemanticBlockIdV1::from_index(0),
+        blocks,
+    )
+    .unwrap();
+    let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
+    let function = function.with_kernel_entry(SemanticKernelEntryV1::new(
+        SemanticLinkSymbolV1::new(format!("guarded_proof_input_{seed}").into_bytes()).unwrap(),
+        SemanticKernelBindingIdentityV1::from_sha256(bytes(5, seed)),
+        SemanticKernelSourceContractV1::new(
+            Some(
+                SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None)
+                    .unwrap(),
+            ),
+            None,
+            None,
+        )
+        .unwrap(),
+    ));
+    let intrinsic = |tag, inputs, output, operation| SemanticCallableDeclV1::CompilerIntrinsic {
+        binding: SemanticNonBodyCallableBindingV1::new(
+            SemanticFunctionIdentityV1::from_sha256(bytes(tag, seed)),
+            SemanticItemDefinitionIdentityV1::from_sha256(bytes(tag, seed)),
+            SemanticMonomorphizationIdentityV1::from_sha256(bytes(tag, seed)),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(tag, seed)),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(tag, seed)),
+            unavailable,
+            SemanticFunctionAbiV1::new(
+                SemanticAbiIdentityV1::from_sha256(bytes(tag, seed)),
+                layout,
+                SemanticCanonAbiV1::Rust,
+                false,
+                false,
+                inputs,
+                output,
+            )
+            .unwrap(),
+        ),
+        operation,
+        operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(tag, seed)),
+    };
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        SemanticTargetDataLayoutV1::gfx942(layout),
+        types,
+        vec![],
+        vec![],
+        vec![],
+        vec![function],
+        vec![
+            SemanticCallableDeclV1::defined(root),
+            intrinsic(
+                220,
+                vec![],
+                direct(witness),
+                SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
+                    index_witness: witness,
+                    raw_index: u64_ty,
+                },
+            ),
+            intrinsic(
+                221,
+                vec![pair(), direct(u64_ty)],
+                direct(u32_ty),
+                SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element: u32_ty },
+            ),
+        ],
+        vec![root],
     )
     .unwrap()
     .admit_current_production(SemanticMirLimitsV1::default())

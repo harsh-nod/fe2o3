@@ -29,12 +29,11 @@ use fe2o3_compiler_lineage::{
     TargetBindingTranscriptV3, TargetLineageIdentityV3, derive_semantic_target_layout_identity_v1,
 };
 use fe2o3_kernel_ir::{
-    FunctionRole, InertCanonicalFormalMemoryObligationReceiptV1, Module,
-    ProductionSemanticDebugAvailabilityV1, ProductionSemanticDebugCarrierV1,
-    ProductionSemanticDebugProducerGapV1, ProductionSemanticDebugReceiptExtensionV1,
-    VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
-    VerifiedCanonicalKernelIrErrorV11, VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
-    VerifiedCanonicalKernelIrV11,
+    FunctionRole, InertFormalMemoryReceiptFormatV3, Module, ProductionSemanticDebugAvailabilityV1,
+    ProductionSemanticDebugCarrierV1, ProductionSemanticDebugProducerGapV1,
+    ProductionSemanticDebugReceiptExtensionV1, VerifiedCanonicalKernelIrErrorV8,
+    VerifiedCanonicalKernelIrErrorV9, VerifiedCanonicalKernelIrErrorV11,
+    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV11,
 };
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV4, InertCanonicalMirToKirCorrespondenceEvidenceV5,
@@ -279,7 +278,7 @@ fn prepare_lineage_evidence_v1(
             fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1::from_report(induction)
                 .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
         let formal_receipt =
-            InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(formal.obligations())
+            InertFormalMemoryReceiptFormatV3::from_current_obligations(formal.obligations())
                 .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
         let correspondence = encode_correspondence_root_payload_v1(
             admitted.semantic_kir().correspondence(),
@@ -829,10 +828,9 @@ fn validate_lineage_roster_envelope_v1(
                 )?;
             }
             LineageRosterPayloadV1::FormalMemory => {
-                InertCanonicalFormalMemoryObligationReceiptV1::from_canonical_bytes(
-                    root.payload().to_vec(),
-                )
-                .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
+                InertFormalMemoryReceiptFormatV3::decode_current(root.payload().to_vec()).map_err(
+                    |error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()),
+                )?;
             }
             LineageRosterPayloadV1::VerusExecution => {
                 let _ =
@@ -1963,7 +1961,7 @@ mod layout_tests {
             FormalIndexWidth::Bits64,
         )
         .unwrap();
-        InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(obligations.obligations())
+        InertFormalMemoryReceiptFormatV3::from_current_obligations(obligations.obligations())
             .unwrap()
             .into_canonical_bytes()
             .into_boxed_slice()
@@ -1979,6 +1977,123 @@ mod layout_tests {
     );
 
     fn formal_roster_fixture() -> FormalRosterFixture {
+        formal_roster_fixture_with_guarded(false)
+    }
+
+    fn guarded_formal_payload(kernel_name: &str) -> Box<[u8]> {
+        use fe2o3_kernel_ir::{
+            AccessMode, AddressSpace, ComparePredicate, Constant, IntrinsicOperation, MemoryAccess,
+            Operation, OperationKind, ScalarType, Type, ValueDef, ValueId,
+        };
+        let pointer = Type::pointer(
+            Type::Scalar(ScalarType::U32),
+            AddressSpace::Global,
+            AccessMode::ReadOnly,
+        );
+        let op = |id, ty, kind| Operation::effect_free(ValueDef::new(ValueId(id), ty), kind);
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations = vec![
+            op(
+                2,
+                Type::INDEX,
+                OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+            ),
+            op(
+                3,
+                Type::INDEX,
+                OperationKind::SliceLength { slice: ValueId(0) },
+            ),
+            op(
+                4,
+                Type::BOOL,
+                OperationKind::Compare {
+                    predicate: ComparePredicate::LessThan,
+                    lhs: ValueId(2),
+                    rhs: ValueId(3),
+                },
+            ),
+            op(5, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+            op(
+                6,
+                Type::INDEX,
+                OperationKind::Select {
+                    condition: ValueId(4),
+                    true_value: ValueId(2),
+                    false_value: ValueId(5),
+                },
+            ),
+            op(
+                7,
+                pointer.clone(),
+                OperationKind::SliceData { slice: ValueId(0) },
+            ),
+            op(
+                8,
+                pointer,
+                OperationKind::GetElementPointer {
+                    base: ValueId(7),
+                    offset: ValueId(6),
+                },
+            ),
+            op(
+                9,
+                Type::Scalar(ScalarType::U32),
+                OperationKind::GuardedLoad {
+                    pointer: ValueId(8),
+                    predicate: ValueId(4),
+                    fallback: ValueId(1),
+                    access: MemoryAccess::new(AddressSpace::Global, 4),
+                },
+            ),
+        ];
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("guarded-lineage-component");
+        module.functions.push(Function::kernel_entry(
+            kernel_name,
+            Signature::new(
+                vec![
+                    Type::slice(
+                        Type::Scalar(ScalarType::U32),
+                        AddressSpace::Global,
+                        AccessMode::ReadOnly,
+                    ),
+                    Type::Scalar(ScalarType::U32),
+                ],
+                vec![],
+            ),
+            vec![ValueId(0), ValueId(1)],
+            vec![block],
+        ));
+        module.kernels.push(Kernel::new(
+            kernel_name,
+            kernel_name,
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(64),
+            },
+        ));
+        let report = derive_kernel_memory_obligations_for_launch(
+            &module,
+            &module.kernels[0].id,
+            ExplicitLaunchExtent::Exact {
+                rank: 1,
+                extents: [64, 1, 1],
+            },
+            FormalIndexWidth::Bits64,
+        )
+        .unwrap();
+        assert!(report.is_complete());
+        let receipt =
+            InertFormalMemoryReceiptFormatV3::from_current_obligations(report.obligations())
+                .unwrap();
+        assert_eq!(
+            receipt.metadata().encoding(),
+            fe2o3_kernel_ir::FormalMemoryReceiptEncodingV3::GuardedV3
+        );
+        assert!(!receipt.grants_authority());
+        receipt.into_canonical_bytes().into_boxed_slice()
+    }
+
+    fn formal_roster_fixture_with_guarded(guarded: bool) -> FormalRosterFixture {
         let semantic_sha256 = [0x31; 32];
         let roster_identity = [0x42; 32];
         let neutral = LineageNeutralKirIdentityV1 {
@@ -2012,7 +2127,11 @@ mod layout_tests {
                 workgroup: [128, 1, 1],
                 middle_end: vec![2].into_boxed_slice(),
                 correspondence: vec![2].into_boxed_slice(),
-                formal_memory: formal_payload("alpha_kernel"),
+                formal_memory: if guarded {
+                    guarded_formal_payload("alpha_kernel")
+                } else {
+                    formal_payload("alpha_kernel")
+                },
                 verus_execution: vec![2].into_boxed_slice(),
             },
         ];
@@ -2178,6 +2297,62 @@ mod layout_tests {
                 roster,
                 &reordered_workgroups,
                 LineageRosterPayloadV1::FormalMemory,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn multi_root_lineage_keeps_mixed_legacy_guarded_payloads_exact_and_inert() {
+        let (bytes, identity, semantic, neutral, roster, workgroups) =
+            formal_roster_fixture_with_guarded(true);
+        validate_lineage_roster_envelope_v1(
+            &bytes,
+            identity,
+            &semantic,
+            neutral,
+            roster,
+            &workgroups,
+            LineageRosterPayloadV1::FormalMemory,
+        )
+        .unwrap();
+        let decoded = MultiRootProofRosterTranscriptV2::decode(&bytes).unwrap();
+        let mut encodings = Vec::new();
+        for ordinal in 0..2 {
+            let root = decoded.root(ordinal).unwrap();
+            let receipt =
+                InertFormalMemoryReceiptFormatV3::decode_current(root.payload().to_vec()).unwrap();
+            assert_eq!(receipt.kernel_id(), root.kernel_id());
+            assert_eq!(receipt.entry_id(), root.kernel_id());
+            assert!(!receipt.grants_authority());
+            encodings.push(receipt.metadata().encoding());
+        }
+        assert!(encodings.contains(&fe2o3_kernel_ir::FormalMemoryReceiptEncodingV3::LegacyV1));
+        assert!(encodings.contains(&fe2o3_kernel_ir::FormalMemoryReceiptEncodingV3::GuardedV3));
+        let mut hostile = bytes.clone();
+        *hostile.last_mut().unwrap() ^= 1;
+        assert!(
+            validate_lineage_roster_envelope_v1(
+                &hostile,
+                identity,
+                &semantic,
+                neutral,
+                roster,
+                &workgroups,
+                LineageRosterPayloadV1::FormalMemory
+            )
+            .is_err()
+        );
+        let rebound_identity = Sha256::digest(&hostile).into();
+        assert!(
+            validate_lineage_roster_envelope_v1(
+                &hostile,
+                rebound_identity,
+                &semantic,
+                neutral,
+                roster,
+                &workgroups,
+                LineageRosterPayloadV1::FormalMemory
             )
             .is_err()
         );

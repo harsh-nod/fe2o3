@@ -502,8 +502,9 @@ mod identity_getter_physical_tests {
         fn source_preservation_complete_reports_each_actual_guarded_store_without_length_premise() {
             use fe2o3_kernel_ir::{
                 FormalAccessDomainV1, FormalBoundsKindV1, FormalGuardedPathV1,
-                FormalMemoryAccessKind, FormalMemoryReceiptErrorV1,
-                InertCanonicalFormalMemoryObligationReceiptV1, OperationKind,
+                FormalMemoryAccessKind, FormalMemoryReceiptEncodingV3, FormalMemoryReceiptErrorV1,
+                InertCanonicalFormalMemoryObligationReceiptV1, InertFormalMemoryReceiptFormatV3,
+                OperationKind,
             };
             for profile in [Profile::Gfx942, Profile::Gfx950] {
                 for mode in [false, true] {
@@ -520,6 +521,7 @@ mod identity_getter_physical_tests {
                                 with_original(source, inputs, &references, budget, |_, _| {});
                                 let floor = budget.storage();
                                 let mut entered = false;
+                                let mut inert_reports = Vec::new();
                                 with_source_preservation_output_v1::<()>(view, profile, inputs, &references, budget,
                                 |preservation, same, formals, accesses, _| {
                                     entered = true;
@@ -555,12 +557,26 @@ mod identity_getter_physical_tests {
                                         }
                                         assert_eq!(InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(obligations),
                                             Err(FormalMemoryReceiptErrorV1::UnsupportedGuardedRepresentation));
+                                        let receipt = InertFormalMemoryReceiptFormatV3::from_current_obligations(obligations).unwrap();
+                                        assert_eq!(receipt.metadata().encoding(), FormalMemoryReceiptEncodingV3::GuardedV3);
+                                        assert_eq!(receipt.kernel_id(), formal.kernel().id.as_str());
+                                        assert_eq!(receipt.entry_id(), formal.kernel().entry.as_str());
+                                        assert!(!receipt.grants_authority());
+                                        receipt.revalidate().unwrap();
+                                        inert_reports.push(receipt.into_canonical_bytes());
                                     }
                                     Ok(())
                                 }).expect("fresh same-O Complete with honest guarded rows");
                                 assert!(entered);
                                 assert_eq!(budget.storage(), floor);
                                 assert!(references.as_slice().is_empty());
+                                assert_eq!(inert_reports.len(), 2);
+                                for bytes in inert_reports {
+                                    let decoded = InertFormalMemoryReceiptFormatV3::decode_current(bytes.clone()).unwrap();
+                                    assert_eq!(decoded.canonical_bytes(), bytes);
+                                    assert_eq!(decoded.metadata().encoding(), FormalMemoryReceiptEncodingV3::GuardedV3);
+                                    assert!(!decoded.grants_authority());
+                                }
                             },
                         );
                     }

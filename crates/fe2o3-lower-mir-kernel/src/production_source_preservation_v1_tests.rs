@@ -318,6 +318,19 @@ fn block(
 // Real admitted factory, not rustc provenance. All SSA identities and source/N
 // locators below are produced by the current planner/capture/materializer.
 fn source(value: u32, signed: bool, copies: bool, stores: usize) -> ProductionSemanticSsaOwnerV1 {
+    ProductionSemanticSsaOwnerV1::try_new(
+        source_mir(value, signed, copies, stores),
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap()
+}
+
+fn source_mir(
+    value: u32,
+    signed: bool,
+    copies: bool,
+    stores: usize,
+) -> fe2o3_pliron::ProductionSemanticMirOwnerV1 {
     let discriminator = if signed { I64 } else { U64 };
     let call = |callee, arguments, destination, ty, target| {
         SemanticTerminatorKindV1::Call(
@@ -567,15 +580,440 @@ fn source(value: u32, signed: bool, copies: bool, stores: usize) -> ProductionSe
     .unwrap()
     .admit_current_production(SemanticMirLimitsV1::default())
     .unwrap();
-    ProductionSemanticSsaOwnerV1::try_new(
-        ProductionSemanticMirOwnerV1::try_new(
-            admitted,
-            fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
-        )
-        .unwrap(),
-        ProductionSemanticSsaLimitsV1::default(),
+    ProductionSemanticMirOwnerV1::try_new(
+        admitted,
+        fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
     )
     .unwrap()
+}
+
+// Each call retains the real checked read and its lowering-generated OOB trap.
+pub(super) fn guarded_read_source_v360(
+    pending_first: bool,
+    mixed: bool,
+) -> ProductionSemanticMirOwnerV1 {
+    const READ_SLICE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(5);
+    const READ_REF: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(6);
+    let unavailable = SemanticSourceProvenanceV1::unavailable();
+    let integer = SemanticBackendScalarV1::initialized(
+        SemanticBackendPrimitiveV1::integer(false, 64, 8),
+        SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+    );
+    let mut catalog = types(false)[..5].to_vec();
+    catalog.push(declaration(
+        150,
+        SemanticTypeLayoutV1::with_exact_rustc_layout(
+            0,
+            4,
+            SemanticFieldsShapeV1::Array {
+                stride_bytes: 4,
+                count: 0,
+            },
+            SemanticRustcVariantsV1::Single { index: 0 },
+            SemanticBackendReprV1::memory(false),
+            None,
+            false,
+            None,
+            4,
+            0,
+            SemanticTypeLayoutDetailsV1::None,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Slice { element: U32 },
+    ));
+    catalog.push(
+        declaration(
+            151,
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(16),
+                8,
+                SemanticBackendReprV1::ScalarPair {
+                    first: pointer_scalar(true),
+                    second: integer,
+                },
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new_with_kind(
+                    READ_SLICE,
+                    SemanticPointerKindV1::Reference,
+                    SemanticMutabilityV1::Immutable,
+                    0,
+                    64,
+                    SemanticPointerMetadataV1::SliceLength,
+                )
+                .unwrap(),
+            ),
+        )
+        .with_rustc_abi_properties(
+            SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+                Some(
+                    SemanticAbiPointeeInfoV1::new(
+                        SemanticAbiPointeeKindV1::SharedReference { frozen: true },
+                        0,
+                        4,
+                    )
+                    .unwrap(),
+                ),
+                None,
+            ),
+        ),
+    );
+    let direct = |ty| {
+        SemanticAbiValueV1::new(
+            ty,
+            SemanticAbiPassModeV1::Direct(attributes(false, 0, None)),
+        )
+    };
+    let pair = || {
+        SemanticAbiValueV1::new(
+            READ_REF,
+            SemanticAbiPassModeV1::Pair {
+                first: SemanticAbiValueAttributesV1::new(
+                    SemanticAbiRegularAttributesV1::new(
+                        true,
+                        Some(SemanticAbiPointerCaptureV1::CapturesReadOnly),
+                        true,
+                        true,
+                        false,
+                        true,
+                    ),
+                    SemanticAbiExtensionV1::None,
+                    0,
+                    Some(4),
+                )
+                .unwrap(),
+                second: attributes(false, 0, None),
+            },
+        )
+    };
+    let call = |callee, arguments, destination, ty, target| {
+        SemanticTerminatorKindV1::Call(
+            SemanticDirectCallV1::new_callable(
+                SemanticCallableIdV1::from_index(callee),
+                arguments,
+                Some(SemanticCallDestinationV1::new(
+                    place(destination, ty),
+                    edge(SemanticEdgeRoleV1::CallReturn, target),
+                )),
+                SemanticUnwindActionV1::Unreachable,
+            )
+            .unwrap(),
+        )
+    };
+    let raw_index = || {
+        SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(2),
+                vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), U64).unwrap()],
+                U64,
+            )
+            .unwrap(),
+        )
+    };
+    let index = |pending| {
+        if pending {
+            SemanticOperandV1::Constant(SemanticConstantV1::new(
+                U64,
+                SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(0, 8).unwrap()),
+            ))
+        } else {
+            raw_index()
+        }
+    };
+    let blocks = vec![
+        block(40, vec![], call(1, vec![], 2, WITNESS, 1)),
+        block(
+            41,
+            vec![],
+            call(
+                2,
+                vec![
+                    SemanticOperandV1::Copy(place(1, READ_REF)),
+                    index(mixed && pending_first),
+                ],
+                3,
+                U32,
+                2,
+            ),
+        ),
+        block(
+            42,
+            vec![],
+            call(
+                2,
+                vec![
+                    SemanticOperandV1::Copy(place(1, READ_REF)),
+                    index(mixed && !pending_first),
+                ],
+                4,
+                U32,
+                3,
+            ),
+        ),
+        block(43, vec![], SemanticTerminatorKindV1::Return),
+    ];
+    let abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256([160; 32]),
+        SemanticLayoutIdentityV1::from_sha256([250; 32]),
+        SemanticCanonAbiV1::GpuKernel,
+        SemanticExternAbiV1::GpuKernel,
+        false,
+        false,
+        1,
+        vec![SemanticAbiArgumentV1::source(pair())],
+        SemanticAbiValueV1::new(UNIT, SemanticAbiPassModeV1::Ignore),
+    )
+    .unwrap()
+    .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::SharedBorrow])
+    .unwrap();
+    let locals = [
+        (UNIT, SemanticLocalRoleV1::Return),
+        (READ_REF, SemanticLocalRoleV1::Argument(0)),
+        (WITNESS, SemanticLocalRoleV1::Temporary),
+        (U32, SemanticLocalRoleV1::Temporary),
+        (U32, SemanticLocalRoleV1::Temporary),
+    ];
+    let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
+    let function = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256([170; 32]),
+        SemanticFunctionRoleV1::KernelRoot,
+        SemanticItemDefinitionIdentityV1::from_sha256([171; 32]),
+        SemanticMonomorphizationIdentityV1::from_sha256([172; 32]),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256([173; 32]),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256([174; 32]),
+        unavailable,
+        abi,
+        locals
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, (ty, role))| {
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([180 + ordinal as u8; 32]),
+                    ty,
+                    role,
+                    unavailable,
+                )
+            })
+            .collect(),
+        SemanticBlockIdV1::from_index(0),
+        blocks,
+    )
+    .unwrap()
+    .with_kernel_entry(SemanticKernelEntryV1::new(
+        SemanticLinkSymbolV1::new(b"unsupported_index_correlation".to_vec()).unwrap(),
+        SemanticKernelBindingIdentityV1::from_sha256([190; 32]),
+        SemanticKernelSourceContractV1::new(
+            Some(
+                SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None)
+                    .unwrap(),
+            ),
+            None,
+            None,
+        )
+        .unwrap(),
+    ));
+    let intrinsic = |tag, inputs, output, operation| SemanticCallableDeclV1::CompilerIntrinsic {
+        binding: SemanticNonBodyCallableBindingV1::new(
+            SemanticFunctionIdentityV1::from_sha256([tag; 32]),
+            SemanticItemDefinitionIdentityV1::from_sha256([tag; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([tag; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([tag; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([tag; 32]),
+            unavailable,
+            SemanticFunctionAbiV1::new(
+                SemanticAbiIdentityV1::from_sha256([tag; 32]),
+                SemanticLayoutIdentityV1::from_sha256([tag; 32]),
+                SemanticCanonAbiV1::Rust,
+                false,
+                false,
+                inputs,
+                output,
+            )
+            .unwrap(),
+        ),
+        operation,
+        operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256([tag; 32]),
+    };
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([250; 32])),
+        catalog,
+        vec![],
+        vec![],
+        vec![],
+        vec![function],
+        vec![
+            SemanticCallableDeclV1::defined(ROOT),
+            intrinsic(
+                220,
+                vec![],
+                direct(WITNESS),
+                SemanticCompilerIntrinsicOperationV1::ThreadIndex1d {
+                    index_witness: WITNESS,
+                    raw_index: U64,
+                },
+            ),
+            intrinsic(
+                221,
+                vec![pair(), direct(U64)],
+                direct(U32),
+                SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element: U32 },
+            ),
+        ],
+        vec![ROOT],
+    )
+    .unwrap()
+    .admit_current_production(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticMirOwnerV1::try_new(
+        admitted,
+        fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn live_guarded_formal_v4_preserves_exact_owner_and_policy_pairing() {
+    use crate::{
+        FormalMemoryAdmissionValidationPolicyV4, InertCanonicalFormalMemoryAdmissionEvidenceV4,
+        ProductionFormalMemoryEvidenceErrorV4, ProductionFormalMemoryOwnerV1,
+    };
+    use fe2o3_kernel_ir::{FormalMemoryReceiptEncodingV3, InertFormalMemoryReceiptFormatV3};
+    let semantic = ProductionSemanticKirOwnerV1::try_lower(
+        guarded_read_source_v360(false, false),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    semantic.verify_equivalence().unwrap();
+    assert!(!semantic.retains_mandatory_generic_checks());
+    let identity = semantic.canonical_kernel_ir_identity();
+    let formal = ProductionFormalMemoryOwnerV1::try_admit(semantic).unwrap();
+    formal.verify_equivalence().unwrap();
+    let evidence = InertCanonicalFormalMemoryAdmissionEvidenceV4::from_live_owner(&formal).unwrap();
+    assert_eq!(
+        evidence.validation_policy(),
+        FormalMemoryAdmissionValidationPolicyV4::GuardedV2
+    );
+    assert_eq!(evidence.canonical_kernel_ir_identity(), identity);
+    let nested = InertFormalMemoryReceiptFormatV3::decode_current(
+        evidence.canonical_bytes()[120..].to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        nested.metadata().encoding(),
+        FormalMemoryReceiptEncodingV3::GuardedV3
+    );
+    assert!(!nested.grants_authority());
+    let decoded =
+        InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(evidence.canonical_bytes()).unwrap();
+    assert_eq!(decoded, evidence);
+    for policy in [1_u16, 3] {
+        let mut bytes = evidence.canonical_bytes().to_vec();
+        bytes[10..12].copy_from_slice(&policy.to_le_bytes());
+        let result = InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(&bytes);
+        if policy == 1 {
+            assert!(matches!(
+                result,
+                Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission)
+            ));
+        } else {
+            assert!(result.is_err());
+        }
+    }
+    for witness in [0_u64, 63, 65] {
+        let mut bytes = evidence.canonical_bytes().to_vec();
+        bytes[96..104].copy_from_slice(&witness.to_le_bytes());
+        assert!(matches!(
+            InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(&bytes),
+            Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission)
+        ));
+    }
+}
+
+#[test]
+fn live_fixed_formal_v4_retains_legacy_policy_and_exact_bytes() {
+    use crate::{
+        FormalMemoryAdmissionValidationPolicyV4, InertCanonicalFormalMemoryAdmissionEvidenceV4,
+        ProductionFormalMemoryEvidenceErrorV4, ProductionFormalMemoryOwnerV1,
+    };
+    use fe2o3_kernel_ir::{FormalMemoryReceiptEncodingV3, InertFormalMemoryReceiptFormatV3};
+    let semantic = ProductionSemanticKirOwnerV1::try_lower(
+        source_mir(7, false, false, 0),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    let formal = ProductionFormalMemoryOwnerV1::try_admit(semantic).unwrap();
+    let evidence = InertCanonicalFormalMemoryAdmissionEvidenceV4::from_live_owner(&formal).unwrap();
+    assert_eq!(
+        evidence.validation_policy(),
+        FormalMemoryAdmissionValidationPolicyV4::LegacyV1
+    );
+    let nested = InertFormalMemoryReceiptFormatV3::decode_current(
+        evidence.canonical_bytes()[120..].to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        nested.metadata().encoding(),
+        FormalMemoryReceiptEncodingV3::LegacyV1
+    );
+    assert_eq!(&evidence.canonical_bytes()[8..12], &[4, 0, 1, 0]);
+    assert_eq!(
+        InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(evidence.canonical_bytes()).unwrap(),
+        evidence
+    );
+    let mut bytes = evidence.canonical_bytes().to_vec();
+    bytes[10..12].copy_from_slice(&2_u16.to_le_bytes());
+    assert!(matches!(
+        InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(&bytes),
+        Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission)
+    ));
+}
+
+#[test]
+fn guarded_v4_rejects_inert_bits32_even_after_exact_nested_identity_rebinding() {
+    use crate::{
+        InertCanonicalFormalMemoryAdmissionEvidenceV4,
+        MAX_FORMAL_MEMORY_ADMISSION_EVIDENCE_BYTES_V4, ProductionFormalMemoryEvidenceErrorV4,
+        ProductionFormalMemoryOwnerV1,
+    };
+    use fe2o3_kernel_ir::{FormalIndexWidth, InertFormalMemoryReceiptFormatV3};
+    let semantic = ProductionSemanticKirOwnerV1::try_lower(
+        guarded_read_source_v360(false, false),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    let formal = ProductionFormalMemoryOwnerV1::try_admit(semantic).unwrap();
+    let evidence = InertCanonicalFormalMemoryAdmissionEvidenceV4::from_live_owner(&formal).unwrap();
+    let mut nested = evidence.formal_obligation_receipt_bytes().to_vec();
+    let mut cursor = 20;
+    for _ in 0..2 {
+        let length = u32::from_le_bytes(nested[cursor..cursor + 4].try_into().unwrap()) as usize;
+        cursor += 4 + length;
+    }
+    assert_eq!(nested[cursor], 2);
+    nested[cursor] = 1;
+    let receipt = InertFormalMemoryReceiptFormatV3::decode_current(nested).unwrap();
+    assert_eq!(receipt.metadata().index_width(), FormalIndexWidth::Bits32);
+    assert!(!receipt.grants_authority());
+    let mut bytes = evidence.canonical_bytes()[..120].to_vec();
+    bytes[64..96].copy_from_slice(receipt.identity_digest());
+    bytes.extend_from_slice(receipt.canonical_bytes());
+    assert!(matches!(
+        InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(&bytes),
+        Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission)
+    ));
+    assert!(matches!(
+        InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(&vec![
+            0;
+            MAX_FORMAL_MEMORY_ADMISSION_EVIDENCE_BYTES_V4
+                + 1
+        ]),
+        Err(ProductionFormalMemoryEvidenceErrorV4::TooLarge)
+    ));
+    let mut trailing = evidence.canonical_bytes().to_vec();
+    trailing.push(0);
+    assert!(InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(&trailing).is_err());
 }
 
 fn with_fixture(
