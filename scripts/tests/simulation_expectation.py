@@ -124,6 +124,26 @@ class SimulationExpectationTests(unittest.TestCase):
         self.actual["diagnostic_metadata"] = {"not_an_oracle": [1, 2, 3]}
         self.assert_success(self.check())
 
+    def test_view_access_and_alignment_match_backing_preflight(self):
+        accesses = ("read_only", "write_only", "read_write")
+        for backing_access in accesses:
+            for view_access in accesses:
+                expected = copy.deepcopy(self.expected)
+                expected["shared_buffers"][0]["buffer"]["access"] = backing_access
+                expected["arguments"][2]["access"] = view_access
+                accepted = backing_access == "read_write" or backing_access == view_access
+                for validate_only in (False, True):
+                    with self.subTest(backing=backing_access, view=view_access, mode=validate_only):
+                        checked = self.check(expected, result_for(expected), validate_only)
+                        (self.assert_success if accepted else self.assert_rejected)(checked)
+        expected = copy.deepcopy(self.expected)
+        expected["arguments"][2]["byte_offset"] = 0
+        expected["arguments"][2]["alignment"] = 8
+        self.assert_rejected(self.check(expected, result_for(expected)))
+        self.assert_rejected(self.check(expected, validate_only=True))
+        expected["shared_buffers"][0]["buffer"]["alignment"] = 8
+        self.assert_success(self.check(expected, result_for(expected)))
+
     def test_empty_rosters_buffers_and_zero_extent_views(self):
         for expected in [
             {"schema": self.expected["schema"], "arguments": [], "shared_buffers": []},
