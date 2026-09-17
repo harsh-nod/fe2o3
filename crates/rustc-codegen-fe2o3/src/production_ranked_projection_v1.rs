@@ -12,6 +12,9 @@ mod ranked_projection_source_v1;
 mod slice_projection_v1;
 use slice_projection_v1::ProjectedViewsV1;
 
+#[cfg(test)]
+pub(crate) use tests::with_backend_checked_output_policy3_v1;
+
 use analysis_multi_split_v1::{
     append_analysis_multi_split_blocks, append_analysis_multi_split_blocks_with_arguments,
 };
@@ -24414,6 +24417,7 @@ mod cold_compile_error_tests;
 #[cfg(test)]
 mod tests {
     include!("production_ranked_projection_v1/projection_01_tests.rs");
+    include!("production_ranked_projection_v1/checked_output_admission_policy3_v1_fixture.rs");
 
     #[test]
     fn pipeline_scalar_rejection_trace_has_exact_bounded_numeric_fields() {

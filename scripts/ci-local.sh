@@ -1229,6 +1229,8 @@ run_generic_core() {
   run_format
   run_check
   run_backend_build
+  run_step simulation-expectation-tests \
+    python3 -I -B scripts/tests/simulation_expectation.py
   run_step quickstart-shell-tests bash scripts/tests/quickstart.sh
   run_step kernel-compile-matrix-shell-tests \
     bash scripts/tests/kernel-compile-matrix.sh

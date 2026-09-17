@@ -1,5 +1,8 @@
 //! Workload-neutral rustc-derived descriptor input for production typed kernels.
 
+#[path = "compiler_descriptor_checked_output_policy3_v1.rs"]
+pub(crate) mod checked_output_policy3_v1;
+
 use crate::collector::{CollectedFunction, TypedArgumentListV1};
 use crate::kernel_ir_codegen::InertCompilerModuleTextV1;
 use crate::rust_type_layout_v3::{
@@ -1550,6 +1553,8 @@ pub(crate) enum CompilerDescriptorError {
     MissingTypedKernel(String),
     UnexpectedWorkgroupSize { kernel: String, expected: [u32; 3] },
     ProductionFormalMemory(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
+    CheckedOutputPolicy3(fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy3V1),
+    CheckedOutputTarget(dialect_amdgcn::ProductionTargetCoordinateErrorV1),
     ProductionGeometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
     ProductionDescriptorMismatch(&'static str),
     UnsupportedCapability(String),
@@ -1639,6 +1644,15 @@ impl fmt::Display for CompilerDescriptorError {
             }
             Self::ProductionGeometry(error) => {
                 write!(formatter, "production geometry evidence failed: {error}")
+            }
+            Self::CheckedOutputPolicy3(error) => {
+                write!(
+                    formatter,
+                    "checked Policy3 output admission failed: {error}"
+                )
+            }
+            Self::CheckedOutputTarget(error) => {
+                write!(formatter, "checked Policy3 target binding failed: {error}")
             }
             Self::ProductionDescriptorMismatch(field) => write!(
                 formatter,
