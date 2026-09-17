@@ -84,6 +84,8 @@ replacement for the support matrix.
 
 ## Proof and evidence
 
+- [Tutorial kernel-pair obligations](tutorial-kernel-pairs-v1.md): inspect
+  pending SIMT/tile source bindings without implying execution evidence.
 - [Evidence Record V1](evidence-record-v1.md)
 - [Parity evidence policy](parity-row-evidence-v1.md)
 - [Signed parity evidence](parity-signed-evidence-v2.md)
