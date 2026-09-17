@@ -258,6 +258,9 @@ mod initial_bind;
 #[path = "queue_live/model_loan.rs"]
 pub(in crate::queue) mod model_loan;
 use model_loan::execute_live_model_custody_v1;
+#[path = "queue_live/sdma_creation.rs"]
+mod sdma_creation;
+use sdma_creation::ReturnedSdmaCreationV1;
 #[path = "queue_live/persistent_bind.rs"]
 pub(in crate::queue) mod persistent_bind;
 #[path = "queue_live/pool_trim.rs"]
@@ -6347,15 +6350,18 @@ impl ComputeAqlQueueSessionV1 {
         }
         let reserved = self.active_compute_queue_ids_for_sdma_creation_v1()?;
         let key = self.key;
-        let owner = self.with_sdma_queue_creation_custody_v1(
-            "generic SDMA queue creation",
-            |memory| Gfx942SdmaQueueSetV1::create_generic(memory, key, &reserved),
-            |owner| Gfx942SdmaQueueSetV1::retain_created_for_terminal(owner, None),
-        )?;
-        let observation = owner
+        let created =
+            self.with_sdma_queue_creation_custody_v1("generic SDMA queue creation", |memory| {
+                Gfx942SdmaQueueSetV1::create_generic(memory, key, &reserved)
+                    .map(|owner| ReturnedSdmaCreationV1::single(owner, ()))
+            })?;
+        self.sdma = Some(created.into_single().0);
+        let observation = self
+            .sdma
+            .as_ref()
+            .expect("rooted generic SDMA owner")
             .generic_observation()
             .expect("created generic SDMA queue set");
-        self.sdma = Some(owner);
         Ok(observation)
     }
 
@@ -6379,15 +6385,20 @@ impl ComputeAqlQueueSessionV1 {
         }
         let reserved = self.active_compute_queue_ids_for_sdma_creation_v1()?;
         let key = self.key;
-        let owner = self.with_sdma_queue_creation_custody_v1(
+        let created = self.with_sdma_queue_creation_custody_v1(
             "directional SDMA queue creation",
-            |memory| Gfx942SdmaQueueSetV1::create_directional(memory, key, &reserved),
-            |owner| Gfx942SdmaQueueSetV1::retain_created_for_terminal(owner, None),
+            |memory| {
+                Gfx942SdmaQueueSetV1::create_directional(memory, key, &reserved)
+                    .map(|owner| ReturnedSdmaCreationV1::single(owner, ()))
+            },
         )?;
-        let observation = owner
+        self.sdma = Some(created.into_single().0);
+        let observation = self
+            .sdma
+            .as_ref()
+            .expect("rooted directional SDMA owner")
             .directional_observation()
             .expect("created directional SDMA queue set");
-        self.sdma = Some(owner);
         Ok(observation)
     }
 
@@ -6412,15 +6423,18 @@ impl ComputeAqlQueueSessionV1 {
         }
         let reserved = self.active_compute_queue_ids_for_sdma_creation_v1()?;
         let key = self.key;
-        let owner = self.with_sdma_queue_creation_custody_v1(
-            "targeted SDMA queue creation",
-            |memory| Gfx942SdmaQueueSetV1::create_targeted(memory, key, engine_index, &reserved),
-            |owner| Gfx942SdmaQueueSetV1::retain_created_for_terminal(owner, None),
-        )?;
-        let observation = owner
+        let created =
+            self.with_sdma_queue_creation_custody_v1("targeted SDMA queue creation", |memory| {
+                Gfx942SdmaQueueSetV1::create_targeted(memory, key, engine_index, &reserved)
+                    .map(|owner| ReturnedSdmaCreationV1::single(owner, ()))
+            })?;
+        self.sdma = Some(created.into_single().0);
+        let observation = self
+            .sdma
+            .as_ref()
+            .expect("rooted targeted SDMA owner")
             .generic_observation()
             .expect("created targeted single SDMA queue set");
-        self.sdma = Some(owner);
         Ok(observation)
     }
 
@@ -6450,11 +6464,13 @@ impl ComputeAqlQueueSessionV1 {
         }
         let reserved = self.active_compute_queue_ids_for_sdma_creation_v1()?;
         let key = self.key;
-        let (owner, observations) = self.with_sdma_queue_creation_custody_v1(
-            "striped SDMA queue creation",
-            |memory| Gfx942SdmaQueueSetV1::create_striped(memory, key, queue_count, &reserved),
-            |(owner, _)| Gfx942SdmaQueueSetV1::retain_created_for_terminal(owner, None),
-        )?;
+        let created =
+            self.with_sdma_queue_creation_custody_v1("striped SDMA queue creation", |memory| {
+                Gfx942SdmaQueueSetV1::create_striped(memory, key, queue_count, &reserved).map(
+                    |(owner, observations)| ReturnedSdmaCreationV1::single(owner, observations),
+                )
+            })?;
+        let (owner, observations) = created.into_single();
         self.sdma = Some(owner);
         Ok(observations)
     }
@@ -6485,7 +6501,7 @@ impl ComputeAqlQueueSessionV1 {
         }
         let reserved = self.active_compute_queue_ids_for_sdma_creation_v1()?;
         let key = self.key;
-        let (owner, observation) = self.with_sdma_queue_creation_custody_v1(
+        let created = self.with_sdma_queue_creation_custody_v1(
             "logical-mux SDMA queue creation",
             |memory| {
                 Gfx942SdmaQueueSetV1::create_logical_mux_v2(
@@ -6494,9 +6510,10 @@ impl ComputeAqlQueueSessionV1 {
                     logical_lane_count,
                     &reserved,
                 )
+                .map(|(owner, observation)| ReturnedSdmaCreationV1::single(owner, observation))
             },
-            |(owner, _)| Gfx942SdmaQueueSetV1::retain_created_for_terminal(owner, None),
         )?;
+        let (owner, observation) = created.into_single();
         self.sdma = Some(owner);
         Ok(observation)
     }
@@ -6526,20 +6543,19 @@ impl ComputeAqlQueueSessionV1 {
         }
         let reserved_queue_ids = self.active_compute_queue_ids_for_sdma_creation_v1()?;
         let key = self.key;
-        let (directional, striped, capacity) = self.with_sdma_queue_creation_custody_v1(
-            "combined SDMA queue creation",
-            |memory| {
+        let created =
+            self.with_sdma_queue_creation_custody_v1("combined SDMA queue creation", |memory| {
                 Gfx942SdmaQueueSetV1::create_combined_directional_and_striped(
                     memory,
                     key,
                     striped_queue_count,
                     &reserved_queue_ids,
                 )
-            },
-            |(directional, striped, _)| {
-                Gfx942SdmaQueueSetV1::retain_created_for_terminal(directional, Some(striped))
-            },
-        )?;
+                .map(|(directional, striped, capacity)| {
+                    ReturnedSdmaCreationV1::combined(directional, striped, capacity)
+                })
+            })?;
+        let (directional, striped, capacity) = created.into_combined();
         self.sdma = Some(directional);
         self.striped_sdma = Some(striped);
         Ok(capacity)
@@ -12830,6 +12846,17 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         operation: impl FnOnce(&mut SharedGttMemorySessionV1) -> R,
     ) -> Result<(R, Result<(), ComputeAqlQueueSessionErrorV1>), ComputeAqlQueueSessionErrorV1> {
+        self.with_live_queue_memory_model_custody_with_poison(operation, |session| {
+            session.poison_terminal();
+            permanently_poison_process_global_kfd_runtime_gate_v1();
+        })
+    }
+
+    fn with_live_queue_memory_model_custody_with_poison<R>(
+        &mut self,
+        operation: impl FnOnce(&mut SharedGttMemorySessionV1) -> R,
+        poison: impl FnOnce(&mut Self),
+    ) -> Result<(R, Result<(), ComputeAqlQueueSessionErrorV1>), ComputeAqlQueueSessionErrorV1> {
         execute_live_model_custody_v1(
             self,
             |session| session.restore_model_ownership_for_live_mutation(),
@@ -12841,10 +12868,7 @@ impl ComputeAqlQueueSessionV1 {
                 operation(&mut engine.backend.session)
             },
             |session, loan| session.retake_model_ownership_after_live_mutation(loan),
-            |session| {
-                session.poison_terminal();
-                permanently_poison_process_global_kfd_runtime_gate_v1();
-            },
+            poison,
         )
     }
 
@@ -12853,75 +12877,12 @@ impl ComputeAqlQueueSessionV1 {
         stage: &'static str,
         operation: impl FnOnce(
             &mut SharedGttMemorySessionV1,
-        ) -> Result<R, crate::sdma::Gfx942SdmaQueueSetCreationFailureV1>,
-        terminalize_success: impl FnOnce(R) -> Gfx942SdmaQueueSetV1,
-    ) -> Result<R, ComputeAqlQueueSessionErrorV1> {
-        let mut created = None;
-        let envelope = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.with_live_queue_memory_model(|memory| {
-                created = Some(operation(memory));
-                Ok(())
-            })
-        }));
-        let envelope = match envelope {
-            Ok(envelope) => envelope,
-            Err(payload) => {
-                // A panicking creation callee may already have consumed native
-                // owners. No recoverable owner custody is claimed in that case.
-                self.poison_terminal();
-                permanently_poison_process_global_kfd_runtime_gate_v1();
-                std::panic::resume_unwind(payload)
-            }
-        };
-        match (envelope, created) {
-            (Ok(()), Some(Ok(created))) => Ok(created),
-            (Ok(()), Some(Err(failure))) => {
-                let (error, disposition, retained) = failure.into_parts();
-                if matches!(
-                    disposition,
-                    crate::sdma::Gfx942SdmaQueueSetCreationDispositionV1::Terminal
-                ) {
-                    if let Some(retained) = retained {
-                        self.sdma = Some(retained);
-                    }
-                    self.poison_terminal();
-                    permanently_poison_process_global_kfd_runtime_gate_v1();
-                    Err(terminal_creation(stage, error.into()))
-                } else {
-                    Err(error.into())
-                }
-            }
-            (Err(envelope_error), Some(Ok(created))) => {
-                self.sdma = Some(terminalize_success(created));
-                self.poison_terminal();
-                permanently_poison_process_global_kfd_runtime_gate_v1();
-                Err(terminal_creation(stage, envelope_error))
-            }
-            (Err(envelope_error), Some(Err(failure))) => {
-                let (_lower_error, _disposition, retained) = failure.into_parts();
-                if let Some(retained) = retained {
-                    self.sdma = Some(retained);
-                }
-                self.poison_terminal();
-                permanently_poison_process_global_kfd_runtime_gate_v1();
-                Err(terminal_creation(stage, envelope_error))
-            }
-            (Ok(()), None) => {
-                self.poison_terminal();
-                permanently_poison_process_global_kfd_runtime_gate_v1();
-                Err(terminal_creation(
-                    stage,
-                    ComputeAqlQueueSessionErrorV1::Contract(
-                        "SDMA creation operation did not execute",
-                    ),
-                ))
-            }
-            (Err(error), None) => {
-                self.poison_terminal();
-                permanently_poison_process_global_kfd_runtime_gate_v1();
-                Err(terminal_creation(stage, error))
-            }
-        }
+        ) -> Result<
+            ReturnedSdmaCreationV1<R>,
+            crate::sdma::Gfx942SdmaQueueSetCreationFailureV1,
+        >,
+    ) -> Result<ReturnedSdmaCreationV1<R>, ComputeAqlQueueSessionErrorV1> {
+        sdma_creation::create_with_custody_v1(self, stage, operation)
     }
 
     fn detach_persistent_dispatch_data_retaining_control_v1(

@@ -1,0 +1,1589 @@
+diff --git a/crates/fe2o3-kfd/src/queue_linux/doorbell_release_tests.rs b/crates/fe2o3-kfd/src/queue_linux/doorbell_release_tests.rs
+index e6c7202b4..bb6c38939 100644
+--- a/crates/fe2o3-kfd/src/queue_linux/doorbell_release_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_linux/doorbell_release_tests.rs
+@@ -1,6 +1,23 @@
+ use super::*;
+ use std::panic::{AssertUnwindSafe, catch_unwind};
+ 
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub(crate) struct LocalDoorbellObservation {
++    address: usize,
++    plan: DoorbellMmapPlanV1,
++    opener_pid: u32,
++    active: bool,
++}
++
++pub(crate) fn observe_local_doorbell(owner: &LinuxDoorbellSliceV1) -> LocalDoorbellObservation {
++    LocalDoorbellObservation {
++        address: owner.address.as_ptr() as usize,
++        plan: owner.plan,
++        opener_pid: owner.opener_pid,
++        active: owner.active,
++    }
++}
++
+ pub(crate) fn local_doorbell() -> LinuxDoorbellSliceV1 {
+     let bytes = KFD_GFX942_PROCESS_DOORBELL_SLICE_BYTES as usize;
+     // SAFETY: this independent anonymous VMA is exclusively owned by the returned
+diff --git a/crates/fe2o3-kfd/src/queue_live.rs b/crates/fe2o3-kfd/src/queue_live.rs
+index df4a7118a..f98707741 100644
+--- a/crates/fe2o3-kfd/src/queue_live.rs
++++ b/crates/fe2o3-kfd/src/queue_live.rs
+@@ -258,6 +258,9 @@ mod initial_bind;
+ #[path = "queue_live/model_loan.rs"]
+ pub(in crate::queue) mod model_loan;
+ use model_loan::execute_live_model_custody_v1;
++#[path = "queue_live/sdma_creation.rs"]
++mod sdma_creation;
++use sdma_creation::ReturnedSdmaCreationV1;
+ #[path = "queue_live/persistent_bind.rs"]
+ pub(in crate::queue) mod persistent_bind;
+ #[path = "queue_live/pool_trim.rs"]
+@@ -6347,15 +6350,18 @@ impl ComputeAqlQueueSessionV1 {
+         }
+         let reserved = self.active_compute_queue_ids_for_sdma_creation_v1()?;
+         let key = self.key;
+-        let owner = self.with_sdma_queue_creation_custody_v1(
+-            "generic SDMA queue creation",
+-            |memory| Gfx942SdmaQueueSetV1::create_generic(memory, key, &reserved),
+-            |owner| Gfx942SdmaQueueSetV1::retain_created_for_terminal(owner, None),
+-        )?;
+-        let observation = owner
++        let created =
++            self.with_sdma_queue_creation_custody_v1("generic SDMA queue creation", |memory| {
++                Gfx942SdmaQueueSetV1::create_generic(memory, key, &reserved)
++                    .map(|owner| ReturnedSdmaCreationV1::single(owner, ()))
++            })?;
++        self.sdma = Some(created.into_single().0);
++        let observation = self
++            .sdma
++            .as_ref()
++            .expect("rooted generic SDMA owner")
+             .generic_observation()
+             .expect("created generic SDMA queue set");
+-        self.sdma = Some(owner);
+         Ok(observation)
+     }
+ 
+@@ -6379,15 +6385,20 @@ impl ComputeAqlQueueSessionV1 {
+         }
+         let reserved = self.active_compute_queue_ids_for_sdma_creation_v1()?;
+         let key = self.key;
+-        let owner = self.with_sdma_queue_creation_custody_v1(
++        let created = self.with_sdma_queue_creation_custody_v1(
+             "directional SDMA queue creation",
+-            |memory| Gfx942SdmaQueueSetV1::create_directional(memory, key, &reserved),
+-            |owner| Gfx942SdmaQueueSetV1::retain_created_for_terminal(owner, None),
++            |memory| {
++                Gfx942SdmaQueueSetV1::create_directional(memory, key, &reserved)
++                    .map(|owner| ReturnedSdmaCreationV1::single(owner, ()))
++            },
+         )?;
+-        let observation = owner
++        self.sdma = Some(created.into_single().0);
++        let observation = self
++            .sdma
++            .as_ref()
++            .expect("rooted directional SDMA owner")
+             .directional_observation()
+             .expect("created directional SDMA queue set");
+-        self.sdma = Some(owner);
+         Ok(observation)
+     }
+ 
+@@ -6412,15 +6423,18 @@ impl ComputeAqlQueueSessionV1 {
+         }
+         let reserved = self.active_compute_queue_ids_for_sdma_creation_v1()?;
+         let key = self.key;
+-        let owner = self.with_sdma_queue_creation_custody_v1(
+-            "targeted SDMA queue creation",
+-            |memory| Gfx942SdmaQueueSetV1::create_targeted(memory, key, engine_index, &reserved),
+-            |owner| Gfx942SdmaQueueSetV1::retain_created_for_terminal(owner, None),
+-        )?;
+-        let observation = owner
++        let created =
++            self.with_sdma_queue_creation_custody_v1("targeted SDMA queue creation", |memory| {
++                Gfx942SdmaQueueSetV1::create_targeted(memory, key, engine_index, &reserved)
++                    .map(|owner| ReturnedSdmaCreationV1::single(owner, ()))
++            })?;
++        self.sdma = Some(created.into_single().0);
++        let observation = self
++            .sdma
++            .as_ref()
++            .expect("rooted targeted SDMA owner")
+             .generic_observation()
+             .expect("created targeted single SDMA queue set");
+-        self.sdma = Some(owner);
+         Ok(observation)
+     }
+ 
+@@ -6450,11 +6464,13 @@ impl ComputeAqlQueueSessionV1 {
+         }
+         let reserved = self.active_compute_queue_ids_for_sdma_creation_v1()?;
+         let key = self.key;
+-        let (owner, observations) = self.with_sdma_queue_creation_custody_v1(
+-            "striped SDMA queue creation",
+-            |memory| Gfx942SdmaQueueSetV1::create_striped(memory, key, queue_count, &reserved),
+-            |(owner, _)| Gfx942SdmaQueueSetV1::retain_created_for_terminal(owner, None),
+-        )?;
++        let created =
++            self.with_sdma_queue_creation_custody_v1("striped SDMA queue creation", |memory| {
++                Gfx942SdmaQueueSetV1::create_striped(memory, key, queue_count, &reserved).map(
++                    |(owner, observations)| ReturnedSdmaCreationV1::single(owner, observations),
++                )
++            })?;
++        let (owner, observations) = created.into_single();
+         self.sdma = Some(owner);
+         Ok(observations)
+     }
+@@ -6485,7 +6501,7 @@ impl ComputeAqlQueueSessionV1 {
+         }
+         let reserved = self.active_compute_queue_ids_for_sdma_creation_v1()?;
+         let key = self.key;
+-        let (owner, observation) = self.with_sdma_queue_creation_custody_v1(
++        let created = self.with_sdma_queue_creation_custody_v1(
+             "logical-mux SDMA queue creation",
+             |memory| {
+                 Gfx942SdmaQueueSetV1::create_logical_mux_v2(
+@@ -6494,9 +6510,10 @@ impl ComputeAqlQueueSessionV1 {
+                     logical_lane_count,
+                     &reserved,
+                 )
++                .map(|(owner, observation)| ReturnedSdmaCreationV1::single(owner, observation))
+             },
+-            |(owner, _)| Gfx942SdmaQueueSetV1::retain_created_for_terminal(owner, None),
+         )?;
++        let (owner, observation) = created.into_single();
+         self.sdma = Some(owner);
+         Ok(observation)
+     }
+@@ -6526,20 +6543,19 @@ impl ComputeAqlQueueSessionV1 {
+         }
+         let reserved_queue_ids = self.active_compute_queue_ids_for_sdma_creation_v1()?;
+         let key = self.key;
+-        let (directional, striped, capacity) = self.with_sdma_queue_creation_custody_v1(
+-            "combined SDMA queue creation",
+-            |memory| {
++        let created =
++            self.with_sdma_queue_creation_custody_v1("combined SDMA queue creation", |memory| {
+                 Gfx942SdmaQueueSetV1::create_combined_directional_and_striped(
+                     memory,
+                     key,
+                     striped_queue_count,
+                     &reserved_queue_ids,
+                 )
+-            },
+-            |(directional, striped, _)| {
+-                Gfx942SdmaQueueSetV1::retain_created_for_terminal(directional, Some(striped))
+-            },
+-        )?;
++                .map(|(directional, striped, capacity)| {
++                    ReturnedSdmaCreationV1::combined(directional, striped, capacity)
++                })
++            })?;
++        let (directional, striped, capacity) = created.into_combined();
+         self.sdma = Some(directional);
+         self.striped_sdma = Some(striped);
+         Ok(capacity)
+@@ -12829,6 +12845,17 @@ impl ComputeAqlQueueSessionV1 {
+     fn with_live_queue_memory_model_custody<R>(
+         &mut self,
+         operation: impl FnOnce(&mut SharedGttMemorySessionV1) -> R,
++    ) -> Result<(R, Result<(), ComputeAqlQueueSessionErrorV1>), ComputeAqlQueueSessionErrorV1> {
++        self.with_live_queue_memory_model_custody_with_poison(operation, |session| {
++            session.poison_terminal();
++            permanently_poison_process_global_kfd_runtime_gate_v1();
++        })
++    }
++
++    fn with_live_queue_memory_model_custody_with_poison<R>(
++        &mut self,
++        operation: impl FnOnce(&mut SharedGttMemorySessionV1) -> R,
++        poison: impl FnOnce(&mut Self),
+     ) -> Result<(R, Result<(), ComputeAqlQueueSessionErrorV1>), ComputeAqlQueueSessionErrorV1> {
+         execute_live_model_custody_v1(
+             self,
+@@ -12841,10 +12868,7 @@ impl ComputeAqlQueueSessionV1 {
+                 operation(&mut engine.backend.session)
+             },
+             |session, loan| session.retake_model_ownership_after_live_mutation(loan),
+-            |session| {
+-                session.poison_terminal();
+-                permanently_poison_process_global_kfd_runtime_gate_v1();
+-            },
++            poison,
+         )
+     }
+ 
+@@ -12853,75 +12877,12 @@ impl ComputeAqlQueueSessionV1 {
+         stage: &'static str,
+         operation: impl FnOnce(
+             &mut SharedGttMemorySessionV1,
+-        ) -> Result<R, crate::sdma::Gfx942SdmaQueueSetCreationFailureV1>,
+-        terminalize_success: impl FnOnce(R) -> Gfx942SdmaQueueSetV1,
+-    ) -> Result<R, ComputeAqlQueueSessionErrorV1> {
+-        let mut created = None;
+-        let envelope = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+-            self.with_live_queue_memory_model(|memory| {
+-                created = Some(operation(memory));
+-                Ok(())
+-            })
+-        }));
+-        let envelope = match envelope {
+-            Ok(envelope) => envelope,
+-            Err(payload) => {
+-                // A panicking creation callee may already have consumed native
+-                // owners. No recoverable owner custody is claimed in that case.
+-                self.poison_terminal();
+-                permanently_poison_process_global_kfd_runtime_gate_v1();
+-                std::panic::resume_unwind(payload)
+-            }
+-        };
+-        match (envelope, created) {
+-            (Ok(()), Some(Ok(created))) => Ok(created),
+-            (Ok(()), Some(Err(failure))) => {
+-                let (error, disposition, retained) = failure.into_parts();
+-                if matches!(
+-                    disposition,
+-                    crate::sdma::Gfx942SdmaQueueSetCreationDispositionV1::Terminal
+-                ) {
+-                    if let Some(retained) = retained {
+-                        self.sdma = Some(retained);
+-                    }
+-                    self.poison_terminal();
+-                    permanently_poison_process_global_kfd_runtime_gate_v1();
+-                    Err(terminal_creation(stage, error.into()))
+-                } else {
+-                    Err(error.into())
+-                }
+-            }
+-            (Err(envelope_error), Some(Ok(created))) => {
+-                self.sdma = Some(terminalize_success(created));
+-                self.poison_terminal();
+-                permanently_poison_process_global_kfd_runtime_gate_v1();
+-                Err(terminal_creation(stage, envelope_error))
+-            }
+-            (Err(envelope_error), Some(Err(failure))) => {
+-                let (_lower_error, _disposition, retained) = failure.into_parts();
+-                if let Some(retained) = retained {
+-                    self.sdma = Some(retained);
+-                }
+-                self.poison_terminal();
+-                permanently_poison_process_global_kfd_runtime_gate_v1();
+-                Err(terminal_creation(stage, envelope_error))
+-            }
+-            (Ok(()), None) => {
+-                self.poison_terminal();
+-                permanently_poison_process_global_kfd_runtime_gate_v1();
+-                Err(terminal_creation(
+-                    stage,
+-                    ComputeAqlQueueSessionErrorV1::Contract(
+-                        "SDMA creation operation did not execute",
+-                    ),
+-                ))
+-            }
+-            (Err(error), None) => {
+-                self.poison_terminal();
+-                permanently_poison_process_global_kfd_runtime_gate_v1();
+-                Err(terminal_creation(stage, error))
+-            }
+-        }
++        ) -> Result<
++            ReturnedSdmaCreationV1<R>,
++            crate::sdma::Gfx942SdmaQueueSetCreationFailureV1,
++        >,
++    ) -> Result<ReturnedSdmaCreationV1<R>, ComputeAqlQueueSessionErrorV1> {
++        sdma_creation::create_with_custody_v1(self, stage, operation)
+     }
+ 
+     fn detach_persistent_dispatch_data_retaining_control_v1(
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
+index b07c44eea..0316eef4b 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
+@@ -23,6 +23,8 @@ mod pool_trim_cases;
+ mod sdma_allocation_cases;
+ #[path = "integration_release_sdma_tests.rs"]
+ mod sdma_cases;
++#[path = "integration_sdma_creation_tests.rs"]
++mod sdma_creation_cases;
+ 
+ struct Parent {
+     engine: NativeQueueEngineV1<PrimaryQueueBackendV1<Memory>>,
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs
+new file mode 100644
+index 000000000..7cedacf66
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs
+@@ -0,0 +1,722 @@
++//! Creation settlement on the original constructor and its model loan.
++
++// Exercise the production inline failure-custody representation unchanged.
++#![allow(clippy::result_large_err)]
++
++use super::*;
++use crate::queue::live::sdma_creation::{
++    ReturnedSdmaCreationV1, SdmaCreationContextV1, create_with_custody_v1,
++};
++use crate::sdma::retained_release::fixture::{
++    add_creation_attempt, cleanup_creation_set, creation_failure, creation_observation,
++    creation_profile, directional_with_ids,
++};
++use std::cell::Cell;
++use std::sync::{
++    Arc,
++    atomic::{AtomicUsize, Ordering},
++};
++
++struct CreationParent {
++    parent: Parent,
++    trace: Rc<RefCell<Trace>>,
++    skip_callback: bool,
++    regress_reclaim: bool,
++    final_poison_panic: bool,
++    secondary_drops: Arc<AtomicUsize>,
++    final_poison_roots: Vec<bool>,
++}
++
++impl CreationParent {
++    fn new(dispatch: bool) -> Self {
++        let (parent, trace, _) = constructed(dispatch);
++        Self {
++            parent,
++            trace,
++            skip_callback: false,
++            regress_reclaim: false,
++            final_poison_panic: false,
++            secondary_drops: Arc::new(AtomicUsize::new(0)),
++            final_poison_roots: Vec::new(),
++        }
++    }
++
++    fn fault(&mut self, name: &'static str, panic: bool) {
++        self.trace.borrow_mut().fault = Some((name, 1, panic));
++    }
++
++    fn assert_no_retry(&mut self) {
++        let before = self.trace.borrow().calls.clone();
++        let root = self.parent.sdma.as_ref().map(creation_observation);
++        let engine = &self.parent.engine;
++        let memory = engine
++            .backend
++            .session
++            .retained_queue_memory_snapshot_v1(&engine.foundation);
++        let loan = engine
++            .backend
++            .session
++            .primary_loan_state_v1(&engine.foundation);
++        let foundation_in_engine = engine.backend.foundation_in_engine;
++        let poisoned = self.parent.poisoned;
++        let poison_roots = self.final_poison_roots.clone();
++        assert!(
++            create_with_custody_v1(
++                self,
++                "retry",
++                |_| -> Result<ReturnedSdmaCreationV1<()>, _> {
++                    panic!("terminal creation cannot retry")
++                }
++            )
++            .is_err()
++        );
++        assert_eq!(self.trace.borrow().calls, before);
++        assert_eq!(self.parent.sdma.as_ref().map(creation_observation), root);
++        let engine = &self.parent.engine;
++        assert_eq!(
++            engine
++                .backend
++                .session
++                .retained_queue_memory_snapshot_v1(&engine.foundation),
++            memory
++        );
++        assert_eq!(
++            engine
++                .backend
++                .session
++                .primary_loan_state_v1(&engine.foundation),
++            loan
++        );
++        assert_eq!(engine.backend.foundation_in_engine, foundation_in_engine);
++        assert_eq!(self.parent.poisoned, poisoned);
++        assert_eq!(self.final_poison_roots, poison_roots);
++    }
++}
++
++impl Drop for CreationParent {
++    fn drop(&mut self) {
++        if let Some(set) = &mut self.parent.sdma {
++            cleanup_creation_set(set);
++        }
++    }
++}
++
++struct PanicDrop(Arc<AtomicUsize>);
++impl Drop for PanicDrop {
++    fn drop(&mut self) {
++        self.0.fetch_add(1, Ordering::SeqCst);
++        panic!("secondary payload destructor");
++    }
++}
++
++impl SdmaCreationContextV1 for CreationParent {
++    type Memory = Memory;
++
++    fn require_vacant(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        if self.parent.poisoned || self.parent.sdma.is_some() {
++            return Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "fixture creation not vacant/live",
++            ));
++        }
++        Ok(())
++    }
++
++    fn with_memory_custody(
++        &mut self,
++        work: impl FnOnce(&mut Memory),
++    ) -> Result<((), Result<(), ComputeAqlQueueSessionErrorV1>), ComputeAqlQueueSessionErrorV1>
++    {
++        execute_live_model_custody_v1(
++            self,
++            |f| {
++                step("creation-loan")?;
++                let engine = &mut f.parent.engine;
++                let loan = engine
++                    .backend
++                    .session
++                    .primary_loan(&mut engine.foundation)?;
++                engine.backend.foundation_in_engine = false;
++                Ok(loan)
++            },
++            |f| {
++                if !f.skip_callback {
++                    work(&mut f.parent.engine.backend.session);
++                }
++            },
++            |f, loan| {
++                step("creation-retake-before")?;
++                let engine = &mut f.parent.engine;
++                if f.regress_reclaim {
++                    engine
++                        .backend
++                        .session
++                        .primary_regress_loan_revision_v1(&loan);
++                }
++                engine
++                    .backend
++                    .session
++                    .primary_reclaim(&mut engine.foundation, loan)?;
++                engine.backend.foundation_in_engine = true;
++                step("creation-retake-after")
++            },
++            |_| {},
++        )
++    }
++
++    fn retained_slot(&mut self) -> &mut Option<Gfx942SdmaQueueSetV1> {
++        &mut self.parent.sdma
++    }
++
++    fn poison(&mut self) {
++        self.final_poison_roots.push(self.parent.sdma.is_some());
++        self.parent.poison_release();
++        if self.final_poison_panic {
++            std::panic::panic_any(PanicDrop(self.secondary_drops.clone()));
++        }
++    }
++}
++
++#[test]
++fn constructed_sdma_creation_success_preserves_owner_and_normal_teardown() {
++    for dispatch in [false, true] {
++        let mut f = CreationParent::new(dispatch);
++        let local = f.trace.borrow().local_resources.clone();
++        let key = f.parent.key;
++        let mut before = None;
++        let created = create_with_custody_v1(&mut f, "fixture success", |memory| {
++            let owner = directional_with_ids(memory, key, 100);
++            before = Some(creation_observation(&owner));
++            Ok(ReturnedSdmaCreationV1::single(owner, 17_u32))
++        })
++        .unwrap();
++        let (owner, output) = created.into_single();
++        assert_eq!(output, 17);
++        assert_eq!(creation_observation(&owner), before.unwrap());
++        assert!(!f.parent.poisoned && f.parent.sdma.is_none());
++        assert!(f.final_poison_roots.is_empty());
++        f.parent.sdma = Some(owner);
++        let mut release = PrimaryReleaseStateV1::<Fixture>::new();
++        release.release_in_place(&mut f.parent).unwrap();
++        assert!(release.complete);
++        release.sdma.as_mut().unwrap().cleanup_local_mappings();
++        drop(release);
++        drop(f);
++        assert_eq!(local.live(), (0, 0, 0));
++    }
++}
++
++#[test]
++fn constructed_sdma_creation_retake_faults_retain_exact_single_and_combined_owners() {
++    for combined in [false, true] {
++        for after in [false, true] {
++            for panic in [false, true] {
++                let mut f = CreationParent::new(true);
++                let local = f.trace.borrow().local_resources.clone();
++                let key = f.parent.key;
++                let original = original_resource_ids(&f.parent);
++                let signal = Memory::primary_token_identity(f.parent.signals.as_ref().unwrap());
++                let dispatch = RetainedControlSnapshotV1::ordinary_owner_v1(
++                    f.parent.dispatch.as_ref().unwrap(),
++                );
++                let drops = f.trace.borrow().drops;
++                let point = if after {
++                    "creation-retake-after"
++                } else {
++                    "creation-retake-before"
++                };
++                f.fault(point, panic);
++                let mut primary = None;
++                let mut secondary = None;
++                let mut backing = None;
++                let result = catch_unwind(AssertUnwindSafe(|| {
++                    create_with_custody_v1(&mut f, "fixture retake", |memory| {
++                        let owner = directional_with_ids(memory, key, 100);
++                        primary = Some(creation_observation(&owner).primary);
++                        let created = if combined {
++                            let second = directional_with_ids(memory, key, 200);
++                            secondary = Some(creation_observation(&second).primary);
++                            ReturnedSdmaCreationV1::combined(owner, second, ())
++                        } else {
++                            ReturnedSdmaCreationV1::single(owner, ())
++                        };
++                        backing = Some(memory.retained_cleanup_memory_snapshot_v1());
++                        Ok(created)
++                    })
++                }));
++                if panic {
++                    assert_eq!(
++                        result.err().unwrap().downcast_ref::<(&str, usize)>(),
++                        Some(&(point, 1))
++                    );
++                } else {
++                    let error = result.ok().unwrap().err().unwrap();
++                    assert!(
++                        matches!(error, ComputeAqlQueueSessionErrorV1::TerminalCreation { source, .. }
++                        if matches!(*source, ComputeAqlQueueSessionErrorV1::Contract(name) if name == point))
++                    );
++                }
++                let retained = f.parent.sdma.as_ref().unwrap();
++                assert!(matches!(
++                    retained,
++                    Gfx942SdmaQueueSetV1::TerminalRetained { .. }
++                ));
++                let observed = creation_observation(retained);
++                assert_eq!(observed.primary, primary.unwrap());
++                if combined {
++                    assert_eq!(observed.secondary, secondary);
++                }
++                assert!(observed.attempted.is_none());
++                assert_eq!(
++                    f.parent
++                        .engine
++                        .backend
++                        .session
++                        .retained_queue_memory_snapshot_v1(&f.parent.engine.foundation),
++                    backing.unwrap()
++                );
++                assert_eq!(
++                    f.parent
++                        .engine
++                        .backend
++                        .session
++                        .primary_loan_state_v1(&f.parent.engine.foundation)
++                        .1
++                        .is_some(),
++                    !after
++                );
++                assert_eq!(f.parent.engine.backend.foundation_in_engine, after);
++                assert_eq!(original_resource_ids(&f.parent), original);
++                assert_eq!(
++                    Memory::primary_token_identity(f.parent.signals.as_ref().unwrap()),
++                    signal
++                );
++                dispatch.assert_restored_v1(
++                    RetainedControlSnapshotV1::ordinary_owner_v1(
++                        f.parent.dispatch.as_ref().unwrap(),
++                    ),
++                    true,
++                );
++                assert_eq!(f.trace.borrow().drops, drops);
++                assert_eq!(f.final_poison_roots, [true]);
++                f.assert_no_retry();
++                drop(f);
++                assert_eq!(local.live(), (0, 0, 0));
++            }
++        }
++    }
++}
++
++#[test]
++fn constructed_sdma_creation_real_reclaim_rejection_retains_exact_custody() {
++    for combined in [false, true] {
++        let mut f = CreationParent::new(true);
++        let local = f.trace.borrow().local_resources.clone();
++        let key = f.parent.key;
++        let engine = &f.parent.engine;
++        let opening = engine
++            .backend
++            .session
++            .retained_queue_memory_snapshot_v1(&engine.foundation);
++        let loan = engine
++            .backend
++            .session
++            .primary_loan_state_v1(&engine.foundation);
++        let resources = original_resource_ids(&f.parent);
++        let mut primary = None;
++        let mut secondary = None;
++        let mut completed = None;
++        f.regress_reclaim = true;
++        let error = create_with_custody_v1(&mut f, "real reclaim rejection", |memory| {
++            let owner = directional_with_ids(memory, key, 100);
++            primary = Some(creation_observation(&owner).primary);
++            let created = if combined {
++                let second = directional_with_ids(memory, key, 200);
++                secondary = Some(creation_observation(&second).primary);
++                ReturnedSdmaCreationV1::combined(owner, second, ())
++            } else {
++                ReturnedSdmaCreationV1::single(owner, ())
++            };
++            completed = Some(memory.retained_cleanup_memory_snapshot_v1());
++            Ok(created)
++        })
++        .err()
++        .unwrap();
++        assert!(matches!(
++            error,
++            ComputeAqlQueueSessionErrorV1::TerminalCreation { source, .. }
++                if matches!(*source, ComputeAqlQueueSessionErrorV1::Memory(
++                    MemorySessionError::Model("fixture live foundation reclaim")
++                ))
++        ));
++        let retained = creation_observation(f.parent.sdma.as_ref().unwrap());
++        assert_eq!(retained.primary, primary.unwrap());
++        if combined {
++            assert_eq!(retained.secondary, secondary);
++        }
++        assert!(retained.attempted.is_none());
++        let engine = &f.parent.engine;
++        completed.unwrap().assert_after_retake_v1(
++            engine
++                .backend
++                .session
++                .retained_queue_memory_snapshot_v1(&engine.foundation),
++            &opening,
++            true,
++        );
++        assert_eq!(
++            engine
++                .backend
++                .session
++                .primary_loan_state_v1(&engine.foundation),
++            (loan.0, Some(loan.2), loan.2 + 1)
++        );
++        assert!(!engine.backend.foundation_in_engine);
++        assert_eq!(original_resource_ids(&f.parent), resources);
++        assert!(f.parent.poisoned);
++        assert_eq!(f.final_poison_roots, [true]);
++        f.assert_no_retry();
++        drop(f);
++        assert_eq!(local.live(), (0, 0, 0));
++    }
++}
++
++#[test]
++fn constructed_sdma_creation_lower_failure_retains_attempted_owner_and_error_precedence() {
++    for attempt in [None, Some(0), Some(1), Some(2)] {
++        for closing in 0..3 {
++            let mut f = CreationParent::new(false);
++            let local = f.trace.borrow().local_resources.clone();
++            let key = f.parent.key;
++            if closing != 0 {
++                f.fault("creation-retake-after", closing == 2);
++            }
++            let mut before = None;
++            let mut backing = None;
++            let result = catch_unwind(AssertUnwindSafe(|| {
++                create_with_custody_v1(
++                    &mut f,
++                    "fixture lower",
++                    |memory| -> Result<ReturnedSdmaCreationV1<()>, _> {
++                        let owner = directional_with_ids(memory, key, 100);
++                        let mut retained =
++                            Gfx942SdmaQueueSetV1::retain_created_for_terminal(owner, None);
++                        if let Some(attempt) = attempt {
++                            add_creation_attempt(&mut retained, attempt);
++                        }
++                        before = Some(creation_observation(&retained));
++                        backing = Some(memory.retained_cleanup_memory_snapshot_v1());
++                        Err(creation_failure(Some(retained), true))
++                    },
++                )
++            }));
++            if closing == 2 {
++                assert_eq!(
++                    result.err().unwrap().downcast_ref::<(&str, usize)>(),
++                    Some(&("creation-retake-after", 1))
++                );
++            } else {
++                let error = result.ok().unwrap().err().unwrap();
++                assert!(
++                    matches!(error, ComputeAqlQueueSessionErrorV1::TerminalCreation { source, .. }
++                    if match *source {
++                        ComputeAqlQueueSessionErrorV1::Contract("creation-retake-after") => closing == 1,
++                        ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Contract("injected creation failure")) => closing == 0,
++                        _ => false,
++                    })
++                );
++            }
++            assert_eq!(
++                creation_observation(f.parent.sdma.as_ref().unwrap()),
++                before.unwrap()
++            );
++            assert_eq!(
++                f.parent
++                    .engine
++                    .backend
++                    .session
++                    .retained_queue_memory_snapshot_v1(&f.parent.engine.foundation),
++                backing.unwrap()
++            );
++            assert_eq!(f.final_poison_roots, [true]);
++            f.assert_no_retry();
++            drop(f);
++            assert_eq!(local.live(), (0, 0, 0));
++        }
++    }
++}
++
++#[test]
++fn constructed_sdma_creation_no_output_and_lower_panic_do_not_invent_custody() {
++    for mode in 0..6 {
++        let mut f = CreationParent::new(false);
++        let local = f.trace.borrow().local_resources.clone();
++        if mode < 2 {
++            f.fault("creation-loan", mode == 1);
++        }
++        if mode == 2 {
++            f.skip_callback = true;
++        }
++        if mode >= 4 {
++            f.fault("creation-retake-before", mode == 5);
++        }
++        let calls = Cell::new(0);
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            create_with_custody_v1(
++                &mut f,
++                "fixture no output",
++                |_| -> Result<ReturnedSdmaCreationV1<()>, _> {
++                    calls.set(calls.get() + 1);
++                    std::panic::panic_any("creation-operation")
++                },
++            )
++        }));
++        assert_eq!(calls.get(), usize::from(mode >= 3));
++        if mode == 1 {
++            assert_eq!(
++                result.err().unwrap().downcast_ref::<(&str, usize)>(),
++                Some(&("creation-loan", 1))
++            );
++        } else if mode >= 3 {
++            assert_eq!(
++                result.err().unwrap().downcast_ref::<&str>(),
++                Some(&"creation-operation")
++            );
++        } else {
++            assert!(result.ok().unwrap().err().unwrap().is_terminal_creation());
++        }
++        assert!(f.parent.sdma.is_none());
++        assert_eq!(f.final_poison_roots, [false]);
++        f.assert_no_retry();
++        drop(f);
++        assert_eq!(local.live(), (0, 0, 0));
++    }
++}
++
++#[test]
++fn constructed_sdma_creation_retryable_failure_and_occupied_preflight_are_inert() {
++    let mut f = CreationParent::new(false);
++    let local = f.trace.borrow().local_resources.clone();
++    let result = create_with_custody_v1(
++        &mut f,
++        "retryable",
++        |_| -> Result<ReturnedSdmaCreationV1<()>, _> { Err(creation_failure(None, false)) },
++    );
++    assert!(matches!(
++        result,
++        Err(ComputeAqlQueueSessionErrorV1::Sdma(_))
++    ));
++    assert!(!f.parent.poisoned && f.parent.sdma.is_none());
++    assert!(f.final_poison_roots.is_empty());
++    let key = f.parent.key;
++    let created = create_with_custody_v1(&mut f, "success", |memory| {
++        Ok(ReturnedSdmaCreationV1::single(
++            directional_with_ids(memory, key, 100),
++            (),
++        ))
++    })
++    .unwrap();
++    f.parent.sdma = Some(created.into_single().0);
++    f.assert_no_retry();
++    assert!(!f.parent.poisoned);
++    drop(f);
++    assert_eq!(local.live(), (0, 0, 0));
++}
++
++#[test]
++fn constructed_sdma_creation_every_profile_retains_its_original_roster() {
++    for profile in 0..5 {
++        let mut f = CreationParent::new(false);
++        let local = f.trace.borrow().local_resources.clone();
++        f.fault("creation-retake-after", false);
++        let key = f.parent.key;
++        let mut original = None;
++        let result = create_with_custody_v1(&mut f, "profile retention", |memory| {
++            let owner = creation_profile(memory, key, profile);
++            original = Some(creation_observation(&owner).primary);
++            Ok(ReturnedSdmaCreationV1::single(owner, ()))
++        });
++        assert!(result.err().unwrap().is_terminal_creation());
++        assert_eq!(
++            creation_observation(f.parent.sdma.as_ref().unwrap()).primary,
++            original.unwrap()
++        );
++        assert_eq!(f.final_poison_roots, [true]);
++        f.assert_no_retry();
++        drop(f);
++        assert_eq!(local.live(), (0, 0, 0));
++    }
++}
++
++#[test]
++fn constructed_sdma_creation_ownerless_failure_distinguishes_retryable_from_transport() {
++    for terminal in [false, true] {
++        for closing in 0..3 {
++            let mut f = CreationParent::new(false);
++            let local = f.trace.borrow().local_resources.clone();
++            if closing != 0 {
++                f.fault("creation-retake-before", closing == 2);
++            }
++            let calls = Cell::new(0);
++            let result = catch_unwind(AssertUnwindSafe(|| {
++                create_with_custody_v1(
++                    &mut f,
++                    "ownerless failure",
++                    |_| -> Result<ReturnedSdmaCreationV1<()>, _> {
++                        calls.set(calls.get() + 1);
++                        Err(creation_failure(None, terminal))
++                    },
++                )
++            }));
++            assert_eq!(calls.get(), 1);
++            let poisoned = terminal || closing != 0;
++            assert_eq!(f.parent.poisoned, poisoned);
++            assert!(f.parent.sdma.is_none());
++            assert_eq!(
++                f.final_poison_roots,
++                if poisoned { vec![false] } else { vec![] }
++            );
++            if closing == 2 {
++                assert_eq!(
++                    result.err().unwrap().downcast_ref::<(&str, usize)>(),
++                    Some(&("creation-retake-before", 1))
++                );
++            } else {
++                assert_eq!(
++                    result.ok().unwrap().err().unwrap().is_terminal_creation(),
++                    poisoned
++                );
++            }
++            drop(f);
++            assert_eq!(local.live(), (0, 0, 0));
++        }
++    }
++}
++
++#[test]
++fn constructed_sdma_creation_first_panic_survives_retake_and_final_poison_panics() {
++    for retake_panic in [false, true] {
++        let mut f = CreationParent::new(false);
++        f.final_poison_panic = true;
++        f.fault("creation-retake-before", retake_panic);
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            create_with_custody_v1(
++                &mut f,
++                "panic",
++                |_| -> Result<ReturnedSdmaCreationV1<()>, _> {
++                    std::panic::panic_any("original lower panic")
++                },
++            )
++        }));
++        assert_eq!(
++            result.err().unwrap().downcast_ref::<&str>(),
++            Some(&"original lower panic")
++        );
++        assert_eq!(f.secondary_drops.load(Ordering::SeqCst), 0);
++        assert_eq!(f.final_poison_roots, [false]);
++        assert!(f.parent.poisoned);
++    }
++}
++
++#[test]
++fn constructed_sdma_creation_roots_before_metadata_drop_and_preserves_retake_panic() {
++    for retake_panic in [false, true] {
++        let mut f = CreationParent::new(false);
++        f.fault("creation-retake-before", retake_panic);
++        f.final_poison_panic = true;
++        let key = f.parent.key;
++        let mut before = None;
++        let metadata_drops = Arc::new(AtomicUsize::new(0));
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            create_with_custody_v1(&mut f, "metadata", |memory| {
++                let owner = directional_with_ids(memory, key, 100);
++                before = Some(creation_observation(&owner).primary);
++                Ok(ReturnedSdmaCreationV1::single(
++                    owner,
++                    PanicDrop(metadata_drops.clone()),
++                ))
++            })
++        }));
++        let payload = result.err().unwrap();
++        if retake_panic {
++            assert_eq!(
++                payload.downcast_ref::<(&str, usize)>(),
++                Some(&("creation-retake-before", 1))
++            );
++        } else {
++            assert_eq!(
++                payload.downcast_ref::<&str>(),
++                Some(&"secondary payload destructor")
++            );
++        }
++        assert_eq!(metadata_drops.load(Ordering::SeqCst), 1);
++        assert_eq!(f.secondary_drops.load(Ordering::SeqCst), 0);
++        assert_eq!(
++            creation_observation(f.parent.sdma.as_ref().unwrap()).primary,
++            before.unwrap()
++        );
++        assert_eq!(f.final_poison_roots, [true]);
++        f.assert_no_retry();
++    }
++}
++
++#[test]
++fn sdma_creation_all_six_public_profiles_use_rooted_production_settlement() {
++    let live = include_str!("../../queue_live.rs");
++    let live = live.split("#[cfg(test)]\nmod tests").next().unwrap();
++    let profiles = live
++        .split("pub fn enable_sdma_copy_engine(")
++        .nth(1)
++        .unwrap()
++        .split("pub fn allocate_sdma_host_buffer(")
++        .next()
++        .unwrap();
++    assert_eq!(
++        profiles
++            .matches("with_sdma_queue_creation_custody_v1(")
++            .count(),
++        6
++    );
++    assert_eq!(
++        profiles.matches("ReturnedSdmaCreationV1::single(").count(),
++        5
++    );
++    assert_eq!(
++        profiles
++            .matches("ReturnedSdmaCreationV1::combined(")
++            .count(),
++        1
++    );
++    for name in [
++        "enable_gfx942_directional_sdma_copy_engines(",
++        "enable_gfx942_sdma_copy_engine_on_engine_index(",
++    ] {
++        let body = profiles
++            .split(name)
++            .nth(1)
++            .unwrap()
++            .split("\n    pub fn ")
++            .next()
++            .unwrap();
++        assert!(body.find("self.sdma = Some(").unwrap() < body.find(".expect(\"created").unwrap());
++    }
++    let adapter = live
++        .split("fn with_sdma_queue_creation_custody_v1<R>")
++        .nth(1)
++        .unwrap()
++        .split("fn detach_persistent_dispatch_data_retaining_control_v1")
++        .next()
++        .unwrap();
++    assert!(adapter.contains("sdma_creation::create_with_custody_v1(self, stage, operation)"));
++    let implementation = include_str!("../sdma_creation.rs")
++        .split("impl SdmaCreationContextV1 for ComputeAqlQueueSessionV1")
++        .nth(1)
++        .unwrap();
++    assert!(
++        implementation
++            .contains("self.with_live_queue_memory_model_custody_with_poison(operation, |_| {})")
++    );
++    assert!(implementation.contains("&mut self.sdma"));
++    assert!(implementation.contains("self.striped_sdma.is_some()"));
++    assert!(implementation.contains("self.poison_terminal()"));
++    assert!(implementation.contains("permanently_poison_process_global_kfd_runtime_gate_v1()"));
++}
+diff --git a/crates/fe2o3-kfd/src/queue_live/sdma_creation.rs b/crates/fe2o3-kfd/src/queue_live/sdma_creation.rs
+new file mode 100644
+index 000000000..0b8178db4
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_live/sdma_creation.rs
+@@ -0,0 +1,210 @@
++//! Root returned SDMA creation owners before model-retake failure escapes.
++
++use super::*;
++use crate::sdma::{Gfx942SdmaQueueSetCreationDispositionV1, Gfx942SdmaQueueSetCreationFailureV1};
++use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
++
++pub(in crate::queue) struct ReturnedSdmaCreationV1<O> {
++    primary: Gfx942SdmaQueueSetV1,
++    secondary: Option<Gfx942SdmaQueueSetV1>,
++    output: O,
++}
++
++impl<O> ReturnedSdmaCreationV1<O> {
++    pub(in crate::queue) fn single(primary: Gfx942SdmaQueueSetV1, output: O) -> Self {
++        Self {
++            primary,
++            secondary: None,
++            output,
++        }
++    }
++
++    pub(in crate::queue) fn combined(
++        primary: Gfx942SdmaQueueSetV1,
++        secondary: Gfx942SdmaQueueSetV1,
++        output: O,
++    ) -> Self {
++        Self {
++            primary,
++            secondary: Some(secondary),
++            output,
++        }
++    }
++
++    pub(in crate::queue) fn into_single(self) -> (Gfx942SdmaQueueSetV1, O) {
++        if self.secondary.is_some() {
++            std::process::abort();
++        }
++        (self.primary, self.output)
++    }
++
++    pub(in crate::queue) fn into_combined(self) -> (Gfx942SdmaQueueSetV1, Gfx942SdmaQueueSetV1, O) {
++        let Some(secondary) = self.secondary else {
++            std::process::abort()
++        };
++        (self.primary, secondary, self.output)
++    }
++}
++
++type CreationResultV1<O> = Result<ReturnedSdmaCreationV1<O>, Gfx942SdmaQueueSetCreationFailureV1>;
++type CreationEnvelopeV1 =
++    Result<((), Result<(), ComputeAqlQueueSessionErrorV1>), ComputeAqlQueueSessionErrorV1>;
++
++pub(in crate::queue) trait SdmaCreationContextV1 {
++    type Memory;
++
++    fn require_vacant(&self) -> Result<(), ComputeAqlQueueSessionErrorV1>;
++    fn with_memory_custody(
++        &mut self,
++        operation: impl FnOnce(&mut Self::Memory),
++    ) -> CreationEnvelopeV1;
++    fn retained_slot(&mut self) -> &mut Option<Gfx942SdmaQueueSetV1>;
++    fn poison(&mut self);
++}
++
++fn install(context: &mut impl SdmaCreationContextV1, owner: Gfx942SdmaQueueSetV1) {
++    let slot = context.retained_slot();
++    if slot.is_some() {
++        // Vacancy is checked before the memory-only callback. Never unwind by
++        // destroying either native owner if that invariant is violated.
++        core::mem::forget(owner);
++        std::process::abort();
++    }
++    *slot = Some(owner);
++}
++
++fn retain<O>(context: &mut impl SdmaCreationContextV1, created: Option<CreationResultV1<O>>) {
++    match created {
++        Some(Ok(created)) => {
++            let ReturnedSdmaCreationV1 {
++                primary,
++                secondary,
++                output,
++            } = created;
++            install(
++                context,
++                Gfx942SdmaQueueSetV1::retain_created_for_terminal(primary, secondary),
++            );
++            // Even a metadata destructor must observe rooted native custody.
++            drop(output);
++        }
++        Some(Err(failure)) => {
++            let (error, _, retained) = failure.into_parts();
++            if let Some(owner) = retained {
++                install(context, owner);
++            }
++            drop(error);
++        }
++        None => {}
++    }
++}
++
++fn resume_poisoned(
++    context: &mut impl SdmaCreationContextV1,
++    payload: Box<dyn core::any::Any + Send>,
++) -> ! {
++    if let Err(secondary) = catch_unwind(AssertUnwindSafe(|| context.poison())) {
++        core::mem::forget(secondary);
++    }
++    resume_unwind(payload)
++}
++
++fn retain_and_resume<O>(
++    context: &mut impl SdmaCreationContextV1,
++    created: Option<CreationResultV1<O>>,
++    payload: Box<dyn core::any::Any + Send>,
++) -> ! {
++    if let Err(secondary) = catch_unwind(AssertUnwindSafe(|| retain(context, created))) {
++        core::mem::forget(secondary);
++    }
++    resume_poisoned(context, payload)
++}
++
++// Failure custody stays inline so retaining native owners needs no allocation.
++#[allow(clippy::result_large_err)]
++pub(in crate::queue) fn create_with_custody_v1<C: SdmaCreationContextV1, O>(
++    context: &mut C,
++    stage: &'static str,
++    operation: impl FnOnce(&mut C::Memory) -> CreationResultV1<O>,
++) -> Result<ReturnedSdmaCreationV1<O>, ComputeAqlQueueSessionErrorV1> {
++    context.require_vacant()?;
++    let mut created = None;
++    let envelope = catch_unwind(AssertUnwindSafe(|| {
++        let ((), retake) = context.with_memory_custody(|memory| {
++            // Keep a lower panic outside model retake and its poison callbacks.
++            created = Some(catch_unwind(AssertUnwindSafe(|| operation(memory))));
++        })?;
++        retake
++    }));
++    let created = match created {
++        Some(Ok(created)) => Some(created),
++        Some(Err(payload)) => {
++            core::mem::forget(envelope);
++            resume_poisoned(context, payload)
++        }
++        None => None,
++    };
++    let envelope = match envelope {
++        Ok(envelope) => envelope,
++        Err(payload) => retain_and_resume(context, created, payload),
++    };
++    let error = match (envelope, created) {
++        (Ok(()), Some(Ok(created))) => return Ok(created),
++        (Ok(()), Some(Err(failure))) => {
++            let (error, disposition, retained) = failure.into_parts();
++            let has_retained = retained.is_some();
++            if let Some(owner) = retained {
++                install(context, owner);
++            }
++            if disposition == Gfx942SdmaQueueSetCreationDispositionV1::Retryable && !has_retained {
++                return Err(error.into());
++            }
++            error.into()
++        }
++        (Err(error), created) => {
++            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| retain(context, created))) {
++                resume_poisoned(context, payload);
++            }
++            error
++        }
++        (Ok(()), None) => {
++            ComputeAqlQueueSessionErrorV1::Contract("SDMA creation operation did not execute")
++        }
++    };
++    context.poison();
++    Err(terminal_creation(stage, error))
++}
++
++impl SdmaCreationContextV1 for ComputeAqlQueueSessionV1 {
++    type Memory = SharedGttMemorySessionV1;
++
++    fn require_vacant(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        if self.terminal_poisoned || self.sdma.is_some() || self.striped_sdma.is_some() {
++            return Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "SDMA creation requires live vacant owner slots",
++            ));
++        }
++        Ok(())
++    }
++
++    fn with_memory_custody(
++        &mut self,
++        operation: impl FnOnce(&mut Self::Memory),
++    ) -> CreationEnvelopeV1 {
++        // Creation settlement must root returned owners before poisoning. All
++        // opening/closing errors and panics are terminalized by the outer driver.
++        self.with_live_queue_memory_model_custody_with_poison(operation, |_| {})
++    }
++
++    fn retained_slot(&mut self) -> &mut Option<Gfx942SdmaQueueSetV1> {
++        &mut self.sdma
++    }
++
++    fn poison(&mut self) {
++        let local = catch_unwind(AssertUnwindSafe(|| self.poison_terminal()));
++        permanently_poison_process_global_kfd_runtime_gate_v1();
++        if let Err(payload) = local {
++            resume_unwind(payload);
++        }
++    }
++}
+diff --git a/crates/fe2o3-kfd/src/sdma.rs b/crates/fe2o3-kfd/src/sdma.rs
+index bc338d90d..1f02152b4 100644
+--- a/crates/fe2o3-kfd/src/sdma.rs
++++ b/crates/fe2o3-kfd/src/sdma.rs
+@@ -5760,7 +5760,7 @@ impl Gfx942SdmaQueueSetV1 {
+ 
+         let primary = confirmed_owners(primary);
+         let secondary = secondary.map_or_else(Vec::new, confirmed_owners);
+-        permanently_poison_process_global_kfd_runtime_gate_v1();
++        // The creation adapter installs this owner before terminal poisoning.
+         Self::TerminalRetained {
+             primary,
+             secondary,
+diff --git a/crates/fe2o3-kfd/src/sdma/retained_release/creation_fixture.rs b/crates/fe2o3-kfd/src/sdma/retained_release/creation_fixture.rs
+new file mode 100644
+index 000000000..8e92178bd
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/sdma/retained_release/creation_fixture.rs
+@@ -0,0 +1,253 @@
++//! Borrowed observations and local-only disposal, never native recovery.
++
++use super::*;
++use crate::queue_linux::doorbell_release_tests::{
++    LocalDoorbellObservation, observe_local_doorbell,
++};
++
++#[derive(Debug, Eq, PartialEq)]
++pub(crate) struct StorageObservation {
++    pointer: usize,
++    len: usize,
++    capacity: usize,
++    occupied: Vec<usize>,
++}
++
++fn storage<T>(values: &Vec<Option<T>>) -> StorageObservation {
++    StorageObservation {
++        pointer: values.as_ptr() as usize,
++        len: values.len(),
++        capacity: values.capacity(),
++        occupied: values
++            .iter()
++            .enumerate()
++            .filter_map(|(i, v)| v.is_some().then_some(i))
++            .collect(),
++    }
++}
++
++#[derive(Debug, Eq, PartialEq)]
++struct CreationOwnerObservation {
++    key: QueueKeyV1,
++    id: u32,
++    engine: Option<u32>,
++    state: (bool, bool),
++    identities: [Option<SharedGttAllocationIdentityV1>; 3],
++    storage: [StorageObservation; 4],
++    generations: Vec<u32>,
++    uncertain: Option<Gfx942SdmaCopyTicketV1>,
++    doorbell: Option<LocalDoorbellObservation>,
++}
++
++#[derive(Debug, Eq, PartialEq)]
++pub(crate) struct CreationRosterObservation {
++    storage: (usize, usize, usize),
++    owners: Vec<CreationOwnerObservation>,
++}
++
++fn roster(owners: &Vec<Gfx942SdmaQueueOwnerV1>) -> CreationRosterObservation {
++    CreationRosterObservation {
++        storage: (owners.as_ptr() as usize, owners.len(), owners.capacity()),
++        owners: owners
++            .iter()
++            .map(|owner| CreationOwnerObservation {
++                key: owner.owner,
++                id: owner.queue_id,
++                engine: owner.engine_index,
++                state: (owner.destroyed, owner.poisoned),
++                identities: [
++                    owner
++                        .ring
++                        .as_ref()
++                        .map(PreparationMemoryFixtureV1::primary_token_identity),
++                    owner
++                        .control
++                        .as_ref()
++                        .map(PreparationMemoryFixtureV1::primary_token_identity),
++                    owner.completions.as_ref().map(|v| v.storage_identity()),
++                ],
++                storage: [
++                    storage(&owner.records),
++                    storage(&owner.xgmi_records),
++                    storage(&owner.persistent_window_slots),
++                    storage(&owner.persistent_window_records),
++                ],
++                generations: owner.generations.to_vec(),
++                uncertain: owner.uncertain_xgmi_ticket,
++                doorbell: owner.doorbell.as_ref().map(observe_local_doorbell),
++            })
++            .collect(),
++    }
++}
++
++#[derive(Debug, Eq, PartialEq)]
++pub(crate) enum CreationAttemptObservation {
++    Opaque,
++    Prepared {
++        key: QueueKeyV1,
++        engine: Option<u32>,
++        identities: [SharedGttAllocationIdentityV1; 3],
++        storage: Box<[StorageObservation; 4]>,
++        native: Gfx942SdmaQueueCreationNativeObservationV1,
++        doorbell: Option<LocalDoorbellObservation>,
++    },
++}
++
++#[derive(Debug, Eq, PartialEq)]
++pub(crate) struct CreationObservation {
++    pub(crate) primary: CreationRosterObservation,
++    pub(crate) secondary: Option<CreationRosterObservation>,
++    pub(crate) attempted: Option<CreationAttemptObservation>,
++}
++
++pub(crate) fn creation_observation(set: &Gfx942SdmaQueueSetV1) -> CreationObservation {
++    let (primary, secondary, attempted) = match set {
++        Gfx942SdmaQueueSetV1::Generic(owners)
++        | Gfx942SdmaQueueSetV1::Directional(owners)
++        | Gfx942SdmaQueueSetV1::Striped { owners, .. }
++        | Gfx942SdmaQueueSetV1::LogicalMuxV2 { owners, .. } => (owners, None, None),
++        Gfx942SdmaQueueSetV1::TerminalRetained {
++            primary,
++            secondary,
++            attempted,
++        } => (primary, Some(secondary), attempted.as_ref()),
++    };
++    CreationObservation {
++        primary: roster(primary),
++        secondary: secondary.map(roster),
++        attempted: attempted.map(|attempt| match attempt {
++            TerminalGfx942SdmaQueueCreationV1::OpaqueAfterFirstMemoryOperation => {
++                CreationAttemptObservation::Opaque
++            }
++            TerminalGfx942SdmaQueueCreationV1::QueueAttempt {
++                prepared,
++                native,
++                doorbell,
++            } => CreationAttemptObservation::Prepared {
++                key: prepared.owner,
++                engine: prepared.engine_index,
++                identities: [
++                    PreparationMemoryFixtureV1::primary_token_identity(&prepared.ring),
++                    PreparationMemoryFixtureV1::primary_token_identity(&prepared.control),
++                    prepared.completions.storage_identity(),
++                ],
++                storage: Box::new([
++                    storage(&prepared.records),
++                    storage(&prepared.xgmi_records),
++                    storage(&prepared.persistent_window_slots),
++                    storage(&prepared.persistent_window_records),
++                ]),
++                native: *native,
++                doorbell: doorbell.as_ref().map(observe_local_doorbell),
++            },
++        }),
++    }
++}
++
++pub(crate) fn creation_failure(
++    retained: Option<Gfx942SdmaQueueSetV1>,
++    terminal: bool,
++) -> Gfx942SdmaQueueSetCreationFailureV1 {
++    Gfx942SdmaQueueSetCreationFailureV1 {
++        error: Gfx942SdmaErrorV1::Contract("injected creation failure"),
++        disposition: if terminal {
++            Gfx942SdmaQueueSetCreationDispositionV1::Terminal
++        } else {
++            Gfx942SdmaQueueSetCreationDispositionV1::Retryable
++        },
++        retained,
++    }
++}
++
++pub(crate) fn add_creation_attempt(set: &mut Gfx942SdmaQueueSetV1, kind: u8) {
++    let Gfx942SdmaQueueSetV1::TerminalRetained {
++        primary, attempted, ..
++    } = set
++    else {
++        panic!("terminal fixture")
++    };
++    *attempted = Some(if kind == 0 {
++        TerminalGfx942SdmaQueueCreationV1::OpaqueAfterFirstMemoryOperation
++    } else {
++        let mut owner = primary.pop().unwrap();
++        TerminalGfx942SdmaQueueCreationV1::QueueAttempt {
++            prepared: PreparedGfx942SdmaQueueV1 {
++                owner: owner.owner,
++                engine_index: owner.engine_index,
++                ring: owner.ring.take().unwrap(),
++                control: owner.control.take().unwrap(),
++                completions: owner.completions.take().unwrap(),
++                records: owner.records,
++                xgmi_records: owner.xgmi_records,
++                persistent_window_slots: owner.persistent_window_slots,
++                persistent_window_records: owner.persistent_window_records,
++            },
++            native: if kind == 1 {
++                Gfx942SdmaQueueCreationNativeObservationV1::ValidatedQueueId(owner.queue_id)
++            } else {
++                Gfx942SdmaQueueCreationNativeObservationV1::UntrustedIoctlOutputs {
++                    queue_id: owner.queue_id,
++                    doorbell_offset: 4096,
++                }
++            },
++            doorbell: owner.doorbell.take(),
++        }
++    });
++}
++
++pub(crate) fn creation_profile(
++    memory: &mut PreparationMemoryFixtureV1,
++    key: QueueKeyV1,
++    profile: u8,
++) -> Gfx942SdmaQueueSetV1 {
++    match profile {
++        0 => Gfx942SdmaQueueSetV1::Generic(creation_owners(memory, key, 100, 1)),
++        1 => directional_with_ids(memory, key, 100),
++        2 => Gfx942SdmaQueueSetV1::Striped {
++            owners: creation_owners(memory, key, 100, 4),
++            next_owner: 0,
++        },
++        3 => Gfx942SdmaQueueSetV1::LogicalMuxV2 {
++            owners: creation_owners(memory, key, 100, 2),
++            logical_lane_count: 4,
++            next_logical_lane: 0,
++        },
++        4 => {
++            let mut owners = creation_owners(memory, key, 100, 1);
++            owners[0].engine_index = Some(1);
++            Gfx942SdmaQueueSetV1::Generic(owners)
++        }
++        _ => unreachable!(),
++    }
++}
++
++pub(crate) fn cleanup_creation_set(set: &mut Gfx942SdmaQueueSetV1) {
++    fn cleanup(owners: &mut [Gfx942SdmaQueueOwnerV1]) {
++        for owner in owners {
++            if let Some(doorbell) = &mut owner.doorbell {
++                cleanup_local_doorbell(doorbell);
++            }
++        }
++    }
++    match set {
++        Gfx942SdmaQueueSetV1::Generic(owners)
++        | Gfx942SdmaQueueSetV1::Directional(owners)
++        | Gfx942SdmaQueueSetV1::Striped { owners, .. }
++        | Gfx942SdmaQueueSetV1::LogicalMuxV2 { owners, .. } => cleanup(owners),
++        Gfx942SdmaQueueSetV1::TerminalRetained {
++            primary,
++            secondary,
++            attempted,
++        } => {
++            cleanup(primary);
++            cleanup(secondary);
++            if let Some(TerminalGfx942SdmaQueueCreationV1::QueueAttempt {
++                doorbell: Some(doorbell),
++                ..
++            }) = attempted
++            {
++                cleanup_local_doorbell(doorbell);
++            }
++        }
++    }
++}
+diff --git a/crates/fe2o3-kfd/src/sdma/retained_release/fixture.rs b/crates/fe2o3-kfd/src/sdma/retained_release/fixture.rs
+index e87282d0f..64e8ff9b6 100644
+--- a/crates/fe2o3-kfd/src/sdma/retained_release/fixture.rs
++++ b/crates/fe2o3-kfd/src/sdma/retained_release/fixture.rs
+@@ -2,11 +2,32 @@ use super::*;
+ use crate::queue_linux::doorbell_release_tests::{cleanup_local_doorbell, local_doorbell};
+ use crate::shared_memory::PreparationMemoryFixtureV1;
+ 
++#[path = "creation_fixture.rs"]
++mod creation;
++pub(crate) use creation::*;
++
+ pub(crate) fn directional(
+     memory: &mut PreparationMemoryFixtureV1,
+     key: QueueKeyV1,
+ ) -> Gfx942SdmaQueueSetV1 {
+-    let owners = (0..2)
++    directional_with_ids(memory, key, 100)
++}
++
++pub(crate) fn directional_with_ids(
++    memory: &mut PreparationMemoryFixtureV1,
++    key: QueueKeyV1,
++    first_id: u32,
++) -> Gfx942SdmaQueueSetV1 {
++    Gfx942SdmaQueueSetV1::Directional(creation_owners(memory, key, first_id, 2))
++}
++
++fn creation_owners(
++    memory: &mut PreparationMemoryFixtureV1,
++    key: QueueKeyV1,
++    first_id: u32,
++    count: u32,
++) -> Vec<Gfx942SdmaQueueOwnerV1> {
++    (0..count)
+         .map(|index| {
+             let mut ring = memory.allocate::<AqlQueueGttV1>(4096).unwrap();
+             memory
+@@ -34,7 +55,7 @@ pub(crate) fn directional(
+                 .unwrap_or_else(|_| panic!("fixture roster allocation"));
+             PreparedGfx942SdmaQueueV1 {
+                 owner: key,
+-                engine_index: Some(index),
++                engine_index: Some(index % 2),
+                 ring,
+                 control,
+                 completions,
+@@ -43,10 +64,9 @@ pub(crate) fn directional(
+                 persistent_window_slots: host.persistent_window_slots,
+                 persistent_window_records: host.persistent_window_records,
+             }
+-            .into_live(100 + index, local_doorbell())
++            .into_live(first_id + index, local_doorbell())
+         })
+-        .collect();
+-    Gfx942SdmaQueueSetV1::Directional(owners)
++        .collect()
+ }
+ 
+ #[derive(Debug, Eq, PartialEq)]

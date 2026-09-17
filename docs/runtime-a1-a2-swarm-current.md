@@ -165,6 +165,13 @@ round-robin progress, and allow empty-prefix Stop/drain. Only clean contention i
 retryable; identity/health errors and panics remain terminal. This is CPU-tested
 development work, not native or N5 acceptance.
 
+The subsequent [SDMA creation-custody repair](evidence/dev-sdma-creation-custody-2026-09-17/README.md)
+retains returned owners across model-retake errors and panics in all six public
+creation adapters. CPU fixtures exercise exact retained ownership, real model
+reclaim rejection, first-panic precedence and inert retry. They do not execute
+native CREATE_QUEUE or qualify additional teardown profiles. This remains R126
+development; R125, R118B C1/C2/C3 and R116/V3 remain the accepted checkpoints.
+
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,865 tests with

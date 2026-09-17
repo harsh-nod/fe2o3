@@ -5760,7 +5760,7 @@ impl Gfx942SdmaQueueSetV1 {
 
         let primary = confirmed_owners(primary);
         let secondary = secondary.map_or_else(Vec::new, confirmed_owners);
-        permanently_poison_process_global_kfd_runtime_gate_v1();
+        // The creation adapter installs this owner before terminal poisoning.
         Self::TerminalRetained {
             primary,
             secondary,

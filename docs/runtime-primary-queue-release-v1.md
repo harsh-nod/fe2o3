@@ -868,6 +868,28 @@ for final-source results and remaining coverage. This is not all-profile,
 native-failure, formal-correspondence or performance qualification. R125 remains
 the accepted Native CPU/test checkpoint; R126, A1/A2 and #182 remain open.
 
+## Returned SDMA Creation Custody
+
+The [SDMA creation development receipt](evidence/dev-sdma-creation-custody-2026-09-17/README.md)
+repairs returned-owner loss when model retake panics. All six public creation
+profiles use one settlement driver. It installs returned single/combined owners
+or lower failure custody under the parent before retake unwinding escapes and
+before the adapter's final poisoning or metadata destruction. Earlier lower
+failure construction may already poison its process gate. Only ownerless,
+retryable lower rejection followed by successful model return stays retryable.
+
+The driver preserves the first panic across retake, metadata destruction and
+final poisoning. Real model-reclaim rejection and exact inert terminal retry
+are exercised with constructed fixture owners. The ordinary model-loan helper
+keeps its previous poisoning policy; only creation defers it to settlement.
+
+These CPU tests preserve owner/token/storage/doorbell identities, backing extents,
+accounting and model state. Queue IDs and creation outcomes remain scripted;
+anonymous local mapping disposal is not native queue destruction. The packet
+does not recover owners consumed inside a panicking creator or qualify Generic,
+Striped, LogicalMux or terminal-creation teardown. Native failure, formal and
+performance qualification remain open. R125 is still the accepted checkpoint.
+
 ## Remaining Qualification
 
 Allocation settlement still needs native failure qualification beyond the two

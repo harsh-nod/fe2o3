@@ -1,0 +1,19 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 58.68s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-5074a99fa693d94b)
+
+running 11 tests
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_first_panic_survives_retake_and_final_poison_panics ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_ownerless_failure_distinguishes_retryable_from_transport ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_every_profile_retains_its_original_roster ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_no_output_and_lower_panic_do_not_invent_custody ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_real_reclaim_rejection_retains_exact_custody ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_retryable_failure_and_occupied_preflight_are_inert ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_success_preserves_owner_and_normal_teardown ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_roots_before_metadata_drop_and_preserves_retake_panic ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::sdma_creation_all_six_public_profiles_use_rooted_production_settlement ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_retake_faults_retain_exact_single_and_combined_owners ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_lower_failure_retains_attempted_owner_and_error_precedence ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 1389 filtered out; finished in 15.51s
+

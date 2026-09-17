@@ -2,11 +2,32 @@ use super::*;
 use crate::queue_linux::doorbell_release_tests::{cleanup_local_doorbell, local_doorbell};
 use crate::shared_memory::PreparationMemoryFixtureV1;
 
+#[path = "creation_fixture.rs"]
+mod creation;
+pub(crate) use creation::*;
+
 pub(crate) fn directional(
     memory: &mut PreparationMemoryFixtureV1,
     key: QueueKeyV1,
 ) -> Gfx942SdmaQueueSetV1 {
-    let owners = (0..2)
+    directional_with_ids(memory, key, 100)
+}
+
+pub(crate) fn directional_with_ids(
+    memory: &mut PreparationMemoryFixtureV1,
+    key: QueueKeyV1,
+    first_id: u32,
+) -> Gfx942SdmaQueueSetV1 {
+    Gfx942SdmaQueueSetV1::Directional(creation_owners(memory, key, first_id, 2))
+}
+
+fn creation_owners(
+    memory: &mut PreparationMemoryFixtureV1,
+    key: QueueKeyV1,
+    first_id: u32,
+    count: u32,
+) -> Vec<Gfx942SdmaQueueOwnerV1> {
+    (0..count)
         .map(|index| {
             let mut ring = memory.allocate::<AqlQueueGttV1>(4096).unwrap();
             memory
@@ -34,7 +55,7 @@ pub(crate) fn directional(
                 .unwrap_or_else(|_| panic!("fixture roster allocation"));
             PreparedGfx942SdmaQueueV1 {
                 owner: key,
-                engine_index: Some(index),
+                engine_index: Some(index % 2),
                 ring,
                 control,
                 completions,
@@ -43,10 +64,9 @@ pub(crate) fn directional(
                 persistent_window_slots: host.persistent_window_slots,
                 persistent_window_records: host.persistent_window_records,
             }
-            .into_live(100 + index, local_doorbell())
+            .into_live(first_id + index, local_doorbell())
         })
-        .collect();
-    Gfx942SdmaQueueSetV1::Directional(owners)
+        .collect()
 }
 
 #[derive(Debug, Eq, PartialEq)]

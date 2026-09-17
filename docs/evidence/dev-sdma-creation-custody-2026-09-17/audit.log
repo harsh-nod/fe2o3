@@ -1,0 +1,18 @@
+crates/fe2o3-kfd/src/queue_linux/doorbell_release_tests.rs: OK
+crates/fe2o3-kfd/src/queue_live.rs: OK
+crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs: OK
+crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs: OK
+crates/fe2o3-kfd/src/queue_live/sdma_creation.rs: OK
+crates/fe2o3-kfd/src/sdma.rs: OK
+crates/fe2o3-kfd/src/sdma/retained_release/creation_fixture.rs: OK
+crates/fe2o3-kfd/src/sdma/retained_release/fixture.rs: OK
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 1389 filtered out; finished in 7.60s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 1389 filtered out; finished in 15.51s
+test result: ok. 249 passed; 0 failed; 0 ignored; 0 measured; 1151 filtered out; finished in 11.92s
+test result: ok. 869 passed; 0 failed; 13 ignored; 0 measured; 0 filtered out; finished in 26.72s
+test result: ok. 249 passed; 0 failed; 0 ignored; 0 measured; 1151 filtered out; finished in 17.37s
+test result: ok. 869 passed; 0 failed; 13 ignored; 0 measured; 0 filtered out; finished in 37.22s
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 18.42s
+SDMA creation development source and result audit passed; no native execution claimed.

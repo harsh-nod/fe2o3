@@ -1,6 +1,23 @@
 use super::*;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LocalDoorbellObservation {
+    address: usize,
+    plan: DoorbellMmapPlanV1,
+    opener_pid: u32,
+    active: bool,
+}
+
+pub(crate) fn observe_local_doorbell(owner: &LinuxDoorbellSliceV1) -> LocalDoorbellObservation {
+    LocalDoorbellObservation {
+        address: owner.address.as_ptr() as usize,
+        plan: owner.plan,
+        opener_pid: owner.opener_pid,
+        active: owner.active,
+    }
+}
+
 pub(crate) fn local_doorbell() -> LinuxDoorbellSliceV1 {
     let bytes = KFD_GFX942_PROCESS_DOORBELL_SLICE_BYTES as usize;
     // SAFETY: this independent anonymous VMA is exclusively owned by the returned

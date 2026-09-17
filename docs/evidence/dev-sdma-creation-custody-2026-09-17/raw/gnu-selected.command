@@ -1,0 +1,1 @@
+prlimit --core=0:0 -- target/debug/deps/fe2o3_kfd-5074a99fa693d94b queue::live::model_loan::tests:: queue::live::tests:: sdma::tests:: queue_linux::tests:: shared_memory::tests::live_foundation_ shared_memory::tests::panic_before_and_after_allocation_map_projection_remains_retakeable queue::live::construction_primary:: queue::live::construction_auxiliary:: --test-threads=4 

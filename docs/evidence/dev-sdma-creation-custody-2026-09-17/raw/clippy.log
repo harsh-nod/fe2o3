@@ -1,0 +1,197 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/sdma_creation.rs:133:58
+    |
+133 |             created = Some(catch_unwind(AssertUnwindSafe(|| operation(memory))));
+    |                                                          ^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 776 bytes
+    |
+    = help: try reducing the size of `sdma::Gfx942SdmaQueueSetCreationFailureV1`, for example by boxing large elements or replacing it with `Box<sdma::Gfx942SdmaQueueSetCreationFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: could not compile `fe2o3-kfd` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: the `Err`-variant returned from this closure is very large
+  --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs:64:24
+   |
+64 |                 |_| -> Result<ReturnedSdmaCreationV1<()>, _> {
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 776 bytes
+   |
+   = help: try reducing the size of `sdma::Gfx942SdmaQueueSetCreationFailureV1`, for example by boxing large elements or replacing it with `Box<sdma::Gfx942SdmaQueueSetCreationFailureV1>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+   = note: `-D clippy::result-large-err` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs:183:73
+    |
+183 |           let created = create_with_custody_v1(&mut f, "fixture success", |memory| {
+    |  _________________________________________________________________________^
+184 | |             let owner = directional_with_ids(memory, key, 100);
+185 | |             before = Some(creation_observation(&owner));
+186 | |             Ok(ReturnedSdmaCreationV1::single(owner, 17_u32))
+187 | |         })
+    | |_________^ the `Err`-variant is at least 776 bytes
+    |
+    = help: try reducing the size of `sdma::Gfx942SdmaQueueSetCreationFailureV1`, for example by boxing large elements or replacing it with `Box<sdma::Gfx942SdmaQueueSetCreationFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs:229:70
+    |
+229 |                       create_with_custody_v1(&mut f, "fixture retake", |memory| {
+    |  ______________________________________________________________________^
+230 | |                         let owner = directional_with_ids(memory, key, 100);
+231 | |                         primary = Some(creation_observation(&owner).primary);
+232 | |                         let created = if combined {
+...   |
+240 | |                         Ok(created)
+241 | |                     })
+    | |_____________________^ the `Err`-variant is at least 776 bytes
+    |
+    = help: try reducing the size of `sdma::Gfx942SdmaQueueSetCreationFailureV1`, for example by boxing large elements or replacing it with `Box<sdma::Gfx942SdmaQueueSetCreationFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs:326:78
+    |
+326 |           let error = create_with_custody_v1(&mut f, "real reclaim rejection", |memory| {
+    |  ______________________________________________________________________________^
+327 | |             let owner = directional_with_ids(memory, key, 100);
+328 | |             primary = Some(creation_observation(&owner).primary);
+329 | |             let created = if combined {
+...   |
+337 | |             Ok(created)
+338 | |         })
+    | |_________^ the `Err`-variant is at least 776 bytes
+    |
+    = help: try reducing the size of `sdma::Gfx942SdmaQueueSetCreationFailureV1`, for example by boxing large elements or replacing it with `Box<sdma::Gfx942SdmaQueueSetCreationFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs:396:33
+    |
+396 |                     |memory| -> Result<ReturnedSdmaCreationV1<()>, _> {
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 776 bytes
+    |
+    = help: try reducing the size of `sdma::Gfx942SdmaQueueSetCreationFailureV1`, for example by boxing large elements or replacing it with `Box<sdma::Gfx942SdmaQueueSetCreationFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs:464:24
+    |
+464 |                 |_| -> Result<ReturnedSdmaCreationV1<()>, _> {
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 776 bytes
+    |
+    = help: try reducing the size of `sdma::Gfx942SdmaQueueSetCreationFailureV1`, for example by boxing large elements or replacing it with `Box<sdma::Gfx942SdmaQueueSetCreationFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs:499:16
+    |
+499 |         |_| -> Result<ReturnedSdmaCreationV1<()>, _> { Err(creation_failure(None, false)) },
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 776 bytes
+    |
+    = help: try reducing the size of `sdma::Gfx942SdmaQueueSetCreationFailureV1`, for example by boxing large elements or replacing it with `Box<sdma::Gfx942SdmaQueueSetCreationFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs:508:61
+    |
+508 |       let created = create_with_custody_v1(&mut f, "success", |memory| {
+    |  _____________________________________________________________^
+509 | |         Ok(ReturnedSdmaCreationV1::single(
+510 | |             directional_with_ids(memory, key, 100),
+511 | |             (),
+512 | |         ))
+513 | |     })
+    | |_____^ the `Err`-variant is at least 776 bytes
+    |
+    = help: try reducing the size of `sdma::Gfx942SdmaQueueSetCreationFailureV1`, for example by boxing large elements or replacing it with `Box<sdma::Gfx942SdmaQueueSetCreationFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs:530:74
+    |
+530 |           let result = create_with_custody_v1(&mut f, "profile retention", |memory| {
+    |  __________________________________________________________________________^
+531 | |             let owner = creation_profile(memory, key, profile);
+532 | |             original = Some(creation_observation(&owner).primary);
+533 | |             Ok(ReturnedSdmaCreationV1::single(owner, ()))
+534 | |         });
+    | |_________^ the `Err`-variant is at least 776 bytes
+    |
+    = help: try reducing the size of `sdma::Gfx942SdmaQueueSetCreationFailureV1`, for example by boxing large elements or replacing it with `Box<sdma::Gfx942SdmaQueueSetCreationFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs:561:28
+    |
+561 |                     |_| -> Result<ReturnedSdmaCreationV1<()>, _> {
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 776 bytes
+    |
+    = help: try reducing the size of `sdma::Gfx942SdmaQueueSetCreationFailureV1`, for example by boxing large elements or replacing it with `Box<sdma::Gfx942SdmaQueueSetCreationFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs:602:24
+    |
+602 |                 |_| -> Result<ReturnedSdmaCreationV1<()>, _> {
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 776 bytes
+    |
+    = help: try reducing the size of `sdma::Gfx942SdmaQueueSetCreationFailureV1`, for example by boxing large elements or replacing it with `Box<sdma::Gfx942SdmaQueueSetCreationFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs:627:56
+    |
+627 |               create_with_custody_v1(&mut f, "metadata", |memory| {
+    |  ________________________________________________________^
+628 | |                 let owner = directional_with_ids(memory, key, 100);
+629 | |                 before = Some(creation_observation(&owner).primary);
+630 | |                 Ok(ReturnedSdmaCreationV1::single(
+...   |
+633 | |                 ))
+634 | |             })
+    | |_____________^ the `Err`-variant is at least 776 bytes
+    |
+    = help: try reducing the size of `sdma::Gfx942SdmaQueueSetCreationFailureV1`, for example by boxing large elements or replacing it with `Box<sdma::Gfx942SdmaQueueSetCreationFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: the `Err`-variant returned from this closure is very large
+   --> crates/fe2o3-kfd/src/queue_live/sdma_creation.rs:133:58
+    |
+133 |             created = Some(catch_unwind(AssertUnwindSafe(|| operation(memory))));
+    |                                                          ^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 776 bytes
+    |
+    = help: try reducing the size of `sdma::Gfx942SdmaQueueSetCreationFailureV1`, for example by boxing large elements or replacing it with `Box<sdma::Gfx942SdmaQueueSetCreationFailureV1>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: large size difference between variants
+  --> crates/fe2o3-kfd/src/sdma/retained_release/creation_fixture.rs:84:1
+   |
+84 | /  pub(crate) enum CreationAttemptObservation {
+85 | |      Opaque,
+   | |      ------ the second-largest variant carries no data at all
+86 | |/     Prepared {
+87 | ||         key: QueueKeyV1,
+88 | ||         engine: Option<u32>,
+89 | ||         identities: [SharedGttAllocationIdentityV1; 3],
+...  ||
+92 | ||         doorbell: Option<LocalDoorbellObservation>,
+93 | ||     },
+   | ||_____- the largest variant contains at least 368 bytes
+94 | |  }
+   | |__^ the entire enum is at least 368 bytes
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#large_enum_variant
+   = note: `-D clippy::large-enum-variant` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::large_enum_variant)]`
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+   |
+90 -         storage: [StorageObservation; 4],
+90 +         storage: Box<[StorageObservation; 4]>,
+   |
+
+error: could not compile `fe2o3-kfd` (lib test) due to 14 previous errors

@@ -1,0 +1,23 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+error[E0277]: `std::rc::Rc<std::cell::Cell<usize>>` cannot be sent between threads safely
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs:129:35
+    |
+129 |             std::panic::panic_any(PanicDrop(self.secondary_drops.clone()));
+    |             --------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `std::rc::Rc<std::cell::Cell<usize>>` cannot be sent between threads safely
+    |             |
+    |             required by a bound introduced by this call
+    |
+    = help: within `PanicDrop`, the trait `std::marker::Send` is not implemented for `std::rc::Rc<std::cell::Cell<usize>>`
+note: required because it appears within the type `PanicDrop`
+   --> crates/fe2o3-kfd/src/queue_live/construction_primary/integration_sdma_creation_tests.rs:65:8
+    |
+ 65 | struct PanicDrop(Rc<Cell<usize>>);
+    |        ^^^^^^^^^
+note: required by a bound in `panic_any`
+   --> /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:259:37
+    |
+259 | pub fn panic_any<M: 'static + Any + Send>(msg: M) -> ! {
+    |                                     ^^^^ required by this bound in `panic_any`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error

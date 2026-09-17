@@ -23,6 +23,8 @@ mod pool_trim_cases;
 mod sdma_allocation_cases;
 #[path = "integration_release_sdma_tests.rs"]
 mod sdma_cases;
+#[path = "integration_sdma_creation_tests.rs"]
+mod sdma_creation_cases;
 
 struct Parent {
     engine: NativeQueueEngineV1<PrimaryQueueBackendV1<Memory>>,
