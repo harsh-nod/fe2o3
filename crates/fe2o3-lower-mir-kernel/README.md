@@ -322,7 +322,8 @@ the original Work identity and storage floor. Scope records cannot escape the
 callback. The actual tagged borrowed-owner headers are included in their
 existing storage accounting.
 
-These additions do not attach final checks or authorize default Policy3 output.
+These occurrence/report APIs do not themselves attach final checks or authorize
+default Policy3 output.
 Unit-local helper source/output replay and unsupported private reads/effects
 remain refused; complete final source/control/memory/refinement validation is
 still required. Target-binding tests use the real binder and exact metadata
@@ -335,6 +336,36 @@ the constructor checks only the stated N-plus-O floor lower bound. Source replay
 uses its inherited source limits outside that ledger. Row receipts describe
 logical requested payload under the existing allocation convention, not portable
 allocator capacity, RSS, or a whole-compiler memory bound.
+
+## Closed Policy3 Output Admission
+
+`ProductionCheckedOutputOwnerPolicy3V1::try_admit` consumes the materialized
+ranked receipt, exact B and actual checked Policy3 O. Its first admitted subset
+is deliberately closed: root-only modules, unsigned integer/boolean scalar
+inputs and locals, Unit returns, one returning source/KIR block per root, and
+total scalar recipes. The ranked projection may contain a finite unconditional
+chain covering every block, including its synthetic entry block. A bounded
+linear walk checks that chain independently of stored block order. Source/KIR
+branches, assertions, calls, borrowed interfaces, private addresses, memory
+effects and ordered execution are refused, including in unused bodies.
+Source/ranked/N/B/O censuses and exact endpoint checks precede fresh O obligations;
+all allocation/access/bounds/alias/conflict rows must be empty.
+
+The owner retains historical N separately, and `output()` exposes only O. It
+cannot replace the legacy formal owner or be constructed from a borrowed formal
+report. Revalidation reruns the closed checks and fresh obligations. New census
+work uses the shared ledger; existing source reconstruction/ranked attachment,
+formal scratch/results and wrapper bookkeeping remain outside its canonical
+payload accounting. Input reservations are caller-owned and must outlive the
+consuming owner, including failed transfers.
+
+The backend has an inert descriptor consumer joining this owner with exact
+target metadata, typed source ownership/ABI, retained launch fields and O
+geometry. The default backend route and legacy V8/V9/V11 lineage are unchanged.
+General final admission, V12/Policy3 lineage, ordinary-source tutorial coverage,
+protected artifacts and hardware qualification remain separate gates. This is
+an M5/M7 prerequisite, not completion of either milestone or formal verification
+of the compiler.
 
 ## Source-Qualified Pipeline Catalogs
 

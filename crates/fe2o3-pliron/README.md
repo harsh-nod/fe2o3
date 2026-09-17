@@ -59,17 +59,23 @@ machine-code and HSACO authority.
 ## Immutable Canonical Analysis Scope
 
 `with_canonical_analysis_scope_v1` borrows one connected V12 owner, derives its
-inventory once, and lazily caches sparse scalar facts on first request. It
+inventory once, and lazily caches sparse scalar facts and conservative
+single-partition MemorySSA independently on first request. It
 cannot replace the owner or reuse facts by matching hashes. Mutation requires
 ending the scope and deriving fresh analyses for the changed graph. Returned
 values cannot borrow the local inventory or cached report.
 
 The caller reserves the graph's retained payload. Inventory and cached-report
-payloads remain reserved on the shared ledger until dropped; success and Result
-errors restore the incoming floor without rewinding work, peak storage, or
-failure history. Each cache request charges one lookup before inspecting the
-cache. Callbacks must not release live analysis floors. Stack-only scope framing,
-unrelated caller allocations, and panic recovery are outside this contract.
+payloads remain reserved on the shared ledger until dropped; success, Result
+errors and unwinding restore the incoming floor without rewinding work, peak
+storage, or failure history. Each cache request prepays six custody/lookup checks;
+the first retained report also pays two transfer checks. Replacing the Work
+ledger or losing any live floor poisons both caches, even when a consumer catches
+the error. Foreign storage is not released and missing storage is not recreated.
+Callback scratch must be dropped before returning or unwinding; output retained
+by callers must be reserved before scope entry. Stack-only framing and unrelated
+caller allocations remain outside this logical-payload contract. Fixed checks
+cannot observe violations completely repaired inside a callback.
 This API is not a pass, a preservation proof, or production-pipeline activation.
 
 ## Checked Occurrence Execution

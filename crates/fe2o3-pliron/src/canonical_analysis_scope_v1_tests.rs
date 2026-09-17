@@ -1,4 +1,7 @@
 use super::*;
+
+#[path = "canonical_analysis_scope_memory_ssa_v1_tests.rs"]
+mod memory_ssa_tests;
 use fe2o3_kernel_analysis::{
     CanonicalKirBlockRefV1, CanonicalKirDefinitionRefV1, CanonicalKirFunctionRefV1,
     CanonicalKirOperationRefV1, CanonicalKirSparseExceptionV1, CanonicalKirSparseValueV1,
@@ -49,18 +52,19 @@ fn inventory_only_scope_does_not_eagerly_allocate_sparse_facts() {
     let (owner, owner_storage) = admit(&Module::new("empty"));
     let floor = owner_storage + 17;
     let inventory = size_of::<CanonicalKirInventoryV1<'_>>();
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(2);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(6);
     let mut budget = Budget::new(&mut work, floor + inventory);
     budget.reserve_storage(floor).unwrap();
     with_canonical_analysis_scope_v1(&owner, &mut budget, |scope| -> ScopeResult<()> {
         assert!(scope.inventory().belongs_to(&owner));
         assert!(scope.sparse.is_none());
+        assert!(scope.memory_ssa.is_none());
         assert_eq!(scope.budget.storage(), floor + inventory);
         Ok(())
     })
     .unwrap();
     assert_eq!(budget.storage(), floor);
-    assert_eq!(budget.work(), 2);
+    assert_eq!(budget.work(), 6);
     assert_eq!(budget.peak_storage(), floor + inventory);
 }
 
@@ -70,12 +74,12 @@ fn empty_cache_has_independent_exact_and_one_under_work_and_storage_limits() {
     let floor = owner_storage + 17;
     let payload =
         size_of::<CanonicalKirInventoryV1<'_>>() + size_of::<CanonicalKirSparseV1<'_, '_>>();
-    // Two inventory visits, one cache lookup, eight sparse admission checks,
-    // then one cache hit. An empty graph has no row or worklist allocations.
+    // Outer checks4 + inventory2 + first request6 + sparse8 + transfer2 + hit6.
+    // An empty graph has no row or worklist allocations.
     for (allowance, storage, success) in [
-        (12, payload, true),
-        (11, payload, false),
-        (12, payload - 1, false),
+        (28, payload, true),
+        (27, payload, false),
+        (28, payload - 1, false),
     ] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(5 + allowance);
         work.charge_work(5).unwrap();
@@ -92,19 +96,19 @@ fn empty_cache_has_independent_exact_and_one_under_work_and_storage_limits() {
         assert_eq!(budget.storage(), floor);
         match result {
             Ok(()) => {
-                assert_eq!(budget.work(), 17);
+                assert_eq!(budget.work(), 33);
                 assert_eq!(budget.peak_storage(), floor + payload);
             }
             Err(CanonicalAnalysisScopeErrorV1::Resource(Resource::Work(error))) => {
-                assert_eq!(error.actual(), 17);
-                assert_eq!(budget.work(), 16);
+                assert_eq!(error.actual(), 33);
+                assert_eq!(budget.work(), 27);
                 assert_eq!(budget.peak_storage(), floor + payload);
             }
             Err(CanonicalAnalysisScopeErrorV1::Sparse(CanonicalKirSparseErrorV1::Resource(
                 Resource::Storage(error),
             ))) => {
                 assert_eq!(error.actual(), floor + payload);
-                assert_eq!(budget.work(), 16);
+                assert_eq!(budget.work(), 25);
                 assert_eq!(budget.failed_storage(), Some(floor + payload));
             }
             other => panic!("unexpected independent boundary result: {other:?}"),
@@ -180,7 +184,7 @@ fn same_scope_reuses_exact_report_after_a_consumer_error() {
         scope.with_sparse_v1(|report, budget| -> ScopeResult<()> {
             assert_eq!(first, std::ptr::from_ref(report));
             assert!(matches!(report.value(0), Some(CanonicalKirSparseValueV1::Constant(value)) if value.bits() == 1));
-            assert_eq!(budget.work(), prior_work + 2);
+            assert_eq!(budget.work(), prior_work + 12);
             assert_eq!(budget.storage(), prior_storage);
             Ok(())
         })
@@ -246,7 +250,7 @@ fn callback_errors_drop_inventory_and_cache_before_restoring_floor() {
 #[test]
 fn early_inventory_failure_preserves_floor_and_never_calls_consumer() {
     let (owner, owner_storage) = admit(&Module::new("empty"));
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(0);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(4);
     let mut budget = Budget::new(&mut work, 1_000_000);
     budget.reserve_storage(owner_storage).unwrap();
     let result: ScopeResult<()> = with_canonical_analysis_scope_v1(&owner, &mut budget, |_| {
@@ -288,7 +292,7 @@ fn sparse_failure_installs_no_cache_and_preserves_prior_failure_history() {
         .unwrap();
         assert_eq!(budget.storage(), owner_storage);
         assert_eq!(budget.failed_storage(), Some(usize::MAX));
-        assert_eq!(budget.work(), 3 + 2 + 2 * (1 + 8));
+        assert_eq!(budget.work(), 3 + 4 + 2 + 2 * (6 + 8));
     }
     assert_eq!(work.failed_work(), Some(usize::MAX));
 }
