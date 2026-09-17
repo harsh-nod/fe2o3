@@ -6543,7 +6543,16 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                 .pending_compute
                 .remove(&id)
                 .expect("accepted clean compute remains pending before first progress");
-            let _ = self.progress_pending_compute_v1(pending)?;
+            self.progress_pending_compute_v1(pending)
+                .map_err(|failure| {
+                    if let RuntimeBackendFailureV1::Rejected(mut error) = failure {
+                        self.poison_terminal_v1();
+                        error.kind = KfdRuntimeBackendErrorKindV1::Terminal;
+                        RuntimeBackendFailureV1::Terminal(error)
+                    } else {
+                        failure
+                    }
+                })?;
         }
         Ok(id)
     }
@@ -19491,6 +19500,121 @@ mod tests {
         assert!(backend.terminal_sdma_custody.is_none());
         assert!(backend.published_sdma_submissions.is_empty());
         assert!(backend.published_sdma_index_is_consistent_v1());
+        let driver = backend.scripted_sdma.as_ref().unwrap();
+        assert!(driver.is_exhausted());
+        assert_eq!(driver.live_owner_count(), 2);
+        assert_eq!(driver.unexpected_drops(), 0);
+        disarm_scripted_drop_after_inspection_v1(&mut backend);
+    }
+
+    #[test]
+    fn scripted_initial_compute_progress_rejection_preserves_accepted_custody() {
+        let steps = [
+            scripted_submit_step_v1(
+                Gfx942PersistentSdmaDirectionV1::HostToDevice,
+                0,
+                0,
+                8,
+                ScriptedFailureModeV1::Success,
+            ),
+            ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Completed {
+                direction: None,
+                copy_bytes: None,
+            }),
+            ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::Success),
+        ];
+        let (mut backend, stream, host, device) = scripted_direct_backend_v1(8, steps);
+        let owner_ids = |backend: &KfdRuntimeBackendV1| {
+            let KfdRuntimeSdmaStorageV1::Host(SdmaBufferOwnerV1::Scripted(host_owner)) =
+                &backend.allocations[&host].sdma_storage
+            else {
+                panic!("missing scripted host owner");
+            };
+            let KfdRuntimeSdmaStorageV1::Device(device_owner) =
+                &backend.allocations[&device].sdma_storage
+            else {
+                panic!("missing scripted device owner");
+            };
+            (
+                host_owner.observation().0,
+                device_owner.scripted_owner_id().unwrap(),
+            )
+        };
+        let original_owners = owner_ids(&backend);
+        let (source, destination) = scripted_copy_regions_v1(host, device, 8);
+        let copy = backend
+            .copy_async_v1(stream, source, destination, &[])
+            .unwrap();
+        assert_eq!(backend.poll_v1(copy).unwrap(), BackendPollV1::Succeeded);
+        let module = backend
+            .load_module_v1(7, &synthetic_cov6::module())
+            .unwrap();
+        let kernel = backend
+            .resolve_kernel_v1(module, "vecadd", [7; 32])
+            .unwrap();
+        // Inject a broken predecessor index, retaining its real ordered stream
+        // tail. No test authority or scripted token is native GPU authority.
+        backend.submissions.remove(&copy).unwrap();
+        assert_eq!(backend.stream_submission_tails[&stream], copy);
+        assert!(!backend.allocations[&host].sdma_shadow_dirty);
+        assert!(backend.allocations[&host].native_dirty.is_empty());
+        assert_eq!(backend.native_dirty_extents, 0);
+        let accepted_id = backend.next_handle;
+        let mut kernarg = [0; 16];
+        kernarg[8..].copy_from_slice(&13_u64.to_le_bytes());
+        let result = backend.submit_v1(BackendLaunchV1 {
+            stream,
+            kernel,
+            explicit_kernarg: &kernarg,
+            bindings: &[BackendBindingV1 {
+                region: source,
+                kernarg_byte_offset: 0,
+            }],
+            dependencies: &[],
+            geometry: crate::RuntimeLaunchGeometryV1 {
+                grid: [64, 1, 1],
+                workgroup: [64, 1, 1],
+                dynamic_shared_bytes: 0,
+            },
+            semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
+        });
+        let Err(RuntimeBackendFailureV1::Terminal(error)) = result else {
+            panic!("accepted custody reported definite rejection");
+        };
+        assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Terminal);
+        assert_eq!(error.detail(), "unknown KFD submission");
+        assert!(backend.terminal);
+        let pending = &backend.pending_compute[&accepted_id];
+        assert_eq!(pending.id, accepted_id);
+        assert_eq!(pending.module, module);
+        assert_eq!(pending.ordered_predecessor, Some(copy));
+        assert_eq!(&*pending.retained_allocations, &[host]);
+        assert_eq!(pending.launch.bindings[0].region.allocation, host);
+        assert_eq!(
+            backend.pending_compute_streams[&stream].front(),
+            Some(&accepted_id)
+        );
+        assert_eq!(backend.stream_submission_tails[&stream], accepted_id);
+        assert_eq!(backend.compute_module_retain_counts[&module], 1);
+        assert_eq!(backend.compute_dependency_retain_counts[&copy], 1);
+        assert_eq!(
+            backend.allocation_custody[&host]
+                .owners
+                .front()
+                .unwrap()
+                .submission,
+            accepted_id
+        );
+        assert_eq!(backend.compute_completion_reservations, 1);
+        assert!(backend.active.is_none());
+        assert_eq!(owner_ids(&backend), original_owners);
+        let next = backend.next_handle;
+        assert!(matches!(
+            backend.poll_v1(accepted_id),
+            Err(RuntimeBackendFailureV1::Terminal(_))
+        ));
+        assert_eq!(backend.next_handle, next);
+        assert!(backend.pending_compute.contains_key(&accepted_id));
         let driver = backend.scripted_sdma.as_ref().unwrap();
         assert!(driver.is_exhausted());
         assert_eq!(driver.live_owner_count(), 2);

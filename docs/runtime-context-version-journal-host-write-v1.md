@@ -7,6 +7,8 @@ Resources R116/V3. No new solver proof, GPU qualification or performance claim
 is supplied by this increment.
 CPU qualification is recorded in the
 [development receipt](evidence/dev-v6-host-writes-2026-09-17/README.md).
+The later [async writer extension](runtime-context-version-journal-async-v1.md)
+adds ordinary submission settlement; the historical receipt's scope is unchanged.
 
 ## Writer Boundary
 

@@ -146,7 +146,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         self.release_unpublished_hold_v1(hold)?;
         // This status describes native execution. Typed output stays behind
         // its original gate until the async driver consumes the decoder.
-        self.transition_submission_status(id, RuntimeCompletionStatusV1::Succeeded);
+        self.transition_submission_status(id, RuntimeCompletionStatusV1::Succeeded)?;
         self.submissions.remove(&id);
         self.backend_submissions.remove(&backend_submission);
         self.generated_issues.remove(&hold.stream());

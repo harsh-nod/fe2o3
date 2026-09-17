@@ -1,0 +1,2979 @@
+diff --git a/crates/fe2o3-runtime/README.md b/crates/fe2o3-runtime/README.md
+index 86d4a84ad..743e7346e 100644
+--- a/crates/fe2o3-runtime/README.md
++++ b/crates/fe2o3-runtime/README.md
+@@ -149,6 +149,14 @@ versions do not grant compiler admission or cross-run freshness. See the
+ [R65 contract](../../docs/runtime-async-drain-versions-v1.md) for bounds,
+ verification scope and remaining A1/A2 acceptance.
+ 
++`open_with_version_journal_v1` opts into bounded allocation and writer metadata.
++It tracks synchronous host writes and ordinary async launch/copy destinations,
++settling only from the exact backend result and retaining uncertain outcomes
++independently of completion handles. This development profile rejects overlapping
++unsettled writers and does not expose lineage, read leases or reuse authority.
++Generated protected execution is separate. See the
++[async journal boundary](../../docs/runtime-context-version-journal-async-v1.md).
++
+ R66 adds reciprocal native storage checks and runtime scheduling for disjoint
+ primary persistent compute with directional-persistent H2D/D2H copies. This
+ changes admission, not completion or release semantics. See the
+diff --git a/crates/fe2o3-runtime/src/context.rs b/crates/fe2o3-runtime/src/context.rs
+index 7c9ddff94..2dd292f78 100644
+--- a/crates/fe2o3-runtime/src/context.rs
++++ b/crates/fe2o3-runtime/src/context.rs
+@@ -24,7 +24,7 @@ use allocation_admission::ContextAllocationAdmissionV1;
+ pub use drain_capture::*;
+ pub use generated_preparation::*;
+ pub(crate) use unpublished::ContextUnpublishedHoldV1;
+-use versions::ContextVersionsV1;
++use versions::{ContextVersionsV1, SubmissionWriterOutcomeV1};
+ pub use versions::{RuntimeContextJournalUsageV1, RuntimeContextOpenFailureV1};
+ 
+ /// Maximum number of devices retained by one runtime context.
+@@ -1010,6 +1010,7 @@ struct SubmissionRecordV1 {
+     device: RuntimeDeviceIdV1,
+     quiescent: bool,
+     status: RuntimeCompletionStatusV1,
++    journal_writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
+ }
+ 
+ type RuntimeCompletionCallbackV1 =
+@@ -1086,6 +1087,7 @@ pub(crate) struct PreparedContextLaunchV1 {
+     kernel: u64,
+     explicit_kernarg: Vec<u8>,
+     backend_bindings: Vec<BackendBindingV1>,
++    journal_destinations: Vec<RuntimeAllocationIdV1>,
+     backend_dependencies: Vec<u64>,
+     geometry: RuntimeLaunchGeometryV1,
+     semantic_launch: BackendSemanticLaunchV1,
+@@ -1267,7 +1269,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+     }
+ 
+     pub(crate) fn quarantine_after_async_command_panic_v1(&mut self) {
+-        self.terminal = true;
++        self.quarantine_submission_writers_v1();
+     }
+ 
+     pub(crate) fn shutdown_owned_backend_v1(
+@@ -1306,9 +1308,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         let mut streams_quiescent = true;
+         for id in stream_ids {
+             let record = self.streams[&id];
+-            match self.backend.destroy_stream_v1(record.backend_stream) {
++            match self.invoke_journal_backend_v1(|backend| {
++                backend.destroy_stream_v1(record.backend_stream)
++            }) {
+                 Ok(()) => {
+-                    self.mark_stream_quiescent(id);
++                    if self.mark_stream_quiescent(id).is_err() {
++                        return self.cleanup_report(failures);
++                    }
+                     self.streams.remove(&id);
+                     self.backend_streams.remove(&record.backend_stream);
+                 }
+@@ -1317,15 +1323,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                         streams_quiescent = false;
+                     }
+                     if matches!(failure, RuntimeBackendFailureV1::Quiescent(_)) {
+-                        self.mark_stream_quiescent(id);
++                        let _ = self.mark_stream_quiescent(id);
+                     }
+                     let terminal = matches!(failure, RuntimeBackendFailureV1::Terminal(_));
+                     failures.push(RuntimeCleanupFailureV1 {
+                         resource: RuntimeCleanupResourceV1::Stream(id),
+                         failure,
+                     });
+-                    if terminal {
+-                        self.terminal = true;
++                    if terminal || self.terminal {
++                        self.quarantine_after_async_command_panic_v1();
+                         return self.cleanup_report(failures);
+                     }
+                 }
+@@ -1340,7 +1346,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         let mut events_released_or_quiescent = true;
+         for id in event_ids {
+             let record = self.events[&id];
+-            match self.backend.release_event_v1(record.backend_event) {
++            match self
++                .invoke_journal_backend_v1(|backend| backend.release_event_v1(record.backend_event))
++            {
+                 Ok(()) => {
+                     self.events.remove(&id);
+                     self.backend_events.remove(&record.backend_event);
+@@ -1355,7 +1363,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                         failure,
+                     });
+                     if terminal {
+-                        self.terminal = true;
++                        self.quarantine_submission_writers_v1();
+                         return self.cleanup_report(failures);
+                     }
+                 }
+@@ -1375,10 +1383,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                 submissions_released = false;
+                 continue;
+             }
+-            match self
+-                .backend
+-                .release_submission_v1(record.backend_submission)
+-            {
++            match self.invoke_journal_backend_v1(|backend| {
++                backend.release_submission_v1(record.backend_submission)
++            }) {
+                 Ok(()) => {
+                     self.submissions.remove(&id);
+                     self.backend_submissions.remove(&record.backend_submission);
+@@ -1392,7 +1399,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                         failure,
+                     });
+                     if terminal {
+-                        self.terminal = true;
++                        self.quarantine_submission_writers_v1();
+                         return self.cleanup_report(failures);
+                     }
+                 }
+@@ -1406,7 +1413,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         module_ids.sort_unstable();
+         for id in module_ids {
+             let record = self.modules[&id];
+-            match self.backend.unload_module_v1(record.backend_module) {
++            match self.invoke_journal_backend_v1(|backend| {
++                backend.unload_module_v1(record.backend_module)
++            }) {
+                 Ok(()) => {
+                     self.modules.remove(&id);
+                     self.backend_modules.remove(&record.backend_module);
+@@ -1419,7 +1428,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                         failure,
+                     });
+                     if terminal {
+-                        self.terminal = true;
++                        self.quarantine_submission_writers_v1();
+                         return self.cleanup_report(failures);
+                     }
+                 }
+@@ -1449,7 +1458,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                         failure,
+                     });
+                     if terminal {
+-                        self.terminal = true;
++                        self.quarantine_submission_writers_v1();
+                         return self.cleanup_report(failures);
+                     }
+                 }
+@@ -1511,7 +1520,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         Ok(identity)
+     }
+ 
+-    fn mark_stream_quiescent(&mut self, stream: RuntimeStreamIdV1) {
++    fn mark_stream_quiescent(
++        &mut self,
++        stream: RuntimeStreamIdV1,
++    ) -> Result<(), RuntimeValidationErrorV1> {
+         let submissions: Vec<_> = self
+             .submissions
+             .iter()
+@@ -1521,21 +1533,32 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             self.transition_submission_status(
+                 submission,
+                 RuntimeCompletionStatusV1::QuiescentWithoutResult,
+-            );
++            )?;
+         }
++        Ok(())
+     }
+ 
+     fn transition_submission_status(
+         &mut self,
+         submission: RuntimeSubmissionIdV1,
+         status: RuntimeCompletionStatusV1,
+-    ) -> RuntimeCompletionStatusV1 {
+-        let Some(record) = self.submissions.get_mut(&submission) else {
+-            return status;
++    ) -> Result<RuntimeCompletionStatusV1, RuntimeValidationErrorV1> {
++        let Some(record) = self.submissions.get(&submission) else {
++            return Ok(status);
+         };
+         if record.status.is_terminal() || !status.is_terminal() {
+-            return record.status;
++            return Ok(record.status);
+         }
++        let outcome = if status == RuntimeCompletionStatusV1::Succeeded {
++            SubmissionWriterOutcomeV1::Success
++        } else {
++            SubmissionWriterOutcomeV1::Unknown
++        };
++        self.settle_submission_writer_v1(submission, outcome)?;
++        let record = self
++            .submissions
++            .get_mut(&submission)
++            .expect("retained observed submission");
+         record.status = status;
+         record.quiescent = true;
+         let callbacks = self
+@@ -1552,14 +1575,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                     self.completion_callback_panic_count.saturating_add(1);
+             }
+         }
+-        status
++        Ok(status)
+     }
+ 
+     fn observe_submission_backend(
+         &mut self,
+         submission: RuntimeSubmissionIdV1,
+         observation: BackendPollV1,
+-    ) -> RuntimeCompletionStatusV1 {
++    ) -> Result<RuntimeCompletionStatusV1, RuntimeValidationErrorV1> {
+         let status = match observation {
+             BackendPollV1::Pending => RuntimeCompletionStatusV1::Pending,
+             BackendPollV1::Succeeded => RuntimeCompletionStatusV1::Succeeded,
+@@ -1576,19 +1599,21 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         result: Result<BackendPollV1, RuntimeBackendFailureV1<B::Error>>,
+     ) -> Result<RuntimeCompletionStatusV1, RuntimeErrorV1<B::Error>> {
+         match result {
+-            Ok(observation) => Ok(self.observe_submission_backend(submission, observation)),
++            Ok(observation) => self
++                .observe_submission_backend(submission, observation)
++                .map_err(Into::into),
+             Err(RuntimeBackendFailureV1::Rejected(error)) => {
+                 Err(RuntimeErrorV1::BackendRejected(error))
+             }
+             Err(RuntimeBackendFailureV1::Quiescent(error)) => {
+-                self.transition_submission_status(
++                let _ = self.transition_submission_status(
+                     submission,
+                     RuntimeCompletionStatusV1::QuiescentWithoutResult,
+                 );
+                 Err(RuntimeErrorV1::BackendQuiescent(error))
+             }
+             Err(RuntimeBackendFailureV1::Terminal(error)) => {
+-                self.terminal = true;
++                self.quarantine_after_async_command_panic_v1();
+                 Err(RuntimeErrorV1::BackendTerminal(error))
+             }
+         }
+@@ -1691,7 +1716,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                 Err(RuntimeErrorV1::BackendQuiescent(error))
+             }
+             Err(RuntimeBackendFailureV1::Terminal(error)) => {
+-                self.terminal = true;
++                self.quarantine_after_async_command_panic_v1();
+                 Err(RuntimeErrorV1::BackendTerminal(error))
+             }
+         }
+@@ -1722,7 +1747,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         value: T,
+     ) -> Result<T, RuntimeErrorV1<B::Error>> {
+         if let Some(error) = error {
+-            self.terminal = true;
++            self.quarantine_after_async_command_panic_v1();
+             Err(RuntimeErrorV1::BackendProtocol(error))
+         } else {
+             Ok(value)
+@@ -1758,7 +1783,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         }
+         let backend_device = device_record.backend_device;
+         let id = RuntimeStreamIdV1::new(self.context_generation, self.next_id()?);
+-        let result = self.backend.create_stream_v1(backend_device);
++        let result =
++            self.invoke_journal_backend_v1(|backend| backend.create_stream_v1(backend_device));
+         let backend_stream = self.backend_result(result)?;
+         let protocol_error = self
+             .backend_handle_protocol_error(RuntimeBackendResourceKindV1::Stream, backend_stream);
+@@ -1783,12 +1809,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+     ) -> Result<(), RuntimeErrorV1<B::Error>> {
+         self.require_live()?;
+         let record = *self.unheld_stream_v1(stream)?;
+-        let result = self.backend.destroy_stream_v1(record.backend_stream);
++        let result = self
++            .invoke_journal_backend_v1(|backend| backend.destroy_stream_v1(record.backend_stream));
+         if matches!(&result, Err(RuntimeBackendFailureV1::Quiescent(_))) {
+-            self.mark_stream_quiescent(stream);
++            let _ = self.mark_stream_quiescent(stream);
+         }
+         self.backend_result(result)?;
+-        self.mark_stream_quiescent(stream);
++        self.mark_stream_quiescent(stream)?;
+         self.streams.remove(&stream);
+         self.backend_streams.remove(&record.backend_stream);
+         Ok(())
+@@ -1841,7 +1868,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             Err(error) => {
+                 self.dispose_journal_provisional_v1(enrollment);
+                 if error == crate::RuntimeResourceCreditErrorV1::Invariant {
+-                    self.terminal = true;
++                    self.quarantine_submission_writers_v1();
+                 }
+                 return Err(RuntimeValidationErrorV1::Capacity.into());
+             }
+@@ -1853,7 +1880,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             })) {
+                 Ok(result) => result,
+                 Err(payload) => {
+-                    self.terminal = true;
++                    self.quarantine_submission_writers_v1();
+                     drop(credits);
+                     std::panic::resume_unwind(payload);
+                 }
+@@ -1868,7 +1895,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                 if let Some(credits) = credits
+                     && let Err(invariant) = credits.release_after_disposal()
+                 {
+-                    self.terminal = true;
++                    self.quarantine_submission_writers_v1();
+                     panic!(
+                         "allocation credit owner invariant failed after settlement: {invariant:?}"
+                     );
+@@ -1880,7 +1907,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                 if let Some(credits) = credits {
+                     if matches!(&failure, RuntimeBackendFailureV1::Rejected(_)) {
+                         if let Err(error) = credits.release_after_rejection() {
+-                            self.terminal = true;
++                            self.quarantine_submission_writers_v1();
+                             panic!(
+                                 "allocation credit owner invariant failed after rejection: {error:?}"
+                             );
+@@ -1924,7 +1951,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         };
+         if guarded {
+             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| commit(self))) {
+-                self.terminal = true;
++                self.quarantine_submission_writers_v1();
+                 std::panic::resume_unwind(payload);
+             }
+         } else {
+@@ -1983,9 +2010,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             .get(&allocation)
+             .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
+         validate_byte_range(record.byte_len, byte_offset, destination.len())?;
+-        let result =
+-            self.backend
+-                .read_allocation_v1(record.backend_allocation, byte_offset, destination);
++        let result = self.invoke_journal_backend_v1(|backend| {
++            backend.read_allocation_v1(record.backend_allocation, byte_offset, destination)
++        });
+         self.backend_result(result)
+     }
+ 
+@@ -2007,7 +2034,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         let backend_device = self.device(device)?.backend_device;
+         let id = RuntimeModuleIdV1::new(self.context_generation, self.next_id()?);
+         let image_sha256 = Sha256::digest(image).into();
+-        let result = self.backend.load_module_v1(backend_device, image);
++        let result =
++            self.invoke_journal_backend_v1(|backend| backend.load_module_v1(backend_device, image));
+         let backend_module = self.backend_result(result)?;
+         let protocol_error = self
+             .backend_handle_protocol_error(RuntimeBackendResourceKindV1::Module, backend_module);
+@@ -2034,7 +2062,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             .modules
+             .get(&module)
+             .ok_or(RuntimeValidationErrorV1::UnknownModule)?;
+-        let result = self.backend.unload_module_v1(record.backend_module);
++        let result = self
++            .invoke_journal_backend_v1(|backend| backend.unload_module_v1(record.backend_module));
+         self.backend_result(result)?;
+         self.modules.remove(&module);
+         self.backend_modules.remove(&record.backend_module);
+@@ -2075,9 +2104,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             A::SIGNATURE_V1,
+         ))
+         .map_err(|_| RuntimeValidationErrorV1::InvalidKernelSignature)?;
+-        let result = self
+-            .backend
+-            .resolve_kernel_v1(record.backend_module, name, A::SIGNATURE_V1);
++        let result = self.invoke_journal_backend_v1(|backend| {
++            backend.resolve_kernel_v1(record.backend_module, name, A::SIGNATURE_V1)
++        });
+         let backend_kernel = self.backend_result(result)?;
+         let protocol_error = self
+             .backend_handle_protocol_error(RuntimeBackendResourceKindV1::Kernel, backend_kernel);
+@@ -2218,6 +2247,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             return Err(RuntimeValidationErrorV1::TooManyBindings.into());
+         }
+         let mut backend_bindings = Vec::with_capacity(bindings.len());
++        let mut journal_destinations = Vec::new();
++        if self.versions.is_some() {
++            journal_destinations
++                .try_reserve_exact(bindings.len())
++                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
++        }
+         for binding in bindings {
+             let region = binding.region;
+             let allocation = *self
+@@ -2267,6 +2302,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                 },
+                 kernarg_byte_offset: binding.kernarg_byte_offset,
+             });
++            if self.versions.is_some()
++                && matches!(
++                    region.access,
++                    RuntimeAccessV1::Write | RuntimeAccessV1::ReadWrite
++                )
++            {
++                journal_destinations.push(region.allocation);
++            }
+         }
+         let mut backend_dependencies = Vec::with_capacity(dependencies.len());
+         for dependency in dependencies {
+@@ -2285,6 +2328,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             kernel: kernel.backend_kernel,
+             explicit_kernarg,
+             backend_bindings,
++            journal_destinations,
+             backend_dependencies,
+             geometry,
+             semantic_launch,
+@@ -2314,51 +2358,31 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             kernel,
+             explicit_kernarg,
+             backend_bindings,
++            journal_destinations,
+             backend_dependencies,
+             geometry,
+             semantic_launch,
+         } = prepared;
+-        let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
+-        let result = submit(
+-            &mut self.backend,
+-            BackendLaunchV1 {
+-                stream: stream_record.backend_stream,
+-                kernel,
+-                explicit_kernarg: &explicit_kernarg,
+-                bindings: &backend_bindings,
+-                dependencies: &backend_dependencies,
+-                geometry,
+-                semantic_launch,
+-            },
+-        );
+-        let backend_submission = self.backend_result(result)?;
+-        let protocol_error = self.backend_handle_protocol_error(
+-            RuntimeBackendResourceKindV1::Submission,
+-            backend_submission,
+-        );
+-        self.submissions.insert(
+-            id,
+-            SubmissionRecordV1 {
+-                backend_submission,
+-                stream,
+-                device: stream_record.device,
+-                quiescent: false,
+-                status: RuntimeCompletionStatusV1::Pending,
+-            },
+-        );
+-        if protocol_error.is_none() {
+-            self.backend_submissions.insert(backend_submission);
+-        }
+-        let submission = RuntimeSubmissionV1 {
+-            id,
+-            backend_submission,
++        self.submit_context_operation_v1(
+             stream,
+-            device: stream_record.device,
+-            completion: None,
+-            peer_transfer: None,
+-            marker: PhantomData,
+-        };
+-        self.seal_backend_protocol(protocol_error, submission)
++            stream_record,
++            &journal_destinations,
++            None,
++            |backend| {
++                submit(
++                    backend,
++                    BackendLaunchV1 {
++                        stream: stream_record.backend_stream,
++                        kernel,
++                        explicit_kernarg: &explicit_kernarg,
++                        bindings: &backend_bindings,
++                        dependencies: &backend_dependencies,
++                        geometry,
++                        semantic_launch,
++                    },
++                )
++            },
++        )
+     }
+ 
+     /// Submits an admitted typed kernel under an explicit atomic contract.
+@@ -2513,7 +2537,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         if record.status.is_terminal() {
+             return Ok(submission.observe_status(record.status));
+         }
+-        let result = self.backend.poll_v1(record.backend_submission);
++        let result =
++            self.invoke_journal_backend_v1(|backend| backend.poll_v1(record.backend_submission));
+         let status = self.completion_backend_result(submission.id, result)?;
+         Ok(submission.observe_status(status))
+     }
+@@ -2531,7 +2556,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         let deadline = Instant::now()
+             .checked_add(timeout)
+             .ok_or(RuntimeValidationErrorV1::InvalidDeadline)?;
+-        let result = self.backend.wait_v1(record.backend_submission, deadline);
++        let result = self.invoke_journal_backend_v1(|backend| {
++            backend.wait_v1(record.backend_submission, deadline)
++        });
+         let status = self.completion_backend_result(submission.id, result)?;
+         Ok(submission.observe_status(status))
+     }
+@@ -2584,7 +2611,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+     {
+         self.require_graph_access(access)?;
+         let backend_stream = self.unheld_stream_v1(stream)?.backend_stream;
+-        let result = self.backend.flush_stream_v1(backend_stream);
++        let result =
++            self.invoke_journal_backend_v1(|backend| backend.flush_stream_v1(backend_stream));
+         self.backend_result(result)
+     }
+ 
+@@ -2622,10 +2650,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         pending.sort_unstable_by_key(|(id, _)| *id);
+         let mut first_error = None;
+         for (submission, backend_submission) in pending {
+-            let result = self.backend.wait_v1(backend_submission, deadline);
++            let result = self
++                .invoke_journal_backend_v1(|backend| backend.wait_v1(backend_submission, deadline));
+             match self.completion_backend_result(submission, result) {
+                 Ok(_) => {}
+-                Err(error @ RuntimeErrorV1::BackendTerminal(_)) => return Err(error),
++                Err(error) if self.terminal => return Err(error),
+                 Err(error) => {
+                     first_error.get_or_insert(error);
+                 }
+@@ -2723,11 +2752,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             self.transition_submission_status(
+                 submission.id,
+                 RuntimeCompletionStatusV1::QuiescentWithoutResult,
+-            );
++            )?;
+         }
+-        let result = self
+-            .backend
+-            .release_submission_v1(record.backend_submission);
++        let result = self.invoke_journal_backend_v1(|backend| {
++            backend.release_submission_v1(record.backend_submission)
++        });
+         self.backend_result(result)?;
+         self.submissions.remove(&submission.id);
+         self.backend_submissions.remove(&record.backend_submission);
+@@ -2749,9 +2778,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         }
+         let stream = self.streams[&submission_record.stream];
+         let id = RuntimeEventIdV1::new(self.context_generation, self.next_id()?);
+-        let result = self
+-            .backend
+-            .record_event_v1(stream.backend_stream, submission_record.backend_submission);
++        let result = self.invoke_journal_backend_v1(|backend| {
++            backend.record_event_v1(stream.backend_stream, submission_record.backend_submission)
++        });
+         let backend_event = self.backend_result(result)?;
+         let protocol_error =
+             self.backend_handle_protocol_error(RuntimeBackendResourceKindV1::Event, backend_event);
+@@ -2819,7 +2848,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         if submission.status.is_terminal() {
+             return Ok(submission.status);
+         }
+-        let result = self.backend.poll_v1(submission.backend_submission);
++        let result = self
++            .invoke_journal_backend_v1(|backend| backend.poll_v1(submission.backend_submission));
+         self.completion_backend_result(event.submission, result)
+     }
+ 
+@@ -2844,9 +2874,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         let deadline = Instant::now()
+             .checked_add(timeout)
+             .ok_or(RuntimeValidationErrorV1::InvalidDeadline)?;
+-        let result = self
+-            .backend
+-            .wait_v1(submission.backend_submission, deadline);
++        let result = self.invoke_journal_backend_v1(|backend| {
++            backend.wait_v1(submission.backend_submission, deadline)
++        });
+         self.completion_backend_result(event.submission, result)
+     }
+ 
+@@ -2859,7 +2889,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             .events
+             .get(&event)
+             .ok_or(RuntimeValidationErrorV1::UnknownEvent)?;
+-        let result = self.backend.release_event_v1(record.backend_event);
++        let result = self
++            .invoke_journal_backend_v1(|backend| backend.release_event_v1(record.backend_event));
+         self.backend_result(result)?;
+         self.events.remove(&event);
+         self.backend_events.remove(&record.backend_event);
+@@ -2887,6 +2918,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         }
+         let stream_record = *self.unheld_stream_v1(stream)?;
+         let peer_contract_identity = peer_copy_contract_identity(stream, source, destination);
++        let journal_destination = destination.allocation;
+         let translate = |region: RuntimeMemoryRegionV1| -> Result<
+             (BackendMemoryRegionV1, RuntimeDeviceIdV1),
+             RuntimeValidationErrorV1,
+@@ -2949,43 +2981,22 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             }
+             backend_dependencies.push(event.backend_event);
+         }
+-        let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
+-        let result = self.backend.peer_copy_v1(
+-            stream_record.backend_stream,
+-            source,
+-            destination,
+-            &backend_dependencies,
+-        );
+-        let backend_submission = self.backend_result(result)?;
+-        let protocol_error = self.backend_handle_protocol_error(
+-            RuntimeBackendResourceKindV1::Submission,
+-            backend_submission,
+-        );
+-        self.submissions.insert(
+-            id,
+-            SubmissionRecordV1 {
+-                backend_submission,
+-                stream,
+-                device: destination_device,
+-                quiescent: false,
+-                status: RuntimeCompletionStatusV1::Pending,
+-            },
+-        );
+-        if protocol_error.is_none() {
+-            self.backend_submissions.insert(backend_submission);
+-        }
+-        let submission = RuntimeSubmissionV1 {
+-            id,
+-            backend_submission,
++        self.submit_context_operation_v1(
+             stream,
+-            device: destination_device,
+-            completion: None,
+-            peer_transfer: Some(PeerTransferMechanismV1::DeclaredPeerCopy {
++            stream_record,
++            &[journal_destination],
++            Some(PeerTransferMechanismV1::DeclaredPeerCopy {
+                 contract_identity: peer_contract_identity,
+             }),
+-            marker: PhantomData,
+-        };
+-        self.seal_backend_protocol(protocol_error, submission)
++            |backend| {
++                backend.peer_copy_v1(
++                    stream_record.backend_stream,
++                    source,
++                    destination,
++                    &backend_dependencies,
++                )
++            },
++        )
+     }
+ 
+     /// Submits a same-device copy without waiting for completion.
+@@ -3034,6 +3045,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         if source.allocation == destination.allocation {
+             return Err(RuntimeValidationErrorV1::InvalidRange.into());
+         }
++        let journal_destination = destination.allocation;
+         let translate = |region: RuntimeMemoryRegionV1| -> Result<
+             (BackendMemoryRegionV1, RuntimeDeviceIdV1),
+             RuntimeValidationErrorV1,
+@@ -3092,6 +3104,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             stream_record,
+             source,
+             destination,
++            journal_destination,
+             backend_dependencies,
+         })
+     }
+@@ -3114,44 +3127,23 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             stream_record,
+             source,
+             destination,
++            journal_destination,
+             backend_dependencies,
+         } = prepared;
+-        let destination_device = stream_record.device;
+-        let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
+-        let result = self.backend.copy_async_v1(
+-            stream_record.backend_stream,
+-            source,
+-            destination,
+-            &backend_dependencies,
+-        );
+-        let backend_submission = self.backend_result(result)?;
+-        let protocol_error = self.backend_handle_protocol_error(
+-            RuntimeBackendResourceKindV1::Submission,
+-            backend_submission,
+-        );
+-        self.submissions.insert(
+-            id,
+-            SubmissionRecordV1 {
+-                backend_submission,
+-                stream,
+-                device: destination_device,
+-                quiescent: false,
+-                status: RuntimeCompletionStatusV1::Pending,
+-            },
+-        );
+-        if protocol_error.is_none() {
+-            self.backend_submissions.insert(backend_submission);
+-        }
+-        let submission = RuntimeSubmissionV1 {
+-            id,
+-            backend_submission,
++        self.submit_context_operation_v1(
+             stream,
+-            device: destination_device,
+-            completion: None,
+-            peer_transfer: None,
+-            marker: PhantomData,
+-        };
+-        self.seal_backend_protocol(protocol_error, submission)
++            stream_record,
++            &[journal_destination],
++            None,
++            |backend| {
++                backend.copy_async_v1(
++                    stream_record.backend_stream,
++                    source,
++                    destination,
++                    &backend_dependencies,
++                )
++            },
++        )
+     }
+ 
+     /// Attempts to withdraw a submission before native publication.
+@@ -3170,30 +3162,35 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         if record.quiescent {
+             return Ok(RuntimeCancellationV1::TooLate);
+         }
+-        let result = self.backend.cancel_v1(record.backend_submission);
++        let result =
++            self.invoke_journal_backend_v1(|backend| backend.cancel_v1(record.backend_submission));
+         let cancellation = match result {
+             Ok(cancellation) => cancellation,
+             Err(RuntimeBackendFailureV1::Rejected(error)) => {
+                 return Err(RuntimeErrorV1::BackendRejected(error));
+             }
+             Err(RuntimeBackendFailureV1::Quiescent(error)) => {
+-                self.transition_submission_status(
++                let _ = self.transition_submission_status(
+                     submission.id,
+                     RuntimeCompletionStatusV1::QuiescentWithoutResult,
+                 );
+                 return Err(RuntimeErrorV1::BackendQuiescent(error));
+             }
+             Err(RuntimeBackendFailureV1::Terminal(error)) => {
+-                self.terminal = true;
++                self.quarantine_after_async_command_panic_v1();
+                 return Err(RuntimeErrorV1::BackendTerminal(error));
+             }
+         };
+         match cancellation {
+             BackendCancellationV1::Cancelled => {
++                self.settle_submission_writer_v1(
++                    submission.id,
++                    SubmissionWriterOutcomeV1::NoEffect,
++                )?;
+                 let status = self.transition_submission_status(
+                     submission.id,
+                     RuntimeCompletionStatusV1::Failed(RuntimeCompletionFailureV1::Cancelled),
+-                );
++                )?;
+                 submission.observe_status(status);
+                 Ok(RuntimeCancellationV1::Cancelled)
+             }
+@@ -3218,7 +3215,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         if record.status.is_terminal() {
+             return Ok(submission.observe_status(record.status));
+         }
+-        let result = self.backend.drain_v1(record.backend_submission, deadline);
++        let result = self.invoke_journal_backend_v1(|backend| {
++            backend.drain_v1(record.backend_submission, deadline)
++        });
+         let status = self.completion_backend_result(submission.id, result)?;
+         Ok(submission.observe_status(status))
+     }
+@@ -3426,6 +3425,7 @@ mod tests {
+     use super::*;
+     mod allocation_admission_tests;
+     mod allocation_outcome_tests;
++    mod async_journal_tests;
+     mod submission_identity_tests;
+     mod version_journal_tests;
+ 
+diff --git a/crates/fe2o3-runtime/src/context/allocation_admission.rs b/crates/fe2o3-runtime/src/context/allocation_admission.rs
+index 96e18aae7..e34a14063 100644
+--- a/crates/fe2o3-runtime/src/context/allocation_admission.rs
++++ b/crates/fe2o3-runtime/src/context/allocation_admission.rs
+@@ -179,7 +179,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+ 
+     pub(super) fn dispose_allocation_credits_v1(&mut self, id: RuntimeAllocationIdV1) {
+         if let Err(error) = self.allocation_admission.release_disposed(id) {
+-            self.terminal = true;
++            self.quarantine_submission_writers_v1();
+             panic!("allocation credit owner invariant failed after disposal: {error:?}");
+         }
+     }
+@@ -197,13 +197,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         })) {
+             Ok(result) => {
+                 if matches!(&result, Err(RuntimeBackendFailureV1::Terminal(_))) {
+-                    self.terminal = true;
++                    self.quarantine_submission_writers_v1();
+                     self.allocation_admission.quarantine(id);
+                 }
+                 result
+             }
+             Err(payload) => {
+-                self.terminal = true;
++                self.quarantine_submission_writers_v1();
+                 self.allocation_admission.quarantine(id);
+                 std::panic::resume_unwind(payload);
+             }
+diff --git a/crates/fe2o3-runtime/src/context/drain.rs b/crates/fe2o3-runtime/src/context/drain.rs
+index 576899470..85415d86a 100644
+--- a/crates/fe2o3-runtime/src/context/drain.rs
++++ b/crates/fe2o3-runtime/src/context/drain.rs
+@@ -45,7 +45,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         if record.status.is_terminal() {
+             return Ok(record.status);
+         }
+-        let result = self.backend.poll_v1(record.backend_submission);
++        let result =
++            self.invoke_journal_backend_v1(|backend| backend.poll_v1(record.backend_submission));
+         self.completion_backend_result(id, result)
+     }
+ 
+diff --git a/crates/fe2o3-runtime/src/context/drain_capture.rs b/crates/fe2o3-runtime/src/context/drain_capture.rs
+index ec5e19c5e..9ad37d420 100644
+--- a/crates/fe2o3-runtime/src/context/drain_capture.rs
++++ b/crates/fe2o3-runtime/src/context/drain_capture.rs
+@@ -210,21 +210,23 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         _quiescence: crate::async_engine::DrainQuiescenceV1,
+     ) -> Result<(), RuntimeHostCaptureErrorV1> {
+         let device = self.validate_host_capture_source_v1(source, destination.len())?;
+-        match self
+-            .backend
+-            .capture_coherent_host_range_v1(BackendHostCaptureV1 {
+-                device,
+-                allocation: source.backend_allocation,
+-                byte_offset: source.byte_offset,
+-                destination,
+-            }) {
++        match self.guard_journal_unwind_v1(|context| {
++            context
++                .backend
++                .capture_coherent_host_range_v1(BackendHostCaptureV1 {
++                    device,
++                    allocation: source.backend_allocation,
++                    byte_offset: source.byte_offset,
++                    destination,
++                })
++        }) {
+             Ok(()) => Ok(()),
+             Err(
+                 RuntimeBackendFailureV1::Rejected(error)
+                 | RuntimeBackendFailureV1::Quiescent(error),
+             ) => Err(error),
+             Err(RuntimeBackendFailureV1::Terminal(error)) => {
+-                self.terminal = true;
++                self.quarantine_submission_writers_v1();
+                 Err(error)
+             }
+         }
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue.rs b/crates/fe2o3-runtime/src/context/generated_issue.rs
+index 39029fd1f..87d675e6a 100644
+--- a/crates/fe2o3-runtime/src/context/generated_issue.rs
++++ b/crates/fe2o3-runtime/src/context/generated_issue.rs
+@@ -142,6 +142,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+                 device,
+                 quiescent: false,
+                 status: RuntimeCompletionStatusV1::Pending,
++                journal_writer: None,
+             },
+         );
+         assert!(self.backend_submissions.insert(backend_submission));
+@@ -285,7 +286,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+             self.transition_submission_status(
+                 id,
+                 RuntimeCompletionStatusV1::QuiescentWithoutResult,
+-            );
++            )?;
+             self.submissions.remove(&id);
+             self.backend_submissions.remove(&backend_submission);
+             self.retire_generated_shells_v1(hold)?;
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue/completion.rs b/crates/fe2o3-runtime/src/context/generated_issue/completion.rs
+index 920939b14..26bbeeb39 100644
+--- a/crates/fe2o3-runtime/src/context/generated_issue/completion.rs
++++ b/crates/fe2o3-runtime/src/context/generated_issue/completion.rs
+@@ -146,7 +146,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+         self.release_unpublished_hold_v1(hold)?;
+         // This status describes native execution. Typed output stays behind
+         // its original gate until the async driver consumes the decoder.
+-        self.transition_submission_status(id, RuntimeCompletionStatusV1::Succeeded);
++        self.transition_submission_status(id, RuntimeCompletionStatusV1::Succeeded)?;
+         self.submissions.remove(&id);
+         self.backend_submissions.remove(&backend_submission);
+         self.generated_issues.remove(&hold.stream());
+diff --git a/crates/fe2o3-runtime/src/context/generated_preparation.rs b/crates/fe2o3-runtime/src/context/generated_preparation.rs
+index 29ff86878..ac2f385f5 100644
+--- a/crates/fe2o3-runtime/src/context/generated_preparation.rs
++++ b/crates/fe2o3-runtime/src/context/generated_preparation.rs
+@@ -297,12 +297,12 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+             Ok(Ok(value)) => Ok(value),
+             Ok(Err(failure)) => {
+                 if matches!(failure, RuntimeBackendFailureV1::Terminal(_)) {
+-                    self.terminal = true;
++                    self.quarantine_submission_writers_v1();
+                 }
+                 Err(map_backend_error(failure))
+             }
+             Err(payload) => {
+-                self.terminal = true;
++                self.quarantine_submission_writers_v1();
+                 std::panic::resume_unwind(payload)
+             }
+         }
+diff --git a/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs b/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs
+index e09d64640..ee3834111 100644
+--- a/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs
++++ b/crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs
+@@ -121,12 +121,12 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+         match result {
+             Ok(Ok(())) => Ok(()),
+             Ok(Err(error)) => {
+-                self.terminal = true;
++                self.quarantine_submission_writers_v1();
+                 self.backend.quarantine_generated_adoption_v1();
+                 Err(error)
+             }
+             Err(payload) => {
+-                self.terminal = true;
++                self.quarantine_submission_writers_v1();
+                 self.backend.resume_generated_adoption_panic_v1(payload)
+             }
+         }
+diff --git a/crates/fe2o3-runtime/src/context/generated_shells.rs b/crates/fe2o3-runtime/src/context/generated_shells.rs
+index 623ca40f7..5dead6d79 100644
+--- a/crates/fe2o3-runtime/src/context/generated_shells.rs
++++ b/crates/fe2o3-runtime/src/context/generated_shells.rs
+@@ -95,7 +95,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+             .prepare_roster(device, &lengths)
+             .map_err(|error| {
+                 if error == crate::RuntimeResourceCreditErrorV1::Invariant {
+-                    self.terminal = true;
++                    self.quarantine_submission_writers_v1();
+                 }
+                 RuntimeValidationErrorV1::Capacity
+             })?;
+diff --git a/crates/fe2o3-runtime/src/context/graph.rs b/crates/fe2o3-runtime/src/context/graph.rs
+index 762015eed..3c371edf8 100644
+--- a/crates/fe2o3-runtime/src/context/graph.rs
++++ b/crates/fe2o3-runtime/src/context/graph.rs
+@@ -20,6 +20,7 @@ pub(crate) struct PreparedContextCopyV1 {
+     pub(super) stream_record: StreamRecordV1,
+     pub(super) source: BackendMemoryRegionV1,
+     pub(super) destination: BackendMemoryRegionV1,
++    pub(super) journal_destination: RuntimeAllocationIdV1,
+     pub(super) backend_dependencies: Vec<u64>,
+ }
+ 
+diff --git a/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests.rs b/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests.rs
+index 675a821f1..264fb367f 100644
+--- a/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests.rs
++++ b/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests.rs
+@@ -1,5 +1,6 @@
+ use super::*;
+ 
++mod async_tests;
+ mod writer_tests;
+ use crate::{RuntimeResourceKindV1 as K, RuntimeResourceVectorV1};
+ use std::sync::{
+@@ -45,6 +46,44 @@ struct AllocationOnlyBackend {
+     release_failure: MockMemoryFailure,
+     release_diagnostic: Option<Box<Diagnostic>>,
+     release_calls: usize,
++    failure_call: Option<DiagnosticCall>,
++    call_failure: MockMemoryFailure,
++    call_diagnostic: Option<Box<Diagnostic>>,
++}
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++enum DiagnosticCall {
++    Submit,
++    Poll,
++    Wait,
++    Cancel,
++    Drain,
++    Flush,
++    CreateStream,
++    DestroyStream,
++    RecordEvent,
++    ReleaseEvent,
++    ReleaseSubmission,
++    LoadModule,
++    UnloadModule,
++    ResolveKernel,
++    Read,
++}
++
++impl AllocationOnlyBackend {
++    fn fail_call(
++        &mut self,
++        call: DiagnosticCall,
++    ) -> Result<(), RuntimeBackendFailureV1<Box<Diagnostic>>> {
++        if self.failure_call != Some(call) {
++            return Ok(());
++        }
++        self.failure_call = None;
++        diagnostic_failure(
++            core::mem::take(&mut self.call_failure),
++            &mut self.call_diagnostic,
++        )
++    }
+ }
+ 
+ fn diagnostic_failure(
+@@ -123,11 +162,20 @@ impl RuntimeBackendV1 for AllocationOnlyBackend {
+         Ok(())
+     }
+ 
+-    fn create_stream_v1(&mut self, _: u64) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+-        unreachable!()
++    fn create_stream_v1(
++        &mut self,
++        device: u64,
++    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
++        self.fail_call(DiagnosticCall::CreateStream)?;
++        Ok(self.inner.create_stream_v1(device).unwrap())
+     }
+-    fn destroy_stream_v1(&mut self, _: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+-        unreachable!()
++    fn destroy_stream_v1(
++        &mut self,
++        stream: u64,
++    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
++        self.fail_call(DiagnosticCall::DestroyStream)?;
++        self.inner.destroy_stream_v1(stream).unwrap();
++        Ok(())
+     }
+     fn write_allocation_v1(
+         &mut self,
+@@ -156,6 +204,7 @@ impl RuntimeBackendV1 for AllocationOnlyBackend {
+         offset: u64,
+         bytes: &mut [u8],
+     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
++        self.fail_call(DiagnosticCall::Read)?;
+         self.inner
+             .read_allocation_v1(allocation, offset, bytes)
+             .unwrap();
+@@ -163,53 +212,74 @@ impl RuntimeBackendV1 for AllocationOnlyBackend {
+     }
+     fn load_module_v1(
+         &mut self,
+-        _: u64,
+-        _: &[u8],
++        device: u64,
++        image: &[u8],
+     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+-        unreachable!()
++        self.fail_call(DiagnosticCall::LoadModule)?;
++        Ok(self.inner.load_module_v1(device, image).unwrap())
+     }
+-    fn unload_module_v1(&mut self, _: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+-        unreachable!()
++    fn unload_module_v1(
++        &mut self,
++        module: u64,
++    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
++        self.fail_call(DiagnosticCall::UnloadModule)?;
++        self.inner.unload_module_v1(module).unwrap();
++        Ok(())
+     }
+     fn resolve_kernel_v1(
+         &mut self,
+-        _: u64,
+-        _: &str,
+-        _: [u8; 32],
++        module: u64,
++        name: &str,
++        signature: [u8; 32],
+     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+-        unreachable!()
++        self.fail_call(DiagnosticCall::ResolveKernel)?;
++        Ok(self
++            .inner
++            .resolve_kernel_v1(module, name, signature)
++            .unwrap())
+     }
+     fn submit_v1(
+         &mut self,
+-        _: BackendLaunchV1<'_>,
++        launch: BackendLaunchV1<'_>,
+     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+-        unreachable!()
++        self.fail_call(DiagnosticCall::Submit)?;
++        Ok(self.inner.submit_v1(launch).unwrap())
+     }
+-    fn poll_v1(&mut self, _: u64) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+-        unreachable!()
++    fn poll_v1(
++        &mut self,
++        submission: u64,
++    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
++        self.fail_call(DiagnosticCall::Poll)?;
++        Ok(self.inner.poll_v1(submission).unwrap())
+     }
+     fn wait_v1(
+         &mut self,
+-        _: u64,
+-        _: Instant,
++        submission: u64,
++        deadline: Instant,
+     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+-        unreachable!()
++        self.fail_call(DiagnosticCall::Wait)?;
++        Ok(self.inner.wait_v1(submission, deadline).unwrap())
+     }
+     fn release_submission_v1(
+         &mut self,
+-        _: u64,
++        submission: u64,
+     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+-        unreachable!()
++        self.fail_call(DiagnosticCall::ReleaseSubmission)?;
++        self.inner.release_submission_v1(submission).unwrap();
++        Ok(())
+     }
+     fn record_event_v1(
+         &mut self,
+-        _: u64,
+-        _: u64,
++        stream: u64,
++        submission: u64,
+     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+-        unreachable!()
++        self.fail_call(DiagnosticCall::RecordEvent)?;
++        Ok(self.inner.record_event_v1(stream, submission).unwrap())
+     }
+-    fn release_event_v1(&mut self, _: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+-        unreachable!()
++    fn release_event_v1(&mut self, event: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
++        self.fail_call(DiagnosticCall::ReleaseEvent)?;
++        self.inner.release_event_v1(event).unwrap();
++        Ok(())
+     }
+     fn peer_copy_v1(
+         &mut self,
+@@ -222,6 +292,32 @@ impl RuntimeBackendV1 for AllocationOnlyBackend {
+     }
+ }
+ 
++impl RuntimeCancellationBackendV1 for AllocationOnlyBackend {
++    fn cancel_v1(
++        &mut self,
++        submission: u64,
++    ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
++        self.fail_call(DiagnosticCall::Cancel)?;
++        Ok(self.inner.cancel_v1(submission).unwrap())
++    }
++    fn drain_v1(
++        &mut self,
++        submission: u64,
++        deadline: Instant,
++    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
++        self.fail_call(DiagnosticCall::Drain)?;
++        Ok(self.inner.drain_v1(submission, deadline).unwrap())
++    }
++}
++
++impl RuntimeFlushBackendV1 for AllocationOnlyBackend {
++    fn flush_stream_v1(&mut self, stream: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
++        self.fail_call(DiagnosticCall::Flush)?;
++        self.inner.flush_stream_v1(stream).unwrap();
++        Ok(())
++    }
++}
++
+ #[test]
+ fn journal_settled_no_owner_refunds_without_replacing_diagnostic_or_panic_payload() {
+     for credits in [false, true] {
+diff --git a/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests/async_tests.rs b/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests/async_tests.rs
+new file mode 100644
+index 000000000..71fb7b12d
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests/async_tests.rs
+@@ -0,0 +1,403 @@
++use super::*;
++use fe2o3_runtime_model::{ContextAllocationStateV1, ContextWriterStateV1};
++use writer_tests::assert_diagnostic;
++
++type Context = RuntimeContextV1<AllocationOnlyBackend>;
++type Failure = MockMemoryFailure;
++
++struct Fixture {
++    context: Context,
++    stream: RuntimeStreamIdV1,
++    allocations: [RuntimeAllocationIdV1; 2],
++    module: RuntimeModuleIdV1,
++    kernel: TypedRuntimeKernelV1<AddArguments>,
++}
++
++impl Fixture {
++    fn new(credits: bool) -> Self {
++        let mut context =
++            Context::open_with_version_journal_v1(AllocationOnlyBackend::default(), 3, 2).unwrap();
++        let device = context.devices()[0].id();
++        if credits {
++            context
++                .configure_allocation_admission_v1(device, 192, 3)
++                .unwrap();
++        }
++        let stream = context.create_stream(device).unwrap();
++        let allocations = [
++            context
++                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
++                .unwrap(),
++            context
++                .allocate(device, RuntimeMemoryKindV1::HostVisible, 64, 16)
++                .unwrap(),
++        ];
++        let module = context.load_module(device, b"object").unwrap();
++        let kernel = context
++            .resolve_kernel::<AddArguments>(module, "add")
++            .unwrap();
++        Self {
++            context,
++            stream,
++            allocations,
++            module,
++            kernel,
++        }
++    }
++
++    fn launch(&mut self, index: usize) -> RuntimeSubmissionV1<AddArguments> {
++        self.context
++            .launch(
++                self.stream,
++                &self.kernel,
++                &AddArguments {
++                    allocation: self.allocations[index],
++                    scalar: 1,
++                },
++                geometry(),
++                &[],
++            )
++            .unwrap()
++    }
++
++    fn state(&self, index: usize) -> ContextAllocationStateV1 {
++        self.context
++            .versions
++            .as_ref()
++            .unwrap()
++            .journal_for_test()
++            .lookup_allocation(
++                self.context.allocations[&self.allocations[index]]
++                    .journal
++                    .unwrap(),
++            )
++            .unwrap()
++    }
++
++    fn assert_writer(&self, index: usize, unknown: bool) {
++        let writer = self.state(index).pending_writer.unwrap();
++        let state = self
++            .context
++            .versions
++            .as_ref()
++            .unwrap()
++            .journal_for_test()
++            .lookup_writer(writer)
++            .unwrap();
++        assert_eq!(
++            state,
++            if unknown {
++                ContextWriterStateV1::Unknown { member_count: 1 }
++            } else {
++                ContextWriterStateV1::Pending { member_count: 1 }
++            }
++        );
++        assert_eq!(self.state(index).content_lineage, 0);
++    }
++
++    fn failure(
++        &mut self,
++        call: DiagnosticCall,
++        failure: Failure,
++    ) -> (*const Diagnostic, Arc<AtomicUsize>) {
++        let drops = Arc::new(AtomicUsize::new(0));
++        let diagnostic = Box::new(Diagnostic {
++            drops: drops.clone(),
++        });
++        let pointer = &*diagnostic as *const Diagnostic;
++        self.context.backend.failure_call = Some(call);
++        self.context.backend.call_failure = failure;
++        self.context.backend.call_diagnostic = Some(diagnostic);
++        (pointer, drops)
++    }
++}
++
++#[test]
++fn actual_launch_preserves_boxed_submit_errors_and_unwind_identity_without_handles() {
++    for credits in [false, true] {
++        for failure in [
++            Failure::Rejected,
++            Failure::Quiescent,
++            Failure::Terminal,
++            Failure::Panic,
++        ] {
++            let mut fixture = Fixture::new(credits);
++            let (pointer, drops) = fixture.failure(DiagnosticCall::Submit, failure);
++            let next = fixture.context.next_identity;
++            let result = catch_unwind(AssertUnwindSafe(|| {
++                fixture
++                    .context
++                    .launch(
++                        fixture.stream,
++                        &fixture.kernel,
++                        &AddArguments {
++                            allocation: fixture.allocations[0],
++                            scalar: 1,
++                        },
++                        geometry(),
++                        &[],
++                    )
++                    .map(drop)
++            }));
++            assert_diagnostic(result, failure, pointer, &drops);
++            assert_eq!(fixture.context.next_identity, next + 1);
++            assert!(fixture.context.submissions.is_empty());
++            assert_eq!(fixture.state(0).attempt_epoch, 1);
++            assert_eq!(fixture.state(1).attempt_epoch, 0);
++            if failure == Failure::Rejected {
++                assert!(fixture.state(0).pending_writer.is_none());
++                assert_eq!(fixture.state(0).content_lineage, 0);
++                assert!(fixture.context.cleanup().is_complete());
++            } else {
++                fixture.assert_writer(0, true);
++                assert_eq!(
++                    fixture.context.is_terminal(),
++                    matches!(failure, Failure::Terminal | Failure::Panic)
++                );
++                assert!(!fixture.context.cleanup().is_complete());
++            }
++        }
++    }
++}
++
++#[test]
++fn observation_failure_matrix_preserves_diagnostics_and_exact_neighbor_credits() {
++    for call in [
++        DiagnosticCall::Poll,
++        DiagnosticCall::Wait,
++        DiagnosticCall::Cancel,
++        DiagnosticCall::Drain,
++        DiagnosticCall::Flush,
++    ] {
++        for failure in [
++            Failure::Rejected,
++            Failure::Quiescent,
++            Failure::Terminal,
++            Failure::Panic,
++        ] {
++            let mut fixture = Fixture::new(true);
++            let mut submission = fixture.launch(0);
++            let _neighbor = fixture.launch(1);
++            let (pointer, drops) = fixture.failure(call, failure);
++            let result = catch_unwind(AssertUnwindSafe(|| match call {
++                DiagnosticCall::Poll => fixture.context.poll(&mut submission).map(drop),
++                DiagnosticCall::Wait => fixture
++                    .context
++                    .wait(&mut submission, Duration::ZERO)
++                    .map(drop),
++                DiagnosticCall::Cancel => fixture.context.cancel(&mut submission).map(drop),
++                DiagnosticCall::Drain => fixture
++                    .context
++                    .drain(&mut submission, Instant::now() + Duration::from_secs(60))
++                    .map(drop),
++                DiagnosticCall::Flush => fixture.context.flush_stream(fixture.stream),
++                _ => unreachable!(),
++            }));
++            assert_diagnostic(result, failure, pointer, &drops);
++            let terminal = matches!(failure, Failure::Terminal | Failure::Panic);
++            assert_eq!(fixture.context.is_terminal(), terminal);
++            fixture.assert_writer(
++                0,
++                terminal || (failure == Failure::Quiescent && call != DiagnosticCall::Flush),
++            );
++            fixture.assert_writer(1, terminal);
++            let usage = fixture
++                .context
++                .allocation_admission_usage_v1(fixture.context.devices()[0].id())
++                .unwrap()
++                .unwrap();
++            assert_eq!(
++                usage.used,
++                RuntimeResourceVectorV1::ZERO
++                    .with(K::RequestedAllocationBytes, 128)
++                    .with(K::AllocationRecords, 2)
++            );
++            assert_eq!(usage.quarantined_records, if terminal { 2 } else { 0 });
++            assert!(!fixture.context.cleanup().is_complete());
++        }
++    }
++}
++
++#[test]
++fn effectful_neighbor_calls_quarantine_pending_writers_on_terminal_or_panic() {
++    for call in [
++        DiagnosticCall::CreateStream,
++        DiagnosticCall::DestroyStream,
++        DiagnosticCall::RecordEvent,
++        DiagnosticCall::ReleaseEvent,
++        DiagnosticCall::ReleaseSubmission,
++        DiagnosticCall::LoadModule,
++        DiagnosticCall::UnloadModule,
++        DiagnosticCall::ResolveKernel,
++        DiagnosticCall::Read,
++    ] {
++        for failure in [Failure::Terminal, Failure::Panic] {
++            let mut fixture = Fixture::new(true);
++            let mut completed = fixture.launch(1);
++            fixture
++                .context
++                .wait(&mut completed, Duration::ZERO)
++                .unwrap();
++            let submission = fixture.launch(0);
++            let event = if call == DiagnosticCall::ReleaseEvent {
++                Some(fixture.context.record_event(&submission).unwrap())
++            } else {
++                None
++            };
++            let (pointer, drops) = fixture.failure(call, failure);
++            let device = fixture.context.devices()[0].id();
++            let result = catch_unwind(AssertUnwindSafe(|| match call {
++                DiagnosticCall::CreateStream => fixture.context.create_stream(device).map(drop),
++                DiagnosticCall::DestroyStream => fixture.context.destroy_stream(fixture.stream),
++                DiagnosticCall::RecordEvent => fixture.context.record_event(&submission).map(drop),
++                DiagnosticCall::ReleaseEvent => fixture.context.release_event(event.unwrap()),
++                DiagnosticCall::ReleaseSubmission => {
++                    fixture.context.release_submission_ref(&completed, None)
++                }
++                DiagnosticCall::LoadModule => {
++                    fixture.context.load_module(device, b"other").map(drop)
++                }
++                DiagnosticCall::UnloadModule => fixture.context.unload_module(fixture.module),
++                DiagnosticCall::ResolveKernel => fixture
++                    .context
++                    .resolve_kernel::<AddArguments>(fixture.module, "other")
++                    .map(drop),
++                DiagnosticCall::Read => {
++                    fixture
++                        .context
++                        .read_allocation(fixture.allocations[1], 0, &mut [0; 8])
++                }
++                _ => unreachable!(),
++            }));
++            assert_diagnostic(result, failure, pointer, &drops);
++            assert!(fixture.context.is_terminal());
++            fixture.assert_writer(0, true);
++            assert!(fixture.state(1).pending_writer.is_none());
++            assert_eq!(fixture.state(1).content_lineage, 1);
++            let usage = fixture
++                .context
++                .allocation_admission_usage_v1(device)
++                .unwrap()
++                .unwrap();
++            assert_eq!((usage.retained_records, usage.quarantined_records), (1, 1));
++            assert!(!fixture.context.cleanup().is_complete());
++        }
++    }
++}
++
++#[test]
++fn cleanup_failure_preserves_boxed_error_and_retained_unknown_writers() {
++    for call in [
++        DiagnosticCall::DestroyStream,
++        DiagnosticCall::ReleaseEvent,
++        DiagnosticCall::ReleaseSubmission,
++        DiagnosticCall::UnloadModule,
++    ] {
++        for failure in [Failure::Terminal, Failure::Panic] {
++            let mut fixture = Fixture::new(true);
++            let submission = fixture.launch(0);
++            fixture.context.record_event(&submission).unwrap();
++            let (pointer, drops) = fixture.failure(call, failure);
++            let result = catch_unwind(AssertUnwindSafe(|| {
++                let mut report = fixture.context.cleanup();
++                assert!(!report.is_complete());
++                assert!(report.is_terminal());
++                assert_eq!(report.failures.len(), 1);
++                let RuntimeBackendFailureV1::Terminal(error) =
++                    report.failures.pop().unwrap().failure
++                else {
++                    panic!("wrong cleanup classification");
++                };
++                Err(RuntimeErrorV1::BackendTerminal(error))
++            }));
++            assert_diagnostic(result, failure, pointer, &drops);
++            fixture.assert_writer(0, true);
++            let usage = fixture
++                .context
++                .allocation_admission_usage_v1(fixture.context.devices()[0].id())
++                .unwrap()
++                .unwrap();
++            assert_eq!((usage.retained_records, usage.quarantined_records), (1, 1));
++            assert_eq!(fixture.context.version_journal_writer_records_v1(), Some(1));
++        }
++    }
++}
++
++#[test]
++fn allocation_and_host_write_panics_quarantine_other_active_writers() {
++    for operation in 0..3 {
++        let mut fixture = Fixture::new(true);
++        let _submission = fixture.launch(0);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let diagnostic = Box::new(Diagnostic {
++            drops: drops.clone(),
++        });
++        let pointer = &*diagnostic as *const Diagnostic;
++        match operation {
++            0 => {
++                fixture.context.backend.diagnostic = Some(diagnostic);
++                fixture.context.backend.panic_before_outcome = true;
++            }
++            1 => {
++                fixture.context.backend.release_diagnostic = Some(diagnostic);
++                fixture.context.backend.release_failure = Failure::Panic;
++            }
++            _ => {
++                fixture.context.backend.write_diagnostic = Some(diagnostic);
++                fixture.context.backend.write_failure = Failure::Panic;
++            }
++        }
++        let device = fixture.context.devices()[0].id();
++        let result = catch_unwind(AssertUnwindSafe(|| match operation {
++            0 => fixture
++                .context
++                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
++                .map(drop),
++            1 => fixture.context.release_allocation(fixture.allocations[1]),
++            _ => fixture
++                .context
++                .write_allocation(fixture.allocations[1], 0, &[1; 8]),
++        }));
++        assert_diagnostic(result, Failure::Panic, pointer, &drops);
++        assert!(fixture.context.is_terminal());
++        fixture.assert_writer(0, true);
++        let usage = fixture
++            .context
++            .allocation_admission_usage_v1(device)
++            .unwrap()
++            .unwrap();
++        assert_eq!(usage.quarantined_records, 2);
++        assert!(!fixture.context.cleanup().is_complete());
++    }
++}
++
++#[test]
++fn secondary_settlement_failure_cannot_replace_quiescent_backend_diagnostic() {
++    let mut fixture = Fixture::new(true);
++    let mut submission = fixture.launch(0);
++    fixture
++        .context
++        .submissions
++        .get_mut(&submission.id)
++        .unwrap()
++        .journal_writer
++        .as_mut()
++        .unwrap()
++        .key
++        .local += 1;
++    let (pointer, drops) = fixture.failure(DiagnosticCall::Wait, Failure::Quiescent);
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        fixture
++            .context
++            .wait(&mut submission, Duration::ZERO)
++            .map(drop)
++    }));
++    assert_diagnostic(result, Failure::Quiescent, pointer, &drops);
++    assert!(fixture.context.is_terminal());
++    assert_eq!(
++        fixture.context.query_submission(&submission).unwrap(),
++        RuntimeCompletionStatusV1::Pending
++    );
++    fixture.assert_writer(0, true);
++    assert!(!fixture.context.cleanup().is_complete());
++}
+diff --git a/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests/writer_tests.rs b/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests/writer_tests.rs
+index b8e5f1779..0f81337d8 100644
+--- a/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests/writer_tests.rs
++++ b/crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests/writer_tests.rs
+@@ -57,7 +57,7 @@ fn diagnostic(
+     (pointer, drops)
+ }
+ 
+-fn assert_diagnostic(
++pub(super) fn assert_diagnostic(
+     result: std::thread::Result<Result<(), RuntimeErrorV1<Box<Diagnostic>>>>,
+     failure: Failure,
+     pointer: *const Diagnostic,
+diff --git a/crates/fe2o3-runtime/src/context/tests/async_journal_tests.rs b/crates/fe2o3-runtime/src/context/tests/async_journal_tests.rs
+new file mode 100644
+index 000000000..04a689af7
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/context/tests/async_journal_tests.rs
+@@ -0,0 +1,605 @@
++use super::*;
++use fe2o3_runtime_model::{ContextAllocationStateV1, ContextWriterKindV1, ContextWriterStateV1};
++
++type Context = RuntimeContextV1<MockBackend>;
++
++fn fixture(
++    writers: usize,
++) -> (
++    Context,
++    RuntimeStreamIdV1,
++    RuntimeAllocationIdV1,
++    TypedRuntimeKernelV1<AddArguments>,
++) {
++    let backend = MockBackend {
++        next: 100,
++        ..MockBackend::default()
++    };
++    let mut context = Context::open_with_version_journal_v1(backend, 128, writers).unwrap();
++    let device = context.devices()[0].id();
++    let stream = context.create_stream(device).unwrap();
++    let allocation = context
++        .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
++        .unwrap();
++    let module = context.load_module(device, b"object").unwrap();
++    let kernel = context
++        .resolve_kernel::<AddArguments>(module, "add")
++        .unwrap();
++    (context, stream, allocation, kernel)
++}
++
++fn state(context: &Context, id: RuntimeAllocationIdV1) -> ContextAllocationStateV1 {
++    context
++        .versions
++        .as_ref()
++        .unwrap()
++        .journal_for_test()
++        .lookup_allocation(context.allocations[&id].journal.unwrap())
++        .unwrap()
++}
++
++fn writer_state(context: &Context, id: RuntimeAllocationIdV1) -> ContextWriterStateV1 {
++    context
++        .versions
++        .as_ref()
++        .unwrap()
++        .journal_for_test()
++        .lookup_writer(state(context, id).pending_writer.unwrap())
++        .unwrap()
++}
++
++fn launch(
++    context: &mut Context,
++    stream: RuntimeStreamIdV1,
++    allocation: RuntimeAllocationIdV1,
++    kernel: &TypedRuntimeKernelV1<AddArguments>,
++) -> RuntimeSubmissionV1<AddArguments> {
++    context
++        .launch(
++            stream,
++            kernel,
++            &AddArguments {
++                allocation,
++                scalar: 1,
++            },
++            geometry(),
++            &[],
++        )
++        .unwrap()
++}
++
++#[test]
++fn async_writer_uses_exact_submission_identity_and_settles_once_through_event() {
++    let (mut context, stream, allocation, kernel) = fixture(2);
++    let next = context.next_identity;
++    let mut submission = launch(&mut context, stream, allocation, &kernel);
++    let writer = state(&context, allocation).pending_writer.unwrap();
++    assert_eq!(
++        writer.key.context_generation,
++        submission.id.context_generation
++    );
++    assert_eq!(writer.key.local, submission.id.local);
++    assert_eq!(writer.key.kind, ContextWriterKindV1::Submission);
++    assert_ne!(writer.key.local, submission.backend_submission);
++    assert_eq!(submission.id.local, next);
++    assert_eq!(context.next_identity, next + 1);
++    assert_eq!(state(&context, allocation).byte_extent, 64);
++    assert_eq!(
++        context.poll(&mut submission).unwrap(),
++        RuntimePollV1::Pending
++    );
++    assert_eq!(state(&context, allocation).content_lineage, 0);
++    let event = context.record_event(&submission).unwrap();
++    assert_eq!(
++        context.wait_event(event, Duration::ZERO).unwrap(),
++        RuntimeCompletionStatusV1::Succeeded
++    );
++    assert_eq!(state(&context, allocation).content_lineage, 1);
++    assert!(state(&context, allocation).pending_writer.is_none());
++    assert_eq!(context.version_journal_writer_records_v1(), Some(0));
++    assert_eq!(
++        context.poll(&mut submission).unwrap(),
++        RuntimePollV1::Succeeded
++    );
++    context.destroy_stream(stream).unwrap();
++    assert_eq!(state(&context, allocation).content_lineage, 1);
++    assert!(context.cleanup().is_complete());
++}
++
++struct MixedArguments(Vec<RuntimeMemoryRegionV1>);
++
++impl RuntimeArgumentsV1 for MixedArguments {
++    const SIGNATURE_V1: [u8; 32] = [41; 32];
++
++    fn encode_explicit_kernarg_v1(&self) -> Vec<u8> {
++        vec![0; self.0.len() * 8]
++    }
++
++    fn bindings_v1(&self) -> Vec<RuntimeBindingV1> {
++        self.0
++            .iter()
++            .enumerate()
++            .map(|(index, region)| RuntimeBindingV1 {
++                region: *region,
++                kernarg_byte_offset: index as u32 * 8,
++            })
++            .collect()
++    }
++}
++
++fn region(
++    allocation: RuntimeAllocationIdV1,
++    access: RuntimeAccessV1,
++    byte_offset: u64,
++) -> RuntimeMemoryRegionV1 {
++    RuntimeMemoryRegionV1 {
++        allocation,
++        access,
++        byte_offset,
++        byte_len: 8,
++    }
++}
++
++#[test]
++fn async_writer_canonicalizes_duplicate_writable_allocations_and_skips_read_only() {
++    let (mut context, stream, a, _) = fixture(1);
++    let device = context.devices()[0].id();
++    let b = context
++        .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
++        .unwrap();
++    let read = context
++        .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
++        .unwrap();
++    let module = context.load_module(device, b"mixed").unwrap();
++    let kernel = context
++        .resolve_kernel::<MixedArguments>(module, "mixed")
++        .unwrap();
++    let args = MixedArguments(vec![
++        region(b, RuntimeAccessV1::Write, 0),
++        region(read, RuntimeAccessV1::Read, 0),
++        region(a, RuntimeAccessV1::ReadWrite, 8),
++        region(a, RuntimeAccessV1::Write, 0),
++    ]);
++    let before = state(&context, read);
++    let mut submission = context
++        .launch(stream, &kernel, &args, geometry(), &[])
++        .unwrap();
++    assert_eq!(
++        writer_state(&context, a),
++        ContextWriterStateV1::Pending { member_count: 2 }
++    );
++    assert_eq!(
++        state(&context, a).pending_writer,
++        state(&context, b).pending_writer
++    );
++    assert_eq!(state(&context, read), before);
++    context.wait(&mut submission, Duration::ZERO).unwrap();
++    assert_eq!(state(&context, a).content_lineage, 1);
++    assert_eq!(state(&context, b).content_lineage, 1);
++    assert_eq!(state(&context, read), before);
++    assert!(context.cleanup().is_complete());
++}
++
++#[test]
++fn read_only_submission_needs_no_writer_capacity() {
++    let (mut context, stream, a, kernel) = fixture(1);
++    let mut writer = launch(&mut context, stream, a, &kernel);
++    let device = context.devices()[0].id();
++    let read = context
++        .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
++        .unwrap();
++    let module = context.load_module(device, b"read").unwrap();
++    let reader = context
++        .resolve_kernel::<MixedArguments>(module, "read")
++        .unwrap();
++    let mut submission = context
++        .launch(
++            stream,
++            &reader,
++            &MixedArguments(vec![region(read, RuntimeAccessV1::Read, 0)]),
++            geometry(),
++            &[],
++        )
++        .unwrap();
++    assert!(context.submissions[&submission.id].journal_writer.is_none());
++    context.wait(&mut submission, Duration::ZERO).unwrap();
++    assert_eq!(state(&context, read).attempt_epoch, 0);
++    assert_eq!(context.version_journal_writer_records_v1(), Some(1));
++    context.wait(&mut writer, Duration::ZERO).unwrap();
++    assert!(context.cleanup().is_complete());
++}
++
++#[test]
++fn copy_and_peer_copy_journal_only_the_full_destination() {
++    for peer in [false, true] {
++        let (mut context, local_stream, source, _) = fixture(1);
++        let device = context.devices()[usize::from(peer)].id();
++        let destination = context
++            .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
++            .unwrap();
++        let stream = if peer {
++            context.create_stream(device).unwrap()
++        } else {
++            local_stream
++        };
++        let source_region = region(source, RuntimeAccessV1::Read, 8);
++        let destination_region = region(destination, RuntimeAccessV1::Write, 24);
++        let before = state(&context, source);
++        if peer {
++            let mut submission = context
++                .peer_copy(stream, source_region, destination_region, &[])
++                .unwrap();
++            assert_eq!(
++                writer_state(&context, destination),
++                ContextWriterStateV1::Pending { member_count: 1 }
++            );
++            context.wait(&mut submission, Duration::ZERO).unwrap();
++        } else {
++            let mut submission = context
++                .copy_async(stream, source_region, destination_region, &[])
++                .unwrap();
++            assert_eq!(
++                writer_state(&context, destination),
++                ContextWriterStateV1::Pending { member_count: 1 }
++            );
++            context.wait(&mut submission, Duration::ZERO).unwrap();
++        }
++        assert_eq!(state(&context, destination).byte_extent, 64);
++        assert_eq!(state(&context, destination).content_lineage, 1);
++        assert_eq!(state(&context, source), before);
++        assert!(context.cleanup().is_complete());
++    }
++}
++
++#[test]
++fn capacity_and_conflicting_writers_reject_before_identity_or_backend() {
++    for writers in [1, 2] {
++        let (mut context, stream, allocation, kernel) = fixture(writers);
++        let mut submission = launch(&mut context, stream, allocation, &kernel);
++        let before = (
++            context.next_identity,
++            context.backend.submit_count,
++            state(&context, allocation),
++        );
++        let result = context.launch(
++            stream,
++            &kernel,
++            &AddArguments {
++                allocation,
++                scalar: 1,
++            },
++            geometry(),
++            &[],
++        );
++        let expected = if writers == 1 {
++            RuntimeValidationErrorV1::Capacity
++        } else {
++            RuntimeValidationErrorV1::ContextReserved
++        };
++        assert!(matches!(result, Err(RuntimeErrorV1::Validation(error)) if error == expected));
++        assert_eq!(
++            (
++                context.next_identity,
++                context.backend.submit_count,
++                state(&context, allocation)
++            ),
++            before
++        );
++        context.wait(&mut submission, Duration::ZERO).unwrap();
++        assert!(context.cleanup().is_complete());
++    }
++}
++
++#[test]
++fn rejected_completion_observation_is_not_no_effect() {
++    let (mut context, stream, allocation, kernel) = fixture(1);
++    context.backend.first_wait_failure = MockWaitFailure::RejectFirst;
++    let mut submission = launch(&mut context, stream, allocation, &kernel);
++    let before = state(&context, allocation);
++    assert!(matches!(
++        context.wait(&mut submission, Duration::ZERO),
++        Err(RuntimeErrorV1::BackendRejected(_))
++    ));
++    assert_eq!(state(&context, allocation), before);
++    assert_eq!(
++        writer_state(&context, allocation),
++        ContextWriterStateV1::Pending { member_count: 1 }
++    );
++    context.wait(&mut submission, Duration::ZERO).unwrap();
++    assert_eq!(state(&context, allocation).content_lineage, 1);
++    assert!(context.cleanup().is_complete());
++}
++
++#[test]
++fn explicit_unpublished_cancellation_settles_no_effect_but_too_late_does_not() {
++    for cancellable in [false, true] {
++        let (mut context, stream, allocation, kernel) = fixture(1);
++        context.backend.cancel_before_publication = cancellable;
++        let mut submission = launch(&mut context, stream, allocation, &kernel);
++        context.cancel(&mut submission).unwrap();
++        assert_eq!(state(&context, allocation).attempt_epoch, 1);
++        assert_eq!(state(&context, allocation).content_lineage, 0);
++        assert_eq!(
++            state(&context, allocation).pending_writer.is_none(),
++            cancellable
++        );
++        if !cancellable {
++            context.wait(&mut submission, Duration::ZERO).unwrap();
++        }
++        assert!(context.cleanup().is_complete());
++    }
++}
++
++#[test]
++fn failed_or_resultless_completion_retains_unknown_after_metadata_release() {
++    for outcome in 0..3 {
++        let (mut context, stream, allocation, kernel) = fixture(1);
++        let mut submission = launch(&mut context, stream, allocation, &kernel);
++        match outcome {
++            0 => {
++                context.backend.wait_observation = Some(BackendPollV1::Failed { code: -2 });
++                assert_eq!(
++                    context.wait(&mut submission, Duration::ZERO).unwrap(),
++                    RuntimePollV1::Failed { code: -2 }
++                );
++            }
++            1 => {
++                context.backend.first_wait_failure = MockWaitFailure::QuiescentFirst;
++                assert!(matches!(
++                    context.wait(&mut submission, Duration::ZERO),
++                    Err(RuntimeErrorV1::BackendQuiescent(_))
++                ));
++            }
++            _ => context.destroy_stream(stream).unwrap(),
++        }
++        assert_eq!(
++            writer_state(&context, allocation),
++            ContextWriterStateV1::Unknown { member_count: 1 }
++        );
++        context.release_submission(submission).unwrap();
++        assert!(context.submissions.is_empty());
++        assert_eq!(context.version_journal_writer_records_v1(), Some(1));
++        assert_eq!(state(&context, allocation).content_lineage, 0);
++        assert!(matches!(
++            context.release_allocation(allocation),
++            Err(RuntimeErrorV1::Validation(
++                RuntimeValidationErrorV1::Unsupported
++            ))
++        ));
++        let report = context.cleanup();
++        assert!(!report.is_complete());
++        assert!(!report.is_terminal());
++        assert_eq!(report.writer_journal_records_v1(), 1);
++        assert!(context.allocations.contains_key(&allocation));
++    }
++}
++
++#[test]
++fn invalid_submission_handles_preserve_attempted_and_existing_writers() {
++    for duplicate in [false, true] {
++        let (mut context, stream, a, kernel) = fixture(2);
++        let handle = if duplicate {
++            launch(&mut context, stream, a, &kernel).backend_submission
++        } else {
++            0
++        };
++        let device = context.devices()[0].id();
++        let b = context
++            .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
++            .unwrap();
++        context.backend.handle_override = Some((MockHandleKind::Submission, handle));
++        assert!(matches!(
++            context.launch(
++                stream,
++                &kernel,
++                &AddArguments {
++                    allocation: b,
++                    scalar: 1
++                },
++                geometry(),
++                &[]
++            ),
++            Err(RuntimeErrorV1::BackendProtocol(_))
++        ));
++        assert!(context.is_terminal());
++        assert_eq!(context.submissions.len(), 1 + usize::from(duplicate));
++        assert_eq!(
++            writer_state(&context, b),
++            ContextWriterStateV1::Unknown { member_count: 1 }
++        );
++        if duplicate {
++            assert_eq!(
++                writer_state(&context, a),
++                ContextWriterStateV1::Unknown { member_count: 1 }
++            );
++        }
++        assert!(!context.cleanup().is_complete());
++    }
++}
++
++#[test]
++fn initial_no_handle_failures_settle_only_definite_rejection() {
++    for failure in [
++        MockMemoryFailure::Rejected,
++        MockMemoryFailure::Quiescent,
++        MockMemoryFailure::Terminal,
++        MockMemoryFailure::Panic,
++    ] {
++        let (mut context, stream, allocation, _) = fixture(1);
++        let next = context.next_identity;
++        let record = context.streams[&stream];
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            context.submit_context_operation_v1::<()>(
++                stream,
++                record,
++                &[allocation],
++                None,
++                |backend| {
++                    backend.submit_count += 1;
++                    mock_memory_failure_v1(failure).map(|()| 0)
++                },
++            )
++        }));
++        match (failure, result) {
++            (MockMemoryFailure::Rejected, Ok(Err(RuntimeErrorV1::BackendRejected(error)))) => {
++                assert_eq!(error.0, "allocation rejected")
++            }
++            (MockMemoryFailure::Quiescent, Ok(Err(RuntimeErrorV1::BackendQuiescent(error)))) => {
++                assert_eq!(error.0, "allocation quiescent failure")
++            }
++            (MockMemoryFailure::Terminal, Ok(Err(RuntimeErrorV1::BackendTerminal(error)))) => {
++                assert_eq!(error.0, "allocation terminal failure")
++            }
++            (MockMemoryFailure::Panic, Err(payload)) => assert_eq!(
++                payload.downcast_ref::<&str>(),
++                Some(&"scripted allocation adapter panic")
++            ),
++            _ => panic!("original failure was replaced"),
++        }
++        assert_eq!(context.next_identity, next + 1);
++        assert_eq!(context.backend.submit_count, 1);
++        assert!(context.submissions.is_empty());
++        assert_eq!(state(&context, allocation).attempt_epoch, 1);
++        assert_eq!(state(&context, allocation).content_lineage, 0);
++        if failure == MockMemoryFailure::Rejected {
++            assert_eq!(context.version_journal_writer_records_v1(), Some(0));
++            assert!(context.cleanup().is_complete());
++        } else {
++            assert_eq!(
++                writer_state(&context, allocation),
++                ContextWriterStateV1::Unknown { member_count: 1 }
++            );
++            assert_eq!(
++                context.is_terminal(),
++                failure != MockMemoryFailure::Quiescent
++            );
++            assert!(!context.cleanup().is_complete());
++        }
++    }
++}
++
++#[test]
++fn missing_expected_writer_cannot_publish_completion() {
++    let (mut context, stream, allocation, kernel) = fixture(1);
++    let mut submission = launch(&mut context, stream, allocation, &kernel);
++    let called = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
++    let observed = called.clone();
++    context
++        .on_completion(&submission, move |_| {
++            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
++        })
++        .unwrap();
++    context
++        .versions
++        .as_mut()
++        .unwrap()
++        .remove_submission_writer_root_for_test_v1(submission.id);
++    assert!(matches!(
++        context.wait(&mut submission, Duration::ZERO),
++        Err(RuntimeErrorV1::Validation(
++            RuntimeValidationErrorV1::InvalidBackendDescription
++        ))
++    ));
++    assert!(context.is_terminal());
++    assert_eq!(
++        context.query_submission(&submission).unwrap(),
++        RuntimeCompletionStatusV1::Pending
++    );
++    assert_eq!(state(&context, allocation).content_lineage, 0);
++    assert_eq!(called.load(std::sync::atomic::Ordering::SeqCst), 0);
++    assert!(!context.cleanup().is_complete());
++}
++
++#[test]
++fn callback_panic_cannot_undo_settlement_or_repeat_delivery() {
++    let (mut context, stream, allocation, kernel) = fixture(1);
++    let mut submission = launch(&mut context, stream, allocation, &kernel);
++    context
++        .on_completion(&submission, |status| {
++            assert_eq!(status, RuntimeCompletionStatusV1::Succeeded);
++            panic!("scripted callback panic after completion");
++        })
++        .unwrap();
++    context.wait(&mut submission, Duration::ZERO).unwrap();
++    assert_eq!(state(&context, allocation).content_lineage, 1);
++    assert_eq!(context.version_journal_writer_records_v1(), Some(0));
++    assert_eq!(context.completion_callback_panic_count(), 1);
++    context.wait(&mut submission, Duration::ZERO).unwrap();
++    assert_eq!(context.completion_callback_panic_count(), 1);
++    assert!(!context.is_terminal());
++    assert!(context.cleanup().is_complete());
++}
++
++#[test]
++fn prepared_copy_revalidates_original_destination_before_begin_or_backend_entry() {
++    let (mut context, stream, source, _) = fixture(1);
++    let device = context.devices()[0].id();
++    let destination = context
++        .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
++        .unwrap();
++    let action = context
++        .prepare_graph_copy_v1(
++            stream,
++            region(source, RuntimeAccessV1::Read, 0),
++            region(destination, RuntimeAccessV1::Write, 0),
++        )
++        .unwrap();
++    context.release_allocation(destination).unwrap();
++    let reservation = context.reserve_graph_v1(1).unwrap();
++    let next = context.next_identity;
++    let backend_next = context.backend.next;
++    assert!(matches!(
++        context.submit_graph_action_v1(reservation, action),
++        Err(RuntimeErrorV1::Validation(
++            RuntimeValidationErrorV1::UnknownAllocation
++        ))
++    ));
++    assert_eq!(context.next_identity, next);
++    assert_eq!(context.backend.next, backend_next);
++    assert_eq!(context.version_journal_writer_records_v1(), Some(0));
++    context.close_graph_issue_v1(reservation).unwrap();
++    context.release_graph_v1(reservation).unwrap();
++    assert!(context.cleanup().is_complete());
++}
++
++#[test]
++fn writer_registry_reuses_capacity_across_dense_settlement_cycles() {
++    let (mut context, stream, a, kernel) = fixture(64);
++    let device = context.devices()[0].id();
++    let mut allocations = vec![a];
++    for _ in 1..64 {
++        allocations.push(
++            context
++                .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
++                .unwrap(),
++        );
++    }
++    let mut submissions: Vec<_> = allocations
++        .iter()
++        .map(|&id| launch(&mut context, stream, id, &kernel))
++        .collect();
++    for cycle in 0..8 {
++        for parity in 0..2 {
++            for index in (parity..64).step_by(2) {
++                context
++                    .wait(&mut submissions[index], Duration::ZERO)
++                    .unwrap();
++                context
++                    .release_submission_ref(&submissions[index], None)
++                    .unwrap();
++            }
++            for index in (parity..64).step_by(2) {
++                assert_eq!(
++                    state(&context, allocations[index]).content_lineage,
++                    cycle + 1
++                );
++                submissions[index] = launch(&mut context, stream, allocations[index], &kernel);
++            }
++        }
++    }
++    for submission in &mut submissions {
++        context.wait(submission, Duration::ZERO).unwrap();
++    }
++    assert_eq!(context.version_journal_writer_records_v1(), Some(0));
++    assert!(context.cleanup().is_complete());
++}
+diff --git a/crates/fe2o3-runtime/src/context/versions.rs b/crates/fe2o3-runtime/src/context/versions.rs
+index 03a07b837..ca57158d2 100644
+--- a/crates/fe2o3-runtime/src/context/versions.rs
++++ b/crates/fe2o3-runtime/src/context/versions.rs
+@@ -6,7 +6,9 @@ use fe2o3_runtime_model::{
+     ContextJournalDeviceKeyV1, ContextVersionJournalErrorV1, ContextVersionJournalV1,
+ };
+ 
++mod submissions;
+ mod writers;
++pub(super) use submissions::SubmissionWriterOutcomeV1;
+ 
+ /// Bounded journal metadata counts, not residency, initializedness or data versions.
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+@@ -53,6 +55,7 @@ enum AllocationPhaseV1 {
+ pub(super) struct ContextVersionsV1 {
+     journal: ContextVersionJournalV1,
+     phases: Vec<Option<AllocationPhaseV1>>,
++    submission_writers: HashMap<RuntimeSubmissionIdV1, submissions::RetainedSubmissionWriterV1>,
+ }
+ 
+ // Dropping this move-only ticket never removes its Context-owned record.
+@@ -102,7 +105,15 @@ impl ContextVersionsV1 {
+             .try_reserve_exact(allocations)
+             .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;
+         phases.resize(allocations, None);
+-        Ok(Self { journal, phases })
++        let mut submission_writers = HashMap::new();
++        submission_writers
++            .try_reserve(writers)
++            .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;
++        Ok(Self {
++            journal,
++            phases,
++            submission_writers,
++        })
+     }
+ 
+     pub(super) fn retained_records(&self) -> usize {
+@@ -210,7 +221,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         match catch_unwind(AssertUnwindSafe(|| operation(self))) {
+             Ok(value) => value,
+             Err(payload) => {
+-                self.terminal = true;
++                self.quarantine_submission_writers_v1();
+                 std::panic::resume_unwind(payload);
+             }
+         }
+@@ -220,11 +231,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+     /// Each capacity must be in 1..=1_048_576; invalid bounds reject before
+     /// enumeration. Other failures return the possibly enumeration-entered backend.
+     ///
+-    /// This development profile tracks allocation custody and synchronous host
+-    /// writes. Writer capacity and unresolved writes gate further host writes.
+-    /// Launches, copies and backend aliases remain untracked, so no content
+-    /// lineage, input lease or reuse permission is exposed. Unknown host writes
+-    /// permit only confirmed allocation disposal, not content recovery.
++    /// This development profile tracks allocation custody, synchronous host
++    /// writes and ordinary asynchronous launch/copy destinations. Writer
++    /// capacity and unresolved writes gate subsequent writes. Generated protected
++    /// launches, backend aliases and input leases remain outside this profile;
++    /// no content lineage or reuse permission is exposed. Unknown async writers
++    /// retain their allocations, even after submission metadata is released.
+     /// The default `open` path is unchanged.
+     pub fn open_with_version_journal_v1(
+         backend: B,
+@@ -264,7 +276,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         result: Result<T, ContextVersionJournalErrorV1>,
+     ) -> Result<T, RuntimeValidationErrorV1> {
+         result.map_err(|_| {
+-            self.terminal = true;
++            self.quarantine_submission_writers_v1();
+             RuntimeValidationErrorV1::InvalidBackendDescription
+         })
+     }
+@@ -334,7 +346,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                 _ => false,
+             };
+             if !exact {
+-                context.terminal = true;
++                context.quarantine_submission_writers_v1();
+                 panic!("allocation disposal plan identity invariant");
+             }
+             context.dispose_allocation_credits_v1(id);
+diff --git a/crates/fe2o3-runtime/src/context/versions/submissions.rs b/crates/fe2o3-runtime/src/context/versions/submissions.rs
+new file mode 100644
+index 000000000..3aa6ccd49
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/context/versions/submissions.rs
+@@ -0,0 +1,323 @@
++use super::*;
++use fe2o3_runtime_model::{
++    ContextAllocationWriteV1, ContextWriterKeyV1, ContextWriterKindV1,
++    ContextWriterNoEffectEvidenceV1, ContextWriterReferenceV1, ContextWriterSuccessEvidenceV1,
++};
++
++// Context owns this root independently of a returned backend/public handle.
++pub(super) struct RetainedSubmissionWriterV1 {
++    writer: ContextWriterReferenceV1,
++    allocations: Vec<RuntimeAllocationIdV1>,
++}
++
++struct PreparedSubmissionWriterV1 {
++    allocations: Vec<RuntimeAllocationIdV1>,
++    members: Vec<ContextAllocationWriteV1>,
++}
++
++#[derive(Clone, Copy)]
++pub(in crate::context) enum SubmissionWriterOutcomeV1 {
++    Success,
++    NoEffect,
++    Unknown,
++}
++
++#[cfg(test)]
++impl ContextVersionsV1 {
++    pub(in crate::context) fn remove_submission_writer_root_for_test_v1(
++        &mut self,
++        id: RuntimeSubmissionIdV1,
++    ) {
++        self.submission_writers.remove(&id);
++    }
++}
++
++impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
++    fn prepare_submission_writer_v1(
++        &mut self,
++        destinations: &[RuntimeAllocationIdV1],
++    ) -> Result<Option<PreparedSubmissionWriterV1>, RuntimeValidationErrorV1> {
++        self.guard_journal_unwind_v1(|context| {
++            let Some(versions) = context.versions.as_ref() else {
++                return Ok(None);
++            };
++            if destinations.is_empty() {
++                return Ok(None);
++            }
++            if versions.journal.remaining_writer_slots() == 0 {
++                return Err(RuntimeValidationErrorV1::Capacity);
++            }
++            let mut allocations = Vec::new();
++            allocations
++                .try_reserve_exact(destinations.len())
++                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
++            allocations.extend_from_slice(destinations);
++            allocations.sort_unstable();
++            allocations.dedup();
++            let mut members = Vec::new();
++            members
++                .try_reserve_exact(allocations.len())
++                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
++            for id in &allocations {
++                let record = context
++                    .allocations
++                    .get(id)
++                    .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
++                let result = context
++                    .versions
++                    .as_ref()
++                    .expect("configured journal")
++                    .whole_allocation(*id, record);
++                let member = context.journal_result_v1(result)?;
++                let result = context
++                    .versions
++                    .as_ref()
++                    .expect("configured journal")
++                    .journal
++                    .lookup_allocation(member.allocation);
++                let state = context.journal_result_v1(result)?;
++                if let Some(writer) = state.pending_writer {
++                    let result = context
++                        .versions
++                        .as_ref()
++                        .expect("configured journal")
++                        .retained_writer(writer);
++                    context.journal_result_v1(result)?;
++                    return Err(RuntimeValidationErrorV1::ContextReserved);
++                }
++                if state.attempt_epoch == u64::MAX {
++                    return Err(RuntimeValidationErrorV1::Capacity);
++                }
++                members.push(member);
++            }
++            Ok(Some(PreparedSubmissionWriterV1 {
++                allocations,
++                members,
++            }))
++        })
++    }
++
++    fn begin_submission_writer_v1(
++        &mut self,
++        id: RuntimeSubmissionIdV1,
++        prepared: Option<PreparedSubmissionWriterV1>,
++    ) -> Result<Option<ContextWriterReferenceV1>, RuntimeValidationErrorV1> {
++        self.guard_journal_unwind_v1(|context| {
++            let Some(prepared) = prepared else {
++                return Ok(None);
++            };
++            let key = ContextWriterKeyV1 {
++                context_generation: id.context_generation,
++                local: id.local,
++                kind: ContextWriterKindV1::Submission,
++            };
++            let result = context
++                .versions
++                .as_mut()
++                .expect("configured journal")
++                .journal
++                .register_writer(key);
++            let writer = context.journal_result_v1(result)?;
++            let versions = context.versions.as_mut().expect("configured journal");
++            assert!(
++                !versions.submission_writers.contains_key(&id),
++                "fresh submission writer identity"
++            );
++            assert!(
++                versions.submission_writers.len() < versions.submission_writers.capacity(),
++                "preallocated submission writer root"
++            );
++            versions.submission_writers.insert(
++                id,
++                RetainedSubmissionWriterV1 {
++                    writer,
++                    allocations: prepared.allocations,
++                },
++            );
++            let result = versions.journal.begin_write(writer, &prepared.members);
++            if result.is_err() {
++                let abort = versions.journal.abort_reserved(writer);
++                context.journal_result_v1(abort)?;
++                context
++                    .versions
++                    .as_mut()
++                    .expect("configured journal")
++                    .submission_writers
++                    .remove(&id);
++            }
++            context.journal_result_v1(result)?;
++            Ok(Some(writer))
++        })
++    }
++
++    pub(in crate::context) fn settle_submission_writer_v1(
++        &mut self,
++        id: RuntimeSubmissionIdV1,
++        outcome: SubmissionWriterOutcomeV1,
++    ) -> Result<(), RuntimeValidationErrorV1> {
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            let record = self.submissions.get(&id);
++            let expected = record.and_then(|record| record.journal_writer);
++            let absent = if expected.is_some() {
++                Err(ContextVersionJournalErrorV1::InvalidReference)
++            } else {
++                Ok(())
++            };
++            let Some(versions) = self.versions.as_mut() else {
++                return absent;
++            };
++            let Some(root) = versions.submission_writers.get(&id) else {
++                return absent;
++            };
++            let writer = root.writer;
++            if record.is_some() && expected != Some(writer) {
++                return Err(ContextVersionJournalErrorV1::InvalidReference);
++            }
++            if writer.key.context_generation != id.context_generation
++                || writer.key.local != id.local
++                || writer.key.kind != ContextWriterKindV1::Submission
++            {
++                return Err(ContextVersionJournalErrorV1::InvalidReference);
++            }
++            match outcome {
++                SubmissionWriterOutcomeV1::Success => versions
++                    .journal
++                    .settle_success(writer, &ContextWriterSuccessEvidenceV1 { writer })?,
++                SubmissionWriterOutcomeV1::NoEffect => versions
++                    .journal
++                    .settle_no_effect(writer, &ContextWriterNoEffectEvidenceV1 { writer })?,
++                SubmissionWriterOutcomeV1::Unknown => versions.journal.mark_unknown(writer)?,
++            }
++            if !matches!(outcome, SubmissionWriterOutcomeV1::Unknown) {
++                versions.submission_writers.remove(&id);
++                if let Some(record) = self.submissions.get_mut(&id) {
++                    record.journal_writer = None;
++                }
++            }
++            Ok(())
++        }));
++        match result {
++            Ok(Ok(())) => Ok(()),
++            Ok(Err(_)) => {
++                self.quarantine_after_async_command_panic_v1();
++                Err(RuntimeValidationErrorV1::InvalidBackendDescription)
++            }
++            Err(payload) => {
++                self.quarantine_after_async_command_panic_v1();
++                core::mem::forget(payload);
++                Err(RuntimeValidationErrorV1::InvalidBackendDescription)
++            }
++        }
++    }
++
++    pub(in crate::context) fn quarantine_submission_writers_v1(&mut self) {
++        self.terminal = true;
++        let Some(versions) = self.versions.as_mut() else {
++            return;
++        };
++        for root in versions.submission_writers.values() {
++            // Even a secondary poison/settlement panic must preserve the
++            // backend's original diagnostic and all remaining roots.
++            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
++                let _ = versions.journal.mark_unknown(root.writer);
++            })) {
++                core::mem::forget(payload);
++            }
++            for id in &root.allocations {
++                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
++                    self.allocation_admission.quarantine(*id);
++                })) {
++                    core::mem::forget(payload);
++                }
++            }
++        }
++    }
++
++    pub(in crate::context) fn invoke_journal_backend_v1<T>(
++        &mut self,
++        call: impl FnOnce(&mut B) -> Result<T, RuntimeBackendFailureV1<B::Error>>,
++    ) -> Result<T, RuntimeBackendFailureV1<B::Error>> {
++        if self.versions.is_none() {
++            return call(&mut self.backend);
++        }
++        match catch_unwind(AssertUnwindSafe(|| call(&mut self.backend))) {
++            Ok(result) => result,
++            Err(payload) => {
++                self.quarantine_after_async_command_panic_v1();
++                std::panic::resume_unwind(payload);
++            }
++        }
++    }
++
++    pub(in crate::context) fn submit_context_operation_v1<M>(
++        &mut self,
++        stream: RuntimeStreamIdV1,
++        stream_record: StreamRecordV1,
++        destinations: &[RuntimeAllocationIdV1],
++        peer_transfer: Option<PeerTransferMechanismV1>,
++        submit: impl FnOnce(&mut B) -> Result<u64, RuntimeBackendFailureV1<B::Error>>,
++    ) -> Result<RuntimeSubmissionV1<M>, RuntimeErrorV1<B::Error>> {
++        let prepared = self.prepare_submission_writer_v1(destinations)?;
++        if prepared.is_some() {
++            // Settlements can leave hash-table tombstones despite a free model
++            // slot. Restore insertion headroom before burning an ID or Begin.
++            self.versions
++                .as_mut()
++                .expect("configured journal")
++                .submission_writers
++                .try_reserve(1)
++                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
++        }
++        self.submissions
++            .try_reserve(1)
++            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
++        self.backend_submissions
++            .try_reserve(1)
++            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
++        let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
++        let journal_writer = self.begin_submission_writer_v1(id, prepared)?;
++        let result = self.invoke_journal_backend_v1(submit);
++        let backend_submission = match result {
++            Ok(handle) => handle,
++            Err(failure) => {
++                let outcome = if matches!(&failure, RuntimeBackendFailureV1::Rejected(_)) {
++                    SubmissionWriterOutcomeV1::NoEffect
++                } else {
++                    SubmissionWriterOutcomeV1::Unknown
++                };
++                let _ = self.settle_submission_writer_v1(id, outcome);
++                return self.backend_result(Err(failure));
++            }
++        };
++        let protocol_error = self.backend_handle_protocol_error(
++            RuntimeBackendResourceKindV1::Submission,
++            backend_submission,
++        );
++        // Both indexes have headroom before backend entry. Root the returned
++        // handle even if the backend violated zero/duplicate-handle rules.
++        self.submissions.insert(
++            id,
++            SubmissionRecordV1 {
++                backend_submission,
++                stream,
++                device: stream_record.device,
++                quiescent: false,
++                status: RuntimeCompletionStatusV1::Pending,
++                journal_writer,
++            },
++        );
++        if protocol_error.is_none() {
++            self.backend_submissions.insert(backend_submission);
++        }
++        let submission = RuntimeSubmissionV1 {
++            id,
++            backend_submission,
++            stream,
++            device: stream_record.device,
++            completion: None,
++            peer_transfer,
++            marker: PhantomData,
++        };
++        self.seal_backend_protocol(protocol_error, submission)
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/context/versions/writers.rs b/crates/fe2o3-runtime/src/context/versions/writers.rs
+index a809ae356..ca68fc1f5 100644
+--- a/crates/fe2o3-runtime/src/context/versions/writers.rs
++++ b/crates/fe2o3-runtime/src/context/versions/writers.rs
+@@ -19,7 +19,7 @@ enum HostWriteOutcomeV1 {
+ }
+ 
+ impl ContextVersionsV1 {
+-    fn retained_writer(
++    pub(super) fn retained_writer(
+         &self,
+         writer: ContextWriterReferenceV1,
+     ) -> Result<ContextWriterStateV1, ContextVersionJournalErrorV1> {
+@@ -44,7 +44,7 @@ impl ContextVersionsV1 {
+         &self.journal
+     }
+ 
+-    fn whole_allocation(
++    pub(super) fn whole_allocation(
+         &self,
+         id: RuntimeAllocationIdV1,
+         record: &AllocationRecordV1,
+@@ -219,7 +219,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         let result = match settled {
+             Ok(result) => self.journal_result_v1(result),
+             Err(payload) => {
+-                self.terminal = true;
++                self.quarantine_submission_writers_v1();
+                 core::mem::forget(payload);
+                 Err(RuntimeValidationErrorV1::InvalidBackendDescription)
+             }
+@@ -248,7 +248,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         match outcome {
+             Ok(result) => {
+                 if matches!(&result, Err(RuntimeBackendFailureV1::Terminal(_))) {
+-                    self.terminal = true;
++                    self.quarantine_submission_writers_v1();
+                 }
+                 let disposition = match &result {
+                     Ok(()) => HostWriteOutcomeV1::Success,
+@@ -264,7 +264,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                 self.backend_result(result)
+             }
+             Err(payload) => {
+-                self.terminal = true;
++                self.quarantine_submission_writers_v1();
+                 let _ = self.finish_host_write_v1(ticket, HostWriteOutcomeV1::Unknown);
+                 std::panic::resume_unwind(payload);
+             }
+diff --git a/crates/fe2o3-runtime/src/kfd_backend.rs b/crates/fe2o3-runtime/src/kfd_backend.rs
+index 564a09fb3..15ea076eb 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend.rs
+@@ -6543,7 +6543,16 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
+                 .pending_compute
+                 .remove(&id)
+                 .expect("accepted clean compute remains pending before first progress");
+-            let _ = self.progress_pending_compute_v1(pending)?;
++            self.progress_pending_compute_v1(pending)
++                .map_err(|failure| {
++                    if let RuntimeBackendFailureV1::Rejected(mut error) = failure {
++                        self.poison_terminal_v1();
++                        error.kind = KfdRuntimeBackendErrorKindV1::Terminal;
++                        RuntimeBackendFailureV1::Terminal(error)
++                    } else {
++                        failure
++                    }
++                })?;
+         }
+         Ok(id)
+     }
+@@ -19498,6 +19507,121 @@ mod tests {
+         disarm_scripted_drop_after_inspection_v1(&mut backend);
+     }
+ 
++    #[test]
++    fn scripted_initial_compute_progress_rejection_preserves_accepted_custody() {
++        let steps = [
++            scripted_submit_step_v1(
++                Gfx942PersistentSdmaDirectionV1::HostToDevice,
++                0,
++                0,
++                8,
++                ScriptedFailureModeV1::Success,
++            ),
++            ScriptedSdmaStepV1::Poll(ScriptedExecutionOutcomeV1::Completed {
++                direction: None,
++                copy_bytes: None,
++            }),
++            ScriptedSdmaStepV1::Retire(ScriptedFailureModeV1::Success),
++        ];
++        let (mut backend, stream, host, device) = scripted_direct_backend_v1(8, steps);
++        let owner_ids = |backend: &KfdRuntimeBackendV1| {
++            let KfdRuntimeSdmaStorageV1::Host(SdmaBufferOwnerV1::Scripted(host_owner)) =
++                &backend.allocations[&host].sdma_storage
++            else {
++                panic!("missing scripted host owner");
++            };
++            let KfdRuntimeSdmaStorageV1::Device(device_owner) =
++                &backend.allocations[&device].sdma_storage
++            else {
++                panic!("missing scripted device owner");
++            };
++            (
++                host_owner.observation().0,
++                device_owner.scripted_owner_id().unwrap(),
++            )
++        };
++        let original_owners = owner_ids(&backend);
++        let (source, destination) = scripted_copy_regions_v1(host, device, 8);
++        let copy = backend
++            .copy_async_v1(stream, source, destination, &[])
++            .unwrap();
++        assert_eq!(backend.poll_v1(copy).unwrap(), BackendPollV1::Succeeded);
++        let module = backend
++            .load_module_v1(7, &synthetic_cov6::module())
++            .unwrap();
++        let kernel = backend
++            .resolve_kernel_v1(module, "vecadd", [7; 32])
++            .unwrap();
++        // Inject a broken predecessor index, retaining its real ordered stream
++        // tail. No test authority or scripted token is native GPU authority.
++        backend.submissions.remove(&copy).unwrap();
++        assert_eq!(backend.stream_submission_tails[&stream], copy);
++        assert!(!backend.allocations[&host].sdma_shadow_dirty);
++        assert!(backend.allocations[&host].native_dirty.is_empty());
++        assert_eq!(backend.native_dirty_extents, 0);
++        let accepted_id = backend.next_handle;
++        let mut kernarg = [0; 16];
++        kernarg[8..].copy_from_slice(&13_u64.to_le_bytes());
++        let result = backend.submit_v1(BackendLaunchV1 {
++            stream,
++            kernel,
++            explicit_kernarg: &kernarg,
++            bindings: &[BackendBindingV1 {
++                region: source,
++                kernarg_byte_offset: 0,
++            }],
++            dependencies: &[],
++            geometry: crate::RuntimeLaunchGeometryV1 {
++                grid: [64, 1, 1],
++                workgroup: [64, 1, 1],
++                dynamic_shared_bytes: 0,
++            },
++            semantic_launch: KfdRuntimeSemanticLaunchV1::Ordinary,
++        });
++        let Err(RuntimeBackendFailureV1::Terminal(error)) = result else {
++            panic!("accepted custody reported definite rejection");
++        };
++        assert_eq!(error.kind(), KfdRuntimeBackendErrorKindV1::Terminal);
++        assert_eq!(error.detail(), "unknown KFD submission");
++        assert!(backend.terminal);
++        let pending = &backend.pending_compute[&accepted_id];
++        assert_eq!(pending.id, accepted_id);
++        assert_eq!(pending.module, module);
++        assert_eq!(pending.ordered_predecessor, Some(copy));
++        assert_eq!(&*pending.retained_allocations, &[host]);
++        assert_eq!(pending.launch.bindings[0].region.allocation, host);
++        assert_eq!(
++            backend.pending_compute_streams[&stream].front(),
++            Some(&accepted_id)
++        );
++        assert_eq!(backend.stream_submission_tails[&stream], accepted_id);
++        assert_eq!(backend.compute_module_retain_counts[&module], 1);
++        assert_eq!(backend.compute_dependency_retain_counts[&copy], 1);
++        assert_eq!(
++            backend.allocation_custody[&host]
++                .owners
++                .front()
++                .unwrap()
++                .submission,
++            accepted_id
++        );
++        assert_eq!(backend.compute_completion_reservations, 1);
++        assert!(backend.active.is_none());
++        assert_eq!(owner_ids(&backend), original_owners);
++        let next = backend.next_handle;
++        assert!(matches!(
++            backend.poll_v1(accepted_id),
++            Err(RuntimeBackendFailureV1::Terminal(_))
++        ));
++        assert_eq!(backend.next_handle, next);
++        assert!(backend.pending_compute.contains_key(&accepted_id));
++        let driver = backend.scripted_sdma.as_ref().unwrap();
++        assert!(driver.is_exhausted());
++        assert_eq!(driver.live_owner_count(), 2);
++        assert_eq!(driver.unexpected_drops(), 0);
++        disarm_scripted_drop_after_inspection_v1(&mut backend);
++    }
++
+     #[test]
+     fn scripted_pending_compute_dependency_rejection_is_terminal_and_reindexed() {
+         let byte_len = usize::try_from(HOST_VISIBLE_MEMORY_PAGE_BYTES_V1).unwrap();
+diff --git a/docs/runtime-a1-a2-swarm-current.md b/docs/runtime-a1-a2-swarm-current.md
+index fd26c6f7e..8b42b774e 100644
+--- a/docs/runtime-a1-a2-swarm-current.md
++++ b/docs/runtime-a1-a2-swarm-current.md
+@@ -10,7 +10,17 @@ Resources' V4-J1 proof handoff above the locally accepted
+ Its immediate assignments supersede the older checkpoint tables below, whose
+ detailed contracts and historical observations are retained.
+ 
+-Latest development (2026-09-17): the [C6 owned-Stop correction](evidence/dev-c6-owned-stop-2026-09-17/README.md)
++Latest development (2026-09-17): the opt-in Context journal now joins ordinary
++async launch/copy writers to completion, explicit cancellation and retained
++Unknown outcomes. Original submission IDs and independent writer roots preserve
++custody even without a returned handle or after metadata release. See the
++[async writer boundary](runtime-context-version-journal-async-v1.md) and its
++[qualification archive](evidence/dev-v6-async-writers-2026-09-17/README.md).
++Generated protected execution, input leases, ordered writers, full disposal,
++formal correspondence, native qualification and matched performance remain open;
++this does not advance the accepted checkpoints or close A1/A2.
++
++Preceding development: the [C6 owned-Stop correction](evidence/dev-c6-owned-stop-2026-09-17/README.md)
+ now consumes original ready generated replies before deciding whether an active
+ graph still requires retained custody. Eight new tests include 52 deterministic
+ owner-loop scenarios across phase boundaries, observer loss, decoder outcomes and
+diff --git a/docs/runtime-context-version-journal-async-v1.md b/docs/runtime-context-version-journal-async-v1.md
+new file mode 100644
+index 000000000..9a4746074
+--- /dev/null
++++ b/docs/runtime-context-version-journal-async-v1.md
+@@ -0,0 +1,95 @@
++# Context Async Submission Writer Journal V1
++
++Status: development extension of the opt-in V6 Context journal, not completion
++of V5/V6, A1/A2, #182 or HIP/HSA parity. Accepted checkpoints remain Native R125
++CPU/test, Admission R118B C1-C3 and Resources R116/V3. Qualification and its limits
++are recorded in [the async writer archive](evidence/dev-v6-async-writers-2026-09-17/README.md).
++
++## Ownership
++
++Ordinary typed launches, snapshots, atomic/collective launches and prepared graph
++launches use one submission helper. Only original Context allocation IDs with
++Write or ReadWrite access enter the writer roster. Same-device, prepared graph
++and peer copies contribute only their original destination allocation ID.
++Preparation sorts and deduplicates that roster, revalidates its live journal
++records immediately before issue, and covers each complete allocation, including
++partial-region writes. Read-only and empty rosters consume no writer slot.
++
++The helper reserves all three insertion indexes before minting the original
++Context submission ID. Hash-table insertion capacity is rechecked after prior
++removals; constructor-time reservation alone is insufficient. The exact same
++submission ID registers the model Submission writer, without a second ID or a
++backend-handle-derived identity. Its allocation roster is rooted independently
++of the public token and backend submission metadata before backend entry.
++
++An installed submission also holds its exact expected writer reference. Missing,
++foreign or substituted roots fail closed before publishing completion or calling
++callbacks. A valid returned backend handle stays Pending. Even an invalid zero
++or duplicate handle is rooted before protocol rejection seals Context.
++
++## Settlement
++
++| Observation | Writer disposition |
++| --- | --- |
++| Initial submit Rejected | NoEffect; burned attempt epoch is preserved |
++| Initial submit Quiescent | Unknown, including when no handle is returned |
++| Initial Terminal, panic, zero or duplicate handle | Unknown; seal Context and quarantine retained writer allocation credits |
++| Poll/wait/drain Pending or Rejected | Keep Pending |
++| Conclusive Succeeded | Success, before status or callback publication |
++| Conclusive Failed, including a numeric cancellation code | Unknown |
++| Explicit cancellation-before-publication result | NoEffect |
++| TooLate or rejected cancellation | Keep Pending |
++| Quiescence without a result, including successful stream destruction | Unknown |
++| Flush, metadata release, callback return or future drop | No independent settlement evidence |
++
++Repeated terminal observations do not settle twice. A later stream destroy cannot
++downgrade an already successful writer. Unknown roots survive release of their
++submission metadata. Exact whole-writer physical disposal for Submission writers
++is not yet integrated: those allocations remain retained and cleanup reports
++incomplete, rather than borrowing the singleton synchronous-writer disposal rule.
++
++Terminal failures and caught backend panics quarantine all retained ordinary
++submission writers, including when the failing call concerns a different
++allocation, event, stream or module. Individual secondary bookkeeping failures
++must not replace the original boxed error or unwind payload. Journal-backed
++ordinary operations catch mutable backend entry; immutable capability queries
++retain their existing observational contract. Owned shutdown and generated
++operations retain their separate enclosing failure boundaries. Non-journal panic behavior is
++unchanged. All ordinary submissions now reserve facade insertion headroom before
++backend entry, which can report Capacity earlier than the previous path.
++
++The direct-KFD first-progress boundary now promotes a Rejected error to Terminal
++when logical compute custody has already been accepted. It preserves the owned
++detail string, changes the stable failure kind, and retains the pending launch,
++dependency/module/allocation custody, stream indexes and completion reservation.
++It does not change definite pre-admission rejection into terminal failure.
++
++## Cost And Bounds
++
++For b writable bindings and k distinct destination allocations, preparation sorts
++in O(b log b), then builds the exact O(k) roster. Successful Begin/settlement
++traverses that writer's members rather than every allocation. Hash indexes use
++expected amortized lookup/insertion costs; rehashing is not a hard constant-time
++guarantee. Terminal quarantine visits all retained writer roots and their members.
++All root/member storage is acquired before backend entry; roots are count-bounded
++by the configured writer capacity and their disjoint members by allocation
++capacity. This is not an aggregate byte-budget or throughput qualification.
++
++## Remaining Boundaries
++
++SPI Rejected, completion and cancellation classifications remain explicit backend
++contracts, not authenticated machine-refinement evidence. The existing V4-J1
++issuance proof does not prove this production settlement integration.
++
++Generated protected execution is deliberately not enrolled by this helper. It
++requires its own effect roster, closing currentness, checked readback, native
++retirement and production verifier/refinement evidence before journal settlement.
++Existing generated transitions retain their distinct completion path.
++
++Backend aliases, input/read leases, ordered overlapping writers, cross-run version
++consumption, content recovery and multi-member physical disposal remain open.
++Pending or Unknown membership currently rejects a later writer even if an event
++dependency or stream order would otherwise serialize it. No public lineage or
++reuse authority is exposed by this development profile. Native GPU campaigns,
++new solver proofs and matched HIP/HSA performance measurements are not supplied
++by its CPU qualification.
+diff --git a/docs/runtime-context-version-journal-host-write-v1.md b/docs/runtime-context-version-journal-host-write-v1.md
+index c4fc3a2fe..b55ff8c75 100644
+--- a/docs/runtime-context-version-journal-host-write-v1.md
++++ b/docs/runtime-context-version-journal-host-write-v1.md
+@@ -7,6 +7,8 @@ Resources R116/V3. No new solver proof, GPU qualification or performance claim
+ is supplied by this increment.
+ CPU qualification is recorded in the
+ [development receipt](evidence/dev-v6-host-writes-2026-09-17/README.md).
++The later [async writer extension](runtime-context-version-journal-async-v1.md)
++adds ordinary submission settlement; the historical receipt's scope is unchanged.
+ 
+ ## Writer Boundary
+ 

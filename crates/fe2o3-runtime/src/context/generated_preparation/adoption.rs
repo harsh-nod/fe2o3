@@ -121,12 +121,12 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         match result {
             Ok(Ok(())) => Ok(()),
             Ok(Err(error)) => {
-                self.terminal = true;
+                self.quarantine_submission_writers_v1();
                 self.backend.quarantine_generated_adoption_v1();
                 Err(error)
             }
             Err(payload) => {
-                self.terminal = true;
+                self.quarantine_submission_writers_v1();
                 self.backend.resume_generated_adoption_panic_v1(payload)
             }
         }

@@ -57,7 +57,7 @@ fn diagnostic(
     (pointer, drops)
 }
 
-fn assert_diagnostic(
+pub(super) fn assert_diagnostic(
     result: std::thread::Result<Result<(), RuntimeErrorV1<Box<Diagnostic>>>>,
     failure: Failure,
     pointer: *const Diagnostic,

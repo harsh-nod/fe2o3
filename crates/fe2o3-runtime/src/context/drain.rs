@@ -45,7 +45,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if record.status.is_terminal() {
             return Ok(record.status);
         }
-        let result = self.backend.poll_v1(record.backend_submission);
+        let result =
+            self.invoke_journal_backend_v1(|backend| backend.poll_v1(record.backend_submission));
         self.completion_backend_result(id, result)
     }
 

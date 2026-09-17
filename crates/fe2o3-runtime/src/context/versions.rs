@@ -6,7 +6,9 @@ use fe2o3_runtime_model::{
     ContextJournalDeviceKeyV1, ContextVersionJournalErrorV1, ContextVersionJournalV1,
 };
 
+mod submissions;
 mod writers;
+pub(super) use submissions::SubmissionWriterOutcomeV1;
 
 /// Bounded journal metadata counts, not residency, initializedness or data versions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,6 +55,7 @@ enum AllocationPhaseV1 {
 pub(super) struct ContextVersionsV1 {
     journal: ContextVersionJournalV1,
     phases: Vec<Option<AllocationPhaseV1>>,
+    submission_writers: HashMap<RuntimeSubmissionIdV1, submissions::RetainedSubmissionWriterV1>,
 }
 
 // Dropping this move-only ticket never removes its Context-owned record.
@@ -102,7 +105,15 @@ impl ContextVersionsV1 {
             .try_reserve_exact(allocations)
             .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;
         phases.resize(allocations, None);
-        Ok(Self { journal, phases })
+        let mut submission_writers = HashMap::new();
+        submission_writers
+            .try_reserve(writers)
+            .map_err(|_| ContextVersionJournalErrorV1::StorageAllocationFailed)?;
+        Ok(Self {
+            journal,
+            phases,
+            submission_writers,
+        })
     }
 
     pub(super) fn retained_records(&self) -> usize {
@@ -210,7 +221,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         match catch_unwind(AssertUnwindSafe(|| operation(self))) {
             Ok(value) => value,
             Err(payload) => {
-                self.terminal = true;
+                self.quarantine_submission_writers_v1();
                 std::panic::resume_unwind(payload);
             }
         }
@@ -220,11 +231,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// Each capacity must be in 1..=1_048_576; invalid bounds reject before
     /// enumeration. Other failures return the possibly enumeration-entered backend.
     ///
-    /// This development profile tracks allocation custody and synchronous host
-    /// writes. Writer capacity and unresolved writes gate further host writes.
-    /// Launches, copies and backend aliases remain untracked, so no content
-    /// lineage, input lease or reuse permission is exposed. Unknown host writes
-    /// permit only confirmed allocation disposal, not content recovery.
+    /// This development profile tracks allocation custody, synchronous host
+    /// writes and ordinary asynchronous launch/copy destinations. Writer
+    /// capacity and unresolved writes gate subsequent writes. Generated protected
+    /// launches, backend aliases and input leases remain outside this profile;
+    /// no content lineage or reuse permission is exposed. Unknown async writers
+    /// retain their allocations, even after submission metadata is released.
     /// The default `open` path is unchanged.
     pub fn open_with_version_journal_v1(
         backend: B,
@@ -264,7 +276,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         result: Result<T, ContextVersionJournalErrorV1>,
     ) -> Result<T, RuntimeValidationErrorV1> {
         result.map_err(|_| {
-            self.terminal = true;
+            self.quarantine_submission_writers_v1();
             RuntimeValidationErrorV1::InvalidBackendDescription
         })
     }
@@ -334,7 +346,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 _ => false,
             };
             if !exact {
-                context.terminal = true;
+                context.quarantine_submission_writers_v1();
                 panic!("allocation disposal plan identity invariant");
             }
             context.dispose_allocation_credits_v1(id);

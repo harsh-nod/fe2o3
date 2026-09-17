@@ -10,7 +10,17 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest development (2026-09-17): the [C6 owned-Stop correction](evidence/dev-c6-owned-stop-2026-09-17/README.md)
+Latest development (2026-09-17): the opt-in Context journal now joins ordinary
+async launch/copy writers to completion, explicit cancellation and retained
+Unknown outcomes. Original submission IDs and independent writer roots preserve
+custody even without a returned handle or after metadata release. See the
+[async writer boundary](runtime-context-version-journal-async-v1.md) and its
+[qualification archive](evidence/dev-v6-async-writers-2026-09-17/README.md).
+Generated protected execution, input leases, ordered writers, full disposal,
+formal correspondence, native qualification and matched performance remain open;
+this does not advance the accepted checkpoints or close A1/A2.
+
+Preceding development: the [C6 owned-Stop correction](evidence/dev-c6-owned-stop-2026-09-17/README.md)
 now consumes original ready generated replies before deciding whether an active
 graph still requires retained custody. Eight new tests include 52 deterministic
 owner-loop scenarios across phase boundaries, observer loss, decoder outcomes and

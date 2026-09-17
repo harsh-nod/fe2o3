@@ -210,21 +210,23 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         _quiescence: crate::async_engine::DrainQuiescenceV1,
     ) -> Result<(), RuntimeHostCaptureErrorV1> {
         let device = self.validate_host_capture_source_v1(source, destination.len())?;
-        match self
-            .backend
-            .capture_coherent_host_range_v1(BackendHostCaptureV1 {
-                device,
-                allocation: source.backend_allocation,
-                byte_offset: source.byte_offset,
-                destination,
-            }) {
+        match self.guard_journal_unwind_v1(|context| {
+            context
+                .backend
+                .capture_coherent_host_range_v1(BackendHostCaptureV1 {
+                    device,
+                    allocation: source.backend_allocation,
+                    byte_offset: source.byte_offset,
+                    destination,
+                })
+        }) {
             Ok(()) => Ok(()),
             Err(
                 RuntimeBackendFailureV1::Rejected(error)
                 | RuntimeBackendFailureV1::Quiescent(error),
             ) => Err(error),
             Err(RuntimeBackendFailureV1::Terminal(error)) => {
-                self.terminal = true;
+                self.quarantine_submission_writers_v1();
                 Err(error)
             }
         }

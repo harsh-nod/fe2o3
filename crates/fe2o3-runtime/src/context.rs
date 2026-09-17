@@ -24,7 +24,7 @@ use allocation_admission::ContextAllocationAdmissionV1;
 pub use drain_capture::*;
 pub use generated_preparation::*;
 pub(crate) use unpublished::ContextUnpublishedHoldV1;
-use versions::ContextVersionsV1;
+use versions::{ContextVersionsV1, SubmissionWriterOutcomeV1};
 pub use versions::{RuntimeContextJournalUsageV1, RuntimeContextOpenFailureV1};
 
 /// Maximum number of devices retained by one runtime context.
@@ -1010,6 +1010,7 @@ struct SubmissionRecordV1 {
     device: RuntimeDeviceIdV1,
     quiescent: bool,
     status: RuntimeCompletionStatusV1,
+    journal_writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
 }
 
 type RuntimeCompletionCallbackV1 =
@@ -1086,6 +1087,7 @@ pub(crate) struct PreparedContextLaunchV1 {
     kernel: u64,
     explicit_kernarg: Vec<u8>,
     backend_bindings: Vec<BackendBindingV1>,
+    journal_destinations: Vec<RuntimeAllocationIdV1>,
     backend_dependencies: Vec<u64>,
     geometry: RuntimeLaunchGeometryV1,
     semantic_launch: BackendSemanticLaunchV1,
@@ -1267,7 +1269,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     }
 
     pub(crate) fn quarantine_after_async_command_panic_v1(&mut self) {
-        self.terminal = true;
+        self.quarantine_submission_writers_v1();
     }
 
     pub(crate) fn shutdown_owned_backend_v1(
@@ -1306,9 +1308,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let mut streams_quiescent = true;
         for id in stream_ids {
             let record = self.streams[&id];
-            match self.backend.destroy_stream_v1(record.backend_stream) {
+            match self.invoke_journal_backend_v1(|backend| {
+                backend.destroy_stream_v1(record.backend_stream)
+            }) {
                 Ok(()) => {
-                    self.mark_stream_quiescent(id);
+                    if self.mark_stream_quiescent(id).is_err() {
+                        return self.cleanup_report(failures);
+                    }
                     self.streams.remove(&id);
                     self.backend_streams.remove(&record.backend_stream);
                 }
@@ -1317,15 +1323,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         streams_quiescent = false;
                     }
                     if matches!(failure, RuntimeBackendFailureV1::Quiescent(_)) {
-                        self.mark_stream_quiescent(id);
+                        let _ = self.mark_stream_quiescent(id);
                     }
                     let terminal = matches!(failure, RuntimeBackendFailureV1::Terminal(_));
                     failures.push(RuntimeCleanupFailureV1 {
                         resource: RuntimeCleanupResourceV1::Stream(id),
                         failure,
                     });
-                    if terminal {
-                        self.terminal = true;
+                    if terminal || self.terminal {
+                        self.quarantine_after_async_command_panic_v1();
                         return self.cleanup_report(failures);
                     }
                 }
@@ -1340,7 +1346,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let mut events_released_or_quiescent = true;
         for id in event_ids {
             let record = self.events[&id];
-            match self.backend.release_event_v1(record.backend_event) {
+            match self
+                .invoke_journal_backend_v1(|backend| backend.release_event_v1(record.backend_event))
+            {
                 Ok(()) => {
                     self.events.remove(&id);
                     self.backend_events.remove(&record.backend_event);
@@ -1355,7 +1363,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         failure,
                     });
                     if terminal {
-                        self.terminal = true;
+                        self.quarantine_submission_writers_v1();
                         return self.cleanup_report(failures);
                     }
                 }
@@ -1375,10 +1383,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 submissions_released = false;
                 continue;
             }
-            match self
-                .backend
-                .release_submission_v1(record.backend_submission)
-            {
+            match self.invoke_journal_backend_v1(|backend| {
+                backend.release_submission_v1(record.backend_submission)
+            }) {
                 Ok(()) => {
                     self.submissions.remove(&id);
                     self.backend_submissions.remove(&record.backend_submission);
@@ -1392,7 +1399,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         failure,
                     });
                     if terminal {
-                        self.terminal = true;
+                        self.quarantine_submission_writers_v1();
                         return self.cleanup_report(failures);
                     }
                 }
@@ -1406,7 +1413,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         module_ids.sort_unstable();
         for id in module_ids {
             let record = self.modules[&id];
-            match self.backend.unload_module_v1(record.backend_module) {
+            match self.invoke_journal_backend_v1(|backend| {
+                backend.unload_module_v1(record.backend_module)
+            }) {
                 Ok(()) => {
                     self.modules.remove(&id);
                     self.backend_modules.remove(&record.backend_module);
@@ -1419,7 +1428,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         failure,
                     });
                     if terminal {
-                        self.terminal = true;
+                        self.quarantine_submission_writers_v1();
                         return self.cleanup_report(failures);
                     }
                 }
@@ -1449,7 +1458,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         failure,
                     });
                     if terminal {
-                        self.terminal = true;
+                        self.quarantine_submission_writers_v1();
                         return self.cleanup_report(failures);
                     }
                 }
@@ -1511,7 +1520,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         Ok(identity)
     }
 
-    fn mark_stream_quiescent(&mut self, stream: RuntimeStreamIdV1) {
+    fn mark_stream_quiescent(
+        &mut self,
+        stream: RuntimeStreamIdV1,
+    ) -> Result<(), RuntimeValidationErrorV1> {
         let submissions: Vec<_> = self
             .submissions
             .iter()
@@ -1521,21 +1533,32 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             self.transition_submission_status(
                 submission,
                 RuntimeCompletionStatusV1::QuiescentWithoutResult,
-            );
+            )?;
         }
+        Ok(())
     }
 
     fn transition_submission_status(
         &mut self,
         submission: RuntimeSubmissionIdV1,
         status: RuntimeCompletionStatusV1,
-    ) -> RuntimeCompletionStatusV1 {
-        let Some(record) = self.submissions.get_mut(&submission) else {
-            return status;
+    ) -> Result<RuntimeCompletionStatusV1, RuntimeValidationErrorV1> {
+        let Some(record) = self.submissions.get(&submission) else {
+            return Ok(status);
         };
         if record.status.is_terminal() || !status.is_terminal() {
-            return record.status;
+            return Ok(record.status);
         }
+        let outcome = if status == RuntimeCompletionStatusV1::Succeeded {
+            SubmissionWriterOutcomeV1::Success
+        } else {
+            SubmissionWriterOutcomeV1::Unknown
+        };
+        self.settle_submission_writer_v1(submission, outcome)?;
+        let record = self
+            .submissions
+            .get_mut(&submission)
+            .expect("retained observed submission");
         record.status = status;
         record.quiescent = true;
         let callbacks = self
@@ -1552,14 +1575,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     self.completion_callback_panic_count.saturating_add(1);
             }
         }
-        status
+        Ok(status)
     }
 
     fn observe_submission_backend(
         &mut self,
         submission: RuntimeSubmissionIdV1,
         observation: BackendPollV1,
-    ) -> RuntimeCompletionStatusV1 {
+    ) -> Result<RuntimeCompletionStatusV1, RuntimeValidationErrorV1> {
         let status = match observation {
             BackendPollV1::Pending => RuntimeCompletionStatusV1::Pending,
             BackendPollV1::Succeeded => RuntimeCompletionStatusV1::Succeeded,
@@ -1576,19 +1599,21 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         result: Result<BackendPollV1, RuntimeBackendFailureV1<B::Error>>,
     ) -> Result<RuntimeCompletionStatusV1, RuntimeErrorV1<B::Error>> {
         match result {
-            Ok(observation) => Ok(self.observe_submission_backend(submission, observation)),
+            Ok(observation) => self
+                .observe_submission_backend(submission, observation)
+                .map_err(Into::into),
             Err(RuntimeBackendFailureV1::Rejected(error)) => {
                 Err(RuntimeErrorV1::BackendRejected(error))
             }
             Err(RuntimeBackendFailureV1::Quiescent(error)) => {
-                self.transition_submission_status(
+                let _ = self.transition_submission_status(
                     submission,
                     RuntimeCompletionStatusV1::QuiescentWithoutResult,
                 );
                 Err(RuntimeErrorV1::BackendQuiescent(error))
             }
             Err(RuntimeBackendFailureV1::Terminal(error)) => {
-                self.terminal = true;
+                self.quarantine_after_async_command_panic_v1();
                 Err(RuntimeErrorV1::BackendTerminal(error))
             }
         }
@@ -1691,7 +1716,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 Err(RuntimeErrorV1::BackendQuiescent(error))
             }
             Err(RuntimeBackendFailureV1::Terminal(error)) => {
-                self.terminal = true;
+                self.quarantine_after_async_command_panic_v1();
                 Err(RuntimeErrorV1::BackendTerminal(error))
             }
         }
@@ -1722,7 +1747,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         value: T,
     ) -> Result<T, RuntimeErrorV1<B::Error>> {
         if let Some(error) = error {
-            self.terminal = true;
+            self.quarantine_after_async_command_panic_v1();
             Err(RuntimeErrorV1::BackendProtocol(error))
         } else {
             Ok(value)
@@ -1758,7 +1783,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         }
         let backend_device = device_record.backend_device;
         let id = RuntimeStreamIdV1::new(self.context_generation, self.next_id()?);
-        let result = self.backend.create_stream_v1(backend_device);
+        let result =
+            self.invoke_journal_backend_v1(|backend| backend.create_stream_v1(backend_device));
         let backend_stream = self.backend_result(result)?;
         let protocol_error = self
             .backend_handle_protocol_error(RuntimeBackendResourceKindV1::Stream, backend_stream);
@@ -1783,12 +1809,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     ) -> Result<(), RuntimeErrorV1<B::Error>> {
         self.require_live()?;
         let record = *self.unheld_stream_v1(stream)?;
-        let result = self.backend.destroy_stream_v1(record.backend_stream);
+        let result = self
+            .invoke_journal_backend_v1(|backend| backend.destroy_stream_v1(record.backend_stream));
         if matches!(&result, Err(RuntimeBackendFailureV1::Quiescent(_))) {
-            self.mark_stream_quiescent(stream);
+            let _ = self.mark_stream_quiescent(stream);
         }
         self.backend_result(result)?;
-        self.mark_stream_quiescent(stream);
+        self.mark_stream_quiescent(stream)?;
         self.streams.remove(&stream);
         self.backend_streams.remove(&record.backend_stream);
         Ok(())
@@ -1841,7 +1868,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             Err(error) => {
                 self.dispose_journal_provisional_v1(enrollment);
                 if error == crate::RuntimeResourceCreditErrorV1::Invariant {
-                    self.terminal = true;
+                    self.quarantine_submission_writers_v1();
                 }
                 return Err(RuntimeValidationErrorV1::Capacity.into());
             }
@@ -1853,7 +1880,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             })) {
                 Ok(result) => result,
                 Err(payload) => {
-                    self.terminal = true;
+                    self.quarantine_submission_writers_v1();
                     drop(credits);
                     std::panic::resume_unwind(payload);
                 }
@@ -1868,7 +1895,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 if let Some(credits) = credits
                     && let Err(invariant) = credits.release_after_disposal()
                 {
-                    self.terminal = true;
+                    self.quarantine_submission_writers_v1();
                     panic!(
                         "allocation credit owner invariant failed after settlement: {invariant:?}"
                     );
@@ -1880,7 +1907,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 if let Some(credits) = credits {
                     if matches!(&failure, RuntimeBackendFailureV1::Rejected(_)) {
                         if let Err(error) = credits.release_after_rejection() {
-                            self.terminal = true;
+                            self.quarantine_submission_writers_v1();
                             panic!(
                                 "allocation credit owner invariant failed after rejection: {error:?}"
                             );
@@ -1924,7 +1951,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         };
         if guarded {
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| commit(self))) {
-                self.terminal = true;
+                self.quarantine_submission_writers_v1();
                 std::panic::resume_unwind(payload);
             }
         } else {
@@ -1983,9 +2010,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .get(&allocation)
             .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
         validate_byte_range(record.byte_len, byte_offset, destination.len())?;
-        let result =
-            self.backend
-                .read_allocation_v1(record.backend_allocation, byte_offset, destination);
+        let result = self.invoke_journal_backend_v1(|backend| {
+            backend.read_allocation_v1(record.backend_allocation, byte_offset, destination)
+        });
         self.backend_result(result)
     }
 
@@ -2007,7 +2034,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let backend_device = self.device(device)?.backend_device;
         let id = RuntimeModuleIdV1::new(self.context_generation, self.next_id()?);
         let image_sha256 = Sha256::digest(image).into();
-        let result = self.backend.load_module_v1(backend_device, image);
+        let result =
+            self.invoke_journal_backend_v1(|backend| backend.load_module_v1(backend_device, image));
         let backend_module = self.backend_result(result)?;
         let protocol_error = self
             .backend_handle_protocol_error(RuntimeBackendResourceKindV1::Module, backend_module);
@@ -2034,7 +2062,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .modules
             .get(&module)
             .ok_or(RuntimeValidationErrorV1::UnknownModule)?;
-        let result = self.backend.unload_module_v1(record.backend_module);
+        let result = self
+            .invoke_journal_backend_v1(|backend| backend.unload_module_v1(record.backend_module));
         self.backend_result(result)?;
         self.modules.remove(&module);
         self.backend_modules.remove(&record.backend_module);
@@ -2075,9 +2104,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             A::SIGNATURE_V1,
         ))
         .map_err(|_| RuntimeValidationErrorV1::InvalidKernelSignature)?;
-        let result = self
-            .backend
-            .resolve_kernel_v1(record.backend_module, name, A::SIGNATURE_V1);
+        let result = self.invoke_journal_backend_v1(|backend| {
+            backend.resolve_kernel_v1(record.backend_module, name, A::SIGNATURE_V1)
+        });
         let backend_kernel = self.backend_result(result)?;
         let protocol_error = self
             .backend_handle_protocol_error(RuntimeBackendResourceKindV1::Kernel, backend_kernel);
@@ -2218,6 +2247,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(RuntimeValidationErrorV1::TooManyBindings.into());
         }
         let mut backend_bindings = Vec::with_capacity(bindings.len());
+        let mut journal_destinations = Vec::new();
+        if self.versions.is_some() {
+            journal_destinations
+                .try_reserve_exact(bindings.len())
+                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        }
         for binding in bindings {
             let region = binding.region;
             let allocation = *self
@@ -2267,6 +2302,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 },
                 kernarg_byte_offset: binding.kernarg_byte_offset,
             });
+            if self.versions.is_some()
+                && matches!(
+                    region.access,
+                    RuntimeAccessV1::Write | RuntimeAccessV1::ReadWrite
+                )
+            {
+                journal_destinations.push(region.allocation);
+            }
         }
         let mut backend_dependencies = Vec::with_capacity(dependencies.len());
         for dependency in dependencies {
@@ -2285,6 +2328,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             kernel: kernel.backend_kernel,
             explicit_kernarg,
             backend_bindings,
+            journal_destinations,
             backend_dependencies,
             geometry,
             semantic_launch,
@@ -2314,51 +2358,31 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             kernel,
             explicit_kernarg,
             backend_bindings,
+            journal_destinations,
             backend_dependencies,
             geometry,
             semantic_launch,
         } = prepared;
-        let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
-        let result = submit(
-            &mut self.backend,
-            BackendLaunchV1 {
-                stream: stream_record.backend_stream,
-                kernel,
-                explicit_kernarg: &explicit_kernarg,
-                bindings: &backend_bindings,
-                dependencies: &backend_dependencies,
-                geometry,
-                semantic_launch,
-            },
-        );
-        let backend_submission = self.backend_result(result)?;
-        let protocol_error = self.backend_handle_protocol_error(
-            RuntimeBackendResourceKindV1::Submission,
-            backend_submission,
-        );
-        self.submissions.insert(
-            id,
-            SubmissionRecordV1 {
-                backend_submission,
-                stream,
-                device: stream_record.device,
-                quiescent: false,
-                status: RuntimeCompletionStatusV1::Pending,
-            },
-        );
-        if protocol_error.is_none() {
-            self.backend_submissions.insert(backend_submission);
-        }
-        let submission = RuntimeSubmissionV1 {
-            id,
-            backend_submission,
+        self.submit_context_operation_v1(
             stream,
-            device: stream_record.device,
-            completion: None,
-            peer_transfer: None,
-            marker: PhantomData,
-        };
-        self.seal_backend_protocol(protocol_error, submission)
+            stream_record,
+            &journal_destinations,
+            None,
+            |backend| {
+                submit(
+                    backend,
+                    BackendLaunchV1 {
+                        stream: stream_record.backend_stream,
+                        kernel,
+                        explicit_kernarg: &explicit_kernarg,
+                        bindings: &backend_bindings,
+                        dependencies: &backend_dependencies,
+                        geometry,
+                        semantic_launch,
+                    },
+                )
+            },
+        )
     }
 
     /// Submits an admitted typed kernel under an explicit atomic contract.
@@ -2513,7 +2537,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if record.status.is_terminal() {
             return Ok(submission.observe_status(record.status));
         }
-        let result = self.backend.poll_v1(record.backend_submission);
+        let result =
+            self.invoke_journal_backend_v1(|backend| backend.poll_v1(record.backend_submission));
         let status = self.completion_backend_result(submission.id, result)?;
         Ok(submission.observe_status(status))
     }
@@ -2531,7 +2556,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(RuntimeValidationErrorV1::InvalidDeadline)?;
-        let result = self.backend.wait_v1(record.backend_submission, deadline);
+        let result = self.invoke_journal_backend_v1(|backend| {
+            backend.wait_v1(record.backend_submission, deadline)
+        });
         let status = self.completion_backend_result(submission.id, result)?;
         Ok(submission.observe_status(status))
     }
@@ -2584,7 +2611,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     {
         self.require_graph_access(access)?;
         let backend_stream = self.unheld_stream_v1(stream)?.backend_stream;
-        let result = self.backend.flush_stream_v1(backend_stream);
+        let result =
+            self.invoke_journal_backend_v1(|backend| backend.flush_stream_v1(backend_stream));
         self.backend_result(result)
     }
 
@@ -2622,10 +2650,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         pending.sort_unstable_by_key(|(id, _)| *id);
         let mut first_error = None;
         for (submission, backend_submission) in pending {
-            let result = self.backend.wait_v1(backend_submission, deadline);
+            let result = self
+                .invoke_journal_backend_v1(|backend| backend.wait_v1(backend_submission, deadline));
             match self.completion_backend_result(submission, result) {
                 Ok(_) => {}
-                Err(error @ RuntimeErrorV1::BackendTerminal(_)) => return Err(error),
+                Err(error) if self.terminal => return Err(error),
                 Err(error) => {
                     first_error.get_or_insert(error);
                 }
@@ -2723,11 +2752,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             self.transition_submission_status(
                 submission.id,
                 RuntimeCompletionStatusV1::QuiescentWithoutResult,
-            );
+            )?;
         }
-        let result = self
-            .backend
-            .release_submission_v1(record.backend_submission);
+        let result = self.invoke_journal_backend_v1(|backend| {
+            backend.release_submission_v1(record.backend_submission)
+        });
         self.backend_result(result)?;
         self.submissions.remove(&submission.id);
         self.backend_submissions.remove(&record.backend_submission);
@@ -2749,9 +2778,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         }
         let stream = self.streams[&submission_record.stream];
         let id = RuntimeEventIdV1::new(self.context_generation, self.next_id()?);
-        let result = self
-            .backend
-            .record_event_v1(stream.backend_stream, submission_record.backend_submission);
+        let result = self.invoke_journal_backend_v1(|backend| {
+            backend.record_event_v1(stream.backend_stream, submission_record.backend_submission)
+        });
         let backend_event = self.backend_result(result)?;
         let protocol_error =
             self.backend_handle_protocol_error(RuntimeBackendResourceKindV1::Event, backend_event);
@@ -2819,7 +2848,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if submission.status.is_terminal() {
             return Ok(submission.status);
         }
-        let result = self.backend.poll_v1(submission.backend_submission);
+        let result = self
+            .invoke_journal_backend_v1(|backend| backend.poll_v1(submission.backend_submission));
         self.completion_backend_result(event.submission, result)
     }
 
@@ -2844,9 +2874,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(RuntimeValidationErrorV1::InvalidDeadline)?;
-        let result = self
-            .backend
-            .wait_v1(submission.backend_submission, deadline);
+        let result = self.invoke_journal_backend_v1(|backend| {
+            backend.wait_v1(submission.backend_submission, deadline)
+        });
         self.completion_backend_result(event.submission, result)
     }
 
@@ -2859,7 +2889,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .events
             .get(&event)
             .ok_or(RuntimeValidationErrorV1::UnknownEvent)?;
-        let result = self.backend.release_event_v1(record.backend_event);
+        let result = self
+            .invoke_journal_backend_v1(|backend| backend.release_event_v1(record.backend_event));
         self.backend_result(result)?;
         self.events.remove(&event);
         self.backend_events.remove(&record.backend_event);
@@ -2887,6 +2918,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         }
         let stream_record = *self.unheld_stream_v1(stream)?;
         let peer_contract_identity = peer_copy_contract_identity(stream, source, destination);
+        let journal_destination = destination.allocation;
         let translate = |region: RuntimeMemoryRegionV1| -> Result<
             (BackendMemoryRegionV1, RuntimeDeviceIdV1),
             RuntimeValidationErrorV1,
@@ -2949,43 +2981,22 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
             backend_dependencies.push(event.backend_event);
         }
-        let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
-        let result = self.backend.peer_copy_v1(
-            stream_record.backend_stream,
-            source,
-            destination,
-            &backend_dependencies,
-        );
-        let backend_submission = self.backend_result(result)?;
-        let protocol_error = self.backend_handle_protocol_error(
-            RuntimeBackendResourceKindV1::Submission,
-            backend_submission,
-        );
-        self.submissions.insert(
-            id,
-            SubmissionRecordV1 {
-                backend_submission,
-                stream,
-                device: destination_device,
-                quiescent: false,
-                status: RuntimeCompletionStatusV1::Pending,
-            },
-        );
-        if protocol_error.is_none() {
-            self.backend_submissions.insert(backend_submission);
-        }
-        let submission = RuntimeSubmissionV1 {
-            id,
-            backend_submission,
+        self.submit_context_operation_v1(
             stream,
-            device: destination_device,
-            completion: None,
-            peer_transfer: Some(PeerTransferMechanismV1::DeclaredPeerCopy {
+            stream_record,
+            &[journal_destination],
+            Some(PeerTransferMechanismV1::DeclaredPeerCopy {
                 contract_identity: peer_contract_identity,
             }),
-            marker: PhantomData,
-        };
-        self.seal_backend_protocol(protocol_error, submission)
+            |backend| {
+                backend.peer_copy_v1(
+                    stream_record.backend_stream,
+                    source,
+                    destination,
+                    &backend_dependencies,
+                )
+            },
+        )
     }
 
     /// Submits a same-device copy without waiting for completion.
@@ -3034,6 +3045,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if source.allocation == destination.allocation {
             return Err(RuntimeValidationErrorV1::InvalidRange.into());
         }
+        let journal_destination = destination.allocation;
         let translate = |region: RuntimeMemoryRegionV1| -> Result<
             (BackendMemoryRegionV1, RuntimeDeviceIdV1),
             RuntimeValidationErrorV1,
@@ -3092,6 +3104,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             stream_record,
             source,
             destination,
+            journal_destination,
             backend_dependencies,
         })
     }
@@ -3114,44 +3127,23 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             stream_record,
             source,
             destination,
+            journal_destination,
             backend_dependencies,
         } = prepared;
-        let destination_device = stream_record.device;
-        let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
-        let result = self.backend.copy_async_v1(
-            stream_record.backend_stream,
-            source,
-            destination,
-            &backend_dependencies,
-        );
-        let backend_submission = self.backend_result(result)?;
-        let protocol_error = self.backend_handle_protocol_error(
-            RuntimeBackendResourceKindV1::Submission,
-            backend_submission,
-        );
-        self.submissions.insert(
-            id,
-            SubmissionRecordV1 {
-                backend_submission,
-                stream,
-                device: destination_device,
-                quiescent: false,
-                status: RuntimeCompletionStatusV1::Pending,
-            },
-        );
-        if protocol_error.is_none() {
-            self.backend_submissions.insert(backend_submission);
-        }
-        let submission = RuntimeSubmissionV1 {
-            id,
-            backend_submission,
+        self.submit_context_operation_v1(
             stream,
-            device: destination_device,
-            completion: None,
-            peer_transfer: None,
-            marker: PhantomData,
-        };
-        self.seal_backend_protocol(protocol_error, submission)
+            stream_record,
+            &[journal_destination],
+            None,
+            |backend| {
+                backend.copy_async_v1(
+                    stream_record.backend_stream,
+                    source,
+                    destination,
+                    &backend_dependencies,
+                )
+            },
+        )
     }
 
     /// Attempts to withdraw a submission before native publication.
@@ -3170,30 +3162,35 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if record.quiescent {
             return Ok(RuntimeCancellationV1::TooLate);
         }
-        let result = self.backend.cancel_v1(record.backend_submission);
+        let result =
+            self.invoke_journal_backend_v1(|backend| backend.cancel_v1(record.backend_submission));
         let cancellation = match result {
             Ok(cancellation) => cancellation,
             Err(RuntimeBackendFailureV1::Rejected(error)) => {
                 return Err(RuntimeErrorV1::BackendRejected(error));
             }
             Err(RuntimeBackendFailureV1::Quiescent(error)) => {
-                self.transition_submission_status(
+                let _ = self.transition_submission_status(
                     submission.id,
                     RuntimeCompletionStatusV1::QuiescentWithoutResult,
                 );
                 return Err(RuntimeErrorV1::BackendQuiescent(error));
             }
             Err(RuntimeBackendFailureV1::Terminal(error)) => {
-                self.terminal = true;
+                self.quarantine_after_async_command_panic_v1();
                 return Err(RuntimeErrorV1::BackendTerminal(error));
             }
         };
         match cancellation {
             BackendCancellationV1::Cancelled => {
+                self.settle_submission_writer_v1(
+                    submission.id,
+                    SubmissionWriterOutcomeV1::NoEffect,
+                )?;
                 let status = self.transition_submission_status(
                     submission.id,
                     RuntimeCompletionStatusV1::Failed(RuntimeCompletionFailureV1::Cancelled),
-                );
+                )?;
                 submission.observe_status(status);
                 Ok(RuntimeCancellationV1::Cancelled)
             }
@@ -3218,7 +3215,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if record.status.is_terminal() {
             return Ok(submission.observe_status(record.status));
         }
-        let result = self.backend.drain_v1(record.backend_submission, deadline);
+        let result = self.invoke_journal_backend_v1(|backend| {
+            backend.drain_v1(record.backend_submission, deadline)
+        });
         let status = self.completion_backend_result(submission.id, result)?;
         Ok(submission.observe_status(status))
     }
@@ -3426,6 +3425,7 @@ mod tests {
     use super::*;
     mod allocation_admission_tests;
     mod allocation_outcome_tests;
+    mod async_journal_tests;
     mod submission_identity_tests;
     mod version_journal_tests;
 

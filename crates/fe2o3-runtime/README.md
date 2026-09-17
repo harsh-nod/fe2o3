@@ -149,6 +149,14 @@ versions do not grant compiler admission or cross-run freshness. See the
 [R65 contract](../../docs/runtime-async-drain-versions-v1.md) for bounds,
 verification scope and remaining A1/A2 acceptance.
 
+`open_with_version_journal_v1` opts into bounded allocation and writer metadata.
+It tracks synchronous host writes and ordinary async launch/copy destinations,
+settling only from the exact backend result and retaining uncertain outcomes
+independently of completion handles. This development profile rejects overlapping
+unsettled writers and does not expose lineage, read leases or reuse authority.
+Generated protected execution is separate. See the
+[async journal boundary](../../docs/runtime-context-version-journal-async-v1.md).
+
 R66 adds reciprocal native storage checks and runtime scheduling for disjoint
 primary persistent compute with directional-persistent H2D/D2H copies. This
 changes admission, not completion or release semantics. See the

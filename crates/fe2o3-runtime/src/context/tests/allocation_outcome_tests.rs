@@ -1,5 +1,6 @@
 use super::*;
 
+mod async_tests;
 mod writer_tests;
 use crate::{RuntimeResourceKindV1 as K, RuntimeResourceVectorV1};
 use std::sync::{
@@ -45,6 +46,44 @@ struct AllocationOnlyBackend {
     release_failure: MockMemoryFailure,
     release_diagnostic: Option<Box<Diagnostic>>,
     release_calls: usize,
+    failure_call: Option<DiagnosticCall>,
+    call_failure: MockMemoryFailure,
+    call_diagnostic: Option<Box<Diagnostic>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiagnosticCall {
+    Submit,
+    Poll,
+    Wait,
+    Cancel,
+    Drain,
+    Flush,
+    CreateStream,
+    DestroyStream,
+    RecordEvent,
+    ReleaseEvent,
+    ReleaseSubmission,
+    LoadModule,
+    UnloadModule,
+    ResolveKernel,
+    Read,
+}
+
+impl AllocationOnlyBackend {
+    fn fail_call(
+        &mut self,
+        call: DiagnosticCall,
+    ) -> Result<(), RuntimeBackendFailureV1<Box<Diagnostic>>> {
+        if self.failure_call != Some(call) {
+            return Ok(());
+        }
+        self.failure_call = None;
+        diagnostic_failure(
+            core::mem::take(&mut self.call_failure),
+            &mut self.call_diagnostic,
+        )
+    }
 }
 
 fn diagnostic_failure(
@@ -123,11 +162,20 @@ impl RuntimeBackendV1 for AllocationOnlyBackend {
         Ok(())
     }
 
-    fn create_stream_v1(&mut self, _: u64) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
-        unreachable!()
+    fn create_stream_v1(
+        &mut self,
+        device: u64,
+    ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+        self.fail_call(DiagnosticCall::CreateStream)?;
+        Ok(self.inner.create_stream_v1(device).unwrap())
     }
-    fn destroy_stream_v1(&mut self, _: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
-        unreachable!()
+    fn destroy_stream_v1(
+        &mut self,
+        stream: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.fail_call(DiagnosticCall::DestroyStream)?;
+        self.inner.destroy_stream_v1(stream).unwrap();
+        Ok(())
     }
     fn write_allocation_v1(
         &mut self,
@@ -156,6 +204,7 @@ impl RuntimeBackendV1 for AllocationOnlyBackend {
         offset: u64,
         bytes: &mut [u8],
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.fail_call(DiagnosticCall::Read)?;
         self.inner
             .read_allocation_v1(allocation, offset, bytes)
             .unwrap();
@@ -163,53 +212,74 @@ impl RuntimeBackendV1 for AllocationOnlyBackend {
     }
     fn load_module_v1(
         &mut self,
-        _: u64,
-        _: &[u8],
+        device: u64,
+        image: &[u8],
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
-        unreachable!()
+        self.fail_call(DiagnosticCall::LoadModule)?;
+        Ok(self.inner.load_module_v1(device, image).unwrap())
     }
-    fn unload_module_v1(&mut self, _: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
-        unreachable!()
+    fn unload_module_v1(
+        &mut self,
+        module: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.fail_call(DiagnosticCall::UnloadModule)?;
+        self.inner.unload_module_v1(module).unwrap();
+        Ok(())
     }
     fn resolve_kernel_v1(
         &mut self,
-        _: u64,
-        _: &str,
-        _: [u8; 32],
+        module: u64,
+        name: &str,
+        signature: [u8; 32],
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
-        unreachable!()
+        self.fail_call(DiagnosticCall::ResolveKernel)?;
+        Ok(self
+            .inner
+            .resolve_kernel_v1(module, name, signature)
+            .unwrap())
     }
     fn submit_v1(
         &mut self,
-        _: BackendLaunchV1<'_>,
+        launch: BackendLaunchV1<'_>,
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
-        unreachable!()
+        self.fail_call(DiagnosticCall::Submit)?;
+        Ok(self.inner.submit_v1(launch).unwrap())
     }
-    fn poll_v1(&mut self, _: u64) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
-        unreachable!()
+    fn poll_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        self.fail_call(DiagnosticCall::Poll)?;
+        Ok(self.inner.poll_v1(submission).unwrap())
     }
     fn wait_v1(
         &mut self,
-        _: u64,
-        _: Instant,
+        submission: u64,
+        deadline: Instant,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
-        unreachable!()
+        self.fail_call(DiagnosticCall::Wait)?;
+        Ok(self.inner.wait_v1(submission, deadline).unwrap())
     }
     fn release_submission_v1(
         &mut self,
-        _: u64,
+        submission: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
-        unreachable!()
+        self.fail_call(DiagnosticCall::ReleaseSubmission)?;
+        self.inner.release_submission_v1(submission).unwrap();
+        Ok(())
     }
     fn record_event_v1(
         &mut self,
-        _: u64,
-        _: u64,
+        stream: u64,
+        submission: u64,
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
-        unreachable!()
+        self.fail_call(DiagnosticCall::RecordEvent)?;
+        Ok(self.inner.record_event_v1(stream, submission).unwrap())
     }
-    fn release_event_v1(&mut self, _: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
-        unreachable!()
+    fn release_event_v1(&mut self, event: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.fail_call(DiagnosticCall::ReleaseEvent)?;
+        self.inner.release_event_v1(event).unwrap();
+        Ok(())
     }
     fn peer_copy_v1(
         &mut self,
@@ -219,6 +289,32 @@ impl RuntimeBackendV1 for AllocationOnlyBackend {
         _: &[u64],
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
         unreachable!()
+    }
+}
+
+impl RuntimeCancellationBackendV1 for AllocationOnlyBackend {
+    fn cancel_v1(
+        &mut self,
+        submission: u64,
+    ) -> Result<BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
+        self.fail_call(DiagnosticCall::Cancel)?;
+        Ok(self.inner.cancel_v1(submission).unwrap())
+    }
+    fn drain_v1(
+        &mut self,
+        submission: u64,
+        deadline: Instant,
+    ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        self.fail_call(DiagnosticCall::Drain)?;
+        Ok(self.inner.drain_v1(submission, deadline).unwrap())
+    }
+}
+
+impl RuntimeFlushBackendV1 for AllocationOnlyBackend {
+    fn flush_stream_v1(&mut self, stream: u64) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
+        self.fail_call(DiagnosticCall::Flush)?;
+        self.inner.flush_stream_v1(stream).unwrap();
+        Ok(())
     }
 }
 

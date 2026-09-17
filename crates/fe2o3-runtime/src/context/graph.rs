@@ -20,6 +20,7 @@ pub(crate) struct PreparedContextCopyV1 {
     pub(super) stream_record: StreamRecordV1,
     pub(super) source: BackendMemoryRegionV1,
     pub(super) destination: BackendMemoryRegionV1,
+    pub(super) journal_destination: RuntimeAllocationIdV1,
     pub(super) backend_dependencies: Vec<u64>,
 }
 

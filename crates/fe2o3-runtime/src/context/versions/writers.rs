@@ -19,7 +19,7 @@ enum HostWriteOutcomeV1 {
 }
 
 impl ContextVersionsV1 {
-    fn retained_writer(
+    pub(super) fn retained_writer(
         &self,
         writer: ContextWriterReferenceV1,
     ) -> Result<ContextWriterStateV1, ContextVersionJournalErrorV1> {
@@ -44,7 +44,7 @@ impl ContextVersionsV1 {
         &self.journal
     }
 
-    fn whole_allocation(
+    pub(super) fn whole_allocation(
         &self,
         id: RuntimeAllocationIdV1,
         record: &AllocationRecordV1,
@@ -219,7 +219,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let result = match settled {
             Ok(result) => self.journal_result_v1(result),
             Err(payload) => {
-                self.terminal = true;
+                self.quarantine_submission_writers_v1();
                 core::mem::forget(payload);
                 Err(RuntimeValidationErrorV1::InvalidBackendDescription)
             }
@@ -248,7 +248,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         match outcome {
             Ok(result) => {
                 if matches!(&result, Err(RuntimeBackendFailureV1::Terminal(_))) {
-                    self.terminal = true;
+                    self.quarantine_submission_writers_v1();
                 }
                 let disposition = match &result {
                     Ok(()) => HostWriteOutcomeV1::Success,
@@ -264,7 +264,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 self.backend_result(result)
             }
             Err(payload) => {
-                self.terminal = true;
+                self.quarantine_submission_writers_v1();
                 let _ = self.finish_host_write_v1(ticket, HostWriteOutcomeV1::Unknown);
                 std::panic::resume_unwind(payload);
             }

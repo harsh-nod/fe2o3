@@ -179,7 +179,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
 
     pub(super) fn dispose_allocation_credits_v1(&mut self, id: RuntimeAllocationIdV1) {
         if let Err(error) = self.allocation_admission.release_disposed(id) {
-            self.terminal = true;
+            self.quarantine_submission_writers_v1();
             panic!("allocation credit owner invariant failed after disposal: {error:?}");
         }
     }
@@ -197,13 +197,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         })) {
             Ok(result) => {
                 if matches!(&result, Err(RuntimeBackendFailureV1::Terminal(_))) {
-                    self.terminal = true;
+                    self.quarantine_submission_writers_v1();
                     self.allocation_admission.quarantine(id);
                 }
                 result
             }
             Err(payload) => {
-                self.terminal = true;
+                self.quarantine_submission_writers_v1();
                 self.allocation_admission.quarantine(id);
                 std::panic::resume_unwind(payload);
             }

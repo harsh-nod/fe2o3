@@ -142,6 +142,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 device,
                 quiescent: false,
                 status: RuntimeCompletionStatusV1::Pending,
+                journal_writer: None,
             },
         );
         assert!(self.backend_submissions.insert(backend_submission));
@@ -285,7 +286,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             self.transition_submission_status(
                 id,
                 RuntimeCompletionStatusV1::QuiescentWithoutResult,
-            );
+            )?;
             self.submissions.remove(&id);
             self.backend_submissions.remove(&backend_submission);
             self.retire_generated_shells_v1(hold)?;

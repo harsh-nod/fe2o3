@@ -297,12 +297,12 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(failure)) => {
                 if matches!(failure, RuntimeBackendFailureV1::Terminal(_)) {
-                    self.terminal = true;
+                    self.quarantine_submission_writers_v1();
                 }
                 Err(map_backend_error(failure))
             }
             Err(payload) => {
-                self.terminal = true;
+                self.quarantine_submission_writers_v1();
                 std::panic::resume_unwind(payload)
             }
         }

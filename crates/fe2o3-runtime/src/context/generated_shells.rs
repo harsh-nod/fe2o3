@@ -95,7 +95,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             .prepare_roster(device, &lengths)
             .map_err(|error| {
                 if error == crate::RuntimeResourceCreditErrorV1::Invariant {
-                    self.terminal = true;
+                    self.quarantine_submission_writers_v1();
                 }
                 RuntimeValidationErrorV1::Capacity
             })?;
