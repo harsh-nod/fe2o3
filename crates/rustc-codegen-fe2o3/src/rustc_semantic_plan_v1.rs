@@ -38,6 +38,10 @@ use crate::production_rustc_intrinsic_v1::{
 use crate::production_rustc_slice_metadata_v1::{
     SliceMetadataErrorV1, SliceMetadataPlanV1, SliceMetadataRewriteV1,
 };
+use crate::production_semantic_body_v1::receiver_materialization_v1::ReceiverLocalV1;
+use crate::production_semantic_body_v1::receiver_reborrow_v1::{
+    ReceiverReborrowErrorV1, ReceiverReborrowV1, derive_fn_receiver_reborrow_v1,
+};
 use crate::production_semantic_terminal_v1::{
     ProductionSemanticTerminalRuleV1, ProductionTerminalExpansionV1,
 };
@@ -398,6 +402,26 @@ pub(crate) struct NormalizedRustcIntrinsicRecipeV1<'tcx> {
 }
 
 #[derive(Debug)]
+pub(crate) struct ProductionSemanticConstructionWorkV1 {
+    limits: SemanticMirLimitsV1,
+    validation_work: u64,
+}
+
+impl ProductionSemanticConstructionWorkV1 {
+    pub(crate) fn into_parts(self) -> (SemanticMirLimitsV1, u64) {
+        (self.limits, self.validation_work)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(limits: SemanticMirLimitsV1, validation_work: u64) -> Self {
+        Self {
+            limits,
+            validation_work,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct ProductionSemanticPreflightPlanV1<'tcx> {
     types: Box<[RetainedSemanticTypeProducerV1<'tcx>]>,
     functions: Box<[RetainedSemanticFunctionProducerV1<'tcx>]>,
@@ -413,9 +437,18 @@ pub(crate) struct ProductionSemanticPreflightPlanV1<'tcx> {
     sha256: [u8; 32],
     canonical_transcript: Box<[u8]>,
     context_entries: BTreeMap<SemanticFunctionIdV1, BoundContextEntryV29<'tcx>>,
+    construction_work: Option<ProductionSemanticConstructionWorkV1>,
 }
 
 impl<'tcx> ProductionSemanticPreflightPlanV1<'tcx> {
+    pub(crate) fn take_construction_work(
+        &mut self,
+    ) -> Result<ProductionSemanticConstructionWorkV1, ProductionSemanticPreflightErrorV1> {
+        self.construction_work
+            .take()
+            .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)
+    }
+
     pub(crate) fn take_context_entries_v29(
         &mut self,
     ) -> BTreeMap<SemanticFunctionIdV1, BoundContextEntryV29<'tcx>> {
@@ -957,6 +990,7 @@ pub(crate) fn build_production_semantic_preflight_plan_with_work_v1<'tcx>(
     // subset, and charges only resources directly observed in rustc MIR.
     let mut types = BTreeMap::new();
     let mut source_producers = Vec::with_capacity(functions.len());
+    let mut receiver_reborrows = Vec::with_capacity(functions.len());
     let mut source_cache = HashMap::new();
     let mut debug_source_files = BTreeMap::new();
     let mut debug_counts = RawMirPreflightCountsV1::default();
@@ -1026,6 +1060,45 @@ pub(crate) fn build_production_semantic_preflight_plan_with_work_v1<'tcx>(
                 ));
             }
         }
+        let receiver_reborrow =
+            derive_fn_receiver_reborrow_v1(tcx, function.instance, body, |amount| {
+                counts.charge(SemanticMirResourceV1::ValidationWork, amount, limits)
+            })
+            .map_err(|error| match error {
+                ReceiverReborrowErrorV1::Resource(error) => error,
+                ReceiverReborrowErrorV1::Unsupported(construct) => materialize_rejection_v1(
+                    tcx,
+                    &functions,
+                    &roots,
+                    &edges,
+                    reject(construct, abi_site),
+                ),
+            })?;
+        if let Some(reborrow) = receiver_reborrow {
+            let callee_identity =
+                canonical_function_identities_v1(tcx, reborrow.callee()).function();
+            let callee = function_ids
+                .get(&callee_identity)
+                .copied()
+                .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+            if function.role != CollectedFunctionRole::InternalHelper
+                || !direct_calls.contains(&DirectCallRecipeV1 {
+                    caller: function_id,
+                    block: reborrow.block(),
+                    callee,
+                })
+            {
+                return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+            }
+            for resource in [
+                SemanticMirResourceV1::Locals,
+                SemanticMirResourceV1::Statements,
+                SemanticMirResourceV1::Projections,
+            ] {
+                counts.charge(resource, 1, limits)?;
+            }
+        }
+        receiver_reborrows.push(receiver_reborrow);
     }
 
     for terminal in &terminals {
@@ -1085,7 +1158,15 @@ pub(crate) fn build_production_semantic_preflight_plan_with_work_v1<'tcx>(
         types,
         source_files,
         bodies,
-    } = build_canonical_producer_tables_v1(tcx, target, &functions, source_producers, types)?;
+    } = build_canonical_producer_tables_v1(
+        tcx,
+        target,
+        &functions,
+        source_producers,
+        types,
+        receiver_reborrows,
+        (&mut counts, &mut debug_counts, limits),
+    )?;
     let debug_capture_gap = bodies.iter().find_map(|body| body.debug_capture_gap);
 
     let direct_calls = direct_calls.into_iter().collect::<Box<[_]>>();
@@ -1139,6 +1220,10 @@ pub(crate) fn build_production_semantic_preflight_plan_with_work_v1<'tcx>(
         sha256,
         canonical_transcript,
         context_entries,
+        construction_work: Some(ProductionSemanticConstructionWorkV1 {
+            limits,
+            validation_work: counts.validation_work,
+        }),
     })
 }
 
@@ -2584,8 +2669,14 @@ fn build_canonical_producer_tables_v1<'tcx>(
     functions: &[RetainedSemanticFunctionProducerV1<'tcx>],
     source_producers: Vec<RetainedRawBodySourceProducerV1>,
     types: BTreeMap<SemanticTypeIdentityV1, Ty<'tcx>>,
+    receiver_reborrows: Vec<Option<ReceiverReborrowV1<'tcx>>>,
+    (counts, debug_counts, limits): (
+        &mut RawMirPreflightCountsV1,
+        &mut RawMirPreflightCountsV1,
+        SemanticMirLimitsV1,
+    ),
 ) -> Result<CanonicalProducerTablesV1<'tcx>, ProductionSemanticPreflightErrorV1> {
-    if source_producers.len() != functions.len() {
+    if source_producers.len() != functions.len() || receiver_reborrows.len() != functions.len() {
         return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
     }
     let mut type_ids = BTreeMap::new();
@@ -2613,8 +2704,11 @@ fn build_canonical_producer_tables_v1<'tcx>(
     }
 
     let mut bodies = Vec::with_capacity(functions.len());
-    for (function_index, (function, raw_sources)) in
-        functions.iter().zip(source_producers).enumerate()
+    for (function_index, ((function, raw_sources), receiver_reborrow)) in functions
+        .iter()
+        .zip(source_producers)
+        .zip(receiver_reborrows)
+        .enumerate()
     {
         let function_id = SemanticFunctionIdV1::from_index(
             u32::try_from(function_index)
@@ -2671,7 +2765,7 @@ fn build_canonical_producer_tables_v1<'tcx>(
                 return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
             }
         }
-        let raw_to_semantic_locals = raw_to_semantic_locals
+        let mut raw_to_semantic_locals = raw_to_semantic_locals
             .into_iter()
             .collect::<Option<Vec<_>>>()
             .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
@@ -2725,30 +2819,45 @@ fn build_canonical_producer_tables_v1<'tcx>(
             .copied()
             .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
 
-        let (debug_scopes, debug_variables, debug_capture_gap) =
-            if let Some(gap) = raw_sources.debug_capture_gap {
-                (
-                    Box::<[RetainedDebugSourceScopeV2]>::default(),
-                    Box::<[RetainedDebugSourceVariableV2]>::default(),
-                    Some(gap),
-                )
-            } else {
-                match convert_debug_sources_v2(
-                    function_id,
+        let inserted = if let Some(reborrow) = receiver_reborrow {
+            if !type_ids.contains_key(&rustc_type_identity_v1(
+                tcx,
+                reborrow.shared_receiver_type(),
+            )) {
+                return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+            }
+            counts.charge(SemanticMirResourceV1::ValidationWork, 3, limits)?;
+            counts.charge(SemanticMirResourceV1::ValidationWork, locals.len(), limits)?;
+            Some(
+                ReceiverLocalV1::derive(
                     function_identity,
-                    &raw_sources.debug_scopes,
-                    &raw_sources.debug_variables,
-                    &raw_to_semantic_locals,
-                    &locals,
-                ) {
-                    Ok((scopes, variables)) => (scopes, variables, None),
-                    Err(_) => (
-                        Box::<[RetainedDebugSourceScopeV2]>::default(),
-                        Box::<[RetainedDebugSourceVariableV2]>::default(),
-                        Some(fe2o3_kernel_ir::ProductionSemanticDebugProducerGapV1::ResourceLimit),
-                    ),
-                }
-            };
+                    rustc_block_identity_v1(function_identity, mir_body_sha256, reborrow.block()),
+                    locals.iter().map(|local| local.identity),
+                )
+                .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?,
+            )
+        } else {
+            None
+        };
+        let (debug_scopes, debug_variables, debug_capture_gap) =
+            receiver_debug_v1::convert_receiver_debug_sources_v2(
+                function_id,
+                function_identity,
+                &raw_sources,
+                &raw_to_semantic_locals,
+                &locals,
+                inserted,
+                (debug_counts, limits),
+            );
+
+        if let Some(inserted) = inserted {
+            for local in &mut raw_to_semantic_locals {
+                counts.charge(SemanticMirResourceV1::ValidationWork, 1, limits)?;
+                *local = inserted
+                    .remap(*local)
+                    .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+            }
+        }
 
         bodies.push(RetainedSemanticBodyProducerV1 {
             function: function_id,
@@ -2786,6 +2895,8 @@ fn build_canonical_producer_tables_v1<'tcx>(
         bodies: bodies.into_boxed_slice(),
     })
 }
+
+mod receiver_debug_v1;
 
 fn convert_debug_sources_v2(
     function: SemanticFunctionIdV1,

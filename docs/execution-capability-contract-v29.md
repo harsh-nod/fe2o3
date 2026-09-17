@@ -5,10 +5,11 @@ registered Execution codecs are implemented; executable capability integration
 is not complete. M0 and M1 remain incomplete. The production importer has source
 descriptors for authenticated ContextIssue and the four workgroup/tile terminals.
 Generic by-value closure forwarding is wired through collection and import
-reobservation. Natural `Fn` receiver adaptation and checked callback
+reobservation. Natural `Fn` receiver adaptation is implemented in semantic body
+construction. Borrowed-environment storage, checked call effects and callback
 materialization remain incomplete, so the ordinary `with_workgroup` chain is
 not an admitted executable path.
-Source identities 122-126 and the context commitment are an unpublished
+Source identities 122-126 and the context commitment are an unreleased
 draft pending the shared #271 allocation. The implementation must
 use the one production graph and existing verification and launch gates.
 
@@ -123,9 +124,33 @@ Rustc once-shims are matched against the complete resolved compiler Instance,
 not the `call_once` name or shim variant. Collection preserves caller, shim and
 actual closure body; only generated adapter syntax is exempt from user-HIR
 inspection. The closure body and its helpers still undergo ordinary source
-safety checks. This is collector admission, not complete semantic construction:
-an actual `Fn` body needs an explicit shared reborrow of the shim's mutable
-receiver, with canonical temporary/debug-local mapping and normal accounting.
+safety checks.
+
+For an authenticated `Fn` once-shim, semantic body construction inserts an
+ordinary shared borrow of the mutable receiver's pointee immediately before
+the exact closure-body call. Only receiver argument zero changes. The original
+tuple operands, destination, return edge, unwind action, source signature and
+FnAbi remain intact. `FnMut` keeps its mutable receiver without this adjustment.
+The producer reobserves the supplied MIR and frozen callee binding; an observation
+alone does not authorize another body or call. The adjustment must be consumed
+exactly once and cannot overlap a terminal or normalized-intrinsic expansion.
+A bounded check accepts the pinned compiler-generated adapter structure and
+rejects unsupported metadata before fingerprinting the supplied body. This is
+not a general-purpose resource bound on arbitrary rustc queries or MIR hashing.
+
+One body-bound temporary is merged into canonical local-identity order. The
+source inventory retains exactly N raw locals; its N-entry mapping addresses
+the N+1 emitted locals. There is no fabricated raw MIR local or source record.
+Debug identities are derived from original locals before numeric IDs move.
+Optional debug remapping has its own budget and reports a typed capture gap on
+exhaustion without changing mandatory compilation work or semantic identities.
+
+Construction consumes a move-only continuation of the existing request work
+budget, retaining the original limits rather than starting a fresh default
+budget per body. Structural resource counts describe the actual emitted
+request, including the additional local, statement and dereference. Constructor
+and mutation tests establish this boundary, not executable borrowed-closure
+lowering or an end-to-end source-to-machine equivalence proof.
 
 The bounded profile still rejects returned/projected environments, forwarding
 cycles and by-reference closure parameters. Its environment/capture/static-use

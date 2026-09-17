@@ -542,14 +542,13 @@ fn construct_complete_request_v1<'tcx>(
         let local_bindings = body
             .locals
             .iter()
-            .enumerate()
-            .map(|(semantic, local)| {
+            .map(|local| {
                 Ok(ProductionSemanticLocalBindingV1::new(
                     local.rustc_local,
-                    fe2o3_mir_model::semantic_mir_v1::SemanticLocalIdV1::from_index(
-                        u32::try_from(semantic)
-                            .map_err(|_| ProductionSemanticImportErrorV1::RootIdentityMismatch)?,
-                    ),
+                    *body
+                        .raw_to_semantic_locals
+                        .get(local.rustc_local as usize)
+                        .ok_or(ProductionSemanticImportErrorV1::RootIdentityMismatch)?,
                     local.identity,
                     local.source.provenance,
                 ))
@@ -685,7 +684,7 @@ fn construct_complete_request_v1<'tcx>(
 }
 
 fn build_body_request_owner_v1<'tcx>(
-    plan: &ProductionSemanticPreflightPlanV1<'tcx>,
+    plan: &mut ProductionSemanticPreflightPlanV1<'tcx>,
     type_count: usize,
     function_count: u32,
 ) -> Result<ProductionSemanticBodyRequestOwnerV1<'tcx>, ProductionSemanticImportErrorV1> {
@@ -760,8 +759,13 @@ fn build_body_request_owner_v1<'tcx>(
         ));
     }
 
-    ProductionSemanticBodyRequestOwnerV1::new(SemanticMirLimitsV1::default(), type_count, &entries)
-        .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))
+    ProductionSemanticBodyRequestOwnerV1::with_preflight_work(
+        plan.take_construction_work()
+            .map_err(|error| ProductionSemanticImportErrorV1::Preflight(Box::new(error)))?,
+        type_count,
+        &entries,
+    )
+    .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))
 }
 
 fn body_owner_table_mismatch_v1(table: &'static str) -> ProductionSemanticImportErrorV1 {
