@@ -1,4 +1,8 @@
 use super::*;
+
+#[path = "local_frame_effects_v1/ledger_swap_v1_tests.rs"]
+mod ledger_swap_tests;
+
 use crate::{
     AccessMode, BasicBlock, CanonicalKernelIrWorkBudgetV1, CastKind, FunctionId, MemoryAccess,
     Signature, ValueDef, analyze_interprocedural_effects_v1, verify_module_ref,
@@ -492,11 +496,11 @@ fn slot_bytes() -> usize {
 fn exact_source_derived_work_and_actual_capacity_boundaries_preserve_the_floor() {
     let module = slot();
     let verified = verify_module_ref(&module).unwrap();
-    // Wrapper2 + entry8 + signature1 + census4 + reserve8 + fill13 + sort24 +
+    // Wrapper4 + entry8 + signature1 + census4 + reserve8 + fill13 + sort24 +
     // unique2 + operation totals(15,21,46,41) + return6 + cell sort24 + rows10.
     // V356 adds row initialization6, literal fact7, and two scalar-slot joins14.
-    const EXACT: usize = 2 + 8 + 1 + 4 + 8 + 13 + 24 + 2 + 15 + 21 + 46 + 41 + 6 + 24 + 10;
-    assert_eq!(EXACT, 225);
+    const EXACT: usize = 4 + 8 + 1 + 4 + 8 + 13 + 24 + 2 + 15 + 21 + 46 + 41 + 6 + 24 + 10;
+    assert_eq!(EXACT, 227);
     for limit in [EXACT - 1, EXACT] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
         let mut budget = Budget::new(&mut work, FLOOR + slot_bytes());
@@ -537,11 +541,11 @@ fn exact_source_derived_work_and_actual_capacity_boundaries_preserve_the_floor()
 fn empty_scope_has_exact_header_and_after_allocation_work_denials() {
     let module = module(vec![function("empty", vec![], None)]);
     let verified = verify_module_ref(&module).unwrap();
-    // Wrapper2 + entry8 + four reservation checks8 + terminator1.
+    // Wrapper4 + entry8 + four reservation checks8 + terminator1.
     for (work_limit, storage_limit) in [
-        (19, FLOOR + header_bytes()),
-        (18, FLOOR + header_bytes()),
-        (19, FLOOR + header_bytes() - 1),
+        (21, FLOOR + header_bytes()),
+        (20, FLOOR + header_bytes()),
+        (21, FLOOR + header_bytes() - 1),
     ] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
         let mut budget = Budget::new(&mut work, storage_limit);
@@ -555,18 +559,18 @@ fn empty_scope_has_exact_header_and_after_allocation_work_denials() {
             assert!(
                 matches!(result, Err(LocalFrameErrorV1::Resource(ResourceError::Storage(error))) if error.actual() == FLOOR + header_bytes())
             );
-            assert_eq!(budget.work(), 2);
+            assert_eq!(budget.work(), 4);
             assert_eq!(budget.peak_storage(), FLOOR);
-        } else if work_limit == 18 {
+        } else if work_limit == 20 {
             assert!(
-                matches!(result, Err(LocalFrameErrorV1::Resource(ResourceError::Work(error))) if error.actual() == 19 && error.limit() == 18)
+                matches!(result, Err(LocalFrameErrorV1::Resource(ResourceError::Work(error))) if error.actual() == 21 && error.limit() == 20)
             );
-            assert_eq!(budget.work(), 18);
+            assert_eq!(budget.work(), 20);
             assert_eq!(budget.peak_storage(), FLOOR + header_bytes());
         } else {
             assert_eq!(result, Ok(()));
             assert!(entered);
-            assert_eq!(budget.work(), 19);
+            assert_eq!(budget.work(), 21);
         }
         if result.is_err() {
             assert!(!entered);
@@ -603,14 +607,14 @@ fn queries_reject_foreign_ledgers_and_retained_floor_tampering() {
     let mut budget = Budget::new(&mut work, usize::MAX);
     budget.reserve_storage(FLOOR).unwrap();
     with_checked_local_frame_function_v1(verified, 0, &mut budget, |checked, budget| {
-        let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(4);
+        let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(5);
         let mut foreign = Budget::new(&mut foreign_work, usize::MAX);
         foreign.reserve_storage(budget.storage()).unwrap();
         assert!(matches!(
             checked.allocations(&mut foreign),
             Err(LocalFrameErrorV1::Resource(ResourceError::Accounting))
         ));
-        assert_eq!(foreign.work(), 4);
+        assert_eq!(foreign.work(), 5);
         assert_eq!(checked.allocations(budget)?.len(), 1);
         Ok(())
     })
@@ -647,9 +651,9 @@ fn queries_reject_foreign_ledgers_and_retained_floor_tampering() {
 fn paid_row_query_has_an_exact_boundary_after_a_complete_derivation() {
     let module = slot();
     let verified = verify_module_ref(&module).unwrap();
-    // The independently enumerated slot path costs225; the query adds guard4
+    // The independently enumerated slot path costs227; the query adds guard5
     // then allocation-roster length1. This is not a whole-engine threshold.
-    for limit in [229, 230] {
+    for limit in [232, 233] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
         let mut budget = Budget::new(&mut work, usize::MAX);
         budget.reserve_storage(FLOOR).unwrap();
@@ -661,9 +665,9 @@ fn paid_row_query_has_an_exact_boundary_after_a_complete_derivation() {
                 Ok(())
             });
         assert!(entered);
-        if limit == 229 {
+        if limit == 232 {
             assert!(
-                matches!(result, Err(LocalFrameErrorV1::Resource(ResourceError::Work(error))) if error.actual() == 230 && error.limit() == 229)
+                matches!(result, Err(LocalFrameErrorV1::Resource(ResourceError::Work(error))) if error.actual() == 233 && error.limit() == 232)
             );
         } else {
             assert_eq!(result, Ok(()));

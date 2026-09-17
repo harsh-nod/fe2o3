@@ -634,7 +634,8 @@ pub fn with_checked_local_frame_chain_function_v1<'module>(
     let headers = size_of::<ChainWorkspace<'_>>()
         .checked_add(size_of::<CheckedLocalFrameChainV1<'_, '_>>())
         .ok_or(ResourceError::Arithmetic)?;
-    budget.charge_work(2)?;
+    budget.charge_work(4)?;
+    let work_ledger = budget.work_ledger_identity_v1();
     budget.reserve_storage(headers)?;
     let mut workspace = ChainWorkspace {
         memory: Workspace::new(),
@@ -661,6 +662,7 @@ pub fn with_checked_local_frame_chain_function_v1<'module>(
                 allocations: &workspace.memory.allocations,
                 accesses: &workspace.memory.accesses,
                 ledger,
+                work_ledger,
                 floor: budget.storage(),
             },
             control: &workspace.control,
@@ -668,6 +670,10 @@ pub fn with_checked_local_frame_chain_function_v1<'module>(
         };
         next(checked, budget)
     }));
+    if budget.work_ledger_identity_v1() != work_ledger {
+        drop(workspace);
+        return Err(ResourceError::Accounting.into());
+    }
     let accounting = budget.storage() < retained_floor.unwrap_or(incoming + headers);
     drop(workspace);
     let cleanup = budget.rollback_storage(incoming);

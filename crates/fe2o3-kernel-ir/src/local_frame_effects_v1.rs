@@ -197,6 +197,7 @@ pub struct CheckedLocalFrameV1<'scope, 'module> {
     allocations: &'scope [LocalFrameAllocationV1],
     accesses: &'scope [LocalFrameAccessV1],
     ledger: usize,
+    work_ledger: crate::CanonicalKernelIrWorkLedgerIdentityV1,
     floor: usize,
 }
 
@@ -213,8 +214,11 @@ impl<'scope, 'module> CheckedLocalFrameV1<'scope, 'module> {
     }
 
     fn require_live(&self, budget: &mut Budget<'_>) -> Result<(), LocalFrameErrorV1> {
-        budget.charge_work(4)?;
-        if self.ledger != budget as *const Budget<'_> as usize || budget.storage() < self.floor {
+        budget.charge_work(5)?;
+        if self.ledger != budget as *const Budget<'_> as usize
+            || self.work_ledger != budget.work_ledger_identity_v1()
+            || budget.storage() < self.floor
+        {
             return Err(ResourceError::Accounting.into());
         }
         Ok(())
@@ -974,7 +978,8 @@ pub fn with_checked_local_frame_function_v1<'module>(
     let headers = size_of::<Workspace<'_>>()
         .checked_add(size_of::<CheckedLocalFrameV1<'_, '_>>())
         .ok_or(ResourceError::Arithmetic)?;
-    budget.charge_work(2)?;
+    budget.charge_work(4)?;
+    let work_ledger = budget.work_ledger_identity_v1();
     budget.reserve_storage(headers)?;
     let mut workspace = Workspace::new();
     let mut retained_floor = None;
@@ -988,10 +993,15 @@ pub fn with_checked_local_frame_function_v1<'module>(
             allocations: &workspace.allocations,
             accesses: &workspace.accesses,
             ledger,
+            work_ledger,
             floor: budget.storage(),
         };
         next(checked, budget)
     }));
+    if budget.work_ledger_identity_v1() != work_ledger {
+        drop(workspace);
+        return Err(ResourceError::Accounting.into());
+    }
     let accounting = budget.storage() < retained_floor.unwrap_or(incoming + headers);
     drop(workspace);
     let cleanup = budget.rollback_storage(incoming);

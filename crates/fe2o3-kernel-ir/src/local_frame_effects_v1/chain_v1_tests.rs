@@ -2,6 +2,10 @@ use super::super::tests::{
     FLOOR, capacity_bytes, constant, function, header_bytes, module, pointer, scalar,
 };
 use super::*;
+
+#[path = "chain_ledger_swap_v1_tests.rs"]
+mod ledger_swap_tests;
+
 use crate::{
     CanonicalKernelIrWorkBudgetV1, FunctionId, MemoryAccess, Signature, ValueDef,
     analyze_interprocedural_effects_v1, verify_module_ref,
@@ -31,7 +35,7 @@ fn chain_rejected(module: &Module, operation: Option<usize>, reason: LocalFrameR
 fn old_entry_keeps_its_single_block_refusal_and_precharge() {
     let module = empty_chain();
     let verified = verify_module_ref(&module).unwrap();
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(10);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(12);
     let mut budget = Budget::new(&mut work, FLOOR + header_bytes());
     budget.reserve_storage(FLOOR).unwrap();
     let result = with_checked_local_frame_function_v1(verified, 0, &mut budget, |_, _| {
@@ -41,7 +45,7 @@ fn old_entry_keeps_its_single_block_refusal_and_precharge() {
         result,
         Err(refusal(0, None, LocalFrameRefusalReasonV1::ControlFlow))
     );
-    assert_eq!(budget.work(), 10);
+    assert_eq!(budget.work(), 12);
     assert_eq!(budget.peak_storage(), FLOOR + header_bytes());
     assert_eq!(budget.storage(), FLOOR);
 }
@@ -806,7 +810,7 @@ fn chain_control_queries_and_callback_cleanup_preserve_live_ledger_precedence() 
                         checked.edge_bindings(&mut foreign),
                         Err(LocalFrameErrorV1::Resource(ResourceError::Accounting))
                     );
-                    assert_eq!(foreign.work(), 8);
+                    assert_eq!(foreign.work(), 10);
                     assert_eq!(checked.control(budget)?.len(), 5);
                     if mode >= 3 {
                         budget.release_storage(1)?;
@@ -891,11 +895,11 @@ fn chain_callback_cannot_recreate_released_incoming_storage() {
 
 #[test]
 fn chain_work_and_actual_capacity_limits_are_source_derived() {
-    // Wrapper2 + common entry8 + chain6 + census10 + reservations14 + publish4
+    // Wrapper4 + common entry8 + chain6 + census10 + reservations14 + publish4
     // + sort8 + two loop visits12 + block lookups4+3+3 + dispatch8
-    // + empty substitution3 + return1 + final census2 = 88.
-    const EXACT: usize = 2 + 8 + 6 + 10 + 14 + 4 + 8 + 12 + 4 + 3 + 3 + 8 + 3 + 1 + 2;
-    assert_eq!(EXACT, 88);
+    // + empty substitution3 + return1 + final census2 = 90.
+    const EXACT: usize = 4 + 8 + 6 + 10 + 14 + 4 + 8 + 12 + 4 + 3 + 3 + 8 + 3 + 1 + 2;
+    assert_eq!(EXACT, 90);
     let module = empty_chain();
     let verified = verify_module_ref(&module).unwrap();
     let bytes = chain_header_bytes()
@@ -946,8 +950,8 @@ fn chain_work_and_actual_capacity_limits_are_source_derived() {
 fn control_row_query_has_an_exact_post_derivation_work_boundary() {
     let module = empty_chain();
     let verified = verify_module_ref(&module).unwrap();
-    // Complete derivation88, live-ledger guard4, two retained control rows2.
-    for limit in [93, 94] {
+    // Complete derivation90, live-ledger guard5, two retained control rows2.
+    for limit in [96, 97] {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
         let mut budget = Budget::new(&mut work, usize::MAX);
         budget.reserve_storage(FLOOR).unwrap();
@@ -963,14 +967,14 @@ fn control_row_query_has_an_exact_post_derivation_work_boundary() {
             },
         );
         assert!(entered);
-        if limit == 94 {
+        if limit == 97 {
             result.unwrap();
-            assert_eq!(budget.work(), 94);
+            assert_eq!(budget.work(), 97);
         } else {
             assert!(
-                matches!(result, Err(LocalFrameErrorV1::Resource(ResourceError::Work(error))) if error.actual() == 94 && error.limit() == 93)
+                matches!(result, Err(LocalFrameErrorV1::Resource(ResourceError::Work(error))) if error.actual() == 97 && error.limit() == 96)
             );
-            assert_eq!(budget.work(), 92);
+            assert_eq!(budget.work(), 95);
         }
         assert_eq!(budget.storage(), FLOOR);
     }

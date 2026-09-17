@@ -118,6 +118,15 @@ pub struct CanonicalKernelIrVerificationResourceBudgetV1<'work> {
     storage_limit: usize,
 }
 
+/// Equality-only identity of a borrowed live Work meter, not its Budget slot.
+///
+/// This inert token is meaningful only while the originating Work borrow stays
+/// live. Addresses can be reused after that borrow ends. It is not a receipt,
+/// persistent identity, resource reservation, or compiler authority.
+#[repr(transparent)]
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct CanonicalKernelIrWorkLedgerIdentityV1(usize);
+
 impl<'work> CanonicalKernelIrVerificationResourceBudgetV1<'work> {
     /// Creates an empty verification-storage ledger over a shared work meter.
     pub fn new(work: &'work mut CanonicalKernelIrWorkBudgetV1, storage_limit: usize) -> Self {
@@ -199,6 +208,14 @@ impl<'work> CanonicalKernelIrVerificationResourceBudgetV1<'work> {
         self.work.limit()
     }
 
+    /// Identifies the borrowed Work meter without exposing mutable access.
+    /// A moved Budget keeps this token; replacing its Work borrow changes it.
+    pub fn work_ledger_identity_v1(&self) -> CanonicalKernelIrWorkLedgerIdentityV1 {
+        CanonicalKernelIrWorkLedgerIdentityV1(
+            &*self.work as *const CanonicalKernelIrWorkBudgetV1 as usize,
+        )
+    }
+
     /// Returns accepted shared canonical work.
     pub fn work(&self) -> usize {
         self.work.work()
@@ -228,6 +245,34 @@ impl<'work> CanonicalKernelIrVerificationResourceBudgetV1<'work> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn work_identity_follows_the_meter_not_the_resource_budget_slot() {
+        let mut first_work = CanonicalKernelIrWorkBudgetV1::new(17);
+        let mut second_work = CanonicalKernelIrWorkBudgetV1::new(17);
+        let mut first = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut first_work, 9);
+        let mut second = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut second_work, 9);
+        let first_identity = first.work_ledger_identity_v1();
+        let second_identity = second.work_ledger_identity_v1();
+        assert!(first_identity != second_identity);
+        assert_eq!(
+            std::mem::size_of_val(&first_identity),
+            std::mem::size_of::<usize>()
+        );
+        first.charge_work(3).unwrap();
+        first.reserve_storage(4).unwrap();
+        second.charge_work(3).unwrap();
+        second.reserve_storage(4).unwrap();
+        let mut moved = first;
+        assert!(moved.work_ledger_identity_v1() == first_identity);
+        let slot = &moved as *const _;
+        std::mem::swap(&mut moved, &mut second);
+        assert_eq!(&moved as *const _, slot);
+        assert!(moved.work_ledger_identity_v1() == second_identity);
+        assert!(second.work_ledger_identity_v1() == first_identity);
+        assert_eq!((moved.work(), moved.storage()), (3, 4));
+        assert_eq!((second.work(), second.storage()), (3, 4));
+    }
 
     #[test]
     fn rejected_work_and_storage_preserve_accepted_prefixes() {
