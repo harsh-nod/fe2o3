@@ -452,44 +452,7 @@ impl FreshFormalGuardedReportV1<'_> {
 }
 
 #[cfg(test)]
-pub(crate) fn check_fresh_guarded_report_owner_binding_for_test(
-    owner: &ProductionSemanticKirOwnerV1,
-    foreign: &ProductionSemanticKirOwnerV1,
-) -> Result<(), crate::production_semantic_kir_v1::ProductionMemoryDischargeFailureV1> {
-    let kernel = &owner.module().kernels[0];
-    let extents = witness_extents(&kernel.domain);
-    let analysis = derive_kernel_memory_obligations_for_launch(
-        owner.module(),
-        &kernel.id,
-        ExplicitLaunchExtent::Exact {
-            rank: kernel.domain.rank(),
-            extents,
-        },
-        FormalIndexWidth::Bits64,
-    )
-    .unwrap();
-    let FormalMemoryObligationAnalysis::Incomplete { partial, reasons } = analysis else {
-        panic!("real mixed fixture must retain pending guarded reasons")
-    };
-    let locations = reasons
-        .iter()
-        .filter_map(|reason| match reason {
-            FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { location } => {
-                Some(*location)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let fresh = FreshFormalGuardedReportV1 {
-        owner,
-        kernel,
-        report: &partial,
-        witness_extents: extents,
-    };
-    assert!(fresh.for_owner(owner).is_some());
-    assert!(fresh.for_owner(foreign).is_none());
-    foreign.retained_generic_checks_discharge_guarded_accesses(&fresh, &locations)
-}
+pub(crate) use tests::check_fresh_guarded_report_owner_binding_for_test;
 
 fn derive_admitted_obligations_for_kernel(
     semantic_kir: &ProductionSemanticKirOwnerV1,
@@ -631,6 +594,45 @@ mod tests {
     use fe2o3_kernel_ir::{BlockId, FunctionOperationLocation, ValueId};
 
     use super::*;
+
+    pub(crate) fn check_fresh_guarded_report_owner_binding_for_test(
+        owner: &ProductionSemanticKirOwnerV1,
+        foreign: &ProductionSemanticKirOwnerV1,
+    ) -> Result<(), crate::production_semantic_kir_v1::ProductionMemoryDischargeFailureV1> {
+        let kernel = &owner.module().kernels[0];
+        let extents = witness_extents(&kernel.domain);
+        let analysis = derive_kernel_memory_obligations_for_launch(
+            owner.module(),
+            &kernel.id,
+            ExplicitLaunchExtent::Exact {
+                rank: kernel.domain.rank(),
+                extents,
+            },
+            FormalIndexWidth::Bits64,
+        )
+        .unwrap();
+        let FormalMemoryObligationAnalysis::Incomplete { partial, reasons } = analysis else {
+            panic!("real mixed fixture must retain pending guarded reasons")
+        };
+        let locations = reasons
+            .iter()
+            .filter_map(|reason| match reason {
+                FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { location } => {
+                    Some(*location)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let fresh = FreshFormalGuardedReportV1 {
+            owner,
+            kernel,
+            report: &partial,
+            witness_extents: extents,
+        };
+        assert!(fresh.for_owner(owner).is_some());
+        assert!(fresh.for_owner(foreign).is_none());
+        foreign.retained_generic_checks_discharge_guarded_accesses(&fresh, &locations)
+    }
 
     fn guarded_reason(operation_index: usize) -> FormalMemoryIncompleteReason {
         FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof {
