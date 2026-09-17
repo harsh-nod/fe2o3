@@ -69,6 +69,30 @@ the missing compiler/refinement backends above.
 
 ## Validation
 
-Validation commands and checkpoint results are recorded with the branch's
-integration report. Unit fixtures, offline machine interpretation, development
-Verus proofs, protected proofs, and GPU runs must be reported separately.
+Code checkpoint `4b1192d40357b36e03dbf5cd97e4c3b5c5da3cd9` was tested on MI300X
+on 2026-09-17 with the pinned `nightly-2026-04-03` toolchain. Its exact source
+roster/content SHA-256 is
+`7779f7dd6cf4327e3a9a1e9a31c0b7d75b2ceca0e74c56dff421106399e26374`.
+
+- Selected library tests: 1,575 passed across host (93), kernel analysis (165),
+  MIR lowering (502), runtime-machine adapter (7), verifier (105), and rustc
+  backend (703). Six verifier tests were ignored in this ordinary unit run.
+- Targeted integration tests: 11 EXEC interpreter tests and two current-record
+  API tests passed. Selected documentation tests passed.
+- Formatting, source-growth hygiene, and workspace dependency policy passed.
+  Clippy completed without findings in changed files. Strict Clippy is not
+  green repository-wide: the clean baseline already failed with six lowerer
+  production findings, and existing test warnings remain.
+- The user-owned pinned development Verus reported `10 verified, 0 errors` for
+  the shared EXEC harness. This is not protected-runtime evidence. Its
+  ghost-erased harness also emits an unused-macro warning.
+- Both new protected public-lease tests were explicitly selected separately.
+  Each failed with `ObjectType` during runtime admission; the required root
+  was absent. Neither executed a proof. The combined validation batch therefore
+  returned nonzero. Reviewed-host debug/release proof acceptance remains open.
+- No GPU launch or additional tutorial qualification was performed.
+
+Adapter tests cover the internal byte/symbol/range binding helpers. A genuine
+public typed-request integration fixture remains missing; synthetic protected
+receipts were not introduced to make that test pass. The scalar census tests
+use semantic-source fixtures, not ordinary rustc compilation of the example.
