@@ -2,6 +2,8 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceErrorV1 as HelperMemoryResourceV1,
     LocalFrameAccessV1 as RetainedLocalAccessV1,
     LocalFrameAllocationV1 as RetainedLocalAllocationV1,
+    LocalFrameControlV1 as RetainedLocalControlV1,
+    LocalFrameEdgeBindingV1 as RetainedLocalEdgeBindingV1,
 };
 
 /// Logical retained helper payload. This receipt has no semantic authority by
@@ -24,6 +26,8 @@ enum RetainedHelperKindV1 {
     Local {
         allocations: (usize, usize),
         accesses: (usize, usize),
+        control: (usize, usize),
+        edge_bindings: (usize, usize),
     },
 }
 
@@ -38,6 +42,8 @@ struct SealedHelperMemoryV1 {
     associations: Vec<RetainedHelperAssociationV1>,
     allocations: Vec<RetainedLocalAllocationV1>,
     accesses: Vec<RetainedLocalAccessV1>,
+    control: Vec<RetainedLocalControlV1>,
+    edge_bindings: Vec<RetainedLocalEdgeBindingV1>,
     storage: ProductionHelperMemoryStorageV1,
     analysis_storage: usize,
 }
@@ -147,6 +153,8 @@ impl SealedHelperMemoryV1 {
                 associations: Vec::new(),
                 allocations: Vec::new(),
                 accesses: Vec::new(),
+                control: Vec::new(),
+                edge_bindings: Vec::new(),
                 storage: ProductionHelperMemoryStorageV1(std::mem::size_of::<Self>()),
                 analysis_storage: 0,
             });
@@ -212,13 +220,14 @@ impl SealedHelperMemoryV1 {
             Ok(())
         })?;
 
-        let (allocations, accesses) = derive_retained_helper_physical_rows_v1(
-            subject.executable,
-            &inventory,
-            &effects,
-            &mut functions,
-            budget,
-        )?;
+        let (allocations, accesses, control, edge_bindings) =
+            derive_retained_helper_physical_rows_v1(
+                subject.executable,
+                &inventory,
+                &effects,
+                &mut functions,
+                budget,
+            )?;
         drop(effects);
         budget.release_storage(effect_storage.retained_storage())?;
         drop(inventory);
@@ -232,6 +241,8 @@ impl SealedHelperMemoryV1 {
             associations,
             allocations,
             accesses,
+            control,
+            edge_bindings,
             storage: ProductionHelperMemoryStorageV1(storage),
             analysis_storage: 0,
         })
@@ -245,13 +256,20 @@ fn derive_retained_helper_physical_rows_v1(
     functions: &mut [RetainedHelperKindV1],
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<
-    (Vec<RetainedLocalAllocationV1>, Vec<RetainedLocalAccessV1>),
+    (
+        Vec<RetainedLocalAllocationV1>,
+        Vec<RetainedLocalAccessV1>,
+        Vec<RetainedLocalControlV1>,
+        Vec<RetainedLocalEdgeBindingV1>,
+    ),
     ProductionPreRankedKirErrorV1,
 > {
     use fe2o3_kernel_analysis::CanonicalKirCallEffectDecisionV1 as Decision;
     let mismatch = || ProductionSemanticKirErrorV1::CorrespondenceMismatch;
     let mut allocation_count = 0usize;
     let mut access_count = 0usize;
+    let mut control_count = 0usize;
+    let mut binding_count = 0usize;
     for (physical, state) in functions.iter_mut().enumerate() {
         budget.charge_work(4)?;
         if (executable.module().functions[physical].role
@@ -275,15 +293,23 @@ fn derive_retained_helper_physical_rows_v1(
             Decision::CompleteEmpty => *state = RetainedHelperKindV1::RawEmpty,
             Decision::Incomplete => return Err(mismatch().into()),
             Decision::CompleteNonempty => {
-                budget.charge_work(4)?;
+                budget.charge_work(6)?;
                 let body = executable.module().functions[physical]
                     .body
                     .as_ref()
                     .ok_or_else(mismatch)?;
                 let first_allocation = allocation_count;
                 let first_access = access_count;
+                let first_control = control_count;
+                let first_binding = binding_count;
                 for block in &body.blocks {
-                    budget.charge_work(1)?;
+                    budget.charge_work(3)?;
+                    control_count = control_count
+                        .checked_add(1)
+                        .ok_or(HelperMemoryResourceV1::Arithmetic)?;
+                    binding_count = binding_count
+                        .checked_add(block.parameters.len())
+                        .ok_or(HelperMemoryResourceV1::Arithmetic)?;
                     for operation in &block.operations {
                         budget.charge_work(3)?;
                         match operation.kind {
@@ -304,6 +330,8 @@ fn derive_retained_helper_physical_rows_v1(
                 *state = RetainedHelperKindV1::Local {
                     allocations: (first_allocation, allocation_count),
                     accesses: (first_access, access_count),
+                    control: (first_control, control_count),
+                    edge_bindings: (first_binding, binding_count),
                 };
             }
         }
@@ -311,72 +339,151 @@ fn derive_retained_helper_physical_rows_v1(
     // These output capacities remain live in every producer callback's floor.
     let mut allocations = helper_memory_vec_v1(allocation_count, budget)?;
     let mut accesses = helper_memory_vec_v1(access_count, budget)?;
+    let mut control = helper_memory_vec_v1(control_count, budget)?;
+    let mut edge_bindings = helper_memory_vec_v1(binding_count, budget)?;
     for (physical, state) in functions.iter().enumerate() {
         budget.charge_work(1)?;
         let RetainedHelperKindV1::Local {
             allocations: ar,
             accesses: mr,
+            control: cr,
+            edge_bindings: er,
         } = *state
         else {
             continue;
         };
-        fe2o3_kernel_ir::with_checked_local_frame_function_v1(
+        fe2o3_kernel_ir::with_checked_local_frame_chain_function_v1(
             executable.verified_module_ref_v1(),
             physical,
             budget,
             |checked, budget| {
-                budget.charge_work(8)?;
-                if !std::ptr::eq(checked.module(), executable.module())
-                    || checked.function_ordinal() != physical
-                    || !std::ptr::eq(checked.function(), &executable.module().functions[physical])
-                    || allocations.len() != ar.0
-                    || accesses.len() != mr.0
-                {
-                    return Err(HelperMemoryResourceV1::Accounting.into());
-                }
-                let source_allocations = checked.allocations(budget)?;
-                let source_accesses = checked.accesses(budget)?;
-                if source_allocations.len() != ar.1 - ar.0 || source_accesses.len() != mr.1 - mr.0 {
-                    return Err(HelperMemoryResourceV1::Accounting.into());
-                }
-                for row in source_allocations {
-                    budget.charge_work(3)?;
-                    if row.location().function_ordinal() != physical
-                        || allocations.len() == allocations.capacity()
-                    {
-                        return Err(HelperMemoryResourceV1::Accounting.into());
-                    }
-                    allocations.push(*row);
-                }
-                for row in source_accesses {
-                    budget.charge_work(4)?;
-                    if row.location().function_ordinal() != physical
-                        || row.allocation() >= source_allocations.len()
-                        || accesses.len() == accesses.capacity()
-                    {
-                        return Err(HelperMemoryResourceV1::Accounting.into());
-                    }
-                    accesses.push(*row);
-                }
-                Ok(())
+                copy_retained_helper_rows_v1(
+                    executable,
+                    physical,
+                    [ar, mr, cr, er],
+                    &checked,
+                    (
+                        &mut allocations,
+                        &mut accesses,
+                        &mut control,
+                        &mut edge_bindings,
+                    ),
+                    budget,
+                )
             },
         )
         .map_err(ProductionPreRankedKirErrorV1::LocalFrame)?;
     }
-    budget.charge_work(3)?;
-    if allocations.len() != allocation_count || accesses.len() != access_count {
+    budget.charge_work(5)?;
+    if allocations.len() != allocation_count
+        || accesses.len() != access_count
+        || control.len() != control_count
+        || edge_bindings.len() != binding_count
+    {
         return Err(mismatch().into());
     }
-    Ok((allocations, accesses))
+    Ok((allocations, accesses, control, edge_bindings))
+}
+
+fn copy_retained_helper_rows_v1(
+    executable: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    physical: usize,
+    [ar, mr, cr, er]: [(usize, usize); 4],
+    checked: &fe2o3_kernel_ir::CheckedLocalFrameChainV1<'_, '_>,
+    (allocations, accesses, control, edge_bindings): (
+        &mut Vec<RetainedLocalAllocationV1>,
+        &mut Vec<RetainedLocalAccessV1>,
+        &mut Vec<RetainedLocalControlV1>,
+        &mut Vec<RetainedLocalEdgeBindingV1>,
+    ),
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), fe2o3_kernel_ir::LocalFrameErrorV1> {
+    budget.charge_work(12)?;
+    if !std::ptr::eq(checked.module(), executable.module())
+        || checked.function_ordinal() != physical
+        || !std::ptr::eq(checked.function(), &executable.module().functions[physical])
+        || allocations.len() != ar.0
+        || accesses.len() != mr.0
+        || control.len() != cr.0
+        || edge_bindings.len() != er.0
+    {
+        return Err(HelperMemoryResourceV1::Accounting.into());
+    }
+    let source_allocations = checked.allocations(budget)?;
+    let source_accesses = checked.accesses(budget)?;
+    let source_control = checked.control(budget)?;
+    let source_bindings = checked.edge_bindings(budget)?;
+    if Some(source_allocations.len()) != ar.1.checked_sub(ar.0)
+        || Some(source_accesses.len()) != mr.1.checked_sub(mr.0)
+        || Some(source_control.len()) != cr.1.checked_sub(cr.0)
+        || Some(source_bindings.len()) != er.1.checked_sub(er.0)
+    {
+        return Err(HelperMemoryResourceV1::Accounting.into());
+    }
+    for row in source_allocations {
+        budget.charge_work(3)?;
+        if row.location().function_ordinal() != physical
+            || allocations.len() == allocations.capacity()
+        {
+            return Err(HelperMemoryResourceV1::Accounting.into());
+        }
+        allocations.push(*row);
+    }
+    for row in source_accesses {
+        budget.charge_work(4)?;
+        if row.location().function_ordinal() != physical
+            || row.allocation() >= source_allocations.len()
+            || accesses.len() == accesses.capacity()
+        {
+            return Err(HelperMemoryResourceV1::Accounting.into());
+        }
+        accesses.push(*row);
+    }
+    for row in source_control {
+        budget.charge_work(3)?;
+        if row.function_ordinal() != physical || control.len() == control.capacity() {
+            return Err(HelperMemoryResourceV1::Accounting.into());
+        }
+        control.push(*row);
+    }
+    for row in source_bindings {
+        budget.charge_work(3)?;
+        if row.function_ordinal() != physical || edge_bindings.len() == edge_bindings.capacity() {
+            return Err(HelperMemoryResourceV1::Accounting.into());
+        }
+        edge_bindings.push(*row);
+    }
+    Ok(())
 }
 
 /// Borrowed exact-source local obligations, not purity, return-value semantics,
 /// source equivalence, frame feasibility or artifact/launch authority.
+///
+/// The control and substitution slices cannot escape the same scoped view.
+///
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1;
+/// use fe2o3_kernel_analysis::CanonicalKirInventoryV1;
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+/// fn escape(owner: &ProductionPreRankedKirOwnerV1,
+///     inventory: &CanonicalKirInventoryV1<'_>, budget: &mut Budget<'_>) {
+///     let mut saved = None;
+///     owner.with_checked_helper_memory_v1(inventory, budget, |view, budget| {
+///         if let Some(local) = view.local_frame(1, budget)? {
+///             saved = Some((local.control(), local.edge_bindings()));
+///         }
+///         Ok(())
+///     }).unwrap();
+///     drop(saved);
+/// }
+/// ```
 pub struct ProductionHelperLocalFrameV1<'s> {
     source: &'s SemanticKirFunctionCorrespondenceV1,
     function: &'s Function,
     allocations: &'s [RetainedLocalAllocationV1],
     accesses: &'s [RetainedLocalAccessV1],
+    control: &'s [RetainedLocalControlV1],
+    edge_bindings: &'s [RetainedLocalEdgeBindingV1],
 }
 
 impl ProductionHelperLocalFrameV1<'_> {
@@ -395,6 +502,16 @@ impl ProductionHelperLocalFrameV1<'_> {
     /// Full physical access census, prepaid when this scoped view is issued.
     pub const fn accesses(&self) -> &[RetainedLocalAccessV1] {
         self.accesses
+    }
+    /// Complete checked physical control census, including the inactive trap.
+    /// These rows are not source control or optimized-output transport proofs.
+    pub const fn control(&self) -> &[RetainedLocalControlV1] {
+        self.control
+    }
+    /// Exact simultaneous substitutions of selected scalar edges, prepaid with
+    /// this view. Keep these obligations with the control and memory rows.
+    pub const fn edge_bindings(&self) -> &[RetainedLocalEdgeBindingV1] {
+        self.edge_bindings
     }
 }
 
@@ -466,7 +583,10 @@ impl ProductionPreRankedKirOwnerV1 {
             RetainedHelperKindV1::Local {
                 allocations,
                 accesses,
+                control,
+                edge_bindings,
             } => {
+                budget.charge_work(6)?;
                 let allocations = rows
                     .allocations
                     .get(allocations.0..allocations.1)
@@ -475,12 +595,27 @@ impl ProductionPreRankedKirOwnerV1 {
                     .accesses
                     .get(accesses.0..accesses.1)
                     .ok_or_else(mismatch)?;
-                budget.charge_work(argument_sum_v1(&[allocations.len(), accesses.len()])?)?;
+                let control = rows
+                    .control
+                    .get(control.0..control.1)
+                    .ok_or_else(mismatch)?;
+                let edge_bindings = rows
+                    .edge_bindings
+                    .get(edge_bindings.0..edge_bindings.1)
+                    .ok_or_else(mismatch)?;
+                budget.charge_work(argument_sum_v1(&[
+                    allocations.len(),
+                    accesses.len(),
+                    control.len(),
+                    edge_bindings.len(),
+                ])?)?;
                 Ok(Some(ProductionHelperLocalFrameV1 {
                     source,
                     function,
                     allocations,
                     accesses,
+                    control,
+                    edge_bindings,
                 }))
             }
             RetainedHelperKindV1::NotHelper | RetainedHelperKindV1::Pending => Err(mismatch()),
