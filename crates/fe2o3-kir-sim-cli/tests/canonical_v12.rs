@@ -317,6 +317,75 @@ fn canonical_v12_records_and_replays_canonical_and_seeded_schedules() {
 }
 
 #[test]
+fn canonical_v12_exploration_retains_exact_replayable_input() {
+    let directory = TestDirectory::new();
+    let (kir, request, owner) = fixture(&directory);
+    let explored = success(
+        run(&kir, &request)
+            .args([
+                "--explore-seeded-schedules",
+                "2",
+                "--schedule-seed",
+                "42",
+                "--schedule-max-decisions",
+                "128",
+                "--exploration-max-retained-decisions",
+                "256",
+            ])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(explored["schema"], "fe2o3-simulation-exploration-v1");
+    assert_eq!(explored["authority"], "observation_only");
+    assert_eq!(explored["schedule_space_exhausted"], false);
+    assert_eq!(explored["input"]["kind"], "canonical_kir_v12");
+    assert_eq!(
+        explored["input"]["kir_sha256"],
+        hex(owner.identity().digest())
+    );
+    assert_eq!(
+        explored["input"]["kir_canonical_bytes"],
+        owner.identity().canonical_length()
+    );
+    assert_eq!(explored["exploration"]["first_seed"], 42);
+    assert_eq!(explored["exploration"]["attempted"], 2);
+    assert_eq!(explored["exploration"]["completed"], 2);
+    assert_eq!(explored["exploration"]["no_races_observed"], 2);
+    assert_eq!(explored["exploration"]["failures"], 0);
+    assert_eq!(
+        explored["exploration"]["requested_seed_budget_consumed"],
+        true
+    );
+    assert_eq!(
+        explored["exploration"]["witness_retention_exhausted"],
+        false
+    );
+    let witness = &explored["witnesses"]["first_no_race"];
+    assert_eq!(witness["assessment"]["status"], "no_races_observed");
+    let schedule = witness["replay_schedule"]["document"].as_str().unwrap();
+    let document =
+        PersistedSimulationScheduleDocumentV1::from_canonical_bytes(schedule.as_bytes()).unwrap();
+    assert_eq!(
+        document.binding().artifact(),
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV12
+    );
+    assert_eq!(document.binding().kir_wire_version(), 12);
+    assert_eq!(document.to_canonical_bytes().unwrap(), schedule.as_bytes());
+    let path = directory.path("exploration-replay.json");
+    fs::write(&path, schedule).unwrap();
+    let replayed = success(
+        run(&kir, &request)
+            .arg("--replay-schedule")
+            .arg(path)
+            .arg("--race-evidence")
+            .output()
+            .unwrap(),
+    );
+    assert_result(&replayed, &owner);
+    assert_eq!(replayed["race_assessment"], witness["assessment"]);
+}
+
+#[test]
 fn canonical_v12_replay_rejects_body_request_and_version_substitution() {
     let directory = TestDirectory::new();
     let (kir, request, _) = fixture(&directory);

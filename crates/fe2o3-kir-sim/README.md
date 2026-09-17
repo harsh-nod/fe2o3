@@ -22,7 +22,7 @@ unary/binary/compare/cast type combination. Rows name either the exact
 simulator owner or the typed preflight rejection; the document explicitly
 identifies V7, V9, V10, V11, and V12 separately, names those rows as declared tool-contract facts with no authority, and
 grants no hardware or performance authority. The complete newline-terminated
-compact V1 document is fixed at 4,779,513 bytes and its regression test rejects
+compact V1 document is fixed at 4,819,631 bytes and its regression test rejects
 any unreviewed schema-size change.
 
 The named `gfx942` and `gfx950` profiles select CPU simulation data-layout
