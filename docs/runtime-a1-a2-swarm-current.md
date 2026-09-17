@@ -10,7 +10,17 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest development (2026-09-17): [C6 generated graph execution](runtime-generated-graph-v1.md)
+Latest development (2026-09-17): the [C6 owned-Stop correction](evidence/dev-c6-owned-stop-2026-09-17/README.md)
+now consumes original ready generated replies before deciding whether an active
+graph still requires retained custody. Eight new tests include 52 deterministic
+owner-loop scenarios across phase boundaries, observer loss, decoder outcomes and
+mixed pending work. Frozen-source GNU and scoped musl each pass 942 runtime and
+271 host tests, with seventeen and four ignored respectively; all quality gates
+and 61 doctests pass.
+Production native/formal/performance acceptance and the checkpoints below remain
+unchanged.
+
+Preceding [C6 generated graph execution](runtime-generated-graph-v1.md)
 now integrates exact graph reservations, original typed completion receipts,
 owner-preserving admission, cancellation and accepted-prefix drain in the
 existing scheduler. Nineteen focused CPU tests pass. Frozen-source GNU and scoped

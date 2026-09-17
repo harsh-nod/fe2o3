@@ -1,4 +1,5 @@
 use super::*;
+mod stop_tests;
 use crate::completion::{
     CompletionGraphV1, CompletionNodeIdV1, CompletionNodeStateV1, CompletionNodeV1,
     FutureIdentityV1,
@@ -604,6 +605,54 @@ fn generated_graph_terminal_faults_and_stop_retain_active_custody() {
         assert_eq!(after, before);
         assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
         core::mem::forget(h.registry); // Mirror process-retained ambiguous native custody.
+    }
+}
+
+#[test]
+fn generated_graph_stop_collects_already_settled_original_completion() {
+    for mode in [0, 23, 24] {
+        let mut h = Harness::new(2, 4, true);
+        let drops = Arc::new(AtomicUsize::new(0));
+        let domain = Arc::new(());
+        let (first, stream) =
+            reserve_completion_with_domain(&mut h, drops.clone(), mode, domain.clone());
+        let (suffix, _) = reserve_completion(&mut h, drops.clone(), 0);
+        let future = h
+            .handle
+            .try_submit_generated_graph_v1(request(&h.context, stream, vec![first, suffix]))
+            .unwrap();
+        let mut active = None;
+        command(&mut h, &mut active);
+        advance_graph(&mut h, &mut active);
+        for _ in 0..4 {
+            h.advance();
+        }
+        assert_eq!(h.registry.active_len(), 0);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        let before = h.state.lock().unwrap().adoption_order.clone();
+        active
+            .as_mut()
+            .unwrap()
+            .stop(&mut h.context, &mut h.registry);
+        assert!(
+            !h.context.is_terminal(),
+            "mode {mode}: settled Stop retained Context"
+        );
+        drop(active);
+        let report = ready(future).unwrap().unwrap();
+        assert_eq!(report.completions.len(), usize::from(mode == 0));
+        assert_eq!(report.errors.len(), usize::from(mode != 0));
+        if mode == 0 {
+            assert!(report.completions[0].1.matches_owner(&domain));
+        }
+        assert_eq!(h.registry.len(), 0);
+        assert_eq!(drops.load(Ordering::SeqCst), 2);
+        let mut expected = before;
+        expected.push("payload_drop"); // Only the unactivated suffix is disposed.
+        assert_eq!(h.state.lock().unwrap().adoption_order, expected);
+        assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
+        assert!(!h.handle.observer.graph_slot.load(Ordering::Acquire));
+        assert!(h.context.cleanup().is_complete());
     }
 }
 

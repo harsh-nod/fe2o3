@@ -807,25 +807,8 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
             ActiveGraphActionV1::Ordinary(index, submission, retiring) => {
                 (index, submission, retiring)
             }
-            ActiveGraphActionV1::Generated(index, mut completion) => {
-                match completion.try_take_ready_v1() {
-                    None => self
-                        .active
-                        .push_back(ActiveGraphActionV1::Generated(index, completion)),
-                    Some(Ok(Ok(receipt))) => {
-                        self.completions.push((self.ids[index], receipt));
-                        self.succeed_operation(context, index);
-                    }
-                    Some(result) => {
-                        let error = match result {
-                            Err(error) => RuntimeGeneratedGraphNodeErrorV1::Engine(error),
-                            Ok(Err(error)) => RuntimeGeneratedGraphNodeErrorV1::Readback(error),
-                            Ok(Ok(_)) => unreachable!(),
-                        };
-                        self.generated_errors.push((self.ids[index], error));
-                        self.fail_node(index, 4);
-                    }
-                }
+            ActiveGraphActionV1::Generated(index, completion) => {
+                self.observe_generated(context, index, completion);
                 return true;
             }
         };
@@ -889,6 +872,32 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
             ));
         }
         true
+    }
+
+    fn observe_generated(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        index: usize,
+        mut completion: RuntimeAsyncGeneratedCompletionV1,
+    ) {
+        match completion.try_take_ready_v1() {
+            None => self
+                .active
+                .push_back(ActiveGraphActionV1::Generated(index, completion)),
+            Some(Ok(Ok(receipt))) => {
+                self.completions.push((self.ids[index], receipt));
+                self.succeed_operation(context, index);
+            }
+            Some(result) => {
+                let error = match result {
+                    Err(error) => RuntimeGeneratedGraphNodeErrorV1::Engine(error),
+                    Ok(Err(error)) => RuntimeGeneratedGraphNodeErrorV1::Readback(error),
+                    Ok(Ok(_)) => unreachable!(),
+                };
+                self.generated_errors.push((self.ids[index], error));
+                self.fail_node(index, 4);
+            }
+        }
     }
 
     fn succeed_operation(&mut self, context: &mut RuntimeContextV1<B>, index: usize) {
@@ -978,7 +987,27 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> EngineGraph
         context: &mut RuntimeContextV1<B>,
         operations: &mut operation::OperationRegistryV1<B>,
     ) {
+        if context.is_terminal() {
+            return;
+        }
         self.control.cancel_unissued();
+        if !self.apply_cancel(context, operations) {
+            return;
+        }
+        // The last operation phase may have published a settled result before
+        // Stop was dequeued. Consume only those original cells, without native
+        // polling, decoding, ordinary retirement or issuing any successor.
+        for _ in 0..self.active.len() {
+            match self.active.pop_front().expect("bounded active roster") {
+                ActiveGraphActionV1::Generated(index, completion) => {
+                    self.observe_generated(context, index, completion);
+                }
+                ordinary => self.active.push_back(ordinary),
+            }
+            if context.is_terminal() {
+                return;
+            }
+        }
         if !self.apply_cancel(context, operations) {
             return;
         }

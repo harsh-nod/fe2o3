@@ -62,7 +62,8 @@ Host-only prepared/reserved custody can be explicitly discarded. After accepted
 activation, dropping either acknowledgement or completion loses observation but
 does not cancel execution or refund retained producer/native resources. The old
 preparation control does not cancel an activated invocation. Stop suppresses
-typed delivery and uses the existing disposal path; ordinary drain preserves
+still-pending typed delivery and uses the existing disposal path; already-published
+completion results remain observable. Ordinary drain preserves
 delivery. Subsequent [C6 development](runtime-generated-graph-v1.md) adds graph
 dependencies and corrects direct typed drain before ISSUE; the frozen C5 evidence
 below predates that correction. Native graph qualification remains open.

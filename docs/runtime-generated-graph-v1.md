@@ -73,7 +73,13 @@ Drain snapshots exclude exact generated submissions because the generated
 registry already progresses and retires them. They still contribute to pending
 counts; exclusion cannot manufacture quiescence. Drain requires an inactive graph
 and zero active drivers. Budget exhaustion retains and reports both, never success.
-Stop with an active graph conservatively retains the reserved Context and drivers.
+Stop first cancels unactivated graph owners. It then consumes already-published
+generated completion cells without issuing, polling native work, settling or
+decoding. If this removes the last active entry, the existing release checks
+can close the graph normally. Any still-pending generated or ordinary action
+conservatively retains the reserved Context and drivers. A callback already
+running when Stop is queued finishes before the owner dequeues Stop; Stop is
+not callback preemption.
 Terminal/stopped progress entry points cannot reenter execution hooks.
 
 ## Evidence And Remaining Work
@@ -95,7 +101,13 @@ all 23 changed source files and both targets' exact executables and test rosters
 
 Fixtures exercise shared production control flow with scripted backends and
 inert domain metadata. Constructed Context settlement is not native settlement.
+The subsequent [owned-Stop correction](evidence/dev-c6-owned-stop-2026-09-17/README.md)
+adds deterministic owner-loop phase coverage and avoids retaining an otherwise
+settled Context when Stop precedes graph observation of the original ready cell.
+Its frozen-source GNU and scoped musl each pass 942 runtime and 271 host tests,
+with seventeen and four ignored respectively; all quality gates and 61 doctests
+pass. The prior 23-file C6 archive remains unchanged.
 Protected Worker/carrier/native graph composition and its failure campaign,
-the complete phase-controlled owned Stop matrix, formal Rust/model correspondence,
+native Stop/failure qualification, formal Rust/model correspondence,
 production journals, aggregate residency bounds and matched HIP/HSA benchmarks
 remain open. This packet does not run a GPU workload or measure performance.

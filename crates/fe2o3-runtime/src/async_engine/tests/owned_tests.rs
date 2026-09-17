@@ -31,6 +31,7 @@ struct OwnerTrace {
     capture_requests: Vec<(u64, u64, u64, usize)>,
     capture_submission_rosters: Vec<Vec<(u64, BackendPollV1)>>,
     capture_pause: Option<(SyncSender<()>, Receiver<()>)>,
+    adoption_ready_pause: Option<(SyncSender<()>, Receiver<()>)>,
 }
 
 struct ThreadBoundBackend {

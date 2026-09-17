@@ -1,0 +1,18 @@
+
+running 1 test
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_stop_collects_already_settled_original_completion ... FAILED
+
+failures:
+
+---- async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_stop_collects_already_settled_original_completion stdout ----
+
+thread 'async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_stop_collects_already_settled_original_completion' (3058076) panicked at crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests/graph_tests.rs:636:9:
+mode 0: settled Stop retained Context
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::graph_tests::generated_graph_stop_collects_already_settled_original_completion
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 951 filtered out; finished in 0.02s
+
