@@ -306,8 +306,7 @@ fn materialized_helper_effect_query_releases_report_before_outer_scope_cleanup()
 fn materialized_helper_effect_roster_scan_has_an_exact_work_boundary() {
     let owner = materialized_aggregate_helper_v1();
     let source = RankedProjectionSourceV1::from_legacy(&owner).unwrap();
-    let floor = owner.executable_storage().retained_storage()
-        + owner.assert_origin_storage().payload_storage();
+    let floor = owner.retained_analysis_storage_v1();
     let run = |budget: &mut Budget<'_>| {
         with_canonical_assertions_source_budget_v1(&source, budget, |session| {
             session.callable_effect_summaries(&source)
@@ -361,5 +360,129 @@ fn materialized_helper_effects_reject_equal_bytes_from_another_owner() {
         Err(ProductionRankedProjectionErrorV1::Unsupported(
             "materialized helper effects belong to another executable owner"
         ))
+    ));
+}
+
+fn materialized_unit_local_helper_v1() -> fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1 {
+    let root = assertion_root_with_access(
+        vec![(A_UNIT, SemanticLocalRoleV1::Return)],
+        vec![],
+        vec![
+            block(120, vec![], neutral_test_call_v1(1, vec![], 0, A_UNIT, 1)),
+            block(121, vec![], SemanticTerminatorKindV1::Return),
+        ],
+        false,
+    );
+    let destination = SemanticPlaceV1::new(
+        SemanticLocalIdV1::from_index(1),
+        vec![
+            SemanticProjectionV1::new(
+                SemanticProjectionKindV1::Index(SemanticLocalIdV1::from_index(2)),
+                A_U32,
+            )
+            .unwrap(),
+        ],
+        A_U32,
+    )
+    .unwrap();
+    let helper = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(248)),
+        SemanticFunctionRoleV1::InternalHelper,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(131)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(132)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(133)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(134)),
+        SemanticSourceProvenanceV1::unavailable(),
+        SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256(bytes(135)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(A_UNIT, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap()
+        .with_source_argument_ownership(vec![])
+        .unwrap(),
+        vec![
+            local(136, A_UNIT, SemanticLocalRoleV1::Return),
+            local(137, A_ARRAY, SemanticLocalRoleV1::Temporary),
+            local(138, A_U32, SemanticLocalRoleV1::Temporary),
+        ],
+        SemanticBlockIdV1::from_index(0),
+        vec![block(
+            139,
+            vec![
+                typed_assignment(
+                    2,
+                    A_U32,
+                    SemanticRvalueKindV1::Use(typed_constant(A_U32, 0, 4)),
+                ),
+                typed_assignment(
+                    1,
+                    A_ARRAY,
+                    SemanticRvalueKindV1::Aggregate(
+                        SemanticAggregateRvalueV1::new(
+                            SemanticAggregateKindV1::Array,
+                            vec![typed_constant(A_U32, 11, 4); 8],
+                        )
+                        .unwrap(),
+                    ),
+                ),
+                SemanticStatementV1::new(
+                    SemanticSourceProvenanceV1::unavailable(),
+                    SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                        destination,
+                        SemanticRvalueV1::new(
+                            A_U32,
+                            SemanticRvalueKindV1::Use(typed_constant(A_U32, 99, 4)),
+                        ),
+                    )),
+                ),
+            ],
+            SemanticTerminatorKindV1::Return,
+        )],
+    )
+    .unwrap();
+    assertion_materialized_functions(assertion_types(), vec![root, helper])
+}
+
+#[test]
+fn source_ranked_local_helper_refusal_precedes_empty_external_row_shortcuts() {
+    let owner = materialized_unit_local_helper_v1();
+    assert_eq!(
+        owner.helper_source_policy_v1(),
+        fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1::UnitLocal
+    );
+    assert_eq!(owner.empty_effect_helpers().iter().count(), 0);
+    let mut stores = 0;
+    for function in &owner.executable().module().functions {
+        let body = function.body.as_ref().unwrap();
+        for block in &body.blocks {
+            for operation in &block.operations {
+                if let fe2o3_kernel_ir::OperationKind::Store { access, .. } = &operation.kind {
+                    assert_eq!(access.address_space, fe2o3_kernel_ir::AddressSpace::Private);
+                    stores += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(stores, 9);
+    assert!(matches!(
+        RankedProjectionSourceV1::from_legacy(&owner),
+        Err(ProductionRankedProjectionErrorV1::StructuralValidation(
+            fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::LocalHelperSourceConsumerUnavailable {
+                consumer: "source-ranked projection",
+            }
+        ))
+    ));
+    assert!(matches!(
+        fe2o3_lower_mir_kernel::ProductionMaterializedRankedModuleReceiptV1::from_unvalidated_projection_roster_candidate(owner, vec![]),
+        Err(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::LocalHelperSourceConsumerUnavailable {
+            consumer: "materialized ranked receipt",
+        })
     ));
 }

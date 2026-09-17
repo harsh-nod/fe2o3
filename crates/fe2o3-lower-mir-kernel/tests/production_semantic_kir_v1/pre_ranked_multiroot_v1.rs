@@ -325,10 +325,16 @@ fn pre_ranked_shared_helpers_preserve_sparse_roots_layouts_and_connected_attachm
     let materialized = materialize_shared(&mut budget);
     let storage = materialized.executable_storage();
     let origin_storage = materialized.assert_origin_storage();
+    let helper_storage = materialized.helper_memory_storage_v1();
+    let retained_total = materialized.retained_analysis_storage_v1();
+    assert_eq!(
+        retained_total,
+        storage.retained_storage()
+            + origin_storage.payload_storage()
+            + helper_storage.retained_storage()
+    );
     assert_eq!(budget.storage(), FLOOR);
-    budget
-        .reserve_storage(storage.retained_storage() + origin_storage.payload_storage())
-        .unwrap();
+    budget.reserve_storage(retained_total).unwrap();
     let semantic = materialized.semantic_ssa().source_semantic();
     assert_eq!(
         semantic.roots(),
@@ -467,9 +473,7 @@ fn pre_ranked_shared_helpers_preserve_sparse_roots_layouts_and_connected_attachm
     // This remains the explicit legacy reconstruction audit, after attachment.
     attached.verify_equivalence().unwrap();
     drop(attached);
-    budget
-        .release_storage(storage.retained_storage() + origin_storage.payload_storage())
-        .unwrap();
+    budget.release_storage(retained_total).unwrap();
     assert_eq!(budget.storage(), FLOOR);
 }
 
@@ -493,9 +497,15 @@ fn pre_ranked_shared_roster_rejects_missing_reordered_duplicate_and_substituted_
         let materialized = materialize_shared(&mut budget);
         let storage = materialized.executable_storage();
         let origin_storage = materialized.assert_origin_storage();
-        budget
-            .reserve_storage(storage.retained_storage() + origin_storage.payload_storage())
-            .unwrap();
+        let helper_storage = materialized.helper_memory_storage_v1();
+        let retained_total = materialized.retained_analysis_storage_v1();
+        assert_eq!(
+            retained_total,
+            storage.retained_storage()
+                + origin_storage.payload_storage()
+                + helper_storage.retained_storage()
+        );
+        budget.reserve_storage(retained_total).unwrap();
         let source = materialized.source_launch().roots();
         let first = source[0].layout();
         let second = source[1].layout();
@@ -554,9 +564,7 @@ fn pre_ranked_shared_roster_rejects_missing_reordered_duplicate_and_substituted_
             if *detail == expected),
             "wrong diagnostic for {case}: {error}"
         );
-        budget
-            .release_storage(storage.retained_storage() + origin_storage.payload_storage())
-            .unwrap();
+        budget.release_storage(retained_total).unwrap();
         assert_eq!(budget.storage(), FLOOR);
     }
 }

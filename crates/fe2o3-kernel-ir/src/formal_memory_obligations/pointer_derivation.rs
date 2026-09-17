@@ -1,5 +1,20 @@
 use super::*;
 
+pub(super) enum AccessDerivationError {
+    Incomplete(FormalMemoryIncompleteReason),
+    Resource(GuardedResourceErrorV1),
+}
+impl From<FormalMemoryIncompleteReason> for AccessDerivationError {
+    fn from(reason: FormalMemoryIncompleteReason) -> Self {
+        Self::Incomplete(reason)
+    }
+}
+impl From<GuardedResourceErrorV1> for AccessDerivationError {
+    fn from(error: GuardedResourceErrorV1) -> Self {
+        Self::Resource(error)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct PointerExpression {
     allocation: FormalAllocationIdentity,
@@ -67,6 +82,7 @@ pub(super) struct AccessDerivationContext<'analysis, 'module> {
     allocation_by_value: &'analysis BTreeMap<ValueId, FormalAllocationIdentity>,
     private_load_sources: &'analysis BTreeMap<ValueId, ValueId>,
     pointer_derivations: PointerDerivationCache,
+    pub(super) guarded: Option<GuardedAnalysisV1<'module>>,
 }
 
 impl<'analysis, 'module> AccessDerivationContext<'analysis, 'module> {
@@ -75,6 +91,7 @@ impl<'analysis, 'module> AccessDerivationContext<'analysis, 'module> {
         value_types: &'analysis BTreeMap<ValueId, Type>,
         allocation_by_value: &'analysis BTreeMap<ValueId, FormalAllocationIdentity>,
         private_load_sources: &'analysis BTreeMap<ValueId, ValueId>,
+        guarded: Option<GuardedAnalysisV1<'module>>,
     ) -> Self {
         Self {
             definitions,
@@ -82,6 +99,7 @@ impl<'analysis, 'module> AccessDerivationContext<'analysis, 'module> {
             allocation_by_value,
             private_load_sources,
             pointer_derivations: PointerDerivationCache::default(),
+            guarded,
         }
     }
 }
@@ -92,8 +110,18 @@ pub(super) fn derive_access(
     kind: FormalMemoryAccessKind,
     access: MemoryAccess,
     invocations: InvocationRange1d,
+    predicate: Option<ValueId>,
     context: &mut AccessDerivationContext<'_, '_>,
-) -> Result<FormalMemoryAccess, FormalMemoryIncompleteReason> {
+) -> Result<FormalMemoryAccess, AccessDerivationError> {
+    // Conditional recipes are cached separately from unconditional affine values.
+    // Resolution is deliberately repeated at each actual access context.
+    if let Some(guarded) = &mut context.guarded {
+        if let Some(access) =
+            guarded.access(location, pointer, kind, access, invocations, predicate)?
+        {
+            return Ok(access);
+        }
+    }
     let byte_width = context
         .value_types
         .get(&pointer)
@@ -117,6 +145,7 @@ pub(super) fn derive_access(
         byte_width,
         alignment: u64::from(access.alignment),
         invocations,
+        domain: FormalAccessDomainV1::LaunchEnvelope,
     })
 }
 
@@ -154,6 +183,7 @@ pub(super) fn derive_conservative_guarded_access(
         byte_width,
         alignment: u64::from(access.alignment),
         invocations,
+        domain: FormalAccessDomainV1::LaunchEnvelope,
     })
 }
 

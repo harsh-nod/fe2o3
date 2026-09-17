@@ -592,11 +592,7 @@ fn admitted_scope_reborrow_preserves_the_actual_pipeline_consumer() {
         )
         .unwrap();
         assert_eq!(budget.storage(), FLOOR);
-        let retained = source
-            .executable_storage()
-            .retained_storage()
-            .checked_add(source.assert_origin_storage().payload_storage())
-            .unwrap();
+        let retained = source.retained_analysis_storage_v1();
         budget.reserve_storage(retained).unwrap();
         assert!(source.semantic_ssa().occurrences_v1().is_none());
         source.semantic_ssa().verify_replay().unwrap();

@@ -1,5 +1,22 @@
 use fe2o3_kernel_analysis::{CanonicalKirFunctionRefV1, CanonicalKirInventoryV1};
 
+#[derive(Clone, Copy)]
+struct CanonicalCallSubjectV1<'a> {
+    semantic_ssa: &'a ProductionSemanticSsaOwnerV1,
+    executable: &'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    correspondence: &'a SemanticKirCorrespondenceV1,
+}
+
+impl<'a> CanonicalCallSubjectV1<'a> {
+    fn owner(owner: &'a ProductionPreRankedKirOwnerV1) -> Self {
+        Self {
+            semantic_ssa: &owner.semantic_ssa,
+            executable: &owner.executable,
+            correspondence: &owner.correspondence,
+        }
+    }
+}
+
 /// One root-qualified source association bound to its actual canonical function.
 /// This is occurrence identity, not a purity, value, provenance or authority proof.
 pub struct ProductionCanonicalCallFunctionV1<'a> {
@@ -59,6 +76,9 @@ pub struct ProductionCanonicalCallsV1<'a> {
     inventory: &'a CanonicalKirInventoryV1<'a>,
     groups: Vec<CanonicalCallGroupV1<'a>>,
     calls: Vec<CanonicalCallBindingV1<'a>>,
+    ledger: usize,
+    work_ledger: ArgumentLedgerV1,
+    floor: usize,
 }
 
 impl ProductionCanonicalCallsV1<'_> {
@@ -120,6 +140,84 @@ impl ProductionCanonicalCallsV1<'_> {
             )
         })
     }
+
+    /// Joins the existing exact call/ABI view to its retained callee-local
+    /// obligations. Currently admitted raw-empty helpers yield None. This does
+    /// not change call eligibility or establish any return-value semantics.
+    /// Full retained storage and the original ledger remain live through the
+    /// call callback, including its existing error and unwind postflights.
+    pub fn with_call_local_frame_v1<'w, R>(
+        &self,
+        root: SemanticFunctionIdV1,
+        call: usize,
+        budget: &mut ArgumentBudgetV1<'w>,
+        use_view: impl for<'s, 'rows> FnOnce(
+            &mut ProductionCallViewV1<'s, 'w>,
+            Option<ProductionHelperLocalFrameV1<'rows>>,
+        ) -> Result<R, ProductionSemanticKirErrorV1>,
+    ) -> Result<R, ProductionSemanticKirErrorV1> {
+        budget.charge_work(5)?;
+        if self.ledger != budget as *const ArgumentBudgetV1<'_> as usize
+            || self.work_ledger != budget.work_ledger_identity_v1()
+            || budget.storage() < self.floor
+        {
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
+        self.owner
+            .with_checked_helper_memory_v1(self.inventory, budget, |memory, budget| {
+                let index = assert_origin_find_v1(&self.calls, budget, |row, budget| {
+                    budget.charge_work(1)?;
+                    Ok(row.key().cmp(&(root.index(), call)))
+                })
+                .map_err(call_index_error_v1)?
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+                let binding = &self.calls[index];
+                let local = memory.local_frame(binding.callee, budget)?;
+                with_canonical_call_scratch_v1(budget, |budget| {
+                    budget.charge_work(3)?;
+                    let mut callback_accounting_failed = false;
+                    let assembled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        with_checked_call_site_v1(
+                            &self.owner.semantic_ssa,
+                            &self.owner.correspondence.call_result_components,
+                            binding.site,
+                            self.groups[binding.callee].parameters(),
+                            budget,
+                            |view| {
+                                view.entry.budget.charge_work(5)?;
+                                let work_ledger = view.entry.budget.work_ledger_identity_v1();
+                                let floor = view.entry.budget.storage();
+                                let result =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        use_view(view, local)
+                                    }));
+                                if work_ledger != view.entry.budget.work_ledger_identity_v1()
+                                    || view.entry.budget.storage() != floor
+                                {
+                                    callback_accounting_failed = true;
+                                    return Err(ArgumentResourceV1::Accounting.into());
+                                }
+                                match result {
+                                    Ok(result) => result,
+                                    Err(payload) => std::panic::resume_unwind(payload),
+                                }
+                            },
+                        )
+                    }));
+                    // The legacy parameter scope uses Result-only cleanup.
+                    // A secondary cleanup panic must not replace a detected
+                    // callback accounting failure on this new query path.
+                    if callback_accounting_failed {
+                        drop(assembled);
+                        return Err(ArgumentResourceV1::Accounting.into());
+                    }
+                    match assembled {
+                        Ok(result) => result,
+                        Err(payload) => std::panic::resume_unwind(payload),
+                    }
+                })
+            })
+    }
 }
 
 impl ProductionPreRankedKirOwnerV1 {
@@ -158,9 +256,12 @@ impl ProductionPreRankedKirOwnerV1 {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
             let calls = ProductionCanonicalCallsV1::build(self, inventory, budget)?;
+            budget.charge_work(1)?;
             let callback_floor = budget.storage();
             let result = use_calls(&calls, budget);
-            if budget.storage() != callback_floor {
+            if calls.work_ledger != budget.work_ledger_identity_v1()
+                || budget.storage() != callback_floor
+            {
                 return Err(ArgumentResourceV1::Accounting.into());
             }
             result
@@ -172,8 +273,13 @@ fn with_canonical_call_scratch_v1<'w, R>(
     budget: &mut ArgumentBudgetV1<'w>,
     body: impl FnOnce(&mut ArgumentBudgetV1<'w>) -> Result<R, ProductionSemanticKirErrorV1>,
 ) -> Result<R, ProductionSemanticKirErrorV1> {
+    budget.charge_work(2)?;
+    let work_ledger = budget.work_ledger_identity_v1();
     let floor = budget.storage();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(budget)));
+    if work_ledger != budget.work_ledger_identity_v1() {
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
     budget.release_storage(
         budget
             .storage()

@@ -361,8 +361,7 @@ fn partial_write_materializes_counted_private_storage_without_reading_it() {
         &mut budget,
     )
     .unwrap();
-    let storage = owner.executable_storage().retained_storage()
-        + owner.assert_origin_storage().payload_storage();
+    let storage = owner.retained_analysis_storage_v1();
     budget.reserve_storage(storage).unwrap();
     let module = owner.executable().module();
     verify_module(module).unwrap();

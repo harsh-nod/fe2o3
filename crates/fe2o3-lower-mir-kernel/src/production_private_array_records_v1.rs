@@ -89,6 +89,29 @@ enum PrivateArrayIndexV1 {
         physical_type: ScalarType,
         direct_definition: Option<PrivateArrayPhysicalLocationV1>,
     },
+    InitializerElement {
+        component: u32,
+        value: PrivateArrayInitializerValueV1,
+    },
+}
+
+// A component's written-value relation is distinct from its source occurrence
+// and address. Additional operand recipes require independent value checks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrivateArrayInitializerValueV1 {
+    LiteralScalar {
+        value: ValueId,
+        definition: PrivateArrayPhysicalLocationV1,
+    },
+}
+
+impl PrivateArrayIndexV1 {
+    fn component(self) -> u32 {
+        match self {
+            Self::InitializerElement { component, .. } => component,
+            Self::ConstantIndex { .. } | Self::Local { .. } => 0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -124,6 +147,7 @@ struct PrivateArrayCorrespondenceV1 {
 struct PrivateArrayExpectedPlaceV1<'s> {
     place: &'s SemanticPlaceV1,
     role: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+    initializer_component: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

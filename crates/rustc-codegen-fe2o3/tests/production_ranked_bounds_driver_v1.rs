@@ -9,6 +9,7 @@ include!("production_ranked_bounds_driver_v1/dynamic_local_array_tests.rs");
 include!("production_ranked_bounds_driver_v1/generative_provider_tests.rs");
 include!("production_ranked_bounds_driver_v1/context_entry_tests.rs");
 include!("production_ranked_bounds_driver_v1/tutorial_source_contract.rs");
+include!("production_ranked_bounds_driver_v1/slice_metadata_argument_tests.rs");
 
 fn run_typed_layout_runtime_fixture(
     target: &ScratchTarget,

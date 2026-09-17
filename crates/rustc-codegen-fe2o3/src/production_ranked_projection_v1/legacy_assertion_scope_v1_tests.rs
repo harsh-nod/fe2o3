@@ -74,8 +74,7 @@ mod legacy_scope_tests {
                 ..
             }
         ));
-        let floor = materialized.executable_storage().retained_storage()
-            + materialized.assert_origin_storage().payload_storage();
+        let floor = materialized.retained_analysis_storage_v1();
         let mut work = Work::new(1_000_000);
         let mut budget = Budget::new(&mut work, floor);
         budget.reserve_storage(floor).unwrap();
@@ -205,53 +204,6 @@ mod legacy_scope_tests {
     }
 
     #[test]
-    fn private_array_whole_initialization_keeps_its_distinct_refusal() {
-        use fe2o3_lower_mir_kernel::{
-            ProductionMirPlironTranslationErrorV1, ProductionSemanticKirErrorV1,
-        };
-        for legacy in [false, true] {
-            let old = literal_assertion(true, true, false);
-            let mut statements = old.blocks()[0].statements().to_vec();
-            let SemanticStatementKindV1::Assign(write) = statements[1].kind() else {
-                panic!("indexed write");
-            };
-            let local = write.destination().local();
-            statements.insert(
-                1,
-                typed_assignment(
-                    local.index(),
-                    A_ARRAY,
-                    SemanticRvalueKindV1::aggregate(
-                        SemanticAggregateKindV1::Array,
-                        vec![typed_constant(A_U32, 0, 4); 8],
-                    )
-                    .unwrap(),
-                ),
-            );
-            let function = private_write_statements_v1(&old, statements);
-            assert!(matches!(function.blocks()[0].statements()[1].kind(),
-                SemanticStatementKindV1::Assign(value) if value.destination().projections().is_empty()
-                    && matches!(value.value().kind(), SemanticRvalueKindV1::Aggregate(_))));
-            let result = attach_private_write_fixture_v1(function, legacy, |materialized, root| {
-                assert_private_write_row_v1(materialized, root, 2)
-            });
-            assert!(
-                matches!(
-                    result,
-                    Err(ProductionSemanticKirErrorV1::MirPlironTranslation(
-                        ProductionMirPlironTranslationErrorV1::MissingRankedEffect {
-                            semantic_block: 0,
-                            semantic_statement: Some(1),
-                            semantic_access_ordinal: 0,
-                        }
-                    ))
-                ),
-                "whole-array initialization has no indexed-write recipe"
-            );
-        }
-    }
-
-    #[test]
     fn private_array_rows_do_not_capture_promoted_or_scalar_slot_writes() {
         for retained_scalar in [false, true] {
             for legacy in [false, true] {
@@ -354,9 +306,14 @@ mod legacy_scope_tests {
             );
             let function = private_write_statements_v1(&old, statements);
             let result = attach_private_write_fixture_v1(function, legacy, |materialized, root| {
-                assert!(root.access_sources.is_empty());
-                let floor = materialized.executable_storage().retained_storage()
-                    + materialized.assert_origin_storage().payload_storage();
+                assert_eq!(root.access_sources.len(), 8);
+                assert_private_initializer_rows_v1(materialized, root, 1);
+                assert!(
+                    root.access_sources
+                        .iter()
+                        .all(|row| row.semantic_statement() == Some(1))
+                );
+                let floor = materialized.retained_analysis_storage_v1();
                 let mut work = Work::new(1_000_000);
                 let mut budget = Budget::new(&mut work, floor);
                 budget.reserve_storage(floor).unwrap();
@@ -458,15 +415,14 @@ mod legacy_scope_tests {
                     (1, 0)
                 );
             });
-            // The actual whole-array initialization still fails first. The
-            // no-write-row assertion above independently tests the mixed RHS
-            // exclusion; this is not a claim to reach a later ordinal error.
+            // Literal initialization is now checked; the still-unsupported
+            // private RHS read is the next actual source effect.
             assert!(matches!(
                 result,
                 Err(ProductionSemanticKirErrorV1::MirPlironTranslation(
                     ProductionMirPlironTranslationErrorV1::MissingRankedEffect {
                         semantic_block: 0,
-                        semantic_statement: Some(1),
+                        semantic_statement: Some(2),
                         semantic_access_ordinal: 0,
                     }
                 ))
@@ -475,11 +431,19 @@ mod legacy_scope_tests {
     }
 
     impl ProjectedAssertionFactsV1 for PrivateSourceMeterV1<'_, '_> {
+        fn private_array_initializer_count(
+            &mut self,
+            _: usize,
+            _: usize,
+        ) -> Result<Option<u64>, ProductionRankedProjectionErrorV1> {
+            panic!("source-row component must not query an initializer");
+        }
+
         fn charge_private_array_work(
             &mut self,
             amount: usize,
         ) -> Result<(), ProductionRankedProjectionErrorV1> {
-            assert_eq!(amount, 40);
+            assert!(matches!(amount, 8 | 48));
             self.calls += 1;
             self.budget
                 .charge_work(amount)
@@ -521,7 +485,7 @@ mod legacy_scope_tests {
             }],
             ProductionRankedTerminatorV1::Return,
         )];
-        for limit in [39, 40] {
+        for limit in [47, 48] {
             for statement in [1, usize::MAX] {
                 let sources = [ProjectedAccessSourceV1 {
                     block: 0,
@@ -544,15 +508,15 @@ mod legacy_scope_tests {
                 let result =
                     production_access_sources(&types, &function, &blocks, &sources, &mut facts);
                 assert_eq!(facts.calls, 1);
-                if limit == 39 {
+                if limit == 47 {
                     assert!(
                         matches!(result, Err(ProductionRankedProjectionErrorV1::CanonicalAssertions(
                         CanonicalAssertionErrorV1::Resource(Resource::Work(error))
-                    )) if error.actual() == 40 && error.limit() == 39)
+                    )) if error.actual() == 48 && error.limit() == 47)
                     );
                 } else {
                     assert_eq!(result.unwrap().len(), usize::from(statement == 1));
-                    assert_eq!(facts.budget.work(), 40);
+                    assert_eq!(facts.budget.work(), 48);
                 }
                 assert_eq!(facts.budget.storage(), 17);
             }
@@ -607,7 +571,7 @@ mod legacy_scope_tests {
                 }),
             })
             .collect::<Vec<_>>();
-        let mut work = Work::new(80);
+        let mut work = Work::new(96);
         let mut budget = Budget::new(&mut work, 0);
         let mut facts = PrivateSourceMeterV1 {
             budget: &mut budget,
@@ -616,7 +580,7 @@ mod legacy_scope_tests {
         let rows =
             production_access_sources(&types, &function, &blocks, &sources, &mut facts).unwrap();
         assert_eq!(facts.calls, 2);
-        assert_eq!(facts.budget.work(), 80);
+        assert_eq!(facts.budget.work(), 96);
         assert_eq!(
             rows.iter()
                 .map(|row| (row.ranked_operation(), row.semantic_access_ordinal()))
@@ -645,6 +609,14 @@ mod legacy_scope_tests {
         let canonical_buffer = graph.canonical().canonical_bytes().as_ptr();
         let graph_storage = materialized.executable_storage();
         let origins_storage = materialized.assert_origin_storage();
+        let helper_storage = materialized.helper_memory_storage_v1();
+        let retained_total = materialized.retained_analysis_storage_v1();
+        assert_eq!(
+            retained_total,
+            graph_storage.retained_storage()
+                + origins_storage.payload_storage()
+                + helper_storage.retained_storage()
+        );
         let program = project_and_verify_ranked_materialized_semantic_mir_v1(
             materialized,
             &[ranked_root_input_1d("neutral_generated_hostile", 247, 64)],
@@ -701,6 +673,14 @@ mod legacy_scope_tests {
         assert_eq!(
             attached.pre_ranked_assert_origin_storage(),
             Some(origins_storage)
+        );
+        assert_eq!(
+            attached.pre_ranked_helper_memory_storage_v1(),
+            Some(helper_storage)
+        );
+        assert_eq!(
+            attached.pre_ranked_retained_analysis_storage_v1(),
+            Some(retained_total)
         );
     }
 
@@ -767,12 +747,16 @@ mod legacy_scope_tests {
     }
 
     #[test]
-    fn legacy_scope_requires_both_borrowed_payloads_before_any_callback_or_work() {
+    fn legacy_scope_requires_all_borrowed_payloads_before_any_callback_or_work() {
         let source = assertion_materialized(literal_assertion(true, true, false));
         let graph = source.executable_storage().retained_storage();
         let origins = source.assert_origin_storage().payload_storage();
+        let helpers = source.helper_memory_storage_v1().retained_storage();
+        let total = source.retained_analysis_storage_v1();
         assert!(origins > 0);
-        for floor in [0, graph, graph + origins - 1] {
+        assert!(helpers > 0);
+        assert_eq!(total, graph + origins + helpers);
+        for floor in [0, graph, graph + origins - 1, graph + origins, total - 1] {
             let mut work = Work::new(7);
             let mut budget = Budget::new(&mut work, floor);
             budget.charge_work(7).unwrap();
@@ -817,9 +801,7 @@ mod legacy_scope_tests {
         }
         let source = assertion_materialized(literal_assertion(true, true, false));
         let executable = source.executable() as *const _;
-        let floor = source.executable_storage().retained_storage()
-            + source.assert_origin_storage().payload_storage()
-            + 31;
+        let floor = source.retained_analysis_storage_v1() + 31;
         let work_limit =
             usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap();
         let storage_limit = crate::production_canonical_phase_policy_v1::STORAGE_LIMIT;
@@ -1404,6 +1386,8 @@ mod legacy_scope_tests {
         Read,
         TwoReads,
         ProjectedPrivateWrite,
+        InitializerRead,
+        InitializerTwoReads,
     }
 
     fn private_slice_composition_types_v1() -> Vec<SemanticTypeDeclV1> {
@@ -1492,6 +1476,11 @@ mod legacy_scope_tests {
         mode: PrivateSliceCompositionV1,
     ) -> SemanticFunctionDeclV1 {
         use fe2o3_mir_model::semantic_mir_v1::*;
+        let initialized = matches!(
+            mode,
+            PrivateSliceCompositionV1::InitializerRead
+                | PrivateSliceCompositionV1::InitializerTwoReads
+        );
         let field = || {
             SemanticPlaceV1::new(
                 SemanticLocalIdV1::from_index(2),
@@ -1551,7 +1540,11 @@ mod legacy_scope_tests {
             },
             SemanticRvalueV1::new(
                 A_U32,
-                if matches!(mode, PrivateSliceCompositionV1::TwoReads) {
+                if matches!(
+                    mode,
+                    PrivateSliceCompositionV1::TwoReads
+                        | PrivateSliceCompositionV1::InitializerTwoReads
+                ) {
                     SemanticRvalueKindV1::Binary {
                         operation: SemanticBinaryOpV1::BitXor,
                         left: slice_read(),
@@ -1562,6 +1555,30 @@ mod legacy_scope_tests {
                 },
             ),
         )));
+        let mut later_statements = Vec::new();
+        if initialized {
+            later_statements.push(typed_assignment(
+                7,
+                A_ARRAY,
+                SemanticRvalueKindV1::aggregate(
+                    SemanticAggregateKindV1::Array,
+                    (0..8)
+                        .map(|index| typed_constant(A_U32, index + 11, 4))
+                        .collect(),
+                )
+                .unwrap(),
+            ));
+        }
+        later_statements.extend([
+            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                private_place(),
+                SemanticRvalueV1::new(
+                    A_U32,
+                    SemanticRvalueKindV1::Use(typed_constant(A_U32, 17, 4)),
+                ),
+            ))),
+            later,
+        ]);
         let old = assertion_root_with_access(
             vec![
                 (A_UNIT, SemanticLocalRoleV1::Return),
@@ -1621,20 +1638,7 @@ mod legacy_scope_tests {
                         unwind: SemanticUnwindActionV1::Unreachable,
                     },
                 ),
-                block(
-                    211,
-                    vec![
-                        statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
-                            private_place(),
-                            SemanticRvalueV1::new(
-                                A_U32,
-                                SemanticRvalueKindV1::Use(typed_constant(A_U32, 17, 4)),
-                            ),
-                        ))),
-                        later,
-                    ],
-                    SemanticTerminatorKindV1::Return,
-                ),
+                block(211, later_statements, SemanticTerminatorKindV1::Return),
             ],
             false,
         );
@@ -1704,12 +1708,22 @@ mod legacy_scope_tests {
             ProductionRankedSemanticProjectionReceiptV1, ProductionSemanticKirLimitsV1,
             ProductionSemanticKirOwnerV1,
         };
+        let initialized = matches!(
+            mode,
+            PrivateSliceCompositionV1::InitializerRead
+                | PrivateSliceCompositionV1::InitializerTwoReads
+        );
+        let write_statement = u32::from(initialized);
+        let read_statement = write_statement + 1;
         let types = private_slice_composition_types_v1();
         let function = private_slice_composition_source_v1(mode);
         let ssa = assertion_ssa_functions(types.clone(), vec![function.clone()]);
         let materialized =
             materialize_ranked_fixture_v1(ssa, &[ranked_root_input_1d(A_NAME, 247, 64)]).unwrap();
-        let reads = if matches!(mode, PrivateSliceCompositionV1::TwoReads) {
+        let reads = if matches!(
+            mode,
+            PrivateSliceCompositionV1::TwoReads | PrivateSliceCompositionV1::InitializerTwoReads
+        ) {
             2
         } else {
             1
@@ -1728,7 +1742,12 @@ mod legacy_scope_tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let mut expected_memory = vec![AccessKindAttr::Write];
+        let mut expected_memory = if initialized {
+            vec![AccessKindAttr::Write; 8]
+        } else {
+            Vec::new()
+        };
+        expected_memory.push(AccessKindAttr::Write);
         expected_memory.extend((0..reads).map(|_| AccessKindAttr::Read));
         if matches!(mode, PrivateSliceCompositionV1::ProjectedPrivateWrite) {
             expected_memory.push(AccessKindAttr::Write);
@@ -1740,11 +1759,14 @@ mod legacy_scope_tests {
         // These are real owner/inventory/budget queries, not fabricated slice facts.
         with_canonical_assertions_v1(&materialized, |session| {
             let mut facts = session.for_source(ROOT, ROOT);
+            if initialized {
+                assert_eq!(facts.private_array_initializer_count(1, 0)?, Some(8));
+            }
             for ordinal in 0..reads {
                 let input = facts.slice_access(
                     ProjectedSemanticAccessSiteV1 {
                         block: 1,
-                        statement: Some(1),
+                        statement: Some(read_statement as usize),
                     },
                     ordinal,
                     0,
@@ -1757,7 +1779,7 @@ mod legacy_scope_tests {
                     .slice_access(
                         ProjectedSemanticAccessSiteV1 {
                             block: 1,
-                            statement: Some(1),
+                            statement: Some(read_statement as usize),
                         },
                         reads,
                         0
@@ -1768,15 +1790,17 @@ mod legacy_scope_tests {
             Ok(())
         })
         .unwrap();
-        let floor = materialized.executable_storage().retained_storage()
-            + materialized.assert_origin_storage().payload_storage();
+        let floor = materialized.retained_analysis_storage_v1();
         let mut work = Work::new(1_000_000);
         let mut budget = Budget::new(&mut work, floor);
         budget.reserve_storage(floor).unwrap();
-        for statement in 0..=u32::from(matches!(
-            mode,
-            PrivateSliceCompositionV1::ProjectedPrivateWrite
-        )) {
+        for statement in write_statement
+            ..=write_statement
+                + u32::from(matches!(
+                    mode,
+                    PrivateSliceCompositionV1::ProjectedPrivateWrite
+                ))
+        {
             assert_eq!(
                 materialized.materialized_private_array_constant_index(
                     ROOT,
@@ -1792,6 +1816,7 @@ mod legacy_scope_tests {
             );
         }
         assert_eq!(budget.storage(), floor);
+        drop(budget);
         let program = assertion_project(materialized).unwrap();
         assert!(program.all_kernel_checks_are_clean());
         let ProductionRankedSemanticProgramV1 {
@@ -1818,8 +1843,14 @@ mod legacy_scope_tests {
                 )
             })
             .collect::<Vec<_>>();
-        let mut expected = vec![(1, Some(0), 0, AccessKindAttr::Write)];
-        expected.extend((0..reads).map(|ordinal| (1, Some(1), ordinal, AccessKindAttr::Read)));
+        let mut expected = Vec::new();
+        if initialized {
+            expected.extend((0..8).map(|ordinal| (1, Some(0), ordinal, AccessKindAttr::Write)));
+        }
+        expected.push((1, Some(write_statement), 0, AccessKindAttr::Write));
+        expected.extend(
+            (0..reads).map(|ordinal| (1, Some(read_statement), ordinal, AccessKindAttr::Read)),
+        );
         assert_eq!(
             rows, expected,
             "private write does not shift a later site's canonical read cursor"
@@ -1893,4 +1924,7 @@ mod legacy_scope_tests {
             );
         }
     }
+
+    include!("private_array_checked_output_v1_tests.rs");
+    include!("private_array_initializer_v1_tests.rs");
 }

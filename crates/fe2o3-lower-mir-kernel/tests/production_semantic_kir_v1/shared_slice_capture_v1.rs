@@ -399,3 +399,170 @@ fn frozen_evidence_refuses_slice_components_but_preserves_whole_slice_helpers() 
         }
     }
 }
+
+#[test]
+fn retained_call_join_preserves_raw_empty_slice_and_rust_call_carriers() {
+    use fe2o3_kernel_analysis::CanonicalKirInventoryV1;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrWorkBudgetV1 as Work, CastKind,
+    };
+    use fe2o3_lower_mir_kernel::{
+        ProductionArgumentCoverageV1, ProductionPreRankedKirOwnerV1, ProductionSourceLaunchInputV1,
+        ProductionSourceLaunchRootInputV1, ProductionSourceLaunchRosterV1,
+    };
+    use fe2o3_pliron::{ProductionSemanticSsaLimitsV1, ProductionSemanticSsaOwnerV1};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    for mode in [None, Some(false), Some(true)] {
+        let source = wrapped_owner(mode);
+        let entry = source.semantic().functions()[0].kernel_entry().unwrap();
+        let required = entry
+            .source_contract()
+            .launch()
+            .unwrap()
+            .required()
+            .unwrap();
+        let launches = ProductionSourceLaunchRosterV1::try_new(
+            source.semantic(),
+            &[ProductionSourceLaunchRootInputV1::new(
+                "wrapped_slice",
+                *entry.kernel_binding_identity().as_bytes(),
+                ProductionSourceLaunchInputV1::new(1, Some(required.as_array()), [1, 1, 1]),
+            )],
+        )
+        .unwrap();
+        let root = launches.roots()[0].selected_root();
+        let ssa =
+            ProductionSemanticSsaOwnerV1::try_new(source, ProductionSemanticSsaLimitsV1::default())
+                .unwrap();
+        let mut work = Work::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        budget.reserve_storage(19).unwrap();
+        let owner = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+            ssa,
+            launches,
+            ProductionSemanticKirLimitsV1::default(),
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(budget.storage(), 19);
+        assert_eq!(owner.empty_effect_helpers().iter().count(), 1);
+        let retained = owner.retained_analysis_storage_v1();
+        assert_eq!(
+            retained,
+            owner.executable_storage().retained_storage()
+                + owner.assert_origin_storage().payload_storage()
+                + owner.helper_memory_storage_v1().retained_storage(),
+        );
+        budget.reserve_storage(retained).unwrap();
+        let (inventory, receipt) =
+            CanonicalKirInventoryV1::derive(owner.executable(), &mut budget).unwrap();
+        budget.reserve_storage(receipt.retained_storage()).unwrap();
+        let floor = budget.storage();
+        owner
+            .with_checked_canonical_calls_v1(&inventory, &mut budget, |calls, budget| {
+                assert_eq!(calls.call_count(), 1);
+                budget.charge_work(calls.call_count())?;
+                let (actual_root, call) = calls.sites().next().unwrap();
+                assert_eq!(actual_root, root);
+                let call_floor = budget.storage();
+                for _ in 0..2 {
+                    calls.with_call_local_frame_v1(root, call, budget, |view, local| {
+                        assert!(local.is_none(), "raw-empty Slice ABI is not a scalar frame");
+                        assert_eq!(view.caller().correspondence_owner(), root);
+                        assert!(std::ptr::eq(
+                            view.operation(),
+                            inventory.calls()[call].operation,
+                        ));
+                        let count = if mode.is_some() { 3 } else { 1 };
+                        assert_eq!(
+                            view.source().arguments().len(),
+                            if mode.is_some() { 2 } else { 1 }
+                        );
+                        let OperationKind::Call { arguments, .. } = &view.operation().kind else {
+                            panic!("actual canonical call required");
+                        };
+                        assert_eq!(arguments.len(), count);
+                        assert!(arguments.iter().all(|value| *value == arguments[0]));
+                        let slice = Type::slice(
+                            Type::Scalar(ScalarType::U32),
+                            AddressSpace::Global,
+                            AccessMode::ReadOnly,
+                        );
+                        for slot in 0..count {
+                            let physical = view.physical(slot)?.unwrap();
+                            assert_eq!(physical.caller_value(), arguments[slot]);
+                            assert_eq!(physical.parameter().slot(), slot);
+                            assert_eq!(physical.parameter().ty(), &slice);
+                        }
+                        assert!(view.physical(count)?.is_none());
+                        let mut next_slot = 0;
+                        view.visit_arguments(|node| {
+                            if let ProductionArgumentCoverageV1::Parameter(parameter) =
+                                node.parameter().coverage()
+                            {
+                                assert_eq!(parameter.slot(), next_slot);
+                                assert_eq!(parameter.ty(), &slice);
+                                next_slot += 1;
+                            }
+                            Ok(())
+                        })?;
+                        assert_eq!(next_slot, count);
+                        assert_eq!(view.result_count(), 1);
+                        assert_eq!(view.result_source_type(), ty(4));
+                        let result = view.result_component(0).unwrap();
+                        assert!(result.path().is_empty());
+                        assert_eq!(result.semantic_type(), ty(4));
+                        assert_eq!(result.value().ty, Type::Scalar(ScalarType::U64));
+                        assert_eq!(result.value(), &view.operation().results[0]);
+                        let mut returns = 0;
+                        view.visit_returns(|site| {
+                            returns += 1;
+                            assert_eq!(site.component_count(), 1);
+                            let cast = site.conversion(0).expect("metadata INDEX to U64 return");
+                            assert!(matches!(cast.kind, OperationKind::Cast {
+                                kind: CastKind::Bitcast, value, ..
+                            } if Some(value) == site.input(0)));
+                            Ok(())
+                        })?;
+                        assert_eq!(returns, 1);
+                        Ok(())
+                    })?;
+                    assert_eq!(budget.storage(), call_floor);
+                }
+                assert!(matches!(
+                    calls.with_call_local_frame_v1(root, call, budget, |_, local| {
+                        assert!(local.is_none());
+                        Err::<(), _>(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+                    }),
+                    Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch),
+                ));
+                assert_eq!(budget.storage(), call_floor);
+                let panic = catch_unwind(AssertUnwindSafe(|| {
+                    calls.with_call_local_frame_v1(
+                        root,
+                        call,
+                        budget,
+                        |_, local| -> Result<(), ProductionSemanticKirErrorV1> {
+                            assert!(local.is_none());
+                            std::panic::panic_any(0x365usize)
+                        },
+                    )
+                }));
+                assert_eq!(panic.unwrap_err().downcast_ref::<usize>(), Some(&0x365));
+                assert_eq!(budget.storage(), call_floor);
+                calls.with_call_local_frame_v1(root, call, budget, |_, local| {
+                    assert!(local.is_none());
+                    Ok(())
+                })
+            })
+            .unwrap();
+        assert_eq!(budget.storage(), floor);
+        drop(inventory);
+        budget.release_storage(receipt.retained_storage()).unwrap();
+        drop(owner);
+        budget.release_storage(retained).unwrap();
+        assert_eq!(budget.storage(), 19);
+    }
+}

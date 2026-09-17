@@ -19,11 +19,10 @@ use fe2o3_compiler_lineage::{
 };
 use fe2o3_kernel_ir::{
     AddressSpace, AmdGpuDiagnosticOperation, BasicBlock, BinaryOp, CheckedBinaryOperator,
-    FormalMemoryReceiptErrorV1, FunctionBody, FunctionRole,
-    InertCanonicalFormalMemoryObligationReceiptV1, MemoryAccess, Module, OperationKind, Terminator,
-    VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
-    VerifiedCanonicalKernelIrErrorV11, VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
-    VerifiedCanonicalKernelIrV11,
+    FormalMemoryReceiptErrorV1, FunctionBody, FunctionRole, InertFormalMemoryReceiptFormatV3,
+    MemoryAccess, Module, OperationKind, Terminator, VerifiedCanonicalKernelIrErrorV8,
+    VerifiedCanonicalKernelIrErrorV9, VerifiedCanonicalKernelIrErrorV11,
+    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV11,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticCheckedBinaryOpV1, SemanticFunctionDeclV1,
@@ -110,7 +109,7 @@ pub struct ValidatedCompilerMultiRootProofRootV1 {
     kernel_id: Box<str>,
     middle_end: InertProductionMiddleEndEvidenceV5,
     semantic_u32_induction: InertCanonicalSemanticU32InductionEvidenceV1,
-    formal_memory: InertCanonicalFormalMemoryObligationReceiptV1,
+    formal_memory: InertFormalMemoryReceiptFormatV3,
     verus_execution: CanonicalProductionMirPlironVerusExecutionEvidenceV1,
 }
 
@@ -166,7 +165,7 @@ impl ValidatedCompilerMultiRootProofRootV1 {
     }
 
     /// Returns the independently decoded formal-memory obligation receipt.
-    pub const fn formal_memory(&self) -> &InertCanonicalFormalMemoryObligationReceiptV1 {
+    pub const fn formal_memory(&self) -> &InertFormalMemoryReceiptFormatV3 {
         &self.formal_memory
     }
 
@@ -539,23 +538,8 @@ pub fn validate_compiler_multi_root_proof_inputs_v1(
             });
         }
 
-        let decoded_formal = InertCanonicalFormalMemoryObligationReceiptV1::from_canonical_bytes(
-            formal_root.payload().to_vec(),
-        )
-        .map_err(|source| {
-            CompilerMultiRootProofValidationErrorV1::FormalMemoryPayload {
-                root: ordinal,
-                source,
-            }
-        })?;
-        if decoded_formal.kernel_id() != roster_root.kernel_id()
-            || decoded_formal.entry_id() != roster_root.kernel_id()
-        {
-            return Err(CompilerMultiRootProofValidationErrorV1::RootMismatch {
-                root: ordinal,
-                detail: "formal-memory payload names a different kernel or entry",
-            });
-        }
+        let decoded_formal =
+            decode_formal_root_payload_v1(ordinal, roster_root.kernel_id(), formal_root.payload())?;
 
         let decoded_verus =
             CanonicalProductionMirPlironVerusExecutionEvidenceV1::decode(verus_root.payload())
@@ -618,6 +602,27 @@ fn content_identity_matches(
     byte_len: u64,
 ) -> bool {
     actual.sha256() == *sha256 && actual.byte_len() == byte_len
+}
+
+fn decode_formal_root_payload_v1(
+    ordinal: usize,
+    kernel_id: &str,
+    payload: &[u8],
+) -> Result<InertFormalMemoryReceiptFormatV3, CompilerMultiRootProofValidationErrorV1> {
+    let decoded =
+        InertFormalMemoryReceiptFormatV3::decode_current(payload.to_vec()).map_err(|source| {
+            CompilerMultiRootProofValidationErrorV1::FormalMemoryPayload {
+                root: ordinal,
+                source,
+            }
+        })?;
+    if decoded.kernel_id() != kernel_id || decoded.entry_id() != kernel_id {
+        return Err(CompilerMultiRootProofValidationErrorV1::RootMismatch {
+            root: ordinal,
+            detail: "formal-memory payload names a different kernel or entry",
+        });
+    }
+    Ok(decoded)
 }
 
 fn validate_roster_set(
@@ -1924,6 +1929,189 @@ mod tests {
                     )
                 ));
             }
+        }
+    }
+
+    fn formal_component_payload(
+        name: &str,
+        guarded: bool,
+        width: fe2o3_kernel_ir::FormalIndexWidth,
+    ) -> Vec<u8> {
+        use fe2o3_kernel_ir::{
+            AccessMode, AddressSpace, BasicBlock, BlockId, ComparePredicate, Constant,
+            ExplicitLaunchExtent1d, Function, IntrinsicOperation, Kernel, KernelId, LaunchDomain,
+            LaunchExtent, MemoryAccess, Module, Operation, OperationKind, ScalarType, Signature,
+            Terminator, Type, ValueDef, ValueId, derive_kernel_memory_obligations_from_verified,
+            verify_module_ref,
+        };
+        let mut block = BasicBlock::new(BlockId(0));
+        let mut parameters = Vec::new();
+        let mut values = Vec::new();
+        if guarded {
+            parameters = vec![
+                Type::slice(
+                    Type::Scalar(ScalarType::U32),
+                    AddressSpace::Global,
+                    AccessMode::ReadOnly,
+                ),
+                Type::Scalar(ScalarType::U32),
+            ];
+            values = vec![ValueId(0), ValueId(1)];
+            let pointer = Type::pointer(
+                Type::Scalar(ScalarType::U32),
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            );
+            let op = |id, ty, kind| Operation::effect_free(ValueDef::new(ValueId(id), ty), kind);
+            block.operations = vec![
+                op(
+                    2,
+                    Type::INDEX,
+                    OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+                ),
+                op(
+                    3,
+                    Type::INDEX,
+                    OperationKind::SliceLength { slice: ValueId(0) },
+                ),
+                op(
+                    4,
+                    Type::BOOL,
+                    OperationKind::Compare {
+                        predicate: ComparePredicate::LessThan,
+                        lhs: ValueId(2),
+                        rhs: ValueId(3),
+                    },
+                ),
+                op(5, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+                op(
+                    6,
+                    Type::INDEX,
+                    OperationKind::Select {
+                        condition: ValueId(4),
+                        true_value: ValueId(2),
+                        false_value: ValueId(5),
+                    },
+                ),
+                op(
+                    7,
+                    pointer.clone(),
+                    OperationKind::SliceData { slice: ValueId(0) },
+                ),
+                op(
+                    8,
+                    pointer,
+                    OperationKind::GetElementPointer {
+                        base: ValueId(7),
+                        offset: ValueId(6),
+                    },
+                ),
+                op(
+                    9,
+                    Type::Scalar(ScalarType::U32),
+                    OperationKind::GuardedLoad {
+                        pointer: ValueId(8),
+                        predicate: ValueId(4),
+                        fallback: ValueId(1),
+                        access: MemoryAccess::new(AddressSpace::Global, 4),
+                    },
+                ),
+            ];
+        }
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("multiroot-nested-component");
+        module.functions.push(Function::kernel_entry(
+            name,
+            Signature::new(parameters, vec![]),
+            values,
+            vec![block],
+        ));
+        module.kernels.push(Kernel::new(
+            name,
+            name,
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(64),
+            },
+        ));
+        let report = derive_kernel_memory_obligations_from_verified(
+            verify_module_ref(&module).unwrap(),
+            &KernelId::new(name),
+            ExplicitLaunchExtent1d::Exact(64),
+            fe2o3_kernel_ir::FormalIndexWidth::Bits64,
+        )
+        .unwrap();
+        assert!(report.is_complete());
+        let receipt =
+            InertFormalMemoryReceiptFormatV3::from_current_obligations(report.obligations())
+                .unwrap();
+        if width == fe2o3_kernel_ir::FormalIndexWidth::Bits32 {
+            // Bits32 is an inert codec case, never a claim of complete physical analysis.
+            let mut bytes = receipt.into_canonical_bytes();
+            let mut cursor = 20;
+            for _ in 0..2 {
+                let length =
+                    u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap()) as usize;
+                cursor += 4 + length;
+            }
+            assert_eq!(bytes[cursor], 2);
+            bytes[cursor] = 1;
+            let inert = InertFormalMemoryReceiptFormatV3::decode_current(bytes).unwrap();
+            assert_eq!(inert.metadata().index_width(), width);
+            assert!(!inert.grants_authority());
+            inert.into_canonical_bytes()
+        } else {
+            receipt.into_canonical_bytes()
+        }
+    }
+
+    #[test]
+    fn nested_formal_consumer_preserves_each_format_and_exact_root_binding() {
+        use fe2o3_kernel_ir::{FormalIndexWidth, FormalMemoryReceiptEncodingV3};
+        for (ordinal, name, guarded, width, encoding) in [
+            (
+                0,
+                "alpha",
+                false,
+                FormalIndexWidth::Bits64,
+                FormalMemoryReceiptEncodingV3::LegacyV1,
+            ),
+            (
+                1,
+                "zeta",
+                true,
+                FormalIndexWidth::Bits64,
+                FormalMemoryReceiptEncodingV3::GuardedV3,
+            ),
+            // The bare multiroot payload contract is inert, unlike singleton V4 policy2.
+            (
+                2,
+                "other",
+                true,
+                FormalIndexWidth::Bits32,
+                FormalMemoryReceiptEncodingV3::GuardedV3,
+            ),
+        ] {
+            let payload = formal_component_payload(name, guarded, width);
+            let decoded = decode_formal_root_payload_v1(ordinal, name, &payload).unwrap();
+            assert_eq!(decoded.canonical_bytes(), payload);
+            assert_eq!(decoded.metadata().encoding(), encoding);
+            assert_eq!(decoded.metadata().index_width(), width);
+            assert!(!decoded.grants_authority());
+            assert!(
+                matches!(decode_formal_root_payload_v1(ordinal, "foreign", &payload),
+                Err(CompilerMultiRootProofValidationErrorV1::RootMismatch { root, detail })
+                if root == ordinal && detail == "formal-memory payload names a different kernel or entry")
+            );
+            let mut hostile = payload.clone();
+            hostile[10..12].copy_from_slice(&99_u16.to_le_bytes());
+            assert!(
+                matches!(decode_formal_root_payload_v1(ordinal, name, &hostile),
+                Err(CompilerMultiRootProofValidationErrorV1::FormalMemoryPayload { root, .. }) if root == ordinal)
+            );
+            assert!(
+                matches!(decode_formal_root_payload_v1(ordinal, name, &payload[..payload.len() - 1]),
+                Err(CompilerMultiRootProofValidationErrorV1::FormalMemoryPayload { root, .. }) if root == ordinal)
+            );
         }
     }
 

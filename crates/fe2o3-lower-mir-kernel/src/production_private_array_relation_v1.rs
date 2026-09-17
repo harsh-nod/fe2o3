@@ -450,24 +450,44 @@ fn private_array_exact_relation_v1<W: PrivateArrayChargeV1>(
         .ok_or(Incomplete(
             "private array has no supported exact fixed layout",
         ))?;
-    // Three scalar checks and the following single-projection shape check.
+    // Existing indexed shape or explicit initializer component, never a fake projection.
     work.charge_private_array_work(4)?;
+    let initializer = matches!(
+        effect.original_index,
+        PrivateArrayIndexV1::InitializerElement { .. }
+    );
     if facts.element_type != slot.element_type
         || facts.length != slot.length
-        || effect.semantic_type != slot.element_type
+        || effect.semantic_type
+            != if initializer {
+                slot.semantic_type
+            } else {
+                slot.element_type
+            }
         || !private_array_slot_facts_equal_v1(facts.element, slot.element_facts, work)?
     {
         return Err(Mismatch("private array layout facts changed"));
     }
-    let [projection] = access.place.projections() else {
-        return Err(Incomplete(
-            "private array requires one exact index projection",
-        ));
+    let projection = if initializer {
+        work.charge_private_array_work(2)?;
+        if !access.place.projections().is_empty() || local.role().is_entry_argument() {
+            return Err(Mismatch(
+                "private initializer is not one whole nonargument array",
+            ));
+        }
+        None
+    } else {
+        let [projection] = access.place.projections() else {
+            return Err(Incomplete(
+                "private array requires one exact index projection",
+            ));
+        };
+        work.charge_private_array_work(1)?;
+        if projection.result_type() != slot.element_type {
+            return Err(Mismatch("private array projection element type changed"));
+        }
+        Some(projection.kind())
     };
-    work.charge_private_array_work(1)?;
-    if projection.result_type() != slot.element_type {
-        return Err(Mismatch("private array projection element type changed"));
-    }
 
     work.charge_private_array_work(6)?;
     if slot.count_location.block_ordinal != 0
@@ -499,13 +519,24 @@ fn private_array_exact_relation_v1<W: PrivateArrayChargeV1>(
         work,
     )?;
 
-    let expected_index = match (projection.kind(), effect.original_index) {
+    let expected_index = match (projection, effect.original_index) {
+        (None, PrivateArrayIndexV1::InitializerElement { component, value }) => {
+            private_array_initializer_value_v1(
+                source.kind(),
+                body,
+                slot,
+                effect,
+                component,
+                value,
+                work,
+            )?
+        }
         (
-            SemanticProjectionKindV1::ConstantIndex {
+            Some(SemanticProjectionKindV1::ConstantIndex {
                 offset,
                 minimum_length,
                 from_end,
-            },
+            }),
             PrivateArrayIndexV1::ConstantIndex {
                 offset: recorded_offset,
                 min_length,
@@ -529,7 +560,7 @@ fn private_array_exact_relation_v1<W: PrivateArrayChargeV1>(
             }
         }
         (
-            SemanticProjectionKindV1::Index(local),
+            Some(SemanticProjectionKindV1::Index(local)),
             PrivateArrayIndexV1::Local {
                 local: recorded_local,
                 semantic_type,
@@ -769,7 +800,7 @@ impl ProductionPreRankedKirOwnerV1 {
     /// absent, or mismatched retained relations remain errors. The returned
     /// integer is inert: it grants no source-value, refinement, artifact or
     /// launch authority. It neither installs a row nor changes the source plan.
-    /// Keep the same graph and assertion-origin storage floor reserved. One
+    /// Keep the same graph, assertion-origin and helper-memory floor reserved. One
     /// fixed extraction work unit precedes the unchanged allocation-free query.
     pub fn materialized_private_array_constant_index(
         &self,
@@ -796,11 +827,7 @@ impl ProductionPreRankedKirOwnerV1 {
         use SemanticKirPrivateArrayQueryErrorV1::{Incomplete, InvalidSource, Mismatch, Resource};
         use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as ResourceError;
         budget.charge_work(3).map_err(Resource)?;
-        let floor = self
-            .executable_storage
-            .retained_storage()
-            .checked_add(self.assert_origins.storage.payload_storage())
-            .ok_or(Resource(ResourceError::Arithmetic))?;
+        let floor = self.retained_analysis_storage_v1();
         if budget.storage() < floor {
             return Err(Resource(ResourceError::Accounting));
         }
@@ -1007,6 +1034,7 @@ impl ProductionPreRankedKirOwnerV1 {
             statement as usize,
             role_key.0 as usize,
             role_key.1 as usize,
+            0,
         ];
         let effect_index = private_array_binary_search_v1(
             effects,
@@ -1017,6 +1045,7 @@ impl ProductionPreRankedKirOwnerV1 {
                     row.semantic_statement as usize,
                     role.0 as usize,
                     role.1 as usize,
+                    row.original_index.component() as usize,
                 ]
             },
             key,
@@ -1041,3 +1070,5 @@ impl ProductionPreRankedKirOwnerV1 {
         Ok(Some(index))
     }
 }
+
+include!("production_private_array_initializer_v1.rs");

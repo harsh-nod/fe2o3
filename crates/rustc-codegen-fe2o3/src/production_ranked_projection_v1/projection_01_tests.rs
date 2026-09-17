@@ -25,11 +25,7 @@
                 &mut budget,
             )
             .expect("the source-ranked fixture must also materialize its executable graph");
-        let retained = materialized
-            .executable_storage()
-            .retained_storage()
-            .checked_add(materialized.assert_origin_storage().payload_storage())
-            .unwrap();
+        let retained = materialized.retained_analysis_storage_v1();
         budget.reserve_storage(retained).unwrap();
         Ok(materialized)
     }

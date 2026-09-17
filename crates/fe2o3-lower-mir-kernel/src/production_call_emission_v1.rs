@@ -238,10 +238,11 @@ impl SemanticFunctionLoweringV1<'_> {
                 resource: ProductionSemanticKirResourceV1::AnalysisStorage,
             })?;
         let mut flattened = None;
-        for (projection, expected) in signature
+        for (parameter, (projection, expected)) in signature
             .call_arguments
             .iter()
-            .zip(&signature.parameter_types)
+            .zip(signature.parameter_types)
+            .enumerate()
         {
             let source = source_bindings
                 .get(projection.source_argument as usize)
@@ -274,9 +275,10 @@ impl SemanticFunctionLoweringV1<'_> {
                     ));
                 }
             };
+            let function = self.semantic_function.index();
             let failure = |detail| {
                 unsupported(
-                    self.semantic_function.index(),
+                    function,
                     Some(block.index()),
                     None,
                     detail,
@@ -301,9 +303,34 @@ impl SemanticFunctionLoweringV1<'_> {
                         .ok_or_else(|| failure("defined call aggregate component is missing"))?
                 }
             };
-            if &actual != expected {
-                return Err(failure("defined call argument type changed"));
-            }
+            let value = if actual == Type::INDEX && expected == Type::Scalar(ScalarType::U64) {
+                self.emit(
+                    operations,
+                    expected.clone(),
+                    OperationKind::Cast {
+                        kind: CastKind::Bitcast,
+                        value,
+                        to: expected,
+                    },
+                )?
+                .value()
+                .map_err(failure)?
+                .0
+            } else if actual == expected {
+                value
+            } else {
+                return Err(ProductionSemanticKirErrorV1::DefinedCallArgumentTypeMismatch {
+                    function: self.semantic_function.index(),
+                    callee: callee.index(),
+                    block: block.index(),
+                    parameter,
+                    source_argument: projection.source_argument,
+                    tuple_field: projection.tuple_field,
+                    component: projection.component,
+                    expected,
+                    actual,
+                });
+            };
             arguments.push(value);
         }
         let call_operation = call_operation_ordinal_v1(operations, block)?;

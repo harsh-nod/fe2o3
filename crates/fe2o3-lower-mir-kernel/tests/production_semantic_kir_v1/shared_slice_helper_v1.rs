@@ -6,6 +6,9 @@ enum Shape {
     Length,
     LengthPair,
     LengthMixed,
+    ArgumentLength,
+    ArgumentLengthPair,
+    ArgumentLengthMixed,
     RootRead,
     BranchAndTwoCalls,
     Read,
@@ -74,8 +77,16 @@ fn owner(shape: Shape, f32_element: bool) -> ProductionSemanticMirOwnerV1 {
     let mut types = semantic.types()[..4].to_vec();
     types.push(semantic.types()[5].clone());
     let pair_result = matches!(shape, Shape::LengthPair | Shape::LengthMixed);
+    let metadata_argument = matches!(
+        shape,
+        Shape::ArgumentLength | Shape::ArgumentLengthPair | Shape::ArgumentLengthMixed
+    );
+    let pair_argument = matches!(
+        shape,
+        Shape::ArgumentLengthPair | Shape::ArgumentLengthMixed
+    );
     let result_type = if pair_result { ty(5) } else { ty(4) };
-    if pair_result {
+    if pair_result || pair_argument {
         let SemanticBackendReprV1::Scalar(scalar) = *types[4].layout().backend_repr() else {
             panic!("U64 layout")
         };
@@ -173,6 +184,29 @@ fn owner(shape: Shape, f32_element: bool) -> ProductionSemanticMirOwnerV1 {
     .unwrap()
     .with_source_argument_ownership(root_ownership)
     .unwrap();
+    let helper_argument_type = if pair_argument {
+        ty(5)
+    } else if metadata_argument {
+        ty(4)
+    } else {
+        ty(3)
+    };
+    let helper_argument = if pair_argument {
+        let SemanticAbiPassModeV1::Direct(attributes) = scalar_abi.mode() else {
+            panic!("U64 ABI")
+        };
+        SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+            helper_argument_type,
+            SemanticAbiPassModeV1::Pair {
+                first: *attributes,
+                second: *attributes,
+            },
+        ))
+    } else if metadata_argument {
+        SemanticAbiArgumentV1::source(scalar_abi.clone())
+    } else {
+        slice_argument
+    };
     let helper_abi = SemanticFunctionAbiV1::from_rustc(
         SemanticAbiIdentityV1::from_sha256(bytes(160)),
         root.abi().layout_identity(),
@@ -181,7 +215,7 @@ fn owner(shape: Shape, f32_element: bool) -> ProductionSemanticMirOwnerV1 {
         false,
         false,
         1,
-        vec![slice_argument],
+        vec![helper_argument],
         if pair_result {
             let SemanticAbiPassModeV1::Direct(attributes) = scalar_abi.mode() else {
                 panic!("U64 ABI")
@@ -198,7 +232,9 @@ fn owner(shape: Shape, f32_element: bool) -> ProductionSemanticMirOwnerV1 {
         },
     )
     .unwrap()
-    .with_source_argument_ownership(vec![if matches!(shape, Shape::WrongOwnership) {
+    .with_source_argument_ownership(vec![if metadata_argument
+        || matches!(shape, Shape::WrongOwnership)
+    {
         SemanticSourceArgumentOwnershipV1::ByValue
     } else {
         ownership
@@ -209,7 +245,69 @@ fn owner(shape: Shape, f32_element: bool) -> ProductionSemanticMirOwnerV1 {
         local(171, ty(3), SemanticLocalRoleV1::Argument(0)),
         local(172, ty(4), SemanticLocalRoleV1::Argument(1)),
     ];
-    let root_blocks = if matches!(shape, Shape::BranchAndTwoCalls) {
+    let root_blocks = if metadata_argument {
+        root_locals.push(local(173, ty(4), SemanticLocalRoleV1::Temporary));
+        root_locals.push(local(174, ty(4), SemanticLocalRoleV1::Temporary));
+        let mut statements = vec![assign(
+            local_place(4, ty(4)),
+            SemanticRvalueKindV1::Unary {
+                operation: SemanticUnaryOpV1::PointerMetadata,
+                operand: SemanticOperandV1::Copy(local_place(1, ty(3))),
+            },
+        )];
+        let argument_local = if pair_argument {
+            root_locals.push(local(175, ty(5), SemanticLocalRoleV1::Temporary));
+            statements.push(assign(
+                local_place(5, ty(5)),
+                SemanticRvalueKindV1::Aggregate(
+                    SemanticAggregateRvalueV1::new(
+                        SemanticAggregateKindV1::Tuple,
+                        vec![
+                            SemanticOperandV1::Copy(local_place(4, ty(4))),
+                            SemanticOperandV1::Constant(SemanticConstantV1::new(
+                                ty(0),
+                                SemanticConstantValueV1::ZeroSized,
+                            )),
+                            SemanticOperandV1::Copy(local_place(
+                                if matches!(shape, Shape::ArgumentLengthMixed) {
+                                    2
+                                } else {
+                                    4
+                                },
+                                ty(4),
+                            )),
+                        ],
+                    )
+                    .unwrap(),
+                ),
+            ));
+            5
+        } else {
+            4
+        };
+        vec![
+            block(
+                180,
+                statements,
+                SemanticTerminatorKindV1::Call(
+                    SemanticDirectCallV1::new_callable(
+                        SemanticCallableIdV1::from_index(1),
+                        vec![SemanticOperandV1::Copy(local_place(
+                            argument_local,
+                            helper_argument_type,
+                        ))],
+                        Some(SemanticCallDestinationV1::new(
+                            local_place(3, ty(4)),
+                            edge(SemanticEdgeRoleV1::CallReturn, 1),
+                        )),
+                        SemanticUnwindActionV1::Unreachable,
+                    )
+                    .unwrap(),
+                ),
+            ),
+            block(181, vec![], SemanticTerminatorKindV1::Return),
+        ]
+    } else if matches!(shape, Shape::BranchAndTwoCalls) {
         root_locals.push(local(173, ty(3), SemanticLocalRoleV1::Argument(2)));
         root_locals.push(local(174, ty(4), SemanticLocalRoleV1::Temporary));
         root_locals.push(local(175, ty(3), SemanticLocalRoleV1::Temporary));
@@ -296,15 +394,55 @@ fn owner(shape: Shape, f32_element: bool) -> ProductionSemanticMirOwnerV1 {
     .with_kernel_entry(root.kernel_entry().unwrap().clone());
     let mut helper_locals = vec![
         local(190, result_type, SemanticLocalRoleV1::Return),
-        local(191, ty(3), SemanticLocalRoleV1::Argument(0)),
+        local(191, helper_argument_type, SemanticLocalRoleV1::Argument(0)),
     ];
-    let mut statements = vec![assign(
-        local_place(if pair_result { 2 } else { 0 }, ty(4)),
-        SemanticRvalueKindV1::Unary {
-            operation: SemanticUnaryOpV1::PointerMetadata,
-            operand: SemanticOperandV1::Copy(local_place(1, ty(3))),
-        },
-    )];
+    let mut statements = if metadata_argument {
+        helper_locals.push(local(192, ty(4), SemanticLocalRoleV1::Temporary));
+        let argument = if pair_argument {
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(1),
+                vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), ty(4)).unwrap()],
+                ty(4),
+            )
+            .unwrap()
+        } else {
+            local_place(1, ty(4))
+        };
+        vec![
+            assign(
+                local_place(2, ty(4)),
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Add,
+                    left: SemanticOperandV1::Copy(argument),
+                    right: scalar_constant(ty(4), 1, 8),
+                },
+            ),
+            assign(
+                local_place(2, ty(4)),
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Add,
+                    left: SemanticOperandV1::Copy(local_place(2, ty(4))),
+                    right: scalar_constant(ty(4), 2, 8),
+                },
+            ),
+            assign(
+                local_place(0, ty(4)),
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Add,
+                    left: SemanticOperandV1::Copy(local_place(2, ty(4))),
+                    right: scalar_constant(ty(4), 3, 8),
+                },
+            ),
+        ]
+    } else {
+        vec![assign(
+            local_place(if pair_result { 2 } else { 0 }, ty(4)),
+            SemanticRvalueKindV1::Unary {
+                operation: SemanticUnaryOpV1::PointerMetadata,
+                operand: SemanticOperandV1::Copy(local_place(1, ty(3))),
+            },
+        )]
+    };
     if pair_result {
         helper_locals.push(local(192, ty(4), SemanticLocalRoleV1::Temporary));
         let length = SemanticOperandV1::Copy(local_place(2, ty(4)));
@@ -389,6 +527,181 @@ fn owner(shape: Shape, f32_element: bool) -> ProductionSemanticMirOwnerV1 {
     .unwrap();
     ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
         .unwrap()
+}
+
+#[test]
+fn slice_metadata_call_arguments_preserve_component_order_and_operation_limits() {
+    use fe2o3_lower_mir_kernel::{
+        ProductionArgumentCoverageV1 as Coverage, ProductionArgumentProjectionV1 as Projection,
+    };
+
+    for shape in [
+        Shape::ArgumentLength,
+        Shape::ArgumentLengthPair,
+        Shape::ArgumentLengthMixed,
+    ] {
+        for f32_element in [false, true] {
+            let pair = !matches!(shape, Shape::ArgumentLength);
+            let conversions = if matches!(shape, Shape::ArgumentLengthPair) {
+                2
+            } else {
+                1
+            };
+            let lowered = ProductionSemanticKirOwnerV1::try_lower(
+                owner(shape, f32_element),
+                ProductionSemanticKirLimitsV1::default(),
+            )
+            .unwrap();
+            lowered.verify_equivalence().unwrap();
+            verify_module(lowered.module()).unwrap();
+            let entry = &lowered.module().functions[0];
+            let helper = &lowered.module().functions[1];
+            let body = entry.body.as_ref().unwrap();
+            let operations = &body.blocks[0].operations;
+            let length = &operations[0];
+            assert!(
+                matches!(length.kind, OperationKind::SliceLength { slice } if slice == body.parameters[0])
+            );
+            assert_eq!(length.results[0].ty, Type::INDEX);
+            assert_eq!(operations.len(), conversions + 2);
+            let mut expected_arguments = Vec::new();
+            for cast in &operations[1..1 + conversions] {
+                assert!(
+                    matches!(cast.kind, OperationKind::Cast { kind: CastKind::Bitcast, value, ref to }
+                    if value == length.results[0].id && *to == Type::Scalar(ScalarType::U64))
+                );
+                assert_eq!(cast.results.len(), 1);
+                assert_eq!(cast.results[0].ty, Type::Scalar(ScalarType::U64));
+                expected_arguments.push(cast.results[0].id);
+            }
+            if matches!(shape, Shape::ArgumentLengthMixed) {
+                expected_arguments.push(body.parameters[1]);
+            }
+            if pair {
+                assert_ne!(expected_arguments[0], expected_arguments[1]);
+            }
+            assert!(
+                matches!(&operations.last().unwrap().kind, OperationKind::Call { callee, arguments }
+                if callee == &helper.id && arguments == &expected_arguments)
+            );
+            assert_eq!(
+                helper.signature.parameters,
+                vec![Type::Scalar(ScalarType::U64); expected_arguments.len()]
+            );
+            let root = SemanticFunctionIdV1::from_index(0);
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100_000);
+            let mut budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+                &mut work, 100_000,
+            );
+            lowered
+                .with_checked_call_v1(
+                    root,
+                    root,
+                    SemanticBlockIdV1::from_index(0),
+                    &mut budget,
+                    |view| {
+                        for (slot, expected) in expected_arguments.iter().enumerate() {
+                            let physical = view.physical(slot)?.unwrap();
+                            assert_eq!(physical.caller_value(), *expected);
+                            assert_eq!(physical.parameter().slot(), slot);
+                            assert_eq!(physical.parameter().ty(), &Type::Scalar(ScalarType::U64));
+                        }
+                        assert!(view.physical(expected_arguments.len())?.is_none());
+                        let mut paths = Vec::new();
+                        view.visit_arguments(|node| {
+                            assert_eq!(
+                                node.operand(),
+                                &SemanticOperandV1::Copy(local_place(
+                                    if pair { 5 } else { 4 },
+                                    if pair { ty(5) } else { ty(4) },
+                                ))
+                            );
+                            let parameter = node.parameter();
+                            paths.push(parameter.source_path().to_vec());
+                            assert_eq!(parameter.source_argument(), 0);
+                            match parameter.source_path() {
+                                [] if pair => {
+                                    assert_eq!(parameter.semantic_type(), ty(5));
+                                    assert!(matches!(
+                                        parameter.coverage(),
+                                        Coverage::Components { first: 0, end: 2 }
+                                    ));
+                                }
+                                [Projection::Field(1)] if pair => {
+                                    assert_eq!(parameter.semantic_type(), ty(0));
+                                    assert_eq!(parameter.coverage(), Coverage::Zero);
+                                }
+                                path => {
+                                    let slot = match path {
+                                        [] if !pair => 0,
+                                        [Projection::Field(0)] if pair => 0,
+                                        [Projection::Field(2)] if pair => 1,
+                                        _ => panic!("unexpected source component path"),
+                                    };
+                                    assert_eq!(parameter.semantic_type(), ty(4));
+                                    let Coverage::Parameter(physical) = parameter.coverage() else {
+                                        panic!("scalar leaves retain distinct physical parameters")
+                                    };
+                                    assert_eq!(physical.slot(), slot);
+                                }
+                            }
+                            Ok(())
+                        })?;
+                        assert_eq!(
+                            paths,
+                            if pair {
+                                vec![
+                                    vec![Projection::Field(0)],
+                                    vec![Projection::Field(1)],
+                                    vec![Projection::Field(2)],
+                                    vec![],
+                                ]
+                            } else {
+                                vec![vec![]]
+                            }
+                        );
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            assert_eq!(budget.storage(), 0);
+
+            let operation_count = lowered
+                .module()
+                .functions
+                .iter()
+                .flat_map(|function| &function.body.as_ref().unwrap().blocks)
+                .map(|block| block.operations.len())
+                .sum::<usize>();
+            // Six helper operations exceed its five analysis work/storage units.
+            assert_eq!(operation_count, conversions + 8);
+            let limits =
+                |cap| ProductionSemanticKirLimitsV1::new_with_max_operations(16, 64, 64, cap);
+            let exact = ProductionSemanticKirOwnerV1::try_lower(
+                owner(shape, f32_element),
+                limits(operation_count),
+            )
+            .unwrap();
+            exact.verify_equivalence().unwrap();
+            verify_module(exact.module()).unwrap();
+            assert_eq!(exact.module(), lowered.module());
+            let error = ProductionSemanticKirOwnerV1::try_lower(
+                owner(shape, f32_element),
+                limits(operation_count - 1),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    ProductionSemanticKirErrorV1::ResourceLimit {
+                        resource: ProductionSemanticKirResourceV1::Operations,
+                        ..
+                    }
+                ),
+                "{error:?}"
+            );
+        }
+    }
 }
 
 #[test]

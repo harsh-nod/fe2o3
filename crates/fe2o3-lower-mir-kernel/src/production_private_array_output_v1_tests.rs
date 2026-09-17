@@ -2,6 +2,8 @@ use super::*;
 use fe2o3_kernel_analysis::check_canonical_kir_coordinate_preservation_v1;
 use fe2o3_pliron::{CheckedNeutralKernelIrOwnerV1, KirPlironGraphV12};
 
+include!("production_private_array_initializer_output_v1_tests.rs");
+
 fn optimize(
     input: &VerifiedCanonicalKernelIrModuleV12,
     budget: &mut AssertOriginBudgetV1<'_>,
@@ -166,9 +168,9 @@ fn genuine_checked_use_capture_has_exact_typed_payload_and_failure_cleanup() {
                 let payload = std::mem::size_of::<SourceOutputArrayRowV1>();
                 // Component ledgers isolate the added capture, over real checked
                 // inventories. Header is charged separately by the view constructor.
-                // Entry/reserve3 + instance4 + source/slot16 + coordinates6 +
+                // Entry/reserve3 + instance4 + source/slot17 + coordinates6 +
                 // block3 + five use queries30 + outcomes6 + anchors21 + push/census2.
-                for (limit, accepted, attempted) in [(91, 91, None), (90, 90, Some(91))] {
+                for (limit, accepted, attempted) in [(92, 92, None), (91, 91, Some(92))] {
                     let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
                     let mut budget = AssertOriginBudgetV1::new(&mut work, floor + payload);
                     budget.reserve_storage(floor).unwrap();
@@ -196,7 +198,7 @@ fn genuine_checked_use_capture_has_exact_typed_payload_and_failure_cleanup() {
                     budget.release_storage(payload).unwrap();
                     assert_eq!(budget.storage(), floor);
                 }
-                let mut work = CanonicalKernelIrWorkBudgetV1::new(91);
+                let mut work = CanonicalKernelIrWorkBudgetV1::new(92);
                 let mut budget = AssertOriginBudgetV1::new(&mut work, floor + payload - 1);
                 budget.reserve_storage(floor).unwrap();
                 assert!(
@@ -319,10 +321,10 @@ fn actual_output_query_has_literal_work_and_live_storage_boundaries() {
         |view, live_budget| {
             // These are query-only component ledgers over genuine prebuilt owners,
             // not a production reset. The preceding test uses one live ledger end to end.
-            // N facade279 + floor4 + source/row25 + placement/ancestry15 +
-            // two Index definitions20 + three result lookups18 + physical45 =406.
+            // N facade280 + floor4 + source/row29 + placement/ancestry15 +
+            // two Index definitions20 + three result lookups18 + physical45 =411.
             let floor = live_budget.storage();
-            for (limit, accepted, attempted) in [(406, 406, None), (405, 405, Some(406))] {
+            for (limit, accepted, attempted) in [(411, 411, None), (410, 410, Some(411))] {
                 let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
                 let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
                 budget.reserve_storage(floor).unwrap();
@@ -635,7 +637,7 @@ fn array_header_and_rows_remain_reserved_across_real_catalog_success_and_failure
                 .unwrap();
                 setup.reserve_storage(receipt.retained_storage()).unwrap();
                 let floor = setup.storage();
-                for limit in [96, WORK] {
+                for limit in [97, WORK] {
                     let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
                     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
                     budget.reserve_storage(floor).unwrap();
@@ -652,7 +654,7 @@ fn array_header_and_rows_remain_reserved_across_real_catalog_success_and_failure
                     );
                     assert_eq!(
                         (budget.work(), budget.storage()),
-                        (92, floor + header + payload)
+                        (93, floor + header + payload)
                     );
                     let result = source_output_catalogs_after_replay_v1(
                         view.source(),
@@ -661,12 +663,12 @@ fn array_header_and_rows_remain_reserved_across_real_catalog_success_and_failure
                         &mut budget,
                     );
                     assert_eq!(budget.storage(), floor + header + payload);
-                    if limit == 96 {
+                    if limit == 97 {
                         assert!(
                             matches!(result, Err(ProductionSourceOutputCatalogErrorV1::Resource(AssertOriginResourceV1::Work(error)))
-                        if error.actual() == 97 && error.limit() == 96)
+                        if error.actual() == 98 && error.limit() == 97)
                         );
-                        assert_eq!(budget.work(), 92);
+                        assert_eq!(budget.work(), 93);
                         assert_eq!(budget.peak_storage(), floor + header + payload);
                     } else {
                         let (catalogs, retained) = result.unwrap();
@@ -702,3 +704,391 @@ fn array_header_and_rows_remain_reserved_across_real_catalog_success_and_failure
         },
     );
 }
+
+#[test]
+fn initializer_components_survive_the_real_seven_pass_output_constructor() {
+    for (values, float) in [
+        ([0, 1, 2, 3, 7, 31, 255, u32::MAX], false),
+        ([11; 8], false),
+        (
+            [
+                0,
+                0x8000_0000,
+                0x3f80_0000,
+                0x7f80_0000,
+                0xff80_0000,
+                0x7fc0_0001,
+                0x7fc0_0002,
+                1,
+            ],
+            true,
+        ),
+    ] {
+        for repetitions in [1, 2] {
+            with_output(
+                array_owner(ArrayCase::Initializer {
+                    values,
+                    repetitions,
+                    float,
+                }),
+                |view, budget| {
+                    assert_eq!(view.private_arrays.len(), 8 * repetitions + 1);
+                    for statement in 1..=repetitions {
+                        assert_eq!(
+                            view.source()
+                                .materialized_private_array_initializer_count(
+                                    ARRAY_ROOT,
+                                    ARRAY_ROOT,
+                                    site(0, statement as u32),
+                                    budget,
+                                )
+                                .unwrap(),
+                            Some(8),
+                        );
+                        assert!(matches!(
+                            view.private_array_write(
+                                ARRAY_ROOT,
+                                ARRAY_ROOT,
+                                site(0, statement as u32),
+                                Role::Destination,
+                                budget,
+                            ),
+                            Err(ProductionSourceOutputErrorV1::PrivateArray(
+                                SemanticKirPrivateArrayQueryErrorV1::Incomplete(
+                                    "private array requires one exact index projection"
+                                )
+                            ))
+                        ));
+                        let rows: Vec<_> = view
+                            .private_arrays
+                            .iter()
+                            .filter(|row| row.key[3] == statement as u32)
+                            .collect();
+                        assert_eq!(rows.len(), 8);
+                        for (component, row) in rows.iter().enumerate() {
+                            assert_eq!(
+                                row.key,
+                                [0, 0, 0, statement as u32, 2, 0, component as u32]
+                            );
+                            let original = &view.source().correspondence.private_arrays;
+                            let effect = &original.effects[row.original_effect];
+                            let slot = &original.slots[row.original_slot];
+                            assert_eq!(effect.original_index.component(), component as u32);
+                            assert_eq!(effect.semantic_statement, statement as u32);
+                            assert_eq!(
+                                (slot.owner, slot.function, slot.local),
+                                (effect.owner, effect.function, effect.local)
+                            );
+                            let SourceOutputArrayPlacementV1::Retained(anchors) = row.placement
+                            else {
+                                panic!("required initializer Store placement");
+                            };
+                            assert!(anchors.executable);
+                            let memory =
+                                source_output_operation_v1(view.output(), anchors.memory, budget)
+                                    .unwrap();
+                            assert!(matches!(memory.kind, OperationKind::Store { .. }));
+                        }
+                    }
+                    assert!(matches!(
+                        view.private_array_write(
+                            ARRAY_ROOT,
+                            ARRAY_ROOT,
+                            site(0, repetitions as u32 + 1),
+                            Role::Destination,
+                            budget,
+                        ),
+                        Ok(ProductionSourceOutputPrivateArrayAccessV1::Retained {
+                            index: 0,
+                            executable: true,
+                            ..
+                        })
+                    ));
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn complete_component_keys_reject_duplicates_and_ordinary_row_substitution() {
+    with_output(
+        array_owner(ArrayCase::Initializer {
+            values: [11; 8],
+            repetitions: 1,
+            float: false,
+        }),
+        |view, budget| {
+            // Private key-check components over real rows, not forged source owners.
+            let mut distinct = [view.private_arrays[1], view.private_arrays[0]];
+            assert_eq!(&distinct[0].key[..6], &distinct[1].key[..6]);
+            assert_ne!(distinct[0].key[6], distinct[1].key[6]);
+            source_output_array_check_keys_v1(&mut distinct, budget).unwrap();
+            assert!(distinct[0].key < distinct[1].key);
+            let mut duplicate = distinct;
+            duplicate[1].key = duplicate[0].key;
+            assert!(matches!(
+                source_output_array_check_keys_v1(&mut duplicate, budget),
+                Err(ProductionSourceOutputErrorV1::Invalid(
+                    "duplicate array source occurrence"
+                ))
+            ));
+
+            let ordinary = view
+                .private_arrays
+                .iter()
+                .position(|row| row.key[3] == 2)
+                .unwrap();
+            let saved = view.private_arrays[ordinary];
+            for mutation in 0..2 {
+                let expected = if mutation == 0 {
+                    view.private_arrays[ordinary].key[6] = 1;
+                    "required source-qualified array output row is absent"
+                } else {
+                    view.private_arrays[ordinary].original_effect =
+                        view.private_arrays[0].original_effect;
+                    "array original occurrence identity changed"
+                };
+                assert!(matches!(
+                    view.private_array_write(ARRAY_ROOT, ARRAY_ROOT, site(0, 2), Role::Destination, budget),
+                    Err(ProductionSourceOutputErrorV1::Invalid(actual)) if actual == expected
+                ));
+                view.private_arrays[ordinary] = saved;
+                assert!(matches!(
+                    view.private_array_write(
+                        ARRAY_ROOT,
+                        ARRAY_ROOT,
+                        site(0, 2),
+                        Role::Destination,
+                        budget
+                    ),
+                    Ok(ProductionSourceOutputPrivateArrayAccessV1::Retained { index: 0, .. })
+                ));
+            }
+        },
+    );
+}
+
+#[test]
+fn component_qualified_initialization_does_not_turn_a_read_into_a_write_proof() {
+    let owner = array_owner(ArrayCase::RetainedValueRead);
+    let semantic = owner.semantic_ssa().source_semantic();
+    assert_eq!(semantic.functions().len(), 1);
+    assert_eq!(
+        semantic.functions()[0].role(),
+        SemanticFunctionRoleV1::KernelRoot
+    );
+    assert_eq!(semantic.functions()[0].blocks().len(), 1);
+    assert_eq!(semantic.functions()[0].blocks()[0].statements().len(), 4);
+    assert!(
+        !owner
+            .semantic_ssa()
+            .plan_for_function(ARRAY_ROOT)
+            .unwrap()
+            .plan()
+            .promoted_variables()
+            .iter()
+            .any(|variable| variable.get() == 1)
+    );
+    let rows = &owner.correspondence.private_arrays;
+    assert!(rows.active);
+    assert_eq!(
+        (rows.instances.len(), rows.slots.len(), rows.effects.len()),
+        (1, 1, 10)
+    );
+    assert_eq!(owner.executable().module().functions.len(), 1);
+    let function = &owner.executable().module().functions[0];
+    assert_eq!(function.role, fe2o3_kernel_ir::FunctionRole::KernelEntry);
+    let body = function.body.as_ref().unwrap();
+    let operations: Vec<_> = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.operations)
+        .collect();
+    assert_eq!(
+        operations
+            .iter()
+            .filter(|op| matches!(op.kind, OperationKind::Store { .. }))
+            .count(),
+        9
+    );
+    assert_eq!(
+        operations
+            .iter()
+            .filter(|op| matches!(op.kind, OperationKind::Load { .. }))
+            .count(),
+        1
+    );
+    for (ordinal, effect) in rows.effects.iter().enumerate() {
+        let (statement, role, access) = match ordinal {
+            0..8 => (1, Role::Destination, PrivateArrayAccessV1::Write),
+            8 => (2, Role::Destination, PrivateArrayAccessV1::Write),
+            9 => (3, Role::RvalueOperand(0), PrivateArrayAccessV1::Read),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            (effect.owner, effect.function, effect.local),
+            (ARRAY_ROOT, ARRAY_ROOT, 1)
+        );
+        assert_eq!(
+            (
+                effect.semantic_block,
+                effect.semantic_statement,
+                effect.role,
+                effect.access
+            ),
+            (0, statement, role, access)
+        );
+        if ordinal < 8 {
+            assert!(matches!(effect.original_index,
+                PrivateArrayIndexV1::InitializerElement { component, .. }
+                if component == ordinal as u32));
+        } else {
+            assert!(matches!(
+                effect.original_index,
+                PrivateArrayIndexV1::Local { local: 2, .. }
+            ));
+        }
+        let block = &body.blocks[effect.memory_location.block_ordinal];
+        assert_eq!(block.id, effect.memory_location.block);
+        let memory = &block.operations[effect.memory_location.operation];
+        assert!(match access {
+            PrivateArrayAccessV1::Write => matches!(memory.kind, OperationKind::Store { .. }),
+            PrivateArrayAccessV1::Read => matches!(memory.kind, OperationKind::Load { .. }),
+        });
+    }
+    with_output(owner, |view, budget| {
+        assert_eq!(view.private_arrays.len(), 10);
+        assert_eq!(
+            view.private_arrays
+                .iter()
+                .filter(|row| matches!(row.placement, SourceOutputArrayPlacementV1::Unsupported))
+                .count(),
+            1
+        );
+        let read = view
+            .private_arrays
+            .iter()
+            .find(|row| row.key[3] == 3)
+            .unwrap();
+        assert_eq!(read.original_effect, 9);
+        assert!(matches!(
+            read.placement,
+            SourceOutputArrayPlacementV1::Unsupported
+        ));
+        assert!(matches!(
+            view.private_array_write(
+                ARRAY_ROOT,
+                ARRAY_ROOT,
+                site(0, 2),
+                Role::Destination,
+                budget
+            ),
+            Ok(ProductionSourceOutputPrivateArrayAccessV1::Retained { index: 0, .. })
+        ));
+        assert_eq!(
+            view.source()
+                .materialized_private_array_initializer_count(
+                    ARRAY_ROOT,
+                    ARRAY_ROOT,
+                    site(0, 1),
+                    budget,
+                )
+                .unwrap(),
+            Some(8)
+        );
+        assert_eq!(
+            view.source()
+                .materialized_private_array_constant_index(
+                    ARRAY_ROOT,
+                    ARRAY_ROOT,
+                    site(0, 3),
+                    Role::RvalueOperand(0),
+                    budget,
+                )
+                .unwrap(),
+            Some(0)
+        );
+        assert!(matches!(
+            view.private_array_write(
+                ARRAY_ROOT,
+                ARRAY_ROOT,
+                site(0, 3),
+                Role::RvalueOperand(0),
+                budget
+            ),
+            Err(ProductionSourceOutputErrorV1::PrivateArray(
+                SemanticKirPrivateArrayQueryErrorV1::Incomplete(
+                    "checked output currently requires an ordinary private-array write"
+                )
+            ))
+        ));
+    });
+}
+
+#[test]
+fn component_binding_and_seventh_comparison_have_literal_work_boundaries() {
+    for limit in [1, 2] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
+        let mut budget = AssertOriginBudgetV1::new(&mut work, 0);
+        let result = source_output_array_key_v1(
+            ARRAY_ROOT,
+            ARRAY_ROOT,
+            0,
+            1,
+            Role::Destination,
+            u32::MAX,
+            &mut budget,
+        );
+        if limit == 2 {
+            assert_eq!(result.unwrap(), [0, 0, 0, 1, 2, 0, u32::MAX]);
+            assert_eq!(budget.work(), 2);
+        } else {
+            assert!(
+                matches!(result, Err(ProductionSourceOutputErrorV1::Resource(
+                AssertOriginResourceV1::Work(error))) if error.actual() == 2 && error.limit() == 1)
+            );
+            assert_eq!(budget.work(), 0);
+        }
+        assert_eq!(budget.storage(), 0);
+    }
+    with_output(
+        array_owner(ArrayCase::Write { sparse: false }),
+        |view, live_budget| {
+            // Isolated key-search ledgers over one genuine row, not production resets.
+            // One loop + midpoint/lookup3 + all seven equal fields = 11.
+            let floor = live_budget.storage();
+            let rows = [view.private_arrays[0]];
+            for limit in [10, 11] {
+                let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
+                let mut budget = AssertOriginBudgetV1::new(&mut work, floor);
+                budget.reserve_storage(floor).unwrap();
+                let result = private_array_binary_search_v1(
+                    &rows,
+                    |row| row.key.map(|value| value as usize),
+                    rows[0].key.map(|value| value as usize),
+                    &mut PrivateArrayQueryWorkV1 {
+                        budget: &mut budget,
+                    },
+                );
+                if limit == 11 {
+                    assert_eq!(result.unwrap(), Ok(0));
+                } else {
+                    assert!(
+                        matches!(result, Err(SemanticKirPrivateArrayQueryErrorV1::Resource(
+                    AssertOriginResourceV1::Work(error))) if error.actual() == 11 && error.limit() == 10)
+                    );
+                }
+                assert_eq!(
+                    (budget.work(), budget.storage(), budget.peak_storage()),
+                    (limit, floor, floor)
+                );
+            }
+        },
+    );
+}
+
+include!("production_private_array_ranked_output_v1_tests.rs");
+
+#[path = "production_local_helper_output_refusal_v1_tests.rs"]
+mod local_helper_output_refusal_v1_tests;

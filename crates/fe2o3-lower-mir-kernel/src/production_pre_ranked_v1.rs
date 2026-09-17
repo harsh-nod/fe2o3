@@ -1,5 +1,7 @@
 // This shard shares private correspondence and lowering helpers with its owner.
 
+include!("production_pre_ranked_local_frames_v1.rs");
+
 /// Construction failure before ranked checking starts.
 #[derive(Debug)]
 pub enum ProductionPreRankedKirErrorV1 {
@@ -7,6 +9,10 @@ pub enum ProductionPreRankedKirErrorV1 {
     Lowering(ProductionSemanticKirErrorV1),
     /// Connected V12 wire, semantic verification or resource rejection.
     Canonical(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV12),
+    /// Exact checked local-frame classification or resource rejection.
+    LocalFrame(fe2o3_kernel_ir::LocalFrameErrorV1),
+    /// Exact source/SSA occurrence capture or its resource rejection.
+    Occurrences(fe2o3_pliron::ProductionSemanticSsaOccurrenceErrorV1),
 }
 
 impl fmt::Display for ProductionPreRankedKirErrorV1 {
@@ -14,6 +20,8 @@ impl fmt::Display for ProductionPreRankedKirErrorV1 {
         match self {
             Self::Lowering(error) => error.fmt(formatter),
             Self::Canonical(error) => error.fmt(formatter),
+            Self::LocalFrame(error) => error.fmt(formatter),
+            Self::Occurrences(error) => error.fmt(formatter),
         }
     }
 }
@@ -23,6 +31,8 @@ impl std::error::Error for ProductionPreRankedKirErrorV1 {
         match self {
             Self::Lowering(error) => Some(error),
             Self::Canonical(error) => Some(error),
+            Self::LocalFrame(error) => Some(error),
+            Self::Occurrences(error) => Some(error),
         }
     }
 }
@@ -31,6 +41,24 @@ impl From<ProductionSemanticKirErrorV1> for ProductionPreRankedKirErrorV1 {
     fn from(error: ProductionSemanticKirErrorV1) -> Self {
         Self::Lowering(error)
     }
+}
+
+impl From<fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1>
+    for ProductionPreRankedKirErrorV1
+{
+    fn from(error: fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1) -> Self {
+        Self::Lowering(error.into())
+    }
+}
+
+/// Helper relation category for routing to supported consumers, not authority
+/// to approve a different graph or bypass a source, formal or target check.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProductionHelperSourcePolicyV1 {
+    /// Every helper has the existing complete raw-empty effect contract.
+    RawEmpty,
+    /// At least one helper needs the sealed source-local Unit relation.
+    UnitLocal,
 }
 
 /// One executable mixed-SSA graph constructed before ranked verification.
@@ -64,11 +92,13 @@ pub struct ProductionPreRankedKirOwnerV1 {
     correspondence: SemanticKirCorrespondenceV1,
     limits: ProductionSemanticKirLimitsV1,
     launch_roots: Box<[RetainedRankedLaunchRootV1]>,
+    helper_memory: SealedHelperMemoryV1,
 }
 
 /// Borrowed helper facts from one immutable materialization and its validated
-/// source/KIR correspondence. Construction requires every helper's combined
-/// interprocedural effects to be complete and pure, including compiler ordering.
+/// source/KIR correspondence. Every yielded helper's combined interprocedural
+/// effects are complete and pure, including compiler ordering. Helpers admitted
+/// under the separate source-local rule are never yielded by this view.
 /// This does not establish determinism, termination, or value equivalence.
 ///
 /// ```compile_fail
@@ -96,7 +126,12 @@ impl<'a> ProductionEmptyEffectHelpersV1<'a> {
             .correspondence
             .lowered_functions()
             .iter()
-            .filter(|row| row.role() == SemanticKirFunctionRoleV1::InternalHelper)
+            .enumerate()
+            .filter(|(index, row)| {
+                row.role() == SemanticKirFunctionRoleV1::InternalHelper
+                    && self.owner.helper_memory.is_raw_empty(*index)
+            })
+            .map(|(_, row)| row)
     }
 }
 
@@ -111,14 +146,19 @@ impl ProductionPreRankedKirOwnerV1 {
     /// Entry-argument replay uses the independent limits in `limits`; its
     /// transient logical payload is not transferred to this canonical ledger.
     /// The incoming live floor is restored after failure drops or success transfer.
-    /// Before another allocation, reserve BOTH `executable_storage()` and
-    /// `assert_origin_storage()` while this owner or its attached successor lives.
+    /// Before another allocation, reserve `retained_analysis_storage_v1()` while
+    /// this owner or its attached successor lives. Its separate graph, origin
+    /// and helper receipts describe those same payloads, not additional copies.
+    /// Occurrence capture created for a local helper is included once in that
+    /// subtotal; an incoming capture stays separately caller-reserved.
     /// This phase-local logical ledger is not an allocator/RSS meter or a claim
     /// that excluded host allocation failures are recoverable.
     /// This legacy constructor restores the floor on ordinary `Result` return;
     /// it does not provide an unwind-cleanup guarantee. An optional existing SSA
     /// occurrence-capture receipt stays separately caller-reserved and is not
-    /// included in either transferred receipt. No new capture is performed.
+    /// included in the transferred receipts. Only pending source-local helpers
+    /// trigger new capture. Its existing planner/source-replay cost exclusions
+    /// remain unchanged; the canonical ledger covers its capture-only payload.
     pub fn try_materialize_with_budget(
         semantic_ssa: ProductionSemanticSsaOwnerV1,
         source_launch: crate::ProductionSourceLaunchRosterV1,
@@ -129,7 +169,7 @@ impl ProductionPreRankedKirOwnerV1 {
         let result =
             Self::try_materialize_origins_inner_v1(semantic_ssa, source_launch, limits, budget);
         // The inner call dropped all failed payloads. On success this is the
-        // explicit transfer of graph+origin ownership and their two receipts.
+        // explicit transfer of graph, origin and helper ownership and receipts.
         let release =
             budget
                 .storage()
@@ -144,18 +184,32 @@ impl ProductionPreRankedKirOwnerV1 {
     }
 
     fn try_materialize_origins_inner_v1(
-        semantic_ssa: ProductionSemanticSsaOwnerV1,
+        mut semantic_ssa: ProductionSemanticSsaOwnerV1,
         source_launch: crate::ProductionSourceLaunchRosterV1,
         limits: ProductionSemanticKirLimitsV1,
         budget: &mut AssertOriginBudgetV1<'_>,
     ) -> Result<Self, ProductionPreRankedKirErrorV1> {
         let launch_roots = materialization_launch_roots_v1(&semantic_ssa, &source_launch)?;
+        budget.charge_work(2)?;
+        let mut capture = match semantic_ssa.occurrence_storage() {
+            Some(receipt) => {
+                if budget.storage() < receipt.retained_storage() {
+                    return Err(HelperMemoryResourceV1::Accounting.into());
+                }
+                HelperOccurrenceCaptureV1::Preexisting(receipt)
+            }
+            None => HelperOccurrenceCaptureV1::Absent,
+        };
         let mut emitted_origins = AssertOriginEmissionV1::new(budget);
-        let (module, correspondence) = lower_module_with_assert_origins_v1(
+        let PendingHelperSourceLoweringV1 {
+            module,
+            correspondence,
+            requires_source,
+        } = lower_pending_module_with_assert_origins_v1(
             &semantic_ssa,
             limits,
-            Some(&launch_roots),
-            Some(&mut emitted_origins),
+            &launch_roots,
+            &mut emitted_origins,
         )?;
         // Keep the frozen legacy bytes for existing publication/replay consumers.
         // Their transient inverse validation is not another retained graph.
@@ -169,7 +223,41 @@ impl ProductionPreRankedKirOwnerV1 {
             .reserve_storage(executable_storage.retained_storage())
             .map_err(SemanticKirAssertOriginErrorV1::from)?;
         drop(module);
+        if requires_source && matches!(capture, HelperOccurrenceCaptureV1::Absent) {
+            let receipt = semantic_ssa
+                .try_capture_occurrences_with_budget_v1(emitted_origins.budget)
+                .map_err(ProductionPreRankedKirErrorV1::Occurrences)?;
+            emitted_origins
+                .budget
+                .reserve_storage(receipt.retained_storage())?;
+            capture = HelperOccurrenceCaptureV1::Transferred(receipt);
+        }
         let assert_origins = emitted_origins.seal(&semantic_ssa, &correspondence, &executable)?;
+        let subject = CanonicalCallSubjectV1 {
+            semantic_ssa: &semantic_ssa,
+            executable: &executable,
+            correspondence: &correspondence,
+        };
+        let mut helper_memory = if requires_source {
+            SealedHelperMemoryV1::derive_with_origins_v1(subject, Some(&assert_origins), budget)?
+        } else {
+            SealedHelperMemoryV1::derive(subject, budget)?
+        };
+        budget
+            .charge_work(4)
+            .map_err(ProductionSemanticKirErrorV1::from)?;
+        let has_checked_source = !helper_memory.unit_source.is_empty();
+        if requires_source != has_checked_source {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch.into());
+        }
+        helper_memory.capture = capture;
+        helper_memory.analysis_storage = helper_memory_live_storage_v1(
+            executable_storage.retained_storage(),
+            assert_origins.storage.payload_storage(),
+            helper_memory.storage.retained_storage(),
+        )?
+        .checked_add(capture.transferred_storage())
+        .ok_or(HelperMemoryResourceV1::Arithmetic)?;
         Ok(Self {
             semantic_ssa,
             executable,
@@ -180,6 +268,7 @@ impl ProductionPreRankedKirOwnerV1 {
             correspondence,
             limits,
             launch_roots,
+            helper_memory,
         })
     }
 
@@ -198,9 +287,42 @@ impl ProductionPreRankedKirOwnerV1 {
         ProductionEmptyEffectHelpersV1 { owner: self }
     }
 
+    /// Returns only a consumer-routing category. The typed source relation must
+    /// still be borrowed and checked by any stage that supports local helpers.
+    pub fn helper_source_policy_v1(&self) -> ProductionHelperSourcePolicyV1 {
+        if self.helper_memory.unit_source.is_empty() {
+            ProductionHelperSourcePolicyV1::RawEmpty
+        } else {
+            ProductionHelperSourcePolicyV1::UnitLocal
+        }
+    }
+
+    fn require_legacy_helper_policy_v1(
+        &self,
+        consumer: &'static str,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.helper_source_policy_v1() == ProductionHelperSourcePolicyV1::UnitLocal {
+            return Err(
+                ProductionSemanticKirErrorV1::LocalHelperSourceConsumerUnavailable { consumer },
+            );
+        }
+        Ok(())
+    }
+
     /// Returns the connected graph payload to reserve when continuing its ledger.
     pub const fn executable_storage(&self) -> fe2o3_kernel_ir::CanonicalKernelIrReplayStorageV12 {
         self.executable_storage
+    }
+
+    /// Retained helper payload, to reserve with the graph and assertion origins.
+    pub const fn helper_memory_storage_v1(&self) -> ProductionHelperMemoryStorageV1 {
+        self.helper_memory.storage
+    }
+
+    /// Complete retained graph, assertion-origin, helper and newly created SSA
+    /// occurrence payload. Incoming capture keeps its separate caller reservation.
+    pub const fn retained_analysis_storage_v1(&self) -> usize {
+        self.helper_memory.analysis_storage
     }
 
     /// Borrows source assertion origins sealed against this exact executable.
@@ -243,6 +365,7 @@ impl ProductionMaterializedRankedModuleReceiptV1 {
         materialized: ProductionPreRankedKirOwnerV1,
         roots: Vec<ProductionRankedSemanticProjectionRootV1>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        materialized.require_legacy_helper_policy_v1("materialized ranked receipt")?;
         validate_source_ranked_roster_v1(
             &materialized.semantic_ssa,
             &materialized.source_launch,
@@ -272,6 +395,7 @@ enum RetainedProductionKirModuleV1 {
         storage: fe2o3_kernel_ir::CanonicalKernelIrReplayStorageV12,
         assert_origins: SealedAssertOriginsV1,
         source_launch: crate::ProductionSourceLaunchRosterV1,
+        helper_memory: SealedHelperMemoryV1,
     },
 }
 
@@ -294,13 +418,16 @@ impl std::ops::Deref for RetainedProductionKirModuleV1 {
 impl ProductionSemanticKirOwnerV1 {
     /// Attaches checked ranked custody without invoking executable lowering.
     /// Existing `verify_equivalence` remains an explicit reconstruction audit.
-    /// Graph and origin receipts remain caller-reserved across this consuming
+    /// Graph, origin and helper receipts remain caller-reserved across this consuming
     /// attachment. Any preexisting SSA occurrence-capture receipt is separate
     /// and remains reserved until its source owner is dropped, including when
     /// receipt validation or attachment fails.
     pub fn try_attach_materialized_ranked_checks(
         receipt: ProductionMaterializedRankedModuleReceiptV1,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        receipt
+            .materialized
+            .require_legacy_helper_policy_v1("ranked attachment")?;
         let ProductionMaterializedRankedModuleReceiptV1 {
             materialized,
             roots,
@@ -315,6 +442,7 @@ impl ProductionSemanticKirOwnerV1 {
             correspondence,
             limits,
             launch_roots,
+            helper_memory,
         } = materialized;
         let semantic = semantic_ssa.source_semantic();
         let mut generic_checks = Vec::with_capacity(roots.len());
@@ -350,6 +478,7 @@ impl ProductionSemanticKirOwnerV1 {
                 storage: executable_storage,
                 assert_origins,
                 source_launch,
+                helper_memory,
             },
             canonical_kernel_ir,
             correspondence,
@@ -403,6 +532,30 @@ impl ProductionSemanticKirOwnerV1 {
         match &self.module {
             RetainedProductionKirModuleV1::Connected { assert_origins, .. } => {
                 Some(assert_origins.storage)
+            }
+            RetainedProductionKirModuleV1::Legacy(_) => None,
+        }
+    }
+
+    /// Retained helper obligations move with connected graph custody. Legacy
+    /// owners do not synthesize this receipt.
+    pub const fn pre_ranked_helper_memory_storage_v1(
+        &self,
+    ) -> Option<ProductionHelperMemoryStorageV1> {
+        match &self.module {
+            RetainedProductionKirModuleV1::Connected { helper_memory, .. } => {
+                Some(helper_memory.storage)
+            }
+            RetainedProductionKirModuleV1::Legacy(_) => None,
+        }
+    }
+
+    /// Complete checked retained subtotal transferred with a connected owner.
+    /// Source SSA occurrence capture remains a separate caller reservation.
+    pub const fn pre_ranked_retained_analysis_storage_v1(&self) -> Option<usize> {
+        match &self.module {
+            RetainedProductionKirModuleV1::Connected { helper_memory, .. } => {
+                Some(helper_memory.analysis_storage)
             }
             RetainedProductionKirModuleV1::Legacy(_) => None,
         }

@@ -335,58 +335,15 @@ impl<'a> PrivateArrayFinalRelationV1<'a> {
         {
             return Err(mismatch());
         }
-        work.charge_private_array_work(1)?;
-        let [ranked_index] = indices.as_slice() else {
-            return Err(mismatch());
-        };
-        let Some(ProductionRankedOperationV1::ViewInSpace {
-            element_width,
-            writable,
-            shape,
-            dynamic_extents,
-            memory_space,
-            allocation_origin,
-            noalias_class,
-            ..
-        }) = self.definition(*view, &mut work)?
-        else {
-            return Err(mismatch());
-        };
-        work.charge_private_array_work(1)?;
-        let [extent] = shape.as_slice() else {
-            return Err(mismatch());
-        };
-        // Two origin additions, width multiplication, and seven scalar predicates.
-        work.charge_private_array_work(10)?;
-        let origin = (1u64 << 63)
-            .checked_add(u64::from(slot.local))
-            .and_then(|n| n.checked_add(1))
-            .ok_or_else(mismatch)?;
-        let width = slot
-            .element_facts
-            .size
-            .checked_mul(8)
-            .ok_or_else(mismatch)?;
-        if *memory_space != dialect_kernel::MemorySpaceAttr::Private
-            || !*writable
-            || *extent != slot.length
-            || !dynamic_extents.is_empty()
-            || u64::from(*element_width) != width
-            || *allocation_origin != origin
-            || *noalias_class != origin
-        {
-            return Err(mismatch());
-        }
-        let Some(ProductionRankedOperationV1::IndexConstant { value, .. }) =
-            self.definition(*ranked_index, &mut work)?
-        else {
-            return Err(mismatch());
-        };
-        work.charge_private_array_work(1)?;
-        if *value != offset {
-            return Err(mismatch());
-        }
-        Ok(())
+        private_array_ranked_address_v1(
+            slot,
+            offset,
+            *view,
+            indices,
+            &mut work,
+            |value, work| self.definition(value, work),
+            mismatch,
+        )
     }
 
     fn requires_consumption(
@@ -424,4 +381,71 @@ impl<'a> PrivateArrayFinalRelationV1<'a> {
         )?
         .is_ok())
     }
+}
+
+// Shared ranked geometry only; callers must separately prove source and physical custody.
+fn private_array_ranked_address_v1<'a, W: PrivateArrayChargeV1>(
+    slot: &PrivateArraySlotV1,
+    offset: u64,
+    view: ProductionRankedValueV1,
+    indices: &[ProductionRankedValueV1],
+    work: &mut W,
+    mut definition: impl FnMut(
+        ProductionRankedValueV1,
+        &mut W,
+    ) -> Result<Option<&'a ProductionRankedOperationV1>, W::Error>,
+    mismatch: impl Fn() -> W::Error + Copy,
+) -> Result<(), W::Error> {
+    work.charge_private_array_work(1)?;
+    let [ranked_index] = indices else {
+        return Err(mismatch());
+    };
+    let Some(ProductionRankedOperationV1::ViewInSpace {
+        element_width,
+        writable,
+        shape,
+        dynamic_extents,
+        memory_space,
+        allocation_origin,
+        noalias_class,
+        ..
+    }) = definition(view, work)?
+    else {
+        return Err(mismatch());
+    };
+    work.charge_private_array_work(1)?;
+    let [extent] = shape.as_slice() else {
+        return Err(mismatch());
+    };
+    // Two origin additions, width multiplication, and seven scalar predicates.
+    work.charge_private_array_work(10)?;
+    let origin = (1u64 << 63)
+        .checked_add(u64::from(slot.local))
+        .and_then(|n| n.checked_add(1))
+        .ok_or_else(mismatch)?;
+    let width = slot
+        .element_facts
+        .size
+        .checked_mul(8)
+        .ok_or_else(mismatch)?;
+    if *memory_space != dialect_kernel::MemorySpaceAttr::Private
+        || !*writable
+        || *extent != slot.length
+        || !dynamic_extents.is_empty()
+        || u64::from(*element_width) != width
+        || *allocation_origin != origin
+        || *noalias_class != origin
+    {
+        return Err(mismatch());
+    }
+    let Some(ProductionRankedOperationV1::IndexConstant { value, .. }) =
+        definition(*ranked_index, work)?
+    else {
+        return Err(mismatch());
+    };
+    work.charge_private_array_work(1)?;
+    if *value != offset {
+        return Err(mismatch());
+    }
+    Ok(())
 }

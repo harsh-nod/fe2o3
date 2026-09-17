@@ -552,7 +552,10 @@ fn derives_complete_formal_fill_obligations() {
         ByteExpression::invocation_affine(0, 4)
     );
     assert_eq!(obligations.accesses()[0].invocations().end_exclusive(), 64);
-    assert_eq!(obligations.bounds_requirements()[0].minimum_byte_len(), 256);
+    assert_eq!(
+        obligations.bounds_requirements()[0].minimum_byte_len(),
+        Some(256)
+    );
     assert!(obligations.runtime_alias_requirements().is_empty());
     assert!(obligations.inter_invocation_conflicts().is_empty());
 }
@@ -596,7 +599,7 @@ fn vecadd_derives_output_alias_requirements_but_allows_input_aliasing() {
         obligations
             .bounds_requirements()
             .iter()
-            .all(|requirement| requirement.minimum_byte_len() == 1024)
+            .all(|requirement| requirement.minimum_byte_len() == Some(1024))
     );
     let alias_pairs: Vec<_> = obligations
         .runtime_alias_requirements()
@@ -731,10 +734,16 @@ fn shifted_formal_ranges_still_require_runtime_alias_discharge() {
     let analysis = analyze(&module, 1);
     let requirement = analysis.obligations().runtime_alias_requirements()[0];
     assert!(analysis.is_complete());
-    assert_eq!(requirement.left_accessed_bytes().start(), 0);
-    assert_eq!(requirement.left_accessed_bytes().end_exclusive(), 4);
-    assert_eq!(requirement.right_accessed_bytes().start(), 400);
-    assert_eq!(requirement.right_accessed_bytes().end_exclusive(), 404);
+    assert_eq!(requirement.left_accessed_bytes().unwrap().start(), 0);
+    assert_eq!(
+        requirement.left_accessed_bytes().unwrap().end_exclusive(),
+        4
+    );
+    assert_eq!(requirement.right_accessed_bytes().unwrap().start(), 400);
+    assert_eq!(
+        requirement.right_accessed_bytes().unwrap().end_exclusive(),
+        404
+    );
 }
 
 fn address_space_pair_module(left: AddressSpace, right: AddressSpace) -> Module {
@@ -827,7 +836,7 @@ fn bounds_requirement_exposes_an_out_of_bounds_runtime_extent() {
     let requirement = analysis.obligations().bounds_requirements()[0];
 
     assert!(analysis.is_complete());
-    assert_eq!(requirement.minimum_byte_len(), 260);
+    assert_eq!(requirement.minimum_byte_len(), Some(260));
     assert!(!requirement.is_met_by_untrusted_byte_len(256));
     assert!(requirement.is_met_by_untrusted_byte_len(260));
 }
@@ -1736,7 +1745,7 @@ fn guarded_load_requires_a_distinct_ranked_proof_reason() {
 }
 
 #[test]
-fn guarded_ranked_read_retains_a_conservative_alias_effect() {
+fn exact_guarded_ranked_read_retains_symbolic_bounds_and_alias_obligation() {
     let read_pointer = global_pointer(AccessMode::ReadOnly);
     let write_pointer = global_pointer(AccessMode::ReadWrite);
     let access = MemoryAccess::new(AddressSpace::Global, 4);
@@ -1824,26 +1833,61 @@ fn guarded_ranked_read_retains_a_conservative_alias_effect() {
     );
 
     let analysis = analyze(&module, 8);
-    assert_eq!(
-        analysis.incomplete_reasons(),
-        &[
-            FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof {
-                location: FunctionOperationLocation::new(BlockId(0), 7),
-            }
-        ]
-    );
+    assert!(analysis.is_complete(), "{analysis:?}");
     let obligations = analysis.obligations();
     assert_eq!(obligations.accesses().len(), 2);
     let guarded_read = &obligations.accesses()[0];
     assert_eq!(guarded_read.allocation().parameter_index(), 0);
     assert_eq!(guarded_read.kind(), FormalMemoryAccessKind::Read);
-    assert_eq!(guarded_read.byte_offset(), ByteExpression::Unbounded);
+    assert_eq!(
+        guarded_read.byte_offset(),
+        ByteExpression::Affine {
+            constant: 0,
+            invocation_coefficient: 4,
+        }
+    );
+    let FormalAccessDomainV1::SliceBounded(domain) = guarded_read.domain() else {
+        panic!("exact guarded read must retain its symbolic domain")
+    };
+    assert_eq!(domain.path(), FormalGuardedPathV1::ExplicitPredicate);
+    assert_eq!(domain.slice(), ValueId(0));
+    assert_eq!(domain.index(), ValueId(3));
+    assert_eq!(domain.predicate(), ValueId(5));
+    assert_eq!(domain.selected_offset(), ValueId(7));
+    assert_eq!(domain.pointer(), ValueId(9));
+    let writer = &obligations.accesses()[1];
+    assert_eq!(writer.allocation().parameter_index(), 1);
+    assert_eq!(writer.kind(), FormalMemoryAccessKind::Write);
+    assert_eq!(writer.domain(), FormalAccessDomainV1::LaunchEnvelope);
+    assert_eq!(obligations.bounds_requirements().len(), 2);
+    let read_bound = obligations.bounds_requirements()[0];
+    assert_eq!(read_bound.minimum_byte_len(), None);
+    assert_eq!(
+        read_bound.kind(),
+        FormalBoundsKindV1::SliceElementAtGuardedIndex(domain)
+    );
+    assert!(!read_bound.is_met_by_untrusted_byte_len(u64::MAX));
+    assert_eq!(
+        obligations.bounds_requirements()[1].minimum_byte_len(),
+        Some(32)
+    );
     assert_eq!(obligations.runtime_alias_requirements().len(), 1);
     let alias = obligations.runtime_alias_requirements()[0];
     assert_eq!(alias.left().parameter_index(), 0);
     assert_eq!(alias.right().parameter_index(), 1);
-    assert_eq!(alias.left_accessed_bytes().start(), 0);
-    assert_eq!(alias.left_accessed_bytes().end_exclusive(), u64::MAX);
+    assert_eq!(
+        alias.left_region(),
+        FormalAliasRegionV1::WholeFormalAllocation
+    );
+    assert_eq!(alias.left_accessed_bytes(), None);
+    let write_region = alias.right_accessed_bytes().unwrap();
+    assert_eq!(write_region.start(), 0);
+    assert_eq!(write_region.end_exclusive(), 32);
+    assert!(obligations.inter_invocation_conflicts().is_empty());
+    assert_eq!(
+        InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(obligations),
+        Err(FormalMemoryReceiptErrorV1::UnsupportedGuardedRepresentation)
+    );
 }
 
 fn ssa_memory_module(
@@ -2858,7 +2902,7 @@ fn exact_unsigned_literal_transports_preserve_byte_and_alias_obligations() {
                 obligations
                     .bounds_requirements()
                     .iter()
-                    .all(|bound| bound.minimum_byte_len() == (value + 1) * 4)
+                    .all(|bound| bound.minimum_byte_len() == Some((value + 1) * 4))
             );
             assert_eq!(obligations.runtime_alias_requirements().len(), 1);
             let alias = obligations.runtime_alias_requirements()[0];
@@ -2871,8 +2915,8 @@ fn exact_unsigned_literal_transports_preserve_byte_and_alias_obligations() {
             );
             assert_eq!(
                 (
-                    alias.left_accessed_bytes().start(),
-                    alias.left_accessed_bytes().end_exclusive()
+                    alias.left_accessed_bytes().unwrap().start(),
+                    alias.left_accessed_bytes().unwrap().end_exclusive()
                 ),
                 (value * 4, (value + 1) * 4)
             );

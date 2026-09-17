@@ -432,13 +432,13 @@
               "kind": "source-driver",
               "compilerInput": {
                 "packageManifest": "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/Cargo.toml",
-                "packageManifestSha256": "81eae63f1091d3c9e42e8e4f2a7e506b84ca12111ab087da55c0d4d3a35483dd",
+                "packageManifestSha256": "1bfb8a9e35d4013f3376bf456ed4ad62fe333833e5a40847774fdb5e6cb5f13f",
                 "cargoLockPath": "Cargo.lock",
                 "cargoLockSha256": "ae24aee8d80c34b9d83b58d430d22f9724db6516fa72c7f88ff973ff5a0144a9",
                 "sourcePaths": [
                   "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs"
                 ],
-                "sourceClosureSha256": "9a0afce4b5e2a63657ca2d8529a9d735faa63b4da262e230b5b480a91a42d209",
+                "sourceClosureSha256": "37aca09d60374b080132ead2fd063d74f88d413713a25c2ef925fde60e7d474a",
                 "cargoTarget": {
                   "kind": "lib",
                   "name": "fe2o3_production_ranked_bounds_fixture",
@@ -453,23 +453,23 @@
               },
               "sourceRanges": [
                 {
-                  "byteOffset": 27402,
+                  "byteOffset": 27520,
                   "byteLength": 427
                 },
                 {
-                  "byteOffset": 10066,
+                  "byteOffset": 10184,
                   "byteLength": 1148
                 },
                 {
-                  "byteOffset": 11216,
+                  "byteOffset": 11334,
                   "byteLength": 2099
                 },
                 {
-                  "byteOffset": 15231,
+                  "byteOffset": 15349,
                   "byteLength": 404
                 },
                 {
-                  "byteOffset": 15637,
+                  "byteOffset": 15755,
                   "byteLength": 1796
                 }
               ],
@@ -650,7 +650,7 @@
                   }
                 }
               ],
-              "contractSha256": "90275f2348544a0bd2751c8aa6337e52767f93b112ea4cb8a977c5a3813c0b1a"
+              "contractSha256": "2189de2c054c838b19d0bfef478aefac0b51e9d710bd0722bc40758595f20849"
             },
             "sourceItemStatus": "contract-bound"
           },

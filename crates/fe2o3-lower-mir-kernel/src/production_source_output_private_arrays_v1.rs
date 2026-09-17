@@ -40,7 +40,7 @@ enum SourceOutputArrayPlacementV1 {
 
 #[derive(Clone, Copy, Debug)]
 struct SourceOutputArrayRowV1 {
-    key: [u32; 6],
+    key: [u32; 7],
     original_effect: usize,
     original_slot: usize,
     placement: SourceOutputArrayPlacementV1,
@@ -52,10 +52,11 @@ fn source_output_array_key_v1(
     block: u32,
     statement: u32,
     role: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+    component: u32,
     budget: &mut AssertOriginBudgetV1<'_>,
-) -> Result<[u32; 6], ProductionSourceOutputErrorV1> {
+) -> Result<[u32; 7], ProductionSourceOutputErrorV1> {
     budget
-        .charge_work(1)
+        .charge_work(2)
         .map_err(ProductionSourceOutputErrorV1::Resource)?;
     let (class, ordinal) = private_array_role_key_v1(role).ok_or(
         ProductionSourceOutputErrorV1::Invalid("unsupported array source role"),
@@ -67,6 +68,7 @@ fn source_output_array_key_v1(
         statement,
         u32::from(class),
         ordinal,
+        component,
     ])
 }
 
@@ -182,6 +184,7 @@ fn source_output_array_rows_v1(
                 effect.semantic_block,
                 effect.semantic_statement,
                 effect.role,
+                effect.original_index.component(),
                 budget,
             )?;
             let slot_index = private_array_binary_search_v1(
@@ -291,18 +294,27 @@ fn source_output_array_rows_v1(
     if rows.len() != count {
         return Err(Error::Invalid("array source placement census changed"));
     }
-    assert_origin_sort_v1(&mut rows, budget, |a, b, budget| {
-        budget.charge_work(6)?;
+    source_output_array_check_keys_v1(&mut rows, budget)?;
+    Ok((rows, payload))
+}
+
+fn source_output_array_check_keys_v1(
+    rows: &mut [SourceOutputArrayRowV1],
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<(), ProductionSourceOutputErrorV1> {
+    use ProductionSourceOutputErrorV1 as Error;
+    assert_origin_sort_v1(rows, budget, |a, b, budget| {
+        budget.charge_work(7)?;
         Ok(a.key.cmp(&b.key))
     })
     .map_err(Error::SourceOrigin)?;
     for pair in rows.windows(2) {
-        budget.charge_work(6).map_err(Error::Resource)?;
+        budget.charge_work(7).map_err(Error::Resource)?;
         if pair[0].key == pair[1].key {
             return Err(Error::Invalid("duplicate array source occurrence"));
         }
     }
-    Ok((rows, payload))
+    Ok(())
 }
 
 fn source_output_operation_v1<'o>(
@@ -423,18 +435,33 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
         role: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
         budget: &mut AssertOriginBudgetV1<'_>,
     ) -> Result<ProductionSourceOutputPrivateArrayAccessV1, ProductionSourceOutputErrorV1> {
+        self.private_array_write_with_offset_v1(owner, function, site, role, budget)
+            .map(|(outcome, _)| outcome)
+    }
+
+    // The offset was already proved by the unchanged source query. It is inert,
+    // and retained internally so omitted writes do not require a second query.
+    fn private_array_write_with_offset_v1(
+        &self,
+        owner: SemanticFunctionIdV1,
+        function: SemanticFunctionIdV1,
+        site: fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1,
+        role: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> Result<
+        (ProductionSourceOutputPrivateArrayAccessV1, Option<u64>),
+        ProductionSourceOutputErrorV1,
+    > {
         use ProductionSourceOutputErrorV1 as Error;
         use ProductionSourceOutputPrivateArrayAccessV1 as Outcome;
-        use fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1 as Definition;
-        // Three known live-payload sums and the minimum floor comparison. B's
+        // Preserve the three-sum/floor precharge; source's immutable graph,
+        // origin and helper subtotal was already checked at sealing. B's
         // separate owner receipt remains a caller precondition, as in B0.
         budget.charge_work(4).map_err(Error::Resource)?;
         let minimum = self
             .source
-            .executable_storage()
-            .retained_storage()
-            .checked_add(self.source.assert_origin_storage().payload_storage())
-            .and_then(|n| n.checked_add(self.checked_output.storage().retained_storage()))
+            .retained_analysis_storage_v1()
+            .checked_add(self.checked_output.storage().retained_storage())
             .and_then(|n| n.checked_add(self.storage.retained_storage()))
             .ok_or(Error::Resource(AssertOriginResourceV1::Arithmetic))?;
         if budget.storage() < minimum {
@@ -445,7 +472,7 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
             .materialized_private_array_constant_index(owner, function, site, role, budget)
             .map_err(Error::PrivateArray)?
         else {
-            return Ok(Outcome::ProvenUnretained);
+            return Ok((Outcome::ProvenUnretained, None));
         };
         budget.charge_work(1).map_err(Error::Resource)?;
         let fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1::Statement { block, statement } =
@@ -454,7 +481,7 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
             return Err(Error::Invalid("array source statement is absent"));
         };
         let key =
-            source_output_array_key_v1(owner, function, block.get(), statement, role, budget)?;
+            source_output_array_key_v1(owner, function, block.get(), statement, role, 0, budget)?;
         let ordinal = private_array_binary_search_v1(
             &self.private_arrays,
             |row| row.key.map(|value| value as usize),
@@ -480,9 +507,10 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
             effect.semantic_block,
             effect.semantic_statement,
             effect.role,
+            effect.original_index.component(),
             budget,
         )?;
-        budget.charge_work(9).map_err(Error::Resource)?;
+        budget.charge_work(10).map_err(Error::Resource)?;
         if actual_key != key
             || slot.owner != owner
             || slot.function != function
@@ -500,10 +528,24 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
                 ));
             }
             SourceOutputArrayPlacementV1::OmittedUnreachable => {
-                return Ok(Outcome::OmittedUnreachable);
+                return Ok((Outcome::OmittedUnreachable, Some(index)));
             }
             SourceOutputArrayPlacementV1::Retained(anchors) => anchors,
         };
+        self.private_array_retained_write_v1(slot, anchors, index, budget)
+            .map(|outcome| (outcome, Some(index)))
+    }
+
+    fn private_array_retained_write_v1(
+        &self,
+        slot: &PrivateArraySlotV1,
+        anchors: SourceOutputArrayAnchorsV1,
+        index: u64,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> Result<ProductionSourceOutputPrivateArrayAccessV1, ProductionSourceOutputErrorV1> {
+        use ProductionSourceOutputErrorV1 as Error;
+        use ProductionSourceOutputPrivateArrayAccessV1 as Outcome;
+        use fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1 as Definition;
         // Two result definitions (tag, operation triple, result ordinal),
         // one block pair, and the checked adjacency addition/comparison.
         budget.charge_work(14).map_err(Error::Resource)?;
@@ -601,3 +643,7 @@ impl ProductionSourceOutputOccurrencesV1<'_, '_> {
         })
     }
 }
+
+include!("production_source_output_initializer_v1.rs");
+
+include!("production_source_output_private_array_ranked_v1.rs");

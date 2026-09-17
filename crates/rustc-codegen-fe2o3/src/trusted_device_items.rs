@@ -2,11 +2,11 @@
 //!
 //! Recognition starts from a rustc [`DefId`]. Diagnostic-item equality is only
 //! accepted after the provider definition is anchored to a complete source
-//! closure that exactly matches the reviewed sibling `fe2o3-device` tree used
-//! to build this backend. The source location is not trusted. Rustc's stable
+//! closure that exactly matches a reviewed canonical or Cargo-vendored
+//! `fe2o3-device` materialization. The source location is not trusted. Rustc's stable
 //! crate ID and crate hash are retained as same-session provenance
 //! observations, but portable semantic identities bind only canonical
-//! source-derived fields.
+//! source-derived fields, including the actual materialization's source closure.
 //!
 //! This remains a compiler build-observation boundary, not cryptographic
 //! package authentication. A publisher signature or transparency-log identity
@@ -39,6 +39,15 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
     0xe0, 0xc7, 0xd0, 0xa9, 0xa9, 0x95, 0xfc, 0x33, 0x6a, 0x5a, 0x75, 0xe1, 0x43, 0xd7, 0x48, 0xeb,
     0x51, 0x19, 0x46, 0x46, 0xcb, 0xe5, 0x4f, 0xa3, 0x59, 0xa2, 0x58, 0x48, 0x93, 0x01, 0x85, 0x16,
+];
+// The pinned Cargo-produced manifest fixture is checked with the complete source tree.
+const REVIEWED_SAFE_EXECUTION_CARGO_VENDOR_SOURCE_CLOSURE_V1: [u8; 32] = [
+    0x6e, 0xf4, 0x61, 0xd2, 0x97, 0x68, 0x2f, 0xfb, 0xa7, 0xff, 0x21, 0x83, 0x3b, 0x7a, 0x4e, 0x37,
+    0x3c, 0x8a, 0xf1, 0xbd, 0x4c, 0x01, 0x0d, 0x51, 0xee, 0xe9, 0xf6, 0x90, 0x44, 0x35, 0x23, 0xc2,
+];
+const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1: [[u8; 32]; 2] = [
+    REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
+    REVIEWED_SAFE_EXECUTION_CARGO_VENDOR_SOURCE_CLOSURE_V1,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -1684,9 +1693,9 @@ fn validate_safe_execution_provider_definition_v1(
     definition: &ReviewedProviderSemanticDefinitionV1,
 ) -> Result<(), String> {
     definition.validate()?;
-    if definition.source_closure_identity != REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1 {
+    if !REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1.contains(&definition.source_closure_identity) {
         return Err(format!(
-            "safe execution provider source closure does not match the reviewed V1 identity: {:02x?}",
+            "safe execution provider source closure does not match a reviewed V1 materialization: {:02x?}",
             definition.source_closure_identity
         ));
     }
@@ -2117,7 +2126,7 @@ pub(crate) fn reviewed_provider_semantic_definition_v1(
         provider_definition,
         WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
         WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
-        REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
+        &REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1,
         &WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE,
     )
 }
@@ -2677,7 +2686,7 @@ fn reviewed_provider_semantic_definition_from_source_v1(
     provider_definition: DefId,
     definition_source_domain: &[u8],
     source_closure_domain: &[u8],
-    expected_source_closure: [u8; 32],
+    expected_source_closures: &[[u8; 32]],
     source_closure_cache: &OnceLock<Result<ReviewedProviderSourceClosureV1, String>>,
 ) -> Result<ReviewedProviderSemanticDefinitionV1, String> {
     let crate_num = provider_definition.krate;
@@ -2689,7 +2698,7 @@ fn reviewed_provider_semantic_definition_from_source_v1(
             reviewed_provider_source_closure_from_definition(
                 &source,
                 source_closure_domain,
-                expected_source_closure,
+                expected_source_closures,
             )
         })
         .clone()?;
@@ -2829,9 +2838,10 @@ fn sort_reviewed_source_files_by_relative_path(files: &mut [(String, Vec<u8>)]) 
 fn reviewed_provider_source_closure_from_definition(
     definition_source: &Path,
     domain: &[u8],
-    expected_identity: [u8; 32],
+    expected_identities: &[[u8; 32]],
 ) -> Result<ReviewedProviderSourceClosureV1, String> {
-    if domain.is_empty() || expected_identity == [0; 32] {
+    if domain.is_empty() || expected_identities.is_empty() || expected_identities.contains(&[0; 32])
+    {
         return Err("reviewed provider source closure policy is incomplete".to_owned());
     }
     require_regular_file_without_symlink(definition_source)?;
@@ -2858,9 +2868,9 @@ fn reviewed_provider_source_closure_from_definition(
         )
     })?;
     let identity = reviewed_provider_source_closure_identity(package_root, domain)?;
-    if identity != expected_identity {
+    if !expected_identities.contains(&identity) {
         return Err(format!(
-            "provider source file `{}` is not contained by the exact reviewed fe2o3-device source closure",
+            "provider source file `{}` is not contained by an exact reviewed fe2o3-device materialization",
             definition_source.display()
         ));
     }
@@ -3229,6 +3239,7 @@ const fn narrow_format(value: DeviceValueDiagnosticItem) -> Option<NarrowFloatFo
 mod tests {
     include!("trusted_device_items/core_01_tests.rs");
     include!("trusted_device_items/generative_provider_v1_tests.rs");
+    include!("trusted_device_items/materialization_v1_tests.rs");
 
     include!("trusted_device_items/wrapping_integer_v1_tests.rs");
 
@@ -3622,7 +3633,7 @@ mod tests {
         let located = reviewed_provider_source_closure_from_definition(
             &reviewed.definition(),
             WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
-            identity,
+            &[identity],
         )
         .unwrap();
         assert_eq!(
@@ -3637,7 +3648,7 @@ mod tests {
             reviewed_provider_source_closure_from_definition(
                 &reviewed.definition(),
                 WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
-                substituted_identity,
+                &[substituted_identity],
             )
             .is_err()
         );
@@ -3645,7 +3656,7 @@ mod tests {
             reviewed_provider_source_closure_from_definition(
                 &reviewed.definition(),
                 b"",
-                identity,
+                &[identity],
             )
             .is_err()
         );

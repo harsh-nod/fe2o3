@@ -3,8 +3,8 @@
 use std::{error::Error, fmt};
 
 use fe2o3_kernel_ir::{
-    FORMAL_MEMORY_OBLIGATION_POLICY_V1, FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V1,
-    FormalMemoryReceiptErrorV1, InertCanonicalFormalMemoryObligationReceiptV1,
+    FormalIndexWidth, FormalMemoryAnalysisBasis, FormalMemoryReceiptEncodingV3,
+    FormalMemoryReceiptErrorV1, FormalMemoryReceiptMetadataV3, InertFormalMemoryReceiptFormatV3,
 };
 use sha2::{Digest, Sha256};
 
@@ -17,13 +17,24 @@ use crate::{
 pub const FORMAL_MEMORY_ADMISSION_EVIDENCE_VERSION_V4: u16 = 4;
 /// Closed validation policy for formal-memory admission custody.
 pub const FORMAL_MEMORY_ADMISSION_EVIDENCE_POLICY_V4: u16 = 1;
+/// Domain-aware validation policy paired only with obligation receipt V3/policy 2.
+pub const FORMAL_MEMORY_ADMISSION_EVIDENCE_GUARDED_POLICY_V4: u16 = 2;
 /// Maximum exact bytes accepted by the outer compiler-lineage receipt.
 pub const MAX_FORMAL_MEMORY_ADMISSION_EVIDENCE_BYTES_V4: usize = 4 * 1024 * 1024;
 
 const MAGIC_V4: [u8; 8] = *b"F2FMA4\0\0";
 const IDENTITY_DOMAIN_V4: &[u8] = b"FE2O3/FORMAL-MEMORY-ADMISSION-EVIDENCE/V4\0";
-const FORMAL_OBLIGATION_RECEIPT_MAGIC_V1: [u8; 8] = *b"FE2O3FM\0";
 const HEADER_BYTES_V4: usize = 120;
+
+/// Closed nested-format and witness policy committed by V4 evidence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u16)]
+pub enum FormalMemoryAdmissionValidationPolicyV4 {
+    /// Frozen policy 1 accepts only legacy V1/extraction-policy 1.
+    LegacyV1 = FORMAL_MEMORY_ADMISSION_EVIDENCE_POLICY_V4,
+    /// Policy 2 accepts only V3/extraction-policy 2 with the current Bits64 witness.
+    GuardedV2 = FORMAL_MEMORY_ADMISSION_EVIDENCE_GUARDED_POLICY_V4,
+}
 
 /// Exact completeness policy committed by V4 formal-memory evidence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +60,7 @@ pub struct InertCanonicalFormalMemoryAdmissionEvidenceV4 {
     canonical_kernel_ir: ProductionCanonicalKernelIrIdentityV1,
     formal_obligation_receipt_identity: [u8; 32],
     witness_invocation_count: u64,
+    validation_policy: FormalMemoryAdmissionValidationPolicyV4,
     completeness_policy: FormalMemoryCompletenessPolicyV4,
     completeness_status: FormalMemoryCompletenessStatusV4,
     static_conflict_count: u32,
@@ -71,7 +83,7 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV4 {
             return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
         }
         let receipt =
-            InertCanonicalFormalMemoryObligationReceiptV1::from_obligations(kernel.obligations())
+            InertFormalMemoryReceiptFormatV3::from_current_obligations(kernel.obligations())
                 .map_err(ProductionFormalMemoryEvidenceErrorV4::FormalReceipt)?;
         receipt
             .revalidate()
@@ -84,15 +96,27 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV4 {
         {
             return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
         }
+        let validation_policy = match receipt.metadata().encoding() {
+            FormalMemoryReceiptEncodingV3::LegacyV1 => {
+                FormalMemoryAdmissionValidationPolicyV4::LegacyV1
+            }
+            FormalMemoryReceiptEncodingV3::GuardedV3 => {
+                FormalMemoryAdmissionValidationPolicyV4::GuardedV2
+            }
+            FormalMemoryReceiptEncodingV3::LegacyV2 => {
+                return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
+            }
+        };
         let bytes = encode(
+            validation_policy,
             owner.semantic_kir().canonical_kernel_ir_identity(),
-            *receipt.identity().digest(),
+            *receipt.identity_digest(),
             witness_invocation_count,
             FormalMemoryCompletenessPolicyV4::RequireCompleteConflictFree,
             FormalMemoryCompletenessStatusV4::Complete,
             0,
             0,
-            receipt.canonical_bytes(),
+            &receipt,
         )?;
         Self::decode(&bytes)
     }
@@ -105,9 +129,19 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV4 {
         let mut reader = ReaderV4::new(bytes);
         if reader.fixed::<8>()? != MAGIC_V4
             || reader.u16()? != FORMAL_MEMORY_ADMISSION_EVIDENCE_VERSION_V4
-            || reader.u16()? != FORMAL_MEMORY_ADMISSION_EVIDENCE_POLICY_V4
-            || reader.u32()? != 0
         {
+            return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidHeader);
+        }
+        let validation_policy = match reader.u16()? {
+            FORMAL_MEMORY_ADMISSION_EVIDENCE_POLICY_V4 => {
+                FormalMemoryAdmissionValidationPolicyV4::LegacyV1
+            }
+            FORMAL_MEMORY_ADMISSION_EVIDENCE_GUARDED_POLICY_V4 => {
+                FormalMemoryAdmissionValidationPolicyV4::GuardedV2
+            }
+            _ => return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidHeader),
+        };
+        if reader.u32()? != 0 {
             return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidHeader);
         }
         if reader.usize_u32()? != bytes.len() {
@@ -162,19 +196,18 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV4 {
             return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidLength);
         }
         let formal_obligation_receipt_offset = reader.offset();
-        let receipt = InertCanonicalFormalMemoryObligationReceiptV1::from_canonical_bytes(
-            reader.take(receipt_len)?.to_vec(),
-        )
-        .map_err(ProductionFormalMemoryEvidenceErrorV4::FormalReceipt)?;
+        let receipt =
+            InertFormalMemoryReceiptFormatV3::decode_current(reader.take(receipt_len)?.to_vec())
+                .map_err(ProductionFormalMemoryEvidenceErrorV4::FormalReceipt)?;
         reader.finish()?;
         receipt
             .revalidate()
             .map_err(ProductionFormalMemoryEvidenceErrorV4::FormalReceipt)?;
-        if receipt.identity().digest() != &formal_obligation_receipt_identity {
+        if receipt.identity_digest() != &formal_obligation_receipt_identity {
             return Err(ProductionFormalMemoryEvidenceErrorV4::NestedIdentityMismatch);
         }
-        validate_receipt_witness(receipt.canonical_bytes(), witness_invocation_count)?;
         let reencoded = encode(
+            validation_policy,
             canonical_kernel_ir,
             formal_obligation_receipt_identity,
             witness_invocation_count,
@@ -182,7 +215,7 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV4 {
             completeness_status,
             static_conflict_count,
             inter_invocation_conflict_count,
-            receipt.canonical_bytes(),
+            &receipt,
         )?;
         if reencoded != bytes {
             return Err(ProductionFormalMemoryEvidenceErrorV4::NonCanonical);
@@ -194,6 +227,7 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV4 {
             canonical_kernel_ir,
             formal_obligation_receipt_identity,
             witness_invocation_count,
+            validation_policy,
             completeness_policy,
             completeness_status,
             static_conflict_count,
@@ -243,6 +277,11 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV4 {
     /// Returns the flattened invocation count represented by the structural witness.
     pub const fn witness_invocation_count(&self) -> u64 {
         self.witness_invocation_count
+    }
+
+    /// Returns the exact nested-format and witness validation policy.
+    pub const fn validation_policy(&self) -> FormalMemoryAdmissionValidationPolicyV4 {
+        self.validation_policy
     }
 
     /// Returns the exact completeness policy.
@@ -346,6 +385,7 @@ impl Error for ProductionFormalMemoryEvidenceErrorV4 {
 
 #[allow(clippy::too_many_arguments)]
 fn encode(
+    validation_policy: FormalMemoryAdmissionValidationPolicyV4,
     canonical_kernel_ir: ProductionCanonicalKernelIrIdentityV1,
     formal_obligation_receipt_identity: [u8; 32],
     witness_invocation_count: u64,
@@ -353,7 +393,7 @@ fn encode(
     completeness_status: FormalMemoryCompletenessStatusV4,
     static_conflict_count: u32,
     inter_invocation_conflict_count: u32,
-    receipt: &[u8],
+    receipt: &InertFormalMemoryReceiptFormatV3,
 ) -> Result<Vec<u8>, ProductionFormalMemoryEvidenceErrorV4> {
     if canonical_kernel_ir.digest() == &[0; 32]
         || canonical_kernel_ir.canonical_length() == 0
@@ -366,11 +406,16 @@ fn encode(
         || completeness_status != FormalMemoryCompletenessStatusV4::Complete
         || static_conflict_count != 0
         || inter_invocation_conflict_count != 0
-        || receipt.is_empty()
+        || receipt.canonical_bytes().is_empty()
     {
         return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
     }
-    validate_receipt_witness(receipt, witness_invocation_count)?;
+    validate_receipt_witness(
+        validation_policy,
+        receipt.metadata(),
+        witness_invocation_count,
+    )?;
+    let receipt = receipt.canonical_bytes();
     let exact_size = HEADER_BYTES_V4
         .checked_add(receipt.len())
         .ok_or(ProductionFormalMemoryEvidenceErrorV4::Overflow)?;
@@ -380,7 +425,7 @@ fn encode(
     let mut bytes = Vec::with_capacity(exact_size);
     bytes.extend_from_slice(&MAGIC_V4);
     push_u16(&mut bytes, FORMAL_MEMORY_ADMISSION_EVIDENCE_VERSION_V4);
-    push_u16(&mut bytes, FORMAL_MEMORY_ADMISSION_EVIDENCE_POLICY_V4);
+    push_u16(&mut bytes, validation_policy as u16);
     push_u32(&mut bytes, 0);
     push_usize(&mut bytes, exact_size)?;
     push_u16(
@@ -409,29 +454,33 @@ fn encode(
 }
 
 fn validate_receipt_witness(
-    receipt: &[u8],
+    validation_policy: FormalMemoryAdmissionValidationPolicyV4,
+    metadata: FormalMemoryReceiptMetadataV3,
     witness_invocation_count: u64,
 ) -> Result<(), ProductionFormalMemoryEvidenceErrorV4> {
-    let mut reader = ReaderV4::new(receipt);
-    if reader.fixed::<8>()? != FORMAL_OBLIGATION_RECEIPT_MAGIC_V1
-        || reader.u16()? != FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V1
-        || reader.u16()? != FORMAL_MEMORY_OBLIGATION_POLICY_V1
-        || reader.u16()? != 0
-        || reader.u16()? != 0
-        || reader.usize_u32()? != receipt.len()
+    let expected = match validation_policy {
+        FormalMemoryAdmissionValidationPolicyV4::LegacyV1 => {
+            FormalMemoryReceiptEncodingV3::LegacyV1
+        }
+        FormalMemoryAdmissionValidationPolicyV4::GuardedV2 => {
+            FormalMemoryReceiptEncodingV3::GuardedV3
+        }
+    };
+    if metadata.encoding() != expected {
+        return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
+    }
+    if validation_policy == FormalMemoryAdmissionValidationPolicyV4::GuardedV2
+        && (metadata.index_width() != FormalIndexWidth::Bits64
+            || metadata.analysis_basis()
+                != FormalMemoryAnalysisBasis::CompilerDerivedIrWithUnauthenticatedLaunchInputs)
     {
         return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
     }
-    for _ in 0..2 {
-        let text_len = reader.usize_u32()?;
-        reader.take(text_len)?;
-    }
-    reader.u8()?;
-    reader.u8()?;
-    if reader.u16()? != 0 || reader.u8()? != 1 {
-        return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
-    }
-    if reader.u64()? != 0 || reader.u64()? != witness_invocation_count {
+    if witness_invocation_count == 0
+        || metadata.invocations().is_none_or(|range| {
+            range.start() != 0 || range.end_exclusive() != witness_invocation_count
+        })
+    {
         return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
     }
     Ok(())
@@ -512,10 +561,6 @@ impl<'a> ReaderV4<'a> {
             .map_err(|_| ProductionFormalMemoryEvidenceErrorV4::Truncated)
     }
 
-    fn u8(&mut self) -> Result<u8, ProductionFormalMemoryEvidenceErrorV4> {
-        Ok(self.fixed::<1>()?[0])
-    }
-
     fn u16(&mut self) -> Result<u16, ProductionFormalMemoryEvidenceErrorV4> {
         Ok(u16::from_le_bytes(self.fixed()?))
     }
@@ -537,6 +582,148 @@ impl<'a> ReaderV4<'a> {
             Ok(())
         } else {
             Err(ProductionFormalMemoryEvidenceErrorV4::InvalidLength)
+        }
+    }
+}
+
+#[cfg(test)]
+mod guarded_policy_tests {
+    use super::*;
+    use fe2o3_kernel_ir::{
+        AccessMode, AddressSpace, BasicBlock, BlockId, ExplicitLaunchExtent1d,
+        FormalMemoryIncompleteReason, Function, Kernel, KernelId, LaunchDomain, LaunchExtent,
+        Module, ScalarType, Signature, Terminator, Type, ValueId, VerifiedCanonicalKernelIrV8,
+        VerifiedCanonicalKernelIrV9, derive_kernel_memory_obligations_from_verified,
+        verify_module_ref,
+    };
+
+    fn fixed_receipt(
+        access: AccessMode,
+        width: FormalIndexWidth,
+    ) -> (
+        ProductionCanonicalKernelIrIdentityV1,
+        InertFormalMemoryReceiptFormatV3,
+    ) {
+        let mut block = BasicBlock::new(BlockId(0));
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut module = Module::new("fixed-policy-component");
+        module.functions.push(Function::kernel_entry(
+            "entry",
+            Signature::new(
+                vec![Type::pointer(
+                    Type::Scalar(ScalarType::U32),
+                    AddressSpace::Global,
+                    access,
+                )],
+                vec![],
+            ),
+            vec![ValueId(0)],
+            vec![block],
+        ));
+        module.kernels.push(Kernel::new(
+            "kernel",
+            "entry",
+            LaunchDomain::D1 {
+                x: LaunchExtent::Static(64),
+            },
+        ));
+        let report = derive_kernel_memory_obligations_from_verified(
+            verify_module_ref(&module).unwrap(),
+            &KernelId::new("kernel"),
+            ExplicitLaunchExtent1d::Exact(64),
+            width,
+        )
+        .unwrap();
+        if width == FormalIndexWidth::Bits32 {
+            assert!(matches!(
+                report.incomplete_reasons(),
+                [FormalMemoryIncompleteReason::UnsupportedIndexWidth {
+                    width: FormalIndexWidth::Bits32
+                }]
+            ));
+        } else {
+            assert!(report.is_complete());
+        }
+        let receipt =
+            InertFormalMemoryReceiptFormatV3::from_current_obligations(report.obligations())
+                .unwrap();
+        let identity = if access == AccessMode::WriteOnly {
+            let canonical = VerifiedCanonicalKernelIrV9::from_module(module).unwrap();
+            ProductionCanonicalKernelIrIdentityV1::from_canonical_parts(
+                ProductionCanonicalKernelIrVersionV1::V9,
+                *canonical.identity().digest(),
+                canonical.canonical_bytes().len() as u64,
+            )
+        } else {
+            let canonical = VerifiedCanonicalKernelIrV8::from_module(module).unwrap();
+            ProductionCanonicalKernelIrIdentityV1::from_canonical_parts(
+                ProductionCanonicalKernelIrVersionV1::V8,
+                *canonical.identity().digest(),
+                canonical.canonical_bytes().len() as u64,
+            )
+        };
+        (identity, receipt)
+    }
+
+    #[test]
+    fn legacy_policy_preserves_bits32_exact_header_identity_and_v2_refusal() {
+        let (identity, receipt) = fixed_receipt(AccessMode::ReadWrite, FormalIndexWidth::Bits32);
+        let encoded = encode(
+            FormalMemoryAdmissionValidationPolicyV4::LegacyV1,
+            identity,
+            *receipt.identity_digest(),
+            64,
+            FormalMemoryCompletenessPolicyV4::RequireCompleteConflictFree,
+            FormalMemoryCompletenessStatusV4::Complete,
+            0,
+            0,
+            &receipt,
+        )
+        .unwrap();
+        // The old 120-byte header and nested bytes are unchanged, including Bits32.
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&MAGIC_V4);
+        for value in [4_u16, 1] {
+            expected.extend_from_slice(&value.to_le_bytes());
+        }
+        expected.extend_from_slice(&0_u32.to_le_bytes());
+        expected.extend_from_slice(&((120 + receipt.canonical_bytes().len()) as u32).to_le_bytes());
+        expected.extend_from_slice(&8_u16.to_le_bytes());
+        expected.extend_from_slice(&0_u16.to_le_bytes());
+        expected.extend_from_slice(&identity.canonical_length().to_le_bytes());
+        expected.extend_from_slice(identity.digest());
+        expected.extend_from_slice(receipt.identity_digest());
+        expected.extend_from_slice(&64_u64.to_le_bytes());
+        expected.extend_from_slice(&[1, 0, 1, 0]);
+        expected.extend_from_slice(&[0; 8]);
+        expected.extend_from_slice(&(receipt.canonical_bytes().len() as u32).to_le_bytes());
+        assert_eq!(expected.len(), 120);
+        expected.extend_from_slice(receipt.canonical_bytes());
+        assert_eq!(encoded, expected);
+        let decoded = InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(&expected).unwrap();
+        assert_eq!(decoded.canonical_bytes(), expected);
+        assert_eq!(decoded.identity(), &evidence_identity(&expected).unwrap());
+        assert!(matches!(
+            validate_receipt_witness(
+                FormalMemoryAdmissionValidationPolicyV4::GuardedV2,
+                receipt.metadata(),
+                64
+            ),
+            Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission)
+        ));
+        let (_, write_only) = fixed_receipt(AccessMode::WriteOnly, FormalIndexWidth::Bits64);
+        assert_eq!(
+            write_only.metadata().encoding(),
+            FormalMemoryReceiptEncodingV3::LegacyV2
+        );
+        for policy in [
+            FormalMemoryAdmissionValidationPolicyV4::LegacyV1,
+            FormalMemoryAdmissionValidationPolicyV4::GuardedV2,
+        ] {
+            assert!(matches!(
+                validate_receipt_witness(policy, write_only.metadata(), 64),
+                Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission)
+            ));
         }
     }
 }

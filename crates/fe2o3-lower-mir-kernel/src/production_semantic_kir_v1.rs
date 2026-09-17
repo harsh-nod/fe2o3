@@ -13,9 +13,11 @@ use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Atomic, AtomicKind, Axis,
     BarrierSemantics, BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator,
     ComparePredicate, Constant, Convergence, F32MathFunction, FloatConversionKind, FloatOperation,
-    FormalMemoryIncompleteReason, Function, FunctionBody, FunctionId, FunctionOperationLocation,
-    Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1,
-    IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
+    FormalAccessDomainV1, FormalGuardedPathV1, FormalIndexWidth, FormalMemoryAccess,
+    FormalMemoryAccessKind, FormalMemoryIncompleteReason, FormalMemoryObligations, Function,
+    FunctionBody, FunctionId, FunctionOperationLocation, Gfx950LdsTransposeFormatV1,
+    Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1, IndexKind, IntrinsicKind,
+    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
     MAX_OPERATIONS_V1 as MAX_BLOCK_OPERATIONS_V1, MatrixOperation, MatrixOperationKind,
     MemoryAccess, MemoryEffect, MemoryIntrinsicOperation, MemoryOrdering, Module, Operation,
     OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope, TensorLayoutContractV1,
@@ -37,18 +39,19 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticBf16ConversionKindV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBorrowKindV1,
     SemanticCallableDeclV1, SemanticCanonAbiV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
     SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
-    SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1, SemanticEnumVariantV1,
-    SemanticF32MathFunctionV1, SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
-    SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1,
-    SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1,
-    SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1,
-    SemanticMfmaStorageLayoutV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
-    SemanticPointerKindV1, SemanticPointerMetadataV1, SemanticProjectionKindV1,
-    SemanticProjectionV1, SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1,
-    SemanticScalarValueV1, SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1,
-    SemanticStatementKindV1, SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1,
-    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
-    SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
+    SemanticDisjointIndexSpaceV1, SemanticEdgeRoleV1, SemanticEnumEncodingV1,
+    SemanticEnumVariantV1, SemanticF32MathFunctionV1, SemanticFieldsShapeV1,
+    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionRoleV1,
+    SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1, SemanticLocalRoleV1,
+    SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1,
+    SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1,
+    SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1, SemanticPointerKindV1,
+    SemanticPointerMetadataV1, SemanticProjectionKindV1, SemanticProjectionV1,
+    SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1, SemanticScalarValueV1,
+    SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
+    SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
+    SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
+    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
     SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
     SemanticWriteOnlyDisjointWriteKindV1, semantic_direct_enum_variant_v1,
     semantic_scalar_enum_variant_v1,
@@ -832,6 +835,27 @@ pub enum ProductionSemanticKirErrorV1 {
         /// Stable rejection reason.
         detail: &'static str,
     },
+    /// A defined call's lowered argument differs from its exact physical signature.
+    DefinedCallArgumentTypeMismatch {
+        /// Calling semantic function index.
+        function: u32,
+        /// Called semantic function index.
+        callee: u32,
+        /// Calling semantic block index; the call is its terminator.
+        block: u32,
+        /// Zero-based flattened physical parameter ordinal.
+        parameter: usize,
+        /// Zero-based logical source argument ordinal.
+        source_argument: u32,
+        /// Outer RustCall tuple field, when expanded.
+        tuple_field: Option<u32>,
+        /// Flattened component within the selected source binding, when expanded.
+        component: Option<usize>,
+        /// Exact physical parameter type from the verified helper signature.
+        expected: Type,
+        /// Actual lowered argument type; retained without an additional clone.
+        actual: Type,
+    },
     /// An exact fixed-array index is outside its declared extent.
     FixedArrayIndexOutOfBounds {
         /// Source semantic function index, including non-entry helper bodies.
@@ -857,6 +881,11 @@ pub enum ProductionSemanticKirErrorV1 {
         function: u32,
         /// Helper declaration provenance, not a caller or effect-operation span.
         declaration_source: Box<SemanticSourceProvenanceV1>,
+    },
+    /// A later stage does not yet consume the checked source-local helper relation.
+    LocalHelperSourceConsumerUnavailable {
+        /// Exact consumer that refused to grant its own downstream authority.
+        consumer: &'static str,
     },
     /// A semantic local is used before an SSA value is available on this path.
     MissingLocalDefinition {
@@ -981,6 +1010,20 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
                 formatter,
                 "semantic-to-Kernel-IR lowering rejected function {function}, block {block:?}, statement {statement:?}: {detail}",
             ),
+            Self::DefinedCallArgumentTypeMismatch {
+                function,
+                callee,
+                block,
+                parameter,
+                source_argument,
+                tuple_field,
+                component,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "semantic-to-Kernel-IR lowering rejected function {function}, block {block}, statement None: defined call argument type changed; callee {callee}, physical parameter {parameter}, source argument {source_argument}, tuple field {tuple_field:?}, component {component:?}: expected {expected:?}, actual {actual:?}",
+            ),
             Self::FixedArrayIndexOutOfBounds {
                 function,
                 block,
@@ -1017,6 +1060,10 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
                 fmt_semantic_source_location_v1(formatter, **declaration_source)?;
                 formatter.write_str("\n  = lowering stopped before target IR or artifact emission")
             }
+            Self::LocalHelperSourceConsumerUnavailable { consumer } => write!(
+                formatter,
+                "{consumer} does not yet support checked source-local helpers",
+            ),
             Self::MissingLocalDefinition {
                 function,
                 block,
@@ -1124,8 +1171,10 @@ impl Error for ProductionSemanticKirErrorV1 {
             Self::ResourceLimit { .. }
             | Self::AllocationFailure { .. }
             | Self::Unsupported { .. }
+            | Self::DefinedCallArgumentTypeMismatch { .. }
             | Self::FixedArrayIndexOutOfBounds { .. }
             | Self::HelperEffectsUnavailable { .. }
+            | Self::LocalHelperSourceConsumerUnavailable { .. }
             | Self::MissingLocalDefinition { .. }
             | Self::RetainedLocalStorage { .. }
             | Self::EnumPayloadUnavailable { .. }
@@ -2319,13 +2368,14 @@ impl ProductionSemanticKirOwnerV1 {
 
     pub(crate) fn retained_generic_checks_discharge_guarded_accesses(
         &self,
-        kernel_id: &str,
+        fresh: &crate::production_formal_memory_v1::FreshFormalGuardedReportV1<'_>,
         guarded_locations: &[FunctionOperationLocation],
     ) -> Result<(), ProductionMemoryDischargeFailureV1> {
+        let kernel = fresh.kernel();
         let Some(checks) = self
             .generic_checks
             .iter()
-            .find(|checks| checks.function_name == kernel_id)
+            .find(|checks| checks.function_name == kernel.id.as_str())
         else {
             return Err(ProductionMemoryDischargeFailureV1::stage(
                 "verified Kernel IR does not retain mandatory ranked checks for the selected kernel",
@@ -2336,11 +2386,21 @@ impl ProductionSemanticKirOwnerV1 {
                 "a retained mandatory ranked check is not clean",
             ));
         }
+        let mut budget = GuardedAddressProofBudgetV1::new(self.limits.max_operations)?;
+        budget.prepay(4)?;
+        let Some((report, witness_extents)) = fresh.for_owner(self) else {
+            return Err(ProductionMemoryDischargeFailureV1::stage(
+                "guarded proof received a report from another semantic owner",
+            ));
+        };
         guarded_accesses_have_structural_bounds_result(
             &self.module,
-            kernel_id,
+            kernel,
+            report,
+            witness_extents,
             guarded_locations,
             self.limits.max_operations,
+            &mut budget,
         )
     }
 
@@ -7571,7 +7631,62 @@ struct GuardedAddressProofBudgetV1 {
     remaining: usize,
 }
 
+struct GuardedAccessCursorV1<'a> {
+    rows: &'a [FormalMemoryAccess],
+    next: usize,
+}
+
+impl<'a> GuardedAccessCursorV1<'a> {
+    fn observe(
+        &mut self,
+        location: FunctionOperationLocation,
+        budget: &mut GuardedAddressProofBudgetV1,
+    ) -> Result<Option<&'a FormalMemoryAccess>, ProductionMemoryDischargeFailureV1> {
+        budget.prepay(2)?;
+        let row = self
+            .rows
+            .get(self.next)
+            .filter(|row| row.location() == location);
+        if row.is_some() {
+            budget.prepay(2)?;
+            self.next += 1;
+        }
+        Ok(row)
+    }
+
+    fn finish(
+        &self,
+        budget: &mut GuardedAddressProofBudgetV1,
+    ) -> Result<(), ProductionMemoryDischargeFailureV1> {
+        budget.prepay(1)?;
+        if self.next != self.rows.len() {
+            return Err(ProductionMemoryDischargeFailureV1::stage(
+                "formal access rows do not match retained Kernel IR body order",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl GuardedAddressProofBudgetV1 {
+    fn new(max_operations: usize) -> Result<Self, ProductionMemoryDischargeFailureV1> {
+        let remaining = max_operations
+            .checked_mul(GUARDED_ADDRESS_PROOF_STEPS_PER_OPERATION_V1)
+            .ok_or_else(|| {
+                ProductionMemoryDischargeFailureV1::stage(
+                    "guarded proof resource budget overflowed",
+                )
+            })?;
+        Ok(Self { remaining })
+    }
+
+    fn prepay(&mut self, amount: usize) -> Result<(), ProductionMemoryDischargeFailureV1> {
+        self.remaining = self.remaining.checked_sub(amount).ok_or_else(|| {
+            ProductionMemoryDischargeFailureV1::stage("guarded proof exceeded its work budget")
+        })?;
+        Ok(())
+    }
+
     fn charge(&mut self) -> Result<(), ()> {
         self.remaining = self.remaining.checked_sub(1).ok_or(())?;
         Ok(())
@@ -7580,19 +7695,38 @@ impl GuardedAddressProofBudgetV1 {
 
 fn guarded_accesses_have_structural_bounds_result(
     module: &Module,
-    kernel_id: &str,
+    kernel: &Kernel,
+    report: &FormalMemoryObligations,
+    witness_extents: [u64; 3],
     guarded_locations: &[FunctionOperationLocation],
     max_operations: usize,
+    budget: &mut GuardedAddressProofBudgetV1,
 ) -> Result<(), ProductionMemoryDischargeFailureV1> {
-    let Some(kernel) = module
-        .kernels
-        .iter()
-        .find(|kernel| kernel.id.as_str() == kernel_id)
-    else {
+    budget.prepay(20)?;
+    let names = kernel
+        .id
+        .as_str()
+        .len()
+        .checked_add(kernel.entry.as_str().len())
+        .ok_or_else(|| {
+            ProductionMemoryDischargeFailureV1::stage("guarded proof name size overflowed")
+        })?;
+    budget.prepay(names)?;
+    let count = witness_extents
+        .into_iter()
+        .try_fold(1_u64, |count, extent| count.checked_mul(extent));
+    if report.kernel() != &kernel.id
+        || report.entry() != &kernel.entry
+        || report.index_width() != FormalIndexWidth::Bits64
+        || count.is_none_or(|count| count == 0)
+        || report
+            .invocations()
+            .is_none_or(|range| range.start() != 0 || Some(range.end_exclusive()) != count)
+    {
         return Err(ProductionMemoryDischargeFailureV1::stage(
-            "guarded proof cannot find the selected kernel",
+            "guarded proof report does not match its kernel and exact witness",
         ));
-    };
+    }
     let Some(function) = module.function(&kernel.entry) else {
         return Err(ProductionMemoryDischargeFailureV1::stage(
             "guarded proof cannot find the selected kernel entry",
@@ -7618,6 +7752,10 @@ fn guarded_accesses_have_structural_bounds_result(
 
     let mut actual = BTreeMap::new();
     let mut operation_count = 0_usize;
+    let mut cursor = GuardedAccessCursorV1 {
+        rows: report.accesses(),
+        next: 0,
+    };
     for block in &body.blocks {
         for parameter in &block.parameters {
             if definitions
@@ -7649,12 +7787,20 @@ fn guarded_accesses_have_structural_bounds_result(
                     ));
                 }
             }
+            // Formal rows retain body order, not numeric block order. A pending
+            // load without a row must leave a later row untouched.
+            let location = FunctionOperationLocation::new(block.id, ordinal);
+            let row = cursor.observe(location, budget)?;
             if matches!(
                 &operation.kind,
                 OperationKind::GuardedLoad { access, .. }
                     if access.address_space != AddressSpace::Private
             ) {
-                let location = FunctionOperationLocation::new(block.id, ordinal);
+                if guarded_load_is_core_proved_v1(
+                    function, report, location, operation, row, budget,
+                )? {
+                    continue;
+                }
                 if actual.insert(location, operation).is_some() {
                     return Err(ProductionMemoryDischargeFailureV1::access(
                         location,
@@ -7665,6 +7811,8 @@ fn guarded_accesses_have_structural_bounds_result(
         }
     }
 
+    cursor.finish(budget)?;
+    budget.prepay(3)?;
     let provided = guarded_locations.iter().copied().collect::<BTreeSet<_>>();
     if actual.is_empty()
         || provided.len() != guarded_locations.len()
@@ -7675,18 +7823,8 @@ fn guarded_accesses_have_structural_bounds_result(
         ));
     }
 
-    let Some(proof_steps) =
-        max_operations.checked_mul(GUARDED_ADDRESS_PROOF_STEPS_PER_OPERATION_V1)
-    else {
-        return Err(ProductionMemoryDischargeFailureV1::stage(
-            "guarded proof resource budget overflowed",
-        ));
-    };
-    let mut budget = GuardedAddressProofBudgetV1 {
-        remaining: proof_steps,
-    };
     for (location, operation) in actual {
-        if guarded_load_has_structural_bound(operation, &definitions, &mut budget) {
+        if guarded_load_has_structural_bound(operation, &definitions, budget) {
             continue;
         }
         if let Some((_predicate, index, slice)) =
@@ -7707,6 +7845,56 @@ fn guarded_accesses_have_structural_bounds_result(
     Ok(())
 }
 
+fn guarded_load_is_core_proved_v1(
+    function: &Function,
+    report: &FormalMemoryObligations,
+    location: FunctionOperationLocation,
+    operation: &Operation,
+    row: Option<&FormalMemoryAccess>,
+    budget: &mut GuardedAddressProofBudgetV1,
+) -> Result<bool, ProductionMemoryDischargeFailureV1> {
+    budget.prepay(2)?;
+    let Some(row) = row else { return Ok(false) };
+    let FormalAccessDomainV1::SliceBounded(domain) = row.domain() else {
+        return Ok(false);
+    };
+    budget.prepay(24)?;
+    let OperationKind::GuardedLoad {
+        pointer,
+        predicate,
+        access,
+        ..
+    } = &operation.kind
+    else {
+        return Err(ProductionMemoryDischargeFailureV1::access(
+            location,
+            "core guarded row does not name a guarded load",
+        ));
+    };
+    let parameter = usize::try_from(domain.allocation().parameter_index()).ok();
+    let slice = parameter.and_then(|parameter| function.signature.parameters.get(parameter));
+    let value = parameter.and_then(|parameter| function.body.as_ref()?.parameters.get(parameter));
+    if row.location() != location
+        || row.kind() != FormalMemoryAccessKind::Read
+        || domain.path() != FormalGuardedPathV1::ExplicitPredicate
+        || domain.pointer() != *pointer
+        || domain.predicate() != *predicate
+        || domain.allocation() != row.allocation()
+        || value != Some(&domain.slice())
+        || !matches!(slice, Some(Type::Slice(slice)) if slice.address_space == access.address_space)
+        || row.address_space() != access.address_space
+        || row.alignment() != u64::from(access.alignment)
+        || row.byte_width() != domain.element_bytes()
+        || Some(row.invocations()) != report.invocations()
+    {
+        return Err(ProductionMemoryDischargeFailureV1::access(
+            location,
+            "core guarded row differs from its exact load and formal slice subject",
+        ));
+    }
+    Ok(true)
+}
+
 #[cfg(test)]
 fn guarded_accesses_have_structural_bounds(
     module: &Module,
@@ -7716,11 +7904,34 @@ fn guarded_accesses_have_structural_bounds(
     let [kernel] = module.kernels.as_slice() else {
         return false;
     };
+    let witness_extents = match &kernel.domain {
+        LaunchDomain::D1 {
+            x: LaunchExtent::Static(x),
+        } => [u64::from(*x), 1, 1],
+        _ => return false,
+    };
+    let Ok(analysis) = fe2o3_kernel_ir::derive_kernel_memory_obligations_for_launch(
+        module,
+        &kernel.id,
+        fe2o3_kernel_ir::ExplicitLaunchExtent::Exact {
+            rank: 1,
+            extents: witness_extents,
+        },
+        FormalIndexWidth::Bits64,
+    ) else {
+        return false;
+    };
+    let Ok(mut budget) = GuardedAddressProofBudgetV1::new(max_operations) else {
+        return false;
+    };
     guarded_accesses_have_structural_bounds_result(
         module,
-        kernel.id.as_str(),
+        kernel,
+        analysis.obligations(),
+        witness_extents,
         guarded_locations,
         max_operations,
+        &mut budget,
     )
     .is_ok()
 }
@@ -10700,17 +10911,84 @@ fn lower_module_with_assert_origins_v1(
     authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
     assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
-    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
-        limits.max_argument_correspondence_work,
-    );
-    let mut budget = ArgumentBudgetV1::new(&mut work, limits.max_argument_correspondence_storage);
-    let result = lower_module_with_call_budget_v1(
+    lower_module_for_helper_admission_v1(
         owner,
         limits,
         authenticated_launch_roots,
         assert_origins,
-        &mut budget,
+        &mut HelperLoweringAdmissionV1::RawPure,
+    )
+}
+
+// A pending continuation is not admission: the final merged graph still needs
+// the independent physical and source/SSA helper checks before owner creation.
+enum HelperLoweringAdmissionV1 {
+    RawPure,
+    PendingUnitLocal { requires_source: bool },
+}
+
+struct PendingHelperSourceLoweringV1 {
+    module: Module,
+    correspondence: SemanticKirCorrespondenceV1,
+    requires_source: bool,
+}
+
+fn lower_pending_module_with_assert_origins_v1(
+    owner: &ProductionSemanticSsaOwnerV1,
+    limits: ProductionSemanticKirLimitsV1,
+    authenticated_launch_roots: &[RetainedRankedLaunchRootV1],
+    assert_origins: &mut AssertOriginEmissionV1<'_, '_>,
+) -> Result<PendingHelperSourceLoweringV1, ProductionSemanticKirErrorV1> {
+    let mut admission = HelperLoweringAdmissionV1::PendingUnitLocal {
+        requires_source: false,
+    };
+    let (module, correspondence) = lower_module_for_helper_admission_v1(
+        owner,
+        limits,
+        Some(authenticated_launch_roots),
+        Some(assert_origins),
+        &mut admission,
     )?;
+    let HelperLoweringAdmissionV1::PendingUnitLocal { requires_source } = admission else {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    };
+    Ok(PendingHelperSourceLoweringV1 {
+        module,
+        correspondence,
+        requires_source,
+    })
+}
+
+fn lower_module_for_helper_admission_v1(
+    owner: &ProductionSemanticSsaOwnerV1,
+    limits: ProductionSemanticKirLimitsV1,
+    authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
+    assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
+    admission: &mut HelperLoweringAdmissionV1,
+) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+        limits.max_argument_correspondence_work,
+    );
+    let mut budget = ArgumentBudgetV1::new(&mut work, limits.max_argument_correspondence_storage);
+    let result = match admission {
+        HelperLoweringAdmissionV1::RawPure => lower_module_with_call_budget_v1(
+            owner,
+            limits,
+            authenticated_launch_roots,
+            assert_origins,
+            &mut budget,
+        ),
+        HelperLoweringAdmissionV1::PendingUnitLocal { .. } => {
+            lower_module_with_call_budget_for_helper_admission_v1(
+                owner,
+                limits,
+                authenticated_launch_roots,
+                assert_origins,
+                &mut budget,
+                admission,
+            )
+        }
+    }?;
     if budget.storage()
         != CallReturnBufferV1::bytes(
             result.1.call_returns.len(),
@@ -10729,6 +11007,24 @@ fn lower_module_with_call_budget_v1(
     assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
     call_budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
+    lower_module_with_call_budget_for_helper_admission_v1(
+        owner,
+        limits,
+        authenticated_launch_roots,
+        assert_origins,
+        call_budget,
+        &mut HelperLoweringAdmissionV1::RawPure,
+    )
+}
+
+fn lower_module_with_call_budget_for_helper_admission_v1(
+    owner: &ProductionSemanticSsaOwnerV1,
+    limits: ProductionSemanticKirLimitsV1,
+    authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
+    assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
+    call_budget: &mut ArgumentBudgetV1<'_>,
+    admission: &mut HelperLoweringAdmissionV1,
+) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
     let floor = call_budget.storage();
     let result = lower_module_with_call_budget_inner_v1(
         owner,
@@ -10736,6 +11032,7 @@ fn lower_module_with_call_budget_v1(
         authenticated_launch_roots,
         assert_origins,
         call_budget,
+        admission,
     )
     .and_then(|(module, rows)| {
         validate_call_component_pool_v1(
@@ -10767,6 +11064,7 @@ fn lower_module_with_call_budget_inner_v1(
     authenticated_launch_roots: Option<&[RetainedRankedLaunchRootV1]>,
     mut assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
     call_budget: &mut ArgumentBudgetV1<'_>,
+    admission: &mut HelperLoweringAdmissionV1,
 ) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
     let semantic = owner.source_semantic();
     // Admission binds every execution role (including nested/ignored carriers) to V29.
@@ -10801,6 +11099,7 @@ fn lower_module_with_call_budget_inner_v1(
             &mut private_array_work,
             None,
             call_budget,
+            admission,
         )?;
         if correspondence.private_arrays.active {
             private_array_order_correspondence_v1(
@@ -10869,6 +11168,7 @@ fn lower_module_with_call_budget_inner_v1(
             &mut private_array_work,
             private_arrays.as_ref(),
             call_budget,
+            admission,
         )?;
         let [kernel] = root_module.kernels.as_slice() else {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
@@ -11313,6 +11613,89 @@ where
     Ok(ordered)
 }
 
+fn pending_unit_local_candidates_v1(
+    module: &Module,
+    plans: &[LoweredFunctionPlanV1],
+    effects: &fe2o3_kernel_ir::InterproceduralEffectAnalysisV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<bool, ProductionSemanticKirErrorV1> {
+    // Screen the whole roster before deferring its first legacy failure. This
+    // preserves that diagnostic for a nested call or another unsupported helper.
+    for plan in plans.iter().skip(1) {
+        let lookup_work = argument_sum_v1(&[plan.kernel_ir_function.as_str().len(), 1])?;
+        budget.charge_work(argument_product_v1(effects.functions().len(), lookup_work)?)?;
+        let Some(decision) = effects.function(&plan.kernel_ir_function) else {
+            return Ok(false);
+        };
+        if decision.is_complete_and_pure() {
+            continue;
+        }
+        if !decision.is_complete() {
+            return Ok(false);
+        }
+        let mut selected = None;
+        for function in &module.functions {
+            budget.charge_work(lookup_work)?;
+            if function.id == plan.kernel_ir_function {
+                selected = Some(function);
+                break;
+            }
+        }
+        let Some(function) = selected else {
+            return Ok(false);
+        };
+        budget.charge_work(4)?;
+        if !function.signature.parameters.is_empty() || !function.signature.results.is_empty() {
+            return Ok(false);
+        }
+        let Some(body) = &function.body else {
+            return Ok(false);
+        };
+        for block in &body.blocks {
+            budget.charge_work(3)?;
+            match &block.terminator {
+                Some(Terminator::Branch { .. } | Terminator::ConditionalBranch { .. }) => {}
+                Some(Terminator::Return { values }) if values.is_empty() => {}
+                Some(Terminator::Unreachable) if block.operations.len() == 1 => {}
+                _ => return Ok(false),
+            }
+            for operation in &block.operations {
+                budget.charge_work(2)?;
+                match &operation.kind {
+                    OperationKind::Constant(_)
+                    | OperationKind::Cast { .. }
+                    | OperationKind::Compare { .. }
+                    | OperationKind::Alloca { .. }
+                    | OperationKind::GetElementPointer { .. }
+                    | OperationKind::Load { .. }
+                    | OperationKind::Store { .. } => {}
+                    OperationKind::Call { callee, arguments }
+                        if arguments.is_empty()
+                            && operation.results.is_empty()
+                            && block.operations.len() == 1
+                            && matches!(block.terminator, Some(Terminator::Unreachable)) =>
+                    {
+                        // The V1 decoder scans eight fixed descriptors. Zero
+                        // arguments exclude every allocating Print descriptor.
+                        budget.charge_work(argument_sum_v1(&[
+                            argument_product_v1(argument_sum_v1(&[callee.as_str().len(), 2])?, 8)?,
+                            4,
+                        ])?)?;
+                        if !matches!(
+                            AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments),
+                            Some(AmdGpuDiagnosticOperation::Trap)
+                        ) {
+                            return Ok(false);
+                        }
+                    }
+                    _ => return Ok(false),
+                }
+            }
+        }
+    }
+    Ok(true)
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "Keep shared root budgets and outer retained storage independently borrowed"
@@ -11328,6 +11711,7 @@ fn lower_single_root_module(
     private_array_work: &mut PrivateArrayLazyBudgetV1,
     outer_private_arrays: Option<&PrivateArrayMergeV1>,
     call_budget: &mut ArgumentBudgetV1<'_>,
+    admission: &mut HelperLoweringAdmissionV1,
 ) -> Result<
     (Module, SemanticKirCorrespondenceV1, PrivateArrayPayloadV1),
     ProductionSemanticKirErrorV1,
@@ -11855,6 +12239,15 @@ fn lower_single_root_module(
             .function(&plan.kernel_ir_function)
             .is_some_and(|decision| decision.is_complete_and_pure())
         {
+            if let HelperLoweringAdmissionV1::PendingUnitLocal { requires_source } = admission {
+                let emission = assert_origins
+                    .as_mut()
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+                if pending_unit_local_candidates_v1(&module, &plans, &effects, emission.budget)? {
+                    *requires_source = true;
+                    break;
+                }
+            }
             let declaration_source = semantic
                 .functions()
                 .get(plan.semantic_function.index() as usize)
@@ -25700,6 +26093,46 @@ mod resource_tests {
     include!("production_semantic_kir_v1/tests/production_enum_downcast_v1_tests.rs");
 
     #[test]
+    fn defined_call_type_diagnostic_retains_flattened_source_coordinates() {
+        let error = ProductionSemanticKirErrorV1::DefinedCallArgumentTypeMismatch {
+            function: 3,
+            callee: 11,
+            block: 175,
+            parameter: 5,
+            source_argument: 2,
+            tuple_field: Some(1),
+            component: Some(3),
+            expected: Type::Scalar(ScalarType::U64),
+            actual: Type::INDEX,
+        };
+        assert_eq!(
+            error.to_string(),
+            "semantic-to-Kernel-IR lowering rejected function 3, block 175, statement None: defined call argument type changed; callee 11, physical parameter 5, source argument 2, tuple field Some(1), component Some(3): expected Scalar(U64), actual Scalar(Index)",
+        );
+        assert!(std::error::Error::source(&error).is_none());
+    }
+
+    #[test]
+    fn defined_call_type_diagnostic_distinguishes_unexpanded_arguments() {
+        let error = ProductionSemanticKirErrorV1::DefinedCallArgumentTypeMismatch {
+            function: 6,
+            callee: 2,
+            block: 299,
+            parameter: 0,
+            source_argument: 0,
+            tuple_field: None,
+            component: None,
+            expected: Type::F32,
+            actual: Type::Scalar(ScalarType::U32),
+        };
+        assert_eq!(
+            error.to_string(),
+            "semantic-to-Kernel-IR lowering rejected function 6, block 299, statement None: defined call argument type changed; callee 2, physical parameter 0, source argument 0, tuple field None, component None: expected Scalar(F32), actual Scalar(U32)",
+        );
+        assert!(std::error::Error::source(&error).is_none());
+    }
+
+    #[test]
     fn semantic_ssa_completion_accepts_an_exhausted_definition_plan() {
         let pending = BTreeMap::from([((0, 7), VecDeque::new())]);
 
@@ -29744,11 +30177,27 @@ mod resource_tests {
         };
         *predicate = ComparePredicate::Equal;
         verify_module(&wrong_bound.module).expect("hostile comparison remains valid Kernel IR");
+        let kernel = &wrong_bound.module.kernels[0];
+        let witness_extents = [64, 1, 1];
+        let analysis = fe2o3_kernel_ir::derive_kernel_memory_obligations_for_launch(
+            &wrong_bound.module,
+            &kernel.id,
+            fe2o3_kernel_ir::ExplicitLaunchExtent::Exact {
+                rank: 1,
+                extents: witness_extents,
+            },
+            FormalIndexWidth::Bits64,
+        )
+        .unwrap();
+        let mut budget = GuardedAddressProofBudgetV1::new(12).unwrap();
         let failure = guarded_accesses_have_structural_bounds_result(
             &wrong_bound.module,
-            wrong_bound.module.kernels[0].id.as_str(),
+            kernel,
+            analysis.obligations(),
+            witness_extents,
             &wrong_bound.locations,
             12,
+            &mut budget,
         )
         .expect_err("wrong comparison must not prove a slice bound");
         assert!(matches!(
@@ -30118,6 +30567,8 @@ mod resource_tests {
     ) -> ProductionRankedKernelLoweringInputV1 {
         ranked_correlation_input_for_accesses(&[access], allocation_origin)
     }
+
+    include!("production_semantic_kir_v1/guarded_formal_consumer_tests.rs");
 
     fn ranked_correlation_input_for_accesses(
         accesses: &[AccessKindAttr],

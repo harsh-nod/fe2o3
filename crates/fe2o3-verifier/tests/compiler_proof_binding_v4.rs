@@ -366,6 +366,74 @@ fn exact_current_inputs_reimport_the_signed_verus_receipt() {
 }
 
 #[test]
+fn guarded_policy_two_inputs_reimport_exact_source_and_signed_test_evidence() {
+    use fe2o3_kernel_ir::{
+        FormalMemoryReceiptEncodingV3, InertFormalMemoryReceiptFormatV3, OperationKind,
+    };
+    use fe2o3_lower_mir_kernel::FormalMemoryAdmissionValidationPolicyV4;
+    let receipts = receipts_from(
+        compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v4_with_guarded_read(7),
+    );
+    let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+    let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+    let validated = validate(&binding, &receipts).unwrap();
+    assert_eq!(
+        validated.formal_memory().validation_policy(),
+        FormalMemoryAdmissionValidationPolicyV4::GuardedV2
+    );
+    assert_eq!(
+        validated.formal_memory().canonical_bytes(),
+        receipts.formal_memory.canonical_preimage()
+    );
+    let nested = InertFormalMemoryReceiptFormatV3::decode_current(
+        receipts.formal_memory.canonical_preimage()[120..].to_vec(),
+    )
+    .unwrap();
+    assert_eq!(
+        nested.metadata().encoding(),
+        FormalMemoryReceiptEncodingV3::GuardedV3
+    );
+    assert!(!nested.grants_authority());
+    assert!(
+        fe2o3_kernel_ir::decode_module_v8(validated.kernel_ir().canonical_bytes())
+            .unwrap()
+            .functions
+            .iter()
+            .filter_map(|function| function.body.as_ref())
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .any(|operation| matches!(operation.kind, OperationKind::GuardedLoad { .. }))
+    );
+    assert!(validated.has_exact_decoded_input_association());
+    assert!(validated.has_lossless_mir_to_kir_correspondence());
+    assert!(validated.authenticates_signed_verus_receipt_under_embedded_key());
+    assert!(!validated.authenticates_compiler_origin());
+    assert!(!validated.establishes_llvm_or_machine_refinement());
+    assert!(!validated.grants_runtime_authority());
+}
+
+#[test]
+fn guarded_outer_policy_substitution_is_rejected_even_with_rebound_test_association() {
+    use fe2o3_lower_mir_kernel::ProductionFormalMemoryEvidenceErrorV4;
+    let mut receipts = receipts_from(
+        compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v4_with_guarded_read(8),
+    );
+    let mut bytes = receipts.formal_memory.canonical_preimage().to_vec();
+    bytes[10..12].copy_from_slice(&1_u16.to_le_bytes());
+    replace_formal_memory(&mut receipts, bytes);
+    let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
+    let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
+    assert!(matches!(
+        validate(&binding, &receipts),
+        Err(CompilerProofInputValidationErrorV4::Stage(stage))
+            if matches!(stage.as_ref(),
+                CompilerProofInputValidationErrorV3::FormalMemoryV4Decode(
+                    ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission
+                ))
+    ));
+}
+
+#[test]
 fn exact_induction_certificate_is_anchored_to_one_checked_kir_addition() {
     let receipts = induction_receipts(0);
     let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));

@@ -241,6 +241,15 @@ impl IndexedControlFlow {
         self.dominates_positions(definition, use_block)
     }
 
+    /// Descriptive interval from this exact bounded CFG; the caller pays its lookup.
+    pub(crate) fn formal_guard_dominator_interval_v1(&self, block: BlockId) -> Option<(u32, u32)> {
+        let position = self.block_position(block)?;
+        self.reachable[position].then_some((
+            self.dominator_preorder[position],
+            self.dominator_postorder[position],
+        ))
+    }
+
     fn dominates_positions(&self, definition: usize, use_block: usize) -> bool {
         if !self.reachable[use_block] {
             return definition == use_block;
