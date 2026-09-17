@@ -264,7 +264,8 @@ fn checked_guarded_index_preserves_bounds_masks_and_non_speculative_reads() {
                         &request,
                         target,
                         SimulationLimitsV1 {
-                            max_memory_access_records: 2,
+                            // Access records are per byte: four value bytes and one mask byte.
+                            max_memory_access_records: 5,
                             ..SimulationLimitsV1::default()
                         },
                         &mut events,
@@ -303,7 +304,7 @@ fn checked_guarded_index_preserves_bounds_masks_and_non_speculative_reads() {
                     assert!(matches!(
                         result.conflict_assessment(),
                         SimulationConflictAssessmentV1::Incomplete {
-                            record_limit: 2,
+                            record_limit: 5,
                             ..
                         }
                     ));
