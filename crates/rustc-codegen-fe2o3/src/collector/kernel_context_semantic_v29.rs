@@ -20,6 +20,10 @@ type Error = ProductionSemanticPreflightErrorV1;
 #[path = "../production_semantic_body_v1/context_entry_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "kernel_context_commitment_v29_tests.rs"]
+mod commitment_tests;
+
 #[derive(Debug)]
 struct BoundCallV29 {
     raw: flow::CallOccurrenceV1,

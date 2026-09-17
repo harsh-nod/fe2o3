@@ -125,7 +125,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "48f293967b9509dfde5a31dc96d0dba30a089c0eff2bff8033184a52f0aed69e")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "9562224ca3217fad03c3e1987da2de4e4c060b6bc223f76753855912d2433357")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         del self.manifest["curriculum"]

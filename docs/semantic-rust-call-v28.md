@@ -390,6 +390,51 @@ or GPU success.
 
 ## Evidence boundary
 
+### Borrowed Aggregates In Development
+
+Borrowed environments use a different representation from owned, by-value
+arguments. Their source paths begin with a dereference. Each represented field
+is a persistent private scalar cell, the original captured reference, or the
+original whole shared-slice descriptor. A shared view restricts access to the
+same cell; it does not copy its contents. Descriptor identity includes the data
+origin, not only the length. Initialization belongs to the caller's source
+initialization, never to each helper invocation.
+
+The planner selects this representation only for affected helper formals and
+their actual reference/owner closure. Unrelated transparent references and
+issued-scope values keep their existing lowering path. Borrowed component
+transport across unproved control-flow merges remains unsupported.
+
+Emission correspondence records describe candidates, not proofs. The private
+pending-source continuation carries an explicit borrowed replay obligation;
+the legacy raw-pure route still refuses these programs. The independent checker
+reads the original source, exact canonical calls, field initialization, loads,
+stores, access restrictions, and complete native operation/effect census.
+The production pre-ranked owner requires the check and retains its move-only
+result against that exact source and graph. Borrowed helpers have a distinct
+classification; they cannot inherit empty-helper or Unit-local permissions.
+This attachment is not detached publication or launch authority. It uses the
+existing cumulative work/storage ledger, with retained storage distinguished
+from temporary work.
+
+The current replay grammar is deliberately narrow: one root, flat initialized
+fields, straight-line Unit helpers, repeated calls, shared reborrows, and caller
+reloads. Affected branches/loops, owned copies/moves, nested field replay,
+non-Unit results, general arithmetic, captured slice DATA reads, and composition
+with an unrelated guarded suffix remain incomplete. A separate call-path slice
+query checks direct shared-slice helper parameters against the actual root input
+and successful bounds-assertion edge; it does not establish an environment
+field's origin or discharge the helper's other effects.
+
+The registered natural-source tests require successful production export and
+CPU/simulator comparisons for owned closures, repeated `FnMut` mutation, and
+ordinary shared/mutable environments. They are acceptance tests, not passing
+support claims. Until those positives and the downstream source/output,
+ranked-memory and evidence consumers pass, borrowed aggregate kernels are not
+end-to-end supported. Local replay or argument-view tests cannot substitute for
+these gates. No tutorial configuration or hardware/protected-proof count is
+increased by this implementation work.
+
 Legacy serialized V4/V5 proof correspondence does not encode the complete
 component/ignored-argument relation. Its consumers explicitly reject RustCall;
 rejection is not implementation of that relation. Completing it requires exact

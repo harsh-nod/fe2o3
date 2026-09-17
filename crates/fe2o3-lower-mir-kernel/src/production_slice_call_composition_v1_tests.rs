@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_borrowed_call_effects_v1_tests.rs"]
+mod borrowed;
+
 fn mixed_owner(budget: &mut AssertOriginBudgetV1<'_>) -> ProductionPreRankedKirOwnerV1 {
     let (original, _) = slice_source(false, false);
     let semantic = original.source_semantic();

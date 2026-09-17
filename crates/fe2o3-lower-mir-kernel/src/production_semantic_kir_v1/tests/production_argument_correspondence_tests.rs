@@ -473,6 +473,7 @@ fn exact_argument_correspondence_full_core_accumulates_shared_root_work() {
         ArgumentTraceV1 {
             direct: &correspondence.parameter_bindings[..1],
             components: &correspondence.parameter_component_bindings[..4],
+            borrowed: &[],
             ignored: &correspondence.ignored_parameter_bindings[..1],
         },
         &mut budget,
@@ -529,6 +530,7 @@ fn exact_argument_correspondence_budget_is_cumulative_and_restores_scratch() {
             ArgumentTraceV1 {
                 direct: &direct,
                 components: &components,
+                borrowed: &[],
                 ignored: &ignored,
             },
             budget,

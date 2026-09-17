@@ -126,6 +126,9 @@ fn append_parameter_structure_v1(
             })?;
             for part in path.iter().copied() {
                 retained_path.push(match part {
+                    ProductionArgumentProjectionV1::Dereference => {
+                        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                    }
                     ProductionArgumentProjectionV1::Field(field) => {
                         SemanticKirParameterProjectionV1::Field(field)
                     }

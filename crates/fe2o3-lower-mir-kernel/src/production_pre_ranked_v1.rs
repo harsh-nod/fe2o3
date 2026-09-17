@@ -59,6 +59,8 @@ pub enum ProductionHelperSourcePolicyV1 {
     RawEmpty,
     /// At least one helper needs the sealed source-local Unit relation.
     UnitLocal,
+    /// Helpers require the sealed whole-module borrowed aggregate relation.
+    Borrowed,
 }
 
 /// One executable mixed-SSA graph constructed before ranked verification.
@@ -141,6 +143,8 @@ impl ProductionPreRankedKirOwnerV1 {
     ///
     /// The ledger covers connected V12 admission and assertion-origin emission,
     /// sealing scratch, and retained payload, including their coexistence.
+    /// New borrowed-aggregate correspondence payload is reserved after lowering,
+    /// before canonical admission/replay, and transferred in the helper receipt.
     /// Retained source MIR, SSA plans, launch rows, legacy correspondence/bytes
     /// and other lowering scratch keep their existing limits and are excluded.
     /// Entry-argument replay uses the independent limits in `limits`; its
@@ -205,12 +209,21 @@ impl ProductionPreRankedKirOwnerV1 {
             module,
             correspondence,
             requires_source,
+            requires_borrowed,
         } = lower_pending_module_with_assert_origins_v1(
             &semantic_ssa,
             limits,
             &launch_roots,
             &mut emitted_origins,
         )?;
+        let borrowed_correspondence_storage =
+            borrowed_aggregate_correspondence_bytes_v1(&correspondence, emitted_origins.budget)?;
+        emitted_origins
+            .budget
+            .reserve_storage(borrowed_correspondence_storage)?;
+        if requires_borrowed && !requires_source {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch.into());
+        }
         // Keep the frozen legacy bytes for existing publication/replay consumers.
         // Their transient inverse validation is not another retained graph.
         let canonical_kernel_ir = ProductionCanonicalKernelIrV1::from_module_ref(&module)?;
@@ -223,7 +236,10 @@ impl ProductionPreRankedKirOwnerV1 {
             .reserve_storage(executable_storage.retained_storage())
             .map_err(SemanticKirAssertOriginErrorV1::from)?;
         drop(module);
-        if requires_source && matches!(capture, HelperOccurrenceCaptureV1::Absent) {
+        if requires_source
+            && !requires_borrowed
+            && matches!(capture, HelperOccurrenceCaptureV1::Absent)
+        {
             let receipt = semantic_ssa
                 .try_capture_occurrences_with_budget_v1(emitted_origins.budget)
                 .map_err(ProductionPreRankedKirErrorV1::Occurrences)?;
@@ -238,7 +254,9 @@ impl ProductionPreRankedKirOwnerV1 {
             executable: &executable,
             correspondence: &correspondence,
         };
-        let mut helper_memory = if requires_source {
+        let mut helper_memory = if requires_borrowed {
+            SealedHelperMemoryV1::derive_with_source_requirements_v1(subject, None, true, budget)?
+        } else if requires_source {
             SealedHelperMemoryV1::derive_with_origins_v1(subject, Some(&assert_origins), budget)?
         } else {
             SealedHelperMemoryV1::derive(subject, budget)?
@@ -246,10 +264,20 @@ impl ProductionPreRankedKirOwnerV1 {
         budget
             .charge_work(4)
             .map_err(ProductionSemanticKirErrorV1::from)?;
-        let has_checked_source = !helper_memory.unit_source.is_empty();
-        if requires_source != has_checked_source {
+        let has_borrowed_source = helper_memory.borrowed_source.is_some();
+        let has_checked_source = has_borrowed_source || !helper_memory.unit_source.is_empty();
+        if requires_source != has_checked_source || requires_borrowed != has_borrowed_source {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch.into());
         }
+        // The rows stayed reserved in derive's incoming floor. Transfer their
+        // receipt here without reserving the same payload again.
+        helper_memory.storage = ProductionHelperMemoryStorageV1(
+            helper_memory
+                .storage
+                .retained_storage()
+                .checked_add(borrowed_correspondence_storage)
+                .ok_or(HelperMemoryResourceV1::Arithmetic)?,
+        );
         helper_memory.capture = capture;
         helper_memory.analysis_storage = helper_memory_live_storage_v1(
             executable_storage.retained_storage(),
@@ -290,7 +318,9 @@ impl ProductionPreRankedKirOwnerV1 {
     /// Returns only a consumer-routing category. The typed source relation must
     /// still be borrowed and checked by any stage that supports local helpers.
     pub fn helper_source_policy_v1(&self) -> ProductionHelperSourcePolicyV1 {
-        if self.helper_memory.unit_source.is_empty() {
+        if self.helper_memory.borrowed_source.is_some() {
+            ProductionHelperSourcePolicyV1::Borrowed
+        } else if self.helper_memory.unit_source.is_empty() {
             ProductionHelperSourcePolicyV1::RawEmpty
         } else {
             ProductionHelperSourcePolicyV1::UnitLocal
@@ -301,7 +331,7 @@ impl ProductionPreRankedKirOwnerV1 {
         &self,
         consumer: &'static str,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        if self.helper_source_policy_v1() == ProductionHelperSourcePolicyV1::UnitLocal {
+        if self.helper_source_policy_v1() != ProductionHelperSourcePolicyV1::RawEmpty {
             return Err(
                 ProductionSemanticKirErrorV1::LocalHelperSourceConsumerUnavailable { consumer },
             );
@@ -314,13 +344,15 @@ impl ProductionPreRankedKirOwnerV1 {
         self.executable_storage
     }
 
-    /// Retained helper payload, to reserve with the graph and assertion origins.
+    /// Retained helper and borrowed-aggregate correspondence payload, to reserve
+    /// with the graph and assertion origins. Legacy correspondence is excluded.
     pub const fn helper_memory_storage_v1(&self) -> ProductionHelperMemoryStorageV1 {
         self.helper_memory.storage
     }
 
-    /// Complete retained graph, assertion-origin, helper and newly created SSA
-    /// occurrence payload. Incoming capture keeps its separate caller reservation.
+    /// Complete retained graph, assertion-origin, helper (including borrowed
+    /// correspondence), and newly created SSA occurrence payload. Incoming
+    /// capture keeps its separate caller reservation.
     pub const fn retained_analysis_storage_v1(&self) -> usize {
         self.helper_memory.analysis_storage
     }

@@ -41,6 +41,7 @@ struct CanonicalCallGroupV1<'a> {
     spans: &'a [SemanticKirTerminatorOperationSpanV1],
     direct: &'a [SemanticKirParameterBindingV1],
     components: &'a [SemanticKirParameterComponentBindingV1],
+    borrowed: &'a [SemanticKirBorrowedParameterBindingV1],
     ignored: &'a [SemanticKirIgnoredParameterBindingV1],
 }
 
@@ -49,6 +50,7 @@ impl CanonicalCallGroupV1<'_> {
         ArgumentTraceV1 {
             direct: self.direct,
             components: self.components,
+            borrowed: self.borrowed,
             ignored: self.ignored,
         }
     }

@@ -56,8 +56,17 @@ fn empty_helper_payload() -> usize {
         Preexisting(fe2o3_pliron::ProductionSemanticSsaOccurrenceStorageV1),
         Transferred(fe2o3_pliron::ProductionSemanticSsaOccurrenceStorageV1),
     }
-    // Six physical and six source Vec headers. Occurrence payload is separate.
+    // The absent borrowed seal still occupies its inline optional header.
+    #[allow(dead_code)]
+    struct BorrowedSeal {
+        source: fe2o3_pliron::ProductionSemanticSsaIdentityV1,
+        graph: fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV12,
+        functions: Vec<()>,
+        storage: usize,
+    }
+    // Six physical and six source Vec headers. Both row payloads are empty.
     12 * std::mem::size_of::<Vec<()>>()
+        + std::mem::size_of::<Option<BorrowedSeal>>()
         + std::mem::size_of::<Capture>()
         + std::mem::size_of::<fe2o3_lower_mir_kernel::ProductionHelperMemoryStorageV1>()
         + std::mem::size_of::<usize>()

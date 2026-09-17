@@ -602,6 +602,7 @@ fn with_call_view_v1<'w, R>(
     budget.charge_work(argument_sum_v1(&[
         rows.parameter_bindings.len(),
         rows.parameter_component_bindings.len(),
+        rows.borrowed_parameter_bindings.len(),
         rows.ignored_parameter_bindings.len(),
         3,
     ])?)?;
@@ -624,6 +625,9 @@ fn with_call_view_v1<'w, R>(
                 same(row.correspondence_owner, row.semantic_function)
             }),
             components: argument_group_v1(&rows.parameter_component_bindings, |row| {
+                same(row.correspondence_owner, row.semantic_function)
+            }),
+            borrowed: argument_group_v1(&rows.borrowed_parameter_bindings, |row| {
                 same(row.correspondence_owner, row.semantic_function)
             }),
             ignored: argument_group_v1(&rows.ignored_parameter_bindings, |row| {

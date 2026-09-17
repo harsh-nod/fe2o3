@@ -706,6 +706,9 @@ enum SemanticCapabilityAvailabilityV1 {
 #[derive(Clone, Debug)]
 enum SemanticValueBindingV1 {
     Unit,
+    BorrowedAggregate {
+        view: usize,
+    },
     Unmaterialized,
     Aggregate(Vec<SemanticValueBindingV1>),
     Enum {
@@ -825,6 +828,7 @@ fn semantic_binding_kind_v1(binding: &SemanticValueBindingV1) -> &'static str {
     match binding {
         SemanticValueBindingV1::Unit => "unit",
         SemanticValueBindingV1::Unmaterialized => "unmaterialized enum payload",
+        SemanticValueBindingV1::BorrowedAggregate { .. } => "borrowed aggregate view",
         SemanticValueBindingV1::Aggregate(_) => "aggregate",
         SemanticValueBindingV1::Enum {
             variant: Some(_), ..
@@ -869,7 +873,8 @@ fn semantic_binding_can_restore_from_unique_source_v1(binding: &SemanticValueBin
             .iter()
             .all(semantic_binding_can_restore_from_unique_source_v1),
         SemanticValueBindingV1::Value { .. } => true,
-        SemanticValueBindingV1::Unmaterialized
+        SemanticValueBindingV1::BorrowedAggregate { .. }
+        | SemanticValueBindingV1::Unmaterialized
         | SemanticValueBindingV1::Enum { .. }
         | SemanticValueBindingV1::OptionPointer { .. }
         | SemanticValueBindingV1::OptionIndexWitness { .. }
@@ -912,6 +917,7 @@ fn reauthenticate_capabilities_from_enum_payload_v1(
             availability: slot, ..
         } => *slot = availability,
         SemanticValueBindingV1::Unit
+        | SemanticValueBindingV1::BorrowedAggregate { .. }
         | SemanticValueBindingV1::Unmaterialized
         | SemanticValueBindingV1::Enum { .. }
         | SemanticValueBindingV1::MathContext
@@ -945,6 +951,7 @@ impl SemanticValueBindingV1 {
                 Err("unmaterialized enum payload has no ordinary SSA representation")
             }
             Self::Unit
+            | Self::BorrowedAggregate { .. }
             | Self::Aggregate(_)
             | Self::Enum { .. }
             | Self::MathContext
@@ -1004,6 +1011,9 @@ impl SemanticValueBindingV1 {
             Self::Unit => {}
             Self::Unmaterialized => {
                 return Err("unmaterialized enum payload has no ordinary SSA representation");
+            }
+            Self::BorrowedAggregate { .. } => {
+                return Err("borrowed aggregate view requires explicit field transport");
             }
             Self::MathContext
             | Self::CollectiveContext

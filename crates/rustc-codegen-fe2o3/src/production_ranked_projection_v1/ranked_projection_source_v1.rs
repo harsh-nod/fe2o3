@@ -24,7 +24,7 @@ pub(super) struct RankedProjectionSourceV1<'s> {
 impl<'s> RankedProjectionSourceV1<'s> {
     pub(super) fn from_legacy(owner: &'s ProductionPreRankedKirOwnerV1) -> Result<Self, Error> {
         if owner.helper_source_policy_v1()
-            == fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1::UnitLocal
+            != fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1::RawEmpty
         {
             return Err(Error::StructuralValidation(
                 fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::LocalHelperSourceConsumerUnavailable {

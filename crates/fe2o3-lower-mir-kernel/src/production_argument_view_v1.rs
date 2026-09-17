@@ -1,6 +1,8 @@
 /// A source/local projection in the borrowed view, not a correspondence wire tag.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProductionArgumentProjectionV1 {
+    /// Enter the referent of a borrowed aggregate parameter.
+    Dereference,
     /// A tuple or nominal aggregate field.
     Field(u32),
     /// One array element; zero-sized marker arrays retain their full source index.
@@ -14,6 +16,8 @@ pub enum ProductionArgumentTraceV1<'a> {
     Direct(&'a SemanticKirParameterBindingV1),
     /// One local projection supplies this parameter.
     Component(&'a SemanticKirParameterComponentBindingV1),
+    /// A referent field supplies an address or an invariant stored carrier.
+    Borrowed(&'a SemanticKirBorrowedParameterBindingV1),
 }
 
 /// A borrowed actual KIR parameter, not an ABI byte offset or launch authority.
@@ -121,6 +125,7 @@ struct AdjustedArgumentShapeV1 {
     first: usize,
     end: usize,
     atomic: bool,
+    borrowed: bool,
     policy: ParameterLeafPolicyV1,
 }
 
@@ -360,6 +365,7 @@ fn with_owner_arguments_v1<'w, R>(
         rows.lowered_functions.len(),
         rows.parameter_bindings.len(),
         rows.parameter_component_bindings.len(),
+        rows.borrowed_parameter_bindings.len(),
         rows.ignored_parameter_bindings.len(),
         4,
     ])?)?;
@@ -385,6 +391,9 @@ fn with_owner_arguments_v1<'w, R>(
                 same(row.correspondence_owner, row.semantic_function)
             }),
             components: argument_group_v1(&rows.parameter_component_bindings, |row| {
+                same(row.correspondence_owner, row.semantic_function)
+            }),
+            borrowed: argument_group_v1(&rows.borrowed_parameter_bindings, |row| {
                 same(row.correspondence_owner, row.semantic_function)
             }),
             ignored: argument_group_v1(&rows.ignored_parameter_bindings, |row| {
@@ -438,6 +447,7 @@ impl<'s> ArgumentViewDataV1<'s> {
                 PhysicalArgumentTraceV1::Component(row) => {
                     ProductionArgumentTraceV1::Component(row)
                 }
+                PhysicalArgumentTraceV1::Borrowed(row) => ProductionArgumentTraceV1::Borrowed(row),
             },
         }))
     }
@@ -561,7 +571,18 @@ impl<'s> ArgumentViewDataV1<'s> {
                 coverage,
             })
         };
-        if shape.atomic {
+        if shape.borrowed {
+            if prefix.is_some() {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            }
+            visit_borrowed_argument_structure_v1(
+                self.semantic.types(),
+                mapped.abi().ty(),
+                shape.end - shape.first,
+                budget,
+                &mut emit,
+            )
+        } else if shape.atomic {
             visit_atomic_argument_structure_v1(
                 self.semantic.types(),
                 mapped.abi().ty(),

@@ -640,6 +640,157 @@ fn replace_abi(
     .unwrap()
 }
 
+// Cargo's dependency fingerprint identifies the provider used to build this
+// particular test executable, even when the dependency directory is warm.
+fn linked_device_provider_v29(executable: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    use std::fs;
+
+    #[derive(serde::Deserialize)]
+    struct Fingerprint {
+        deps: Vec<(u64, String, bool, u64)>,
+    }
+
+    let valid_hash = |hash: &str| {
+        hash.len() == 16
+            && hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    };
+    let hash = executable
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix("rustc_codegen_fe2o3-"))
+        .filter(|hash| valid_hash(hash))
+        .ok_or("expected the exact Cargo test executable name")?;
+    let dependencies = executable.parent().ok_or("test executable directory")?;
+    let fingerprints = dependencies
+        .parent()
+        .ok_or("Cargo profile directory")?
+        .join(".fingerprint");
+    let record = fingerprints
+        .join(format!("rustc-codegen-fe2o3-{hash}"))
+        .join("test-lib-rustc_codegen_fe2o3.json");
+    let bytes = fs::read(&record).map_err(|error| format!("{}: {error}", record.display()))?;
+    let record: Fingerprint = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    let linked = record
+        .deps
+        .iter()
+        .filter(|(_, name, _, _)| name == "fe2o3_device")
+        .collect::<Vec<_>>();
+    let [(_, _, _, fingerprint)] = linked.as_slice() else {
+        return Err("expected one recorded fe2o3_device dependency".into());
+    };
+    // Cargo stores the u64 fingerprint as hex-encoded little-endian bytes.
+    let expected = fingerprint
+        .to_le_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let mut matched = None;
+    for entry in fs::read_dir(&fingerprints).map_err(|error| error.to_string())? {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        let Some(hash) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_prefix("fe2o3-device-"))
+            .filter(|hash| valid_hash(hash))
+        else {
+            continue;
+        };
+        let identity = path.join("lib-fe2o3_device");
+        let observed = match fs::read_to_string(&identity) {
+            Ok(value) => value,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("{}: {error}", identity.display())),
+        };
+        if observed != expected {
+            continue;
+        }
+        let artifact = dependencies.join(format!("libfe2o3_device-{hash}.rlib"));
+        if matched.replace(artifact).is_some() {
+            return Err("multiple artifacts match the linked fe2o3_device fingerprint".into());
+        }
+    }
+    let artifact = matched.ok_or("linked fe2o3_device fingerprint is unavailable")?;
+    if !artifact.is_file() {
+        return Err(format!(
+            "linked provider artifact is unavailable: {}",
+            artifact.display()
+        ));
+    }
+    Ok(artifact)
+}
+
+#[test]
+fn execution_descriptor_provider_selection_preserves_the_linked_artifact() {
+    use std::fs;
+
+    let directory = TestTempDir::create("fe2o3-execution-provider-selection");
+    let dependencies = directory.path().join("debug/deps");
+    let fingerprints = directory.path().join("debug/.fingerprint");
+    fs::create_dir_all(&dependencies).unwrap();
+    let test_record = fingerprints.join("rustc-codegen-fe2o3-0123456789abcdef");
+    fs::create_dir_all(&test_record).unwrap();
+    let record = test_record.join("test-lib-rustc_codegen_fe2o3.json");
+    let executable = dependencies.join("rustc_codegen_fe2o3-0123456789abcdef");
+    // Non-palindromic bytes catch accidental big-endian fingerprint decoding.
+    let fingerprint = 0x0123456789abcdef_u64;
+    let write_record = |deps: serde_json::Value| {
+        fs::write(
+            &record,
+            serde_json::to_vec(&serde_json::json!({ "deps": deps })).unwrap(),
+        )
+        .unwrap();
+    };
+    let write_provider = |hash: &str, identity: &str| {
+        let path = fingerprints.join(format!("fe2o3-device-{hash}"));
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("lib-fe2o3_device"), identity).unwrap();
+        let artifact = dependencies.join(format!("libfe2o3_device-{hash}.rlib"));
+        fs::write(&artifact, []).unwrap();
+        artifact
+    };
+    write_record(serde_json::json!([[1, "fe2o3_device", false, fingerprint]]));
+    let exact = write_provider("1111111111111111", "efcdab8967452301");
+    let stale = write_provider("ffffffffffffffff", "0123456789abcdef");
+    assert_eq!(linked_device_provider_v29(&executable).unwrap(), exact);
+    fs::remove_file(&exact).unwrap();
+    assert!(stale.is_file());
+    assert!(
+        linked_device_provider_v29(&executable)
+            .unwrap_err()
+            .contains("artifact is unavailable")
+    );
+    fs::write(&exact, []).unwrap();
+    let duplicate = write_provider("2222222222222222", "efcdab8967452301");
+    assert!(
+        linked_device_provider_v29(&executable)
+            .unwrap_err()
+            .contains("multiple artifacts")
+    );
+    fs::remove_dir_all(fingerprints.join("fe2o3-device-2222222222222222")).unwrap();
+    fs::remove_file(duplicate).unwrap();
+    for deps in [
+        serde_json::json!([]),
+        serde_json::json!([[1, "fe2o3_device_lookalike", false, fingerprint]]),
+        serde_json::json!([
+            [1, "fe2o3_device", false, fingerprint],
+            [2, "fe2o3_device", false, fingerprint]
+        ]),
+    ] {
+        write_record(deps);
+        assert!(linked_device_provider_v29(&executable).is_err());
+    }
+    write_record(serde_json::json!([[1, "fe2o3_device", false, 0]]));
+    assert!(
+        linked_device_provider_v29(&executable)
+            .unwrap_err()
+            .contains("fingerprint is unavailable")
+    );
+    fs::remove_file(record).unwrap();
+    assert!(linked_device_provider_v29(&executable).is_err());
+}
+
 #[test]
 fn genuine_execution_descriptors_reject_substituted_types_and_abis() {
     const CHILD: &str = "FE2O3_EXECUTION_DESCRIPTOR_TEST_CHILD";
@@ -674,25 +825,7 @@ fn genuine_execution_descriptors_reject_substituted_types_and_abis() {
     std::fs::write(&source, SOURCE).unwrap();
     let executable = std::env::current_exe().unwrap();
     let dependencies = executable.parent().unwrap();
-    let providers = std::fs::read_dir(dependencies)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "rlib")
-                && path
-                    .file_name()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .starts_with("libfe2o3_device-")
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        providers.len(),
-        1,
-        "unambiguous Cargo-built provider required"
-    );
+    let provider = linked_device_provider_v29(&executable).unwrap();
     let sysroot = Command::new("rustc")
         .args(["--print", "sysroot"])
         .output()
@@ -709,7 +842,7 @@ fn genuine_execution_descriptors_reject_substituted_types_and_abis() {
         "--sysroot".into(),
         String::from_utf8(sysroot.stdout).unwrap().trim().into(),
         "--extern".into(),
-        format!("fe2o3_device={}", providers[0].display()),
+        format!("fe2o3_device={}", provider.display()),
         "-L".into(),
         format!("dependency={}", dependencies.display()),
         "-o".into(),

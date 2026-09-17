@@ -28,6 +28,9 @@ mod capability_provider;
 #[cfg(feature = "rust_call")]
 mod rust_call;
 
+#[cfg(feature = "rust_call_natural_shims")]
+mod rust_call_natural_shims;
+
 #[cfg(feature = "slice_metadata_arguments")]
 mod slice_metadata_arguments;
 
@@ -138,6 +141,7 @@ use fe2o3_device::{Wave64, WaveLane};
     feature = "launch_wrapping_integer",
     feature = "slice_metadata_arguments",
     feature = "rust_call",
+    feature = "rust_call_natural_shims",
     feature = "dynamic_local_array",
     feature = "provider_context",
     feature = "provider_context_entry",

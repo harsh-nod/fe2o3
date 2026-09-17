@@ -67,6 +67,7 @@ fn actual_same_owner_call_groups_have_qualified_bounded_lookup_and_no_duplicate_
             },
             calls: groups[0].calls, spans: groups[0].spans, direct: groups[0].direct,
             components: groups[0].components, ignored: groups[0].ignored,
+            borrowed: groups[0].borrowed,
         };
         let duplicate = [copy(), copy()];
         let floor = budget.storage();

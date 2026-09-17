@@ -478,6 +478,9 @@ fn complete_argument_view_preserves_nested_zero_nodes_and_packed_expanded_identi
                                             .unwrap();
                                         assert!(std::ptr::eq(row, expected));
                                     }
+                                    ProductionArgumentTraceV1::Borrowed(_) => {
+                                        panic!("by-value fixture acquired a borrowed-field parameter");
+                                    }
                                 }
                             }
                             assert_eq!(first, view.physical(0)?);

@@ -55,6 +55,10 @@ use crate::rustc_semantic_adapter_v1::{
 };
 
 #[cfg(test)]
+#[path = "rustc_semantic_plan_v1/context_body_commitment_v29_tests.rs"]
+mod context_body_commitment_v29_tests;
+
+#[cfg(test)]
 const PREFLIGHT_PLAN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v1";
 #[cfg(test)]
 const PREFLIGHT_PLAN_DOMAIN_V2: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v2";

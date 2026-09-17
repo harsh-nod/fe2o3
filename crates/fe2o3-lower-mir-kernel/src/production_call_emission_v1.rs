@@ -276,31 +276,38 @@ impl SemanticFunctionLoweringV1<'_> {
                 }
             };
             let function = self.semantic_function.index();
-            let failure = |detail| {
-                unsupported(
-                    function,
-                    Some(block.index()),
-                    None,
-                    detail,
-                )
-            };
-            let (value, actual) = match projection.component {
-                None => binding.value().map_err(failure)?,
-                Some(component) => {
-                    let key = (projection.source_argument, projection.tuple_field);
-                    if flattened
-                        .as_ref()
-                        .is_none_or(|(previous, _)| *previous != key)
-                    {
-                        flattened = Some((key, binding.values().map_err(failure)?));
+            let failure = |detail| unsupported(function, Some(block.index()), None, detail);
+            let (value, actual) = if projection.borrowed.is_some() {
+                let SemanticValueBindingV1::BorrowedAggregate { view } = binding else {
+                    return Err(failure(
+                        "borrowed helper parameter lacks an explicit borrowed view",
+                    ));
+                };
+                self.borrowed_aggregate_call_component_v1(
+                    *view,
+                    projection
+                        .component
+                        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                )?
+            } else {
+                match projection.component {
+                    None => binding.value().map_err(failure)?,
+                    Some(component) => {
+                        let key = (projection.source_argument, projection.tuple_field);
+                        if flattened
+                            .as_ref()
+                            .is_none_or(|(previous, _)| *previous != key)
+                        {
+                            flattened = Some((key, binding.values().map_err(failure)?));
+                        }
+                        flattened
+                            .as_ref()
+                            .unwrap()
+                            .1
+                            .get(component)
+                            .cloned()
+                            .ok_or_else(|| failure("defined call aggregate component is missing"))?
                     }
-                    flattened
-                        .as_ref()
-                        .unwrap()
-                        .1
-                        .get(component)
-                        .cloned()
-                        .ok_or_else(|| failure("defined call aggregate component is missing"))?
                 }
             };
             let value = if actual == Type::INDEX && expected == Type::Scalar(ScalarType::U64) {
@@ -319,21 +326,32 @@ impl SemanticFunctionLoweringV1<'_> {
             } else if actual == expected {
                 value
             } else {
-                return Err(ProductionSemanticKirErrorV1::DefinedCallArgumentTypeMismatch {
-                    function: self.semantic_function.index(),
-                    callee: callee.index(),
-                    block: block.index(),
-                    parameter,
-                    source_argument: projection.source_argument,
-                    tuple_field: projection.tuple_field,
-                    component: projection.component,
-                    expected,
-                    actual,
-                });
+                return Err(
+                    ProductionSemanticKirErrorV1::DefinedCallArgumentTypeMismatch {
+                        function: self.semantic_function.index(),
+                        callee: callee.index(),
+                        block: block.index(),
+                        parameter,
+                        source_argument: projection.source_argument,
+                        tuple_field: projection.tuple_field,
+                        component: projection.component,
+                        expected,
+                        actual,
+                    },
+                );
             };
             arguments.push(value);
         }
         let call_operation = call_operation_ordinal_v1(operations, block)?;
+        self.record_borrowed_aggregate_call_v1(
+            block,
+            call_operation,
+            callee,
+            &callee_id,
+            &signature.call_arguments,
+            &source_bindings,
+            &arguments,
+        )?;
         let results = self.emit_results(
             operations,
             signature.result_types,

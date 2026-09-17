@@ -109,6 +109,7 @@ struct SemanticSsaTransportInputV1<'a> {
 }
 
 impl SemanticControlFlowSsaPlanV1 {
+    #[cfg(test)]
     fn analyze(
         input: SemanticSsaTransportInputV1<'_>,
         semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
@@ -116,6 +117,29 @@ impl SemanticControlFlowSsaPlanV1 {
         direct_parameters: &BTreeMap<u32, Type>,
         max_analysis_work: usize,
         max_analysis_storage: usize,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        Self::analyze_with_borrowed(
+            input,
+            semantic_ssa,
+            option_dominance,
+            direct_parameters,
+            max_analysis_work,
+            max_analysis_storage,
+            &BTreeSet::new(),
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn analyze_with_borrowed<'work>(
+        input: SemanticSsaTransportInputV1<'_>,
+        semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
+        option_dominance: &SemanticOptionDominanceV1,
+        direct_parameters: &BTreeMap<u32, Type>,
+        max_analysis_work: usize,
+        max_analysis_storage: usize,
+        borrowed_locals: &BTreeSet<u32>,
+        mut borrowed_budget: Option<&mut (dyn BorrowedAggregateBudgetV1 + 'work)>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let SemanticSsaTransportInputV1 {
             types,
@@ -143,10 +167,29 @@ impl SemanticControlFlowSsaPlanV1 {
             .collect::<BTreeSet<_>>();
         let private_slot_candidates =
             private_slot_candidate_locals_v1(function, &shared_promoted, &retained_cross_edge);
+        if !borrowed_locals.is_empty() {
+            let budget = borrowed_budget
+                .as_deref_mut()
+                .ok_or(ArgumentResourceV1::Accounting)?;
+            // Prepay the added set lookups; ordinary SSA planning retains its
+            // existing limits. Borrowed cells are owned by the field emitter.
+            budget.charge_work(argument_product_v1(
+                argument_product_v1(borrowed_locals.len(), 4)?,
+                argument_sum_v1(&[function.locals().len(), 1])?,
+            )?)?;
+            for &local in borrowed_locals {
+                if function.locals().get(local as usize).is_none() {
+                    return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                }
+            }
+        }
         let mut retained_local_slots = BTreeMap::new();
         let mut has_retained_arrays = false;
         let mut unsupported_retained_locals = Vec::new();
         for local in private_slot_candidates {
+            if borrowed_locals.contains(&local) {
+                continue;
+            }
             let declaration = function
                 .locals()
                 .get(local as usize)
@@ -276,6 +319,14 @@ impl SemanticControlFlowSsaPlanV1 {
         )?;
         let mut promoted = BTreeMap::new();
         for local in transported {
+            if borrowed_locals.contains(&local) {
+                return Err(unsupported(
+                    semantic_function.index(),
+                    None,
+                    None,
+                    "borrowed aggregate SSA edge transport requires an independent component relation",
+                ));
+            }
             let declaration = function
                 .locals()
                 .get(local as usize)

@@ -38,6 +38,7 @@ fn build_canonical_call_index_v1<'a>(
         rows.terminator_operation_spans.len(),
         rows.parameter_bindings.len(),
         rows.parameter_component_bindings.len(),
+        rows.borrowed_parameter_bindings.len(),
         rows.ignored_parameter_bindings.len(),
     ])?)?;
     budget.reserve_storage(argument_sum_v1(&[
@@ -61,6 +62,7 @@ fn build_canonical_call_index_v1<'a>(
     let mut remaining_spans = rows.terminator_operation_spans.as_ref();
     let mut remaining_direct = rows.parameter_bindings.as_ref();
     let mut remaining_components = rows.parameter_component_bindings.as_ref();
+    let mut remaining_borrowed = rows.borrowed_parameter_bindings.as_ref();
     let mut remaining_ignored = rows.ignored_parameter_bindings.as_ref();
     // The sealed correspondence stores each association contiguously in
     // lowering order. Partition once; queries never search these rosters.
@@ -97,6 +99,7 @@ fn build_canonical_call_index_v1<'a>(
             spans: group!(remaining_spans, source),
             direct: group!(remaining_direct, source),
             components: group!(remaining_components, source),
+            borrowed: group!(remaining_borrowed, source),
             ignored: group!(remaining_ignored, source),
         };
         validate_call_correspondence_v1(
@@ -115,6 +118,7 @@ fn build_canonical_call_index_v1<'a>(
         || !remaining_spans.is_empty()
         || !remaining_direct.is_empty()
         || !remaining_components.is_empty()
+        || !remaining_borrowed.is_empty()
         || !remaining_ignored.is_empty()
     {
         return Err(mismatch());

@@ -482,6 +482,7 @@ fn with_pending_candidate(
         mut module,
         correspondence,
         requires_source,
+        requires_borrowed,
     } = lower_pending_module_with_assert_origins_v1(
         &ssa,
         ProductionSemanticKirLimitsV1::default(),
@@ -490,6 +491,7 @@ fn with_pending_candidate(
     )
     .unwrap();
     assert!(requires_source);
+    assert!(!requires_borrowed);
     mutate(&mut module);
     // Hostile operands must pass real module verification before source checking.
     let (executable, graph_storage) =

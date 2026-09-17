@@ -1,5 +1,12 @@
 // Shared representation selection for emission and correspondence replay.
 
+include!("production_borrowed_aggregate_budget_v1.rs");
+include!("production_borrowed_aggregate_shape_v1.rs");
+include!("production_borrowed_aggregate_records_v1.rs");
+include!("production_borrowed_aggregate_storage_v1.rs");
+include!("production_borrowed_aggregate_places_v1.rs");
+include!("production_borrowed_aggregate_region_v1.rs");
+
 fn check_argument_function_abi_v1(
     function: &SemanticFunctionDeclV1,
     function_id: SemanticFunctionIdV1,

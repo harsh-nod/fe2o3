@@ -14,6 +14,7 @@ impl From<ArgumentResourceV1> for ProductionSemanticKirErrorV1 {
 struct ArgumentTraceV1<'a> {
     direct: &'a [SemanticKirParameterBindingV1],
     components: &'a [SemanticKirParameterComponentBindingV1],
+    borrowed: &'a [SemanticKirBorrowedParameterBindingV1],
     ignored: &'a [SemanticKirIgnoredParameterBindingV1],
 }
 
@@ -21,6 +22,7 @@ struct ArgumentTraceV1<'a> {
 enum PhysicalArgumentTraceV1<'a> {
     Direct(&'a SemanticKirParameterBindingV1),
     Component(&'a SemanticKirParameterComponentBindingV1),
+    Borrowed(&'a SemanticKirBorrowedParameterBindingV1),
 }
 
 impl PhysicalArgumentTraceV1<'_> {
@@ -28,6 +30,7 @@ impl PhysicalArgumentTraceV1<'_> {
         match self {
             Self::Direct(binding) => binding.kernel_ir_value,
             Self::Component(binding) => binding.kernel_ir_value,
+            Self::Borrowed(binding) => binding.kernel_ir_value,
         }
     }
 }
@@ -136,7 +139,11 @@ fn check_argument_trace_v1<'w, R>(
     let body = target.body.as_ref().ok_or_else(mismatch)?;
     let abi = function.abi();
     check_argument_function_abi_v1(function, instance.semantic_function, instance.role)?;
-    let count = argument_sum_v1(&[trace.direct.len(), trace.components.len()])?;
+    let count = argument_sum_v1(&[
+        trace.direct.len(),
+        trace.components.len(),
+        trace.borrowed.len(),
+    ])?;
     if count != body.parameters.len()
         || count != target.signature.parameters.len()
         || target.id != instance.kernel_ir_function
@@ -227,6 +234,22 @@ fn check_argument_trace_v1<'w, R>(
             used: false,
         });
     }
+    for binding in trace.borrowed {
+        if instance.role != SemanticKirFunctionRoleV1::InternalHelper
+            || !exact_local(
+                binding.correspondence_owner,
+                binding.semantic_function,
+                binding.semantic_local,
+            )
+            || binding.projection.is_empty()
+        {
+            return Err(mismatch());
+        }
+        physical.push(IndexedArgumentTraceV1 {
+            trace: PhysicalArgumentTraceV1::Borrowed(binding),
+            used: false,
+        });
+    }
     for binding in trace.ignored {
         if !exact_local(
             binding.correspondence_owner,
@@ -264,6 +287,34 @@ fn check_argument_trace_v1<'w, R>(
         let shape_floor = budget.storage();
         let first = slot;
         prepay_argument_shape_v1(semantic, mapped.abi().ty(), budget)?;
+        if instance.role == SemanticKirFunctionRoleV1::InternalHelper
+            && let Some(shape) = borrowed_aggregate_helper_parameter_v1(
+                semantic.types(),
+                function,
+                instance.semantic_function,
+                mapped,
+                budget,
+            )?
+        {
+            check_borrowed_argument_parameters_v1(
+                &shape,
+                mapped,
+                target,
+                &mut physical,
+                &mut slot,
+                budget,
+            )?;
+            physical_locals[mapped.local().index() as usize] = true;
+            shapes.push(AdjustedArgumentShapeV1 {
+                first,
+                end: slot,
+                atomic: false,
+                borrowed: true,
+                policy: ParameterLeafPolicyV1::SharedSliceLeaves,
+            });
+            budget.release_storage(budget.storage() - shape_floor)?;
+            continue;
+        }
         let mut check = |path: &[SemanticKirParameterProjectionV1], semantic_type, ty: &Type| {
             budget.charge_work(argument_sum_v1(&[40, path.len()])?)?;
             let value = *body.parameters.get(slot).ok_or_else(mismatch)?;
@@ -295,6 +346,7 @@ fn check_argument_trace_v1<'w, R>(
                             == path.len() + usize::from(mapped.local_field().is_some())
                         && binding.projection.iter().copied().eq(expected)
                 }
+                PhysicalArgumentTraceV1::Borrowed(_) => false,
             };
             if !exact {
                 return Err(mismatch());
@@ -348,6 +400,7 @@ fn check_argument_trace_v1<'w, R>(
             first,
             end: slot,
             atomic,
+            borrowed: false,
             policy: match instance.role {
                 SemanticKirFunctionRoleV1::KernelEntry => ParameterLeafPolicyV1::PointerFree,
                 SemanticKirFunctionRoleV1::InternalHelper => {

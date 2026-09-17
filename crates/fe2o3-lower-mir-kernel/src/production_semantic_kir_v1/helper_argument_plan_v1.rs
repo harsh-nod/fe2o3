@@ -7,6 +7,7 @@ fn direct_scalar_helper_plan_v1(
     kernel_ir_function: FunctionId,
     max_argument_rows: usize,
     closure_budget: &mut ReachableClosureBudgetV1,
+    call_budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<LoweredFunctionPlanV1, ProductionSemanticKirErrorV1> {
     let arguments = semantic
         .logical_arguments_v1(function_id)
@@ -66,6 +67,8 @@ fn direct_scalar_helper_plan_v1(
     let mut parameter_component_bindings = Vec::new();
     let mut local_values = BTreeMap::<usize, Vec<ValueDef>>::new();
     let mut flattened = BTreeSet::new();
+    let mut borrowed_shapes = BTreeMap::new();
+    let mut borrowed_parameter_bindings = Vec::new();
     let mut next_value = u32::try_from(function.locals().len()).map_err(|_| {
         unsupported(
             function_id.index(),
@@ -76,6 +79,75 @@ fn direct_scalar_helper_plan_v1(
     })?;
     for mapped in arguments.adjusted_arguments() {
         let local = mapped.local().index() as usize;
+        if let Some(shape) = borrowed_aggregate_helper_parameter_v1(
+            types,
+            function,
+            function_id,
+            mapped,
+            call_budget,
+        )? {
+            closure_budget.charge_parameter_expansion(
+                logical_argument_rows_v1(function),
+                parameter_types.len(),
+                shape.leaves.len(),
+                max_argument_rows,
+            )?;
+            let mut values = borrowed_aggregate_vec_v1(shape.leaves.len(), call_budget)?;
+            for (component, leaf) in shape.leaves.iter().enumerate() {
+                let ty = leaf.parameter_type(shape.access, call_budget)?;
+                let value = if component == 0 {
+                    ValueId(local as u32)
+                } else {
+                    let value = ValueId(next_value);
+                    next_value = next_value
+                        .checked_add(1)
+                        .ok_or(ArgumentResourceV1::Arithmetic)?;
+                    value
+                };
+                call_budget.reserve_storage(std::mem::size_of::<Type>())?;
+                values.push(ValueDef::new(value, ty.clone()));
+                borrowed_aggregate_push_shared_v1(&mut parameter_types, ty, call_budget)?;
+                borrowed_aggregate_push_shared_v1(&mut parameter_values, value, call_budget)?;
+                let path = leaf.path.clone_in(call_budget)?;
+                let formal_path = path.clone_in(call_budget)?;
+                borrowed_aggregate_push_v1(
+                    &mut borrowed_parameter_bindings,
+                    SemanticKirBorrowedParameterBindingV1 {
+                        correspondence_owner,
+                        semantic_function: function_id,
+                        semantic_local: mapped.local(),
+                        reference_type: shape.reference_type,
+                        semantic_component_type: leaf.semantic_type,
+                        projection: formal_path.fields,
+                        transport: borrowed_parameter_transport_v1(leaf),
+                        kernel_ir_value: value,
+                    },
+                    call_budget,
+                )?;
+                borrowed_aggregate_push_shared_v1(
+                    &mut call_arguments,
+                    HelperCallArgumentV1 {
+                        source_argument: mapped.source_argument(),
+                        tuple_field: None,
+                        component: Some(component),
+                        borrowed: Some(BorrowedAggregateFormalV1 {
+                            local: mapped.local(),
+                            path,
+                            value,
+                        }),
+                    },
+                    call_budget,
+                )?;
+            }
+            call_budget.reserve_storage(
+                std::mem::size_of::<BorrowedAggregateShapeV1>()
+                    + std::mem::size_of::<Vec<ValueDef>>()
+                    + 8 * std::mem::size_of::<usize>(),
+            )?;
+            local_values.insert(local, values);
+            borrowed_shapes.insert(local, shape);
+            continue;
+        }
         let (shared_slice, components) =
             helper_parameter_shape_v1(types, function, function_id, mapped)?;
         closure_budget.charge_parameter_expansion(
@@ -148,6 +220,7 @@ fn direct_scalar_helper_plan_v1(
                 source_argument: mapped.source_argument(),
                 tuple_field: mapped.tuple_field(),
                 component: (!shared_slice).then_some(component),
+                borrowed: None,
             });
         }
     }
@@ -183,7 +256,13 @@ fn direct_scalar_helper_plan_v1(
                 semantic_type: *semantic_type,
             });
         }
-        let binding = if !flattened.contains(local) && values.len() == 1 {
+        let binding = if let Some(shape) = borrowed_shapes.remove(local) {
+            PlannedParameterLocalBindingV1::BorrowedAggregate {
+                local: *local,
+                shape,
+                values,
+            }
+        } else if !flattened.contains(local) && values.len() == 1 {
             PlannedParameterLocalBindingV1::Direct {
                 local: *local,
                 value: values[0].id,
@@ -205,6 +284,7 @@ fn direct_scalar_helper_plan_v1(
         .map(|(_, _, ty, _, _)| ty)
         .collect();
     Ok(LoweredFunctionPlanV1 {
+        borrowed_parameter_bindings,
         correspondence_owner,
         semantic_function: function_id,
         kernel_ir_function,
