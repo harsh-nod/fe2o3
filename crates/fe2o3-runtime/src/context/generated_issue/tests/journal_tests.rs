@@ -2,6 +2,8 @@ use super::*;
 use crate::Gfx942RuntimeBufferAccessV1::{self as Access, ReadOnly, ReadWrite, WriteOnly};
 use fe2o3_runtime_model::{ContextAllocationStateV1, ContextWriterStateV1};
 
+mod reader_tests;
+
 fn context_with_journal(writers: usize) -> RuntimeContextV1<KfdRuntimeBackendV1> {
     let mut context =
         RuntimeContextV1::open_with_version_journal_v1(KfdRuntimeBackendV1::mock(), 6, writers)
@@ -43,7 +45,7 @@ fn generated_shell_readers_block_whole_batch_retirement_before_any_shell_disposa
         ContextWriterKindV1,
     };
     for index in 0..3 {
-        let mut context = context_with_journal(2);
+        let mut context = context_with_journal(3);
         let (hold, plan, _, _) = install_with_access(&mut context, false, [ReadOnly; 3]);
         let before = states(&context, &plan);
         let member = plan.members[index].unwrap();
@@ -117,7 +119,7 @@ fn generated_shell_readers_block_whole_batch_retirement_before_any_shell_disposa
 #[test]
 fn generated_journal_begin_binds_only_original_writable_members() {
     for accesses in access_rosters() {
-        let mut context = context_with_journal(2);
+        let mut context = context_with_journal(3);
         let (hold, plan, roster, _) = install_with_access(&mut context, false, accesses);
         let before = states(&context, &plan);
         let credits = context
@@ -316,7 +318,7 @@ fn generated_journal_generic_observation_and_no_effect_cannot_settle() {
 #[test]
 fn generated_journal_assumed_c4_settlement_is_exact_and_neighbor_preserving() {
     for accesses in access_rosters() {
-        let mut context = context_with_journal(2);
+        let mut context = context_with_journal(3);
         let (hold, plan, roster, _) = install_with_access(&mut context, false, accesses);
         context
             .begin_generated_issue_v1(&hold, plan, &roster)
@@ -385,7 +387,7 @@ fn generated_journal_assumed_c4_settlement_is_exact_and_neighbor_preserving() {
 #[test]
 fn generated_journal_stop_batch_disposes_unknown_and_read_only_members() {
     for accesses in access_rosters() {
-        let mut context = context_with_journal(2);
+        let mut context = context_with_journal(3);
         let (hold, plan, roster, _) = install_with_access(&mut context, false, accesses);
         context
             .begin_generated_issue_v1(&hold, plan, &roster)
@@ -564,7 +566,7 @@ fn generated_journal_success_advances_lineage_once_before_shell_retirement() {
     // Isolate the shared settlement bookkeeping under an assumed successful
     // protected completion; no native receipt is produced by this test.
     context
-        .settle_generated_writer_v1(hold.stream(), SubmissionWriterOutcomeV1::Success)
+        .settle_generated_custody_v1(hold.stream(), SubmissionWriterOutcomeV1::Success)
         .unwrap();
     let after = states(&context, &plan);
     for index in 0..3 {
@@ -589,7 +591,7 @@ fn generated_journal_success_advances_lineage_once_before_shell_retirement() {
     );
     assert!(
         context
-            .settle_generated_writer_v1(hold.stream(), SubmissionWriterOutcomeV1::Success)
+            .settle_generated_custody_v1(hold.stream(), SubmissionWriterOutcomeV1::Success)
             .is_err()
     );
     assert_eq!(states(&context, &plan), after);
@@ -680,29 +682,27 @@ fn generated_journal_stop_preflights_read_only_members_before_batch_disposal() {
         .unwrap();
     context.install_generated_submission_v1(&hold, 900).unwrap();
     let id = context.generated_issues[&hold.stream()].id;
-    let extra = context.retain_test_writer_v1(
-        &[plan.members[0].unwrap().logical],
-        fe2o3_runtime_model::ContextWriterKindV1::Synchronous,
-    );
+    let extra = reader_tests::add_foreign_reader(&mut context, &plan, 0);
     let before = states(&context, &plan);
     assert!(
         context
             .settle_stopped_gfx942_context_v1(&hold, id, 900)
             .is_err()
     );
-    assert!(context.is_terminal());
+    assert!(!context.is_terminal());
     assert_eq!(states(&context, &plan), before);
     assert!(context.backend.validate_generated_shell_disposal_v1(&plan));
     assert_eq!(context.allocations.len(), 3);
     assert_eq!(context.backend_allocations.len(), 3);
-    assert_eq!(context.version_journal_writer_records_v1(), Some(2));
+    assert_eq!(context.version_journal_writer_records_v1(), Some(1));
+    assert_eq!(context.version_journal_read_records_v1(), Some(2));
     assert!(
         context
             .versions
-            .as_ref()
+            .as_mut()
             .unwrap()
-            .journal_for_test()
-            .lookup_writer(extra)
+            .read_leases_for_test_v1()
+            .lookup_read(extra)
             .is_ok()
     );
     core::mem::forget(context);

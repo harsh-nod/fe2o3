@@ -1203,7 +1203,7 @@ fn stale_internal_preparation_retains_provisional_root_before_any_backend_submis
     let id = RuntimeSubmissionIdV1::new(f.context.context_generation, f.context.next_id().unwrap());
     assert_eq!(
         f.context
-            .begin_submission_readers_v1(id, prepared)
+            .begin_submission_readers_v1(id, prepared, SubmissionWriterDomainV1::Ordinary)
             .unwrap_err(),
         RuntimeValidationErrorV1::InvalidBackendDescription
     );

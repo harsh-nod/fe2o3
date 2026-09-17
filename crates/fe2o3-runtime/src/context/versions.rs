@@ -259,7 +259,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// requires protected completion or whole-batch Stop disposal, never generic
     /// polling. Writer capacity and unresolved writes gate subsequent writes.
     /// Built-in copies and pure Read typed bindings retain bounded source read
-    /// leases. Reader capacity equals writer capacity but its occupancy is
+    /// leases. Generated ReadOnly shell members use the same reader arena with
+    /// a distinct stream/hold/shell domain and protected settlement boundary.
+    /// Reader capacity equals writer capacity but its occupancy is
     /// independent. A writable alias uses only exclusive writer custody.
     /// Source writes and retirement reject while any reader remains.
     /// Backend aliases and initialized-input

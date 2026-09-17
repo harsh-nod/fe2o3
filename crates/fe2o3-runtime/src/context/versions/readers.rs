@@ -1,4 +1,4 @@
-//! Ordinary input custody, not initializedness or executable/reuse authority.
+//! Domain-bound input custody, not initializedness or executable/reuse authority.
 
 use super::*;
 use fe2o3_runtime_model::{
@@ -24,10 +24,11 @@ pub(in crate::context) struct PreparedSubmissionReadersV1 {
 }
 
 pub(super) struct RetainedSubmissionReadersV1 {
+    domain: SubmissionWriterDomainV1,
     pub(super) sources: Vec<ContextReadSourceV1>,
     requests: Vec<ContextAllocationReadV1>,
     references: Vec<ContextReadLeaseReferenceV1>,
-    marker: Option<SubmissionReaderMarkerV1>,
+    pub(super) marker: Option<SubmissionReaderMarkerV1>,
 }
 
 impl ContextVersionsV1 {
@@ -70,6 +71,24 @@ impl ContextVersionsV1 {
         id: RuntimeSubmissionIdV1,
     ) -> &[ContextReadSourceV1] {
         &self.submission_readers[&id].sources
+    }
+
+    #[cfg(test)]
+    pub(in crate::context) fn submission_reader_identity_for_test_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> (SubmissionWriterDomainV1, &[ContextReadLeaseReferenceV1]) {
+        let root = &self.submission_readers[&id];
+        (root.domain, &root.references)
+    }
+
+    #[cfg(test)]
+    pub(in crate::context) fn set_submission_reader_domain_for_test_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+        domain: SubmissionWriterDomainV1,
+    ) {
+        self.submission_readers.get_mut(&id).unwrap().domain = domain;
     }
 }
 
@@ -170,6 +189,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
             Ok(Some(PreparedSubmissionReadersV1 {
                 root: RetainedSubmissionReadersV1 {
+                    domain: SubmissionWriterDomainV1::Ordinary,
                     sources: originals,
                     requests,
                     references,
@@ -184,6 +204,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &mut self,
         id: RuntimeSubmissionIdV1,
         prepared: Option<PreparedSubmissionReadersV1>,
+        domain: SubmissionWriterDomainV1,
     ) -> Result<Option<SubmissionReaderMarkerV1>, RuntimeValidationErrorV1> {
         let Some(mut prepared) = prepared else {
             return Ok(None);
@@ -198,7 +219,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     || versions
                         .submission_writers
                         .get(&id)
-                        .is_some_and(|root| root.domain != SubmissionWriterDomainV1::Ordinary)
+                        .is_some_and(|root| root.domain != domain)
                 {
                     return Err(ContextVersionJournalErrorV1::InvalidState);
                 }
@@ -207,6 +228,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                     "preallocated reader root"
                 );
                 // Root the complete original roster before the model can acquire any lease.
+                prepared.root.domain = domain;
                 versions.submission_readers.insert(id, prepared.root);
                 let root = versions
                     .submission_readers
@@ -245,75 +267,103 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         id: RuntimeSubmissionIdV1,
     ) -> Result<(), RuntimeValidationErrorV1> {
         self.require_ordinary_submission_v1(id)?;
+        self.release_readers_in_domain_v1(id, SubmissionWriterDomainV1::Ordinary)
+    }
+
+    pub(super) fn validate_submission_readers_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+        domain: SubmissionWriterDomainV1,
+    ) -> Result<Option<&RetainedSubmissionReadersV1>, ContextVersionJournalErrorV1> {
+        use ContextVersionJournalErrorV1 as E;
+        let record = self.submissions.get(&id);
+        let expected = record.and_then(|record| record.journal_read);
+        let absent = if expected.is_some() {
+            Err(E::InvalidReference)
+        } else {
+            Ok(None)
+        };
+        let Some(versions) = self.versions.as_ref() else {
+            return absent;
+        };
+        let Some(root) = versions.submission_readers.get(&id) else {
+            return absent;
+        };
+        let marker = root.marker.ok_or(E::InvalidReference)?;
+        let consumer = ContextWriterKeyV1 {
+            context_generation: id.context_generation,
+            local: id.local,
+            kind: ContextWriterKindV1::Submission,
+        };
+        if root.domain != domain
+            || marker.count == 0
+            || marker.count != root.sources.len()
+            || marker.count != root.requests.len()
+            || marker.count != root.references.len()
+            || root.references[0] != marker.first
+            || marker.first.consumer != consumer
+            || record.is_some() && expected != Some(marker)
+            || record.is_some_and(|record| {
+                record.journal_writer
+                    != versions.submission_writers.get(&id).map(|root| root.writer)
+            })
+            || versions
+                .submission_writers
+                .get(&id)
+                .is_some_and(|root| root.domain != domain)
+        {
+            return Err(E::InvalidReference);
+        }
+        for (index, ((source, request), reference)) in root
+            .sources
+            .iter()
+            .zip(&root.requests)
+            .zip(&root.references)
+            .enumerate()
+        {
+            if reference.consumer != consumer
+                || marker.first.incarnation.checked_add(index as u64) != Some(reference.incarnation)
+                || source.region.allocation.context_generation
+                    != request.allocation.key.context_generation
+                || source.region.allocation.local != request.allocation.key.local
+                || source.region.byte_offset != request.byte_offset
+                || source.region.byte_len != request.byte_len
+                || source.record.byte_len != request.byte_extent
+                || index > 0
+                    && root.sources[index - 1].region.allocation >= source.region.allocation
+                || self.allocations.get(&source.region.allocation) != Some(&source.record)
+                || !self
+                    .backend_allocations
+                    .contains(&source.record.backend_allocation)
+                || !self
+                    .allocation_admission
+                    .has_expected_credit(source.region.allocation, source.record.device)
+                || versions.validate_live(source.region.allocation, &source.record)?
+                    != request.allocation
+                || versions.journal.lookup_read(*reference)? != *request
+            {
+                return Err(E::InvalidReference);
+            }
+        }
+        Ok(Some(root))
+    }
+
+    pub(super) fn release_readers_in_domain_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+        domain: SubmissionWriterDomainV1,
+    ) -> Result<(), RuntimeValidationErrorV1> {
         let result = catch_unwind(AssertUnwindSafe(|| {
-            use ContextVersionJournalErrorV1 as E;
-            let record = self.submissions.get(&id);
-            let expected = record.and_then(|record| record.journal_read);
-            let absent = if expected.is_some() {
-                Err(E::InvalidReference)
-            } else {
-                Ok(())
-            };
-            let Some(versions) = self.versions.as_mut() else {
-                return absent;
-            };
-            let Some(root) = versions.submission_readers.get(&id) else {
-                return absent;
-            };
-            let marker = root.marker.ok_or(E::InvalidReference)?;
+            if self.validate_submission_readers_v1(id, domain)?.is_none() {
+                return Ok(());
+            }
+            let versions = self.versions.as_mut().expect("validated readers");
+            let root = &versions.submission_readers[&id];
             let consumer = ContextWriterKeyV1 {
                 context_generation: id.context_generation,
                 local: id.local,
                 kind: ContextWriterKindV1::Submission,
             };
-            if marker.count == 0
-                || marker.count != root.sources.len()
-                || marker.count != root.requests.len()
-                || marker.count != root.references.len()
-                || root.references[0] != marker.first
-                || marker.first.consumer != consumer
-                || record.is_some() && expected != Some(marker)
-                || record.is_some_and(|record| {
-                    record.journal_writer
-                        != versions.submission_writers.get(&id).map(|root| root.writer)
-                })
-                || versions
-                    .submission_writers
-                    .get(&id)
-                    .is_some_and(|root| root.domain != SubmissionWriterDomainV1::Ordinary)
-            {
-                return Err(E::InvalidReference);
-            }
-            for (index, ((source, request), reference)) in root
-                .sources
-                .iter()
-                .zip(&root.requests)
-                .zip(&root.references)
-                .enumerate()
-            {
-                if reference.consumer != consumer
-                    || marker.first.incarnation.checked_add(index as u64)
-                        != Some(reference.incarnation)
-                    || source.region.allocation.context_generation
-                        != request.allocation.key.context_generation
-                    || source.region.allocation.local != request.allocation.key.local
-                    || source.region.byte_offset != request.byte_offset
-                    || source.region.byte_len != request.byte_len
-                    || source.record.byte_len != request.byte_extent
-                    || self.allocations.get(&source.region.allocation) != Some(&source.record)
-                    || !self
-                        .backend_allocations
-                        .contains(&source.record.backend_allocation)
-                    || !self
-                        .allocation_admission
-                        .has_expected_credit(source.region.allocation, source.record.device)
-                    || versions.validate_live(source.region.allocation, &source.record)?
-                        != request.allocation
-                    || versions.journal.lookup_read(*reference)? != *request
-                {
-                    return Err(E::InvalidReference);
-                }
-            }
             versions.journal.release_reads(
                 consumer,
                 &root.references,
@@ -323,7 +373,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             if let Some(record) = self.submissions.get_mut(&id) {
                 record.journal_read = None;
             }
-            Ok(())
+            Ok::<_, ContextVersionJournalErrorV1>(())
         }));
         match result {
             Ok(Ok(())) => Ok(()),

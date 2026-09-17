@@ -4,6 +4,10 @@ Development above `d91e470f15bc2c42078842d983a4bb2f36ed4a8c`, not A1/A2,
 issue #182, native protected execution or HIP/HSA parity acceptance. Native R125
 CPU/test, Admission R118B C1-C3 and Resources R116/V3 remain accepted.
 
+Subsequent development adds [generated ReadOnly input leases](runtime-context-generated-read-leases-v1.md).
+Those independent domain-bound readers settle before this writer boundary;
+the original qualification archive below remains historical writer-only evidence.
+
 ## Begin And Observation
 
 The opt-in Context journal now tracks protected generated mutation attempts.
@@ -68,7 +72,7 @@ generic observation rejection, terminal custody and post-model credit faults
 are checked. Existing nonjournal generated and ordinary async tests remain.
 
 No native GPU, solver or matched HIP/HSA benchmark is run for this packet.
-Protected production verifier/machine refinement, input/read leases, aliases,
+Protected production verifier/machine refinement, initialized-input authority, aliases,
 ordered overlapping writers, cross-run versions, content reuse, aggregate
 residency, native high-depth/overlap/failure qualification and performance remain
 open. This journal bookkeeping grants no new execution or content-reuse authority.

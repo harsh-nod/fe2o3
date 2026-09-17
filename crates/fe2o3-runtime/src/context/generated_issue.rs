@@ -22,6 +22,7 @@ pub(super) struct GeneratedIssueV1 {
     roster: GeneratedHostRosterV1,
     phase: PhaseV1,
     pub(super) expected_writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
+    pub(super) expected_reader: Option<SubmissionReaderMarkerV1>,
     // The original hold/carrier remain in the owner-only async registry. Owned
     // shutdown retains that registry and this Context together on any failure.
     submission: Option<RuntimeSubmissionV1<()>>,
@@ -81,6 +82,14 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             &attempt.roster,
         )
         .map_err(|_| RuntimeValidationErrorV1::InvalidBackendDescription)?;
+        self.validate_generated_readers_v1(
+            attempt.id,
+            generated_writer_domain_v1(plan),
+            attempt.expected_reader,
+            plan,
+            &attempt.roster,
+        )
+        .map_err(|_| RuntimeValidationErrorV1::InvalidBackendDescription)?;
         Ok(token)
     }
 
@@ -121,6 +130,19 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         let mut destinations =
             [RuntimeAllocationIdV1::new(0, 0); fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_DATA_V1];
         let mut count = 0;
+        let mut sources = Vec::new();
+        sources
+            .try_reserve_exact(
+                roster.buffers[..roster.count]
+                    .iter()
+                    .filter(|slot| {
+                        slot.is_some_and(|slot| {
+                            slot.access == crate::Gfx942RuntimeBufferAccessV1::ReadOnly
+                        })
+                    })
+                    .count(),
+            )
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
         for (member, slot) in plan.members[..plan.count]
             .iter()
             .zip(&roster.buffers[..roster.count])
@@ -130,12 +152,27 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             {
                 destinations[count] = member.expect("validated plan").logical;
                 count += 1;
+            } else {
+                let member = member.expect("validated plan");
+                let record = self.allocations[&member.logical];
+                sources.push(ContextReadSourceV1 {
+                    region: RuntimeMemoryRegionV1 {
+                        allocation: member.logical,
+                        access: RuntimeAccessV1::Read,
+                        byte_offset: 0,
+                        byte_len: record.byte_len,
+                    },
+                    record,
+                });
             }
         }
+        sources.sort_unstable_by_key(|source| source.region.allocation);
         let prepared = self.prepare_submission_writer_v1(&destinations[..count])?;
+        let readers = self.prepare_submission_readers_v1(&sources)?;
         let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
-        let expected_writer =
-            self.begin_submission_writer_v1(id, prepared, generated_writer_domain_v1(&plan))?;
+        let domain = generated_writer_domain_v1(&plan);
+        let expected_writer = self.begin_submission_writer_v1(id, prepared, domain)?;
+        let expected_reader = self.begin_submission_readers_v1(id, readers, domain)?;
         self.generated_issues.insert(
             hold.stream(),
             GeneratedIssueV1 {
@@ -144,6 +181,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 roster: roster.clone(),
                 phase: PhaseV1::Entering,
                 expected_writer,
+                expected_reader,
                 submission: None,
             },
         );
@@ -167,6 +205,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         let id = attempt.id;
         let device = attempt.plan.binding.device;
         let journal_writer = attempt.expected_writer;
+        let journal_read = attempt.expected_reader;
         attempt.submission = Some(RuntimeSubmissionV1 {
             id,
             backend_submission,
@@ -187,7 +226,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 quiescent: false,
                 status: RuntimeCompletionStatusV1::Pending,
                 journal_writer,
-                journal_read: None,
+                journal_read,
             },
         );
         assert!(self.backend_submissions.insert(backend_submission));
@@ -318,7 +357,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             {
                 return Ok(());
             }
-            let unread = self.generated_shells_unread_v1(&plan);
+            let unread = self.generated_issue_exclusive_readers_v1(&plan);
             if !self.journal_result_v1(unread)? {
                 return Ok(());
             }
@@ -348,7 +387,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         if token.id != id || token.backend_submission != backend_submission {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
         }
-        self.settle_generated_writer_v1(hold.stream(), SubmissionWriterOutcomeV1::Unknown)?;
+        self.settle_generated_custody_v1(hold.stream(), SubmissionWriterOutcomeV1::Unknown)?;
         self.generated_issues
             .get_mut(&hold.stream())
             .expect("retained attempt")
@@ -362,24 +401,28 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         Ok(())
     }
 
-    fn settle_generated_writer_v1(
+    fn settle_generated_custody_v1(
         &mut self,
         stream: RuntimeStreamIdV1,
         outcome: SubmissionWriterOutcomeV1,
     ) -> Result<(), RuntimeValidationErrorV1> {
+        if matches!(outcome, SubmissionWriterOutcomeV1::NoEffect) {
+            return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+        }
         let attempt = self
             .generated_issues
             .get(&stream)
             .ok_or(RuntimeValidationErrorV1::InvalidBackendDescription)?;
         let (id, domain) = attempt.writer_binding_v1();
-        let result = self.validate_generated_writer_v1(
-            id,
-            domain,
-            attempt.expected_writer,
-            &attempt.plan,
-            &attempt.roster,
-        );
-        self.journal_result_v1(result)?;
+        let result = self.generated_issue_exclusive_readers_v1(&attempt.plan);
+        if !self.journal_result_v1(result)? {
+            return Err(RuntimeValidationErrorV1::ContextReserved);
+        }
+        self.release_generated_submission_readers_v1(id, domain)?;
+        self.generated_issues
+            .get_mut(&stream)
+            .expect("retained attempt")
+            .expected_reader = None;
         self.settle_generated_submission_writer_v1(id, domain, outcome)?;
         if matches!(outcome, SubmissionWriterOutcomeV1::Success) {
             self.generated_issues

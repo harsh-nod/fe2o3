@@ -395,7 +395,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
         let journal_writer =
             self.begin_submission_writer_v1(id, prepared, SubmissionWriterDomainV1::Ordinary)?;
-        let journal_read = self.begin_submission_readers_v1(id, reads)?;
+        let journal_read =
+            self.begin_submission_readers_v1(id, reads, SubmissionWriterDomainV1::Ordinary)?;
         let result = self.invoke_journal_backend_v1(submit);
         let backend_submission = match result {
             Ok(handle) => handle,

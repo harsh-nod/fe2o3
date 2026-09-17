@@ -55,9 +55,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         {
             return Err(E::InvalidReference);
         }
-        if self.submissions.get(&id).is_some_and(|record| {
-            record.journal_writer != expected || record.journal_read.is_some()
-        }) {
+        if self
+            .submissions
+            .get(&id)
+            .is_some_and(|record| record.journal_writer != expected)
+        {
             return Err(E::InvalidReference);
         }
         let Some(versions) = self.versions.as_ref() else {
@@ -67,9 +69,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 Err(E::InvalidState)
             };
         };
-        if versions.submission_readers.contains_key(&id) {
-            return Err(E::InvalidReference);
-        }
         let writable =
             roster.buffers[..roster.count]
                 .iter()
@@ -148,6 +147,118 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         Ok(())
     }
 
+    pub(in crate::context) fn validate_generated_readers_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+        domain: SubmissionWriterDomainV1,
+        expected: Option<SubmissionReaderMarkerV1>,
+        plan: &GeneratedShellPlanV1,
+        roster: &GeneratedHostRosterV1,
+    ) -> Result<(), ContextVersionJournalErrorV1> {
+        use ContextVersionJournalErrorV1 as E;
+        if domain
+            != (SubmissionWriterDomainV1::Generated {
+                stream: plan.binding.stream,
+                hold: plan.binding.hold,
+                shell_key: plan.key,
+            })
+            || plan.count != roster.count
+        {
+            return Err(E::InvalidReference);
+        }
+        let root = self.validate_submission_readers_v1(id, domain)?;
+        if root.and_then(|root| root.marker) != expected {
+            return Err(E::InvalidReference);
+        }
+        if self.versions.is_none() {
+            return Ok(());
+        }
+        let members = plan.members.get(..plan.count).ok_or(E::InvalidState)?;
+        let slots = roster.buffers.get(..roster.count).ok_or(E::InvalidState)?;
+        let mut count = 0;
+        for (ordinal, (member, slot)) in members.iter().zip(slots).enumerate() {
+            let member = member.ok_or(E::InvalidAllocationReference)?;
+            let slot = slot.ok_or(E::InvalidAllocationReference)?;
+            if slot.ordinal != ordinal || slot.bytes != member.description.byte_len {
+                return Err(E::InvalidAllocationReference);
+            }
+            if slot.access != crate::Gfx942RuntimeBufferAccessV1::ReadOnly {
+                continue;
+            }
+            let root = root.ok_or(E::InvalidReference)?;
+            let index = root
+                .sources
+                .binary_search_by_key(&member.logical, |source| source.region.allocation)
+                .map_err(|_| E::InvalidAllocationReference)?;
+            let source = &root.sources[index];
+            if source.region.access != RuntimeAccessV1::Read
+                || source.region.byte_offset != 0
+                || source.region.byte_len != member.description.byte_len
+                || source.record.backend_allocation != member.backend
+                || source.record.device != plan.binding.device
+                || source.record.kind != member.description.kind
+            {
+                return Err(E::InvalidAllocationReference);
+            }
+            count += 1;
+        }
+        if count != root.map_or(0, |root| root.sources.len()) {
+            return Err(E::InvalidReference);
+        }
+        Ok(())
+    }
+
+    // Own input leases survive native readback/retirement. Any additional reader
+    // still blocks those effects; final shell disposal separately requires zero.
+    pub(in crate::context) fn generated_issue_exclusive_readers_v1(
+        &self,
+        plan: &GeneratedShellPlanV1,
+    ) -> Result<bool, ContextVersionJournalErrorV1> {
+        use ContextVersionJournalErrorV1 as E;
+        let attempt = self
+            .generated_issues
+            .get(&plan.binding.stream)
+            .ok_or(E::InvalidReference)?;
+        let (original, roster) = attempt.writer_roster_v1();
+        if original != plan {
+            return Err(E::InvalidReference);
+        }
+        let (id, domain) = attempt.writer_binding_v1();
+        self.validate_generated_writer_v1(id, domain, attempt.expected_writer, plan, roster)?;
+        self.validate_generated_readers_v1(id, domain, attempt.expected_reader, plan, roster)?;
+        let Some(versions) = self.versions.as_ref() else {
+            return Ok(true);
+        };
+        for (member, slot) in plan.members[..plan.count]
+            .iter()
+            .zip(&roster.buffers[..roster.count])
+        {
+            let member = member.ok_or(E::InvalidAllocationReference)?;
+            let slot = slot.ok_or(E::InvalidAllocationReference)?;
+            let record = self
+                .allocations
+                .get(&member.logical)
+                .ok_or(E::InvalidAllocationReference)?;
+            let reference = versions.validate_live(member.logical, record)?;
+            let own = usize::from(slot.access == crate::Gfx942RuntimeBufferAccessV1::ReadOnly);
+            if versions.journal.reader_count(reference)? != own {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    pub(in crate::context) fn release_generated_submission_readers_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+        domain: SubmissionWriterDomainV1,
+    ) -> Result<(), RuntimeValidationErrorV1> {
+        if !matches!(domain, SubmissionWriterDomainV1::Generated { .. }) {
+            return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
+        }
+        self.release_readers_in_domain_v1(id, domain)
+    }
+
     pub(in crate::context) fn settle_generated_submission_writer_v1(
         &mut self,
         id: RuntimeSubmissionIdV1,
@@ -182,6 +293,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         let attempt = self.generated_issues.get(&plan.binding.stream);
         if let Some(attempt) = attempt {
             let (id, domain) = attempt.writer_binding_v1();
+            if attempt.expected_reader.is_some()
+                || self
+                    .submissions
+                    .get(&id)
+                    .is_some_and(|record| record.journal_read.is_some())
+                || self
+                    .versions
+                    .as_ref()
+                    .is_some_and(|versions| versions.submission_readers.contains_key(&id))
+            {
+                return Err(E::AllocationBusy);
+            }
             if let Some(writer) = attempt.expected_writer {
                 let (original_plan, roster) = attempt.writer_roster_v1();
                 if *original_plan != plan {

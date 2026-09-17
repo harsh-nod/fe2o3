@@ -9,6 +9,7 @@ pub(super) struct NativeSettlementV1 {
     stream: RuntimeStreamIdV1,
     hold: u64,
     expected_writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
+    expected_reader: Option<SubmissionReaderMarkerV1>,
 }
 
 #[cfg(test)]
@@ -23,6 +24,7 @@ pub(super) fn assume_native_settlement_for_context_test_v1(
         stream: hold.stream(),
         hold: hold.identity(),
         expected_writer: attempt.expected_writer,
+        expected_reader: attempt.expected_reader,
     }
 }
 
@@ -71,7 +73,8 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             let id = token.id;
             let backend_submission = token.backend_submission;
             let expected_writer = attempt.expected_writer;
-            let unread = self.generated_shells_unread_v1(&plan);
+            let expected_reader = attempt.expected_reader;
+            let unread = self.generated_issue_exclusive_readers_v1(&plan);
             if !self.journal_result_v1(unread)? {
                 return Err(RuntimeValidationErrorV1::ContextReserved.into());
             }
@@ -118,6 +121,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                     stream: hold.stream(),
                     hold: hold.identity(),
                     expected_writer,
+                    expected_reader,
                 })
             })?;
             self.settle_completed_gfx942_context_v1(hold, settled)
@@ -147,10 +151,11 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             || settled.stream != hold.stream()
             || settled.hold != hold.identity()
             || settled.expected_writer != attempt.expected_writer
+            || settled.expected_reader != attempt.expected_reader
         {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
         }
-        self.settle_generated_writer_v1(hold.stream(), SubmissionWriterOutcomeV1::Success)?;
+        self.settle_generated_custody_v1(hold.stream(), SubmissionWriterOutcomeV1::Success)?;
         self.retire_generated_shells_v1(hold)?;
         self.require_graph_access(hold.graph_access())?;
         self.release_unpublished_hold_v1(hold)?;

@@ -1,0 +1,1712 @@
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue.rs b/crates/fe2o3-runtime/src/context/generated_issue.rs
+index 9377775b2..8f9515746 100644
+--- a/crates/fe2o3-runtime/src/context/generated_issue.rs
++++ b/crates/fe2o3-runtime/src/context/generated_issue.rs
+@@ -22,6 +22,7 @@ pub(super) struct GeneratedIssueV1 {
+     roster: GeneratedHostRosterV1,
+     phase: PhaseV1,
+     pub(super) expected_writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
++    pub(super) expected_reader: Option<SubmissionReaderMarkerV1>,
+     // The original hold/carrier remain in the owner-only async registry. Owned
+     // shutdown retains that registry and this Context together on any failure.
+     submission: Option<RuntimeSubmissionV1<()>>,
+@@ -81,6 +82,14 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+             &attempt.roster,
+         )
+         .map_err(|_| RuntimeValidationErrorV1::InvalidBackendDescription)?;
++        self.validate_generated_readers_v1(
++            attempt.id,
++            generated_writer_domain_v1(plan),
++            attempt.expected_reader,
++            plan,
++            &attempt.roster,
++        )
++        .map_err(|_| RuntimeValidationErrorV1::InvalidBackendDescription)?;
+         Ok(token)
+     }
+ 
+@@ -121,6 +130,19 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+         let mut destinations =
+             [RuntimeAllocationIdV1::new(0, 0); fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_DATA_V1];
+         let mut count = 0;
++        let mut sources = Vec::new();
++        sources
++            .try_reserve_exact(
++                roster.buffers[..roster.count]
++                    .iter()
++                    .filter(|slot| {
++                        slot.is_some_and(|slot| {
++                            slot.access == crate::Gfx942RuntimeBufferAccessV1::ReadOnly
++                        })
++                    })
++                    .count(),
++            )
++            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+         for (member, slot) in plan.members[..plan.count]
+             .iter()
+             .zip(&roster.buffers[..roster.count])
+@@ -130,12 +152,27 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+             {
+                 destinations[count] = member.expect("validated plan").logical;
+                 count += 1;
++            } else {
++                let member = member.expect("validated plan");
++                let record = self.allocations[&member.logical];
++                sources.push(ContextReadSourceV1 {
++                    region: RuntimeMemoryRegionV1 {
++                        allocation: member.logical,
++                        access: RuntimeAccessV1::Read,
++                        byte_offset: 0,
++                        byte_len: record.byte_len,
++                    },
++                    record,
++                });
+             }
+         }
++        sources.sort_unstable_by_key(|source| source.region.allocation);
+         let prepared = self.prepare_submission_writer_v1(&destinations[..count])?;
++        let readers = self.prepare_submission_readers_v1(&sources)?;
+         let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
+-        let expected_writer =
+-            self.begin_submission_writer_v1(id, prepared, generated_writer_domain_v1(&plan))?;
++        let domain = generated_writer_domain_v1(&plan);
++        let expected_writer = self.begin_submission_writer_v1(id, prepared, domain)?;
++        let expected_reader = self.begin_submission_readers_v1(id, readers, domain)?;
+         self.generated_issues.insert(
+             hold.stream(),
+             GeneratedIssueV1 {
+@@ -144,6 +181,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+                 roster: roster.clone(),
+                 phase: PhaseV1::Entering,
+                 expected_writer,
++                expected_reader,
+                 submission: None,
+             },
+         );
+@@ -167,6 +205,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+         let id = attempt.id;
+         let device = attempt.plan.binding.device;
+         let journal_writer = attempt.expected_writer;
++        let journal_read = attempt.expected_reader;
+         attempt.submission = Some(RuntimeSubmissionV1 {
+             id,
+             backend_submission,
+@@ -187,7 +226,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+                 quiescent: false,
+                 status: RuntimeCompletionStatusV1::Pending,
+                 journal_writer,
+-                journal_read: None,
++                journal_read,
+             },
+         );
+         assert!(self.backend_submissions.insert(backend_submission));
+@@ -318,7 +357,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+             {
+                 return Ok(());
+             }
+-            let unread = self.generated_shells_unread_v1(&plan);
++            let unread = self.generated_issue_exclusive_readers_v1(&plan);
+             if !self.journal_result_v1(unread)? {
+                 return Ok(());
+             }
+@@ -348,7 +387,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+         if token.id != id || token.backend_submission != backend_submission {
+             return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
+         }
+-        self.settle_generated_writer_v1(hold.stream(), SubmissionWriterOutcomeV1::Unknown)?;
++        self.settle_generated_custody_v1(hold.stream(), SubmissionWriterOutcomeV1::Unknown)?;
+         self.generated_issues
+             .get_mut(&hold.stream())
+             .expect("retained attempt")
+@@ -362,24 +401,28 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+         Ok(())
+     }
+ 
+-    fn settle_generated_writer_v1(
++    fn settle_generated_custody_v1(
+         &mut self,
+         stream: RuntimeStreamIdV1,
+         outcome: SubmissionWriterOutcomeV1,
+     ) -> Result<(), RuntimeValidationErrorV1> {
++        if matches!(outcome, SubmissionWriterOutcomeV1::NoEffect) {
++            return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
++        }
+         let attempt = self
+             .generated_issues
+             .get(&stream)
+             .ok_or(RuntimeValidationErrorV1::InvalidBackendDescription)?;
+         let (id, domain) = attempt.writer_binding_v1();
+-        let result = self.validate_generated_writer_v1(
+-            id,
+-            domain,
+-            attempt.expected_writer,
+-            &attempt.plan,
+-            &attempt.roster,
+-        );
+-        self.journal_result_v1(result)?;
++        let result = self.generated_issue_exclusive_readers_v1(&attempt.plan);
++        if !self.journal_result_v1(result)? {
++            return Err(RuntimeValidationErrorV1::ContextReserved);
++        }
++        self.release_generated_submission_readers_v1(id, domain)?;
++        self.generated_issues
++            .get_mut(&stream)
++            .expect("retained attempt")
++            .expected_reader = None;
+         self.settle_generated_submission_writer_v1(id, domain, outcome)?;
+         if matches!(outcome, SubmissionWriterOutcomeV1::Success) {
+             self.generated_issues
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue/completion.rs b/crates/fe2o3-runtime/src/context/generated_issue/completion.rs
+index ce05a98c5..bcd69e96d 100644
+--- a/crates/fe2o3-runtime/src/context/generated_issue/completion.rs
++++ b/crates/fe2o3-runtime/src/context/generated_issue/completion.rs
+@@ -9,6 +9,7 @@ pub(super) struct NativeSettlementV1 {
+     stream: RuntimeStreamIdV1,
+     hold: u64,
+     expected_writer: Option<fe2o3_runtime_model::ContextWriterReferenceV1>,
++    expected_reader: Option<SubmissionReaderMarkerV1>,
+ }
+ 
+ #[cfg(test)]
+@@ -23,6 +24,7 @@ pub(super) fn assume_native_settlement_for_context_test_v1(
+         stream: hold.stream(),
+         hold: hold.identity(),
+         expected_writer: attempt.expected_writer,
++        expected_reader: attempt.expected_reader,
+     }
+ }
+ 
+@@ -71,7 +73,8 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+             let id = token.id;
+             let backend_submission = token.backend_submission;
+             let expected_writer = attempt.expected_writer;
+-            let unread = self.generated_shells_unread_v1(&plan);
++            let expected_reader = attempt.expected_reader;
++            let unread = self.generated_issue_exclusive_readers_v1(&plan);
+             if !self.journal_result_v1(unread)? {
+                 return Err(RuntimeValidationErrorV1::ContextReserved.into());
+             }
+@@ -118,6 +121,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+                     stream: hold.stream(),
+                     hold: hold.identity(),
+                     expected_writer,
++                    expected_reader,
+                 })
+             })?;
+             self.settle_completed_gfx942_context_v1(hold, settled)
+@@ -147,10 +151,11 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
+             || settled.stream != hold.stream()
+             || settled.hold != hold.identity()
+             || settled.expected_writer != attempt.expected_writer
++            || settled.expected_reader != attempt.expected_reader
+         {
+             return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
+         }
+-        self.settle_generated_writer_v1(hold.stream(), SubmissionWriterOutcomeV1::Success)?;
++        self.settle_generated_custody_v1(hold.stream(), SubmissionWriterOutcomeV1::Success)?;
+         self.retire_generated_shells_v1(hold)?;
+         self.require_graph_access(hold.graph_access())?;
+         self.release_unpublished_hold_v1(hold)?;
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue/tests/journal_tests.rs b/crates/fe2o3-runtime/src/context/generated_issue/tests/journal_tests.rs
+index 15d9a1217..eb363e13b 100644
+--- a/crates/fe2o3-runtime/src/context/generated_issue/tests/journal_tests.rs
++++ b/crates/fe2o3-runtime/src/context/generated_issue/tests/journal_tests.rs
+@@ -2,6 +2,8 @@ use super::*;
+ use crate::Gfx942RuntimeBufferAccessV1::{self as Access, ReadOnly, ReadWrite, WriteOnly};
+ use fe2o3_runtime_model::{ContextAllocationStateV1, ContextWriterStateV1};
+ 
++mod reader_tests;
++
+ fn context_with_journal(writers: usize) -> RuntimeContextV1<KfdRuntimeBackendV1> {
+     let mut context =
+         RuntimeContextV1::open_with_version_journal_v1(KfdRuntimeBackendV1::mock(), 6, writers)
+@@ -43,7 +45,7 @@ fn generated_shell_readers_block_whole_batch_retirement_before_any_shell_disposa
+         ContextWriterKindV1,
+     };
+     for index in 0..3 {
+-        let mut context = context_with_journal(2);
++        let mut context = context_with_journal(3);
+         let (hold, plan, _, _) = install_with_access(&mut context, false, [ReadOnly; 3]);
+         let before = states(&context, &plan);
+         let member = plan.members[index].unwrap();
+@@ -117,7 +119,7 @@ fn generated_shell_readers_block_whole_batch_retirement_before_any_shell_disposa
+ #[test]
+ fn generated_journal_begin_binds_only_original_writable_members() {
+     for accesses in access_rosters() {
+-        let mut context = context_with_journal(2);
++        let mut context = context_with_journal(3);
+         let (hold, plan, roster, _) = install_with_access(&mut context, false, accesses);
+         let before = states(&context, &plan);
+         let credits = context
+@@ -316,7 +318,7 @@ fn generated_journal_generic_observation_and_no_effect_cannot_settle() {
+ #[test]
+ fn generated_journal_assumed_c4_settlement_is_exact_and_neighbor_preserving() {
+     for accesses in access_rosters() {
+-        let mut context = context_with_journal(2);
++        let mut context = context_with_journal(3);
+         let (hold, plan, roster, _) = install_with_access(&mut context, false, accesses);
+         context
+             .begin_generated_issue_v1(&hold, plan, &roster)
+@@ -385,7 +387,7 @@ fn generated_journal_assumed_c4_settlement_is_exact_and_neighbor_preserving() {
+ #[test]
+ fn generated_journal_stop_batch_disposes_unknown_and_read_only_members() {
+     for accesses in access_rosters() {
+-        let mut context = context_with_journal(2);
++        let mut context = context_with_journal(3);
+         let (hold, plan, roster, _) = install_with_access(&mut context, false, accesses);
+         context
+             .begin_generated_issue_v1(&hold, plan, &roster)
+@@ -564,7 +566,7 @@ fn generated_journal_success_advances_lineage_once_before_shell_retirement() {
+     // Isolate the shared settlement bookkeeping under an assumed successful
+     // protected completion; no native receipt is produced by this test.
+     context
+-        .settle_generated_writer_v1(hold.stream(), SubmissionWriterOutcomeV1::Success)
++        .settle_generated_custody_v1(hold.stream(), SubmissionWriterOutcomeV1::Success)
+         .unwrap();
+     let after = states(&context, &plan);
+     for index in 0..3 {
+@@ -589,7 +591,7 @@ fn generated_journal_success_advances_lineage_once_before_shell_retirement() {
+     );
+     assert!(
+         context
+-            .settle_generated_writer_v1(hold.stream(), SubmissionWriterOutcomeV1::Success)
++            .settle_generated_custody_v1(hold.stream(), SubmissionWriterOutcomeV1::Success)
+             .is_err()
+     );
+     assert_eq!(states(&context, &plan), after);
+@@ -680,29 +682,27 @@ fn generated_journal_stop_preflights_read_only_members_before_batch_disposal() {
+         .unwrap();
+     context.install_generated_submission_v1(&hold, 900).unwrap();
+     let id = context.generated_issues[&hold.stream()].id;
+-    let extra = context.retain_test_writer_v1(
+-        &[plan.members[0].unwrap().logical],
+-        fe2o3_runtime_model::ContextWriterKindV1::Synchronous,
+-    );
++    let extra = reader_tests::add_foreign_reader(&mut context, &plan, 0);
+     let before = states(&context, &plan);
+     assert!(
+         context
+             .settle_stopped_gfx942_context_v1(&hold, id, 900)
+             .is_err()
+     );
+-    assert!(context.is_terminal());
++    assert!(!context.is_terminal());
+     assert_eq!(states(&context, &plan), before);
+     assert!(context.backend.validate_generated_shell_disposal_v1(&plan));
+     assert_eq!(context.allocations.len(), 3);
+     assert_eq!(context.backend_allocations.len(), 3);
+-    assert_eq!(context.version_journal_writer_records_v1(), Some(2));
++    assert_eq!(context.version_journal_writer_records_v1(), Some(1));
++    assert_eq!(context.version_journal_read_records_v1(), Some(2));
+     assert!(
+         context
+             .versions
+-            .as_ref()
++            .as_mut()
+             .unwrap()
+-            .journal_for_test()
+-            .lookup_writer(extra)
++            .read_leases_for_test_v1()
++            .lookup_read(extra)
+             .is_ok()
+     );
+     core::mem::forget(context);
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue/tests/journal_tests/reader_tests.rs b/crates/fe2o3-runtime/src/context/generated_issue/tests/journal_tests/reader_tests.rs
+new file mode 100644
+index 000000000..ced72c4f7
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/context/generated_issue/tests/journal_tests/reader_tests.rs
+@@ -0,0 +1,799 @@
++use super::*;
++use fe2o3_runtime_model::{
++    ContextAllocationReadV1, ContextReadLeaseReferenceV1, ContextReadQuiescenceEvidenceV1,
++    ContextWriterKeyV1, ContextWriterKindV1,
++};
++
++pub(super) fn add_foreign_reader(
++    context: &mut RuntimeContextV1<KfdRuntimeBackendV1>,
++    plan: &GeneratedShellPlanV1,
++    ordinal: usize,
++) -> ContextReadLeaseReferenceV1 {
++    let member = plan.members[ordinal].unwrap();
++    let allocation = context.allocations[&member.logical].journal.unwrap();
++    let state = states(context, plan)[ordinal];
++    let consumer = ContextWriterKeyV1 {
++        context_generation: context.context_generation,
++        local: context.next_id().unwrap(),
++        kind: ContextWriterKindV1::Submission,
++    };
++    let mut output = [None];
++    // Inert model premise: generated shell IDs do not escape the public API.
++    context
++        .versions
++        .as_mut()
++        .unwrap()
++        .read_leases_for_test_v1()
++        .acquire_reads(
++            consumer,
++            &[ContextAllocationReadV1 {
++                allocation,
++                device: state.device,
++                byte_extent: state.byte_extent,
++                byte_offset: 0,
++                byte_len: state.byte_extent,
++                attempt_epoch: state.attempt_epoch,
++                content_lineage: state.content_lineage,
++            }],
++            &mut output,
++        )
++        .unwrap();
++    output[0].unwrap()
++}
++
++fn references(
++    context: &RuntimeContextV1<KfdRuntimeBackendV1>,
++    id: RuntimeSubmissionIdV1,
++) -> Vec<ContextReadLeaseReferenceV1> {
++    context
++        .versions
++        .as_ref()
++        .unwrap()
++        .submission_reader_identity_for_test_v1(id)
++        .1
++        .to_vec()
++}
++
++#[test]
++fn generated_inputs_bind_exact_domain_records_and_whole_extents() {
++    for accesses in access_rosters() {
++        let mut context = context_with_journal(3);
++        let (hold, plan, roster, _) = install_with_access(&mut context, false, accesses);
++        context
++            .begin_generated_issue_v1(&hold, plan, &roster)
++            .unwrap();
++        let attempt = &context.generated_issues[&hold.stream()];
++        let id = attempt.id;
++        let marker = attempt.expected_reader;
++        let readers = accesses
++            .iter()
++            .filter(|&&access| access == ReadOnly)
++            .count();
++        assert_eq!(context.version_journal_read_records_v1(), Some(readers));
++        assert_eq!(marker.is_some(), readers != 0);
++        if readers != 0 {
++            let versions = context.versions.as_ref().unwrap();
++            let (domain, refs) = versions.submission_reader_identity_for_test_v1(id);
++            assert_eq!(domain, generated_writer_domain_v1(&plan));
++            assert_eq!(marker.unwrap().count, readers);
++            assert_eq!(marker.unwrap().first, refs[0]);
++            let sources = versions.submission_reader_sources_for_test_v1(id);
++            assert_eq!(sources.len(), readers);
++            for (source, reference) in sources.iter().zip(refs) {
++                let member = plan.members[..plan.count]
++                    .iter()
++                    .flatten()
++                    .find(|member| member.logical == source.region.allocation)
++                    .unwrap();
++                assert_eq!(source.record, context.allocations[&member.logical]);
++                assert_eq!(source.record.backend_allocation, member.backend);
++                assert_eq!(source.region.byte_offset, 0);
++                assert_eq!(source.region.byte_len, member.description.byte_len);
++                assert_eq!(reference.consumer.context_generation, id.context_generation);
++                assert_eq!(reference.consumer.local, id.local);
++                assert_eq!(reference.consumer.kind, ContextWriterKindV1::Submission);
++            }
++        }
++        context.install_generated_submission_v1(&hold, 900).unwrap();
++        assert_eq!(context.submissions[&id].journal_read, marker);
++        assert!(context.generated_issue_token_v1(&hold, &plan).is_ok());
++        assert_eq!(
++            context.generated_issue_exclusive_readers_v1(&plan),
++            Ok(true)
++        );
++        assert_eq!(context.generated_shells_unread_v1(&plan), Ok(readers == 0));
++    }
++}
++
++#[test]
++fn generated_reader_capacity_rejects_whole_batch_before_writer_begin() {
++    for (first_access, second_access, admitted) in [
++        ([ReadOnly; 3], [ReadOnly, ReadWrite, WriteOnly], false),
++        ([ReadOnly; 3], [ReadWrite; 3], true),
++        ([ReadOnly, ReadWrite, WriteOnly], [ReadOnly; 3], false),
++    ] {
++        let mut context = context_with_journal(3);
++        let (first, first_plan, first_roster, _) =
++            install_with_access(&mut context, false, first_access);
++        context
++            .begin_generated_issue_v1(&first, first_plan, &first_roster)
++            .unwrap();
++        let first_id = context.generated_issues[&first.stream()].id;
++        let original = references(&context, first_id);
++        let (second, plan, roster, _) = install_with_access(&mut context, false, second_access);
++        let before = states(&context, &plan);
++        let next = context.next_identity;
++        let writers = context.version_journal_writer_records_v1();
++        let credits = context
++            .allocation_admission_usage_v1(plan.binding.device)
++            .unwrap();
++        let result = context.begin_generated_issue_v1(&second, plan, &roster);
++        if admitted {
++            result.unwrap();
++            assert_eq!(context.next_identity, next + 1);
++            assert_eq!(context.version_journal_writer_records_v1(), Some(1));
++        } else {
++            assert!(matches!(
++                result,
++                Err(RuntimeErrorV1::Validation(
++                    RuntimeValidationErrorV1::Capacity
++                ))
++            ));
++            assert_eq!(context.next_identity, next);
++            assert_eq!(states(&context, &plan), before);
++            assert_eq!(context.version_journal_writer_records_v1(), writers);
++            assert!(!context.generated_issues.contains_key(&second.stream()));
++        }
++        assert_eq!(references(&context, first_id), original);
++        assert_eq!(
++            context.version_journal_read_records_v1(),
++            Some(original.len())
++        );
++        assert_eq!(
++            context
++                .allocation_admission_usage_v1(plan.binding.device)
++                .unwrap(),
++            credits
++        );
++        assert!(context.submissions.is_empty());
++        assert!(!context.is_terminal());
++    }
++}
++
++#[test]
++fn generated_busy_input_rejects_before_identity_and_any_reader_acquisition() {
++    for ordinal in 0..3 {
++        let mut context = context_with_journal(3);
++        let (hold, plan, roster, _) = install_with_access(&mut context, false, [ReadOnly; 3]);
++        let _writer = context.retain_test_writer_v1(
++            &[plan.members[ordinal].unwrap().logical],
++            ContextWriterKindV1::Synchronous,
++        );
++        let before = states(&context, &plan);
++        let next = context.next_identity;
++        assert!(matches!(
++            context.begin_generated_issue_v1(&hold, plan, &roster),
++            Err(RuntimeErrorV1::Validation(
++                RuntimeValidationErrorV1::ContextReserved
++            ))
++        ));
++        assert_eq!(context.next_identity, next);
++        assert_eq!(states(&context, &plan), before);
++        assert_eq!(context.version_journal_read_records_v1(), Some(0));
++        assert_eq!(context.version_journal_writer_records_v1(), Some(1));
++        assert!(context.generated_issues.is_empty());
++        assert!(!context.is_terminal());
++    }
++}
++
++#[test]
++fn generated_read_only_domain_survives_missing_backend_handle_and_ordinary_release() {
++    for installed in [false, true] {
++        let mut context = context_with_journal(3);
++        let (hold, plan, roster, _) = install_with_access(&mut context, false, [ReadOnly; 3]);
++        context
++            .begin_generated_issue_v1(&hold, plan, &roster)
++            .unwrap();
++        let id = context.generated_issues[&hold.stream()].id;
++        let original = references(&context, id);
++        if installed {
++            context.install_generated_submission_v1(&hold, 900).unwrap();
++        }
++        let before = states(&context, &plan);
++        assert!(context.release_submission_readers_v1(id).is_err());
++        assert_eq!(references(&context, id), original);
++        assert_eq!(states(&context, &plan), before);
++        assert_eq!(context.version_journal_read_records_v1(), Some(3));
++        assert_eq!(context.version_journal_writer_records_v1(), Some(0));
++        assert_eq!(context.is_terminal(), !installed);
++        assert!(!context.cleanup().is_complete());
++        core::mem::forget(context);
++    }
++}
++
++#[test]
++fn generated_readers_survive_all_ordinary_observations() {
++    for accesses in [[ReadOnly; 3], [ReadOnly, ReadWrite, WriteOnly]] {
++        let mut context = context_with_journal(3);
++        let (hold, plan, roster, _) = install_with_access(&mut context, false, accesses);
++        context
++            .begin_generated_issue_v1(&hold, plan, &roster)
++            .unwrap();
++        context.install_generated_submission_v1(&hold, 900).unwrap();
++        let id = context.generated_issues[&hold.stream()].id;
++        let original = references(&context, id);
++        let before = states(&context, &plan);
++        let record = context.submissions[&id];
++        let mut token = context
++            .generated_issues
++            .get_mut(&hold.stream())
++            .unwrap()
++            .submission
++            .take()
++            .unwrap();
++        for _ in 0..2 {
++            for result in [
++                context.poll(&mut token),
++                context.wait(&mut token, Duration::ZERO),
++                context.drain(&mut token, Instant::now() + Duration::from_secs(1)),
++            ] {
++                assert!(matches!(
++                    result,
++                    Err(RuntimeErrorV1::Validation(
++                        RuntimeValidationErrorV1::ContextReserved
++                    ))
++                ));
++            }
++            assert!(matches!(
++                context.cancel(&mut token),
++                Err(RuntimeErrorV1::Validation(
++                    RuntimeValidationErrorV1::ContextReserved
++                ))
++            ));
++            assert!(context.record_event(&token).is_err());
++            assert!(context.release_submission_ref(&token, None).is_err());
++            for status in [
++                RuntimeCompletionStatusV1::Pending,
++                RuntimeCompletionStatusV1::Succeeded,
++                RuntimeCompletionStatusV1::QuiescentWithoutResult,
++            ] {
++                assert_eq!(
++                    context.transition_submission_status(id, status),
++                    Err(RuntimeValidationErrorV1::ContextReserved)
++                );
++            }
++            assert_eq!(references(&context, id), original);
++            assert_eq!(states(&context, &plan), before);
++            completion_tests::assert_submission_retained(&context, id, record);
++        }
++        context
++            .generated_issues
++            .get_mut(&hold.stream())
++            .unwrap()
++            .submission = Some(token);
++        assert!(!context.is_terminal());
++    }
++}
++
++#[test]
++fn generated_read_only_no_handle_failure_quarantines_inputs_without_writer() {
++    for panic in [false, true] {
++        let mut context = context_with_journal(3);
++        let (hold, plan, roster, _) = install_with_access(&mut context, false, [ReadOnly; 3]);
++        let (_, neighbor_plan, _, _) = install_with_access(&mut context, false, [ReadWrite; 3]);
++        let neighbor = states(&context, &neighbor_plan);
++        context
++            .begin_generated_issue_v1(&hold, plan, &roster)
++            .unwrap();
++        let id = context.generated_issues[&hold.stream()].id;
++        let original = references(&context, id);
++        let before = states(&context, &plan);
++        let diagnostic = std::sync::Arc::new(());
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            if panic {
++                std::panic::panic_any(diagnostic.clone());
++            }
++            Err(RuntimeValidationErrorV1::Capacity.into())
++        }));
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            context.finish_generated_issue_v1(&hold, result)
++        }));
++        if panic {
++            assert!(std::sync::Arc::ptr_eq(
++                result.unwrap_err().downcast_ref().unwrap(),
++                &diagnostic
++            ));
++        } else {
++            assert!(matches!(
++                result.unwrap(),
++                Err(RuntimeErrorV1::Validation(
++                    RuntimeValidationErrorV1::Capacity
++                ))
++            ));
++        }
++        assert!(context.is_terminal());
++        assert_eq!(
++            context.generated_issues[&hold.stream()].phase,
++            PhaseV1::Unknown
++        );
++        assert_eq!(references(&context, id), original);
++        assert_eq!(states(&context, &plan), before);
++        assert_eq!(states(&context, &neighbor_plan), neighbor);
++        assert_eq!(context.version_journal_writer_records_v1(), Some(0));
++        let usage = context
++            .allocation_admission_usage_v1(plan.binding.device)
++            .unwrap()
++            .unwrap();
++        assert_eq!(usage.quarantined_records, 3);
++        assert_eq!(usage.retained_records, 3);
++        assert_eq!(
++            usage.used,
++            crate::RuntimeResourceVectorV1::ZERO
++                .with(crate::RuntimeResourceKindV1::RequestedAllocationBytes, 120)
++                .with(crate::RuntimeResourceKindV1::AllocationRecords, 6)
++        );
++        assert!(context.retire_gfx942_issued_v1(&hold).is_err());
++        assert_eq!(context.version_journal_read_records_v1(), Some(3));
++        core::mem::forget(context);
++    }
++}
++
++#[test]
++fn generated_assumed_completion_or_stop_releases_only_original_read_batch() {
++    for stop in [false, true] {
++        for accesses in [[ReadOnly; 3], [ReadOnly, ReadWrite, WriteOnly]] {
++            let mut context = context_with_journal(6);
++            let (hold, plan, roster, _) = install_with_access(&mut context, false, accesses);
++            context
++                .begin_generated_issue_v1(&hold, plan, &roster)
++                .unwrap();
++            context.install_generated_submission_v1(&hold, 900).unwrap();
++            let id = context.generated_issues[&hold.stream()].id;
++            let (neighbor, neighbor_plan, neighbor_roster, _) =
++                install_with_access(&mut context, false, [ReadOnly; 3]);
++            context
++                .begin_generated_issue_v1(&neighbor, neighbor_plan, &neighbor_roster)
++                .unwrap();
++            context
++                .install_generated_submission_v1(&neighbor, 901)
++                .unwrap();
++            let neighbor_id = context.generated_issues[&neighbor.stream()].id;
++            let neighbor_refs = references(&context, neighbor_id);
++            let neighbor_states = states(&context, &neighbor_plan);
++            let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
++            let notifications = observed.clone();
++            let token = context
++                .generated_issues
++                .get_mut(&hold.stream())
++                .unwrap()
++                .submission
++                .take()
++                .unwrap();
++            context
++                .on_completion(&token, move |status| {
++                    notifications.lock().unwrap().push(status)
++                })
++                .unwrap();
++            context
++                .generated_issues
++                .get_mut(&hold.stream())
++                .unwrap()
++                .submission = Some(token);
++            // These Context tails assume native disposal/currentness, not native execution.
++            if stop {
++                context
++                    .settle_stopped_gfx942_context_v1(&hold, id, 900)
++                    .unwrap();
++                assert_eq!(
++                    *observed.lock().unwrap(),
++                    [RuntimeCompletionStatusV1::QuiescentWithoutResult]
++                );
++                context.release_unpublished_hold_v1(&hold).unwrap();
++            } else {
++                context
++                    .generated_issues
++                    .get_mut(&hold.stream())
++                    .unwrap()
++                    .phase = PhaseV1::Unknown;
++                let wrong =
++                    completion::assume_native_settlement_for_context_test_v1(&context, &neighbor);
++                assert!(
++                    context
++                        .settle_completed_gfx942_context_v1(&hold, wrong)
++                        .is_err()
++                );
++                assert!(observed.lock().unwrap().is_empty());
++                let receipt =
++                    completion::assume_native_settlement_for_context_test_v1(&context, &hold);
++                context
++                    .settle_completed_gfx942_context_v1(&hold, receipt)
++                    .unwrap();
++                assert_eq!(
++                    *observed.lock().unwrap(),
++                    [RuntimeCompletionStatusV1::Succeeded]
++                );
++            }
++            assert_eq!(context.version_journal_read_records_v1(), Some(3));
++            assert_eq!(references(&context, neighbor_id), neighbor_refs);
++            assert_eq!(states(&context, &neighbor_plan), neighbor_states);
++            assert_eq!(context.allocations.len(), 3);
++            assert_eq!(context.backend_allocations.len(), 3);
++            assert_eq!(context.version_journal_writer_records_v1(), Some(0));
++            assert!(!context.generated_issues.contains_key(&hold.stream()));
++            assert!(!context.submissions.contains_key(&id));
++            let usage = context
++                .allocation_admission_usage_v1(plan.binding.device)
++                .unwrap()
++                .unwrap();
++            assert_eq!(usage.retained_records, 3);
++            assert_eq!(usage.quarantined_records, 0);
++            assert_eq!(
++                usage.used,
++                crate::RuntimeResourceVectorV1::ZERO
++                    .with(crate::RuntimeResourceKindV1::RequestedAllocationBytes, 60)
++                    .with(crate::RuntimeResourceKindV1::AllocationRecords, 3)
++            );
++            assert!(!context.is_terminal());
++        }
++    }
++}
++
++#[test]
++fn generated_marker_root_reference_and_domain_corruption_cannot_release_batch() {
++    for fault in 0..10 {
++        let mut context = context_with_journal(3);
++        let (hold, plan, roster, _) = install_with_access(&mut context, false, [ReadOnly; 3]);
++        context
++            .begin_generated_issue_v1(&hold, plan, &roster)
++            .unwrap();
++        context.install_generated_submission_v1(&hold, 900).unwrap();
++        let id = context.generated_issues[&hold.stream()].id;
++        context
++            .generated_issues
++            .get_mut(&hold.stream())
++            .unwrap()
++            .phase = PhaseV1::Unknown;
++        let receipt = completion::assume_native_settlement_for_context_test_v1(&context, &hold);
++        let before = states(&context, &plan);
++        let credits = context
++            .allocation_admission_usage_v1(plan.binding.device)
++            .unwrap();
++        match fault {
++            0 => {
++                context
++                    .generated_issues
++                    .get_mut(&hold.stream())
++                    .unwrap()
++                    .expected_reader = None
++            }
++            1 => context.submissions.get_mut(&id).unwrap().journal_read = None,
++            2 => context
++                .versions
++                .as_mut()
++                .unwrap()
++                .remove_submission_readers_for_test_v1(id),
++            3..=5 => context
++                .versions
++                .as_mut()
++                .unwrap()
++                .corrupt_submission_read_reference_for_test_v1(id, fault - 3),
++            _ => {
++                let domain = match fault {
++                    6 => SubmissionWriterDomainV1::Ordinary,
++                    7 => SubmissionWriterDomainV1::Generated {
++                        stream: hold.stream(),
++                        hold: hold.identity() + 1,
++                        shell_key: plan.key,
++                    },
++                    8 => SubmissionWriterDomainV1::Generated {
++                        stream: hold.stream(),
++                        hold: hold.identity(),
++                        shell_key: plan.key + 1,
++                    },
++                    _ => SubmissionWriterDomainV1::Generated {
++                        stream: context.create_stream(plan.binding.device).unwrap(),
++                        hold: hold.identity(),
++                        shell_key: plan.key,
++                    },
++                };
++                context
++                    .versions
++                    .as_mut()
++                    .unwrap()
++                    .set_submission_reader_domain_for_test_v1(id, domain);
++            }
++        }
++        assert!(
++            context
++                .settle_completed_gfx942_context_v1(&hold, receipt)
++                .is_err()
++        );
++        assert_eq!(context.version_journal_read_records_v1(), Some(3));
++        assert_eq!(states(&context, &plan), before);
++        assert_eq!(
++            context
++                .allocation_admission_usage_v1(plan.binding.device)
++                .unwrap(),
++            credits
++        );
++        assert_eq!(
++            context.submissions[&id].status,
++            RuntimeCompletionStatusV1::Pending
++        );
++        assert_eq!(context.allocations.len(), 3);
++        assert!(context.backend.validate_generated_shell_disposal_v1(&plan));
++        core::mem::forget(context);
++    }
++}
++
++#[test]
++fn generated_foreign_reader_blocks_retirement_preflight_without_releasing_own_inputs() {
++    for ordinal in 0..3 {
++        let mut context = context_with_journal(4);
++        let (hold, plan, roster, _) = install_with_access(&mut context, false, [ReadOnly; 3]);
++        context
++            .begin_generated_issue_v1(&hold, plan, &roster)
++            .unwrap();
++        context.install_generated_submission_v1(&hold, 900).unwrap();
++        let id = context.generated_issues[&hold.stream()].id;
++        let original = references(&context, id);
++        let foreign = add_foreign_reader(&mut context, &plan, ordinal);
++        let before = states(&context, &plan);
++        let credits = context
++            .allocation_admission_usage_v1(plan.binding.device)
++            .unwrap();
++        assert_eq!(
++            context.generated_issue_exclusive_readers_v1(&plan),
++            Ok(false)
++        );
++        assert!(matches!(
++            context.settle_stopped_gfx942_context_v1(&hold, id, 900),
++            Err(RuntimeErrorV1::Validation(
++                RuntimeValidationErrorV1::ContextReserved
++            ))
++        ));
++        assert_eq!(context.version_journal_read_records_v1(), Some(4));
++        assert_eq!(references(&context, id), original);
++        assert_eq!(states(&context, &plan), before);
++        assert_eq!(
++            context
++                .allocation_admission_usage_v1(plan.binding.device)
++                .unwrap(),
++            credits
++        );
++        assert!(context.backend.validate_generated_shell_disposal_v1(&plan));
++        context
++            .versions
++            .as_mut()
++            .unwrap()
++            .read_leases_for_test_v1()
++            .release_reads(
++                foreign.consumer,
++                &[foreign],
++                &ContextReadQuiescenceEvidenceV1 {
++                    consumer: foreign.consumer,
++                },
++            )
++            .unwrap();
++        assert_eq!(
++            context.generated_issue_exclusive_readers_v1(&plan),
++            Ok(true)
++        );
++        assert_eq!(references(&context, id), original);
++        assert_eq!(context.version_journal_read_records_v1(), Some(3));
++        assert_eq!(context.generated_shells_unread_v1(&plan), Ok(false));
++        assert!(matches!(
++            context.retire_generated_shells_v1(&hold),
++            Err(RuntimeErrorV1::Validation(
++                RuntimeValidationErrorV1::ContextReserved
++            ))
++        ));
++        assert_eq!(context.version_journal_read_records_v1(), Some(3));
++        assert!(!context.is_terminal());
++    }
++}
++
++#[test]
++fn generated_settlement_receipt_cannot_release_a_substituted_live_reader_batch() {
++    let mut context = context_with_journal(3);
++    let (hold, plan, roster, _) = install_with_access(&mut context, false, [ReadOnly; 3]);
++    context
++        .begin_generated_issue_v1(&hold, plan, &roster)
++        .unwrap();
++    context.install_generated_submission_v1(&hold, 900).unwrap();
++    let id = context.generated_issues[&hold.stream()].id;
++    context
++        .generated_issues
++        .get_mut(&hold.stream())
++        .unwrap()
++        .phase = PhaseV1::Unknown;
++    let old_receipt = completion::assume_native_settlement_for_context_test_v1(&context, &hold);
++    let old_refs = references(&context, id);
++    let sources = context
++        .versions
++        .as_ref()
++        .unwrap()
++        .submission_reader_sources_for_test_v1(id)
++        .to_vec();
++    let domain = generated_writer_domain_v1(&plan);
++    // Private ABA injection: replace the model batch, not a supported generated retry.
++    context
++        .release_generated_submission_readers_v1(id, domain)
++        .unwrap();
++    let prepared = context.prepare_submission_readers_v1(&sources).unwrap();
++    let replacement = context
++        .begin_submission_readers_v1(id, prepared, domain)
++        .unwrap();
++    context.submissions.get_mut(&id).unwrap().journal_read = replacement;
++    context
++        .generated_issues
++        .get_mut(&hold.stream())
++        .unwrap()
++        .expected_reader = replacement;
++    let new_refs = references(&context, id);
++    assert_ne!(old_refs, new_refs);
++    assert!(context.generated_issue_token_v1(&hold, &plan).is_ok());
++    assert!(
++        context
++            .settle_completed_gfx942_context_v1(&hold, old_receipt)
++            .is_err()
++    );
++    assert_eq!(references(&context, id), new_refs);
++    assert_eq!(context.version_journal_read_records_v1(), Some(3));
++    assert_eq!(
++        context.submissions[&id].status,
++        RuntimeCompletionStatusV1::Pending
++    );
++    assert_eq!(context.allocations.len(), 3);
++    assert!(!context.is_terminal());
++}
++
++#[test]
++fn generated_post_release_disposal_panic_does_not_resurrect_readers() {
++    let mut context = context_with_journal(3);
++    let (hold, plan, roster, _) = install_with_access(&mut context, false, [ReadOnly; 3]);
++    context
++        .begin_generated_issue_v1(&hold, plan, &roster)
++        .unwrap();
++    context.install_generated_submission_v1(&hold, 900).unwrap();
++    let id = context.generated_issues[&hold.stream()].id;
++    context
++        .allocation_admission
++        .reject_disposal_for_test_v1(plan.members[0].unwrap().logical);
++    // Native quiescence/disposal is assumed; the injected fault is Context credit commit.
++    assert!(
++        catch_unwind(AssertUnwindSafe(
++            || context.settle_stopped_gfx942_context_v1(&hold, id, 900)
++        ))
++        .is_err()
++    );
++    assert!(context.is_terminal());
++    assert_eq!(context.version_journal_read_records_v1(), Some(0));
++    assert!(
++        context.generated_issues[&hold.stream()]
++            .expected_reader
++            .is_none()
++    );
++    assert_eq!(context.allocations.len(), 3);
++    assert_eq!(context.backend_allocations.len(), 3);
++    assert!(!context.cleanup().is_complete());
++    core::mem::forget(context);
++}
++
++#[test]
++fn generated_read_only_default_profile_keeps_no_journal_markers() {
++    for stop in [false, true] {
++        let mut context = context();
++        let (hold, plan, roster, _) = install_with_access(&mut context, false, [ReadOnly; 3]);
++        context
++            .begin_generated_issue_v1(&hold, plan, &roster)
++            .unwrap();
++        context.install_generated_submission_v1(&hold, 900).unwrap();
++        let id = context.generated_issues[&hold.stream()].id;
++        assert!(
++            context.generated_issues[&hold.stream()]
++                .expected_reader
++                .is_none()
++        );
++        assert!(context.submissions[&id].journal_read.is_none());
++        assert_eq!(context.version_journal_read_records_v1(), None);
++        assert_eq!(
++            context.generated_issue_exclusive_readers_v1(&plan),
++            Ok(true)
++        );
++        // No native claim: exercise the same owner-only Context settlement tail.
++        if stop {
++            context
++                .settle_stopped_gfx942_context_v1(&hold, id, 900)
++                .unwrap();
++            context.release_unpublished_hold_v1(&hold).unwrap();
++        } else {
++            context
++                .generated_issues
++                .get_mut(&hold.stream())
++                .unwrap()
++                .phase = PhaseV1::Unknown;
++            let receipt = completion::assume_native_settlement_for_context_test_v1(&context, &hold);
++            context
++                .settle_completed_gfx942_context_v1(&hold, receipt)
++                .unwrap();
++        }
++        assert!(context.allocations.is_empty());
++        assert!(context.submissions.is_empty());
++        assert!(context.generated_issues.is_empty());
++        assert!(!context.is_terminal());
++    }
++}
++
++#[test]
++fn generated_graph_readers_release_before_exact_reservation_retirement() {
++    let mut context = context_with_journal(3);
++    let (hold, plan, roster, access) = install_with_access(&mut context, true, [ReadOnly; 3]);
++    let access = access.unwrap();
++    context
++        .begin_generated_issue_v1(&hold, plan, &roster)
++        .unwrap();
++    context.install_generated_submission_v1(&hold, 900).unwrap();
++    context.close_graph_issue_v1(access).unwrap();
++    assert_eq!(
++        context.release_graph_v1(access),
++        Err(RuntimeValidationErrorV1::SubmissionPending)
++    );
++    assert_eq!(context.version_journal_read_records_v1(), Some(3));
++    context
++        .generated_issues
++        .get_mut(&hold.stream())
++        .unwrap()
++        .phase = PhaseV1::Unknown;
++    let receipt = completion::assume_native_settlement_for_context_test_v1(&context, &hold);
++    context
++        .settle_completed_gfx942_context_v1(&hold, receipt)
++        .unwrap();
++    assert_eq!(context.version_journal_read_records_v1(), Some(0));
++    assert!(context.allocations.is_empty());
++    assert!(context.generated_issues.is_empty());
++    context.release_graph_v1(access).unwrap();
++    assert!(context.cleanup().is_complete());
++}
++
++#[test]
++fn generated_no_effect_rejects_before_releasing_any_input_custody() {
++    for accesses in [[ReadOnly; 3], [ReadOnly, ReadWrite, WriteOnly]] {
++        let mut context = context_with_journal(3);
++        let (hold, plan, roster, _) = install_with_access(&mut context, false, accesses);
++        context
++            .begin_generated_issue_v1(&hold, plan, &roster)
++            .unwrap();
++        context.install_generated_submission_v1(&hold, 900).unwrap();
++        let id = context.generated_issues[&hold.stream()].id;
++        let original = references(&context, id);
++        let before = states(&context, &plan);
++        let marker = context.generated_issues[&hold.stream()].expected_reader;
++        let credits = context
++            .allocation_admission_usage_v1(plan.binding.device)
++            .unwrap();
++        assert_eq!(
++            context.settle_generated_custody_v1(hold.stream(), SubmissionWriterOutcomeV1::NoEffect),
++            Err(RuntimeValidationErrorV1::InvalidBackendDescription)
++        );
++        assert_eq!(references(&context, id), original);
++        assert_eq!(states(&context, &plan), before);
++        assert_eq!(
++            context.generated_issues[&hold.stream()].expected_reader,
++            marker
++        );
++        assert_eq!(context.submissions[&id].journal_read, marker);
++        assert_eq!(
++            context.submissions[&id].status,
++            RuntimeCompletionStatusV1::Pending
++        );
++        assert_eq!(
++            context
++                .allocation_admission_usage_v1(plan.binding.device)
++                .unwrap(),
++            credits
++        );
++        assert!(context.generated_issue_token_v1(&hold, &plan).is_ok());
++        assert!(!context.is_terminal());
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/context/tests/kernel_read_lease_tests.rs b/crates/fe2o3-runtime/src/context/tests/kernel_read_lease_tests.rs
+index 1a4f73b0c..b7d0c61f2 100644
+--- a/crates/fe2o3-runtime/src/context/tests/kernel_read_lease_tests.rs
++++ b/crates/fe2o3-runtime/src/context/tests/kernel_read_lease_tests.rs
+@@ -1203,7 +1203,7 @@ fn stale_internal_preparation_retains_provisional_root_before_any_backend_submis
+     let id = RuntimeSubmissionIdV1::new(f.context.context_generation, f.context.next_id().unwrap());
+     assert_eq!(
+         f.context
+-            .begin_submission_readers_v1(id, prepared)
++            .begin_submission_readers_v1(id, prepared, SubmissionWriterDomainV1::Ordinary)
+             .unwrap_err(),
+         RuntimeValidationErrorV1::InvalidBackendDescription
+     );
+diff --git a/crates/fe2o3-runtime/src/context/versions.rs b/crates/fe2o3-runtime/src/context/versions.rs
+index a14d7aabc..fccf9824d 100644
+--- a/crates/fe2o3-runtime/src/context/versions.rs
++++ b/crates/fe2o3-runtime/src/context/versions.rs
+@@ -259,7 +259,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+     /// requires protected completion or whole-batch Stop disposal, never generic
+     /// polling. Writer capacity and unresolved writes gate subsequent writes.
+     /// Built-in copies and pure Read typed bindings retain bounded source read
+-    /// leases. Reader capacity equals writer capacity but its occupancy is
++    /// leases. Generated ReadOnly shell members use the same reader arena with
++    /// a distinct stream/hold/shell domain and protected settlement boundary.
++    /// Reader capacity equals writer capacity but its occupancy is
+     /// independent. A writable alias uses only exclusive writer custody.
+     /// Source writes and retirement reject while any reader remains.
+     /// Backend aliases and initialized-input
+diff --git a/crates/fe2o3-runtime/src/context/versions/generated.rs b/crates/fe2o3-runtime/src/context/versions/generated.rs
+index 3f1e20fea..565b62a2c 100644
+--- a/crates/fe2o3-runtime/src/context/versions/generated.rs
++++ b/crates/fe2o3-runtime/src/context/versions/generated.rs
+@@ -55,9 +55,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         {
+             return Err(E::InvalidReference);
+         }
+-        if self.submissions.get(&id).is_some_and(|record| {
+-            record.journal_writer != expected || record.journal_read.is_some()
+-        }) {
++        if self
++            .submissions
++            .get(&id)
++            .is_some_and(|record| record.journal_writer != expected)
++        {
+             return Err(E::InvalidReference);
+         }
+         let Some(versions) = self.versions.as_ref() else {
+@@ -67,9 +69,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                 Err(E::InvalidState)
+             };
+         };
+-        if versions.submission_readers.contains_key(&id) {
+-            return Err(E::InvalidReference);
+-        }
+         let writable =
+             roster.buffers[..roster.count]
+                 .iter()
+@@ -148,6 +147,118 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         Ok(())
+     }
+ 
++    pub(in crate::context) fn validate_generated_readers_v1(
++        &self,
++        id: RuntimeSubmissionIdV1,
++        domain: SubmissionWriterDomainV1,
++        expected: Option<SubmissionReaderMarkerV1>,
++        plan: &GeneratedShellPlanV1,
++        roster: &GeneratedHostRosterV1,
++    ) -> Result<(), ContextVersionJournalErrorV1> {
++        use ContextVersionJournalErrorV1 as E;
++        if domain
++            != (SubmissionWriterDomainV1::Generated {
++                stream: plan.binding.stream,
++                hold: plan.binding.hold,
++                shell_key: plan.key,
++            })
++            || plan.count != roster.count
++        {
++            return Err(E::InvalidReference);
++        }
++        let root = self.validate_submission_readers_v1(id, domain)?;
++        if root.and_then(|root| root.marker) != expected {
++            return Err(E::InvalidReference);
++        }
++        if self.versions.is_none() {
++            return Ok(());
++        }
++        let members = plan.members.get(..plan.count).ok_or(E::InvalidState)?;
++        let slots = roster.buffers.get(..roster.count).ok_or(E::InvalidState)?;
++        let mut count = 0;
++        for (ordinal, (member, slot)) in members.iter().zip(slots).enumerate() {
++            let member = member.ok_or(E::InvalidAllocationReference)?;
++            let slot = slot.ok_or(E::InvalidAllocationReference)?;
++            if slot.ordinal != ordinal || slot.bytes != member.description.byte_len {
++                return Err(E::InvalidAllocationReference);
++            }
++            if slot.access != crate::Gfx942RuntimeBufferAccessV1::ReadOnly {
++                continue;
++            }
++            let root = root.ok_or(E::InvalidReference)?;
++            let index = root
++                .sources
++                .binary_search_by_key(&member.logical, |source| source.region.allocation)
++                .map_err(|_| E::InvalidAllocationReference)?;
++            let source = &root.sources[index];
++            if source.region.access != RuntimeAccessV1::Read
++                || source.region.byte_offset != 0
++                || source.region.byte_len != member.description.byte_len
++                || source.record.backend_allocation != member.backend
++                || source.record.device != plan.binding.device
++                || source.record.kind != member.description.kind
++            {
++                return Err(E::InvalidAllocationReference);
++            }
++            count += 1;
++        }
++        if count != root.map_or(0, |root| root.sources.len()) {
++            return Err(E::InvalidReference);
++        }
++        Ok(())
++    }
++
++    // Own input leases survive native readback/retirement. Any additional reader
++    // still blocks those effects; final shell disposal separately requires zero.
++    pub(in crate::context) fn generated_issue_exclusive_readers_v1(
++        &self,
++        plan: &GeneratedShellPlanV1,
++    ) -> Result<bool, ContextVersionJournalErrorV1> {
++        use ContextVersionJournalErrorV1 as E;
++        let attempt = self
++            .generated_issues
++            .get(&plan.binding.stream)
++            .ok_or(E::InvalidReference)?;
++        let (original, roster) = attempt.writer_roster_v1();
++        if original != plan {
++            return Err(E::InvalidReference);
++        }
++        let (id, domain) = attempt.writer_binding_v1();
++        self.validate_generated_writer_v1(id, domain, attempt.expected_writer, plan, roster)?;
++        self.validate_generated_readers_v1(id, domain, attempt.expected_reader, plan, roster)?;
++        let Some(versions) = self.versions.as_ref() else {
++            return Ok(true);
++        };
++        for (member, slot) in plan.members[..plan.count]
++            .iter()
++            .zip(&roster.buffers[..roster.count])
++        {
++            let member = member.ok_or(E::InvalidAllocationReference)?;
++            let slot = slot.ok_or(E::InvalidAllocationReference)?;
++            let record = self
++                .allocations
++                .get(&member.logical)
++                .ok_or(E::InvalidAllocationReference)?;
++            let reference = versions.validate_live(member.logical, record)?;
++            let own = usize::from(slot.access == crate::Gfx942RuntimeBufferAccessV1::ReadOnly);
++            if versions.journal.reader_count(reference)? != own {
++                return Ok(false);
++            }
++        }
++        Ok(true)
++    }
++
++    pub(in crate::context) fn release_generated_submission_readers_v1(
++        &mut self,
++        id: RuntimeSubmissionIdV1,
++        domain: SubmissionWriterDomainV1,
++    ) -> Result<(), RuntimeValidationErrorV1> {
++        if !matches!(domain, SubmissionWriterDomainV1::Generated { .. }) {
++            return Err(RuntimeValidationErrorV1::InvalidBackendDescription);
++        }
++        self.release_readers_in_domain_v1(id, domain)
++    }
++
+     pub(in crate::context) fn settle_generated_submission_writer_v1(
+         &mut self,
+         id: RuntimeSubmissionIdV1,
+@@ -182,6 +293,18 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         let attempt = self.generated_issues.get(&plan.binding.stream);
+         if let Some(attempt) = attempt {
+             let (id, domain) = attempt.writer_binding_v1();
++            if attempt.expected_reader.is_some()
++                || self
++                    .submissions
++                    .get(&id)
++                    .is_some_and(|record| record.journal_read.is_some())
++                || self
++                    .versions
++                    .as_ref()
++                    .is_some_and(|versions| versions.submission_readers.contains_key(&id))
++            {
++                return Err(E::AllocationBusy);
++            }
+             if let Some(writer) = attempt.expected_writer {
+                 let (original_plan, roster) = attempt.writer_roster_v1();
+                 if *original_plan != plan {
+diff --git a/crates/fe2o3-runtime/src/context/versions/readers.rs b/crates/fe2o3-runtime/src/context/versions/readers.rs
+index 01d030b84..b9c013a1b 100644
+--- a/crates/fe2o3-runtime/src/context/versions/readers.rs
++++ b/crates/fe2o3-runtime/src/context/versions/readers.rs
+@@ -1,4 +1,4 @@
+-//! Ordinary input custody, not initializedness or executable/reuse authority.
++//! Domain-bound input custody, not initializedness or executable/reuse authority.
+ 
+ use super::*;
+ use fe2o3_runtime_model::{
+@@ -24,10 +24,11 @@ pub(in crate::context) struct PreparedSubmissionReadersV1 {
+ }
+ 
+ pub(super) struct RetainedSubmissionReadersV1 {
++    domain: SubmissionWriterDomainV1,
+     pub(super) sources: Vec<ContextReadSourceV1>,
+     requests: Vec<ContextAllocationReadV1>,
+     references: Vec<ContextReadLeaseReferenceV1>,
+-    marker: Option<SubmissionReaderMarkerV1>,
++    pub(super) marker: Option<SubmissionReaderMarkerV1>,
+ }
+ 
+ impl ContextVersionsV1 {
+@@ -71,6 +72,24 @@ impl ContextVersionsV1 {
+     ) -> &[ContextReadSourceV1] {
+         &self.submission_readers[&id].sources
+     }
++
++    #[cfg(test)]
++    pub(in crate::context) fn submission_reader_identity_for_test_v1(
++        &self,
++        id: RuntimeSubmissionIdV1,
++    ) -> (SubmissionWriterDomainV1, &[ContextReadLeaseReferenceV1]) {
++        let root = &self.submission_readers[&id];
++        (root.domain, &root.references)
++    }
++
++    #[cfg(test)]
++    pub(in crate::context) fn set_submission_reader_domain_for_test_v1(
++        &mut self,
++        id: RuntimeSubmissionIdV1,
++        domain: SubmissionWriterDomainV1,
++    ) {
++        self.submission_readers.get_mut(&id).unwrap().domain = domain;
++    }
+ }
+ 
+ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+@@ -170,6 +189,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                 .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+             Ok(Some(PreparedSubmissionReadersV1 {
+                 root: RetainedSubmissionReadersV1 {
++                    domain: SubmissionWriterDomainV1::Ordinary,
+                     sources: originals,
+                     requests,
+                     references,
+@@ -184,6 +204,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         &mut self,
+         id: RuntimeSubmissionIdV1,
+         prepared: Option<PreparedSubmissionReadersV1>,
++        domain: SubmissionWriterDomainV1,
+     ) -> Result<Option<SubmissionReaderMarkerV1>, RuntimeValidationErrorV1> {
+         let Some(mut prepared) = prepared else {
+             return Ok(None);
+@@ -198,7 +219,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                     || versions
+                         .submission_writers
+                         .get(&id)
+-                        .is_some_and(|root| root.domain != SubmissionWriterDomainV1::Ordinary)
++                        .is_some_and(|root| root.domain != domain)
+                 {
+                     return Err(ContextVersionJournalErrorV1::InvalidState);
+                 }
+@@ -207,6 +228,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+                     "preallocated reader root"
+                 );
+                 // Root the complete original roster before the model can acquire any lease.
++                prepared.root.domain = domain;
+                 versions.submission_readers.insert(id, prepared.root);
+                 let root = versions
+                     .submission_readers
+@@ -245,75 +267,103 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         id: RuntimeSubmissionIdV1,
+     ) -> Result<(), RuntimeValidationErrorV1> {
+         self.require_ordinary_submission_v1(id)?;
++        self.release_readers_in_domain_v1(id, SubmissionWriterDomainV1::Ordinary)
++    }
++
++    pub(super) fn validate_submission_readers_v1(
++        &self,
++        id: RuntimeSubmissionIdV1,
++        domain: SubmissionWriterDomainV1,
++    ) -> Result<Option<&RetainedSubmissionReadersV1>, ContextVersionJournalErrorV1> {
++        use ContextVersionJournalErrorV1 as E;
++        let record = self.submissions.get(&id);
++        let expected = record.and_then(|record| record.journal_read);
++        let absent = if expected.is_some() {
++            Err(E::InvalidReference)
++        } else {
++            Ok(None)
++        };
++        let Some(versions) = self.versions.as_ref() else {
++            return absent;
++        };
++        let Some(root) = versions.submission_readers.get(&id) else {
++            return absent;
++        };
++        let marker = root.marker.ok_or(E::InvalidReference)?;
++        let consumer = ContextWriterKeyV1 {
++            context_generation: id.context_generation,
++            local: id.local,
++            kind: ContextWriterKindV1::Submission,
++        };
++        if root.domain != domain
++            || marker.count == 0
++            || marker.count != root.sources.len()
++            || marker.count != root.requests.len()
++            || marker.count != root.references.len()
++            || root.references[0] != marker.first
++            || marker.first.consumer != consumer
++            || record.is_some() && expected != Some(marker)
++            || record.is_some_and(|record| {
++                record.journal_writer
++                    != versions.submission_writers.get(&id).map(|root| root.writer)
++            })
++            || versions
++                .submission_writers
++                .get(&id)
++                .is_some_and(|root| root.domain != domain)
++        {
++            return Err(E::InvalidReference);
++        }
++        for (index, ((source, request), reference)) in root
++            .sources
++            .iter()
++            .zip(&root.requests)
++            .zip(&root.references)
++            .enumerate()
++        {
++            if reference.consumer != consumer
++                || marker.first.incarnation.checked_add(index as u64) != Some(reference.incarnation)
++                || source.region.allocation.context_generation
++                    != request.allocation.key.context_generation
++                || source.region.allocation.local != request.allocation.key.local
++                || source.region.byte_offset != request.byte_offset
++                || source.region.byte_len != request.byte_len
++                || source.record.byte_len != request.byte_extent
++                || index > 0
++                    && root.sources[index - 1].region.allocation >= source.region.allocation
++                || self.allocations.get(&source.region.allocation) != Some(&source.record)
++                || !self
++                    .backend_allocations
++                    .contains(&source.record.backend_allocation)
++                || !self
++                    .allocation_admission
++                    .has_expected_credit(source.region.allocation, source.record.device)
++                || versions.validate_live(source.region.allocation, &source.record)?
++                    != request.allocation
++                || versions.journal.lookup_read(*reference)? != *request
++            {
++                return Err(E::InvalidReference);
++            }
++        }
++        Ok(Some(root))
++    }
++
++    pub(super) fn release_readers_in_domain_v1(
++        &mut self,
++        id: RuntimeSubmissionIdV1,
++        domain: SubmissionWriterDomainV1,
++    ) -> Result<(), RuntimeValidationErrorV1> {
+         let result = catch_unwind(AssertUnwindSafe(|| {
+-            use ContextVersionJournalErrorV1 as E;
+-            let record = self.submissions.get(&id);
+-            let expected = record.and_then(|record| record.journal_read);
+-            let absent = if expected.is_some() {
+-                Err(E::InvalidReference)
+-            } else {
+-                Ok(())
+-            };
+-            let Some(versions) = self.versions.as_mut() else {
+-                return absent;
+-            };
+-            let Some(root) = versions.submission_readers.get(&id) else {
+-                return absent;
+-            };
+-            let marker = root.marker.ok_or(E::InvalidReference)?;
++            if self.validate_submission_readers_v1(id, domain)?.is_none() {
++                return Ok(());
++            }
++            let versions = self.versions.as_mut().expect("validated readers");
++            let root = &versions.submission_readers[&id];
+             let consumer = ContextWriterKeyV1 {
+                 context_generation: id.context_generation,
+                 local: id.local,
+                 kind: ContextWriterKindV1::Submission,
+             };
+-            if marker.count == 0
+-                || marker.count != root.sources.len()
+-                || marker.count != root.requests.len()
+-                || marker.count != root.references.len()
+-                || root.references[0] != marker.first
+-                || marker.first.consumer != consumer
+-                || record.is_some() && expected != Some(marker)
+-                || record.is_some_and(|record| {
+-                    record.journal_writer
+-                        != versions.submission_writers.get(&id).map(|root| root.writer)
+-                })
+-                || versions
+-                    .submission_writers
+-                    .get(&id)
+-                    .is_some_and(|root| root.domain != SubmissionWriterDomainV1::Ordinary)
+-            {
+-                return Err(E::InvalidReference);
+-            }
+-            for (index, ((source, request), reference)) in root
+-                .sources
+-                .iter()
+-                .zip(&root.requests)
+-                .zip(&root.references)
+-                .enumerate()
+-            {
+-                if reference.consumer != consumer
+-                    || marker.first.incarnation.checked_add(index as u64)
+-                        != Some(reference.incarnation)
+-                    || source.region.allocation.context_generation
+-                        != request.allocation.key.context_generation
+-                    || source.region.allocation.local != request.allocation.key.local
+-                    || source.region.byte_offset != request.byte_offset
+-                    || source.region.byte_len != request.byte_len
+-                    || source.record.byte_len != request.byte_extent
+-                    || self.allocations.get(&source.region.allocation) != Some(&source.record)
+-                    || !self
+-                        .backend_allocations
+-                        .contains(&source.record.backend_allocation)
+-                    || !self
+-                        .allocation_admission
+-                        .has_expected_credit(source.region.allocation, source.record.device)
+-                    || versions.validate_live(source.region.allocation, &source.record)?
+-                        != request.allocation
+-                    || versions.journal.lookup_read(*reference)? != *request
+-                {
+-                    return Err(E::InvalidReference);
+-                }
+-            }
+             versions.journal.release_reads(
+                 consumer,
+                 &root.references,
+@@ -323,7 +373,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+             if let Some(record) = self.submissions.get_mut(&id) {
+                 record.journal_read = None;
+             }
+-            Ok(())
++            Ok::<_, ContextVersionJournalErrorV1>(())
+         }));
+         match result {
+             Ok(Ok(())) => Ok(()),
+diff --git a/crates/fe2o3-runtime/src/context/versions/submissions.rs b/crates/fe2o3-runtime/src/context/versions/submissions.rs
+index b4c3eede7..651c65adf 100644
+--- a/crates/fe2o3-runtime/src/context/versions/submissions.rs
++++ b/crates/fe2o3-runtime/src/context/versions/submissions.rs
+@@ -395,7 +395,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+         let id = RuntimeSubmissionIdV1::new(self.context_generation, self.next_id()?);
+         let journal_writer =
+             self.begin_submission_writer_v1(id, prepared, SubmissionWriterDomainV1::Ordinary)?;
+-        let journal_read = self.begin_submission_readers_v1(id, reads)?;
++        let journal_read =
++            self.begin_submission_readers_v1(id, reads, SubmissionWriterDomainV1::Ordinary)?;
+         let result = self.invoke_journal_backend_v1(submit);
+         let backend_submission = match result {
+             Ok(handle) => handle,
+diff --git a/docs/runtime-a1-a2-swarm-current.md b/docs/runtime-a1-a2-swarm-current.md
+index fef7ca495..444e04a3d 100644
+--- a/docs/runtime-a1-a2-swarm-current.md
++++ b/docs/runtime-a1-a2-swarm-current.md
+@@ -10,7 +10,15 @@ Resources' V4-J1 proof handoff above the locally accepted
+ Its immediate assignments supersede the older checkpoint tables below, whose
+ detailed contracts and historical observations are retained.
+ 
+-Latest development (2026-09-17): [typed-kernel read leases](runtime-context-kernel-read-leases-v1.md)
++Latest development (2026-09-17): [generated input leases](runtime-context-generated-read-leases-v1.md)
++bind ReadOnly shell custody to the original protected attempt, including launches
++without a writer or returned backend handle. Exact completion or quiescent Stop
++releases inputs before writer settlement; foreign readers still block retirement.
++The [qualification receipt](evidence/dev-v6-generated-read-leases-2026-09-17/README.md)
++separates CPU/model evidence from native execution, formal composition and
++performance. Accepted checkpoints and A1/A2 remain unchanged.
++
++Preceding development: [typed-kernel read leases](runtime-context-kernel-read-leases-v1.md)
+ retain pure-Read input batches independently of writer roots, including all-read-only
+ launches. Original identities are revalidated at issue; versions are captured after
+ ordered predecessor settlement. The [qualification receipt](evidence/dev-v6-kernel-read-leases-final-2026-09-17/README.md)
+diff --git a/docs/runtime-context-generated-read-leases-v1.md b/docs/runtime-context-generated-read-leases-v1.md
+new file mode 100644
+index 000000000..ef6fc2a34
+--- /dev/null
++++ b/docs/runtime-context-generated-read-leases-v1.md
+@@ -0,0 +1,77 @@
++# Context Generated Input Leases V1
++
++Development above `ace978213dd4e5e1ff10cb00d875bf24581aae83`, extending
++[ordinary typed input custody](runtime-context-kernel-read-leases-v1.md) and
++[generated writer integration](runtime-context-version-journal-generated-v1.md).
++Accepted checkpoints remain Native R125 CPU/test, Admission R118B C1-C3 and
++Resources R116/V3. V6, A1/A2, #182 and native/formal/performance acceptance remain open.
++
++## Issue Ownership
++
++The opt-in Context journal acquires a whole-allocation read lease for each original
++ReadOnly generated shell member. ReadWrite and WriteOnly members retain exclusive
++writer custody instead. Shell logical IDs are unique under the existing KFD plan
++validator; pointer-fixup participation does not change membership. All-read-only
++attempts acquire readers without allocating a writer slot.
++
++Source records and model requests are prepared before the submission ID, writer
++Begin, reader Begin or native preparation. A busy source or insufficient reader
++capacity rejects the whole preflight without acquiring a prefix. The reader arena
++shares the configured writer capacity, not writer occupancy. Its domain binds the
++genuine submission consumer plus original stream, unpublished hold and shell key.
++The independent root exists before model acquisition and before a backend handle;
++ordinary release cannot discharge it even when no writer or submission record exists.
++
++The retained generated attempt, installed submission record and private completion
++receipt bind the exact first-reference/count marker. Validation checks the entire
++source/request/reference roster, exact domain, allocation/backend/credit records,
++full extents, ordered fresh incarnations and live model leases against the original
++authenticated shell roster. Read leases grant neither initialized-byte authority
++nor permission to execute or reuse a kernel.
++
++## Protected Settlement
++
++Before native readback or retirement, the owner proves each ReadOnly member has
++its exact own reader and no additional reader; writable members must have none.
++An aggregate count alone is insufficient. Issued Stop defers on foreign readers.
++Protected completion preserves its existing conservative behavior: a contention
++error reaching the outer issue-failure wrapper terminalizes and quarantines; it
++is not a retryable completion path.
++
++Own readers remain live through original readback, read-only validation, native
++DATA retirement, native submission release and closing source-currentness checks.
++The exact completion receipt then permits reader release, followed by writer
++Success, shell retirement and status publication. A quiescent issued Stop releases
++readers before writer Unknown and whole-shell disposal. NoEffect is rejected before
++any reader mutation. Generic poll/wait/drain/cancel/event/release cannot settle these
++roots. Pending work and pre-settlement errors retain custody, including attempts
++without returned backend handles.
++
++Final shell disposal still requires no reader root or marker and aggregate zero
++readers on every member. Pre-ISSUE adoption cleanup retains its existing zero-reader
++rule. Once exact quiescence releases readers, a subsequent writer/shell/credit fault
++does not resurrect them: remaining ownership is retained terminally, but the read
++leases have conclusively ended.
++
++## Cost And Evidence
++
++For r ReadOnly members among n bounded shell members, preparation sorts in
++O(r log r), retains O(r) metadata and reserves storage before Begin. Exact shell
++matching uses O(n + r log r) work plus the existing writer checks. No new solver
++proof, Rust/native correspondence or performance bound is claimed.
++
++The [qualification archive](evidence/dev-v6-generated-read-leases-2026-09-17/README.md)
++records CPU qualification separately from native acceptance. Fourteen new tests
++cover domains and extents, reader capacity independent of writers, busy inputs,
++pre-handle ordinary release, generic observers, no-handle failures, exact neighboring
++completion/Stop, marker/root/reference/domain corruption, foreign readers, stale
++settlement receipts, post-release disposal panic, default and graph profiles, and
++NoEffect rejection. Callbacks assert delivered status outside panic containment.
++
++Fixtures use real Context shell identities with explicitly assumed native
++completion/disposal. Foreign readers and batch substitution are private model
++premises, not public races or native fault injections. These tests do not execute
++protected GPU kernels or prove native retirement call ordering. That ordering is
++source-reviewed; production Worker V3/machine refinement, native concurrency/fault
++campaigns, initialized-input authority, ordered writers, cross-run reuse, aggregate
++residency, formal reader composition and matched HIP/HSA measurements remain open.
+diff --git a/docs/runtime-context-version-journal-generated-v1.md b/docs/runtime-context-version-journal-generated-v1.md
+index f6f83727c..e81bb3e8a 100644
+--- a/docs/runtime-context-version-journal-generated-v1.md
++++ b/docs/runtime-context-version-journal-generated-v1.md
+@@ -4,6 +4,10 @@ Development above `d91e470f15bc2c42078842d983a4bb2f36ed4a8c`, not A1/A2,
+ issue #182, native protected execution or HIP/HSA parity acceptance. Native R125
+ CPU/test, Admission R118B C1-C3 and Resources R116/V3 remain accepted.
+ 
++Subsequent development adds [generated ReadOnly input leases](runtime-context-generated-read-leases-v1.md).
++Those independent domain-bound readers settle before this writer boundary;
++the original qualification archive below remains historical writer-only evidence.
++
+ ## Begin And Observation
+ 
+ The opt-in Context journal now tracks protected generated mutation attempts.
+@@ -68,7 +72,7 @@ generic observation rejection, terminal custody and post-model credit faults
+ are checked. Existing nonjournal generated and ordinary async tests remain.
+ 
+ No native GPU, solver or matched HIP/HSA benchmark is run for this packet.
+-Protected production verifier/machine refinement, input/read leases, aliases,
++Protected production verifier/machine refinement, initialized-input authority, aliases,
+ ordered overlapping writers, cross-run versions, content reuse, aggregate
+ residency, native high-depth/overlap/failure qualification and performance remain
+ open. This journal bookkeeping grants no new execution or content-reuse authority.

@@ -10,7 +10,15 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest development (2026-09-17): [typed-kernel read leases](runtime-context-kernel-read-leases-v1.md)
+Latest development (2026-09-17): [generated input leases](runtime-context-generated-read-leases-v1.md)
+bind ReadOnly shell custody to the original protected attempt, including launches
+without a writer or returned backend handle. Exact completion or quiescent Stop
+releases inputs before writer settlement; foreign readers still block retirement.
+The [qualification receipt](evidence/dev-v6-generated-read-leases-2026-09-17/README.md)
+separates CPU/model evidence from native execution, formal composition and
+performance. Accepted checkpoints and A1/A2 remain unchanged.
+
+Preceding development: [typed-kernel read leases](runtime-context-kernel-read-leases-v1.md)
 retain pure-Read input batches independently of writer roots, including all-read-only
 launches. Original identities are revalidated at issue; versions are captured after
 ordered predecessor settlement. The [qualification receipt](evidence/dev-v6-kernel-read-leases-final-2026-09-17/README.md)
