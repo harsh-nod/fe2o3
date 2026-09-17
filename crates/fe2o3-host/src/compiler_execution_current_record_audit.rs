@@ -116,10 +116,10 @@ impl<'evidence> WorkerV3CompilerCurrentRecordEvidenceViewV1<'evidence> {
 
 /// Move-only signed endpoint evidence for one exact Worker V3 compiler receipt.
 ///
-/// The evidence authenticates a fresh response under the receipt's pinned issuer key and a fresh
-/// signed recovery observation under the separately pinned external-anchor key. It remains
-/// non-authoritative because protected key custody and independently administered anchor deployment
-/// are separate production joins.
+/// The evidence authenticates a fresh response under the caller-supplied policy's issuer key and a
+/// fresh signed recovery observation under its external-anchor key. The caller-supplied pin does
+/// not authenticate deployment custody. Protected key custody and independently administered
+/// anchor deployment remain separate production joins, and this evidence grants no authority.
 ///
 /// ```compile_fail
 /// use fe2o3_host::WorkerV3CompilerCurrentRecordAuditV1;
@@ -363,6 +363,11 @@ fn independently_recheck_current_record_v1(
 
 /// One-use auditor that owns the application endpoint inherited at FD 195.
 ///
+/// The retained policy is a caller-supplied pin. The caller must obtain it independently of the
+/// receipt carriage; retaining it does not authenticate protected deployment or key custody.
+/// Every audit compares the complete carried policy before sending a request, and both policy
+/// rejection and successful verification consume the endpoint. Evidence remains authority-free.
+///
 /// ```compile_fail
 /// use fe2o3_host::InheritedWorkerV3CompilerCurrentRecordAuditorV1;
 /// fn require_clone<T: Clone>() {}
@@ -370,6 +375,7 @@ fn independently_recheck_current_record_v1(
 /// ```
 pub struct InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
     client: Option<CompilerExecutionClientV1>,
+    pinned_policy: CompilerExecutionIssuerPolicyV1,
 }
 
 impl fmt::Debug for InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
@@ -384,19 +390,30 @@ impl fmt::Debug for InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
 
 impl InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
     /// Consumes the inherited public FD slot into one private close-on-exec client.
-    pub fn admit_inherited_application_service() -> Result<Self, CompilerExecutionClientErrorV1> {
+    ///
+    /// `pinned_policy` is a caller-supplied pin that must be obtained independently of the receipt
+    /// carriage. This constructor does not authenticate its provisioning, deployment, or key
+    /// custody and grants no verification, load, or launch authority.
+    pub fn admit_inherited_application_service(
+        pinned_policy: CompilerExecutionIssuerPolicyV1,
+    ) -> Result<Self, CompilerExecutionClientErrorV1> {
         CompilerExecutionClientV1::admit_inherited_child(
             WORKER_V3_COMPILER_CURRENT_RECORD_AUDIT_TIMEOUT_V1,
         )
         .map(|client| Self {
             client: Some(client),
+            pinned_policy,
         })
     }
 
     #[cfg(test)]
-    fn from_client(client: CompilerExecutionClientV1) -> Self {
+    fn from_client(
+        client: CompilerExecutionClientV1,
+        pinned_policy: CompilerExecutionIssuerPolicyV1,
+    ) -> Self {
         Self {
             client: Some(client),
+            pinned_policy,
         }
     }
 
@@ -469,8 +486,11 @@ impl InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
         if carriage.request().subject() != subject {
             return Err(WorkerV3CompilerCurrentRecordAuditErrorV1::RequestMismatch);
         }
+        if carriage.policy() != &self.pinned_policy {
+            return Err(WorkerV3CompilerCurrentRecordAuditErrorV1::PolicyMismatch);
+        }
         let verified = client
-            .verify_current_only(carriage.policy(), carriage.clone())
+            .verify_current_only(&self.pinned_policy, carriage.clone())
             .map_err(WorkerV3CompilerCurrentRecordAuditErrorV1::Client)?;
         Ok(WorkerV3CompilerCurrentRecordAuditV1 { verified })
     }
@@ -489,9 +509,12 @@ impl InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
         if carriage.request().subject() != subject {
             return Err(WorkerV3CompilerCurrentRecordAuditErrorV1::RequestMismatch);
         }
+        if carriage.policy() != &self.pinned_policy {
+            return Err(WorkerV3CompilerCurrentRecordAuditErrorV1::PolicyMismatch);
+        }
         let verified = client
             .verify_current_only_with_challenge(
-                carriage.policy(),
+                &self.pinned_policy,
                 carriage.clone(),
                 expected_challenge,
             )
@@ -522,6 +545,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3AuditorV1<K>
 pub enum WorkerV3CompilerCurrentRecordAuditErrorV1 {
     AlreadyConsumed,
     RequestMismatch,
+    PolicyMismatch,
     Client(CompilerExecutionClientErrorV1),
 }
 
@@ -594,6 +618,9 @@ impl fmt::Display for WorkerV3CompilerCurrentRecordAuditErrorV1 {
             Self::RequestMismatch => formatter.write_str(
                 "compiler current-record audit subject differs from its receipt carriage",
             ),
+            Self::PolicyMismatch => formatter.write_str(
+                "compiler current-record audit carriage differs from the caller-supplied policy pin",
+            ),
             Self::Client(error) => {
                 write!(formatter, "compiler current-record service failed: {error}")
             }
@@ -605,7 +632,7 @@ impl Error for WorkerV3CompilerCurrentRecordAuditErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Client(error) => Some(error),
-            Self::AlreadyConsumed | Self::RequestMismatch => None,
+            Self::AlreadyConsumed | Self::RequestMismatch | Self::PolicyMismatch => None,
         }
     }
 }

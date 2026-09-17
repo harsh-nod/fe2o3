@@ -1,10 +1,14 @@
 #![cfg(target_os = "linux")]
 
+use fe2o3_compiler_execution_client::{
+    CompilerExecutionClientErrorV1, CompilerExecutionCurrentRecordChallengeV1,
+};
 use fe2o3_host::{
     CompilerGeneratedKernelExpectationRosterEntryV1, CompilerGeneratedKernelExpectationRosterV1,
     InheritedWorkerV3CompilerCurrentRecordAuditorV1, WorkerV3CompilerCurrentRecordAuditErrorV1,
     WorkerV3CompilerCurrentRecordAuditV1, WorkerV3RosterVerificationRequestV1,
 };
+use fe2o3_runtime_protocol::CompilerExecutionIssuerPolicyV1;
 
 struct CompileSurfaceRoster;
 
@@ -23,8 +27,34 @@ where
     auditor.audit_roster(request)
 }
 
+#[allow(dead_code)]
+fn audit_exact_roster_request_with_challenge<R>(
+    auditor: &mut InheritedWorkerV3CompilerCurrentRecordAuditorV1,
+    request: &WorkerV3RosterVerificationRequestV1<'_, R>,
+    challenge: CompilerExecutionCurrentRecordChallengeV1,
+) -> Result<WorkerV3CompilerCurrentRecordAuditV1, WorkerV3CompilerCurrentRecordAuditErrorV1>
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    auditor.audit_roster_with_challenge(request, challenge)
+}
+
+#[test]
+fn inherited_current_record_auditor_requires_a_caller_supplied_policy_pin() {
+    let _constructor: fn(
+        CompilerExecutionIssuerPolicyV1,
+    ) -> Result<
+        InheritedWorkerV3CompilerCurrentRecordAuditorV1,
+        CompilerExecutionClientErrorV1,
+    > = InheritedWorkerV3CompilerCurrentRecordAuditorV1::admit_inherited_application_service;
+}
+
 #[test]
 fn roster_current_record_audit_is_exposed_only_through_the_request_type() {
     let _request_bound_method =
         InheritedWorkerV3CompilerCurrentRecordAuditorV1::audit_roster::<CompileSurfaceRoster>;
+    let _challenge_bound_method =
+        InheritedWorkerV3CompilerCurrentRecordAuditorV1::audit_roster_with_challenge::<
+            CompileSurfaceRoster,
+        >;
 }

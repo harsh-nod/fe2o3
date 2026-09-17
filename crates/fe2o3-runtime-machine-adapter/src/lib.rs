@@ -3,6 +3,9 @@
 
 //! Exact application of a checked machine-structure receipt to a prepared dispatch.
 
+mod worker_v3_exec_semantics_v1;
+pub use worker_v3_exec_semantics_v1::*;
+
 use core::fmt;
 
 use fe2o3_kernel_analysis::CheckedGfx942AtomicCollectiveMachineStructureV1;

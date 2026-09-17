@@ -22,6 +22,8 @@ mod gfx942_atomic_collective_structure;
 #[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_exec_control;
 #[cfg(feature = "authenticated-machine-effect")]
+mod gfx942_exec_semantics_v1;
+#[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_machine_dataflow;
 #[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_machine_register;
@@ -62,6 +64,8 @@ pub use control_flow::{
 pub use gfx942_atomic_collective_structure::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use gfx942_exec_control::*;
+#[cfg(feature = "authenticated-machine-effect")]
+pub use gfx942_exec_semantics_v1::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use gfx942_machine_dataflow::*;
 #[cfg(feature = "authenticated-machine-effect")]

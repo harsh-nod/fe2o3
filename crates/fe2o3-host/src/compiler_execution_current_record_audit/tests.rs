@@ -293,6 +293,17 @@ mod tests {
 
     #[test]
     fn signed_current_record_is_owned_once_without_authority() {
+        assert_signed_current_record_is_owned_once_without_authority(Some([0xb7; 32]));
+    }
+
+    #[test]
+    fn generated_challenge_current_record_is_owned_once_without_authority() {
+        assert_signed_current_record_is_owned_once_without_authority(None);
+    }
+
+    fn assert_signed_current_record_is_owned_once_without_authority(
+        expected_challenge_bytes: Option<[u8; 32]>,
+    ) {
         let fixture = Fixture::new(0x20);
         let (client, service) = socket_pair();
         let service_carriage = fixture.carriage.clone();
@@ -300,7 +311,6 @@ mod tests {
         let service_key = fixture.signing_key.clone();
         let service_anchor_receipt = fixture.anchor_receipt();
         let service_anchor_key = fixture.anchor_signing_key.clone();
-        let expected_challenge_bytes = [0xb7; 32];
         let service = thread::spawn(move || {
             let request = receive_request(&service);
             assert_eq!(
@@ -309,7 +319,10 @@ mod tests {
             );
             assert_eq!(request.carriage(), Some(&service_carriage));
             let verification_challenge = request.verification_challenge().unwrap();
-            assert_eq!(verification_challenge, expected_challenge_bytes);
+            assert_ne!(verification_challenge, [0; 32]);
+            if let Some(expected) = expected_challenge_bytes {
+                assert_eq!(verification_challenge, expected);
+            }
             let currentness_challenge = CompilerExecutionCurrentRecordVerificationV3::external_anchor_currentness_challenge(
                 &service_carriage,
                 &service_anchor_receipt,
@@ -353,17 +366,23 @@ mod tests {
             )
             .unwrap();
             send_response(&service, response.canonical_bytes());
+            verification_challenge
         });
         let client = CompilerExecutionClientV1::admit(client, Duration::from_secs(2)).unwrap();
-        let mut auditor = InheritedWorkerV3CompilerCurrentRecordAuditorV1::from_client(client);
-        let evidence = auditor
-            .audit_exact_with_challenge(
+        let mut auditor = InheritedWorkerV3CompilerCurrentRecordAuditorV1::from_client(
+            client,
+            fixture.policy.clone(),
+        );
+        let evidence = match expected_challenge_bytes {
+            Some(expected) => auditor.audit_exact_with_challenge(
                 &fixture.subject,
                 &fixture.carriage,
-                CompilerExecutionCurrentRecordChallengeV1::from_bytes(expected_challenge_bytes)
-                    .unwrap(),
-            )
-            .unwrap();
+                CompilerExecutionCurrentRecordChallengeV1::from_bytes(expected).unwrap(),
+            ),
+            None => auditor.audit_exact(&fixture.subject, &fixture.carriage),
+        }
+        .unwrap();
+        let verification_challenge = service.join().unwrap();
         let (verification_bytes, attestation_bytes, verification_identity, attestation_identity) = {
             let view = evidence.canonical_evidence_view();
             let decoded_verification = CompilerExecutionCurrentRecordVerificationV3::decode(
@@ -379,7 +398,7 @@ mod tests {
                 view.verification_identity()
             );
             assert_eq!(decoded_attestation.identity(), view.attestation_identity());
-            assert_eq!(view.verification_challenge(), expected_challenge_bytes);
+            assert_eq!(view.verification_challenge(), verification_challenge);
             assert_eq!(
                 decoded_attestation.verification().identity(),
                 view.verification_identity()
@@ -435,6 +454,14 @@ mod tests {
             auditor.audit_exact(&fixture.subject, &fixture.carriage),
             Err(WorkerV3CompilerCurrentRecordAuditErrorV1::AlreadyConsumed)
         ));
+        assert!(matches!(
+            auditor.audit_exact_with_challenge(
+                &fixture.subject,
+                &fixture.carriage,
+                CompilerExecutionCurrentRecordChallengeV1::from_bytes([0xb8; 32]).unwrap(),
+            ),
+            Err(WorkerV3CompilerCurrentRecordAuditErrorV1::AlreadyConsumed)
+        ));
         let bound = evidence
             .bind_exact_compiler_execution_v1(&fixture.subject, &fixture.carriage)
             .unwrap();
@@ -463,7 +490,77 @@ mod tests {
         );
         assert!(bound.authenticates_signed_currentness_evidence());
         assert!(!bound.grants_verification_authority());
-        service.join().unwrap();
+    }
+
+    #[test]
+    fn issuer_and_anchor_policy_substitutions_fail_before_send_and_consume_once() {
+        let fixture = Fixture::new(0x20);
+        let alternate_issuer_key = SigningKey::from_bytes(&[0x73; 32])
+            .verifying_key()
+            .to_bytes();
+        let alternate_anchor_key = SigningKey::from_bytes(&[0x74; 32])
+            .verifying_key()
+            .to_bytes();
+        for (issuer_key, anchor_key) in [
+            (
+                alternate_issuer_key,
+                *fixture.policy.external_anchor_verifying_key(),
+            ),
+            (*fixture.policy.verifying_key(), alternate_anchor_key),
+        ] {
+            let pinned_policy = CompilerExecutionIssuerPolicyV1::new(
+                fixture.policy.generation(),
+                fixture.policy.executable(),
+                fixture.policy.runtime(),
+                issuer_key,
+                anchor_key,
+            )
+            .unwrap();
+            for expected_challenge in [None, Some([0xb7; 32])] {
+                let (client, service) = socket_pair();
+                let client =
+                    CompilerExecutionClientV1::admit(client, Duration::from_secs(2)).unwrap();
+                let mut auditor = InheritedWorkerV3CompilerCurrentRecordAuditorV1::from_client(
+                    client,
+                    pinned_policy.clone(),
+                );
+                let result = match expected_challenge {
+                    Some(expected) => auditor.audit_exact_with_challenge(
+                        &fixture.subject,
+                        &fixture.carriage,
+                        CompilerExecutionCurrentRecordChallengeV1::from_bytes(expected).unwrap(),
+                    ),
+                    None => auditor.audit_exact(&fixture.subject, &fixture.carriage),
+                };
+                assert!(matches!(
+                    result,
+                    Err(WorkerV3CompilerCurrentRecordAuditErrorV1::PolicyMismatch)
+                ));
+                let mut received = [0_u8; 1];
+                // EOF proves the endpoint closed without leaving a queued request packet.
+                let count = unsafe {
+                    libc::recv(
+                        service.as_raw_fd(),
+                        received.as_mut_ptr().cast(),
+                        received.len(),
+                        libc::MSG_DONTWAIT,
+                    )
+                };
+                assert_eq!(count, 0, "policy mismatch must close without sending");
+                assert!(matches!(
+                    auditor.audit_exact(&fixture.subject, &fixture.carriage),
+                    Err(WorkerV3CompilerCurrentRecordAuditErrorV1::AlreadyConsumed)
+                ));
+                assert!(matches!(
+                    auditor.audit_exact_with_challenge(
+                        &fixture.subject,
+                        &fixture.carriage,
+                        CompilerExecutionCurrentRecordChallengeV1::from_bytes([0xb8; 32]).unwrap(),
+                    ),
+                    Err(WorkerV3CompilerCurrentRecordAuditErrorV1::AlreadyConsumed)
+                ));
+            }
+        }
     }
 
     #[test]
@@ -472,7 +569,10 @@ mod tests {
         let substituted = subject(0x21);
         let (client, _service) = socket_pair();
         let client = CompilerExecutionClientV1::admit(client, Duration::from_secs(2)).unwrap();
-        let mut auditor = InheritedWorkerV3CompilerCurrentRecordAuditorV1::from_client(client);
+        let mut auditor = InheritedWorkerV3CompilerCurrentRecordAuditorV1::from_client(
+            client,
+            fixture.policy.clone(),
+        );
         assert!(matches!(
             auditor.audit_exact(&substituted, &fixture.carriage),
             Err(WorkerV3CompilerCurrentRecordAuditErrorV1::RequestMismatch)
@@ -485,7 +585,10 @@ mod tests {
         let (client, service) = socket_pair();
         drop(service);
         let client = CompilerExecutionClientV1::admit(client, Duration::from_secs(2)).unwrap();
-        let mut auditor = InheritedWorkerV3CompilerCurrentRecordAuditorV1::from_client(client);
+        let mut auditor = InheritedWorkerV3CompilerCurrentRecordAuditorV1::from_client(
+            client,
+            fixture.policy.clone(),
+        );
         assert!(matches!(
             auditor.audit_exact(&fixture.subject, &fixture.carriage),
             Err(WorkerV3CompilerCurrentRecordAuditErrorV1::Client(_))

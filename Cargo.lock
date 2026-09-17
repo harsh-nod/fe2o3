@@ -1718,6 +1718,7 @@ dependencies = [
 name = "fe2o3-runtime-machine-adapter"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-host",
  "fe2o3-kernel-analysis",
  "fe2o3-kfd",
  "fe2o3-runtime",

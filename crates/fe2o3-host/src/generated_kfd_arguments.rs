@@ -22,7 +22,7 @@ use crate::{
     AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectationV1,
     RecoveredWorkerV3AdmissionErrorV1,
 };
-use fe2o3_artifacts::RustDisjointIndexSpaceV1;
+use fe2o3_artifacts::{AbiKind, Access, PointerWidth, RustDisjointIndexSpaceV1};
 
 const PACKING_OBSERVATION_DOMAIN_V1: &[u8] = b"FE2O3/HOST/GENERATED-KFD-PACKING-OBSERVATION/V1\0";
 
@@ -105,6 +105,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         {
             return Err(GeneratedKfdPrepareError::PackedSubstitution);
         }
+        packed.validate_packed_consistency(&plan)?;
         Ok(packed)
     }
 }
@@ -513,6 +514,140 @@ impl<'allocation> GeneratedKfdPackedArguments<'allocation> {
 
     pub(crate) const fn packing_observation(&self) -> &GeneratedKfdPackingObservationV1 {
         &self.packing_observation
+    }
+
+    /// Checks storage and fixup association against the descriptor-validated packing plan.
+    /// This does not discharge kernel access bounds or relationships between argument lengths.
+    pub(crate) fn validate_packed_consistency(
+        &self,
+        plan: &GeneratedArgumentPackingPlanV1,
+    ) -> Result<(), GeneratedKfdPrepareError> {
+        let observation = &self.packing_observation;
+        if plan.pointer_width() != PointerWidth::Bits64
+            || self.kernel_id != plan.kernel_id()
+            || u64::try_from(self.explicit_kernarg.len()).ok() != Some(plan.kernarg_size())
+            || self.alignment != plan.kernarg_alignment()
+            || observation.kernarg_alignment != self.alignment
+            || !observation.matches_explicit_kernarg(&self.explicit_kernarg)
+            || observation.components.len() != plan.component_count()
+            || observation
+                .components
+                .iter()
+                .enumerate()
+                .any(|(index, component)| Some(*component) != plan.component(index))
+            || self.pointer_fixups.len() != self.buffers.len()
+            || self.completion.buffers.len() != self.buffers.len()
+        {
+            return Err(GeneratedKfdPrepareError::PackedSubstitution);
+        }
+        let mut seen_arguments = Vec::new();
+        let mut seen_buffers = Vec::new();
+        for (seen, count) in [
+            (&mut seen_arguments, plan.argument_count()),
+            (&mut seen_buffers, self.buffers.len()),
+        ] {
+            seen.try_reserve_exact(count).map_err(|_| {
+                GeneratedKfdPrepareError::Bind(GeneratedKfdArgumentError::AllocationFailure)
+            })?;
+            seen.resize(count, false);
+        }
+        for binding in &observation.buffers {
+            let argument_index = binding.argument_index;
+            let field = plan
+                .argument(argument_index)
+                .ok_or(GeneratedKfdPrepareError::PackedSubstitution)?;
+            if std::mem::replace(&mut seen_arguments[argument_index], true) {
+                return Err(GeneratedKfdPrepareError::PackedSubstitution);
+            }
+            let AbiKind::Slice {
+                element_size,
+                element_alignment,
+            } = field.kind()
+            else {
+                return Err(GeneratedKfdPrepareError::PackedSubstitution);
+            };
+            let offset = usize::try_from(field.offset())
+                .map_err(|_| GeneratedKfdPrepareError::PackedSubstitution)?;
+            let end = offset
+                .checked_add(16)
+                .ok_or(GeneratedKfdPrepareError::PackedSubstitution)?;
+            let words = self
+                .explicit_kernarg
+                .get(offset..end)
+                .ok_or(GeneratedKfdPrepareError::PackedSubstitution)?;
+            if field.size() != 16 || words[..8] != [0; 8] {
+                return Err(GeneratedKfdPrepareError::PackedSubstitution);
+            }
+            let length = u64::from_le_bytes(words[8..].try_into().unwrap());
+            let byte_len = length
+                .checked_mul(element_size)
+                .and_then(|bytes| usize::try_from(bytes).ok())
+                .ok_or(GeneratedKfdPrepareError::Bind(
+                    GeneratedKfdArgumentError::BufferByteLength { argument_index },
+                ))?;
+            let access = match field.access() {
+                Access::ReadOnly => Gfx942RuntimeBufferAccessV1::ReadOnly,
+                Access::WriteOnly => Gfx942RuntimeBufferAccessV1::WriteOnly,
+                Access::ReadWrite => Gfx942RuntimeBufferAccessV1::ReadWrite,
+                _ => return Err(GeneratedKfdPrepareError::PackedSubstitution),
+            };
+            if length == 0 {
+                if binding.buffer_index.is_some()
+                    || binding.access.is_some()
+                    || binding.initial_bytes != 0
+                    || binding.initial_sha256 != [0; 32]
+                {
+                    return Err(GeneratedKfdPrepareError::PackedSubstitution);
+                }
+                continue;
+            }
+            let buffer_index = binding
+                .buffer_index
+                .ok_or(GeneratedKfdPrepareError::PackedSubstitution)?;
+            let buffer = self
+                .buffers
+                .get(buffer_index)
+                .ok_or(GeneratedKfdPrepareError::PackedSubstitution)?;
+            if std::mem::replace(&mut seen_buffers[buffer_index], true) {
+                return Err(GeneratedKfdPrepareError::PackedSubstitution);
+            }
+            let fixup = self.pointer_fixups[buffer_index];
+            let completion = &self.completion.buffers[buffer_index];
+            let needs_writeback = access != Gfx942RuntimeBufferAccessV1::ReadOnly;
+            if buffer.bytes().len() != byte_len
+                || buffer.access() != access
+                || binding.access != Some(access)
+                || binding.initial_bytes != byte_len
+                || binding.initial_sha256 != <[u8; 32]>::from(Sha256::digest(buffer.bytes()))
+                || fixup.kernarg_offset() != offset
+                || fixup.buffer_index() != buffer_index
+                || fixup.buffer_byte_offset() != 0
+                || fixup.required_alignment() != u64::from(element_alignment)
+                || completion.access != access
+                || completion.byte_len != byte_len
+                || completion.writeback.is_some() != needs_writeback
+                || completion
+                    .writeback
+                    .as_ref()
+                    .is_some_and(|writeback| writeback.byte_len != byte_len)
+            {
+                return Err(GeneratedKfdPrepareError::PackedSubstitution);
+            }
+        }
+        for (index, seen) in seen_arguments.into_iter().enumerate() {
+            match plan.argument(index).unwrap().kind() {
+                AbiKind::Scalar(_) if !seen => {}
+                AbiKind::Slice { .. } if seen => {}
+                _ => return Err(GeneratedKfdPrepareError::PackedSubstitution),
+            }
+        }
+        if seen_buffers.contains(&false)
+            || packing_observation_identity(observation).map_err(GeneratedKfdPrepareError::Bind)?
+                != observation.identity
+        {
+            return Err(GeneratedKfdPrepareError::PackedSubstitution);
+        }
+        Ok(())
     }
 
     pub fn into_runtime_inputs(
@@ -1077,6 +1212,8 @@ mod tests {
         .unwrap();
         validate_argument_packing(KernelId::from_bytes([0x44; 32]), &manifest, &generated).unwrap()
     }
+
+    include!("generated_kfd_arguments_validation_tests.rs");
 
     #[test]
     fn packing_is_address_free_and_binds_exact_buffers_and_fixups() {

@@ -2,6 +2,8 @@ use std::{error::Error, fmt};
 
 use fe2o3_amd_target::{AmdTargetId, PRODUCTION_GFX942_DEVICE_TARGET_V1};
 use fe2o3_aql::AqlDispatchGeometryV1;
+use fe2o3_hsaco::InspectedKernel;
+use fe2o3_kernel_descriptor::{BlockSizeV1, KernelDescriptorV1};
 use fe2o3_kfd::{CheckedGfx942XnackMinusDevice, DeviceBindingError};
 use fe2o3_runtime::{
     Gfx942AuthorizedRuntimeDispatchResultV1, Gfx942AuthorizedRuntimeExecutionErrorV1,
@@ -634,6 +636,13 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             .check_observable_currentness()
             .map_err(GeneratedWorkerV3KfdInvocationError::DeviceCurrentness)?;
         validate_gfx942_target(&self)?;
+        validate_generated_kfd_launch_prerequisites(
+            self.descriptor(),
+            self.admission().physical_kernel(),
+            geometry,
+            dynamic_group_segment_bytes,
+        )
+        .map_err(GeneratedWorkerV3KfdInvocationError::RuntimePreparation)?;
 
         let packed = self
             .prepare_generated_kfd_arguments_with_current(
@@ -720,6 +729,82 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             differential,
         })
     }
+}
+
+fn validate_generated_kfd_launch_prerequisites(
+    descriptor: &KernelDescriptorV1,
+    physical: &InspectedKernel,
+    geometry: AqlDispatchGeometryV1,
+    dynamic_group_segment_bytes: u32,
+) -> Result<(), Gfx942RuntimePreparationErrorV1> {
+    let source = descriptor.launch();
+    let grid = geometry.grid();
+    let workgroup = geometry.workgroup().map(u32::from);
+    if geometry.dimensions() > u16::from(source.rank()) {
+        return Err(Gfx942RuntimePreparationErrorV1::UnsupportedResource(
+            "launch rank exceeds descriptor",
+        ));
+    }
+    grid.into_iter()
+        .try_fold(1_u64, |product, axis| product.checked_mul(u64::from(axis)))
+        .ok_or(Gfx942RuntimePreparationErrorV1::UnsupportedResource(
+            "global invocation count overflow",
+        ))?;
+
+    let expected_required = match source.block_size() {
+        BlockSizeV1::Any => None,
+        BlockSizeV1::Exact(block) => {
+            let required = [block.x(), block.y(), block.z()];
+            if workgroup != required {
+                return Err(Gfx942RuntimePreparationErrorV1::WorkgroupMismatch);
+            }
+            Some(required)
+        }
+        BlockSizeV1::AtMost(block) => {
+            if workgroup
+                .into_iter()
+                .zip([block.x(), block.y(), block.z()])
+                .any(|(actual, maximum)| actual > maximum)
+            {
+                return Err(Gfx942RuntimePreparationErrorV1::WorkgroupMismatch);
+            }
+            None
+        }
+    };
+    let flat_workgroup = workgroup.into_iter().map(u64::from).product::<u64>();
+    if expected_required != physical.required_workgroup_size()
+        || flat_workgroup > u64::from(source.max_flat_workgroup_size())
+        || flat_workgroup > u64::from(physical.max_flat_workgroup_size())
+    {
+        return Err(Gfx942RuntimePreparationErrorV1::WorkgroupMismatch);
+    }
+
+    // AQL grid axes count work-items; descriptor and AMDHSA maxima count workgroups.
+    let max_grid = source.max_grid();
+    let source_maxima = [max_grid.x(), max_grid.y(), max_grid.z()];
+    for (axis, physical_maximum) in physical.max_workgroups().into_iter().enumerate() {
+        let count = grid[axis].div_ceil(workgroup[axis]);
+        if count > source_maxima[axis] || physical_maximum.is_some_and(|maximum| count > maximum) {
+            return Err(Gfx942RuntimePreparationErrorV1::WorkgroupCountExceeded { axis });
+        }
+    }
+    if physical.group_segment_fixed_size() != u64::from(source.static_shared_memory_bytes()) {
+        return Err(Gfx942RuntimePreparationErrorV1::UnsupportedResource(
+            "static group segment differs from descriptor",
+        ));
+    }
+    if dynamic_group_segment_bytes > source.max_dynamic_shared_memory_bytes() {
+        return Err(Gfx942RuntimePreparationErrorV1::UnsupportedResource(
+            "dynamic group segment exceeds descriptor",
+        ));
+    }
+    source
+        .static_shared_memory_bytes()
+        .checked_add(dynamic_group_segment_bytes)
+        .ok_or(Gfx942RuntimePreparationErrorV1::UnsupportedResource(
+            "total group segment representation",
+        ))?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1207,6 +1292,8 @@ impl Error for GeneratedWorkerV3KfdExecutionError {
 mod tests {
     use super::*;
     use crate::worker_v3_verification_admission::admitted_semantic_machine_refinement_for_test_v1;
+
+    include!("generated_kfd_launch_prerequisites_tests.rs");
 
     fn application_coordinates_fixture() -> WorkerV3ApplicationExecutionCoordinatesV1 {
         WorkerV3ApplicationExecutionCoordinatesV1 {
