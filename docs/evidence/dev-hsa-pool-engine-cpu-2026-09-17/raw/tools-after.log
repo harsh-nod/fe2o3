@@ -1,0 +1,6 @@
+/usr/bin/g++: OK
+/usr/bin/python3: OK
+/usr/bin/readelf: OK
+/opt/rocm/include/hsa/hsa.h: OK
+/opt/rocm/include/hsa/hsa_ext_amd.h: OK
+/opt/rocm/lib/libhsa-runtime64.so: OK

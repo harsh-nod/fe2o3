@@ -1,0 +1,6 @@
+1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769  /usr/bin/g++
+e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f  /usr/bin/python3
+64c58e15274bbbb5153f31078e455e9e77ee5f51489e709bba5bb788ce9df2b0  /usr/bin/readelf
+51ea864cc3e83a9ce824c294dd98a5724eeec87b76fafded1a01d406206ce0f5  /opt/rocm/include/hsa/hsa.h
+a59a80700f9fa697f6067b6f5442aca5bdc494eaf20a2da639fd46038a7462b6  /opt/rocm/include/hsa/hsa_ext_amd.h
+5a7697364ebc55ed8e5b4d06588570612853fd5d657301948d6f69ce6eaa14f6  /opt/rocm/lib/libhsa-runtime64.so

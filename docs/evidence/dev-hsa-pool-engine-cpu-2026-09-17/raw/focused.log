@@ -1,0 +1,15 @@
+test_admission_rejections_do_not_allocate_or_copy (__main__.HsaCopyDiagnosticAdapterTests.test_admission_rejections_do_not_allocate_or_copy) ... ok
+test_each_explicit_cell_and_cpu (__main__.HsaCopyDiagnosticAdapterTests.test_each_explicit_cell_and_cpu) ... ok
+test_failed_access_grant_prevents_copy (__main__.HsaCopyDiagnosticAdapterTests.test_failed_access_grant_prevents_copy) ... ok
+test_full_buffer_and_cleanup_failures_suppress_results (__main__.HsaCopyDiagnosticAdapterTests.test_full_buffer_and_cleanup_failures_suppress_results) ... ok
+test_invalid_cli_precedes_hsa_initialization (__main__.HsaCopyDiagnosticAdapterTests.test_invalid_cli_precedes_hsa_initialization) ... ok
+test_late_output_failure_after_cleanup_is_not_success (__main__.HsaCopyDiagnosticAdapterTests.test_late_output_failure_after_cleanup_is_not_success) ... ok
+test_nondefault_cpu_access_is_explicitly_granted (__main__.HsaCopyDiagnosticAdapterTests.test_nondefault_cpu_access_is_explicitly_granted) ... ok
+test_output_failure_does_not_return_success (__main__.HsaCopyDiagnosticAdapterTests.test_output_failure_does_not_return_success) ... ok
+test_unproved_completion_never_resets_or_reuses (__main__.HsaCopyDiagnosticAdapterTests.test_unproved_completion_never_resets_or_reuses) ... ok
+test_policy (__main__.HsaCopyDiagnosticTests.test_policy) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 17.402s
+
+OK

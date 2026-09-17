@@ -1,0 +1,8 @@
+benchmarks/runtime_gfx942/HSA-COPY-DIAGNOSTIC.md: OK
+benchmarks/runtime_gfx942/README.md: OK
+benchmarks/runtime_gfx942/async_copy_hsa_pool_engine.cpp: OK
+benchmarks/runtime_gfx942/hsa_copy_diagnostic.hpp: OK
+benchmarks/runtime_gfx942/hsa_copy_diagnostic_mock.cpp: OK
+benchmarks/runtime_gfx942/hsa_copy_diagnostic_test.cpp: OK
+benchmarks/runtime_gfx942/test_hsa_copy_diagnostic.py: OK
+benchmarks/runtime_gfx942/native_benchmark_args.hpp: OK

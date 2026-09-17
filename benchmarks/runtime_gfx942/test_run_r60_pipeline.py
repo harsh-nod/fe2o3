@@ -10,6 +10,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import signal
 import subprocess
 import tarfile
@@ -196,7 +197,12 @@ class RunnerTests(unittest.TestCase):
             nonlocal interrupted
             if not interrupted:
                 interrupted = True
-                original_sleep(0.2)
+                deadline = RUNNER.time.monotonic() + 10
+                pid_record = self.runner.evidence / "000-interrupted-child.stdout"
+                while not re.fullmatch(r"[1-9][0-9]*\n", pid_record.read_text()):
+                    if RUNNER.time.monotonic() >= deadline:
+                        raise RUNNER.RunError("child readiness watchdog expired")
+                    original_sleep(0.01)
                 raise RUNNER.RunError("simulated interruption")
             original_sleep(duration)
 

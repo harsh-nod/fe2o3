@@ -1,0 +1,1 @@
+git diff --exit-code 5ed58ea896e492f5bbc135e9f8449eabd51165bd -- crates benchmarks/runtime_gfx942/async_copy_hsa.cpp benchmarks/runtime_gfx942/async_copy_hip.cpp benchmarks/runtime_gfx942/run-directional-window-mi300x.sh benchmarks/runtime_gfx942/r26-host-guard.py benchmarks/runtime_gfx942/run-r60-pipeline-mi300x.py 

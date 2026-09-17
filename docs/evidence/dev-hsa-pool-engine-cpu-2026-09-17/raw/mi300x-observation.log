@@ -1,0 +1,80 @@
+
+
+============================ ROCm System Management Interface ============================
+======================================= Unique ID ========================================
+GPU[0]		: Unique ID: 0x6ced1647a296545c
+GPU[1]		: Unique ID: 0xab83d2ffef0d3cdf
+GPU[2]		: Unique ID: 0xd2e26fef80cf5c33
+GPU[3]		: Unique ID: 0x189ca857de1ef2fb
+GPU[4]		: Unique ID: 0x54f88318ca05093d
+GPU[5]		: Unique ID: 0xb7baafd0fb173d8e
+GPU[6]		: Unique ID: 0x10a254ce4987e716
+GPU[7]		: Unique ID: 0x53691ef168a0147d
+==========================================================================================
+=================================== % time GPU is busy ===================================
+GPU[0]		: GPU use (%): 0
+GPU[1]		: GPU use (%): 98
+GPU[2]		: GPU use (%): 99
+GPU[3]		: GPU use (%): 99
+GPU[4]		: GPU use (%): 99
+GPU[5]		: GPU use (%): 100
+GPU[6]		: GPU use (%): 100
+GPU[7]		: GPU use (%): 100
+==========================================================================================
+===================================== KFD Processes ======================================
+KFD process information:
+PID    	PROCESS NAME	GPU(s)	VRAM USED  	SDMA USED	CU OCCUPANCY	
+3161407	python      	0     	0          	0        	0           	
+1668129	python      	0     	0          	0        	0           	
+3161415	python      	0     	0          	0        	0           	
+1650051	python      	1     	56308142080	0        	0           	
+3161403	python      	1     	83189223424	0        	0           	
+1668521	python      	0     	0          	0        	0           	
+3161411	python      	0     	0          	0        	0           	
+1650058	python      	1     	84879740928	0        	0           	
+1650056	python      	1     	63541219328	0        	0           	
+1668528	python      	0     	0          	0        	0           	
+3161428	python      	0     	0          	0        	0           	
+1668131	python      	0     	0          	0        	0           	
+1650052	python      	1     	63669145600	0        	1           	
+1668524	python      	0     	0          	0        	0           	
+3161424	python      	0     	0          	0        	0           	
+1649620	pt_elastic  	0     	0          	0        	0           	
+1668230	python      	0     	0          	0        	0           	
+1650050	python      	1     	68712169472	0        	1           	
+3161432	python      	0     	0          	0        	0           	
+1650057	python      	1     	90768711680	0        	0           	
+1668519	python      	0     	0          	0        	0           	
+3161419	python      	0     	0          	0        	0           	
+1650055	python      	1     	71136477184	0        	10          	
+1649623	pt_elastic  	0     	0          	0        	0           	
+==========================================================================================
+======================================= PCI Bus ID =======================================
+GPU[0]		: PCI Bus: 0000:05:00.0
+GPU[1]		: PCI Bus: 0000:26:00.0
+GPU[2]		: PCI Bus: 0000:46:00.0
+GPU[3]		: PCI Bus: 0000:65:00.0
+GPU[4]		: PCI Bus: 0000:85:00.0
+GPU[5]		: PCI Bus: 0000:A6:00.0
+GPU[6]		: PCI Bus: 0000:C6:00.0
+GPU[7]		: PCI Bus: 0000:E5:00.0
+==========================================================================================
+================================== Memory Usage (Bytes) ==================================
+GPU[0]		: VRAM Total Memory (B): 206141652992
+GPU[0]		: VRAM Total Used Memory (B): 91546685440
+GPU[1]		: VRAM Total Memory (B): 206141652992
+GPU[1]		: VRAM Total Used Memory (B): 69022724096
+GPU[2]		: VRAM Total Memory (B): 206141652992
+GPU[2]		: VRAM Total Used Memory (B): 56614285312
+GPU[3]		: VRAM Total Memory (B): 206141652992
+GPU[3]		: VRAM Total Used Memory (B): 63975092224
+GPU[4]		: VRAM Total Memory (B): 206141652992
+GPU[4]		: VRAM Total Used Memory (B): 71455170560
+GPU[5]		: VRAM Total Memory (B): 206141652992
+GPU[5]		: VRAM Total Used Memory (B): 63848083456
+GPU[6]		: VRAM Total Memory (B): 206141652992
+GPU[6]		: VRAM Total Used Memory (B): 91075592192
+GPU[7]		: VRAM Total Memory (B): 206141652992
+GPU[7]		: VRAM Total Used Memory (B): 85186543616
+==========================================================================================
+================================== End of ROCm SMI Log ===================================

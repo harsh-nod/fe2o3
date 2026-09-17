@@ -39,6 +39,10 @@ retains all accepted measurements, qualifiers, guards and the remaining gap.
 
 ## Measurement Scopes
 
+The separate [HSA pool/engine diagnostic](HSA-COPY-DIAGNOSTIC.md) investigates
+directional-copy allocation and engine-policy differences without changing the
+matched comparators. It is not a runtime parity or performance acceptance gate.
+
 The output is a line-oriented `key=value` stream. Percentiles are computed over
 per-sample average microseconds.
 

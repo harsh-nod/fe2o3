@@ -1,0 +1,58 @@
+.............................................................................................................................................E...F../usr/lib/python3.12/subprocess.py:1127: ResourceWarning: subprocess 612104 is still running
+  _warn("subprocess %s is still running" % self.pid,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/usr/lib/python3.12/re/_parser.py:261: ResourceWarning: unclosed file <_io.FileIO name=3 mode='rb' closefd=True>
+  def get(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/usr/lib/python3.12/re/_parser.py:261: ResourceWarning: unclosed file <_io.FileIO name=5 mode='rb' closefd=True>
+  def get(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+........................................................................DRN2 rejected: DRN-2 capture evidence rejected: invalid drain-capture evidence: Expecting value: line 1 column 1 (char 0); diagnostics=/tmp/tmppo3ap07p/drn2-rejected-c89d85404156e95224062889363e7daf
+......................................E...........R61 rejected: cleanup failed; diagnostics=/tmp/tmpp01n9h09/r61-rejected-0857e943078d093c0355f8c43c6ac1eb
+.R61 rejected: constructor failed; diagnostics=None
+....R61 rejected: typed qualification rejection; diagnostics=/tmp/tmpi2go3jf_/r61-rejected-9a908e983b355939be393c8f912a521e
+.......R62 rejected: constructor failed; diagnostics=None
+....R63 rejected: constructor failed; diagnostics=None
+...R65 rejected: constructor failed; diagnostics=None
+..............R66 rejected: R66 retained-custody evidence rejected: invalid R66 evidence: Expecting value: line 1 column 1 (char 0); diagnostics=/tmp/tmpevvlrcbm/r66-rejected-6885748498951adb4546e77c75bc8b66
+..
+======================================================================
+ERROR: test_target_exec_waits_for_clean_gated_census (test_r26_host_guard.MonitorCommandTests.test_target_exec_waits_for_clean_gated_census)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/benchmarks/runtime_gfx942/r26-host-guard.py", line 1192, in monitor_target
+    cadence.observe(clock())
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/benchmarks/runtime_gfx942/r26-host-guard.py", line 123, in observe
+    raise ObservationGapError(
+fe2o3_r26_host_guard.ObservationGapError: queue census observation 2 gap exceeded: observed_ns=10340974 maximum_ns=10000000
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/benchmarks/runtime_gfx942/test_r26_host_guard.py", line 2249, in test_target_exec_waits_for_clean_gated_census
+    GUARD.monitor_target(
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/benchmarks/runtime_gfx942/r26-host-guard.py", line 1322, in monitor_target
+    raise RetryableCensusError(
+fe2o3_r26_host_guard.RetryableCensusError: queue census observation 2 gap exceeded: observed_ns=10340974 maximum_ns=10000000
+
+======================================================================
+ERROR: test_interruption_reaps_command_group_and_retained_child (test_run_r60_pipeline.RunnerTests.test_interruption_reaps_command_group_and_retained_child)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/benchmarks/runtime_gfx942/test_run_r60_pipeline.py", line 206, in test_interruption_reaps_command_group_and_retained_child
+    pid = int((self.runner.evidence / "000-interrupted-child.stdout").read_text())
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: invalid literal for int() with base 10: ''
+
+======================================================================
+FAIL: test_termination_cleans_target_group_and_buffered_output (test_r26_host_guard.MonitorCommandTests.test_termination_cleans_target_group_and_buffered_output)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/benchmarks/runtime_gfx942/test_r26_host_guard.py", line 3141, in test_termination_cleans_target_group_and_buffered_output
+    self.assertRegex(target_pid_text, r"^[1-9][0-9]*$")
+AssertionError: Regex didn't match: '^[1-9][0-9]*$' not found in ''
+
+----------------------------------------------------------------------
+Ran 305 tests in 69.350s
+
+FAILED (failures=1, errors=2)

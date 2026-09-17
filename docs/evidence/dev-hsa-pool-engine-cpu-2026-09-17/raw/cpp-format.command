@@ -1,0 +1,1 @@
+clang-format --dry-run --Werror benchmarks/runtime_gfx942/async_copy_hsa_pool_engine.cpp benchmarks/runtime_gfx942/hsa_copy_diagnostic.hpp benchmarks/runtime_gfx942/hsa_copy_diagnostic_mock.cpp benchmarks/runtime_gfx942/hsa_copy_diagnostic_test.cpp 

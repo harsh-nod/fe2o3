@@ -2226,6 +2226,12 @@ except guard.GuardError as error:
             marker = root / "target-started"
             observer_cpu = min(os.sched_getaffinity(0))
             census = 0
+            now_ns = 0
+
+            def deterministic_clock() -> int:
+                nonlocal now_ns
+                now_ns += GUARD.POLL_INTERVAL_NS
+                return now_ns
 
             def classify(
                 **_arguments: object,
@@ -2261,6 +2267,7 @@ except guard.GuardError as error:
                     ],
                     kfd_proc_root=kfd_root,
                     proc_root=pathlib.Path("/proc"),
+                    clock=deterministic_clock,
                 )
             self.assertTrue(marker.exists())
             self.assertGreaterEqual(census, 2)
@@ -3115,8 +3122,10 @@ except guard.GuardError as error:
                 "-c",
                 (
                     "import os,pathlib,signal,time; "
-                    f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid())); "
                     "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                    f"ready=pathlib.Path({str(pid_file.with_suffix('.pending'))!r}); "
+                    "ready.write_text(str(os.getpid())); "
+                    f"ready.replace({str(pid_file)!r}); "
                     "time.sleep(10)"
                 ),
             ]
@@ -3128,24 +3137,51 @@ except guard.GuardError as error:
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            deadline = time.monotonic() + 2
-            target_pid_text = ""
-            while time.monotonic() < deadline:
+            target_pid = None
+            termination_requested = False
+            try:
+                deadline = time.monotonic() + 10
+                target_pid_text = ""
+                while time.monotonic() < deadline:
+                    try:
+                        target_pid_text = pid_file.read_text(encoding="ascii")
+                    except FileNotFoundError:
+                        pass
+                    if target_pid_text or monitor.poll() is not None:
+                        break
+                    time.sleep(0.005)
+                self.assertRegex(target_pid_text, r"^[1-9][0-9]*$")
+                target_pid = int(target_pid_text)
+                monitor.terminate()
+                termination_requested = True
+                time.sleep(0.02)
+                monitor.terminate()
+            finally:
+                if monitor.poll() is None and not termination_requested:
+                    monitor.terminate()
                 try:
-                    target_pid_text = pid_file.read_text(encoding="ascii")
-                except FileNotFoundError:
-                    pass
-                if target_pid_text:
-                    break
-                time.sleep(0.005)
-            self.assertRegex(target_pid_text, r"^[1-9][0-9]*$")
-            target_pid = int(target_pid_text)
-            monitor.terminate()
-            time.sleep(0.02)
-            monitor.terminate()
-            stdout, stderr = monitor.communicate(timeout=7)
-            target_exists = pathlib.Path(f"/proc/{target_pid}").exists()
-            output_exists = output.exists()
+                    stdout, stderr = monitor.communicate(timeout=7)
+                except subprocess.TimeoutExpired:
+                    monitor.kill()
+                    monitor.communicate(timeout=2)
+                    raise
+                finally:
+                    # Record the cleanup oracle before test-only fallback cleanup.
+                    target_exists = target_pid is not None and pathlib.Path(
+                        f"/proc/{target_pid}"
+                    ).exists()
+                    output_exists = output.exists()
+                    if target_pid is not None and GUARD._process_group_exists(
+                        target_pid
+                    ):
+                        try:
+                            os.killpg(target_pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            os.waitpid(target_pid, 0)
+                        except ChildProcessError:
+                            pass
         self.assertEqual(monitor.returncode, 2)
         self.assertEqual(stdout, "")
         self.assertIn("interrupted by signal", stderr)

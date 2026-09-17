@@ -1,0 +1,1487 @@
+diff --git a/benchmarks/runtime_gfx942/HSA-COPY-DIAGNOSTIC.md b/benchmarks/runtime_gfx942/HSA-COPY-DIAGNOSTIC.md
+new file mode 100644
+index 000000000..ef0e20895
+--- /dev/null
++++ b/benchmarks/runtime_gfx942/HSA-COPY-DIAGNOSTIC.md
+@@ -0,0 +1,121 @@
++# HSA Pool And Engine Diagnostic
++
++`async_copy_hsa_pool_engine.cpp` is a development diagnostic for the unresolved
++[256 MiB directional copy gap](../../docs/evidence/dev-directional-copy-mi300x-2026-09-17/README.md).
++It does not change `async_copy_hsa.cpp`, the KFD/HIP comparators, their runners,
++or any runtime implementation. Its distinct schema is not a parity acceptance
++record. No native performance or coherence result follows from CPU tests.
++
++## Build And Controls
++
++Build in an owned temporary directory with ROCm development headers/libraries:
++
++```sh
++g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic \
++  -isystem /opt/rocm/include \
++  benchmarks/runtime_gfx942/async_copy_hsa_pool_engine.cpp \
++  -L/opt/rocm/lib -Wl,-rpath,/opt/rocm/lib -lhsa-runtime64 \
++  -o "$work/hsa-copy-pool-engine"
++```
++
++Do not link `hsa_copy_diagnostic_mock.cpp` into a hardware executable. That file
++implements a CPU test double and never establishes a native result.
++
++The executable takes eight explicit arguments:
++
++```text
++hsa-copy-pool-engine <gpu-index> <cpu-index> <bytes> <warmups> <samples> <expected-unique-id> <fine|coarse> <engine0|engine1>
++```
++
++Depth is exactly one; size is 1 through 268,435,456 bytes, samples are nonzero,
++and warmups plus samples cannot exceed 10,000. Invalid CLI input is rejected
++before HSA initialization. GPU UUID, exact `gfx942` target and disabled XNACK
++must match. The CPU index is an explicitly selected enumerated CPU agent, not
++a Linux CPU or NUMA node number. The nearest-CPU handle, driver nodes and GPU
++PCI identifiers are observations, not automatic placement changes.
++
++The host pool must be the unique eligible CPU-location pool with exactly
++fine-grained flags (2) or coarse-grained flags (4). Kernarg, mixed and extended
++flags do not match. The device pool is the unique eligible coarse-grained
++GPU-location pool. Allocation flags remain zero. Both agents must be eligible
++for access and are explicitly granted access to all three buffers. Admission
++checks granule-rounded aggregate capacity for two host allocations and one
++device allocation; reported maximum capacity is not free-memory telemetry or
++a reservation. Missing, ambiguous or unavailable choices fail without fallback.
++
++Engine 0 and engine 1 mean HSA masks 1 and 2. Each must be advertised for both
++H2D and D2H by separate `hsa_amd_memory_copy_engine_status` queries. All copies
++use `hsa_amd_memory_async_copy_on_engine` serially, with no automatic-engine API
++and `force_copy_on_sdma=false`. That flag's documented special case concerns
++same-agent blits, which this diagnostic does not perform. HSA masks must **not**
++be identified with KFD queue indices or treated as measured physical placement.
++The [ROCr API contract](https://rocm.docs.amd.com/projects/ROCR-Runtime/en/latest/api-reference/api.html)
++requires engine availability checks, direct access by both agents and system
++release/acquire ordering around DMA buffers.
++
++## Measurement
++
++Each round initializes the retained upload buffer with a changing uniform
++pattern and poisons the retained download buffer. An idle-signal `screlease`
++after both writes establishes the host release boundary before timed H2D.
++Each direction records host submission duration, blocked `scacquire` wait plus
++signal reset duration, and their total. Only exact signal zero permits reset
++and the next operation. Negative errors or pending/timeout observations fail
++without resetting the signal or reusing/freeing the buffers in application code;
++fatal native errors terminate the diagnostic process.
++
++H2D completes before D2H. Every returned byte is checked after every warmup and
++sample. Setup, host preparation, host release, validation and cleanup are outside
++copy timing. The signal reset remains inside timing, as in the existing HSA
++comparator. The additional intermediate clock observation is diagnostic overhead.
++There is no separate allocation/free stress probe. These are host intervals, not
++device timestamps, and they do not isolate sleeping or physical DMA duration.
++
++`record=pool` describes all enumerated GLOBAL pools, including ineligible ones;
++non-GLOBAL pools are skipped before reading GLOBAL-only attributes. `record=config`
++records admitted choices and extents. Neither is a successful benchmark result.
++`record=round` retains every warmup/sample's timings and validation count, followed
++by `record=complete`, only after signal destruction, all frees and shutdown succeed.
++The process must also exit zero; output errors are fatal. Truncated output, missing
++completion, failed postflight or nonzero exit cannot be accepted as a measurement.
++
++## Experiment And Limits
++
++On an actually free device, compare fine/engine0, fine/engine1, coarse/engine0,
++and coarse/engine1 at 256 MiB, three warmups and ten samples. Hold CPU agent,
++device pool, NUMA policy, wait policy and preparation fixed. Use counterbalanced
++cell order and retain per-process records rather than pooling process percentiles.
++An unavailable cell is unavailable, not permission to change its policy.
++
++Before and after every process, an external shared-host guard must check the
++exact UID/BDF, utilization, VRAM and mapped PIDs. This executable does not reserve
++a GPU or implement that guard. Do not run it merely because utilization is zero
++when another process holds allocations. Stop on admission/postflight failure and
++remove only owned artifacts after all owned processes have exited.
++
++The matrix can establish effects of HSA pool policy and requested engine within
++this diagnostic. It cannot establish physical NUMA residency/cache attributes,
++equivalence to KFD GTT mappings, physical engine identity, or the cause of the
++facade gap. The KFD facade also repeats short currentness-checked waits and performs
++substantial outside-timer shadow preparation; those are separate control variables.
++Automatic HSA engine policy and device profiling are not exercised here.
++
++## CPU Qualification
++
++```sh
++python3 -I benchmarks/runtime_gfx942/test_hsa_copy_diagnostic.py -v
++```
++
++The pure policy test has no HSA dependency. Adapter tests compile the actual
++translation unit against the separately named CPU mock and real ROCm headers,
++without linking ROCr or opening a GPU. They cover all explicit cells and CPU
++choices, exact selected/allocated pools, aggregate bounds, access grants, host
++release placement, directional availability, serial completion/reset, full-buffer
++failures, cleanup failures and early/late output errors. Adapter tests explicitly
++skip when headers are missing; a skip is not adapter qualification. Set `ROCM_PATH`
++to select another header installation. Mocks verify control flow, not hardware
++coherence, memory attributes, DMA execution or performance.
++
++The [CPU qualification receipt](../../docs/evidence/dev-hsa-pool-engine-cpu-2026-09-17/README.md)
++records the actual source identity and check outcomes. Hardware execution remains
++a separate guarded measurement, not an implication of that receipt.
+diff --git a/benchmarks/runtime_gfx942/README.md b/benchmarks/runtime_gfx942/README.md
+index 42c0759ae..ba45d0887 100644
+--- a/benchmarks/runtime_gfx942/README.md
++++ b/benchmarks/runtime_gfx942/README.md
+@@ -39,6 +39,10 @@ retains all accepted measurements, qualifiers, guards and the remaining gap.
+ 
+ ## Measurement Scopes
+ 
++The separate [HSA pool/engine diagnostic](HSA-COPY-DIAGNOSTIC.md) investigates
++directional-copy allocation and engine-policy differences without changing the
++matched comparators. It is not a runtime parity or performance acceptance gate.
++
+ The output is a line-oriented `key=value` stream. Percentiles are computed over
+ per-sample average microseconds.
+ 
+diff --git a/benchmarks/runtime_gfx942/async_copy_hsa_pool_engine.cpp b/benchmarks/runtime_gfx942/async_copy_hsa_pool_engine.cpp
+new file mode 100644
+index 000000000..9c7135055
+--- /dev/null
++++ b/benchmarks/runtime_gfx942/async_copy_hsa_pool_engine.cpp
+@@ -0,0 +1,314 @@
++#include <hsa/hsa.h>
++#include <hsa/hsa_ext_amd.h>
++
++#include "hsa_copy_diagnostic.hpp"
++
++#include <chrono>
++#include <cinttypes>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <limits>
++#include <vector>
++
++namespace policy = fe2o3::copy_diagnostic;
++
++static_assert(policy::kFine == HSA_AMD_MEMORY_POOL_GLOBAL_FLAG_FINE_GRAINED);
++static_assert(policy::kCoarse ==
++              HSA_AMD_MEMORY_POOL_GLOBAL_FLAG_COARSE_GRAINED);
++static_assert(HSA_AMD_SDMA_ENGINE_0 == 1 && HSA_AMD_SDMA_ENGINE_1 == 2);
++static_assert(HSA_AMD_MEMORY_POOL_ACCESS_ALLOWED_BY_DEFAULT == 1 &&
++              HSA_AMD_MEMORY_POOL_ACCESS_DISALLOWED_BY_DEFAULT == 2);
++
++namespace {
++
++[[noreturn]] void fail(const char *message) {
++  std::fprintf(stderr, "HSA copy diagnostic rejected: %s\n", message);
++  // Never free or recycle storage after an unproved completion. Fatal native
++  // errors terminate this process; only the successful path performs cleanup.
++  std::exit(2);
++}
++
++void check(hsa_status_t status, const char *operation) {
++  if (status == HSA_STATUS_SUCCESS)
++    return;
++  const char *text = nullptr;
++  hsa_status_string(status, &text);
++  std::fprintf(stderr, "%s failed: status=%u %s\n", operation,
++               static_cast<unsigned>(status), text ? text : "unknown");
++  fail("HSA operation failed");
++}
++
++void flush_output() {
++  if (std::fflush(stdout) != 0 || std::ferror(stdout))
++    fail("diagnostic output failed");
++}
++
++#define HSA_CHECK(call) check((call), #call)
++
++struct Agents {
++  std::vector<hsa_agent_t> cpus;
++  std::vector<hsa_agent_t> gpus;
++};
++
++hsa_status_t collect_agent(hsa_agent_t agent, void *data) {
++  hsa_device_type_t type;
++  const auto status = hsa_agent_get_info(agent, HSA_AGENT_INFO_DEVICE, &type);
++  if (status != HSA_STATUS_SUCCESS)
++    return status;
++  auto &agents = *static_cast<Agents *>(data);
++  if (type == HSA_DEVICE_TYPE_CPU)
++    agents.cpus.push_back(agent);
++  if (type == HSA_DEVICE_TYPE_GPU)
++    agents.gpus.push_back(agent);
++  return HSA_STATUS_SUCCESS;
++}
++
++struct PoolCollector {
++  hsa_agent_t cpu;
++  hsa_agent_t gpu;
++  std::vector<policy::PoolFacts> pools;
++};
++
++hsa_status_t collect_pool(hsa_amd_memory_pool_t pool, void *data) {
++  auto &collector = *static_cast<PoolCollector *>(data);
++  hsa_amd_segment_t segment;
++  HSA_CHECK(hsa_amd_memory_pool_get_info(pool, HSA_AMD_MEMORY_POOL_INFO_SEGMENT,
++                                         &segment));
++  if (segment != HSA_AMD_SEGMENT_GLOBAL)
++    return HSA_STATUS_SUCCESS;
++  policy::PoolFacts facts;
++  facts.handle = pool.handle;
++  facts.global = true;
++  hsa_amd_memory_pool_location_t location;
++  HSA_CHECK(hsa_amd_memory_pool_get_info(
++      pool, HSA_AMD_MEMORY_POOL_INFO_LOCATION, &location));
++  facts.location =
++      location == HSA_AMD_MEMORY_POOL_LOCATION_CPU   ? policy::Location::Cpu
++      : location == HSA_AMD_MEMORY_POOL_LOCATION_GPU ? policy::Location::Gpu
++                                                     : policy::Location::Other;
++  HSA_CHECK(hsa_amd_memory_pool_get_info(
++      pool, HSA_AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_ALLOWED,
++      &facts.allocatable));
++  HSA_CHECK(hsa_amd_memory_pool_get_info(
++      pool, HSA_AMD_MEMORY_POOL_INFO_GLOBAL_FLAGS, &facts.flags));
++  if (facts.allocatable) {
++    HSA_CHECK(hsa_amd_memory_pool_get_info(
++        pool, HSA_AMD_MEMORY_POOL_INFO_ALLOC_MAX_SIZE, &facts.maximum_bytes));
++    HSA_CHECK(hsa_amd_memory_pool_get_info(
++        pool, HSA_AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_GRANULE, &facts.granule));
++    HSA_CHECK(hsa_amd_memory_pool_get_info(
++        pool, HSA_AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_ALIGNMENT,
++        &facts.alignment));
++  }
++  hsa_amd_memory_pool_access_t cpu_access, gpu_access;
++  HSA_CHECK(hsa_amd_agent_memory_pool_get_info(
++      collector.cpu, pool, HSA_AMD_AGENT_MEMORY_POOL_INFO_ACCESS, &cpu_access));
++  HSA_CHECK(hsa_amd_agent_memory_pool_get_info(
++      collector.gpu, pool, HSA_AMD_AGENT_MEMORY_POOL_INFO_ACCESS, &gpu_access));
++  facts.cpu_access = static_cast<std::uint32_t>(cpu_access);
++  facts.gpu_access = static_cast<std::uint32_t>(gpu_access);
++  collector.pools.push_back(facts);
++  return HSA_STATUS_SUCCESS;
++}
++
++void print_inventory(const char *owner,
++                     const std::vector<policy::PoolFacts> &pools) {
++  for (std::size_t index = 0; index < pools.size(); ++index) {
++    const auto &pool = pools[index];
++    const char *location = pool.location == policy::Location::Cpu   ? "cpu"
++                           : pool.location == policy::Location::Gpu ? "gpu"
++                                                                    : "other";
++    std::printf(
++        "schema=%s record=pool owner=%s index=%zu handle=%" PRIu64
++        " location=%s global=1 allocatable=%u flags=%u max_aggregate_bytes=%zu"
++        " granule=%zu alignment=%zu cpu_access=%u gpu_access=%u\n",
++        policy::kSchema, owner, index, pool.handle, location,
++        static_cast<unsigned>(pool.allocatable), pool.flags, pool.maximum_bytes,
++        pool.granule, pool.alignment, pool.cpu_access, pool.gpu_access);
++  }
++}
++
++std::uint64_t now_ns() {
++  const auto value = std::chrono::duration_cast<std::chrono::nanoseconds>(
++                         std::chrono::steady_clock::now().time_since_epoch())
++                         .count();
++  if (value < 0)
++    fail("negative steady-clock timestamp");
++  return static_cast<std::uint64_t>(value);
++}
++
++policy::Timing copy(void *destination, hsa_agent_t destination_agent,
++                    const void *source, hsa_agent_t source_agent,
++                    std::size_t bytes, hsa_signal_t signal,
++                    std::uint32_t engine_mask, std::uint64_t timeout_hint) {
++  const auto start = now_ns();
++  HSA_CHECK(hsa_amd_memory_async_copy_on_engine(
++      destination, destination_agent, source, source_agent, bytes, 0, nullptr,
++      signal, static_cast<hsa_amd_sdma_engine_id_t>(engine_mask), false));
++  const auto submitted = now_ns();
++  const auto value = hsa_signal_wait_scacquire(
++      signal, HSA_SIGNAL_CONDITION_LT, 1, timeout_hint, HSA_WAIT_STATE_BLOCKED);
++  if (!policy::exact_completion(value))
++    fail("copy signal is not exactly zero; no signal reset or storage reuse");
++  hsa_signal_store_screlease(signal, 1);
++  const auto finished = now_ns();
++  policy::Timing result;
++  if (!policy::timing(start, submitted, finished, &result))
++    fail("nonmonotonic or zero-duration timing");
++  return result;
++}
++
++struct Round {
++  policy::Timing h2d;
++  policy::Timing d2h;
++};
++
++} // namespace
++
++int main(int argc, char **argv) {
++  policy::Config config;
++  if (!policy::parse_config(argc, argv, &config)) {
++    std::fputs(policy::kUsage, stderr);
++    return 2;
++  }
++  HSA_CHECK(hsa_init());
++  bool xnack = true;
++  std::uint64_t frequency = 0;
++  HSA_CHECK(hsa_system_get_info(HSA_AMD_SYSTEM_INFO_XNACK_ENABLED, &xnack));
++  HSA_CHECK(
++      hsa_system_get_info(HSA_SYSTEM_INFO_TIMESTAMP_FREQUENCY, &frequency));
++  if (xnack || frequency == 0 ||
++      frequency > std::numeric_limits<std::uint64_t>::max() / 60)
++    fail("requires XNACK disabled and a bounded HSA timeout hint");
++  Agents agents;
++  HSA_CHECK(hsa_iterate_agents(collect_agent, &agents));
++  if (config.gpu_index >= agents.gpus.size() ||
++      config.cpu_index >= agents.cpus.size())
++    fail("selected CPU or GPU index was not enumerated");
++  const auto cpu = agents.cpus[config.cpu_index];
++  const auto gpu = agents.gpus[config.gpu_index];
++  char uuid[21] = {}, expected_uuid[21] = {}, target[64] = {};
++  HSA_CHECK(hsa_agent_get_info(
++      gpu, static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_UUID), uuid));
++  HSA_CHECK(hsa_agent_get_info(gpu, HSA_AGENT_INFO_NAME, target));
++  std::snprintf(expected_uuid, sizeof(expected_uuid), "GPU-%016" PRIx64,
++                config.unique_id);
++  if (std::strcmp(uuid, expected_uuid) != 0 ||
++      std::strcmp(target, "gfx942") != 0)
++    fail("GPU UUID or gfx942 target mismatch");
++
++  std::uint32_t cpu_node = 0, gpu_node = 0, bdf = 0, domain = 0;
++  hsa_agent_t nearest_cpu{};
++  HSA_CHECK(hsa_agent_get_info(
++      cpu, static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_DRIVER_NODE_ID),
++      &cpu_node));
++  HSA_CHECK(hsa_agent_get_info(
++      gpu, static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_DRIVER_NODE_ID),
++      &gpu_node));
++  HSA_CHECK(hsa_agent_get_info(
++      gpu, static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_BDFID), &bdf));
++  HSA_CHECK(hsa_agent_get_info(
++      gpu, static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_DOMAIN), &domain));
++  HSA_CHECK(hsa_agent_get_info(
++      gpu, static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_NEAREST_CPU),
++      &nearest_cpu));
++  PoolCollector host{cpu, gpu, {}}, device{cpu, gpu, {}};
++  HSA_CHECK(hsa_amd_agent_iterate_memory_pools(cpu, collect_pool, &host));
++  HSA_CHECK(hsa_amd_agent_iterate_memory_pools(gpu, collect_pool, &device));
++  print_inventory("cpu", host.pools);
++  print_inventory("gpu", device.pools);
++  flush_output();
++  policy::PoolSelection host_selection, device_selection;
++  const auto bytes = config.workload.bytes;
++  if (!policy::select_pool(host.pools, policy::Location::Cpu, config.host_flags,
++                           bytes, 2, &host_selection) ||
++      !policy::select_pool(device.pools, policy::Location::Gpu, policy::kCoarse,
++                           bytes, 1, &device_selection))
++    fail("missing, ambiguous, inaccessible or insufficient exact pool role");
++  std::uint32_t h2d_engines = 0, d2h_engines = 0;
++  HSA_CHECK(hsa_amd_memory_copy_engine_status(gpu, cpu, &h2d_engines));
++  HSA_CHECK(hsa_amd_memory_copy_engine_status(cpu, gpu, &d2h_engines));
++  if (!policy::engine_available(config.engine_mask, h2d_engines, d2h_engines))
++    fail("requested engine is not available in both directions");
++  const hsa_amd_memory_pool_t host_pool{
++      host.pools[host_selection.index].handle};
++  const hsa_amd_memory_pool_t device_pool{
++      device.pools[device_selection.index].handle};
++  std::printf(
++      "schema=%s record=config gpu_index=%zu cpu_index=%zu "
++      "unique_id=%016" PRIx64 " target=gfx942 xnack=disabled gpu_agent=%" PRIu64
++      " cpu_agent=%" PRIu64 " nearest_cpu_agent=%" PRIu64
++      " cpu_driver_node=%u gpu_driver_node=%u gpu_domain=%u gpu_bdf_id=%u"
++      " bytes=%zu depth=1 warmups=%zu samples=%zu host_grain=%s"
++      " host_pool=%" PRIu64 " device_pool=%" PRIu64
++      " host_rounded_bytes=%zu host_aggregate_bytes=%zu "
++      "device_rounded_bytes=%zu"
++      " requested_engine_mask=%u h2d_available_mask=%u d2h_available_mask=%u"
++      " allocation_flags=0 force_copy_on_sdma=0 wait=blocked_scacquire"
++      " host_release=signal_screlease_before_h2d_timing"
++      " timing=host_submit_wait_reset timeout_hint=%" PRIu64
++      " timestamp_frequency=%" PRIu64 "\n",
++      policy::kSchema, config.gpu_index, config.cpu_index, config.unique_id,
++      gpu.handle, cpu.handle, nearest_cpu.handle, cpu_node, gpu_node, domain,
++      bdf, bytes, config.workload.warmups, config.workload.samples,
++      config.host_flags == policy::kFine ? "fine" : "coarse", host_pool.handle,
++      device_pool.handle, host_selection.rounded_bytes,
++      host_selection.aggregate_bytes, device_selection.rounded_bytes,
++      config.engine_mask, h2d_engines, d2h_engines, frequency * 60, frequency);
++  flush_output();
++
++  std::vector<Round> rounds(config.workload.total_iterations);
++  void *upload = nullptr, *download = nullptr, *buffer = nullptr;
++  HSA_CHECK(hsa_amd_memory_pool_allocate(host_pool, bytes, 0, &upload));
++  HSA_CHECK(hsa_amd_memory_pool_allocate(host_pool, bytes, 0, &download));
++  HSA_CHECK(hsa_amd_memory_pool_allocate(device_pool, bytes, 0, &buffer));
++  const hsa_agent_t access_agents[] = {cpu, gpu};
++  HSA_CHECK(hsa_amd_agents_allow_access(2, access_agents, nullptr, upload));
++  HSA_CHECK(hsa_amd_agents_allow_access(2, access_agents, nullptr, download));
++  HSA_CHECK(hsa_amd_agents_allow_access(2, access_agents, nullptr, buffer));
++  hsa_signal_t signal{};
++  HSA_CHECK(hsa_signal_create(1, 0, nullptr, &signal));
++  for (std::size_t index = 0; index < rounds.size(); ++index) {
++    const auto expected = policy::pattern(index);
++    std::memset(upload, expected, bytes);
++    std::memset(download, expected ^ 0xff, bytes);
++    // The signal is idle at one. Release the new host contents to system scope
++    // before the timed submission; receive ordering is the scacquire wait.
++    hsa_signal_store_screlease(signal, 1);
++    rounds[index].h2d = copy(buffer, gpu, upload, cpu, bytes, signal,
++                             config.engine_mask, frequency * 60);
++    rounds[index].d2h = copy(download, cpu, buffer, gpu, bytes, signal,
++                             config.engine_mask, frequency * 60);
++    if (!policy::valid_buffer(static_cast<const std::uint8_t *>(download),
++                              bytes, expected))
++      fail("full returned buffer mismatch");
++  }
++  HSA_CHECK(hsa_signal_destroy(signal));
++  HSA_CHECK(hsa_amd_memory_pool_free(buffer));
++  HSA_CHECK(hsa_amd_memory_pool_free(download));
++  HSA_CHECK(hsa_amd_memory_pool_free(upload));
++  HSA_CHECK(hsa_shut_down());
++
++  for (std::size_t index = 0; index < rounds.size(); ++index) {
++    const auto &round = rounds[index];
++    std::printf("schema=%s record=round index=%zu phase=%s pattern=%u"
++                " h2d_submit_ns=%" PRIu64 " h2d_wait_reset_ns=%" PRIu64
++                " h2d_total_ns=%" PRIu64 " d2h_submit_ns=%" PRIu64
++                " d2h_wait_reset_ns=%" PRIu64 " d2h_total_ns=%" PRIu64
++                " h2d_signal=0 d2h_signal=0 checked_bytes=%zu\n",
++                policy::kSchema, index,
++                index < config.workload.warmups ? "warmup" : "sample",
++                static_cast<unsigned>(policy::pattern(index)),
++                round.h2d.submit_ns, round.h2d.wait_reset_ns,
++                round.h2d.total_ns, round.d2h.submit_ns,
++                round.d2h.wait_reset_ns, round.d2h.total_ns, bytes);
++  }
++  std::printf(
++      "schema=%s record=complete validated_rounds=%zu measured_rounds=%zu"
++      " checked_bytes_per_round=%zu signals_destroyed=1 allocations_freed=3"
++      " shutdown=1\n",
++      policy::kSchema, rounds.size(), config.workload.samples, bytes);
++  flush_output();
++  return 0;
++}
+diff --git a/benchmarks/runtime_gfx942/hsa_copy_diagnostic.hpp b/benchmarks/runtime_gfx942/hsa_copy_diagnostic.hpp
+new file mode 100644
+index 000000000..f6f3b9e14
+--- /dev/null
++++ b/benchmarks/runtime_gfx942/hsa_copy_diagnostic.hpp
+@@ -0,0 +1,179 @@
++#ifndef FE2O3_RUNTIME_GFX942_HSA_COPY_DIAGNOSTIC_HPP
++#define FE2O3_RUNTIME_GFX942_HSA_COPY_DIAGNOSTIC_HPP
++
++#include "native_benchmark_args.hpp"
++
++#include <algorithm>
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++#include <vector>
++
++namespace fe2o3::copy_diagnostic {
++
++constexpr std::uint32_t kFine = 2;
++constexpr std::uint32_t kCoarse = 4;
++constexpr std::size_t kMaxBytes = 256 * 1024 * 1024;
++constexpr std::size_t kMaxRounds = 10000;
++constexpr const char *kSchema = "fe2o3.hsa-pool-engine-diagnostic.v1";
++constexpr const char *kUsage =
++    "usage: hsa-copy-pool-engine <gpu-index> <cpu-index> <bytes> <warmups> "
++    "<samples> <expected-unique-id> <fine|coarse> <engine0|engine1>\n";
++
++struct Config {
++  std::size_t gpu_index = 0;
++  std::size_t cpu_index = 0;
++  runtime_gfx942::WorkloadShape workload;
++  std::uint64_t unique_id = 0;
++  std::uint32_t host_flags = 0;
++  std::uint32_t engine_mask = 0;
++};
++
++inline bool parse_config(int argc, const char *const *argv, Config *result) {
++  if (argc != 9 || argv == nullptr || result == nullptr)
++    return false;
++  for (int index = 1; index < argc; ++index)
++    if (argv[index] == nullptr)
++      return false;
++  Config parsed;
++  if (!runtime_gfx942::parse_size(argv[1], &parsed.gpu_index) ||
++      !runtime_gfx942::parse_size(argv[2], &parsed.cpu_index) ||
++      !runtime_gfx942::parse_workload_shape(argv[3], "1", argv[4], argv[5], 1,
++                                            &parsed.workload) ||
++      parsed.workload.bytes > kMaxBytes ||
++      parsed.workload.total_iterations > kMaxRounds ||
++      !runtime_gfx942::parse_unique_id(argv[6], &parsed.unique_id) ||
++      parsed.unique_id == 0)
++    return false;
++  if (std::strcmp(argv[7], "fine") == 0)
++    parsed.host_flags = kFine;
++  else if (std::strcmp(argv[7], "coarse") == 0)
++    parsed.host_flags = kCoarse;
++  else
++    return false;
++  if (std::strcmp(argv[8], "engine0") == 0)
++    parsed.engine_mask = 1;
++  else if (std::strcmp(argv[8], "engine1") == 0)
++    parsed.engine_mask = 2;
++  else
++    return false;
++  *result = parsed;
++  return true;
++}
++
++enum class Location { Cpu, Gpu, Other };
++
++struct PoolFacts {
++  std::uint64_t handle = 0;
++  Location location = Location::Other;
++  bool global = false;
++  bool allocatable = false;
++  std::uint32_t flags = 0;
++  std::size_t maximum_bytes = 0;
++  std::size_t granule = 0;
++  std::size_t alignment = 0;
++  std::uint32_t cpu_access = 0;
++  std::uint32_t gpu_access = 0;
++};
++
++struct PoolSelection {
++  std::size_t index = 0;
++  std::size_t rounded_bytes = 0;
++  std::size_t aggregate_bytes = 0;
++};
++
++inline bool accessible(std::uint32_t access) {
++  return access == 1 || access == 2;
++}
++
++inline bool rounded_extent(std::size_t bytes, std::size_t granule,
++                           std::size_t count, std::size_t *rounded,
++                           std::size_t *aggregate) {
++  if (bytes == 0 || granule == 0 || count == 0 || rounded == nullptr ||
++      aggregate == nullptr)
++    return false;
++  std::size_t extent = bytes;
++  const std::size_t remainder = bytes % granule;
++  if (remainder != 0 &&
++      !runtime_gfx942::checked_add(bytes, granule - remainder, &extent))
++    return false;
++  std::size_t total = 0;
++  if (!runtime_gfx942::checked_multiply(extent, count, &total))
++    return false;
++  *rounded = extent;
++  *aggregate = total;
++  return true;
++}
++
++inline bool select_pool(const std::vector<PoolFacts> &pools, Location location,
++                        std::uint32_t exact_flags, std::size_t bytes,
++                        std::size_t allocation_count, PoolSelection *result) {
++  if (result == nullptr || location == Location::Other ||
++      (exact_flags != kFine && exact_flags != kCoarse) || bytes == 0 ||
++      allocation_count == 0)
++    return false;
++  PoolSelection selected;
++  std::size_t matches = 0;
++  for (std::size_t index = 0; index < pools.size(); ++index) {
++    const auto &pool = pools[index];
++    std::size_t rounded = 0, aggregate = 0;
++    if (pool.handle == 0 || pool.location != location || !pool.global ||
++        !pool.allocatable || pool.flags != exact_flags ||
++        !accessible(pool.cpu_access) || !accessible(pool.gpu_access) ||
++        pool.alignment < alignof(std::uint32_t) ||
++        (pool.alignment & (pool.alignment - 1)) != 0 ||
++        !rounded_extent(bytes, pool.granule, allocation_count, &rounded,
++                        &aggregate) ||
++        aggregate > pool.maximum_bytes)
++      continue;
++    selected = {index, rounded, aggregate};
++    ++matches;
++  }
++  if (matches != 1)
++    return false;
++  *result = selected;
++  return true;
++}
++
++inline bool engine_available(std::uint32_t requested,
++                             std::uint32_t h2d_available,
++                             std::uint32_t d2h_available) {
++  return (requested == 1 || requested == 2) &&
++         (h2d_available & requested) == requested &&
++         (d2h_available & requested) == requested;
++}
++
++inline bool exact_completion(std::int64_t signal_value) {
++  return signal_value == 0;
++}
++
++inline std::uint8_t pattern(std::size_t round) {
++  return static_cast<std::uint8_t>(((round % 251) * 67 + 1) % 251 + 1);
++}
++
++inline bool valid_buffer(const std::uint8_t *buffer, std::size_t bytes,
++                         std::uint8_t expected) {
++  return buffer != nullptr && bytes != 0 &&
++         std::all_of(buffer, buffer + bytes, [expected](std::uint8_t byte) {
++           return byte == expected;
++         });
++}
++
++struct Timing {
++  std::uint64_t submit_ns = 0;
++  std::uint64_t wait_reset_ns = 0;
++  std::uint64_t total_ns = 0;
++};
++
++inline bool timing(std::uint64_t start, std::uint64_t submitted,
++                   std::uint64_t finished, Timing *result) {
++  if (result == nullptr || submitted < start || finished < submitted ||
++      finished == start)
++    return false;
++  *result = {submitted - start, finished - submitted, finished - start};
++  return true;
++}
++
++} // namespace fe2o3::copy_diagnostic
++
++#endif
+diff --git a/benchmarks/runtime_gfx942/hsa_copy_diagnostic_mock.cpp b/benchmarks/runtime_gfx942/hsa_copy_diagnostic_mock.cpp
+new file mode 100644
+index 000000000..21c8b31b7
+--- /dev/null
++++ b/benchmarks/runtime_gfx942/hsa_copy_diagnostic_mock.cpp
+@@ -0,0 +1,335 @@
++// CPU-only adapter fixture. This file must never be linked into hardware runs.
++#include <hsa/hsa.h>
++#include <hsa/hsa_ext_amd.h>
++
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <limits>
++#include <map>
++#include <vector>
++
++namespace {
++
++bool mode(const char *name) {
++  const char *value = std::getenv("FE2O3_HSA_COPY_TEST_CASE");
++  return value != nullptr && std::strcmp(value, name) == 0;
++}
++
++void require(bool condition) {
++  if (!condition) {
++    std::fputs("MOCK_PROTOCOL_ERROR\n", stderr);
++    std::abort();
++  }
++}
++
++template <typename T> hsa_status_t result(void *output, T value) {
++  *static_cast<T *>(output) = value;
++  return HSA_STATUS_SUCCESS;
++}
++
++struct Allocation {
++  std::uint64_t pool;
++  std::size_t bytes;
++  bool access_granted = false;
++};
++
++std::map<const void *, Allocation> allocations;
++std::vector<void *> allocation_order;
++std::uint64_t selected_cpu = 0, selected_gpu = 0;
++std::size_t copies = 0, waits = 0, resets = 0, frees = 0, statuses = 0;
++bool signal_live = false;
++bool prepared = false;
++hsa_signal_value_t signal_value = 1;
++
++bool gpu_pool(std::uint64_t handle) { return handle / 100 >= 20; }
++
++} // namespace
++
++extern "C" {
++
++hsa_status_t hsa_init() {
++  std::fputs("MOCK init\n", stderr);
++  return HSA_STATUS_SUCCESS;
++}
++
++hsa_status_t hsa_shut_down() {
++  std::fputs("MOCK shutdown\n", stderr);
++  require(!signal_live && allocations.empty());
++  if (mode("late_output_error"))
++    require(std::freopen("/dev/full", "w", stdout) != nullptr);
++  return mode("shutdown_error") ? HSA_STATUS_ERROR : HSA_STATUS_SUCCESS;
++}
++
++hsa_status_t hsa_status_string(hsa_status_t, const char **text) {
++  *text = "mock status";
++  return HSA_STATUS_SUCCESS;
++}
++
++hsa_status_t hsa_system_get_info(hsa_system_info_t attribute, void *output) {
++  if (attribute == HSA_AMD_SYSTEM_INFO_XNACK_ENABLED)
++    return result(output, mode("xnack"));
++  require(attribute == HSA_SYSTEM_INFO_TIMESTAMP_FREQUENCY);
++  const auto frequency = mode("frequency_zero") ? std::uint64_t{0}
++                         : mode("frequency_overflow")
++                             ? std::numeric_limits<std::uint64_t>::max()
++                             : std::uint64_t{1000000000};
++  return result(output, frequency);
++}
++
++hsa_status_t hsa_iterate_agents(hsa_status_t (*callback)(hsa_agent_t, void *),
++                                void *data) {
++  for (std::uint64_t handle : {10, 11, 20, 21}) {
++    if (mode("missing_gpu") && handle == 21)
++      continue;
++    const auto status = callback(hsa_agent_t{handle}, data);
++    if (status != HSA_STATUS_SUCCESS)
++      return status;
++  }
++  return HSA_STATUS_SUCCESS;
++}
++
++hsa_status_t hsa_agent_get_info(hsa_agent_t agent, hsa_agent_info_t attribute,
++                                void *output) {
++  require(agent.handle == 10 || agent.handle == 11 || agent.handle == 20 ||
++          agent.handle == 21);
++  if (attribute == HSA_AGENT_INFO_DEVICE)
++    return result(output, agent.handle < 20 ? HSA_DEVICE_TYPE_CPU
++                                            : HSA_DEVICE_TYPE_GPU);
++  if (attribute == static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_UUID)) {
++    std::strcpy(static_cast<char *>(output),
++                mode("uuid") ? "GPU-0000000000000001" : "GPU-ab83d2ffef0d3cdf");
++    return HSA_STATUS_SUCCESS;
++  }
++  if (attribute == HSA_AGENT_INFO_NAME) {
++    std::strcpy(static_cast<char *>(output),
++                mode("target") ? "gfx942x" : "gfx942");
++    return HSA_STATUS_SUCCESS;
++  }
++  if (attribute ==
++      static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_NEAREST_CPU))
++    return result(output, hsa_agent_t{11});
++  if (attribute ==
++      static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_DRIVER_NODE_ID))
++    return result(output, static_cast<std::uint32_t>(agent.handle));
++  if (attribute == static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_BDFID))
++    return result(output, std::uint32_t{0x2600});
++  require(attribute ==
++          static_cast<hsa_agent_info_t>(HSA_AMD_AGENT_INFO_DOMAIN));
++  return result(output, std::uint32_t{0});
++}
++
++hsa_status_t hsa_amd_agent_iterate_memory_pools(
++    hsa_agent_t agent, hsa_status_t (*callback)(hsa_amd_memory_pool_t, void *),
++    void *data) {
++  if (agent.handle < 20)
++    selected_cpu = agent.handle;
++  else
++    selected_gpu = agent.handle;
++  // 0 is non-GLOBAL; 8 is GLOBAL but not allocatable. Invalid attribute reads
++  // for either pool abort the fixture rather than silently returning zeros.
++  for (std::uint64_t suffix : {0, 2, 4, 8}) {
++    if (agent.handle >= 20 && suffix == 2)
++      continue;
++    const auto status =
++        callback(hsa_amd_memory_pool_t{agent.handle * 100 + suffix}, data);
++    if (status != HSA_STATUS_SUCCESS)
++      return status;
++  }
++  if (agent.handle < 20 && mode("duplicate_pool"))
++    return callback(hsa_amd_memory_pool_t{agent.handle * 100 + 12}, data);
++  return HSA_STATUS_SUCCESS;
++}
++
++hsa_status_t hsa_amd_memory_pool_get_info(hsa_amd_memory_pool_t pool,
++                                          hsa_amd_memory_pool_info_t attribute,
++                                          void *output) {
++  const auto suffix = pool.handle % 100;
++  if (attribute == HSA_AMD_MEMORY_POOL_INFO_SEGMENT)
++    return result(output,
++                  suffix == 0 ? HSA_AMD_SEGMENT_GROUP : HSA_AMD_SEGMENT_GLOBAL);
++  require(suffix != 0);
++  if (attribute == HSA_AMD_MEMORY_POOL_INFO_LOCATION)
++    return result(output, gpu_pool(pool.handle)
++                              ? HSA_AMD_MEMORY_POOL_LOCATION_GPU
++                              : HSA_AMD_MEMORY_POOL_LOCATION_CPU);
++  if (attribute == HSA_AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_ALLOWED)
++    return result(output, suffix != 8);
++  if (attribute == HSA_AMD_MEMORY_POOL_INFO_GLOBAL_FLAGS) {
++    std::uint32_t flags = suffix == 4 ? 4 : 2;
++    if (mode("kernarg_pool") && suffix == 2)
++      flags = 3;
++    return result(output, flags);
++  }
++  require(suffix != 8);
++  if (attribute == HSA_AMD_MEMORY_POOL_INFO_ALLOC_MAX_SIZE)
++    return result(output, mode("aggregate_capacity") && !gpu_pool(pool.handle)
++                              ? std::size_t{4096}
++                              : std::size_t{1 << 20});
++  if (attribute == HSA_AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_GRANULE)
++    return result(output, std::size_t{4096});
++  require(attribute == HSA_AMD_MEMORY_POOL_INFO_RUNTIME_ALLOC_ALIGNMENT);
++  return result(output, std::size_t{4096});
++}
++
++hsa_status_t hsa_amd_agent_memory_pool_get_info(
++    hsa_agent_t agent, hsa_amd_memory_pool_t pool,
++    hsa_amd_agent_memory_pool_info_t attribute, void *output) {
++  require(attribute == HSA_AMD_AGENT_MEMORY_POOL_INFO_ACCESS);
++  return result(output, mode("inaccessible")
++                            ? HSA_AMD_MEMORY_POOL_ACCESS_NEVER_ALLOWED
++                        : mode("cpu_access_nondefault") && agent.handle < 20 &&
++                                gpu_pool(pool.handle)
++                            ? HSA_AMD_MEMORY_POOL_ACCESS_DISALLOWED_BY_DEFAULT
++                            : HSA_AMD_MEMORY_POOL_ACCESS_ALLOWED_BY_DEFAULT);
++}
++
++hsa_status_t hsa_amd_memory_copy_engine_status(hsa_agent_t destination,
++                                               hsa_agent_t source,
++                                               std::uint32_t *mask) {
++  const bool h2d =
++      destination.handle == selected_gpu && source.handle == selected_cpu;
++  const bool d2h =
++      destination.handle == selected_cpu && source.handle == selected_gpu;
++  require(h2d || d2h);
++  std::fprintf(stderr, "MOCK engines %s\n", h2d ? "h2d" : "d2h");
++  ++statuses;
++  *mask = (h2d && mode("h2d_unavailable")) || (d2h && mode("d2h_unavailable"))
++              ? 0
++              : 3;
++  return HSA_STATUS_SUCCESS;
++}
++
++hsa_status_t hsa_amd_memory_pool_allocate(hsa_amd_memory_pool_t pool,
++                                          std::size_t bytes,
++                                          std::uint32_t flags, void **output) {
++  require(statuses == 2 && bytes == 4096 && flags == 0);
++  std::fprintf(stderr, "MOCK allocate %llu\n",
++               static_cast<unsigned long long>(pool.handle));
++  *output = std::malloc(bytes);
++  require(*output != nullptr);
++  std::memset(*output, 0, bytes);
++  allocations.emplace(*output, Allocation{pool.handle, bytes});
++  allocation_order.push_back(*output);
++  return HSA_STATUS_SUCCESS;
++}
++
++hsa_status_t hsa_amd_agents_allow_access(std::uint32_t count,
++                                         const hsa_agent_t *agents,
++                                         const std::uint32_t *flags,
++                                         const void *pointer) {
++  require(count == 2 && agents[0].handle == selected_cpu &&
++          agents[1].handle == selected_gpu && flags == nullptr &&
++          allocations.count(pointer) == 1);
++  std::fprintf(stderr, "MOCK access %llu %llu\n",
++               static_cast<unsigned long long>(agents[0].handle),
++               static_cast<unsigned long long>(agents[1].handle));
++  if (mode("access_error"))
++    return HSA_STATUS_ERROR;
++  allocations.at(pointer).access_granted = true;
++  return HSA_STATUS_SUCCESS;
++}
++
++hsa_status_t hsa_signal_create(hsa_signal_value_t value, std::uint32_t count,
++                               const hsa_agent_t *consumers,
++                               hsa_signal_t *signal) {
++  require(value == 1 && count == 0 && consumers == nullptr && !signal_live);
++  signal_live = true;
++  signal->handle = 42;
++  return HSA_STATUS_SUCCESS;
++}
++
++hsa_status_t hsa_amd_memory_async_copy_on_engine(
++    void *destination, hsa_agent_t destination_agent, const void *source,
++    hsa_agent_t source_agent, std::size_t bytes, std::uint32_t dependencies,
++    const hsa_signal_t *dependency_signals, hsa_signal_t signal,
++    hsa_amd_sdma_engine_id_t engine, bool force) {
++  require(signal_live && signal.handle == 42 && signal_value == 1 &&
++          copies == waits && copies == resets && dependencies == 0 &&
++          dependency_signals == nullptr && !force &&
++          (engine == HSA_AMD_SDMA_ENGINE_0 || engine == HSA_AMD_SDMA_ENGINE_1));
++  const auto dst = allocations.at(destination), src = allocations.at(source);
++  const bool h2d = copies % 2 == 0;
++  require(dst.access_granted && src.access_granted && (!h2d || prepared) &&
++          bytes == dst.bytes && bytes == src.bytes &&
++          gpu_pool(dst.pool) == h2d && gpu_pool(src.pool) != h2d &&
++          destination_agent.handle == (h2d ? selected_gpu : selected_cpu) &&
++          source_agent.handle == (h2d ? selected_cpu : selected_gpu));
++  std::fprintf(stderr, "MOCK copy %s engine=%u\n", h2d ? "h2d" : "d2h",
++               static_cast<unsigned>(engine));
++  if (mode("submit_error"))
++    return HSA_STATUS_ERROR;
++  prepared = false;
++  std::memcpy(destination, source, bytes);
++  if (!h2d && (mode("bad_first") || mode("bad_middle") || mode("bad_last"))) {
++    const auto index = mode("bad_first")    ? 0
++                       : mode("bad_middle") ? bytes / 2
++                                            : bytes - 1;
++    static_cast<std::uint8_t *>(destination)[index] ^= 0xff;
++  }
++  ++copies;
++  return HSA_STATUS_SUCCESS;
++}
++
++hsa_signal_value_t hsa_signal_wait_scacquire(hsa_signal_t signal,
++                                             hsa_signal_condition_t condition,
++                                             hsa_signal_value_t compare,
++                                             std::uint64_t timeout,
++                                             hsa_wait_state_t state) {
++  require(signal_live && signal.handle == 42 &&
++          condition == HSA_SIGNAL_CONDITION_LT && compare == 1 &&
++          timeout == 60000000000ULL && state == HSA_WAIT_STATE_BLOCKED &&
++          copies == waits + 1);
++  std::fputs("MOCK wait\n", stderr);
++  ++waits;
++  signal_value = mode("wait_pending") ? 1 : mode("wait_negative") ? -1 : 0;
++  return signal_value;
++}
++
++void hsa_signal_store_screlease(hsa_signal_t signal, hsa_signal_value_t value) {
++  if (signal_value == 1) {
++    require(signal_live && signal.handle == 42 && value == 1 && !prepared &&
++            copies == waits && copies == resets && copies % 2 == 0);
++    require(allocation_order.size() == 3);
++    const auto expected =
++        static_cast<std::uint8_t>(((copies / 2) * 67 + 1) % 251 + 1);
++    const auto *upload = static_cast<const std::uint8_t *>(allocation_order[0]);
++    const auto *download =
++        static_cast<const std::uint8_t *>(allocation_order[1]);
++    for (std::size_t index = 0; index < 4096; ++index)
++      require(upload[index] == expected &&
++              download[index] == (expected ^ 0xff));
++    std::fputs("MOCK prepare_release\n", stderr);
++    prepared = true;
++    return;
++  }
++  require(signal_live && signal.handle == 42 && value == 1 &&
++          signal_value == 0 && resets + 1 == waits);
++  std::fputs("MOCK reset\n", stderr);
++  signal_value = value;
++  ++resets;
++}
++
++hsa_status_t hsa_signal_destroy(hsa_signal_t signal) {
++  require(signal_live && signal.handle == 42 && signal_value == 1 &&
++          copies == waits && copies == resets);
++  std::fputs("MOCK destroy\n", stderr);
++  if (mode("destroy_error"))
++    return HSA_STATUS_ERROR;
++  signal_live = false;
++  return HSA_STATUS_SUCCESS;
++}
++
++hsa_status_t hsa_amd_memory_pool_free(void *pointer) {
++  require(!signal_live && allocations.count(pointer) == 1);
++  std::fputs("MOCK free\n", stderr);
++  if (mode("free_error") && frees == 1)
++    return HSA_STATUS_ERROR;
++  allocations.erase(pointer);
++  std::free(pointer);
++  ++frees;
++  return HSA_STATUS_SUCCESS;
++}
++
++} // extern "C"
+diff --git a/benchmarks/runtime_gfx942/hsa_copy_diagnostic_test.cpp b/benchmarks/runtime_gfx942/hsa_copy_diagnostic_test.cpp
+new file mode 100644
+index 000000000..07f6c43eb
+--- /dev/null
++++ b/benchmarks/runtime_gfx942/hsa_copy_diagnostic_test.cpp
+@@ -0,0 +1,207 @@
++#include "hsa_copy_diagnostic.hpp"
++
++#include <array>
++#include <cstdio>
++#include <limits>
++
++namespace policy = fe2o3::copy_diagnostic;
++
++#define EXPECT(condition)                                                      \
++  do {                                                                         \
++    if (!(condition)) {                                                        \
++      std::fprintf(stderr, "expectation failed at line %d: %s\n", __LINE__,    \
++                   #condition);                                                \
++      return 1;                                                                \
++    }                                                                          \
++  } while (false)
++
++int main() {
++  const std::array<const char *, 9> valid{
++      "diagnostic",         "1",    "0",      "268435456", "3", "10",
++      "0xab83d2ffef0d3cdf", "fine", "engine0"};
++  policy::Config config;
++  EXPECT(policy::parse_config(valid.size(), valid.data(), &config));
++  EXPECT(config.gpu_index == 1 && config.cpu_index == 0);
++  EXPECT(config.workload.bytes == policy::kMaxBytes);
++  EXPECT(config.workload.depth == 1 && config.workload.total_iterations == 13);
++  EXPECT(config.host_flags == policy::kFine && config.engine_mask == 1);
++  EXPECT(config.unique_id == 0xab83d2ffef0d3cdfULL);
++  auto args = valid;
++  args[7] = "coarse";
++  args[8] = "engine1";
++  EXPECT(policy::parse_config(args.size(), args.data(), &config));
++  EXPECT(config.host_flags == policy::kCoarse && config.engine_mask == 2);
++  const auto last_valid = config;
++  for (std::size_t index = 1; index < args.size(); ++index) {
++    for (const char *bad : std::array<const char *, 7>{
++             nullptr, "", "-1", "+1", "1 ", "1x", "18446744073709551616"}) {
++      args = valid;
++      args[index] = bad;
++      EXPECT(!policy::parse_config(args.size(), args.data(), &config));
++      EXPECT(config.engine_mask == last_valid.engine_mask &&
++             config.host_flags == last_valid.host_flags);
++    }
++  }
++  for (const auto &entry : std::vector<std::pair<std::size_t, const char *>>{
++           {3, "0"},
++           {3, "268435457"},
++           {4, "10000"},
++           {5, "0"},
++           {5, "10001"},
++           {6, "0"},
++           {7, "Fine"},
++           {7, "first"},
++           {7, "fine+kernarg"},
++           {8, "auto"},
++           {8, "0"},
++           {8, "1"},
++           {8, "engine2"},
++           {8, "engine0,engine1"}}) {
++    args = valid;
++    args[entry.first] = entry.second;
++    EXPECT(!policy::parse_config(args.size(), args.data(), &config));
++  }
++  EXPECT(!policy::parse_config(8, valid.data(), &config));
++  EXPECT(!policy::parse_config(10, valid.data(), &config));
++  EXPECT(!policy::parse_config(9, nullptr, &config));
++  EXPECT(!policy::parse_config(9, valid.data(), nullptr));
++
++  policy::PoolFacts host{
++      10, policy::Location::Cpu, true, true, policy::kFine, 8192, 4096, 4096, 1,
++      2};
++  policy::PoolSelection selected;
++  EXPECT(policy::select_pool({host}, policy::Location::Cpu, policy::kFine, 4095,
++                             2, &selected));
++  EXPECT(selected.index == 0 && selected.rounded_bytes == 4096 &&
++         selected.aggregate_bytes == 8192);
++  auto coarse = host;
++  coarse.handle = 11;
++  coarse.flags = policy::kCoarse;
++  EXPECT(policy::select_pool({host, coarse}, policy::Location::Cpu,
++                             policy::kCoarse, 4096, 2, &selected));
++  EXPECT(selected.index == 1);
++  auto gpu = coarse;
++  gpu.handle = 12;
++  gpu.location = policy::Location::Gpu;
++  EXPECT(policy::select_pool({gpu}, policy::Location::Gpu, policy::kCoarse,
++                             8192, 1, &selected));
++  for (std::size_t field = 0; field < 14; ++field) {
++    auto bad = host;
++    switch (field) {
++    case 0:
++      bad.handle = 0;
++      break;
++    case 1:
++      bad.location = policy::Location::Gpu;
++      break;
++    case 2:
++      bad.global = false;
++      break;
++    case 3:
++      bad.allocatable = false;
++      break;
++    case 4:
++      bad.flags |= 1;
++      break;
++    case 5:
++      bad.flags |= policy::kCoarse;
++      break;
++    case 6:
++      bad.flags = 8;
++      break;
++    case 7:
++      bad.maximum_bytes = 8191;
++      break;
++    case 8:
++      bad.granule = 0;
++      break;
++    case 9:
++      bad.alignment = 0;
++      break;
++    case 10:
++      bad.alignment = 3;
++      break;
++    case 11:
++      bad.cpu_access = 0;
++      break;
++    case 12:
++      bad.gpu_access = 0;
++      break;
++    case 13:
++      bad.gpu_access = 3;
++      break;
++    }
++    selected = {17, 18, 19};
++    EXPECT(!policy::select_pool({bad}, policy::Location::Cpu, policy::kFine,
++                                4096, 2, &selected));
++    EXPECT(selected.index == 17 && selected.rounded_bytes == 18 &&
++           selected.aggregate_bytes == 19);
++  }
++  EXPECT(!policy::select_pool({}, policy::Location::Cpu, policy::kFine, 4096, 2,
++                              &selected));
++  EXPECT(!policy::select_pool({host, host}, policy::Location::Cpu,
++                              policy::kFine, 4096, 2, &selected));
++  auto duplicate = host;
++  duplicate.handle = 13;
++  EXPECT(!policy::select_pool({host, duplicate}, policy::Location::Cpu,
++                              policy::kFine, 4096, 2, &selected));
++  EXPECT(!policy::select_pool({host}, policy::Location::Other, policy::kFine,
++                              4096, 2, &selected));
++  EXPECT(!policy::select_pool({host}, policy::Location::Cpu, 3, 4096, 2,
++                              &selected));
++  EXPECT(!policy::select_pool({host}, policy::Location::Cpu, policy::kFine, 0,
++                              2, &selected));
++  EXPECT(!policy::select_pool({host}, policy::Location::Cpu, policy::kFine,
++                              4096, 0, &selected));
++  EXPECT(!policy::select_pool({host}, policy::Location::Cpu, policy::kFine,
++                              4096, 2, nullptr));
++  std::size_t rounded = 7, aggregate = 8;
++  const auto maximum = std::numeric_limits<std::size_t>::max();
++  EXPECT(!policy::rounded_extent(maximum, 4096, 1, &rounded, &aggregate));
++  EXPECT(!policy::rounded_extent(maximum / 2 + 1, 1, 2, &rounded, &aggregate));
++  EXPECT(rounded == 7 && aggregate == 8);
++  EXPECT(policy::rounded_extent(8, 3, 2, &rounded, &aggregate));
++  EXPECT(rounded == 9 && aggregate == 18);
++  EXPECT(!policy::rounded_extent(1, 1, 1, nullptr, &aggregate));
++  EXPECT(!policy::rounded_extent(1, 1, 1, &rounded, nullptr));
++
++  for (std::uint32_t requested = 0; requested < 8; ++requested)
++    for (std::uint32_t h2d = 0; h2d < 8; ++h2d)
++      for (std::uint32_t d2h = 0; d2h < 8; ++d2h)
++        EXPECT(policy::engine_available(requested, h2d, d2h) ==
++               ((requested == 1 || requested == 2) && (h2d & requested) != 0 &&
++                (d2h & requested) != 0));
++  EXPECT(policy::exact_completion(0));
++  for (auto value : {std::int64_t{-1}, std::int64_t{1},
++                     std::numeric_limits<std::int64_t>::min(),
++                     std::numeric_limits<std::int64_t>::max()})
++    EXPECT(!policy::exact_completion(value));
++
++  std::array<std::uint8_t, 7> buffer{};
++  for (std::size_t round = 0; round < policy::kMaxRounds; ++round) {
++    const auto expected = policy::pattern(round);
++    EXPECT(expected != 0 && expected <= 251);
++    buffer.fill(expected);
++    EXPECT(policy::valid_buffer(buffer.data(), buffer.size(), expected));
++    for (std::size_t index = 0; index < buffer.size(); ++index) {
++      buffer[index] ^= 0xff;
++      EXPECT(!policy::valid_buffer(buffer.data(), buffer.size(), expected));
++      buffer[index] ^= 0xff;
++    }
++  }
++  EXPECT(!policy::valid_buffer(nullptr, 7, 1));
++  EXPECT(!policy::valid_buffer(buffer.data(), 0, 1));
++  policy::Timing timing;
++  EXPECT(policy::timing(3, 8, 17, &timing));
++  EXPECT(timing.submit_ns == 5 && timing.wait_reset_ns == 9 &&
++         timing.total_ns == 14);
++  EXPECT(policy::timing(0, 0, 1, &timing));
++  EXPECT(policy::timing(0, 1, 1, &timing));
++  EXPECT(!policy::timing(2, 1, 3, &timing));
++  EXPECT(!policy::timing(1, 3, 2, &timing));
++  EXPECT(!policy::timing(1, 1, 1, &timing));
++  EXPECT(!policy::timing(1, 2, 3, nullptr));
++  EXPECT(std::strcmp(policy::kSchema, "fe2o3.async-copy-benchmark.v1") != 0);
++  std::puts("HSA_COPY_DIAGNOSTIC_POLICY_OK");
++  return 0;
++}
+diff --git a/benchmarks/runtime_gfx942/test_hsa_copy_diagnostic.py b/benchmarks/runtime_gfx942/test_hsa_copy_diagnostic.py
+new file mode 100644
+index 000000000..0c47d3e3c
+--- /dev/null
++++ b/benchmarks/runtime_gfx942/test_hsa_copy_diagnostic.py
+@@ -0,0 +1,280 @@
++#!/usr/bin/env python3
++
++"""Host-only policy tests; no HSA initialization or GPU work."""
++
++from __future__ import annotations
++
++import pathlib
++import os
++import subprocess
++import tempfile
++import unittest
++
++
++DIRECTORY = pathlib.Path(__file__).resolve().parent
++
++
++class HsaCopyDiagnosticTests(unittest.TestCase):
++    def test_policy(self) -> None:
++        with tempfile.TemporaryDirectory(prefix="fe2o3-hsa-copy-policy-") as temporary:
++            executable = pathlib.Path(temporary) / "policy-test"
++            subprocess.run(
++                [
++                    "/usr/bin/g++",
++                    "-std=c++17",
++                    "-O2",
++                    "-Wall",
++                    "-Wextra",
++                    "-Werror",
++                    "-pedantic",
++                    "-I",
++                    str(DIRECTORY),
++                    str(DIRECTORY / "hsa_copy_diagnostic_test.cpp"),
++                    "-o",
++                    str(executable),
++                ],
++                check=True,
++            )
++            result = subprocess.run(
++                [str(executable)], check=True, capture_output=True, text=True
++            )
++            self.assertEqual(result.stdout, "HSA_COPY_DIAGNOSTIC_POLICY_OK\n")
++            self.assertEqual(result.stderr, "")
++
++
++class HsaCopyDiagnosticAdapterTests(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls) -> None:
++        include = pathlib.Path(os.environ.get("ROCM_PATH", "/opt/rocm")) / "include"
++        if not (include / "hsa/hsa_ext_amd.h").is_file():
++            raise unittest.SkipTest("ROCm headers required; policy tests still run")
++        cls.temporary = tempfile.TemporaryDirectory(prefix="fe2o3-hsa-copy-mock-")
++        cls.addClassCleanup(cls.temporary.cleanup)
++        cls.executable = pathlib.Path(cls.temporary.name) / "mock-adapter"
++        subprocess.run(
++            [
++                "/usr/bin/g++",
++                "-std=c++17",
++                "-O2",
++                "-Wall",
++                "-Wextra",
++                "-Werror",
++                "-pedantic",
++                "-isystem",
++                str(include),
++                str(DIRECTORY / "async_copy_hsa_pool_engine.cpp"),
++                str(DIRECTORY / "hsa_copy_diagnostic_mock.cpp"),
++                "-o",
++                str(cls.executable),
++            ],
++            check=True,
++        )
++
++    def run_adapter(
++        self,
++        mode: str = "",
++        *,
++        cpu: str = "0",
++        grain: str = "fine",
++        engine: str = "engine0",
++    ) -> subprocess.CompletedProcess[str]:
++        return subprocess.run(
++            [
++                str(self.executable),
++                "1",
++                cpu,
++                "4096",
++                "1",
++                "2",
++                "0xab83d2ffef0d3cdf",
++                grain,
++                engine,
++            ],
++            env={**os.environ, "FE2O3_HSA_COPY_TEST_CASE": mode},
++            capture_output=True,
++            text=True,
++            timeout=10,
++        )
++
++    def test_each_explicit_cell_and_cpu(self) -> None:
++        for cpu in ("0", "1"):
++            for grain in ("fine", "coarse"):
++                for engine, mask in (("engine0", 1), ("engine1", 2)):
++                    with self.subTest(cpu=cpu, grain=grain, engine=engine):
++                        result = self.run_adapter(cpu=cpu, grain=grain, engine=engine)
++                        self.assertEqual(result.returncode, 0, result.stderr)
++                        rows = []
++                        for line in result.stdout.splitlines():
++                            fields = dict(item.split("=", 1) for item in line.split())
++                            self.assertEqual(
++                                fields["schema"], "fe2o3.hsa-pool-engine-diagnostic.v1"
++                            )
++                            rows.append(fields)
++                        config = next(row for row in rows if row["record"] == "config")
++                        self.assertEqual(config["cpu_index"], cpu)
++                        self.assertEqual(config["cpu_agent"], str(10 + int(cpu)))
++                        self.assertEqual(config["host_grain"], grain)
++                        host_pool = str(
++                            (10 + int(cpu)) * 100 + (2 if grain == "fine" else 4)
++                        )
++                        self.assertEqual(config["host_pool"], host_pool)
++                        self.assertEqual(config["device_pool"], "2104")
++                        allocated = [
++                            line.removeprefix("MOCK allocate ")
++                            for line in result.stderr.splitlines()
++                            if line.startswith("MOCK allocate ")
++                        ]
++                        self.assertEqual(allocated, [host_pool, host_pool, "2104"])
++                        self.assertEqual(config["requested_engine_mask"], str(mask))
++                        self.assertEqual(config["host_aggregate_bytes"], "8192")
++                        self.assertEqual(
++                            config["host_release"], "signal_screlease_before_h2d_timing"
++                        )
++                        rounds = [row for row in rows if row["record"] == "round"]
++                        self.assertEqual(
++                            [row["index"] for row in rounds], ["0", "1", "2"]
++                        )
++                        self.assertEqual(
++                            [row["phase"] for row in rounds],
++                            ["warmup", "sample", "sample"],
++                        )
++                        for row in rounds:
++                            for direction in ("h2d", "d2h"):
++                                self.assertEqual(row[f"{direction}_signal"], "0")
++                                self.assertGreater(int(row[f"{direction}_total_ns"]), 0)
++                                self.assertEqual(
++                                    int(row[f"{direction}_submit_ns"])
++                                    + int(row[f"{direction}_wait_reset_ns"]),
++                                    int(row[f"{direction}_total_ns"]),
++                                )
++                            self.assertEqual(row["checked_bytes"], "4096")
++                        self.assertEqual(rows[-1]["record"], "complete")
++                        self.assertEqual(rows[-1]["validated_rounds"], "3")
++                        self.assertEqual(rows[-1]["measured_rounds"], "2")
++                        self.assertEqual(result.stderr.count("MOCK copy "), 6)
++                        self.assertEqual(result.stderr.count(f"engine={mask}\n"), 6)
++                        self.assertEqual(result.stderr.count("MOCK reset\n"), 6)
++                        self.assertEqual(
++                            result.stderr.count("MOCK prepare_release\n"), 3
++                        )
++                        self.assertEqual(
++                            result.stderr.count(f"MOCK access {10 + int(cpu)} 21\n"), 3
++                        )
++                        self.assertTrue(
++                            result.stderr.endswith(
++                                "MOCK destroy\nMOCK free\nMOCK free\nMOCK free\nMOCK shutdown\n"
++                            )
++                        )
++
++    def test_nondefault_cpu_access_is_explicitly_granted(self) -> None:
++        result = self.run_adapter("cpu_access_nondefault", cpu="1", grain="coarse")
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertIn("cpu_access=2", result.stdout)
++        self.assertEqual(result.stderr.count("MOCK access 11 21\n"), 3)
++        self.assertIn("record=complete", result.stdout)
++
++    def test_failed_access_grant_prevents_copy(self) -> None:
++        result = self.run_adapter("access_error")
++        self.assertEqual(result.returncode, 2, result.stderr)
++        self.assertNotIn("MOCK copy", result.stderr)
++        self.assertNotIn("record=complete", result.stdout)
++
++    def test_output_failure_does_not_return_success(self) -> None:
++        with open("/dev/full", "w") as full:
++            result = subprocess.run(
++                [
++                    str(self.executable),
++                    "1",
++                    "0",
++                    "4096",
++                    "1",
++                    "2",
++                    "0xab83d2ffef0d3cdf",
++                    "fine",
++                    "engine0",
++                ],
++                env={**os.environ, "FE2O3_HSA_COPY_TEST_CASE": ""},
++                stdout=full,
++                stderr=subprocess.PIPE,
++                text=True,
++                timeout=10,
++            )
++        self.assertEqual(result.returncode, 2, result.stderr)
++        self.assertNotIn("MOCK allocate", result.stderr)
++        self.assertIn("diagnostic output failed", result.stderr)
++
++    def test_late_output_failure_after_cleanup_is_not_success(self) -> None:
++        result = self.run_adapter("late_output_error")
++        self.assertEqual(result.returncode, 2, result.stderr)
++        self.assertEqual(result.stderr.count("MOCK free\n"), 3)
++        self.assertIn("MOCK destroy\n", result.stderr)
++        self.assertIn("MOCK shutdown\n", result.stderr)
++        self.assertIn("diagnostic output failed", result.stderr)
++        self.assertNotIn("record=round", result.stdout)
++        self.assertNotIn("record=complete", result.stdout)
++
++    def test_invalid_cli_precedes_hsa_initialization(self) -> None:
++        for argument in ("auto", "0", "1", "engine2", ""):
++            with self.subTest(engine=argument):
++                result = self.run_adapter(engine=argument)
++                self.assertEqual(result.returncode, 2)
++                self.assertNotIn("MOCK init", result.stderr)
++                self.assertEqual(result.stdout, "")
++
++    def test_admission_rejections_do_not_allocate_or_copy(self) -> None:
++        for mode in (
++            "xnack",
++            "frequency_zero",
++            "frequency_overflow",
++            "missing_gpu",
++            "uuid",
++            "target",
++            "kernarg_pool",
++            "duplicate_pool",
++            "aggregate_capacity",
++            "inaccessible",
++            "h2d_unavailable",
++            "d2h_unavailable",
++        ):
++            with self.subTest(mode=mode):
++                result = self.run_adapter(mode)
++                self.assertEqual(result.returncode, 2, result.stderr)
++                self.assertNotIn("MOCK allocate", result.stderr)
++                self.assertNotIn("MOCK copy", result.stderr)
++                self.assertNotIn("record=round", result.stdout)
++                self.assertNotIn("record=complete", result.stdout)
++
++    def test_unproved_completion_never_resets_or_reuses(self) -> None:
++        for mode in ("submit_error", "wait_pending", "wait_negative"):
++            with self.subTest(mode=mode):
++                result = self.run_adapter(mode)
++                self.assertEqual(result.returncode, 2, result.stderr)
++                self.assertEqual(result.stderr.count("MOCK copy "), 1)
++                for forbidden in (
++                    "MOCK reset",
++                    "MOCK destroy",
++                    "MOCK free",
++                    "MOCK shutdown",
++                ):
++                    self.assertNotIn(forbidden, result.stderr)
++                self.assertNotIn("record=round", result.stdout)
++                self.assertNotIn("record=complete", result.stdout)
++
++    def test_full_buffer_and_cleanup_failures_suppress_results(self) -> None:
++        for mode in (
++            "bad_first",
++            "bad_middle",
++            "bad_last",
++            "destroy_error",
++            "free_error",
++            "shutdown_error",
++        ):
++            with self.subTest(mode=mode):
++                result = self.run_adapter(mode)
++                self.assertEqual(result.returncode, 2, result.stderr)
++                self.assertNotIn("record=round", result.stdout)
++                self.assertNotIn("record=complete", result.stdout)
++
++
++if __name__ == "__main__":
++    unittest.main()
