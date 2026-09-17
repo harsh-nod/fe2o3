@@ -83,7 +83,14 @@ impl AdmittedSimulationInputV1 {
             self.simulation_bundle_identity,
             self.simulation_bundle_subject,
         ) {
-            (None, None) => PersistedSimulationScheduleArtifactV1::CanonicalKirV7,
+            (None, None) => match self.module.identity().wire_version() {
+                7 => PersistedSimulationScheduleArtifactV1::CanonicalKirV7,
+                9 => PersistedSimulationScheduleArtifactV1::CanonicalKirV9,
+                10 => PersistedSimulationScheduleArtifactV1::CanonicalKirV10,
+                11 => PersistedSimulationScheduleArtifactV1::CanonicalKirV11,
+                12 => PersistedSimulationScheduleArtifactV1::CanonicalKirV12,
+                _ => unreachable!("admitted canonical input has a supported exact version"),
+            },
             (Some(bundle_sha256), Some(subject_sha256))
                 if self
                     .simulation_bundle_evidence

@@ -115,10 +115,11 @@ pub enum SimulationKirWireVersionV1 {
     V9,
     V10,
     V11,
+    V12,
 }
 
 impl SimulationKirWireVersionV1 {
-    const ALL: [Self; 4] = [Self::V7, Self::V9, Self::V10, Self::V11];
+    const ALL: [Self; 5] = [Self::V7, Self::V9, Self::V10, Self::V11, Self::V12];
     const COUNT: usize = Self::ALL.len();
 }
 
@@ -405,7 +406,10 @@ pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
                 operation: "restrict_pointer_access",
                 from_access: "read_write",
                 to_access: "read_only",
-                capability: if kir_wire_version == SimulationKirWireVersionV1::V11 {
+                capability: if matches!(
+                    kir_wire_version,
+                    SimulationKirWireVersionV1::V11 | SimulationKirWireVersionV1::V12
+                ) {
                     SimulationCapabilityDispositionV1::Owned {
                         owner: SimulationSemanticOwnerV1::TypedMemory,
                         typed_rejections: &[

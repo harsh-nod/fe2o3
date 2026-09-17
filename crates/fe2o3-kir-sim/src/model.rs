@@ -5,9 +5,10 @@ use fe2o3_kernel_ir::{
     AccessMode, KernelId, KernelIrDecodeError, KernelIrEncodeError, Module, ScalarType,
     VerifiedCanonicalKernelIrIdentityV7, VerifiedCanonicalKernelIrIdentityV9,
     VerifiedCanonicalKernelIrIdentityV10, VerifiedCanonicalKernelIrIdentityV11,
-    VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV10,
-    VerifiedCanonicalKernelIrV11, decode_module_v7, decode_module_v9, decode_module_v10,
-    decode_module_v11, encode_module_v7, encode_module_v9, encode_module_v10, encode_module_v11,
+    VerifiedCanonicalKernelIrIdentityV12, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV9,
+    VerifiedCanonicalKernelIrV10, VerifiedCanonicalKernelIrV11, VerifiedCanonicalKernelIrV12,
+    decode_module_v7, decode_module_v9, decode_module_v10, decode_module_v11, decode_module_v12,
+    encode_module_v7, encode_module_v9, encode_module_v10, encode_module_v11, encode_module_v12,
 };
 
 const HARD_MAX_CANONICAL_BYTES_V1: usize = 16 * 1024 * 1024;
@@ -780,6 +781,16 @@ impl From<VerifiedCanonicalKernelIrIdentityV11> for SimulationKernelIrIdentityV1
     }
 }
 
+impl From<VerifiedCanonicalKernelIrIdentityV12> for SimulationKernelIrIdentityV1 {
+    fn from(identity: VerifiedCanonicalKernelIrIdentityV12) -> Self {
+        Self {
+            wire_version: fe2o3_kernel_ir::KERNEL_IR_VERSION_V12,
+            digest: *identity.digest(),
+            canonical_length: identity.canonical_length(),
+        }
+    }
+}
+
 /// Exact canonical KIR owner admitted for simulation. This owner is intentionally not `Clone`.
 #[derive(Debug)]
 pub struct AdmittedSimulationModuleV1 {
@@ -857,6 +868,23 @@ impl AdmittedSimulationModuleV1 {
         )
     }
 
+    /// Consumes the current exact verified V12 encoding without converting its
+    /// graph or identity to an older wire version. Existing preflight checks
+    /// still refuse inert vector and verification-contract operations.
+    pub fn admit_v12(
+        canonical: VerifiedCanonicalKernelIrV12,
+        limits: SimulationLimitsV1,
+    ) -> Result<Self, SimulationAdmissionErrorV1> {
+        let identity = SimulationKernelIrIdentityV1::from(*canonical.identity());
+        Self::admit_canonical(
+            identity,
+            canonical.into_canonical_bytes(),
+            limits,
+            decode_module_v12,
+            encode_module_v12,
+        )
+    }
+
     fn admit_canonical(
         identity: SimulationKernelIrIdentityV1,
         bytes: Vec<u8>,
@@ -926,7 +954,7 @@ impl AdmittedSimulationModuleV1 {
     }
 }
 
-/// Failure to admit exact canonical KIR V7 for simulation.
+/// Failure to admit an exact canonical Kernel IR version for simulation.
 #[derive(Debug)]
 pub enum SimulationAdmissionErrorV1 {
     InvalidLimits(SimulationLimitsErrorV1),

@@ -3616,6 +3616,9 @@ fn write_exploration_input<W: Write + ?Sized>(
         PersistedSimulationScheduleArtifactV1::CanonicalKirV11 => {
             writer.write_all(b"{\"kind\":\"canonical_kir_v11\",\"kir_sha256\":\"")?;
         }
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV12 => {
+            writer.write_all(b"{\"kind\":\"canonical_kir_v12\",\"kir_sha256\":\"")?;
+        }
         PersistedSimulationScheduleArtifactV1::SimulationBundleV1 {
             bundle_sha256,
             subject_sha256,
