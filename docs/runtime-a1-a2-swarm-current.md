@@ -122,6 +122,17 @@ observations. They remain unexecuted while the shared MI300X is occupied; see th
 [probe preparation receipt](evidence/dev-r126-native-cold-probes-2026-09-16/README.md).
 Compilation and the CPU guard test do not qualify their native assertions.
 
+Auxiliary teardown now retains the original slot and cleanup receipts through
+temporary model loan/retake, then publishes vacancy only after closing
+currentness. Runtime shutdown clears the exact destroyed auxiliary handle before
+later primary work, so a quiescent primary-custody allocation rejection can retry
+without a stale second destroy. Constructed-owner cleanup/reuse/failure tests and
+an unexecuted two-stream native retry probe are recorded in the
+[auxiliary release receipt](evidence/dev-r126-auxiliary-release-2026-09-16/README.md).
+GNU/musl each pass 1,389 KFD and 842 runtime tests, with eleven native tests
+ignored; exact test rosters, source identities and post-run binaries match.
+This remains R126 development before N5 adoption, not a new accepted checkpoint.
+
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,865 tests with

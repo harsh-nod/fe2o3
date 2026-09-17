@@ -1,0 +1,41 @@
+   Compiling fe2o3-semantic-trace v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-semantic-trace)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-process-identity v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-process-identity)
+   Compiling fe2o3-kernel-ir v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-ir)
+   Compiling fe2o3-mir-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-mir-model)
+   Compiling fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-artifact-transaction v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-artifact-transaction)
+   Compiling fe2o3-semantic-import v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-semantic-import)
+   Compiling fe2o3-compiler-execution-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-execution-protocol)
+   Compiling fe2o3-artifacts v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-artifacts)
+   Compiling fe2o3-compiler-closure-capability v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-closure-capability)
+   Compiling fe2o3-compiler-execution-client v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-compiler-execution-client)
+   Compiling dialect-mir v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-mir)
+   Compiling dialect-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-kernel)
+   Compiling fe2o3-source-isa-observation v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-source-isa-observation)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+   Compiling dialect-proof v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-proof)
+   Compiling fe2o3-kernel-analysis v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-analysis)
+   Compiling fe2o3-pliron v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-pliron)
+   Compiling fe2o3-kernel-opt v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kernel-opt)
+   Compiling fe2o3-lower-mir-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-lower-mir-kernel)
+   Compiling fe2o3-amdgcn-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-amdgcn-model)
+   Compiling dialect-amdgcn v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/dialect-amdgcn)
+   Compiling fe2o3-hsaco-finalize v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-hsaco-finalize)
+   Compiling fe2o3-verifier v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-verifier)
+   Compiling fe2o3-semantic-query v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-semantic-query)
+   Compiling fe2o3-runtime-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime-protocol)
+   Compiling cargo-fe2o3 v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/cargo-fe2o3)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 28s
+     Running tests/unsafe_source_policy.rs (target/debug/deps/unsafe_source_policy-000a5d0e16bfc721)
+
+running 6 tests
+test additions_removals_and_moves_require_baseline_review ... ok
+test refresh_reviewed_unsafe_inventory ... ignored, explicit maintenance command; review the resulting baseline diff
+test all_constructs_and_macro_templates_are_counted ... ok
+test malformed_tokens_fail_closed ... ok
+test comments_literals_and_documentation_do_not_count ... ok
+test unsafe_source_matches_reviewed_inventory ... ok
+
+test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 27.89s
+

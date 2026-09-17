@@ -826,6 +826,41 @@ They require explicit device and isolation acknowledgement and remain unexecuted
 See the [preparation receipt](evidence/dev-r126-native-cold-probes-2026-09-16/README.md);
 these are compiled qualification candidates, not native acceptance or benchmarks.
 
+## Auxiliary Queue Release
+
+Auxiliary destruction now uses a borrowed, one-shot root under the original
+session. The original roster slot, generation and queue key remain present until
+destruction, platform cleanup, resource/dispatch/signal disposal, shared-model
+retake and closing currentness all succeed. The primary retains its runtime
+lease and shared foundation; auxiliary cleanup uses a temporary model loan, not
+the permanent restoration used by primary teardown.
+
+The root retains the exact DESTROY request/outcome, event/payload/doorbell state,
+four-resource cleanup progress, dispatch data and signal disposal receipts.
+Errors or panics after entry poison the session/process, reject reentry and
+preserve the remaining original owners. Dropping an unfinished public session
+aborts instead of silently discarding that root. Preflight rejection installs
+no root and leaves ownership unchanged.
+
+Runtime shutdown retires the exact matching auxiliary handle immediately after
+lower destruction succeeds, before profiler observation. A later quiescent
+primary-custody allocation failure can therefore retry shutdown without trying
+to destroy the old auxiliary generation again. A compiled, opt-in two-stream
+native probe covers that intended retry sequence and duplicate-destroy checks;
+it remains unexecuted. Both recorded isolation checks found every shared MI300X
+GPU occupied.
+
+Constructed-owner CPU tests exercise successful auxiliary-then-primary cleanup,
+actual vacant-slot reconstruction, stale handles, rejection, destroy failures,
+platform errors, native cleanup prefixes, selected model commits/currentness,
+accounting settlement and cleanup/retake panic precedence. The snapshot adapters
+authenticate the active model and check exact committed certificate revisions;
+existing primary-only restoration observers remain strict. See the
+[development receipt](evidence/dev-r126-auxiliary-release-2026-09-16/README.md)
+for final-source results and remaining coverage. This is not all-profile,
+native-failure, formal-correspondence or performance qualification. R125 remains
+the accepted Native CPU/test checkpoint; R126, A1/A2 and #182 remain open.
+
 ## Remaining Qualification
 
 Allocation settlement still needs native cold-admission/failure qualification,

@@ -1,0 +1,2732 @@
+diff --git a/crates/fe2o3-kfd/src/queue_live.rs b/crates/fe2o3-kfd/src/queue_live.rs
+index a289ff6f6..df4a7118a 100644
+--- a/crates/fe2o3-kfd/src/queue_live.rs
++++ b/crates/fe2o3-kfd/src/queue_live.rs
+@@ -1,6 +1,8 @@
+ //! Safe, bounded Linux composition for one gfx942 compute-AQL queue.
+ 
+ use core::fmt;
++#[path = "queue_live/auxiliary_release.rs"]
++mod auxiliary_release;
+ #[path = "queue_live/primary_release.rs"]
+ mod primary_release;
+ pub use primary_release::PrimaryQueueReleaseCustodyV1;
+@@ -3748,6 +3750,7 @@ pub struct ComputeAqlQueueSessionV1 {
+     terminal_poisoned: bool,
+     observation: ComputeAqlQueueObservationV1,
+     auxiliary_compute_lanes: Vec<AuxiliaryComputeLaneSlotV1<ComputeAqlQueueLaneStateV1>>,
++    auxiliary_release: Option<auxiliary_release::AuxiliaryReleaseCustodyV1<construction_primary::LinuxPrimaryEnvironmentV1>>,
+ }
+ 
+ /// Fixed failures for direct coherent reads into caller-owned storage.
+@@ -4303,6 +4306,7 @@ fn auxiliary_compute_lane_quiescence_from_facts_v1(
+         }
+ }
+ 
++#[cfg(test)]
+ fn take_after_auxiliary_destroy_preflight_v1<T>(
+     state: &mut Option<T>,
+     preflight: impl FnOnce(&T) -> Result<(), ComputeAqlQueueSessionErrorV1>,
+@@ -4316,8 +4320,8 @@ fn take_after_auxiliary_destroy_preflight_v1<T>(
+     Ok(state.take().expect("preflight retained auxiliary lane"))
+ }
+ 
+-fn preflight_auxiliary_compute_lane_destroy_v1(
+-    state: &ComputeAqlQueueLaneStateV1,
++fn preflight_auxiliary_compute_lane_destroy_v1<E: construction_primary::PrimaryEnvironmentV1>(
++    state: &ComputeAqlQueueLaneStateV1<E>,
+ ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+     state.completion_owner.ensure_releasable()?;
+     if !state.unpublished_dispatch.is_clear() {
+@@ -6154,87 +6158,7 @@ impl ComputeAqlQueueSessionV1 {
+         &mut self,
+         lane: ComputeAqlQueueLaneV1,
+     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+-        if self.terminal_poisoned {
+-            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
+-        }
+-        let admitted = admit_compute_lane_v1(
+-            self.compute_lane_session,
+-            &self.auxiliary_compute_lanes,
+-            lane,
+-        )?;
+-        let AdmittedComputeLaneV1::Auxiliary(index) = admitted else {
+-            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+-                "the primary queue is destroyed with its session",
+-            ));
+-        };
+-        self.dependency_owner
+-            .ensure_idle()
+-            .map_err(map_dependency_target_use_error_v1)?;
+-        let mut state = take_after_auxiliary_destroy_preflight_v1(
+-            &mut self.auxiliary_compute_lanes[index].state,
+-            preflight_auxiliary_compute_lane_destroy_v1,
+-        )?;
+-
+-        let result =
+-            (|| {
+-                let engine =
+-                    self.engine
+-                        .as_mut()
+-                        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+-                            "missing queue engine",
+-                        ))?;
+-                engine.destroy(state.key).map_err(map_native)?;
+-                let mut exception =
+-                    state
+-                        .exception
+-                        .take()
+-                        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+-                            "missing queue exception state",
+-                        ))?;
+-                exception.runtime.mark_queue_destroyed()?;
+-                let destroyed_event = exception.event.destroy(
+-                    engine.backend.session.kfd_fd(),
+-                    engine.backend.session.opener_pid(),
+-                )?;
+-                let shadows = exception.shadows.after_event_destroy(destroyed_event)?;
+-                exception.runtime.mark_event_destroyed()?;
+-                let disabled_runtime = exception.runtime.disable(
+-                    engine.backend.session.kfd_fd(),
+-                    engine.backend.session.opener_pid(),
+-                )?;
+-                let shadow_release = shadows.after_runtime_destroy(disabled_runtime)?;
+-                state
+-                    .doorbell
+-                    .take()
+-                    .ok_or(ComputeAqlQueueSessionErrorV1::Contract("missing doorbell"))?
+-                    .release()?;
+-                self.check_currentness()?;
+-                let authority = self
+-                    .engine
+-                    .as_mut()
+-                    .expect("checked queue engine")
+-                    .release_destroyed_resources(state.key)
+-                    .map_err(map_native)?;
+-                let dispatch = state.dispatch.take();
+-                let completion_signals = state.completion_signals.take().ok_or(
+-                    ComputeAqlQueueSessionErrorV1::Contract("missing completion signal arena"),
+-                )?;
+-                self.with_live_queue_memory_model(move |memory| {
+-                    release_resource_authority(memory, authority, shadow_release)?;
+-                    if let Some(dispatch) = dispatch {
+-                        dispatch.release(memory)?;
+-                    }
+-                    let completion_signals =
+-                        memory.unmap_from_gpu(completion_signals.into_token())?;
+-                    memory.release(completion_signals)?;
+-                    Ok(())
+-                })
+-            })();
+-        if let Err(error) = result {
+-            self.poison_terminal();
+-            return Err(error);
+-        }
+-        Ok(())
++        auxiliary_release::release_in_place(self, lane)
+     }
+ 
+     fn create_compute_aql_queue_inner(
+@@ -13116,7 +13040,8 @@ fn validate_barrier_probe_success_snapshot(
+ 
+ impl Drop for ComputeAqlQueueSessionV1 {
+     fn drop(&mut self) {
+-        if self.sdma_pool_trim.is_some()
++        if self.auxiliary_release.is_some()
++            || self.sdma_pool_trim.is_some()
+             || self.sdma_allocation.is_some()
+             || self.sdma_promotion.is_some()
+             || self.sdma_demotion.is_some()
+@@ -14101,7 +14026,35 @@ mod tests {
+         assert!(poll.contains("with_dependency_target_lane_v1"));
+         assert!(poll.contains("release_after_dependent_completion"));
+         assert!(poll.contains("permanently_poison_process_global_kfd_runtime_gate_v1"));
+-        assert_eq!(production.matches(".ensure_idle()").count(), 2);
++        assert_eq!(production.matches(".ensure_idle()").count(), 1);
++        let auxiliary_destroy = production
++            .split("pub fn destroy_auxiliary_compute_lane_v1(")
++            .nth(1)
++            .unwrap()
++            .split("fn create_compute_aql_queue_inner(")
++            .next()
++            .unwrap();
++        assert!(auxiliary_destroy.contains("auxiliary_release::release_in_place(self, lane)"));
++        let auxiliary_release = include_str!("queue_live/auxiliary_release.rs");
++        let auxiliary_preflight = auxiliary_release
++            .split("pub(super) fn release_in_place<")
++            .nth(1)
++            .unwrap()
++            .split("fn release_inner<")
++            .next()
++            .unwrap();
++        assert_eq!(auxiliary_preflight.matches(".ensure_idle()").count(), 1);
++        let idle = auxiliary_preflight.find(".ensure_idle()").unwrap();
++        let owners = auxiliary_preflight
++            .find("preflight_primary_owners_v1::<C::Environment>(")
++            .unwrap();
++        let retain = auxiliary_preflight
++            .find("*parts.custody = Some(AuxiliaryReleaseCustodyV1::new(")
++            .unwrap();
++        let entry = auxiliary_preflight
++            .find("catch_unwind(AssertUnwindSafe(|| release_inner(context)))")
++            .unwrap();
++        assert!(idle < owners && owners < retain && retain < entry);
+ 
+         let native_submit = include_str!("queue_submit.rs");
+         let callback_catcher = native_submit
+@@ -15808,6 +15761,7 @@ mod tests {
+             sdma_demotion: None,
+             sdma_synchronous: None,
+             sdma_recycle: None,
++            auxiliary_release: None,
+             sdma_pool_reuse_count: 0,
+             sdma_device_pool: SdmaDevicePoolConfigurationV1::default(),
+             sdma_host_pool_limits: None,
+diff --git a/crates/fe2o3-kfd/src/queue_live/auxiliary_release.rs b/crates/fe2o3-kfd/src/queue_live/auxiliary_release.rs
+new file mode 100644
+index 000000000..dbc3564a9
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_live/auxiliary_release.rs
+@@ -0,0 +1,405 @@
++//! Retained auxiliary teardown while the primary keeps the shared foundation.
++
++#![forbid(unsafe_code)]
++
++use super::*;
++use crate::queue::dispatch_binding::control_release::{
++    ReturningControlCleanupCustodyV1, ReturningControlModeV1,
++};
++use crate::shared_memory::{ControlCleanupCustodyV1, QueueResourceCleanupCustodyV1};
++use construction_primary::{LinuxPrimaryEnvironmentV1, PrimaryEnvironmentV1};
++use primary_release::{
++    PrimaryReleaseEnvironmentV1, PrimaryReleaseMemoryV1, preflight_primary_owners_v1,
++};
++use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub(super) struct AuxiliaryReleaseIdentityV1 {
++    pub(super) index: usize,
++    pub(super) generation: u64,
++    pub(super) key: QueueKeyV1,
++}
++
++pub(super) struct AuxiliaryReleaseCustodyV1<E: PrimaryReleaseEnvironmentV1> {
++    pub(super) identity: AuxiliaryReleaseIdentityV1,
++    pub(super) platform: Option<E::Teardown>,
++    pub(super) authority: Option<QueueResourceAuthorityV1>,
++    pub(super) resources: Option<QueueResourceCleanupCustodyV1>,
++    pub(super) dispatch: Option<ReturningControlCleanupCustodyV1>,
++    pub(super) signals: Option<ControlCleanupCustodyV1>,
++    pub(super) gate: Option<E::TeardownArm>,
++    pub(super) destroy: NativeQueueDestroyProgressV1,
++    pub(super) memory_complete: bool,
++}
++
++impl<E: PrimaryReleaseEnvironmentV1> AuxiliaryReleaseCustodyV1<E> {
++    fn new(identity: AuxiliaryReleaseIdentityV1) -> Self {
++        Self {
++            identity,
++            platform: None,
++            authority: None,
++            resources: None,
++            dispatch: None,
++            signals: None,
++            gate: None,
++            destroy: NativeQueueDestroyProgressV1::default(),
++            memory_complete: false,
++        }
++    }
++}
++
++pub(super) struct AuxiliaryReleasePartsV1<'a, E: PrimaryReleaseEnvironmentV1> {
++    pub(super) engine: &'a mut NativeQueueEngineV1<PrimaryQueueBackendV1<E::Memory>>,
++    pub(super) session_key: QueueKeyV1,
++    pub(super) dependency: &'a ComputeDependencySessionOwnerV1,
++    pub(super) lanes: &'a mut [AuxiliaryComputeLaneSlotV1<ComputeAqlQueueLaneStateV1<E>>],
++    pub(super) custody: &'a mut Option<AuxiliaryReleaseCustodyV1<E>>,
++}
++
++pub(super) trait AuxiliaryReleaseContextV1 {
++    type Environment: PrimaryReleaseEnvironmentV1;
++    fn admit(&self) -> Result<(), ComputeAqlQueueSessionErrorV1>;
++    fn parts(
++        &mut self,
++    ) -> Result<AuxiliaryReleasePartsV1<'_, Self::Environment>, ComputeAqlQueueSessionErrorV1>;
++    fn loan(&mut self) -> Result<LiveQueueModelFoundationLoanV1, ComputeAqlQueueSessionErrorV1>;
++    fn retake(
++        &mut self,
++        loan: LiveQueueModelFoundationLoanV1,
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1>;
++    fn poison(&mut self);
++}
++
++fn retained_lane<E: PrimaryReleaseEnvironmentV1>(
++    lanes: &mut [AuxiliaryComputeLaneSlotV1<ComputeAqlQueueLaneStateV1<E>>],
++    identity: AuxiliaryReleaseIdentityV1,
++) -> Result<&mut ComputeAqlQueueLaneStateV1<E>, ComputeAqlQueueSessionErrorV1> {
++    lanes
++        .get_mut(identity.index)
++        .filter(|slot| slot.generation == identity.generation)
++        .and_then(|slot| slot.state.as_mut())
++        .filter(|state| state.key == identity.key)
++        .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
++            "auxiliary release owner substitution",
++        ))
++}
++
++fn poison_preserving_failure<C: AuxiliaryReleaseContextV1>(context: &mut C) {
++    core::mem::forget(catch_unwind(AssertUnwindSafe(|| context.poison())));
++    core::mem::forget(catch_unwind(AssertUnwindSafe(C::Environment::poison)));
++}
++
++pub(super) fn release_in_place<C: AuxiliaryReleaseContextV1>(
++    context: &mut C,
++    lane: ComputeAqlQueueLaneV1,
++) -> Result<(), ComputeAqlQueueSessionErrorV1>
++where
++    <C::Environment as construction_primary::PrimaryEnvironmentV1>::Memory: PrimaryReleaseMemoryV1,
++{
++    context.admit()?;
++    let parts = context.parts()?;
++    if parts.custody.is_some() {
++        return Err(ComputeAqlQueueSessionErrorV1::Contract(
++            "auxiliary release is one-shot",
++        ));
++    }
++    let AdmittedComputeLaneV1::Auxiliary(index) =
++        admit_compute_lane_v1(parts.session_key, parts.lanes, lane)?
++    else {
++        return Err(ComputeAqlQueueSessionErrorV1::Contract(
++            "the primary queue is destroyed with its session",
++        ));
++    };
++    parts
++        .dependency
++        .ensure_idle()
++        .map_err(map_dependency_target_use_error_v1)?;
++    let slot = &parts.lanes[index];
++    let state = slot.state.as_ref().expect("admitted auxiliary lane");
++    preflight_auxiliary_compute_lane_destroy_v1(state)?;
++    preflight_primary_owners_v1::<C::Environment>(
++        parts.engine,
++        state.key,
++        state.completion_signals.as_ref(),
++        state.exception.as_ref(),
++        state.doorbell.as_ref(),
++    )?;
++    *parts.custody = Some(AuxiliaryReleaseCustodyV1::new(AuxiliaryReleaseIdentityV1 {
++        index,
++        generation: slot.generation,
++        key: state.key,
++    }));
++
++    let result = catch_unwind(AssertUnwindSafe(|| release_inner(context)));
++    match result {
++        Ok(Ok(())) => Ok(()),
++        Ok(Err(error)) => {
++            poison_preserving_failure(context);
++            Err(error)
++        }
++        Err(payload) => {
++            poison_preserving_failure(context);
++            resume_unwind(payload)
++        }
++    }
++}
++
++fn release_inner<C: AuxiliaryReleaseContextV1>(
++    context: &mut C,
++) -> Result<(), ComputeAqlQueueSessionErrorV1>
++where
++    <C::Environment as construction_primary::PrimaryEnvironmentV1>::Memory: PrimaryReleaseMemoryV1,
++{
++    {
++        let parts = context.parts()?;
++        let root = parts.custody.as_mut().expect("installed auxiliary release");
++        let state = retained_lane(parts.lanes, root.identity)?;
++        root.gate = Some(C::Environment::arm_teardown());
++        root.platform = Some(C::Environment::retain_platform(
++            state
++                .exception
++                .take()
++                .expect("preflight auxiliary exception"),
++            state.doorbell.take().expect("preflight auxiliary doorbell"),
++        ));
++        parts
++            .engine
++            .destroy_retaining(state.key, &mut root.destroy)
++            .map_err(map_native)?;
++        let platform = root.platform.as_mut().expect("retained auxiliary platform");
++        C::Environment::after_queue_destroyed(platform, &parts.engine.backend.session)?;
++        C::Environment::release_doorbell(platform)?;
++        parts.engine.prepare_operation().map_err(map_native)?;
++        root.authority = Some(
++            parts
++                .engine
++                .release_destroyed_resources(state.key)
++                .map_err(map_native)?,
++        );
++        if !matches!(
++            root.authority
++                .as_ref()
++                .expect("retained auxiliary authority")
++                .ring,
++            RingAuthority::AqlSpecial(_)
++        ) {
++            return Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "auxiliary release ring substitution",
++            ));
++        }
++        let authority = root
++            .authority
++            .take()
++            .expect("validated auxiliary authority");
++        let RingAuthority::AqlSpecial(ring) = authority.ring else {
++            unreachable!("validated ring");
++        };
++        root.resources = Some(QueueResourceCleanupCustodyV1::new(
++            ring.into_token(),
++            authority.control.into_token(),
++            authority.eop.into_token(),
++            authority.context_save.into_token(),
++        ));
++    }
++
++    // The primary and any SDMA neighbors still own this live shared foundation.
++    let (cleanup, retake) = execute_live_model_custody_v1(
++        context,
++        C::loan,
++        release_memory::<C>,
++        C::retake,
++        poison_preserving_failure,
++    )?;
++    retake?;
++    cleanup?;
++    let parts = context.parts()?;
++    let root = parts.custody.as_mut().expect("retained auxiliary cleanup");
++    retained_lane(parts.lanes, root.identity)?;
++    if !root.memory_complete || !parts.engine.backend.foundation_in_engine {
++        return Err(ComputeAqlQueueSessionErrorV1::Contract(
++            "incomplete auxiliary cleanup settlement",
++        ));
++    }
++    parts.engine.prepare_operation().map_err(map_native)?;
++    C::Environment::confirm_destroyed(root.gate.take().expect("retained auxiliary gate"));
++    // Vacancy is published only after native cleanup, model retake and currentness.
++    parts.lanes[root.identity.index].state = None;
++    *parts.custody = None;
++    Ok(())
++}
++
++fn release_memory<C: AuxiliaryReleaseContextV1>(
++    context: &mut C,
++) -> Result<(), ComputeAqlQueueSessionErrorV1>
++where
++    <C::Environment as construction_primary::PrimaryEnvironmentV1>::Memory: PrimaryReleaseMemoryV1,
++{
++    let parts = context.parts()?;
++    let root = parts
++        .custody
++        .as_mut()
++        .expect("retained auxiliary resources");
++    let state = retained_lane(parts.lanes, root.identity)?;
++    let memory = &mut parts.engine.backend.session;
++    let platform = root.platform.as_mut().expect("retained auxiliary platform");
++    C::Environment::validate_for_release(platform)?;
++    let resources = root
++        .resources
++        .as_mut()
++        .expect("retained auxiliary resources");
++    memory.release_queue_resources(resources)?;
++    if !resources.is_complete() {
++        return Err(ComputeAqlQueueSessionErrorV1::Contract(
++            "incomplete auxiliary resources",
++        ));
++    }
++    C::Environment::complete_shadows(platform)?;
++    if let Some(dispatch) = state.dispatch.take() {
++        root.dispatch = Some(ReturningControlCleanupCustodyV1::new(
++            dispatch,
++            ReturningControlModeV1::Ordinary,
++        ));
++        let dispatch = root.dispatch.as_mut().expect("retained auxiliary dispatch");
++        dispatch.release_ordinary_in_place(memory)?;
++        if !dispatch.is_complete() {
++            return Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "incomplete auxiliary dispatch",
++            ));
++        }
++    }
++    root.signals = Some(ControlCleanupCustodyV1::host_data(
++        state
++            .completion_signals
++            .take()
++            .expect("preflight auxiliary signals")
++            .into_token(),
++    ));
++    let signals = root.signals.as_mut().expect("retained auxiliary signals");
++    memory.release_signals(signals)?;
++    if !signals.is_complete() {
++        return Err(ComputeAqlQueueSessionErrorV1::Contract(
++            "incomplete auxiliary signals",
++        ));
++    }
++    root.memory_complete = true;
++    Ok(())
++}
++
++impl AuxiliaryReleaseContextV1 for ComputeAqlQueueSessionV1 {
++    type Environment = LinuxPrimaryEnvironmentV1;
++
++    fn admit(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        if self.terminal_poisoned {
++            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
++        }
++        if self.auxiliary_release.is_some() {
++            return Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "auxiliary release is one-shot",
++            ));
++        }
++        Ok(())
++    }
++
++    fn parts(
++        &mut self,
++    ) -> Result<AuxiliaryReleasePartsV1<'_, Self::Environment>, ComputeAqlQueueSessionErrorV1> {
++        Ok(AuxiliaryReleasePartsV1 {
++            engine: self
++                .engine
++                .as_mut()
++                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
++                    "missing queue engine",
++                ))?,
++            session_key: self.compute_lane_session,
++            dependency: &self.dependency_owner,
++            lanes: &mut self.auxiliary_compute_lanes,
++            custody: &mut self.auxiliary_release,
++        })
++    }
++
++    fn loan(&mut self) -> Result<LiveQueueModelFoundationLoanV1, ComputeAqlQueueSessionErrorV1> {
++        self.restore_model_ownership_for_live_mutation()
++    }
++
++    fn retake(
++        &mut self,
++        loan: LiveQueueModelFoundationLoanV1,
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        self.retake_model_ownership_after_live_mutation(loan)
++    }
++
++    fn poison(&mut self) {
++        self.poison_terminal();
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn unfinished_shell() -> ComputeAqlQueueSessionV1 {
++        let key = super::super::tests::test_queue_key(95, 1);
++        let mut session =
++            super::super::tests::persistent_compute_cancellation_test_session(key, None, None);
++        // Drop/admission guard only: no native owner is manufactured by this fixture.
++        session.auxiliary_release =
++            Some(AuxiliaryReleaseCustodyV1::new(AuxiliaryReleaseIdentityV1 {
++                index: 0,
++                generation: 1,
++                key,
++            }));
++        session
++    }
++
++    #[test]
++    fn unfinished_auxiliary_release_rejects_reentry_and_primary_fallback_before_missing_engine() {
++        let mut session = unfinished_shell();
++        let lane = session.primary_compute_lane_v1();
++        assert!(matches!(
++            session.destroy_auxiliary_compute_lane_v1(lane),
++            Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "auxiliary release is one-shot"
++            ))
++        ));
++        assert!(matches!(
++            session.supports_retained_primary_release_v1(),
++            Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "unfinished auxiliary release"
++            ))
++        ));
++        assert!(session.engine.is_none() && !session.terminal_poisoned);
++        session.auxiliary_release = None;
++    }
++
++    #[test]
++    fn unfinished_auxiliary_release_drop_aborts() {
++        use std::os::unix::process::ExitStatusExt;
++        const CHILD: &str = "FE2O3_TEST_AUXILIARY_RELEASE_DROP";
++        const TEST: &str =
++            "queue::live::auxiliary_release::tests::unfinished_auxiliary_release_drop_aborts";
++        if std::env::var_os(CHILD).is_none() {
++            let output = std::process::Command::new(std::env::current_exe().unwrap())
++                .args(["--exact", TEST, "--nocapture"])
++                .env(CHILD, "1")
++                .output()
++                .unwrap();
++            assert_eq!(
++                output.status.signal(),
++                Some(6),
++                "{}",
++                String::from_utf8_lossy(&output.stderr)
++            );
++            return;
++        }
++        rustix::process::setrlimit(
++            rustix::process::Resource::Core,
++            rustix::process::Rlimit {
++                current: Some(0),
++                maximum: Some(0),
++            },
++        )
++        .unwrap();
++        drop(unfinished_shell());
++        panic!("unfinished auxiliary root returned from Drop");
++    }
++}
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs
+index d14989a25..154638890 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary.rs
+@@ -99,6 +99,7 @@ impl ComputeAqlQueueSessionV1 {
+             sdma_demotion: None,
+             sdma_synchronous: None,
+             sdma_recycle: None,
++            auxiliary_release: None,
+             sdma_pool_reuse_count: 0,
+             sdma_device_pool: SdmaDevicePoolConfigurationV1 {
+                 limits: self.sdma_device_pool.limits,
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_prefix_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_prefix_tests.rs
+index 0e9c85ab2..d9e5042bf 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_prefix_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_prefix_tests.rs
+@@ -121,6 +121,7 @@ fn prefix_case_with_probe(
+                 lanes: Vec::with_capacity(1),
+                 sdma: None,
+                 striped_sdma: None,
++                release: None,
+                 data: Rc::new(RefCell::new(None)),
+                 preparation: Rc::new(RefCell::new(preparation)),
+             }),
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_release_fault_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_release_fault_tests.rs
+new file mode 100644
+index 000000000..e0987f159
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_release_fault_tests.rs
+@@ -0,0 +1,484 @@
++//! Lower cleanup failures while the original primary retains the shared model.
++
++use super::*;
++use crate::shared_memory::CleanupStageV1 as Stage;
++
++fn memory(scope: &mut Scope) -> &mut Memory {
++    &mut scope
++        .parent
++        .original
++        .as_mut()
++        .unwrap()
++        .primary
++        .completed
++        .as_mut()
++        .unwrap()
++        .engine
++        .backend
++        .session
++}
++
++fn assert_native_failure(
++    result: std::thread::Result<Result<(), ComputeAqlQueueSessionErrorV1>>,
++    operation: &'static str,
++    panic: bool,
++) {
++    if panic {
++        assert_eq!(
++            result.unwrap_err().downcast_ref::<(&str, &str)>(),
++            Some(&("N2 native panic", operation))
++        );
++    } else {
++        assert!(matches!(result.unwrap(),
++            Err(ComputeAqlQueueSessionErrorV1::Memory(MemorySessionError::Injected(actual)))
++            | Err(ComputeAqlQueueSessionErrorV1::DispatchBinding(Gfx942DispatchBindingErrorV1::Memory(MemorySessionError::Injected(actual))))
++            if actual == operation));
++    }
++}
++
++fn settled_engine(scope: &Scope) -> &NativeQueueEngineV1<PrimaryQueueBackendV1<Memory>> {
++    let engine = &scope.primary.completed.as_ref().unwrap().engine;
++    assert!(engine.backend.foundation_in_engine);
++    assert_eq!(
++        engine
++            .backend
++            .session
++            .primary_loan_state_v1(&engine.foundation)
++            .1,
++        None
++    );
++    engine
++}
++
++#[test]
++fn constructed_auxiliary_release_queue_native_failures_keep_exact_prefix_and_suffix() {
++    let calls = [
++        "unmap_gpu",
++        "unmap_gpu",
++        "unmap_gpu",
++        "unmap_gpu",
++        "unmap_cpu",
++        "free",
++        "release_va_reservation",
++        "free",
++        "unmap_cpu",
++        "unmap_cpu",
++        "free",
++        "release_va_reservation",
++        "unmap_cpu",
++        "free",
++        "release_va_reservation",
++    ];
++    for failed in [0, 3, 4, 6, 7, 8, 11, 14] {
++        for panic in [false, true] {
++            let (mut scope, lane, t) = constructed();
++            let state = scope.lanes[0].state.as_ref().unwrap();
++            let dispatch =
++                RetainedControlSnapshotV1::ordinary_owner_v1(state.dispatch.as_ref().unwrap());
++            let signals =
++                Memory::primary_token_identity(state.completion_signals.as_ref().unwrap());
++            memory(&mut scope).primary_fail_cleanup_call_v1(failed + 1, calls[failed], panic);
++            assert_native_failure(
++                catch_unwind(AssertUnwindSafe(|| {
++                    release_in_place(&mut scope.parent, lane)
++                })),
++                calls[failed],
++                panic,
++            );
++            let engine = settled_engine(&scope);
++            let root = scope.release.as_ref().unwrap();
++            t.borrow_mut()
++                .release_snapshot
++                .take()
++                .unwrap()
++                .assert_auxiliary_queue_failure_v1(
++                    &engine.backend.session,
++                    &engine.foundation,
++                    root.resources.as_ref().unwrap(),
++                    failed,
++                    panic,
++                );
++            let state = scope.lanes[0].state.as_ref().unwrap();
++            dispatch.assert_restored_v1(
++                RetainedControlSnapshotV1::ordinary_owner_v1(state.dispatch.as_ref().unwrap()),
++                false,
++            );
++            assert_eq!(
++                Memory::primary_token_identity(state.completion_signals.as_ref().unwrap()),
++                signals
++            );
++            assert!(root.dispatch.is_none() && root.signals.is_none() && !root.memory_complete);
++            assert!(!t.borrow().calls.contains(&"complete-shadows"));
++            assert_no_retry(&mut scope, lane);
++        }
++    }
++}
++
++#[test]
++fn constructed_auxiliary_release_queue_currentness_keeps_disposal_receipts() {
++    for point in [1, 8, 9, 12, 16, 20, 24] {
++        for panic in [false, true] {
++            let (mut scope, lane, t) = constructed();
++            t.borrow_mut().queue_release_currentness_fault = Some((point, panic));
++            assert_native_failure(
++                catch_unwind(AssertUnwindSafe(|| {
++                    release_in_place(&mut scope.parent, lane)
++                })),
++                "currentness",
++                panic,
++            );
++            let engine = settled_engine(&scope);
++            let root = scope.release.as_ref().unwrap();
++            t.borrow_mut()
++                .release_snapshot
++                .take()
++                .unwrap()
++                .assert_auxiliary_queue_currentness_v1(
++                    &engine.backend.session,
++                    &engine.foundation,
++                    root.resources.as_ref().unwrap(),
++                    point,
++                );
++            assert!(root.dispatch.is_none() && root.signals.is_none() && !root.memory_complete);
++            assert_no_retry(&mut scope, lane);
++        }
++    }
++}
++
++#[test]
++fn constructed_auxiliary_release_dispatch_control_failures_keep_original_signal() {
++    for index in [0, 3] {
++        for (step, operation) in ["unmap_gpu", "unmap_cpu", "free", "release_va_reservation"]
++            .into_iter()
++            .enumerate()
++        {
++            for panic in [false, true] {
++                let (mut scope, lane, t) = constructed();
++                let state = scope.lanes[0].state.as_ref().unwrap();
++                let dispatch =
++                    RetainedControlSnapshotV1::ordinary_owner_v1(state.dispatch.as_ref().unwrap());
++                let signal =
++                    Memory::primary_token_identity(state.completion_signals.as_ref().unwrap());
++                memory(&mut scope).arm_control_release_native_v1(index, operation, panic);
++                assert_native_failure(
++                    catch_unwind(AssertUnwindSafe(|| {
++                        release_in_place(&mut scope.parent, lane)
++                    })),
++                    operation,
++                    panic,
++                );
++                let engine = settled_engine(&scope);
++                let root = scope.release.as_ref().unwrap();
++                assert!(root.resources.as_ref().unwrap().is_complete());
++                dispatch.assert_ordinary_control_prefix_v1(root.dispatch.as_ref().unwrap(), index);
++                engine.backend.session.auxiliary_assert_control_failure_v1(
++                    &engine.foundation,
++                    &t.borrow_mut().post_resources_snapshot.take().unwrap(),
++                    &dispatch.order_v1(),
++                    index,
++                    step,
++                );
++                assert_eq!(
++                    Memory::primary_token_identity(
++                        scope.lanes[0]
++                            .state
++                            .as_ref()
++                            .unwrap()
++                            .completion_signals
++                            .as_ref()
++                            .unwrap()
++                    ),
++                    signal
++                );
++                assert!(root.signals.is_none() && !root.memory_complete);
++                assert_no_retry(&mut scope, lane);
++            }
++        }
++    }
++}
++
++#[test]
++fn constructed_auxiliary_release_dispatch_data_failures_keep_exact_owners_and_refunds() {
++    for index in [0usize, 1, 3] {
++        for point in 0..3 {
++            for panic in [false, true] {
++                let (mut scope, lane, t) = constructed();
++                let dispatch = RetainedControlSnapshotV1::ordinary_owner_v1(
++                    scope.lanes[0]
++                        .state
++                        .as_ref()
++                        .unwrap()
++                        .dispatch
++                        .as_ref()
++                        .unwrap(),
++                );
++                let operation = match point {
++                    0 => "unmap_gpu",
++                    1 => "release_va_reservation",
++                    _ => "currentness",
++                };
++                if point == 2 {
++                    memory(&mut scope).primary_arm_data_currentness_v1(
++                        index,
++                        if index == 0 { 5 } else { 6 },
++                        panic,
++                    );
++                } else {
++                    memory(&mut scope).primary_arm_data_native_v1(index, operation, panic);
++                }
++                assert_native_failure(
++                    catch_unwind(AssertUnwindSafe(|| {
++                        release_in_place(&mut scope.parent, lane)
++                    })),
++                    operation,
++                    panic,
++                );
++                let engine = settled_engine(&scope);
++                let root = scope.release.as_ref().unwrap();
++                assert!(root.resources.as_ref().unwrap().is_complete());
++                let active =
++                    dispatch.assert_ordinary_data_prefix_v1(root.dispatch.as_ref().unwrap(), index);
++                assert!(active.started && active.failed && !active.complete);
++                assert_eq!(active.native_disposed, point == 2);
++                t.borrow_mut()
++                    .post_resources_snapshot
++                    .take()
++                    .unwrap()
++                    .assert_auxiliary_data_prefix_v1(
++                        &engine.backend.session,
++                        &engine.foundation,
++                        &dispatch.order_v1(),
++                        &dispatch.data_order_v1(),
++                        index,
++                        &active,
++                    );
++                assert!(root.signals.is_none() && !root.memory_complete);
++                assert!(
++                    scope.lanes[0]
++                        .state
++                        .as_ref()
++                        .unwrap()
++                        .completion_signals
++                        .is_some()
++                );
++                assert_no_retry(&mut scope, lane);
++            }
++        }
++    }
++}
++
++#[test]
++fn constructed_auxiliary_release_signal_native_failures_keep_charge_and_receipts() {
++    for (step, operation) in ["unmap_gpu", "unmap_cpu", "free", "release_va_reservation"]
++        .into_iter()
++        .enumerate()
++    {
++        for panic in [false, true] {
++            let (mut scope, lane, t) = constructed();
++            let signal = Memory::primary_token_identity(
++                scope.lanes[0]
++                    .state
++                    .as_ref()
++                    .unwrap()
++                    .completion_signals
++                    .as_ref()
++                    .unwrap(),
++            );
++            t.borrow_mut().signal_fault = Some((operation, panic));
++            assert_native_failure(
++                catch_unwind(AssertUnwindSafe(|| {
++                    release_in_place(&mut scope.parent, lane)
++                })),
++                operation,
++                panic,
++            );
++            let engine = settled_engine(&scope);
++            let root = scope.release.as_ref().unwrap();
++            assert!(
++                root.resources.as_ref().unwrap().is_complete()
++                    && root.dispatch.as_ref().unwrap().is_complete()
++            );
++            assert_eq!(
++                root.signals.as_ref().unwrap().observation().identity,
++                signal
++            );
++            engine.backend.session.auxiliary_assert_control_failure_v1(
++                &engine.foundation,
++                &t.borrow_mut().signal_snapshot.take().unwrap(),
++                &[signal],
++                0,
++                step,
++            );
++            assert!(!root.memory_complete && root.gate.is_some());
++            assert_no_retry(&mut scope, lane);
++        }
++    }
++}
++
++#[test]
++fn constructed_auxiliary_release_signal_currentness_keeps_unsettled_refund() {
++    for point in 1..=6 {
++        for panic in [false, true] {
++            let (mut scope, lane, t) = constructed();
++            t.borrow_mut().signal_currentness_fault = Some((point, panic));
++            assert_native_failure(
++                catch_unwind(AssertUnwindSafe(|| {
++                    release_in_place(&mut scope.parent, lane)
++                })),
++                "currentness",
++                panic,
++            );
++            let engine = settled_engine(&scope);
++            let root = scope.release.as_ref().unwrap();
++            assert!(
++                root.resources.as_ref().unwrap().is_complete()
++                    && root.dispatch.as_ref().unwrap().is_complete()
++            );
++            t.borrow_mut()
++                .signal_snapshot
++                .take()
++                .unwrap()
++                .assert_auxiliary_signal_currentness_v1(
++                    &engine.backend.session,
++                    &engine.foundation,
++                    root.signals.as_ref().unwrap(),
++                    point,
++                );
++            assert!(!root.memory_complete && root.gate.is_some());
++            assert_no_retry(&mut scope, lane);
++        }
++    }
++}
++
++#[test]
++fn constructed_auxiliary_release_cleanup_and_retake_failures_preserve_first_panic() {
++    for cleanup_panic in [false, true] {
++        for retake_panic in [false, true] {
++            let (mut scope, lane, t) = constructed();
++            t.borrow_mut().signal_fault = Some(("release_va_reservation", cleanup_panic));
++            scope.parent.faults.reclaim_before = if retake_panic {
++                Outcome::Panic
++            } else {
++                Outcome::Error
++            };
++            scope.parent.faults.poison_panic = true;
++            let result = catch_unwind(AssertUnwindSafe(|| {
++                release_in_place(&mut scope.parent, lane)
++            }));
++            if cleanup_panic {
++                assert_eq!(
++                    result.unwrap_err().downcast_ref::<(&str, &str)>(),
++                    Some(&("N2 native panic", "release_va_reservation"))
++                );
++            } else if retake_panic {
++                assert_eq!(
++                    result.unwrap_err().downcast_ref::<(&str, usize)>(),
++                    Some(&("auxiliary-release-retake", 1))
++                );
++            } else {
++                assert!(matches!(
++                    result.unwrap(),
++                    Err(ComputeAqlQueueSessionErrorV1::Contract(
++                        "auxiliary-release-retake"
++                    ))
++                ));
++            }
++            let engine = &scope.primary.completed.as_ref().unwrap().engine;
++            assert!(!engine.backend.foundation_in_engine);
++            let root = scope.release.as_ref().unwrap();
++            assert!(
++                root.resources.as_ref().unwrap().is_complete()
++                    && root.dispatch.as_ref().unwrap().is_complete()
++            );
++            let signal = root.signals.as_ref().unwrap().observation();
++            assert!(signal.started && signal.failed && !signal.native_disposed);
++            assert!(!root.memory_complete && root.gate.is_some());
++            assert_no_retry(&mut scope, lane);
++        }
++    }
++}
++
++#[test]
++fn constructed_auxiliary_release_queue_commit_failures_keep_model_and_native_progress_distinct() {
++    for index in [0, 3] {
++        for stage in [Stage::UnmapCommit, Stage::ReleaseCommit] {
++            for panic in [false, true] {
++                let (mut scope, lane, t) = constructed();
++                t.borrow_mut().queue_release_projection_fault = Some((index, stage, panic));
++                let result = catch_unwind(AssertUnwindSafe(|| {
++                    release_in_place(&mut scope.parent, lane)
++                }));
++                if panic {
++                    assert_eq!(
++                        result.unwrap_err().downcast_ref::<(&str, Stage)>(),
++                        Some(&("control cleanup projection", stage))
++                    );
++                } else {
++                    assert!(matches!(
++                        result.unwrap(),
++                        Err(ComputeAqlQueueSessionErrorV1::Memory(
++                            MemorySessionError::Injected("control cleanup projection")
++                        ))
++                    ));
++                }
++                let engine = settled_engine(&scope);
++                let root = scope.release.as_ref().unwrap();
++                t.borrow_mut()
++                    .release_snapshot
++                    .take()
++                    .unwrap()
++                    .assert_auxiliary_queue_projection_v1(
++                        &engine.backend.session,
++                        &engine.foundation,
++                        root.resources.as_ref().unwrap(),
++                        index,
++                        stage,
++                    );
++                assert!(root.dispatch.is_none() && root.signals.is_none() && !root.memory_complete);
++                assert_no_retry(&mut scope, lane);
++            }
++        }
++    }
++}
++
++#[test]
++fn constructed_auxiliary_release_closing_currentness_failure_retains_complete_receipts() {
++    for panic in [false, true] {
++        let (mut scope, lane, t) = constructed();
++        let occurrence = t
++            .borrow()
++            .calls
++            .iter()
++            .filter(|&&call| call == "currentness")
++            .count()
++            + 4;
++        t.borrow_mut().fault = Some(("currentness", occurrence, panic));
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            release_in_place(&mut scope.parent, lane)
++        }));
++        if panic {
++            assert_eq!(
++                result.unwrap_err().downcast_ref::<(&str, usize)>(),
++                Some(&("currentness", occurrence))
++            );
++        } else {
++            assert!(matches!(
++                result.unwrap(),
++                Err(ComputeAqlQueueSessionErrorV1::Native(
++                    "queue currentness lost"
++                ))
++            ));
++        }
++        settled_engine(&scope);
++        let root = scope.release.as_ref().unwrap();
++        assert!(root.memory_complete && root.gate.is_some());
++        assert!(
++            root.resources.as_ref().unwrap().is_complete()
++                && root.dispatch.as_ref().unwrap().is_complete()
++                && root.signals.as_ref().unwrap().is_complete()
++        );
++        assert!(scope.lanes[0].state.is_some());
++        assert_eq!(t.borrow().local_gate.as_ref().unwrap().teardown_count(), 1);
++        assert_no_retry(&mut scope, lane);
++    }
++}
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_release_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_release_tests.rs
+new file mode 100644
+index 000000000..53d04b877
+--- /dev/null
++++ b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_release_tests.rs
+@@ -0,0 +1,704 @@
++//! Actual constructed auxiliary owners through the production teardown driver.
++
++use super::*;
++use crate::queue::dispatch_binding::control_release::RetainedControlSnapshotV1;
++use crate::queue::live::auxiliary_release::{
++    AuxiliaryReleaseContextV1, AuxiliaryReleasePartsV1, release_in_place,
++};
++use crate::queue_linux::primary_fixture::LocalRuntimeObservationV1;
++
++#[path = "integration_release_fault_tests.rs"]
++mod fault_cases;
++
++impl AuxiliaryReleaseContextV1 for Parent {
++    type Environment = Fixture;
++
++    fn admit(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        if self.poisoned {
++            return Err(Gfx942DispatchBindingErrorV1::Poisoned.into());
++        }
++        Ok(())
++    }
++
++    fn parts(
++        &mut self,
++    ) -> Result<AuxiliaryReleasePartsV1<'_, Fixture>, ComputeAqlQueueSessionErrorV1> {
++        let original = self.original.as_mut().unwrap();
++        let primary = original.primary.completed.as_mut().unwrap();
++        Ok(AuxiliaryReleasePartsV1 {
++            engine: &mut primary.engine,
++            session_key: primary.key,
++            dependency: &primary.dependency_owner,
++            lanes: &mut original.lanes,
++            custody: &mut original.release,
++        })
++    }
++
++    fn loan(&mut self) -> Result<LiveQueueModelFoundationLoanV1, ComputeAqlQueueSessionErrorV1> {
++        outcome("auxiliary-release-loan", self.faults.loan)?;
++        let engine = &mut self
++            .original
++            .as_mut()
++            .unwrap()
++            .primary
++            .completed
++            .as_mut()
++            .unwrap()
++            .engine;
++        assert!(engine.backend.foundation_in_engine);
++        let loan = engine
++            .backend
++            .session
++            .primary_loan(&mut engine.foundation)?;
++        engine.backend.foundation_in_engine = false;
++        Ok(loan)
++    }
++
++    fn retake(
++        &mut self,
++        loan: LiveQueueModelFoundationLoanV1,
++    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
++        outcome("auxiliary-release-retake", self.faults.reclaim_before)?;
++        let engine = &mut self
++            .original
++            .as_mut()
++            .unwrap()
++            .primary
++            .completed
++            .as_mut()
++            .unwrap()
++            .engine;
++        assert!(!engine.backend.foundation_in_engine);
++        if self.faults.regress_revision {
++            engine
++                .backend
++                .session
++                .primary_regress_loan_revision_v1(&loan);
++        }
++        engine
++            .backend
++            .session
++            .primary_reclaim(&mut engine.foundation, loan)?;
++        engine.backend.foundation_in_engine = true;
++        outcome(
++            "auxiliary-release-retake-complete",
++            self.faults.reclaim_after,
++        )
++    }
++
++    fn poison(&mut self) {
++        Parent::poison(self);
++        if self.faults.poison_panic {
++            std::panic::panic_any("auxiliary release poison");
++        }
++    }
++}
++
++fn constructed() -> (Box<Scope>, ComputeAqlQueueLaneV1, Rc<RefCell<Trace>>) {
++    let (memory, t) = setup_memory_with_host_budget(2 << 20);
++    t.borrow_mut().local_gate = Some(LocalGateV1::new());
++    let (primary, t) = setup_with_memory(memory, t);
++    let (primary, result) = run(primary, QueueRingBackingV1::AqlSpecial, false);
++    assert!(result.is_ok(), "completed primary prerequisite");
++    let (programs, packets) = recipe();
++    let preparation = PrimaryPreparationSnapshotV1::packets(&packets);
++    let scope = Box::new(Scope {
++        parent: Parent {
++            original: Some(Original {
++                primary,
++                lanes: Vec::with_capacity(1),
++                sdma: None,
++                striped_sdma: None,
++                release: None,
++                data: Rc::new(RefCell::new(None)),
++                preparation: Rc::new(RefCell::new(preparation)),
++            }),
++            poisoned: false,
++            faults: Faults::default(),
++        },
++        construction: AuxiliaryConstructionV1::new(packets),
++        terminal_parent: None,
++    });
++    let (scope, result) = run_auxiliary(scope, programs);
++    assert!(result.is_ok(), "completed auxiliary prerequisite");
++    let primary = scope.primary.completed.as_ref().unwrap();
++    let lane = ComputeAqlQueueLaneV1 {
++        session: primary.key,
++        ordinal: 1,
++        generation: scope.lanes[0].generation,
++    };
++    assert_pair_custody(&scope);
++    t.borrow_mut().destroy = Some(0);
++    (scope, lane, t)
++}
++
++fn assert_no_retry(scope: &mut Scope, lane: ComputeAqlQueueLaneV1) {
++    fn snapshot(scope: &Scope) -> impl core::fmt::Debug + PartialEq + use<> {
++        let primary = scope.primary.completed.as_ref().unwrap();
++        let engine = &primary.engine;
++        let state = scope.lanes[0].state.as_ref().unwrap();
++        let root = scope.release.as_ref().unwrap();
++        (
++            (
++                root.identity,
++                root.destroy,
++                root.memory_complete,
++                root.gate.is_some(),
++            ),
++            (
++                root.authority.as_ref().map(authority_ids),
++                root.resources.as_ref().map(|r| r.observation()),
++                root.signals.as_ref().map(|s| s.observation()),
++                root.dispatch
++                    .as_ref()
++                    .map(RetainedControlSnapshotV1::ordinary_root_v1),
++                root.platform
++                    .as_ref()
++                    .map(|p| (p.identities(), p.observation(), p.progress())),
++            ),
++            (
++                scope.lanes.as_ptr() as usize,
++                scope.lanes.capacity(),
++                scope.lanes[0].generation,
++                state.key,
++                state
++                    .exception
++                    .as_ref()
++                    .map(|e| [e.runtime.identity, e.event.identity, e.shadows.identity]),
++                state.doorbell.as_ref().map(|d| d.identity),
++                state
++                    .dispatch
++                    .as_ref()
++                    .map(RetainedControlSnapshotV1::ordinary_owner_v1),
++                state
++                    .completion_signals
++                    .as_ref()
++                    .map(Memory::primary_token_identity),
++            ),
++            (
++                engine
++                    .backend
++                    .session
++                    .retained_queue_memory_snapshot_v1(&engine.foundation),
++                engine.model.clone(),
++                engine.authority_poisoned,
++                engine.backend.foundation_in_engine,
++                engine
++                    .resources
++                    .iter()
++                    .map(|r| (r.key, r.authority.as_ref().map(authority_ids)))
++                    .collect::<Vec<_>>(),
++                primary.completion_owner.custody_snapshot_for_test(),
++                primary.dependency_owner.custody_snapshot_for_test(),
++            ),
++            trace().borrow().calls.clone(),
++            trace().borrow().local_gate.as_ref().unwrap().observation(),
++            trace()
++                .borrow()
++                .local_gate
++                .as_ref()
++                .unwrap()
++                .runtime_observation(),
++            trace()
++                .borrow()
++                .local_gate
++                .as_ref()
++                .unwrap()
++                .teardown_count(),
++        )
++    }
++    assert!(scope.parent.poisoned && trace().borrow().poison);
++    let before = snapshot(scope);
++    assert!(release_in_place(&mut scope.parent, lane).is_err());
++    assert_eq!(snapshot(scope), before);
++}
++
++#[test]
++fn constructed_auxiliary_release_success_preserves_primary_and_slot_generation() {
++    let (mut scope, lane, t) = constructed();
++    let primary = scope.primary.completed.as_ref().unwrap();
++    let key = primary.key;
++    let primary_address = &*scope.primary as *const Root as usize;
++    let engine_address = &primary.engine as *const _ as usize;
++    let primary_platform = platform::platform_identities(&scope.primary, None);
++    let completion = primary.completion_owner.custody_snapshot_for_test();
++    let dependency = primary.dependency_owner.custody_snapshot_for_test();
++    let primary_signals = Memory::primary_token_identity(&primary.completion_signals);
++    let primary_resources = authority_ids(
++        primary
++            .engine
++            .resources
++            .iter()
++            .find(|r| r.key == key)
++            .unwrap()
++            .authority
++            .as_ref()
++            .unwrap(),
++    );
++    let aux_key = scope.lanes[0].state.as_ref().unwrap().key;
++    let aux_record = primary
++        .engine
++        .resources
++        .iter()
++        .find(|r| r.key == aux_key)
++        .unwrap();
++    let aux_history = (aux_record.view.plan, aux_record.create_outputs);
++    let publications: Vec<_> = primary
++        .engine
++        .foundation
++        .memory()
++        .publications()
++        .iter()
++        .filter(|p| {
++            p.owner == fe2o3_runtime_model::MemoryPublicationOwnerV1::ComputeAqlQueue(aux_key)
++        })
++        .map(|p| p.key)
++        .collect();
++    assert_eq!(publications.len(), 4);
++    let gate = t.borrow().local_gate.as_ref().unwrap().clone();
++    let roster = (scope.lanes.as_ptr(), scope.lanes.capacity());
++    let generation = scope.lanes[0].generation;
++    let call_start = t.borrow().calls.len();
++    release_in_place(&mut scope.parent, lane).unwrap();
++    assert!(scope.release.is_none() && scope.lanes[0].state.is_none());
++    assert!(!scope.parent.poisoned && !t.borrow().poison);
++    assert_eq!((scope.lanes.as_ptr(), scope.lanes.capacity()), roster);
++    assert_eq!(scope.lanes[0].generation, generation);
++    let primary = scope.primary.completed.as_ref().unwrap();
++    assert_eq!(&*scope.primary as *const Root as usize, primary_address);
++    assert_eq!(&primary.engine as *const _ as usize, engine_address);
++    assert_eq!(
++        platform::platform_identities(&scope.primary, None),
++        primary_platform
++    );
++    assert_eq!(
++        primary.completion_owner.custody_snapshot_for_test(),
++        completion
++    );
++    assert_eq!(
++        primary.dependency_owner.custody_snapshot_for_test(),
++        dependency
++    );
++    assert_eq!(
++        Memory::primary_token_identity(&primary.completion_signals),
++        primary_signals
++    );
++    assert_eq!(
++        authority_ids(
++            primary
++                .engine
++                .resources
++                .iter()
++                .find(|r| r.key == key)
++                .unwrap()
++                .authority
++                .as_ref()
++                .unwrap()
++        ),
++        primary_resources
++    );
++    assert!(primary.engine.backend.foundation_in_engine);
++    assert_eq!(
++        primary.engine.phase(key),
++        Some(ComputeAqlQueuePhaseV1::Active)
++    );
++    let records: Vec<_> = primary
++        .engine
++        .resources
++        .iter()
++        .filter(|r| r.key == aux_key)
++        .collect();
++    assert_eq!(records.len(), 1);
++    assert!(records[0].authority.is_none());
++    assert_eq!(
++        (records[0].view.plan, records[0].create_outputs),
++        aux_history
++    );
++    assert_eq!(
++        primary.engine.phase(aux_key),
++        Some(ComputeAqlQueuePhaseV1::Destroyed)
++    );
++    for key in publications {
++        let record = primary
++            .engine
++            .foundation
++            .memory()
++            .publications()
++            .iter()
++            .find(|p| p.key == key)
++            .unwrap();
++        assert_eq!(
++            record.owner,
++            fe2o3_runtime_model::MemoryPublicationOwnerV1::ComputeAqlQueue(aux_key)
++        );
++        assert_eq!(
++            record.state,
++            fe2o3_runtime_model::MemoryPublicationStateV1::Released
++        );
++    }
++    primary
++        .engine
++        .backend
++        .session
++        .assert_original_records_unchanged(t.borrow().initial_data.as_ref().unwrap());
++    scope.primary.preparation.1.primary_assert_snapshot_v1(
++        &primary.engine.backend.session,
++        t.borrow().initial_preparation.as_ref().unwrap(),
++        primary.dispatch.as_ref(),
++    );
++    assert_eq!(
++        gate.runtime_observation(),
++        LocalRuntimeObservationV1::Enabled {
++            opener_pid: std::process::id(),
++            leases: 1
++        }
++    );
++    assert_eq!(gate.teardown_count(), 0);
++    assert!(admit_compute_lane_v1(key, &scope.lanes, lane).is_err());
++    let next = prepare_auxiliary_compute_lane_slot_v1(&scope.lanes).unwrap();
++    assert_eq!(
++        (next.index, next.generation, next.append),
++        (0, generation + 1, false)
++    );
++    let calls = t.borrow().calls[call_start..].to_vec();
++    assert!(!calls.contains(&"restore-foundation"));
++    assert!(
++        !calls.contains(&"disable-runtime"),
++        "primary retains its runtime lease"
++    );
++    let order = [
++        "destroy",
++        "destroy-event",
++        "release-doorbell",
++        "auxiliary-release-loan",
++        "release-resources",
++        "complete-shadows",
++        "release-signals",
++        "auxiliary-release-retake",
++        "auxiliary-release-retake-complete",
++    ];
++    let positions: Vec<_> = order
++        .iter()
++        .map(|name| calls.iter().position(|call| call == name).unwrap())
++        .collect();
++    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
++    let complete = scope
++        .parent
++        .original
++        .as_mut()
++        .unwrap()
++        .primary
++        .completed
++        .take()
++        .unwrap();
++    super::super::release_cases::release_completed_parent_after_auxiliary(complete);
++    assert_eq!(
++        gate.runtime_observation(),
++        LocalRuntimeObservationV1::Disabled
++    );
++}
++
++#[test]
++fn constructed_auxiliary_release_reuses_vacant_slot_with_fresh_native_generation() {
++    let (mut scope, old_lane, t) = constructed();
++    let old_key = scope.lanes[0].state.as_ref().unwrap().key;
++    let roster = (scope.lanes.as_ptr(), scope.lanes.capacity());
++    let engine_address = &scope.primary.completed.as_ref().unwrap().engine as *const _;
++    let old_create = t.borrow().create_returns[1];
++    release_in_place(&mut scope.parent, old_lane).unwrap();
++    let (programs, packets) = recipe();
++    *scope.preparation.borrow_mut() = PrimaryPreparationSnapshotV1::packets(&packets);
++    scope.construction = AuxiliaryConstructionV1::new(packets);
++    let (mut scope, result) = run_auxiliary(scope, programs);
++    assert!(result.is_ok(), "reconstructed auxiliary prerequisite");
++    assert_eq!((scope.lanes.as_ptr(), scope.lanes.capacity()), roster);
++    assert_eq!(scope.lanes.len(), 1);
++    let primary = scope.primary.completed.as_ref().unwrap();
++    assert_eq!(&primary.engine as *const _, engine_address);
++    let slot = &scope.lanes[0];
++    assert_eq!(slot.generation, old_lane.generation + 1);
++    let state = slot.state.as_ref().unwrap();
++    assert_ne!(state.key, old_key);
++    assert_eq!(t.borrow().create_returns.len(), 3);
++    assert_ne!(t.borrow().create_returns[2], old_create);
++    assert_eq!(state.observation.queue_id(), t.borrow().create_returns[2].0);
++    let new_lane = ComputeAqlQueueLaneV1 {
++        generation: slot.generation,
++        ..old_lane
++    };
++    assert!(matches!(
++        admit_compute_lane_v1(primary.key, &scope.lanes, new_lane),
++        Ok(AdmittedComputeLaneV1::Auxiliary(0))
++    ));
++    assert!(admit_compute_lane_v1(primary.key, &scope.lanes, old_lane).is_err());
++    let history = primary
++        .engine
++        .resources
++        .iter()
++        .find(|r| r.key == old_key)
++        .unwrap();
++    assert!(history.authority.is_none());
++    assert_eq!(
++        primary.engine.phase(old_key),
++        Some(ComputeAqlQueuePhaseV1::Destroyed)
++    );
++    assert!(
++        primary
++            .engine
++            .resources
++            .iter()
++            .find(|r| r.key == state.key)
++            .unwrap()
++            .authority
++            .is_some()
++    );
++    let memory = &primary.engine.backend.session;
++    scope.primary.preparation.1.primary_assert_snapshot_v1(
++        memory,
++        t.borrow().initial_preparation.as_ref().unwrap(),
++        primary.dispatch.as_ref(),
++    );
++    scope
++        .construction
++        .preparation
++        .as_ref()
++        .unwrap()
++        .primary_assert_snapshot_v1(memory, &scope.preparation.borrow(), state.dispatch.as_ref());
++    release_in_place(&mut scope.parent, new_lane).unwrap();
++    assert!(scope.lanes[0].state.is_none() && scope.release.is_none());
++    assert_eq!(scope.lanes[0].generation, new_lane.generation);
++    let complete = scope
++        .parent
++        .original
++        .as_mut()
++        .unwrap()
++        .primary
++        .completed
++        .take()
++        .unwrap();
++    super::super::release_cases::release_completed_parent_after_auxiliary(complete);
++}
++
++#[test]
++fn constructed_auxiliary_release_preflight_rejection_leaves_original_owners_live() {
++    for case in 0..4 {
++        let (mut scope, mut lane, t) = constructed();
++        match case {
++            0 => lane.ordinal = 0,
++            1 => lane.generation += 1,
++            2 => {
++                scope.parent.original.as_mut().unwrap().lanes[0]
++                    .state
++                    .as_mut()
++                    .unwrap()
++                    .completion_owner
++                    .bind_barrier_probe()
++                    .unwrap();
++            }
++            _ => {
++                scope
++                    .parent
++                    .original
++                    .as_mut()
++                    .unwrap()
++                    .primary
++                    .completed
++                    .as_mut()
++                    .unwrap()
++                    .dependency_owner
++                    .poison();
++            }
++        }
++        let primary = scope.primary.completed.as_ref().unwrap();
++        let before = primary
++            .engine
++            .backend
++            .session
++            .retained_queue_memory_snapshot_v1(&primary.engine.foundation);
++        let model = primary.engine.model.clone();
++        let dependencies = primary.dependency_owner.custody_snapshot_for_test();
++        let completions = scope.lanes[0]
++            .state
++            .as_ref()
++            .unwrap()
++            .completion_owner
++            .custody_snapshot_for_test();
++        let calls = t.borrow().calls.clone();
++        assert!(
++            release_in_place(&mut scope.parent, lane).is_err(),
++            "preflight case {case}"
++        );
++        assert!(scope.release.is_none() && !scope.parent.poisoned && !t.borrow().poison);
++        assert_eq!(t.borrow().calls, calls);
++        let primary = scope.primary.completed.as_ref().unwrap();
++        assert_eq!(
++            primary
++                .engine
++                .backend
++                .session
++                .retained_queue_memory_snapshot_v1(&primary.engine.foundation),
++            before
++        );
++        assert_eq!(primary.engine.model, model);
++        assert_eq!(
++            primary.dependency_owner.custody_snapshot_for_test(),
++            dependencies
++        );
++        assert_eq!(
++            scope.lanes[0]
++                .state
++                .as_ref()
++                .unwrap()
++                .completion_owner
++                .custody_snapshot_for_test(),
++            completions
++        );
++        assert_pair_custody(&scope);
++    }
++}
++
++#[test]
++fn constructed_auxiliary_release_destroy_errors_and_panic_retain_original_slot() {
++    for mode in 1..=4 {
++        let (mut scope, lane, t) = constructed();
++        let key = scope.lanes[0].state.as_ref().unwrap().key;
++        let state = scope.lanes[0].state.as_ref().unwrap();
++        let exception = state.exception.as_ref().unwrap();
++        let platform = [
++            exception.runtime.identity,
++            exception.event.identity,
++            exception.shadows.identity,
++            state.doorbell.as_ref().unwrap().identity,
++        ];
++        t.borrow_mut().destroy = Some(mode);
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            release_in_place(&mut scope.parent, lane)
++        }));
++        if mode == 3 {
++            assert_eq!(
++                result.unwrap_err().downcast_ref::<&str>(),
++                Some(&"DESTROY panic")
++            );
++        } else {
++            assert!(result.unwrap().is_err());
++        }
++        assert_eq!(scope.lanes[0].state.as_ref().unwrap().key, key);
++        assert_eq!(
++            scope
++                .release
++                .as_ref()
++                .unwrap()
++                .platform
++                .as_ref()
++                .unwrap()
++                .identities(),
++            platform
++        );
++        assert!(scope.release.as_ref().unwrap().resources.is_none());
++        assert_no_retry(&mut scope, lane);
++    }
++}
++
++#[test]
++fn constructed_auxiliary_release_platform_and_cleanup_errors_preserve_prefixes() {
++    for stage in [
++        "destroy-event",
++        "zero-payload",
++        "protect-payload",
++        "unmap-payload",
++        "release-doorbell",
++        "release-validate-platform",
++        "release-resources",
++        "complete-shadows",
++        "release-signals",
++    ] {
++        for panic in [false, true] {
++            let (mut scope, lane, t) = constructed();
++            let nth = t
++                .borrow()
++                .calls
++                .iter()
++                .filter(|&&name| name == stage)
++                .count()
++                + 1;
++            t.borrow_mut().fault = Some((stage, nth, panic));
++            let result = catch_unwind(AssertUnwindSafe(|| {
++                release_in_place(&mut scope.parent, lane)
++            }));
++            if panic {
++                assert_eq!(
++                    result.unwrap_err().downcast_ref::<(&str, usize)>(),
++                    Some(&(stage, nth))
++                );
++            } else {
++                assert!(result.unwrap().is_err(), "{stage}");
++            }
++            assert!(scope.lanes[0].state.is_some());
++            assert!(!scope.release.as_ref().unwrap().memory_complete);
++            assert!(scope.release.as_ref().unwrap().gate.is_some());
++            assert_no_retry(&mut scope, lane);
++        }
++    }
++}
++
++#[test]
++fn constructed_auxiliary_release_model_failures_keep_settled_receipts_and_first_panic() {
++    for boundary in 0..3 {
++        for panic in [false, true] {
++            for poison_panic in [false, true] {
++                let (mut scope, lane, _) = constructed();
++                let failure = if panic {
++                    Outcome::Panic
++                } else {
++                    Outcome::Error
++                };
++                let stage = match boundary {
++                    0 => {
++                        scope.parent.faults.loan = failure;
++                        "auxiliary-release-loan"
++                    }
++                    1 => {
++                        scope.parent.faults.reclaim_before = failure;
++                        "auxiliary-release-retake"
++                    }
++                    _ => {
++                        scope.parent.faults.reclaim_after = failure;
++                        "auxiliary-release-retake-complete"
++                    }
++                };
++                scope.parent.faults.poison_panic = poison_panic;
++                let result = catch_unwind(AssertUnwindSafe(|| {
++                    release_in_place(&mut scope.parent, lane)
++                }));
++                if panic {
++                    assert_eq!(
++                        result.unwrap_err().downcast_ref::<(&str, usize)>(),
++                        Some(&(stage, 1))
++                    );
++                } else {
++                    assert!(
++                        matches!(result.unwrap(), Err(ComputeAqlQueueSessionErrorV1::Contract(name)) if name == stage)
++                    );
++                }
++                let root = scope.release.as_ref().unwrap();
++                assert_eq!(root.memory_complete, boundary != 0);
++                assert_eq!(
++                    root.resources.as_ref().unwrap().is_complete(),
++                    boundary != 0
++                );
++                assert_eq!(
++                    scope
++                        .primary
++                        .completed
++                        .as_ref()
++                        .unwrap()
++                        .engine
++                        .backend
++                        .foundation_in_engine,
++                    boundary != 1
++                );
++                assert_no_retry(&mut scope, lane);
++            }
++        }
++    }
++}
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_tests.rs
+index f96487d5b..f21099323 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_auxiliary/integration_tests.rs
+@@ -12,11 +12,15 @@ type AuxiliaryRunResult = (Box<Scope>, Result<(), Box<dyn std::any::Any + Send>>
+ #[path = "integration_prefix_tests.rs"]
+ mod prefix_cases;
+ 
++#[path = "integration_release_tests.rs"]
++mod release_cases;
++
+ struct Original {
+     primary: Box<Root>,
+     lanes: Vec<AuxiliaryComputeLaneSlotV1<ComputeAqlQueueLaneStateV1<Fixture>>>,
+     sdma: Option<Gfx942SdmaQueueSetV1>,
+     striped_sdma: Option<Gfx942SdmaQueueSetV1>,
++    release: Option<crate::queue::live::auxiliary_release::AuxiliaryReleaseCustodyV1<Fixture>>,
+     data: Rc<RefCell<Option<crate::shared_memory::PreparationMemoryObservationV1>>>,
+     preparation: Rc<RefCell<PrimaryPreparationSnapshotV1>>,
+ }
+@@ -529,6 +533,7 @@ fn exercise(fault: Option<(&'static str, bool)>, collision: bool) {
+                 lanes: Vec::with_capacity(1),
+                 sdma: None,
+                 striped_sdma: None,
++                release: None,
+                 data: Rc::new(RefCell::new(None)),
+                 preparation: Rc::new(RefCell::new(preparation)),
+             }),
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs
+index 9ba5130b3..5d504b7c3 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/environment.rs
+@@ -268,6 +268,7 @@ impl CompletedPrimaryV1<LinuxPrimaryEnvironmentV1> {
+             sdma_demotion: None,
+             sdma_synchronous: None,
+             sdma_recycle: None,
++            auxiliary_release: None,
+             sdma_pool_reuse_count: 0,
+             sdma_device_pool: SdmaDevicePoolConfigurationV1::default(),
+             sdma_host_pool_limits: None,
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_platform.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_platform.rs
+index 3edd702ad..88e092b0c 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_platform.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_platform.rs
+@@ -83,7 +83,10 @@ impl PrimaryReleaseEnvironmentV1 for Fixture {
+         );
+         assert_eq!(
+             Some(doorbell.doorbell.unwrap().queue_id().value()),
+-            trace().borrow().create_return.map(|v| v.0)
++            trace()
++                .borrow()
++                .destroy_target
++                .or_else(|| trace().borrow().create_return.map(|v| v.0))
+         );
+         exception
+             .shadows
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
+index fd60d70ab..b07c44eea 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_tests.rs
+@@ -121,7 +121,7 @@ impl PrimaryReleaseMemoryV1 for Memory {
+     ) -> Result<(), MemorySessionError> {
+         memory_step("release-resources")?;
+         trace().borrow_mut().release_snapshot =
+-            Some(self.primary_queue_cleanup_snapshot_v1(resources));
++            Some(self.retained_queue_cleanup_snapshot_v1(resources));
+         if let Some((offset, panic)) = trace().borrow().queue_release_currentness_fault {
+             self.primary_fail_currentness_v1(offset, panic);
+         }
+@@ -131,7 +131,7 @@ impl PrimaryReleaseMemoryV1 for Memory {
+         );
+         if result.is_ok() {
+             trace().borrow_mut().post_resources_snapshot =
+-                Some(self.primary_restored_memory_snapshot_v1());
++                Some(self.retained_cleanup_memory_snapshot_v1());
+         }
+         result
+     }
+@@ -141,7 +141,7 @@ impl PrimaryReleaseMemoryV1 for Memory {
+     ) -> Result<(), MemorySessionError> {
+         memory_step("release-signals")?;
+         trace().borrow_mut().signal_snapshot =
+-            Some(self.primary_signal_cleanup_snapshot_v1(signals));
++            Some(self.retained_signal_cleanup_snapshot_v1(signals));
+         if let Some((operation, panic)) = trace().borrow().signal_fault {
+             self.fail_cleanup(operation, panic);
+         }
+@@ -241,7 +241,25 @@ fn constructed_on_gate(
+         assert!(result.is_ok(), "constructed queue parent");
+         root.completed.take().unwrap()
+     };
+-    let parent = Parent {
++    let parent = parent_from_completed(complete);
++    parent
++        .engine
++        .backend
++        .session
++        .primary_authenticate(&parent.engine.foundation)
++        .unwrap();
++    parent.preflight_release().unwrap();
++    assert_eq!(gate.teardown_count(), 0);
++    assert_eq!(gate.observation(), (false, false));
++    let mut trace = t.borrow_mut();
++    trace.calls.clear();
++    trace.destroy = Some(0);
++    drop(trace);
++    (parent, t, gate)
++}
++
++fn parent_from_completed(complete: CompletedPrimaryV1<Fixture>) -> Parent {
++    Parent {
+         engine: complete.engine,
+         key: complete.key,
+         queue_id: complete.observation.queue_id,
+@@ -264,21 +282,46 @@ fn constructed_on_gate(
+         detached_identities: Vec::new(),
+         detached_next: None,
+         poisoned: false,
+-    };
++    }
++}
++
++pub(super) fn release_completed_parent_after_auxiliary(complete: CompletedPrimaryV1<Fixture>) {
++    let id = complete.observation.queue_id;
++    assert!(
++        trace()
++            .borrow()
++            .create_returns
++            .iter()
++            .any(|record| record.0 == id)
++    );
++    trace().borrow_mut().destroy_target = Some(id);
++    let mut parent = parent_from_completed(complete);
++    let mut root = PrimaryReleaseStateV1::<Fixture>::new();
++    root.release_in_place(&mut parent).unwrap();
++    assert!(root.complete && !parent.poisoned);
+     parent
+         .engine
+         .backend
+         .session
+-        .primary_authenticate(&parent.engine.foundation)
+-        .unwrap();
+-    parent.preflight_release().unwrap();
+-    assert_eq!(gate.teardown_count(), 0);
+-    assert_eq!(gate.observation(), (false, false));
+-    let mut trace = t.borrow_mut();
+-    trace.calls.clear();
+-    trace.destroy = Some(0);
+-    drop(trace);
+-    (parent, t, gate)
++        .primary_assert_all_released_v1();
++    assert_eq!(
++        trace()
++            .borrow()
++            .local_gate
++            .as_ref()
++            .unwrap()
++            .runtime_observation(),
++        LocalRuntimeObservationV1::Disabled
++    );
++    assert_eq!(
++        trace()
++            .borrow()
++            .local_gate
++            .as_ref()
++            .unwrap()
++            .teardown_count(),
++        0
++    );
+ }
+ 
+ fn original_resource_ids(parent: &Parent) -> [SharedGttAllocationIdentityV1; 4] {
+diff --git a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs
+index 3652e9f40..d648c6f7d 100644
+--- a/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs
++++ b/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_tests.rs
+@@ -42,6 +42,7 @@ struct Trace {
+     native_fault: Option<(&'static str, usize, bool)>,
+     create: u8,
+     destroy: Option<u8>,
++    destroy_target: Option<u32>,
+     sdma_destroy_mutation: Option<(u32, bool)>,
+     sdma_resource_native_fault: Option<(usize, bool)>,
+     sdma_resource_snapshot: Option<crate::shared_memory::ControlReleaseMemorySnapshotV1>,
+@@ -421,7 +422,10 @@ impl PrimaryMemoryV1 for Memory {
+             .expect("constructor must not DESTROY");
+         assert_eq!(
+             Some(args.queue_id),
+-            trace().borrow().create_return.map(|v| v.0)
++            trace()
++                .borrow()
++                .destroy_target
++                .or_else(|| trace().borrow().create_return.map(|v| v.0))
+         );
+         record("destroy");
+         if mode == 3 {
+diff --git a/crates/fe2o3-kfd/src/queue_live/primary_release.rs b/crates/fe2o3-kfd/src/queue_live/primary_release.rs
+index 430f65826..c6285181f 100644
+--- a/crates/fe2o3-kfd/src/queue_live/primary_release.rs
++++ b/crates/fe2o3-kfd/src/queue_live/primary_release.rs
+@@ -16,12 +16,12 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+ 
+ #[path = "primary_release/driver.rs"]
+ mod driver;
+-#[cfg(test)]
+ pub(super) use driver::{
+-    PrimaryReleaseEnvironmentV1, PrimaryReleaseMemoryV1, PrimaryReleaseParentV1,
+-    PrimaryReleasePartsV1,
++    PrimaryReleaseEnvironmentV1, PrimaryReleaseMemoryV1, PrimaryReleaseStateV1,
++    preflight_primary_owners_v1,
+ };
+-pub(super) use driver::{PrimaryReleaseStateV1, preflight_primary_owners_v1};
++#[cfg(test)]
++pub(super) use driver::{PrimaryReleaseParentV1, PrimaryReleasePartsV1};
+ 
+ pub(super) fn primary_dispatch_release_admitted_v1(
+     unpublished: &UnpublishedDispatchStateV1,
+@@ -49,6 +49,11 @@ impl ComputeAqlQueueSessionV1 {
+     pub fn supports_retained_primary_release_v1(
+         &self,
+     ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
++        if self.auxiliary_release.is_some() {
++            return Err(ComputeAqlQueueSessionErrorV1::Contract(
++                "unfinished auxiliary release",
++            ));
++        }
+         self.require_no_sdma_recycle_v1()?;
+         self.require_no_sdma_owner_transition_v1()?;
+         if self.sdma_allocation.is_some() {
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs b/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs
+index 698165267..3494a6e21 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/primary_release.rs
+@@ -128,6 +128,7 @@ impl PreparationMemoryFixtureV1 {
+         assert!(matches!(
+             self.fixture.ownership.phase,
+             QueueModelOwnershipPhaseV1::SessionOwned
++                | QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan { .. }
+         ));
+         let before = resources.observation();
+         let f = &mut self.fixture;
+@@ -193,6 +194,7 @@ impl PreparationMemoryFixtureV1 {
+         assert!(matches!(
+             self.fixture.ownership.phase,
+             QueueModelOwnershipPhaseV1::SessionOwned
++                | QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan { .. }
+         ));
+         let before = signals.observation();
+         let f = &mut self.fixture;
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs
+index 1e032071f..d989f86db 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/cleanup_tests.rs
+@@ -289,6 +289,50 @@ impl PristineAbortMemoryFixtureV1 {
+ }
+ 
+ impl crate::shared_memory::PreparationMemoryFixtureV1 {
++    pub(crate) fn retained_cleanup_memory_snapshot_v1(&self) -> Snapshot {
++        assert!(matches!(
++            self.fixture.ownership.phase,
++            QueueModelOwnershipPhaseV1::SessionOwned
++                | QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan { .. }
++        ));
++        self.assert_disposed_controls_v1();
++        Snapshot::from_fixture(
++            &self.fixture,
++            &self.fixture.foundation,
++            self.control_release_process_poisoned + self.data_release_process_poisoned,
++        )
++    }
++
++    pub(crate) fn retained_queue_memory_snapshot_v1(
++        &self,
++        queue: &QueueModelFoundationV1,
++    ) -> Snapshot {
++        self.assert_disposed_controls_v1();
++        Snapshot::from_fixture(
++            &self.fixture,
++            self.coherent_active_foundation_v1(queue),
++            self.control_release_process_poisoned + self.data_release_process_poisoned,
++        )
++    }
++
++    pub(crate) fn retained_queue_cleanup_snapshot_v1<const N: usize>(
++        &self,
++        resources: &crate::shared_memory::QueueResourceCleanupCustodyV1<N>,
++    ) -> Snapshot {
++        let mut snapshot = self.retained_cleanup_memory_snapshot_v1();
++        snapshot.controls = resources.observation().controls.into();
++        snapshot
++    }
++
++    pub(crate) fn retained_signal_cleanup_snapshot_v1(
++        &self,
++        signals: &ControlCleanupCustodyV1,
++    ) -> Snapshot {
++        let mut snapshot = self.retained_cleanup_memory_snapshot_v1();
++        snapshot.controls.push(signals.observation());
++        snapshot
++    }
++
+     pub(crate) fn primary_restored_memory_snapshot_v1(&self) -> Snapshot {
+         assert!(matches!(
+             self.fixture.ownership.phase,
+@@ -322,6 +366,29 @@ impl crate::shared_memory::PreparationMemoryFixtureV1 {
+         );
+     }
+ 
++    pub(crate) fn auxiliary_assert_control_failure_v1(
++        &self,
++        queue: &QueueModelFoundationV1,
++        before: &Snapshot,
++        order: &[SharedGttAllocationIdentityV1],
++        completed: usize,
++        step: usize,
++    ) {
++        let after = self.retained_queue_memory_snapshot_v1(queue);
++        before.assert_cleanup_certificate_delta_v1(&after, 2 * completed + usize::from(step > 0));
++        before.assert_control_transition_snapshot_v1(
++            &after,
++            (self.fixture.vm, self.fixture.engine.session_id),
++            order,
++            (
++                completed,
++                step > 0,
++                step + 1,
++                Some((step > 0, step, false, step == 2)),
++            ),
++        );
++    }
++
+     pub(crate) fn primary_release_memory_snapshot_v1(
+         &self,
+         queue: &QueueModelFoundationV1,
+@@ -400,6 +467,21 @@ impl crate::shared_memory::PreparationMemoryFixtureV1 {
+ }
+ 
+ impl Snapshot {
++    fn assert_cleanup_certificate_delta_v1(&self, after: &Self, commits: usize) {
++        match (&self.certificate, &after.certificate) {
++            (None, None) => {}
++            (Some(before), Some(after)) => {
++                assert_eq!(
++                    (before.0, before.1, before.2, before.3, before.4, before.5),
++                    (after.0, after.1, after.2, after.3, after.4, after.5)
++                );
++                assert_eq!(after.6, before.6.checked_add(commits as u64).unwrap());
++                // The live snapshot authenticates the new seal against the actual model.
++            }
++            _ => panic!("cleanup changed certificate ownership"),
++        }
++    }
++
+     fn from_fixture(
+         f: &BackingConstructorFixture,
+         foundation: &QueueModelFoundationV1,
+@@ -446,6 +528,36 @@ struct SignalPrefixV1 {
+ }
+ 
+ impl Snapshot {
++    pub(crate) fn assert_auxiliary_signal_currentness_v1(
++        &self,
++        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
++        queue: &QueueModelFoundationV1,
++        signals: &ControlCleanupCustodyV1,
++        point: usize,
++    ) {
++        assert!((1..=6).contains(&point));
++        let after = memory.retained_queue_memory_snapshot_v1(queue);
++        self.assert_cleanup_certificate_delta_v1(&after, usize::from(point >= 3));
++        self.assert_signal_prefix_between_v1(
++            memory,
++            after,
++            signals,
++            SignalPrefixV1 {
++                stage: if point <= 2 {
++                    Stage::NativeUnmap
++                } else {
++                    Stage::NativeRelease
++                },
++                checks: point,
++                model_unmapped: point >= 3,
++                native_unmapped: point >= 3,
++                native_calls: [0, 1, 1, 2, 3, 4][point - 1],
++                settled: false,
++                quarantined: true,
++            },
++        );
++    }
++
+     pub(crate) fn assert_constructed_signal_currentness_v1(
+         &self,
+         memory: &crate::shared_memory::PreparationMemoryFixtureV1,
+@@ -511,6 +623,16 @@ impl Snapshot {
+         prefix: SignalPrefixV1,
+     ) {
+         let after = memory.primary_signal_cleanup_snapshot_v1(signals);
++        self.assert_signal_prefix_between_v1(memory, after, signals, prefix);
++    }
++
++    fn assert_signal_prefix_between_v1(
++        &self,
++        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
++        after: Self,
++        signals: &ControlCleanupCustodyV1,
++        prefix: SignalPrefixV1,
++    ) {
+         let active = signals.observation();
+         let original = &self.controls[0];
+         assert_eq!(active.identity, original.identity);
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/data_tests.rs b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/data_tests.rs
+index aff0ef4d9..ea4213f7f 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/data_tests.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/data_tests.rs
+@@ -267,6 +267,44 @@ fn shared_calls(r: &RecordSnapshot) -> [CleanupCallV1; 4] {
+ }
+ 
+ impl Snapshot {
++    pub(crate) fn assert_auxiliary_data_prefix_v1(
++        &self,
++        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
++        queue: &QueueModelFoundationV1,
++        controls: &[SharedGttAllocationIdentityV1],
++        order: &[Identity],
++        completed: usize,
++        active: &DataCleanupObservationV1,
++    ) {
++        let after = memory.retained_queue_memory_snapshot_v1(queue);
++        let committed_host_unmap = matches!(order[completed], Identity::Host(_))
++            && matches!(
++                active.stage,
++                Stage::Unmapped
++                    | Stage::ReleasePreflight
++                    | Stage::ReleaseEvidence
++                    | Stage::ReleaseProjection
++                    | Stage::NativeRelease
++                    | Stage::ReleaseCommit
++                    | Stage::Complete
++            );
++        let commits = 2 * controls.len()
++            + 2 * order[..completed]
++                .iter()
++                .filter(|id| matches!(id, Identity::Host(_)))
++                .count()
++            + usize::from(committed_host_unmap);
++        self.assert_cleanup_certificate_delta_v1(&after, commits);
++        self.assert_data_prefix_between_v1(
++            &after,
++            memory.fixture.vm,
++            controls,
++            order,
++            completed,
++            Some(active),
++        );
++    }
++
+     pub(crate) fn assert_primary_data_prefix_v1(
+         &self,
+         memory: &crate::shared_memory::PreparationMemoryFixtureV1,
+diff --git a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/queue_tests.rs b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/queue_tests.rs
+index 6ccec73e9..6ad47c904 100644
+--- a/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/queue_tests.rs
++++ b/crates/fe2o3-kfd/src/shared_memory/tests/pristine_abort/queue_tests.rs
+@@ -222,6 +222,23 @@ fn expected_queue_record(
+ }
+ 
+ impl Snapshot {
++    pub(crate) fn assert_auxiliary_queue_currentness_v1(
++        &self,
++        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
++        queue: &QueueModelFoundationV1,
++        custody: &QueueResourceCleanupCustodyV1,
++        point: usize,
++    ) {
++        let mut after = memory.retained_queue_memory_snapshot_v1(queue);
++        after.controls = custody.observation().controls.into();
++        self.assert_queue_currentness_snapshot_v1(
++            &after,
++            memory.fixture.vm,
++            &custody.observation(),
++            point,
++        );
++    }
++
+     pub(crate) fn assert_constructed_queue_currentness_v1(
+         &self,
+         memory: &crate::shared_memory::PreparationMemoryFixtureV1,
+@@ -370,7 +387,7 @@ impl Snapshot {
+         }
+         assert_eq!(after.phase, SharedMemorySessionPhaseV1::Quarantined);
+         assert_eq!(after.identity, self.identity);
+-        assert_eq!(after.certificate, self.certificate);
++        self.assert_cleanup_certificate_delta_v1(after, unmapped + released);
+         assert_eq!(after.usage, self.usage);
+         assert_eq!(after.devices, self.devices);
+         assert_eq!(after.retained_device_bytes, self.retained_device_bytes);
+@@ -395,6 +412,30 @@ impl Snapshot {
+         stage: Stage,
+     ) {
+         let after = memory.primary_queue_cleanup_snapshot_v1(custody);
++        self.assert_queue_projection_snapshot_v1(after, memory.fixture.vm, custody, index, stage);
++    }
++
++    pub(crate) fn assert_auxiliary_queue_projection_v1(
++        &self,
++        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
++        queue: &QueueModelFoundationV1,
++        custody: &QueueResourceCleanupCustodyV1,
++        index: usize,
++        stage: Stage,
++    ) {
++        let mut after = memory.retained_queue_memory_snapshot_v1(queue);
++        after.controls = custody.observation().controls.into();
++        self.assert_queue_projection_snapshot_v1(after, memory.fixture.vm, custody, index, stage);
++    }
++
++    fn assert_queue_projection_snapshot_v1(
++        &self,
++        after: Self,
++        vm: VmKeyV1,
++        custody: &QueueResourceCleanupCustodyV1,
++        index: usize,
++        stage: Stage,
++    ) {
+         let state = custody.observation();
+         let release = matches!(
+             stage,
+@@ -432,14 +473,14 @@ impl Snapshot {
+         assert_eq!(after.calls, calls);
+         assert_eq!(
+             after.model,
+-            expected_model_in_vm(memory.fixture.vm, self, unmapped, released)
++            expected_model_in_vm(vm, self, unmapped, released)
+         );
+         assert_eq!(
+             after.retained_va,
+             retained_va_after(self, released + usize::from(disposed))
+         );
+         assert_eq!(after.identity, self.identity);
+-        assert_eq!(after.certificate, self.certificate);
++        self.assert_cleanup_certificate_delta_v1(&after, unmapped + released);
+         assert_eq!(after.devices, self.devices);
+         assert_eq!(after.usage, self.usage);
+         assert_eq!(after.storage, self.storage);
+@@ -513,6 +554,42 @@ impl Snapshot {
+         panic: bool,
+     ) {
+         let after = memory.primary_queue_cleanup_snapshot_v1(custody);
++        self.assert_queue_failure_snapshot_v1(
++            after,
++            memory.fixture.vm,
++            custody,
++            failed_call,
++            panic,
++        );
++    }
++
++    pub(crate) fn assert_auxiliary_queue_failure_v1(
++        &self,
++        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
++        queue: &QueueModelFoundationV1,
++        custody: &QueueResourceCleanupCustodyV1,
++        failed_call: usize,
++        panic: bool,
++    ) {
++        let mut after = memory.retained_queue_memory_snapshot_v1(queue);
++        after.controls = custody.observation().controls.into();
++        self.assert_queue_failure_snapshot_v1(
++            after,
++            memory.fixture.vm,
++            custody,
++            failed_call,
++            panic,
++        );
++    }
++
++    fn assert_queue_failure_snapshot_v1(
++        &self,
++        after: Self,
++        vm: VmKeyV1,
++        custody: &QueueResourceCleanupCustodyV1,
++        failed_call: usize,
++        panic: bool,
++    ) {
+         let state = custody.observation();
+         let calls = all_calls(self);
+         assert_eq!(after.calls, calls[..=self.calls.len() + failed_call]);
+@@ -541,7 +618,7 @@ impl Snapshot {
+         let mut model = self.model.clone();
+         for (i, c) in self.controls.iter().enumerate().take(unmapped) {
+             let (reservation, allocation, mapping) =
+-                model_keys(memory.fixture.vm, c.identity.id, c.identity.generation);
++                model_keys(vm, c.identity.id, c.identity.generation);
+             model = project_unmap(&model, mapping).unwrap();
+             if i < released {
+                 model = project_release(&model, reservation, allocation, mapping).unwrap();
+@@ -550,7 +627,7 @@ impl Snapshot {
+         assert_eq!(after.model, model);
+         assert_eq!(after.retained_va, retained_va_after(self, released));
+         assert_eq!(after.identity, self.identity);
+-        assert_eq!(after.certificate, self.certificate);
++        self.assert_cleanup_certificate_delta_v1(&after, unmapped + released);
+         assert_eq!(after.devices, self.devices);
+         assert_eq!(after.usage, self.usage);
+         assert_eq!(after.storage, self.storage);
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs b/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs
+index bc782b675..104db0865 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs
+@@ -4201,8 +4201,9 @@ impl KfdRuntimeBackendV1 {
+     /// Explicitly tears down the retained native queue after logical cleanup.
+     ///
+     /// Every logical stream must already be destroyed and no submission may
+-    /// be active. A teardown failure is terminal because the consuming KFD
+-    /// transition cannot return queue custody for a retry.
++    /// be active. Failures after destructive native entry are terminal. A
++    /// primary-custody allocation failure retains the live primary for retry;
++    /// auxiliary queues already destroyed are not revisited.
+     pub fn shutdown_native_v1(
+         &mut self,
+     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+@@ -4279,17 +4280,14 @@ impl KfdRuntimeBackendV1 {
+             if native_lane.ordinal() == 0 {
+                 continue;
+             }
+-            let result = self
+-                .queue
+-                .as_mut()
+-                .expect("auxiliary queue retains its shared owner")
+-                .destroy_auxiliary_compute_lane_v1(native_lane);
+-            if let Err(error) = result {
+-                return Err(
+-                    self.terminal_error(format!("explicit auxiliary KFD queue teardown: {error}"))
+-                );
+-            }
+-            self.observe_destroyed_compute_lane_v1(Some(index));
++            self.release_auxiliary_for_shutdown_v1(index, |backend| {
++                backend
++                    .queue
++                    .as_mut()
++                    .expect("auxiliary queue retains its shared owner")
++                    .destroy_auxiliary_compute_lane_v1(native_lane)?;
++                Ok(native_lane)
++            })?;
+         }
+         let primary_logical_lane = self
+             .native_compute_lanes
+@@ -4315,7 +4313,15 @@ impl KfdRuntimeBackendV1 {
+                     self.terminal_error(format!("primary KFD queue teardown preflight: {error}"))
+                 );
+             }
+-            let shell = try_uninit_box_v1::<PrimaryQueueReleaseCustodyV1>().map_err(|_| {
++            #[cfg(test)]
++            let shell = if super::retained_release_tests::reject_primary_teardown_shell() {
++                Err(())
++            } else {
++                try_uninit_box_v1::<PrimaryQueueReleaseCustodyV1>()
++            };
++            #[cfg(not(test))]
++            let shell = try_uninit_box_v1::<PrimaryQueueReleaseCustodyV1>();
++            let shell = shell.map_err(|_| {
+                 // Earlier dispatch/auxiliary cleanup may already have committed.
+                 // The primary queue is still retained and can retry shutdown.
+                 Self::quiescent_error(
+@@ -4377,6 +4383,40 @@ impl KfdRuntimeBackendV1 {
+         Ok(())
+     }
+ 
++    pub(super) fn release_auxiliary_for_shutdown_v1(
++        &mut self,
++        index: usize,
++        release: impl FnOnce(
++            &mut Self,
++        )
++            -> Result<ComputeAqlQueueLaneV1, fe2o3_kfd::ComputeAqlQueueSessionErrorV1>,
++    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
++        self.require_live()?;
++        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            let destroyed = release(self).map_err(|error| {
++                self.terminal_error(format!("retained auxiliary KFD queue teardown: {error}"))
++            })?;
++            if self.native_compute_lanes.get(index).copied().flatten() != Some(destroyed) {
++                return Err(
++                    self.terminal_error("retained auxiliary KFD queue slot changed after teardown")
++                );
++            }
++            // Later primary teardown allocation may fail quiescently and allow a retry.
++            self.native_compute_lanes[index] = None;
++            self.observe_destroyed_compute_lane_v1(Some(index));
++            Ok(())
++        }));
++        match result {
++            Ok(result) => result,
++            Err(payload) => {
++                core::mem::forget(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
++                    || self.terminal_error("retained auxiliary KFD queue teardown panicked"),
++                )));
++                std::panic::resume_unwind(payload)
++            }
++        }
++    }
++
+     pub(super) fn trim_sdma_pool_for_shutdown_v1(
+         &mut self,
+         trim: impl FnOnce(&mut Self) -> Result<usize, fe2o3_kfd::ComputeAqlQueueSessionErrorV1>,
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs b/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
+index c6a8fabb7..df2194348 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests.rs
+@@ -8,6 +8,11 @@ use std::cell::Cell;
+ mod cold_allocation;
+ 
+ thread_local! { static SELECTION: Cell<Option<bool>> = const { Cell::new(None) }; }
++thread_local! { static PRIMARY_TEARDOWN_CAPACITY: Cell<bool> = const { Cell::new(false) }; }
++
++pub(super) fn reject_primary_teardown_shell() -> bool {
++    PRIMARY_TEARDOWN_CAPACITY.with(|slot| slot.replace(false))
++}
+ 
+ #[derive(Clone, Copy, Debug, Default)]
+ struct PrimaryHostUsage {
+@@ -204,6 +209,83 @@ fn runtime_multi_device_shutdown_retries_after_a_child_rejection() {
+     );
+ }
+ 
++#[test]
++fn runtime_auxiliary_teardown_errors_and_panics_seal_reentry_without_destroyed_events() {
++    use std::panic::{AssertUnwindSafe, catch_unwind};
++    use std::sync::{
++        Arc,
++        atomic::{AtomicUsize, Ordering},
++    };
++
++    #[derive(Debug)]
++    struct Payload(Arc<AtomicUsize>);
++    impl Drop for Payload {
++        fn drop(&mut self) {
++            self.0.fetch_add(1, Ordering::SeqCst);
++        }
++    }
++    for panic in [false, true] {
++        let mut backend = std::mem::ManuallyDrop::new(KfdRuntimeBackendV1::mock());
++        backend
++            .enable_profiler_v1(KfdRuntimeProfilerConfigV1::new([0x87; 32], 32).unwrap())
++            .unwrap();
++        let drops = Arc::new(AtomicUsize::new(0));
++        let payload = Box::new(Payload(drops.clone()));
++        let pointer = core::ptr::from_ref(payload.as_ref());
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            backend.release_auxiliary_for_shutdown_v1(1, |_| {
++                if panic {
++                    std::panic::resume_unwind(payload);
++                }
++                Err(fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract(
++                    "auxiliary fault",
++                ))
++            })
++        }));
++        assert!(backend.terminal && !backend.queue_retired);
++        assert!(matches!(
++            backend
++                .release_auxiliary_for_shutdown_v1(1, |_| panic!("terminal retry entered cleanup")),
++            Err(RuntimeBackendFailureV1::Terminal(_))
++        ));
++        assert!(matches!(
++            backend.shutdown_owned_v1(),
++            Err(RuntimeBackendFailureV1::Terminal(_))
++        ));
++        assert!(matches!(
++            backend.create_stream_v1(7),
++            Err(RuntimeBackendFailureV1::Terminal(_))
++        ));
++        if panic {
++            let caught = result.unwrap_err().downcast::<Payload>().unwrap();
++            assert_eq!(core::ptr::from_ref(caught.as_ref()), pointer);
++            assert_eq!(drops.load(Ordering::SeqCst), 0);
++            drop(caught);
++        } else {
++            assert!(
++                matches!(result.unwrap(), Err(RuntimeBackendFailureV1::Terminal(error)) if error.detail().contains("auxiliary fault"))
++            );
++        }
++        assert_eq!(drops.load(Ordering::SeqCst), 1);
++        assert!(
++            !backend
++                .profiler
++                .as_ref()
++                .unwrap()
++                .recorded_events_for_test_v1()
++                .iter()
++                .any(|event| matches!(
++                    event.event,
++                    KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { .. }
++                ))
++        );
++        // Adapter settlement only: this fixture has no native queue to discard.
++        assert!(backend.queue.is_none() && backend.allocations.is_empty());
++        backend.terminal = false;
++        drop(std::mem::ManuallyDrop::into_inner(backend));
++    }
++}
++
+ #[test]
+ fn runtime_pool_trim_error_and_panic_terminalize_before_returning() {
+     use std::panic::{AssertUnwindSafe, catch_unwind};
+@@ -504,28 +586,35 @@ fn native_device_roundtrip_retained_shutdown(zero_cache: bool) {
+ #[test]
+ #[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+ fn native_runtime_typed_dispatch_shutdown_refunds_and_profiles_retained_primary() {
+-    native_typed_dispatch_retained_release(1, false);
++    native_typed_dispatch_retained_release(1, false, false);
+ }
+ 
+ #[cfg(feature = "hardware-qualification")]
+ #[test]
+ #[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+ fn native_runtime_two_stream_dispatch_uses_primary_and_auxiliary_then_refunds() {
+-    native_typed_dispatch_retained_release(2, false);
++    native_typed_dispatch_retained_release(2, false, false);
++}
++
++#[cfg(feature = "hardware-qualification")]
++#[test]
++#[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
++fn native_runtime_auxiliary_shutdown_retries_after_primary_capacity_rejection() {
++    native_typed_dispatch_retained_release(2, false, true);
+ }
+ 
+ #[cfg(feature = "hardware-qualification")]
+ #[test]
+ #[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+ fn native_runtime_allocates_while_primary_compute_is_pending() {
+-    native_typed_dispatch_retained_release(1, true);
++    native_typed_dispatch_retained_release(1, true, false);
+ }
+ 
+ #[cfg(feature = "hardware-qualification")]
+ #[test]
+ #[ignore = "requires an isolated MI300X process and FE2O3_TEST_NATIVE_UNIQUE_ID"]
+ fn native_runtime_allocates_while_primary_and_auxiliary_compute_are_pending() {
+-    native_typed_dispatch_retained_release(2, true);
++    native_typed_dispatch_retained_release(2, true, false);
+ }
+ 
+ #[cfg(feature = "hardware-qualification")]
+@@ -929,7 +1018,11 @@ fn native_pending_snapshot(backend: &KfdRuntimeBackendV1, count: usize) -> Nativ
+ }
+ 
+ #[cfg(feature = "hardware-qualification")]
+-fn native_typed_dispatch_retained_release(stream_count: usize, pending_allocations: bool) {
++fn native_typed_dispatch_retained_release(
++    stream_count: usize,
++    pending_allocations: bool,
++    retry_shutdown: bool,
++) {
+     use crate::qualification_gfx942_vecadd_v1::{
+         GFX942_VECADD_QUALIFICATION_BUFFER_ALIGNMENT_V1 as ALIGNMENT,
+         GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as BYTES, Gfx942VecaddQualificationArgumentsV1,
+@@ -1134,6 +1227,54 @@ fn native_typed_dispatch_retained_release(stream_count: usize, pending_allocatio
+             .auxiliary_compute_lane_count_v1(),
+         stream_count - 1
+     );
++    if retry_shutdown {
++        assert_eq!(stream_count, 2);
++        let primary = backend.native_compute_lanes[0].unwrap();
++        let auxiliary = backend.native_compute_lanes[1].unwrap();
++        let auxiliary_profile = backend
++            .profile_resource_v1(
++                KfdProfileResourceKindV1::NativeQueue,
++                KFD_PROFILE_NATIVE_QUEUE_ORDINAL_V1 + 1,
++            )
++            .unwrap();
++        PRIMARY_TEARDOWN_CAPACITY.with(|slot| {
++            assert!(!slot.replace(true));
++        });
++        assert!(
++            matches!(backend.shutdown_owned_v1(), Err(RuntimeBackendFailureV1::Quiescent(error))
++            if error.kind() == KfdRuntimeBackendErrorKindV1::Capacity && error.detail() == "primary KFD teardown storage")
++        );
++        assert!(!PRIMARY_TEARDOWN_CAPACITY.with(Cell::get));
++        assert!(!backend.terminal && !backend.queue_retired && backend.primary_teardown.is_none());
++        assert_eq!(backend.native_compute_lanes[0], Some(primary));
++        assert!(backend.native_compute_lanes[1].is_none());
++        assert!(backend.stream_compute_lanes.is_empty());
++        let queue = backend.queue.as_mut().unwrap();
++        assert_eq!(queue.primary_compute_lane_v1(), primary);
++        assert!(queue.with_compute_lane_v1(primary, |_| ()).is_ok());
++        assert_eq!(queue.auxiliary_compute_lane_count_v1(), 0);
++        assert!(queue.with_compute_lane_v1(auxiliary, |_| ()).is_err());
++        let state = &backend.auxiliary_compute_lanes[0];
++        assert!(
++            state.owner_stream.is_none()
++                && state.active.is_none()
++                && state.pipeline.is_empty()
++                && state.resident_data.is_none()
++                && state.recycled_dispatch.is_none()
++        );
++        let destroyed: Vec<_> = backend
++            .profiler
++            .as_ref()
++            .unwrap()
++            .recorded_events_for_test_v1()
++            .iter()
++            .filter_map(|e| match e.event {
++                KfdRuntimeProfileEventKindV1::NativeQueueDestroyed { queue } => Some(queue),
++                _ => None,
++            })
++            .collect();
++        assert_eq!(destroyed, vec![auxiliary_profile]);
++    }
+     let usage = observe_shutdown(&mut backend);
+     assert!(matches!(
+         backend.create_stream_v1(device),
