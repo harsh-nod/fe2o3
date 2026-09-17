@@ -1,0 +1,17 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 13s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-d209755ce6df5405)
+
+running 8 tests
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_borrow_original_program_and_complete_bytes_across_control_transfer ... ok
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_closing_staleness_overrides_callback_success_and_failure ... ok
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_preserve_each_callback_failure_class_after_closing_check ... ok
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_propagate_first_callback_panic_without_consuming_storage ... ok
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_reject_artifact_substitution_before_callback ... ok
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_reject_authority_substitution_and_staleness_before_callback ... ok
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_reject_every_reserved_roster_coordinate_before_callback ... ok
+test persistent_projection::tests::generated_native_inputs_reject_retained_program_and_abi_corruption_before_callback ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 853 filtered out; finished in 0.17s
+

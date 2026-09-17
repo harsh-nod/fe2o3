@@ -1,0 +1,48 @@
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error[E0308]: mismatched types
+   --> crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs:391:65
+    |
+391 |     let _ = source.with_native_inputs_v1(7, expected, |_, _| Ok(vec![1u8]));
+    |                                                              -- ^^^^^^^^^ expected `()`, found `Vec<u8>`
+    |                                                              |
+    |                                                              arguments to this enum variant are incorrect
+    |
+    = note: expected unit type `()`
+                  found struct `Vec<u8>`
+help: the type constructed contains `Vec<u8>` due to the type of the argument passed
+   --> crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs:391:62
+    |
+391 |     let _ = source.with_native_inputs_v1(7, expected, |_, _| Ok(vec![1u8]));
+    |                                                              ^^^---------^
+    |                                                                 |
+    |                                                                 this argument influences the type of `Ok`
+note: tuple variant defined here
+   --> /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:561:5
+    |
+561 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^
+
+error[E0521]: borrowed data escapes outside of closure
+   --> crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs:369:9
+    |
+367 |     let mut escaped = None;
+    |         ----------- `escaped` declared here, outside of the closure body
+368 |     let _ = source.with_native_inputs_v1(7, expected, |_, buffers| {
+369 |         escaped = Some(buffers);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^ a temporary borrow escapes the closure body here
+    |
+    = help: `escaped` is declared outside the closure, so any data borrowed inside the closure cannot be stored into it
+
+error[E0521]: borrowed data escapes outside of closure
+   --> crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs:381:9
+    |
+379 |     let mut escaped = None;
+    |         ----------- `escaped` declared here, outside of the closure body
+380 |     let _ = source.with_native_inputs_v1(7, expected, |program, _| {
+    |                                                        ------- `program` is a reference that is only valid in the closure body
+381 |         escaped = Some(program);
+    |         ^^^^^^^ `program` escapes the closure body here
+
+Some errors have detailed explanations: E0308, E0521.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `fe2o3-runtime` (lib test) due to 3 previous errors

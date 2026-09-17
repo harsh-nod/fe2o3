@@ -1,0 +1,7 @@
+crates/fe2o3-runtime/src/authorized_execution.rs: OK
+crates/fe2o3-runtime/src/authorized_execution/tests/generated_identity.rs: OK
+crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs: OK
+crates/fe2o3-runtime/src/authorized_execution/tests/generated_storage.rs: OK
+crates/fe2o3-runtime/src/generated_source.rs: OK
+crates/fe2o3-runtime/src/persistent_projection.rs: OK
+crates/fe2o3-runtime/src/persistent_projection/tests.rs: OK

@@ -143,6 +143,17 @@ remaining five planned invocations are not counted as executed. Exact binary
 hashes and owned scratch cleanup are recorded. This is bounded native behavior
 evidence, not full R126 qualification, physical-overlap proof or a benchmark.
 
+N5 now has a private borrowed native-source handoff that revalidates the original
+HSACO/program/ABI and exact source roster while bracketing callback currentness.
+It preserves the original buffers and one-shot packet; higher-ranked lifetimes
+and an owner-free callback result constrain escape. See the
+[development receipt](evidence/dev-n5-native-source-2026-09-17/README.md).
+GNU/musl each pass 852 runtime tests with eleven native tests ignored; ten
+focused tests per target, three compiled negatives and 33 doctests pass.
+Backend adoption phases, native binding/retirement, lane leasing and production
+async hooks remain unimplemented. This prerequisite does not complete N5 or
+advance the accepted milestones.
+
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,865 tests with

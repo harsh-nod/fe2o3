@@ -1,0 +1,7 @@
+gnu/kfd: 1389 passed, 0 ignored (prior qualified identical binary); exact executable/roster checked
+gnu/runtime: 852 passed, 11 ignored (fresh run); exact executable/roster checked
+musl/kfd: 1389 passed, 0 ignored (prior qualified identical binary); exact executable/roster checked
+musl/runtime: 852 passed, 11 ignored (fresh run); exact executable/roster checked
+Ten focused tests per target and three expected compiler rejections; source restored exactly.
+All 26 final command records passed; duplicate lower run stopped with exit 143, not counted as completed.
+No native adoption or GPU execution is claimed.

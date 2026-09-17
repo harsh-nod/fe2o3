@@ -1,0 +1,31 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+   Compiling fe2o3-semantic-query v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-semantic-query)
+   Compiling cargo-fe2o3 v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/cargo-fe2o3)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 58.43s
+     Running tests/unsafe_source_policy.rs (target/debug/deps/unsafe_source_policy-000a5d0e16bfc721)
+
+running 6 tests
+test additions_removals_and_moves_require_baseline_review ... ok
+test all_constructs_and_macro_templates_are_counted ... ok
+test refresh_reviewed_unsafe_inventory ... ignored, explicit maintenance command; review the resulting baseline diff
+test comments_literals_and_documentation_do_not_count ... ok
+test malformed_tokens_fail_closed ... ok
+test unsafe_source_matches_reviewed_inventory ... FAILED
+
+failures:
+
+---- unsafe_source_matches_reviewed_inventory stdout ----
+
+thread 'unsafe_source_matches_reviewed_inventory' (1605104) panicked at crates/cargo-fe2o3/tests/unsafe_source_policy.rs:124:5:
+unsafe source inventory changed:
+docs/evidence/dev-n5-native-source-2026-09-17/source/crates/fe2o3-runtime/src/authorized_execution.rs: reviewed=None, observed=Some({"block": 3, "impl": 1, "trait": 1})
+Review each change and refresh the baseline as documented in docs/unsafe-code-policy.md
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    unsafe_source_matches_reviewed_inventory
+
+test result: FAILED. 4 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 19.63s
+
+error: test failed, to rerun pass `-p cargo-fe2o3 --test unsafe_source_policy`

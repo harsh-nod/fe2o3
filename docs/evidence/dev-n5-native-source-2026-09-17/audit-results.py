@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""Check the source-bound CPU campaign and three intentional compiler errors."""
+
+import hashlib
+import json
+from pathlib import Path
+import re
+import shlex
+import subprocess
+
+ARCHIVE = Path(__file__).resolve().parent
+ROOT = ARCHIVE.parents[2]
+BASE = "8e16409976a8cbfb9d54dffb354f3dac917b72dd"
+BASELINE = ROOT / "docs/evidence/dev-r126-auxiliary-release-2026-09-16"
+
+
+def require(condition, message):
+    if not condition:
+        raise SystemExit(message)
+
+
+def read(group, name, suffix="log"):
+    return (ARCHIVE / group / f"{name}.{suffix}").read_text()
+
+
+def command(name, expected, group="final"):
+    require(shlex.split(read(group, name, "command")) == expected, f"{group}/{name}: command mismatch")
+
+
+def sha(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+order = ["base", "source-before", "rustc", "cargo", "clippy", "formatting"]
+for target in ("gnu", "musl"):
+    order.extend([f"{target}-build", f"{target}-kfd-roster", f"{target}-kfd-baseline-binary", f"{target}-kfd-baseline-roster",
+                  f"{target}-runtime-roster", f"{target}-focused", f"{target}-ignored",
+                  f"{target}-runtime-full"])
+order.extend(["doctests", "no-default", "unsafe-policy", "source-after"])
+require(len(order) == 26, "wrong final command inventory")
+previous = None
+for group, names, exit_code in (("preliminary", ["focused-01"], "0"),
+                               ("negative", ["compile-borrow-and-result-rejections"], "101"),
+                               ("final", order, "0")):
+    files = {f"{name}.{suffix}" for name in names
+             for suffix in ("command", "log", "started", "finished", "exit")}
+    if group == "final":
+        files.update(f"{target}-{crate}-binary.sha256" for target in ("gnu", "musl")
+                     for crate in ("kfd", "runtime"))
+    require({path.name for path in (ARCHIVE / group).iterdir()} == files, f"{group}: record inventory mismatch")
+    for name in names:
+        require(read(group, name, "exit").strip() == exit_code, f"{group}/{name}: exit mismatch")
+        start, finish = [read(group, name, suffix).strip() for suffix in ("started", "finished")]
+        require(all(re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{9}Z", item)
+                    for item in (start, finish)) and start <= finish,
+                f"{group}/{name}: invalid UTC endpoints")
+        require(previous is None or previous <= start, f"{group}/{name}: nonserial record")
+        previous = finish
+
+duplicate = ["base", "source-before", "rustc", "cargo", "clippy", "formatting", "gnu-build", "gnu-kfd-roster", "gnu-kfd-full"]
+expected_duplicate = {f"{name}.{suffix}" for name in duplicate for suffix in ("command", "log", "started", "finished", "exit")}
+expected_duplicate.add("gnu-kfd-binary.sha256")
+require({path.name for path in (ARCHIVE / "duplicate-lower-run").iterdir()} == expected_duplicate, "duplicate-run inventory mismatch")
+previous = read("negative", "compile-borrow-and-result-rejections", "finished").strip()
+for name in duplicate:
+    require(read("duplicate-lower-run", name, "exit").strip() == ("143" if name == "gnu-kfd-full" else "0"), "duplicate-run exit mismatch")
+    start, finish = [read("duplicate-lower-run", name, suffix).strip() for suffix in ("started", "finished")]
+    require(previous <= start <= finish, "duplicate-run chronology mismatch")
+    previous = finish
+    if name != "gnu-kfd-full":
+        require(read("duplicate-lower-run", name, "command") == read("final", name, "command"), "duplicate-run command mismatch")
+require("test result:" not in read("duplicate-lower-run", "gnu-kfd-full"), "interrupted test run unexpectedly has summary")
+interruptions = {
+    "parent-inspection": ["ps", "-o", "pid,ppid,pgid,stat,args", "--ppid", "1579728"],
+    "process-tree": ["pstree", "-ap", "1579734"],
+    "stop-owned-duplicate": ["kill", "-TERM", "1579734"],
+    "process-absent": ["test", "!", "-d", "/proc/1579734"],
+}
+require({path.name for path in (ARCHIVE / "interruption").iterdir()}
+        == {f"{name}.{suffix}" for name in interruptions for suffix in ("command", "log", "started", "finished", "exit")}, "interruption inventory mismatch")
+previous = read("duplicate-lower-run", "gnu-kfd-full", "started").strip()
+for name, args in interruptions.items():
+    command(name, args, "interruption")
+    require(read("interruption", name, "exit").strip() == "0", "interruption check failed")
+    start, finish = [read("interruption", name, suffix).strip() for suffix in ("started", "finished")]
+    require(previous <= start <= finish, "interruption chronology mismatch")
+    previous = finish
+require(read("interruption", "stop-owned-duplicate", "started").strip()
+        <= read("duplicate-lower-run", "gnu-kfd-full", "finished").strip()
+        <= read("interruption", "process-absent", "started").strip()
+        and previous <= read("final", "base", "started").strip(), "owned process closure order mismatch")
+require(read("interruption", "stop-owned-duplicate") == read("interruption", "process-absent") == "", "unexpected stop/absence output")
+
+source_rows = [line.split("  ", 1) for line in (ARCHIVE / "source-files.sha256").read_text().splitlines()]
+require(len(source_rows) == 7 and len({path for _, path in source_rows}) == 7, "source membership mismatch")
+changed = subprocess.run(["git", "diff", "--name-only", BASE, "--", "crates"], cwd=ROOT,
+                         check=True, capture_output=True, text=True).stdout.splitlines()
+require(set(changed) == {path for _, path in source_rows}, "unmanifested changed source")
+for digest, path in source_rows:
+    require(sha(ROOT / path) == sha(ARCHIVE / "source" / (path + ".txt")) == digest, f"source mismatch: {path}")
+source_files = {str(path.relative_to(ARCHIVE / "source")) for path in (ARCHIVE / "source").rglob("*") if path.is_file()}
+require(source_files == {path + ".txt" for _, path in source_rows}, "extra source snapshot files")
+delta = subprocess.run(["git", "diff", "--binary", BASE, "--", "crates"], cwd=ROOT,
+                       check=True, capture_output=True).stdout
+require(delta == (ARCHIVE / "source.patch").read_bytes(), "source patch mismatch")
+require(read("final", "base").strip() == BASE, "wrong source base")
+for name in ("source-before", "source-after"):
+    command(name, ["sha256sum", "--check", str(ARCHIVE / "source-files.sha256")])
+    require(read("final", name) == "".join(path + ": OK\n" for _, path in source_rows), "source gate mismatch")
+command("base", ["git", "rev-parse", "HEAD"])
+command("rustc", ["rustc", "-vV"])
+require(re.findall(r"^host: (.*)$", read("final", "rustc"), re.MULTILINE) == ["x86_64-unknown-linux-gnu"], "wrong GNU build host")
+command("cargo", ["cargo", "-V"])
+env = ["env", "CARGO_INCREMENTAL=0"]
+command("clippy", env + ["cargo", "clippy", "--locked", "--offline", "-p", "fe2o3-kfd", "-p", "fe2o3-runtime",
+                         "--all-features", "--all-targets", "--", "-D", "warnings"])
+command("formatting", ["cargo", "fmt", "--all", "--", "--check"])
+
+
+def roster(log):
+    entries = re.findall(r"^(\S+): test$", log, re.MULTILINE)
+    require(len(entries) == len(set(entries)), "duplicate test roster")
+    summaries = re.findall(r"^(\d+) tests?, (\d+) benchmarks?$", log, re.MULTILINE)
+    require(summaries == [(str(len(entries)), "0")], "invalid roster footer")
+    require(all(not line or re.fullmatch(r"\S+: test|\d+ tests?, 0 benchmarks?", line)
+                for line in log.splitlines()), "unexpected roster line")
+    return set(entries)
+
+
+def outcomes(log):
+    entries = re.findall(r"^test (\S+) \.\.\. (ok|ignored(?:, [^\n]*)?|FAILED)$", log, re.MULTILINE)
+    require(len(entries) == len({name for name, _ in entries}), "duplicate result")
+    require(len(re.findall(r"^test \S+ \.\.\..*$", log, re.MULTILINE)) == len(entries), "unrecognized test status")
+    summaries = re.findall(r"^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out; finished in [\d.]+s$", log, re.MULTILINE)
+    require(len(summaries) == len(re.findall(r"^test result:.*$", log, re.MULTILINE)) == 1, "missing/duplicate passing summary")
+    passed, failed, ignored, measured, filtered = map(int, summaries[0])
+    require(failed == measured == 0 and all(status != "FAILED" for _, status in entries), "failed/measured test")
+    require(passed == sum(status == "ok" for _, status in entries)
+            and ignored == sum(status.startswith("ignored") for _, status in entries), "summary/result mismatch")
+    return dict(entries), (passed, ignored, filtered)
+
+
+target_results = {}
+require(sha(BASELINE / "SHA256SUMS") == "a8adcc1764c922b02e03145b939e37e685a88f2ba14d6ebad7abf4371a993760", "lower baseline manifest changed")
+baseline_hashes = {name.removeprefix("./"): digest for digest, name in
+                   (line.split("  ", 1) for line in (BASELINE / "SHA256SUMS").read_text().splitlines())}
+for target in ("gnu", "musl"):
+    args = [] if target == "gnu" else ["--target", "x86_64-unknown-linux-musl"]
+    command(f"{target}-build", env + ["cargo", "test", "--locked", "--offline", "-p", "fe2o3-kfd", "-p", "fe2o3-runtime",
+                                    "--all-features", "--lib", *args, "--no-run", "--message-format=json"])
+    artifacts = []
+    for line in read("final", f"{target}-build").splitlines():
+        if line.startswith("{"):
+            item = json.loads(line)
+            if item.get("reason") == "compiler-artifact" and item["profile"]["test"]:
+                artifacts.append(item)
+    for crate in ("kfd", "runtime"):
+        selected = [item for item in artifacts if item["target"]["name"] == f"fe2o3_{crate}"]
+        require(len(selected) == 1, f"{target}/{crate}: missing/duplicate Cargo artifact")
+        artifact = selected[0]
+        binary = artifact["executable"]
+        crate_dir = ROOT / f"crates/fe2o3-{crate}"
+        target_dir = ROOT / "target" if target == "gnu" else ROOT / "target/x86_64-unknown-linux-musl"
+        features = ["default", "live-validation"] if crate == "kfd" else ["default", "hardware-diagnostic", "hardware-qualification"]
+        require(artifact["manifest_path"] == str(crate_dir / "Cargo.toml")
+                and artifact["package_id"].startswith("path+" + crate_dir.as_uri() + "#")
+                and artifact["target"]["src_path"] == str(crate_dir / "src/lib.rs")
+                and artifact["target"]["kind"] == ["lib"]
+                and artifact["target"]["crate_types"] == ["lib"]
+                and artifact["target"]["test"] is True
+                and artifact["features"] == features
+                and Path(binary).parent == target_dir / "debug/deps"
+                and binary in artifact["filenames"], "wrong Cargo artifact identity")
+        digest, recorded_binary = read("final", f"{target}-{crate}-binary", "sha256").strip().split("  ", 1)
+        require(binary == recorded_binary and sha(Path(binary)) == digest, "test binary mismatch")
+        command(f"{target}-{crate}-roster", [binary, "--list"])
+        expected = roster(read("final", f"{target}-{crate}-roster"))
+        if crate == "kfd":
+            for suffix, filename in (("binary", f"{target}-kfd-binary.sha256"), ("roster", f"{target}-kfd-roster.log")):
+                command(f"{target}-kfd-baseline-{suffix}", ["cmp", str(ARCHIVE / "final" / filename), str(BASELINE / "final" / filename)])
+                require(read("final", f"{target}-kfd-baseline-{suffix}") == "", "nonempty lower comparison output")
+                require((ARCHIVE / "final" / filename).read_bytes() == (BASELINE / "final" / filename).read_bytes(), "lower baseline mismatch")
+            for filename in (f"{target}-kfd-binary.sha256", f"{target}-kfd-roster.log", f"{target}-kfd-full.log"):
+                require(sha(BASELINE / "final" / filename) == baseline_hashes["final/" + filename], "lower baseline artifact hash mismatch")
+            actual, totals = outcomes((BASELINE / "final" / f"{target}-kfd-full.log").read_text())
+            if target == "gnu":
+                command("gnu-kfd-full", ["prlimit", "--core=0:0", "--", binary, "--test-threads=4"], "duplicate-lower-run")
+                require(read("duplicate-lower-run", "gnu-kfd-binary", "sha256") == read("final", "gnu-kfd-binary", "sha256"), "duplicate executable mismatch")
+                require(f"1579734 1579728 1574348 Sl   {binary} --test-threads=4" in read("interruption", "parent-inspection"), "stopped process identity mismatch")
+                tree = read("interruption", "process-tree").splitlines()
+                require(tree[0] == "fe2o3_kfd-f9eea,1579734 --test-threads=4"
+                        and all("{fe2o3_kfd-f9eea}," in line for line in tree[1:]), "unexpected duplicate-run descendants")
+        else:
+            command(f"{target}-{crate}-full", ["prlimit", "--core=0:0", "--", binary, "--test-threads=4"])
+            actual, totals = outcomes(read("final", f"{target}-{crate}-full"))
+        require(set(actual) == expected and totals[2] == 0, "full suite roster mismatch")
+        target_results[(target, crate)] = actual
+        if crate == "runtime":
+            require({"hardware-diagnostic", "hardware-qualification"} <= set(artifact["features"]), "missing runtime features")
+            command(f"{target}-ignored", [binary, "--ignored", "--list"])
+            ignored = roster(read("final", f"{target}-ignored"))
+            require(len(ignored) == 11 and ignored == {name for name, status in actual.items() if status.startswith("ignored")}, "native ignored roster mismatch")
+            command(f"{target}-focused", ["prlimit", "--core=0:0", "--", binary, "generated_native_inputs", "--test-threads=1"])
+            focused, counts = outcomes(read("final", f"{target}-focused"))
+            require(counts == (10, 0, len(expected) - 10)
+                    and set(focused) == {name for name in expected if "generated_native_inputs" in name}, "focused matrix mismatch")
+        origin = "prior qualified identical binary" if crate == "kfd" else "fresh run"
+        print(f"{target}/{crate}: {totals[0]} passed, {totals[1]} ignored ({origin}); exact executable/roster checked")
+for crate in ("kfd", "runtime"):
+    require(target_results[("gnu", crate)] == target_results[("musl", crate)], "GNU/musl roster/result drift")
+
+for name, args in (
+    ("doctests", ["cargo", "test", "--locked", "--offline", "-p", "fe2o3-runtime", "--all-features", "--doc"]),
+    ("no-default", ["cargo", "check", "--locked", "--offline", "-p", "fe2o3-runtime", "--no-default-features"]),
+    ("unsafe-policy", ["cargo", "test", "--locked", "--offline", "-p", "cargo-fe2o3", "--test", "unsafe_source_policy"]),
+):
+    command(name, env + args)
+for name in ("doctests", "unsafe-policy"):
+    require("test result: ok." in read("final", name) and "test result: FAILED" not in read("final", name), name + " failed")
+policy_group = "policy-before-snapshot-extension"
+require({path.name for path in (ARCHIVE / policy_group).iterdir()}
+        == {f"unsafe-policy.{suffix}" for suffix in ("command", "log", "started", "finished", "exit")}, "policy attempt inventory mismatch")
+require(read(policy_group, "unsafe-policy", "command") == read("final", "unsafe-policy", "command")
+        and read(policy_group, "unsafe-policy", "exit").strip() == "101", "policy attempt mismatch")
+require(read("final", "no-default", "finished").strip()
+        <= read(policy_group, "unsafe-policy", "started").strip()
+        <= read(policy_group, "unsafe-policy", "finished").strip()
+        <= read("final", "unsafe-policy", "started").strip(), "policy retry chronology mismatch")
+policy_failure = read(policy_group, "unsafe-policy")
+require("test result: FAILED. 4 passed; 1 failed; 1 ignored;" in policy_failure
+        and 'source/crates/fe2o3-runtime/src/authorized_execution.rs: reviewed=None, observed=Some({"block": 3, "impl": 1, "trait": 1})' in policy_failure,
+        "unexpected original policy failure")
+
+command("focused-01", env + ["cargo", "test", "--locked", "--offline", "-p", "fe2o3-runtime", "--all-features", "--lib",
+                             "generated_native_inputs", "--", "--test-threads=1"], "preliminary")
+require(outcomes(read("preliminary", "focused-01"))[1] == (8, 0, 853), "wrong preliminary result")
+command("compile-borrow-and-result-rejections", env + ["cargo", "check", "--locked", "--offline", "-p", "fe2o3-runtime",
+                                                      "--all-features", "--tests"], "negative")
+negative = read("negative", "compile-borrow-and-result-rejections")
+require(re.findall(r"^error\[(E\d+)\]", negative, re.MULTILINE) == ["E0308", "E0521", "E0521"]
+        and "due to 3 previous errors" in negative, "wrong negative diagnostics")
+negative_source = (ARCHIVE / "negative-source.rs").read_text()
+require(all(name in negative_source for name in ("fn forbidden_buffer_escape", "fn forbidden_program_escape", "fn forbidden_owner_result")), "missing negative source")
+diagnostics = re.split(r"(?=^error\[)", negative, flags=re.MULTILINE)[1:]
+sites = [(391, 65, "Ok(vec![1u8])"), (369, 9, "escaped = Some(buffers);"), (381, 9, "escaped = Some(program);")]
+for diagnostic, (line, column, expression) in zip(diagnostics, sites, strict=True):
+    path = "crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs"
+    locations = re.findall(r"^\s*--> (.*)$", diagnostic, re.MULTILINE)
+    require(locations and locations[0] == f"{path}:{line}:{column}"
+            and expression in diagnostic and expression in negative_source.splitlines()[line - 1], "compiler error source mismatch")
+prefix = negative_source.split("\nfn forbidden_buffer_escape", 1)[0]
+formatted = subprocess.run(["rustfmt", "--edition", "2024", "--emit", "stdout"], input=prefix,
+                           cwd=ROOT, capture_output=True, text=True, check=True).stdout
+test_path = "crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs"
+require(formatted == (ARCHIVE / "source" / (test_path + ".txt")).read_text(), "negative restoration mismatch")
+require({path.name for path in (ARCHIVE / "audit-attempts").iterdir()}
+        == {f"source-location-01.{suffix}" for suffix in ("command", "log", "started", "finished", "exit")}, "audit attempt inventory mismatch")
+command("source-location-01", ["python3", str(ARCHIVE / "audit-initial.py.txt")], "audit-attempts")
+require(read("audit-attempts", "source-location-01", "exit").strip() == "1"
+        and "compiler error source mismatch" in read("audit-attempts", "source-location-01"), "original auditor failure mismatch")
+print("Ten focused tests per target and three expected compiler rejections; source restored exactly.")
+print("All 26 final command records passed; duplicate lower run stopped with exit 143, not counted as completed.")
+print("No native adoption or GPU execution is claimed.")

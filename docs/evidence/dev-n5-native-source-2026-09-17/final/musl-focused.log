@@ -1,0 +1,15 @@
+
+running 10 tests
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_borrow_original_program_and_complete_bytes_across_control_transfer ... ok
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_closing_currentness_panic_preserves_success_and_error_custody ... ok
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_closing_staleness_overrides_callback_success_and_failure ... ok
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_opening_currentness_error_and_panic_precede_callback ... ok
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_preserve_each_callback_failure_class_after_closing_check ... ok
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_propagate_first_callback_panic_without_consuming_storage ... ok
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_reject_artifact_substitution_before_callback ... ok
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_reject_authority_substitution_and_staleness_before_callback ... ok
+test authorized_execution::tests::generated_native_inputs::generated_native_inputs_reject_every_reserved_roster_coordinate_before_callback ... ok
+test persistent_projection::tests::generated_native_inputs_reject_retained_program_and_abi_corruption_before_callback ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 853 filtered out; finished in 0.19s
+

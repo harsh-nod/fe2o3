@@ -1,0 +1,862 @@
+diff --git a/crates/fe2o3-runtime/src/authorized_execution.rs b/crates/fe2o3-runtime/src/authorized_execution.rs
+index 54e9598dd..293b4d0a2 100644
+--- a/crates/fe2o3-runtime/src/authorized_execution.rs
++++ b/crates/fe2o3-runtime/src/authorized_execution.rs
+@@ -900,6 +900,7 @@ where
+ #[cfg(test)]
+ pub(crate) mod tests {
+     mod generated_identity;
++    mod generated_native_inputs;
+     mod generated_storage;
+ 
+     use super::*;
+@@ -933,13 +934,21 @@ pub(crate) mod tests {
+         }
+     }
+ 
++    #[derive(Clone, Copy)]
++    enum CurrentnessFault {
++        ErrorAt(usize),
++        PanicAt(usize),
++    }
++
+     pub(crate) struct TestAuthorityV1 {
+         object: [u8; 32],
+         length: u64,
+         kernel: &'static str,
+         dispatch: [u8; 32],
+         device: u64,
+-        current: bool,
++        current: Cell<bool>,
++        checks: Cell<usize>,
++        fault: Cell<Option<CurrentnessFault>>,
+     }
+ 
+     // SAFETY: only identity, inert storage and shell unit tests use this fixture;
+@@ -968,7 +977,18 @@ pub(crate) mod tests {
+         }
+ 
+         fn revalidate_currentness(&self) -> Result<(), Self::CurrentnessError> {
+-            if self.current {
++            let check = self.checks.get() + 1;
++            self.checks.set(check);
++            match self.fault.get() {
++                Some(CurrentnessFault::ErrorAt(at)) if at == check => {
++                    return Err("injected stale authority");
++                }
++                Some(CurrentnessFault::PanicAt(at)) if at == check => {
++                    std::panic::panic_any("currentness panic")
++                }
++                _ => {}
++            }
++            if self.current.get() {
+                 Ok(())
+             } else {
+                 Err("stale test authority")
+@@ -983,7 +1003,9 @@ pub(crate) mod tests {
+             kernel: "kernel_v1",
+             dispatch: [2; 32],
+             device: 0x1234,
+-            current: true,
++            current: Cell::new(true),
++            checks: Cell::new(0),
++            fault: Cell::new(None),
+         }
+     }
+ 
+@@ -1076,7 +1098,9 @@ pub(crate) mod tests {
+             kernel: "vecadd",
+             dispatch: projection.dispatch_contract_sha256(),
+             device: 7,
+-            current: true,
++            current: Cell::new(true),
++            checks: Cell::new(0),
++            fault: Cell::new(None),
+         }
+     }
+ 
+@@ -1121,7 +1145,7 @@ pub(crate) mod tests {
+                 2 => authority.kernel = "other",
+                 3 => authority.dispatch[0] ^= 1,
+                 4 => authority.device += 1,
+-                _ => authority.current = false,
++                _ => authority.current.set(false),
+             }
+             let source =
+                 crate::RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority);
+diff --git a/crates/fe2o3-runtime/src/authorized_execution/tests/generated_identity.rs b/crates/fe2o3-runtime/src/authorized_execution/tests/generated_identity.rs
+index c14511a44..a98b29e1c 100644
+--- a/crates/fe2o3-runtime/src/authorized_execution/tests/generated_identity.rs
++++ b/crates/fe2o3-runtime/src/authorized_execution/tests/generated_identity.rs
+@@ -371,7 +371,9 @@ fn generated_transferred_source_rechecks_authority_and_currentness() {
+             kernel: fixture.authority.kernel,
+             dispatch: fixture.authority.dispatch,
+             device: fixture.authority.device,
+-            current: fixture.authority.current,
++            current: fixture.authority.current.clone(),
++            checks: fixture.authority.checks.clone(),
++            fault: fixture.authority.fault.clone(),
+         };
+         match field {
+             0 => fixture.authority.object[0] ^= 1,
+@@ -379,7 +381,7 @@ fn generated_transferred_source_rechecks_authority_and_currentness() {
+             2 => fixture.authority.kernel = "other",
+             3 => fixture.authority.dispatch[0] ^= 1,
+             4 => fixture.authority.device += 1,
+-            _ => fixture.authority.current = false,
++            _ => fixture.authority.current.set(false),
+         }
+         {
+             let source = RuntimeGfx942GeneratedSourceV1::from_generated_storage(
+diff --git a/crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs b/crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs
+new file mode 100644
+index 000000000..27eaafcac
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs
+@@ -0,0 +1,363 @@
++use super::*;
++use crate::generated_source::GeneratedNativeInputErrorV1 as InputError;
++use crate::{
++    KfdRuntimeBackendV1, RuntimeBackendFailureV1, RuntimeBackendV1,
++    RuntimeGfx942GeneratedReservationErrorV1 as SourceError, RuntimeGfx942GeneratedSourceV1,
++};
++use std::panic::{AssertUnwindSafe, catch_unwind};
++
++#[test]
++fn generated_native_inputs_borrow_original_program_and_complete_bytes_across_control_transfer() {
++    let (hsaco, projection) = source_projection();
++    let authority = source_authority(&projection);
++    let expected = RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority)
++        .validate(7)
++        .unwrap();
++    let identity = projection.identity();
++    let expected_abi = fe2o3_amdhsa_loader::validate(
++        &hsaco,
++        fe2o3_amdhsa_loader::AdmittedProfile::Gfx942XnackOffCov6,
++    )
++    .unwrap()
++    .bind_kernel("vecadd")
++    .unwrap()
++    .reconcile_dispatch_abi(
++        expected.dispatch_contract_sha256,
++        &[fe2o3_amdhsa_loader::KernelGlobalBufferAbiV1::new(
++            0,
++            "a_ptr",
++            0,
++            4,
++            fe2o3_hsaco::ArgumentAccess::ReadWrite,
++        )],
++    )
++    .unwrap()
++    .dispatch_abi_identity();
++    assert!(expected_abi.is_some());
++    let mut storage = projection.into_generated_storage_v1();
++    let original = storage
++        .buffers()
++        .iter()
++        .map(|buffer| (buffer.bytes().as_ptr(), buffer.bytes().to_vec()))
++        .collect::<Vec<_>>();
++    let buffer_roster = storage.buffers().as_ptr();
++    let mut control = None;
++    let mut calls = 0;
++    for transferred in [false, true] {
++        if transferred {
++            assert!(storage.transfer_control_into(&mut control));
++        }
++        let source =
++            RuntimeGfx942GeneratedSourceV1::from_generated_storage(&storage, &hsaco, &authority);
++        source
++            .with_native_inputs_v1(7, &expected, |program, buffers| {
++                calls += 1;
++                assert_eq!(program.identity_inputs(), identity);
++                assert_eq!(program.dispatch_abi_identity(), expected_abi);
++                assert_eq!(program.dispatch_pointee_alignment(0), Some(4));
++                assert_eq!(
++                    program.dispatch_actual_access(0),
++                    Some(fe2o3_hsaco::ArgumentAccess::ReadWrite)
++                );
++                assert_eq!(program.selected_kernel().name(), "vecadd");
++                let segment = program
++                    .envelope()
++                    .materialization()
++                    .copy_phase()
++                    .segment(fe2o3_amdhsa_loader::SegmentOrdinal::First)
++                    .source()
++                    .bytes();
++                let range = hsaco.as_ptr_range();
++                assert!(segment.as_ptr() >= range.start && segment.as_ptr() < range.end);
++                assert_eq!(buffers.as_ptr(), buffer_roster);
++                assert_eq!(buffers.len(), 3);
++                for (buffer, (address, bytes)) in buffers.iter().zip(&original) {
++                    assert_eq!(buffer.bytes().as_ptr(), *address);
++                    assert_eq!(buffer.bytes(), bytes);
++                }
++                Ok(())
++            })
++            .unwrap()
++            .unwrap();
++        assert_eq!(storage.control_available(), !transferred);
++        assert_eq!(control.is_some(), transferred);
++        assert!(source.validate(7).unwrap().matches(&expected));
++    }
++    assert_eq!(calls, 2);
++    assert!(!storage.transfer_control_into(&mut None));
++    assert_eq!(control.as_ref().unwrap().buffer_count(), 1);
++    assert_eq!(storage.timeout_milliseconds(), 4321);
++}
++
++#[test]
++fn generated_native_inputs_reject_every_reserved_roster_coordinate_before_callback() {
++    let (hsaco, projection) = source_projection();
++    let authority = source_authority(&projection);
++    let storage = projection.into_generated_storage_v1();
++    let source =
++        RuntimeGfx942GeneratedSourceV1::from_generated_storage(&storage, &hsaco, &authority);
++    for axis in 0..10 {
++        let mut expected = source.validate(7).unwrap();
++        match axis {
++            0 => expected.source_identity = std::sync::Arc::new(()),
++            1 => expected.count -= 1,
++            2 => expected.readback_bytes += 1,
++            3 => expected.fixup_count += 1,
++            4 => expected.dispatch_contract_sha256[0] ^= 1,
++            5 => expected.buffers[0].as_mut().unwrap().ordinal = 1,
++            6 => expected.buffers[1].as_mut().unwrap().bytes += 1,
++            7 => {
++                expected.buffers[2].as_mut().unwrap().access =
++                    crate::Gfx942RuntimeBufferAccessV1::ReadOnly
++            }
++            8 => expected.buffers[0] = None,
++            _ => expected.buffers[3] = expected.buffers[0],
++        }
++        assert!(
++            matches!(
++                source.with_native_inputs_v1(7, &expected, |_, _| {
++                    panic!("invalid roster reached callback")
++                }),
++                Err(InputError::Source(SourceError::InvalidRoster))
++            ),
++            "axis {axis}"
++        );
++        assert!(storage.control_available());
++    }
++}
++
++#[test]
++fn generated_native_inputs_reject_artifact_substitution_before_callback() {
++    let (hsaco, projection) = source_projection();
++    let authority = source_authority(&projection);
++    let expected = RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority)
++        .validate(7)
++        .unwrap();
++    let storage = projection.into_generated_storage_v1();
++    for axis in 0..3 {
++        let mut changed = hsaco.clone();
++        match axis {
++            0 => changed[0] ^= 1,
++            1 => changed.push(0),
++            _ => changed = storage.executable_image().to_vec(),
++        }
++        let source =
++            RuntimeGfx942GeneratedSourceV1::from_generated_storage(&storage, &changed, &authority);
++        assert!(matches!(
++            source.with_native_inputs_v1(7, &expected, |_, _| {
++                panic!("substituted artifact reached callback")
++            }),
++            Err(InputError::Source(SourceError::ArtifactMismatch))
++        ));
++        assert!(storage.control_available());
++    }
++}
++
++#[test]
++fn generated_native_inputs_reject_authority_substitution_and_staleness_before_callback() {
++    let (hsaco, projection) = source_projection();
++    let good = source_authority(&projection);
++    let expected = RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &good)
++        .validate(7)
++        .unwrap();
++    for axis in 0..6 {
++        let mut authority = source_authority(&projection);
++        match axis {
++            0 => authority.object[0] ^= 1,
++            1 => authority.length += 1,
++            2 => authority.kernel = "other",
++            3 => authority.dispatch[0] ^= 1,
++            4 => authority.device += 1,
++            _ => authority.current.set(false),
++        }
++        let source = RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority);
++        let error = source
++            .with_native_inputs_v1(7, &expected, |_, _| panic!("invalid authority callback"))
++            .unwrap_err();
++        if axis < 5 {
++            assert!(matches!(
++                error,
++                InputError::Source(SourceError::AuthorityMismatch)
++            ));
++        } else {
++            assert!(matches!(
++                error,
++                InputError::Source(SourceError::AuthorityNotCurrent)
++            ));
++        }
++    }
++}
++
++fn rejected_error() -> crate::KfdRuntimeBackendErrorV1 {
++    match KfdRuntimeBackendV1::mock()
++        .create_stream_v1(u64::MAX)
++        .unwrap_err()
++    {
++        RuntimeBackendFailureV1::Rejected(error) => error,
++        other => panic!("expected pure backend rejection: {other:?}"),
++    }
++}
++
++#[test]
++fn generated_native_inputs_preserve_each_callback_failure_class_after_closing_check() {
++    let (hsaco, projection) = source_projection();
++    let authority = source_authority(&projection);
++    let storage = projection.into_generated_storage_v1();
++    let source =
++        RuntimeGfx942GeneratedSourceV1::from_generated_storage(&storage, &hsaco, &authority);
++    let expected = source.validate(7).unwrap();
++    for axis in 0..3 {
++        let error = rejected_error();
++        let same = error.clone();
++        let mut calls = 0;
++        let result = source
++            .with_native_inputs_v1(7, &expected, |_, _| {
++                calls += 1;
++                Err(match axis {
++                    0 => RuntimeBackendFailureV1::Rejected(error),
++                    1 => RuntimeBackendFailureV1::Quiescent(error),
++                    _ => RuntimeBackendFailureV1::Terminal(error),
++                })
++            })
++            .unwrap()
++            .unwrap_err();
++        match (axis, result) {
++            (0, RuntimeBackendFailureV1::Rejected(error))
++            | (1, RuntimeBackendFailureV1::Quiescent(error))
++            | (2, RuntimeBackendFailureV1::Terminal(error)) => assert_eq!(error, same),
++            other => panic!("changed failure class: {other:?}"),
++        }
++        assert_eq!(calls, 1);
++        assert!(storage.control_available());
++    }
++}
++
++#[test]
++fn generated_native_inputs_closing_staleness_overrides_callback_success_and_failure() {
++    let (hsaco, projection) = source_projection();
++    let authority = source_authority(&projection);
++    let storage = projection.into_generated_storage_v1();
++    for failed in [false, true] {
++        authority.current.set(true);
++        let source =
++            RuntimeGfx942GeneratedSourceV1::from_generated_storage(&storage, &hsaco, &authority);
++        let expected = source.validate(7).unwrap();
++        let mut calls = 0;
++        let result = source.with_native_inputs_v1(7, &expected, |_, _| {
++            calls += 1;
++            authority.current.set(false);
++            if failed {
++                Err(RuntimeBackendFailureV1::Rejected(rejected_error()))
++            } else {
++                Ok(())
++            }
++        });
++        assert!(matches!(
++            result,
++            Err(InputError::Source(SourceError::AuthorityNotCurrent))
++        ));
++        assert_eq!(calls, 1);
++        assert!(storage.control_available());
++    }
++}
++
++#[test]
++fn generated_native_inputs_propagate_first_callback_panic_without_consuming_storage() {
++    let (hsaco, projection) = source_projection();
++    let authority = source_authority(&projection);
++    let storage = projection.into_generated_storage_v1();
++    let source =
++        RuntimeGfx942GeneratedSourceV1::from_generated_storage(&storage, &hsaco, &authority);
++    let expected = source.validate(7).unwrap();
++    authority.checks.set(0);
++    authority.fault.set(Some(CurrentnessFault::PanicAt(3)));
++    let original = storage.buffers().as_ptr();
++    let mut calls = 0;
++    let result = catch_unwind(AssertUnwindSafe(|| {
++        source.with_native_inputs_v1(7, &expected, |_, _| {
++            calls += 1;
++            authority.current.set(false);
++            std::panic::panic_any(1729u64)
++        })
++    }));
++    assert_eq!(result.unwrap_err().downcast_ref::<u64>(), Some(&1729));
++    assert_eq!(calls, 1);
++    assert_eq!(authority.checks.get(), 2);
++    assert!(storage.control_available());
++    assert_eq!(storage.buffers().as_ptr(), original);
++}
++
++#[test]
++fn generated_native_inputs_opening_currentness_error_and_panic_precede_callback() {
++    let (hsaco, projection) = source_projection();
++    let authority = source_authority(&projection);
++    let storage = projection.into_generated_storage_v1();
++    let source =
++        RuntimeGfx942GeneratedSourceV1::from_generated_storage(&storage, &hsaco, &authority);
++    let expected = source.validate(7).unwrap();
++    for at in [1, 2] {
++        for panic in [false, true] {
++            authority.checks.set(0);
++            authority.fault.set(Some(if panic {
++                CurrentnessFault::PanicAt(at)
++            } else {
++                CurrentnessFault::ErrorAt(at)
++            }));
++            let calls = Cell::new(0);
++            let result = catch_unwind(AssertUnwindSafe(|| {
++                source.with_native_inputs_v1(7, &expected, |_, _| {
++                    calls.set(calls.get() + 1);
++                    Ok(())
++                })
++            }));
++            if panic {
++                assert_eq!(
++                    result.unwrap_err().downcast_ref::<&str>(),
++                    Some(&"currentness panic")
++                );
++            } else {
++                assert!(matches!(
++                    result.unwrap(),
++                    Err(InputError::Source(SourceError::AuthorityNotCurrent))
++                ));
++            }
++            assert_eq!(calls.get(), 0);
++            assert_eq!(authority.checks.get(), at);
++            assert!(storage.control_available());
++        }
++    }
++}
++
++#[test]
++fn generated_native_inputs_closing_currentness_panic_preserves_success_and_error_custody() {
++    let (hsaco, projection) = source_projection();
++    let authority = source_authority(&projection);
++    let storage = projection.into_generated_storage_v1();
++    let source =
++        RuntimeGfx942GeneratedSourceV1::from_generated_storage(&storage, &hsaco, &authority);
++    let expected = source.validate(7).unwrap();
++    let original = storage.buffers().as_ptr();
++    for failed in [false, true] {
++        authority.checks.set(0);
++        authority.fault.set(Some(CurrentnessFault::PanicAt(3)));
++        let mut calls = 0;
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            source.with_native_inputs_v1(7, &expected, |_, _| {
++                calls += 1;
++                if failed {
++                    Err(RuntimeBackendFailureV1::Rejected(rejected_error()))
++                } else {
++                    Ok(())
++                }
++            })
++        }));
++        assert_eq!(
++            result.unwrap_err().downcast_ref::<&str>(),
++            Some(&"currentness panic")
++        );
++        assert_eq!(calls, 1);
++        assert_eq!(authority.checks.get(), 3);
++        assert!(storage.control_available());
++        assert_eq!(storage.buffers().as_ptr(), original);
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/authorized_execution/tests/generated_storage.rs b/crates/fe2o3-runtime/src/authorized_execution/tests/generated_storage.rs
+index f6a092105..66eef4e8a 100644
+--- a/crates/fe2o3-runtime/src/authorized_execution/tests/generated_storage.rs
++++ b/crates/fe2o3-runtime/src/authorized_execution/tests/generated_storage.rs
+@@ -95,7 +95,9 @@ fn generated_storage_authority_rejections_preserve_control_for_valid_retry() {
+             kernel: good.kernel,
+             dispatch: good.dispatch,
+             device: good.device,
+-            current: true,
++            current: Cell::new(true),
++            checks: Cell::new(0),
++            fault: Cell::new(None),
+         };
+         match field {
+             0 => authority.object[0] ^= 1,
+@@ -103,7 +105,7 @@ fn generated_storage_authority_rejections_preserve_control_for_valid_retry() {
+             2 => authority.kernel = "other",
+             3 => authority.dispatch[0] ^= 1,
+             4 => authority.device += 1,
+-            _ => authority.current = false,
++            _ => authority.current.set(false),
+         }
+         let source = RuntimeGfx942GeneratedSourceMutV1::new(&mut storage, &hsaco, &authority);
+         if field < 5 {
+diff --git a/crates/fe2o3-runtime/src/generated_source.rs b/crates/fe2o3-runtime/src/generated_source.rs
+index 4675d8f23..c6e8233bd 100644
+--- a/crates/fe2o3-runtime/src/generated_source.rs
++++ b/crates/fe2o3-runtime/src/generated_source.rs
+@@ -74,8 +74,66 @@ impl<'a, E> RuntimeGfx942GeneratedSourceV1<'a, E> {
+             .revalidate_currentness()
+             .map_err(|_| RuntimeGfx942GeneratedReservationErrorV1::AuthorityNotCurrent)
+     }
++
++    /// Borrows complete original inputs without moving or reconstructing control.
++    /// A callback entering native work must root the exact packet, lane and every
++    /// admitted prefix in its backend. Closing failure cannot dispose or retry it.
++    /// The `()` callback result cannot hide ownership discarded by a failed
++    /// closing check; panics propagate to the caller's retained adoption envelope.
++    #[allow(
++        dead_code,
++        reason = "private input handoff for forthcoming native DATA adoption"
++    )]
++    pub(crate) fn with_native_inputs_v1(
++        &self,
++        device_unique_id: u64,
++        expected: &GeneratedHostRosterV1,
++        callback: impl for<'borrow> FnOnce(
++            fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'borrow>,
++            &'borrow [crate::Gfx942KfdDispatchBufferV1],
++        ) -> Result<
++            (),
++            crate::RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>,
++        >,
++    ) -> Result<
++        Result<(), crate::RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>,
++        GeneratedNativeInputErrorV1,
++    > {
++        use GeneratedNativeInputErrorV1 as Error;
++        let actual = self.validate(device_unique_id).map_err(Error::Source)?;
++        if !actual.matches(expected) {
++            return Err(Error::Source(
++                RuntimeGfx942GeneratedReservationErrorV1::InvalidRoster,
++            ));
++        }
++        let program = self
++            .projection
++            .native_program_v1(self.hsaco)
++            .map_err(Error::Projection)?;
++        self.revalidate().map_err(Error::Source)?;
++        let result = callback(program, self.projection.buffers());
++        self.revalidate().map_err(Error::Source)?;
++        Ok(result)
++    }
+ }
+ 
++#[derive(Debug)]
++pub(crate) enum GeneratedNativeInputErrorV1 {
++    Source(RuntimeGfx942GeneratedReservationErrorV1),
++    Projection(crate::Gfx942RuntimeProjectionErrorV1),
++}
++
++impl fmt::Display for GeneratedNativeInputErrorV1 {
++    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::Source(error) => error.fmt(formatter),
++            Self::Projection(error) => error.fmt(formatter),
++        }
++    }
++}
++
++impl Error for GeneratedNativeInputErrorV1 {}
++
+ /// Closed simultaneous mutable storage and immutable authority borrow.
+ /// No public method extracts control or changes the source representation.
+ ///
+diff --git a/crates/fe2o3-runtime/src/persistent_projection.rs b/crates/fe2o3-runtime/src/persistent_projection.rs
+index 22fbe2b7f..263800a80 100644
+--- a/crates/fe2o3-runtime/src/persistent_projection.rs
++++ b/crates/fe2o3-runtime/src/persistent_projection.rs
+@@ -1,6 +1,8 @@
+ //! Consuming, non-authorizing translation into the existing fixed queue format.
+ 
+-use fe2o3_amdhsa_loader::{KernelDispatchAbiErrorV1, KernelGlobalBufferAbiV1, SegmentOrdinal};
++use fe2o3_amdhsa_loader::{
++    KernelDispatchAbiErrorV1, KernelGlobalBufferAbiV1, SegmentOrdinal, ValidatedKernelEnvelope,
++};
+ use fe2o3_hsaco::{ArgumentAccess, ExplicitValueKind};
+ use fe2o3_kfd::{
+     Gfx942DispatchBindingErrorV1, Gfx942DispatchBufferBindingV1, Gfx942FixedDispatchPacketV1,
+@@ -92,6 +94,59 @@ impl PersistentDispatchDataV1 {
+     pub fn buffer_access(&self, index: usize) -> Option<Gfx942RuntimeBufferAccessV1> {
+         self.buffer_policies.get(index).map(|policy| policy.access)
+     }
++
++    pub(crate) fn native_program_v1<'a>(
++        &self,
++        hsaco: &'a [u8],
++    ) -> Result<ValidatedKernelEnvelope<'a>, Gfx942RuntimeProjectionErrorV1> {
++        use Gfx942RuntimeProjectionErrorV1 as Error;
++        let kernel = validate(hsaco, AdmittedProfile::Gfx942XnackOffCov6)
++            .map_err(|error| Error::Preparation(error.into()))?
++            .bind_kernel(self.kernel_name())
++            .map_err(|error| Error::Preparation(error.into()))?;
++        let resources = kernel.resources();
++        if u64::try_from(hsaco.len()).ok() != Some(self.finalized_hsaco_length())
++            || self.identity() != kernel.identity_inputs()
++            || Some(self.descriptor_offset())
++                != kernel
++                    .selected_binding()
++                    .descriptor_address()
++                    .checked_sub(kernel.envelope().plan().image_start())
++            || !image_matches_materialization(
++                &self.executable_image,
++                kernel.envelope().materialization(),
++            )
++            || self.kernarg_alignment
++                != resources
++                    .kernarg_segment_alignment()
++                    .max(DIRECT_KFD_KERNARG_ALIGNMENT_V1)
++            || self.description.static_group_segment_bytes != resources.group_segment_fixed_size()
++            || Some(u64::from(self.description.packet_group_segment_bytes))
++                != resources
++                    .group_segment_fixed_size()
++                    .checked_add(u64::from(self.description.dynamic_group_segment_bytes))
++        {
++            return Err(Error::Mismatch(
++                "retained object, image or descriptor resources",
++            ));
++        }
++        validate_resources(
++            resources,
++            self.description.geometry,
++            self.description.dynamic_group_segment_bytes,
++        )
++        .map_err(Error::Preparation)?;
++        // The original contract was checked before packet/data separation. Its
++        // exact occurrence is joined by source identity, not a copied kernarg.
++        let (kernel, _) = reconcile_projection_abi_v1(
++            kernel,
++            self.dispatch_contract_sha256(),
++            &self.buffers,
++            &self.pointer_fixups,
++            &self.buffer_policies,
++        )?;
++        Ok(kernel)
++    }
+ }
+ 
+ // Both inert representations expose the same immutable description, never control.
+@@ -261,65 +316,13 @@ impl PreparedGfx942RuntimeDispatchV1 {
+             hsaco.len(),
+         )?;
+ 
+-        let arguments = kernel.selected_kernel().explicit_arguments();
+-        if arguments
+-            .iter()
+-            .filter(|arg| arg.value_kind() == ExplicitValueKind::GlobalBuffer)
+-            .count()
+-            != request.pointer_fixups.len()
+-        {
+-            return Err(Error::Mismatch("complete global-buffer fixup roster"));
+-        }
+-        let mut rows = Vec::with_capacity(request.pointer_fixups.len());
+-        let mut bindings = Vec::with_capacity(request.pointer_fixups.len());
+-        for fixup in &request.pointer_fixups {
+-            let (ordinal, argument) = arguments
+-                .iter()
+-                .enumerate()
+-                .find(|(_, argument)| argument.offset() == fixup.kernarg_offset() as u64)
+-                .filter(|(_, argument)| argument.value_kind() == ExplicitValueKind::GlobalBuffer)
+-                .ok_or(Error::Mismatch("fixup does not name a global argument"))?;
+-            let name = argument
+-                .name()
+-                .ok_or(Error::Mismatch("unnamed global argument"))?;
+-            let buffer = request
+-                .buffers
+-                .get(fixup.buffer_index())
+-                .ok_or(Error::Mismatch("fixup buffer index"))?;
+-            let byte_len = buffer
+-                .bytes()
+-                .len()
+-                .checked_sub(fixup.buffer_byte_offset())
+-                .filter(|&length| length != 0)
+-                .ok_or(Error::Mismatch("fixup buffer extent"))?;
+-            let access = match buffer_policies[fixup.buffer_index()].access {
+-                Gfx942RuntimeBufferAccessV1::ReadOnly => ArgumentAccess::ReadOnly,
+-                Gfx942RuntimeBufferAccessV1::WriteOnly => ArgumentAccess::WriteOnly,
+-                Gfx942RuntimeBufferAccessV1::ReadWrite => ArgumentAccess::ReadWrite,
+-            };
+-            rows.push((
+-                ordinal,
+-                name.to_owned(),
+-                argument.offset(),
+-                fixup.required_alignment(),
+-                access,
+-            ));
+-            bindings.push(Gfx942DispatchBufferBindingV1::new(
+-                ordinal,
+-                fixup.buffer_index(),
+-                fixup.buffer_byte_offset() as u64,
+-                byte_len as u64,
+-            ));
+-        }
+-        let abi = rows
+-            .iter()
+-            .map(|(ordinal, name, offset, alignment, access)| {
+-                KernelGlobalBufferAbiV1::new(*ordinal, name, *offset, *alignment, *access)
+-            })
+-            .collect::<Vec<_>>();
+-        let kernel = kernel
+-            .reconcile_dispatch_abi(description.dispatch_contract_sha256, &abi)
+-            .map_err(Error::Abi)?;
++        let (kernel, bindings) = reconcile_projection_abi_v1(
++            kernel,
++            description.dispatch_contract_sha256,
++            &request.buffers,
++            &request.pointer_fixups,
++            &buffer_policies,
++        )?;
+         let lengths = request
+             .buffers
+             .iter()
+@@ -350,6 +353,84 @@ impl PreparedGfx942RuntimeDispatchV1 {
+     }
+ }
+ 
++fn reconcile_projection_abi_v1<'a>(
++    kernel: ValidatedKernelEnvelope<'a>,
++    dispatch_contract_sha256: [u8; 32],
++    buffers: &[Gfx942KfdDispatchBufferV1],
++    pointer_fixups: &[Gfx942KfdDispatchPointerFixupV1],
++    policies: &[Gfx942RuntimePreparedBufferPolicyV1],
++) -> Result<
++    (
++        ValidatedKernelEnvelope<'a>,
++        Vec<Gfx942DispatchBufferBindingV1>,
++    ),
++    Gfx942RuntimeProjectionErrorV1,
++> {
++    use Gfx942RuntimeProjectionErrorV1 as Error;
++    if !complete_buffer_policies_match(policies, buffers) {
++        return Err(Error::Mismatch("complete buffer-policy roster"));
++    }
++    let arguments = kernel.selected_kernel().explicit_arguments();
++    if arguments
++        .iter()
++        .filter(|arg| arg.value_kind() == ExplicitValueKind::GlobalBuffer)
++        .count()
++        != pointer_fixups.len()
++    {
++        return Err(Error::Mismatch("complete global-buffer fixup roster"));
++    }
++    let mut rows = Vec::with_capacity(pointer_fixups.len());
++    let mut bindings = Vec::with_capacity(pointer_fixups.len());
++    for fixup in pointer_fixups {
++        let (ordinal, argument) = arguments
++            .iter()
++            .enumerate()
++            .find(|(_, argument)| argument.offset() == fixup.kernarg_offset() as u64)
++            .filter(|(_, argument)| argument.value_kind() == ExplicitValueKind::GlobalBuffer)
++            .ok_or(Error::Mismatch("fixup does not name a global argument"))?;
++        let name = argument
++            .name()
++            .ok_or(Error::Mismatch("unnamed global argument"))?;
++        let buffer = buffers
++            .get(fixup.buffer_index())
++            .ok_or(Error::Mismatch("fixup buffer index"))?;
++        let byte_len = buffer
++            .bytes()
++            .len()
++            .checked_sub(fixup.buffer_byte_offset())
++            .filter(|&length| length != 0)
++            .ok_or(Error::Mismatch("fixup buffer extent"))?;
++        let access = match policies[fixup.buffer_index()].access {
++            Gfx942RuntimeBufferAccessV1::ReadOnly => ArgumentAccess::ReadOnly,
++            Gfx942RuntimeBufferAccessV1::WriteOnly => ArgumentAccess::WriteOnly,
++            Gfx942RuntimeBufferAccessV1::ReadWrite => ArgumentAccess::ReadWrite,
++        };
++        rows.push((
++            ordinal,
++            name.to_owned(),
++            argument.offset(),
++            fixup.required_alignment(),
++            access,
++        ));
++        bindings.push(Gfx942DispatchBufferBindingV1::new(
++            ordinal,
++            fixup.buffer_index(),
++            fixup.buffer_byte_offset() as u64,
++            byte_len as u64,
++        ));
++    }
++    let abi = rows
++        .iter()
++        .map(|(ordinal, name, offset, alignment, access)| {
++            KernelGlobalBufferAbiV1::new(*ordinal, name, *offset, *alignment, *access)
++        })
++        .collect::<Vec<_>>();
++    let kernel = kernel
++        .reconcile_dispatch_abi(dispatch_contract_sha256, &abi)
++        .map_err(Error::Abi)?;
++    Ok((kernel, bindings))
++}
++
+ fn validate_projection_source(
+     description: &RuntimeDispatchDescriptionV1,
+     request: &Gfx942KfdDispatchRequestPartsV1,
+diff --git a/crates/fe2o3-runtime/src/persistent_projection/tests.rs b/crates/fe2o3-runtime/src/persistent_projection/tests.rs
+index da07d0b0f..95d445715 100644
+--- a/crates/fe2o3-runtime/src/persistent_projection/tests.rs
++++ b/crates/fe2o3-runtime/src/persistent_projection/tests.rs
+@@ -50,6 +50,51 @@ fn generated_roster_rejects_policy_count_length_access_and_read_only_seed_mismat
+     }
+ }
+ 
++#[test]
++fn generated_native_inputs_reject_retained_program_and_abi_corruption_before_callback() {
++    for axis in 0..10 {
++        let (hsaco, mut projection) = crate::authorized_execution::tests::source_projection();
++        let authority = crate::authorized_execution::tests::source_authority(&projection);
++        let expected =
++            crate::generated_source::GeneratedHostRosterV1::from_projection(&projection).unwrap();
++        match axis {
++            0 => projection.data.executable_image[0] ^= 1,
++            1 => projection.data.description.descriptor_offset += 64,
++            2 => projection.data.kernarg_alignment *= 2,
++            3 => projection.data.description.static_group_segment_bytes += 1,
++            4 => projection.data.description.packet_group_segment_bytes += 1,
++            5 => projection.data.description.dynamic_group_segment_bytes += 1,
++            6 => {
++                projection.data.pointer_fixups[0] = Gfx942KfdDispatchPointerFixupV1::new(8, 0, 0, 4)
++            }
++            7 => {
++                projection.data.pointer_fixups[0] = Gfx942KfdDispatchPointerFixupV1::new(0, 3, 0, 4)
++            }
++            8 => {
++                projection.data.pointer_fixups[0] =
++                    Gfx942KfdDispatchPointerFixupV1::new(0, 0, 16, 4)
++            }
++            _ => {
++                projection.data.pointer_fixups[0] = Gfx942KfdDispatchPointerFixupV1::new(0, 0, 0, 3)
++            }
++        }
++        let storage = projection.into_generated_storage_v1();
++        let source = crate::RuntimeGfx942GeneratedSourceV1::from_generated_storage(
++            &storage, &hsaco, &authority,
++        );
++        assert!(
++            matches!(
++                source.with_native_inputs_v1(7, &expected, |_, _| {
++                    panic!("invalid retained program reached callback")
++                }),
++                Err(crate::generated_source::GeneratedNativeInputErrorV1::Projection(_))
++            ),
++            "axis {axis}"
++        );
++        assert!(storage.control_available());
++    }
++}
++
+ #[test]
+ fn persistent_projection_retains_complete_roster_identity_timeout_and_allocations() {
+     let hsaco = synthetic_cov6::preparation_module();

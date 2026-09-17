@@ -1,0 +1,4 @@
+gnu/kfd: 1389 passed, 0 ignored (prior qualified identical binary); exact executable/roster checked
+gnu/runtime: 852 passed, 11 ignored (fresh run); exact executable/roster checked
+musl/kfd: 1389 passed, 0 ignored (prior qualified identical binary); exact executable/roster checked
+musl/runtime: 852 passed, 11 ignored (fresh run); exact executable/roster checked
