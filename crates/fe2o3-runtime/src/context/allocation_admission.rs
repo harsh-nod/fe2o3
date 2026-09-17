@@ -189,7 +189,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         id: RuntimeAllocationIdV1,
         backend_allocation: u64,
     ) -> Result<(), RuntimeBackendFailureV1<B::Error>> {
-        if !self.allocation_admission.retained.contains_key(&id) {
+        if !self.allocation_admission.retained.contains_key(&id) && self.versions.is_none() {
             return self.backend.release_allocation_v1(backend_allocation);
         }
         match catch_unwind(AssertUnwindSafe(|| {

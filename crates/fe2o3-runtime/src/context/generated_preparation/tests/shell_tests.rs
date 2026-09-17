@@ -20,11 +20,24 @@ struct Snapshot {
     next: u64,
     generated: Option<u64>,
     usage: Option<crate::RuntimeResourceCreditUsageV1>,
+    journal: Option<RuntimeContextJournalUsageV1>,
 }
 
 impl Fixture {
     fn new(limits: Option<(u64, usize)>) -> Self {
-        let mut context = context();
+        Self::new_with_journal(limits, None)
+    }
+
+    fn new_with_journal(limits: Option<(u64, usize)>, capacity: Option<usize>) -> Self {
+        let mut context = match capacity {
+            Some(capacity) => RuntimeContextV1::open_with_version_journal_v1(
+                KfdRuntimeBackendV1::mock(),
+                capacity,
+                2,
+            )
+            .unwrap(),
+            None => context(),
+        };
         let device = context.devices()[0].id();
         if let Some((bytes, records)) = limits {
             context
@@ -71,6 +84,7 @@ impl Fixture {
                 .context
                 .allocation_admission_usage_v1(self.device)
                 .unwrap(),
+            journal: self.context.version_journal_usage_v1(),
         }
     }
 
@@ -121,6 +135,96 @@ fn generated_readiness_requires_exact_empty_hold_without_changing_credits() {
             .is_err()
     );
     assert_eq!(fixture.snapshot(), retired);
+}
+
+#[test]
+fn generated_journal_enrolls_and_retires_the_complete_roster_with_original_ids() {
+    for credits in [false, true] {
+        let mut fixture = Fixture::new_with_journal(credits.then_some((60, 3)), Some(3));
+        let next = fixture.context.next_identity;
+        let count = fixture.roster.count;
+        fixture.install().unwrap();
+        assert_eq!(fixture.context.next_identity, next + count as u64);
+        let usage = fixture.context.version_journal_usage_v1().unwrap();
+        assert_eq!(usage.allocation_records, count);
+        assert_eq!(usage.provisional_records, 0);
+        let mut ids: Vec<_> = fixture.context.allocations.keys().copied().collect();
+        ids.sort_unstable();
+        for (index, id) in ids.iter().enumerate() {
+            let record = fixture.context.allocations[id];
+            assert_eq!(id.get(), next + index as u64);
+            assert_eq!(record.journal.unwrap().key.local, id.local);
+            fixture
+                .context
+                .versions
+                .as_ref()
+                .unwrap()
+                .validate_live(*id, &record)
+                .unwrap();
+        }
+        fixture.retire();
+        assert_eq!(
+            fixture
+                .context
+                .version_journal_usage_v1()
+                .unwrap()
+                .allocation_records,
+            0
+        );
+        assert!(fixture.context.cleanup().is_complete());
+    }
+}
+
+#[test]
+fn generated_journal_capacity_rejection_leaves_entire_roster_and_identity_unchanged() {
+    let mut fixture = Fixture::new_with_journal(Some((60, 3)), Some(2));
+    assert_eq!(fixture.roster.count, 3);
+    let before = fixture.snapshot();
+    assert!(matches!(
+        fixture.install(),
+        Err(RuntimeErrorV1::Validation(
+            RuntimeValidationErrorV1::Capacity
+        ))
+    ));
+    assert_eq!(fixture.snapshot(), before);
+    fixture
+        .context
+        .release_unpublished_hold_v1(&fixture.hold)
+        .unwrap();
+    assert!(fixture.context.cleanup().is_complete());
+}
+
+#[test]
+fn generated_journal_bad_member_never_partially_disposes_a_roster() {
+    for index in 0..3 {
+        let mut fixture = Fixture::new_with_journal(Some((60, 3)), Some(3));
+        fixture.install().unwrap();
+        let mut ids: Vec<_> = fixture.context.allocations.keys().copied().collect();
+        ids.sort_unstable();
+        fixture
+            .context
+            .allocations
+            .get_mut(&ids[index])
+            .unwrap()
+            .journal = None;
+        let before = fixture.snapshot();
+        assert!(
+            fixture
+                .context
+                .retire_generated_shells_v1(&fixture.hold)
+                .is_err()
+        );
+        assert_eq!(fixture.snapshot(), before);
+        assert!(fixture.context.is_terminal());
+        assert!(
+            fixture
+                .context
+                .retire_generated_shells_v1(&fixture.hold)
+                .is_err()
+        );
+        assert_eq!(fixture.snapshot(), before);
+        assert!(!fixture.context.cleanup().is_complete());
+    }
 }
 
 #[test]

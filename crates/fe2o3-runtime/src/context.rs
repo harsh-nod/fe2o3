@@ -19,10 +19,13 @@ mod generated_issue;
 mod generated_preparation;
 mod generated_shells;
 mod unpublished;
+mod versions;
 use allocation_admission::ContextAllocationAdmissionV1;
 pub use drain_capture::*;
 pub use generated_preparation::*;
 pub(crate) use unpublished::ContextUnpublishedHoldV1;
+use versions::ContextVersionsV1;
+pub use versions::{RuntimeContextJournalUsageV1, RuntimeContextOpenFailureV1};
 
 /// Maximum number of devices retained by one runtime context.
 pub const MAX_RUNTIME_DEVICES_V1: usize = 256;
@@ -909,6 +912,7 @@ pub struct RuntimeCleanupReportV1<E> {
     terminal: bool,
     graph_reserved: bool,
     allocation_credit_records: usize,
+    allocation_journal_records: usize,
 }
 
 impl<E> RuntimeCleanupReportV1<E> {
@@ -929,6 +933,7 @@ impl<E> RuntimeCleanupReportV1<E> {
             && !self.graph_reserved
             && self.retained.is_empty()
             && self.allocation_credit_records == 0
+            && self.allocation_journal_records == 0
     }
 
     pub const fn is_graph_reserved(&self) -> bool {
@@ -939,6 +944,11 @@ impl<E> RuntimeCleanupReportV1<E> {
     /// quarantined attempts. This count is not a full native resource inventory.
     pub const fn allocation_credit_records_v1(&self) -> usize {
         self.allocation_credit_records
+    }
+
+    /// Opt-in journal records, including attempts with no returned handle.
+    pub const fn allocation_journal_records_v1(&self) -> usize {
+        self.allocation_journal_records
     }
 }
 
@@ -964,6 +974,7 @@ struct AllocationRecordV1 {
     device: RuntimeDeviceIdV1,
     kind: RuntimeMemoryKindV1,
     byte_len: u64,
+    journal: Option<fe2o3_runtime_model::ContextAllocationReferenceV1>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1030,6 +1041,7 @@ pub struct RuntimeContextV1<B: RuntimeBackendV1> {
     allocations: HashMap<RuntimeAllocationIdV1, AllocationRecordV1>,
     backend_allocations: HashSet<u64>,
     allocation_admission: ContextAllocationAdmissionV1,
+    versions: Option<ContextVersionsV1>,
     modules: HashMap<RuntimeModuleIdV1, ModuleRecordV1>,
     backend_modules: HashSet<u64>,
     kernels: HashMap<u64, KernelRecordV1>,
@@ -1132,41 +1144,70 @@ impl<B: RuntimeBackendV1> RuntimeContextShutdownFailureV1<B> {
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
-    pub fn open(mut backend: B) -> Result<Self, RuntimeErrorV1<B::Error>> {
-        let descriptions = backend.enumerate_devices_v1().map_err(map_backend_error)?;
-        if descriptions.len() > MAX_RUNTIME_DEVICES_V1 {
-            return Err(RuntimeValidationErrorV1::Capacity.into());
+    pub fn open(backend: B) -> Result<Self, RuntimeErrorV1<B::Error>> {
+        Self::open_configured_v1(backend, None).map_err(|failure| failure.error)
+    }
+
+    fn open_configured_v1(
+        mut backend: B,
+        journal: Option<(usize, usize)>,
+    ) -> Result<Self, RuntimeContextOpenFailureV1<B>> {
+        if journal.is_some_and(|(allocations, writers)| {
+            let bounds = 1..=fe2o3_runtime_model::CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1;
+            !bounds.contains(&allocations) || !bounds.contains(&writers)
+        }) {
+            return Err(RuntimeContextOpenFailureV1 {
+                backend,
+                error: RuntimeValidationErrorV1::Capacity.into(),
+            });
         }
-        for (index, device) in descriptions.iter().enumerate() {
-            if device.backend_device == 0
-                || device.name.is_empty()
-                || device.name.len() > MAX_RUNTIME_DEVICE_NAME_BYTES_V1
-                || device.target.is_empty()
-                || device.target.len() > MAX_RUNTIME_DEVICE_TARGET_BYTES_V1
-                || descriptions[..index]
-                    .iter()
-                    .any(|prior| prior.backend_device == device.backend_device)
-            {
-                return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
+        let initialization = (|| {
+            let descriptions = backend.enumerate_devices_v1().map_err(map_backend_error)?;
+            if descriptions.len() > MAX_RUNTIME_DEVICES_V1 {
+                return Err(RuntimeValidationErrorV1::Capacity.into());
             }
-        }
-        let context_generation = NEXT_CONTEXT_GENERATION_V1
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
-                generation.checked_add(1)
-            })
-            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
-        let devices = descriptions
-            .into_iter()
-            .enumerate()
-            .map(|(index, device)| RuntimeDeviceV1 {
-                id: RuntimeDeviceIdV1::new(context_generation, index as u64 + 1),
-                backend_device: device.backend_device,
-                name: device.name,
-                target: device.target,
-                global_memory_bytes: device.global_memory_bytes,
-                capabilities: device.capabilities,
-            })
-            .collect();
+            for (index, device) in descriptions.iter().enumerate() {
+                if device.backend_device == 0
+                    || device.name.is_empty()
+                    || device.name.len() > MAX_RUNTIME_DEVICE_NAME_BYTES_V1
+                    || device.target.is_empty()
+                    || device.target.len() > MAX_RUNTIME_DEVICE_TARGET_BYTES_V1
+                    || descriptions[..index]
+                        .iter()
+                        .any(|prior| prior.backend_device == device.backend_device)
+                {
+                    return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
+                }
+            }
+            let context_generation = NEXT_CONTEXT_GENERATION_V1
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
+                    generation.checked_add(1)
+                })
+                .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+            let devices = descriptions
+                .into_iter()
+                .enumerate()
+                .map(|(index, device)| RuntimeDeviceV1 {
+                    id: RuntimeDeviceIdV1::new(context_generation, index as u64 + 1),
+                    backend_device: device.backend_device,
+                    name: device.name,
+                    target: device.target,
+                    global_memory_bytes: device.global_memory_bytes,
+                    capabilities: device.capabilities,
+                })
+                .collect();
+            let versions = journal
+                .map(|(allocations, writers)| {
+                    ContextVersionsV1::new(context_generation, allocations, writers)
+                        .map_err(|_| RuntimeValidationErrorV1::Capacity)
+                })
+                .transpose()?;
+            Ok((context_generation, devices, versions))
+        })();
+        let (context_generation, devices, versions) = match initialization {
+            Ok(initialized) => initialized,
+            Err(error) => return Err(RuntimeContextOpenFailureV1 { backend, error }),
+        };
         Ok(Self {
             backend,
             context_generation,
@@ -1176,6 +1217,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             allocations: HashMap::new(),
             backend_allocations: HashSet::new(),
             allocation_admission: ContextAllocationAdmissionV1::default(),
+            versions,
             modules: HashMap::new(),
             backend_modules: HashSet::new(),
             kernels: HashMap::new(),
@@ -1381,11 +1423,12 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         allocation_ids.sort_unstable();
         for id in allocation_ids {
             let record = self.allocations[&id];
+            if self.validate_journal_allocation_v1(id, &record).is_err() {
+                return self.cleanup_report(failures);
+            }
             match self.release_admitted_allocation_backend_v1(id, record.backend_allocation) {
                 Ok(()) => {
-                    self.dispose_allocation_credits_v1(id);
-                    self.allocations.remove(&id);
-                    self.backend_allocations.remove(&record.backend_allocation);
+                    self.finish_allocation_disposal_v1(id, record);
                 }
                 Err(failure) => {
                     let terminal = matches!(failure, RuntimeBackendFailureV1::Terminal(_));
@@ -1437,6 +1480,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             terminal: self.terminal,
             graph_reserved: self.graph_reservation.is_some(),
             allocation_credit_records: self.allocation_admission.retained_records(),
+            allocation_journal_records: self
+                .versions
+                .as_ref()
+                .map_or(0, ContextVersionsV1::retained_records),
         }
     }
 
@@ -1754,11 +1801,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(RuntimeValidationErrorV1::Unsupported.into());
         }
         let backend_device = device_record.backend_device;
+        self.preflight_journal_capacity_v1(1)?;
         let id = RuntimeAllocationIdV1::new(self.context_generation, self.next_id()?);
         if self
             .allocation_admission
             .prepare_registry(device)
             .map_err(|_| RuntimeValidationErrorV1::Capacity)?
+            || self.versions.is_some()
         {
             self.allocations
                 .try_reserve(1)
@@ -1767,16 +1816,21 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 .try_reserve(1)
                 .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
         }
-        let credits = self
-            .allocation_admission
-            .reserve(device, byte_len)
-            .map_err(|error| {
+        let enrollment = self.enroll_journal_allocation_v1(id, device, byte_len)?;
+        let credit_result = self.guard_journal_unwind_v1(|context| {
+            context.allocation_admission.reserve(device, byte_len)
+        });
+        let credits = match credit_result {
+            Ok(credits) => credits,
+            Err(error) => {
+                self.dispose_journal_provisional_v1(enrollment);
                 if error == crate::RuntimeResourceCreditErrorV1::Invariant {
                     self.terminal = true;
                 }
-                RuntimeValidationErrorV1::Capacity
-            })?;
-        let result = if credits.is_some() {
+                return Err(RuntimeValidationErrorV1::Capacity.into());
+            }
+        };
+        let result = if credits.is_some() || self.versions.is_some() {
             match catch_unwind(AssertUnwindSafe(|| {
                 self.backend
                     .allocate_with_outcome_v1(backend_device, kind, byte_len, alignment)
@@ -1803,6 +1857,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         "allocation credit owner invariant failed after settlement: {invariant:?}"
                     );
                 }
+                self.dispose_journal_provisional_v1(enrollment);
                 return Err(RuntimeErrorV1::BackendQuiescent(error));
             }
             Err(failure) => {
@@ -1818,10 +1873,15 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                         credits.quarantine();
                     }
                 }
+                if matches!(&failure, RuntimeBackendFailureV1::Rejected(_)) {
+                    self.dispose_journal_provisional_v1(enrollment);
+                }
                 return self.backend_result(Err(failure));
             }
         };
-        self.allocation_admission.attach(id, credits);
+        let journal = enrollment
+            .as_ref()
+            .map(versions::AllocationEnrollmentV1::reference);
         let protocol_error = self.backend_handle_protocol_error(
             RuntimeBackendResourceKindV1::Allocation,
             backend_allocation,
@@ -1833,10 +1893,26 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
                 device,
                 kind,
                 byte_len,
+                journal,
             },
         );
         if protocol_error.is_none() {
             self.backend_allocations.insert(backend_allocation);
+        }
+        // Root the returned handle before any credit or journal invariant can
+        // unwind. A partial metadata commit must retain it in a sealed Context.
+        let guarded = credits.is_some() || self.versions.is_some();
+        let commit = |context: &mut Self| {
+            context.allocation_admission.attach(id, credits);
+            context.commit_journal_allocation_v1(enrollment);
+        };
+        if guarded {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| commit(self))) {
+                self.terminal = true;
+                std::panic::resume_unwind(payload);
+            }
+        } else {
+            commit(self);
         }
         self.seal_backend_protocol(protocol_error, id)
     }
@@ -1850,12 +1926,11 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .allocations
             .get(&allocation)
             .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
+        self.validate_journal_allocation_v1(allocation, &record)?;
         let result =
             self.release_admitted_allocation_backend_v1(allocation, record.backend_allocation);
         self.backend_result(result)?;
-        self.dispose_allocation_credits_v1(allocation);
-        self.allocations.remove(&allocation);
-        self.backend_allocations.remove(&record.backend_allocation);
+        self.finish_allocation_disposal_v1(allocation, record);
         Ok(())
     }
 
@@ -3333,6 +3408,7 @@ mod tests {
     mod allocation_admission_tests;
     mod allocation_outcome_tests;
     mod submission_identity_tests;
+    mod version_journal_tests;
 
     #[derive(Debug)]
     struct MockError(&'static str);
@@ -3422,6 +3498,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct MockBackend {
         next: u64,
+        enumeration_calls: usize,
         allocation_calls: usize,
         allocation_failure: MockMemoryFailure,
         release_allocation_failure: MockMemoryFailure,
@@ -3637,6 +3714,7 @@ mod tests {
         fn enumerate_devices_v1(
             &mut self,
         ) -> Result<Vec<BackendDeviceDescriptionV1>, RuntimeBackendFailureV1<Self::Error>> {
+            self.enumeration_calls += 1;
             let capabilities = RuntimeCapabilitiesV1 {
                 typed_async_launch: true,
                 streams: true,

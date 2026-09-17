@@ -35,6 +35,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             return Err(RuntimeValidationErrorV1::Unsupported.into());
         }
         let backend_device = record.backend_device;
+        self.preflight_journal_capacity_v1(roster.count)?;
         let next_identity = self
             .next_identity
             .checked_add(roster.count as u64)
@@ -99,33 +100,64 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 RuntimeValidationErrorV1::Capacity
             })?;
         let mut credits = credits.map(|members| members.into_vec().into_iter());
+        let mut journal = [None; fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_DATA_V1];
+        self.guard_journal_unwind_v1(|context| -> Result<(), RuntimeValidationErrorV1> {
+            if let Some(versions) = context.versions.as_mut() {
+                let mut entries = [versions::enrollment(logical[0], device, lengths[0]);
+                    fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_DATA_V1];
+                for (index, &id) in logical.iter().enumerate() {
+                    entries[index] = versions::enrollment(id, device, lengths[index]);
+                }
+                let result =
+                    versions.enroll_roster(&entries[..roster.count], &mut journal[..roster.count]);
+                context.journal_result_v1(result)?;
+            }
+            Ok(())
+        })?;
         // Every capacity and identity check precedes this non-reentrant commit.
         // Root Context records/credits before transferring control into the backend.
-        self.next_identity = next_identity;
-        for member in plan.members[..plan.count].iter().flatten() {
-            self.allocations.insert(
-                member.logical,
-                AllocationRecordV1 {
-                    backend_allocation: member.backend,
-                    device,
-                    kind: member.description.kind,
-                    byte_len: member.description.byte_len,
-                },
-            );
-            assert!(self.backend_allocations.insert(member.backend));
-            self.allocation_admission.attach(
-                member.logical,
-                credits
+        self.guard_journal_unwind_v1(|context| {
+            context.next_identity = next_identity;
+            for (index, member) in plan.members[..plan.count].iter().flatten().enumerate() {
+                context.allocations.insert(
+                    member.logical,
+                    AllocationRecordV1 {
+                        backend_allocation: member.backend,
+                        device,
+                        kind: member.description.kind,
+                        byte_len: member.description.byte_len,
+                        journal: journal[index],
+                    },
+                );
+                assert!(context.backend_allocations.insert(member.backend));
+            }
+            for member in plan.members[..plan.count].iter().flatten() {
+                context.allocation_admission.attach(
+                    member.logical,
+                    credits
+                        .as_mut()
+                        .map(|members| members.next().expect("complete credit roster").retain()),
+                );
+            }
+            for reference in journal[..roster.count].iter().flatten() {
+                let result = context
+                    .versions
                     .as_mut()
-                    .map(|members| members.next().expect("complete credit roster").retain()),
-            );
-        }
-        self.streams
-            .get_mut(&hold.stream())
-            .expect("held stream")
-            .generated = Some(plan.key);
-        self.backend
-            .commit_generated_shells_v1(plan, source, roster);
+                    .expect("configured journal")
+                    .commit_live(*reference);
+                context
+                    .journal_result_v1(result)
+                    .expect("generated journal commit invariant");
+            }
+            context
+                .streams
+                .get_mut(&hold.stream())
+                .expect("held stream")
+                .generated = Some(plan.key);
+            context
+                .backend
+                .commit_generated_shells_v1(plan, source, roster);
+        });
         Ok(())
     }
 
@@ -137,21 +169,49 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         if !self.backend.validate_generated_shell_disposal_v1(&plan) {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
         }
-        self.backend.dispose_generated_shells_v1(&plan);
-        for member in plan.members[..plan.count].iter().flatten() {
-            self.allocations.remove(&member.logical);
-            self.backend_allocations.remove(&member.backend);
-            self.dispose_allocation_credits_v1(member.logical);
+        let mut references = [fe2o3_runtime_model::ContextAllocationReferenceV1 {
+            slot: 0,
+            key: fe2o3_runtime_model::ContextAllocationKeyV1 {
+                context_generation: 0,
+                local: 0,
+            },
+        }; fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_DATA_V1];
+        if let Some(versions) = self.versions.as_ref() {
+            let result = (|| {
+                for (index, member) in plan.members[..plan.count].iter().flatten().enumerate() {
+                    references[index] = versions
+                        .validate_live(member.logical, &self.allocations[&member.logical])?;
+                }
+                versions.validate_retirement(&references[..plan.count])
+            })();
+            self.journal_result_v1(result)?;
         }
-        self.streams
-            .get_mut(&hold.stream())
-            .expect("held stream")
-            .generated = None;
+        self.guard_journal_unwind_v1(|context| {
+            context.backend.dispose_generated_shells_v1(&plan);
+            for member in plan.members[..plan.count].iter().flatten() {
+                context.dispose_allocation_credits_v1(member.logical);
+            }
+            if let Some(versions) = context.versions.as_mut() {
+                let result = versions.retire(&references[..plan.count]);
+                context
+                    .journal_result_v1(result)
+                    .expect("generated journal disposal invariant");
+            }
+            for member in plan.members[..plan.count].iter().flatten() {
+                context.allocations.remove(&member.logical);
+                context.backend_allocations.remove(&member.backend);
+            }
+            context
+                .streams
+                .get_mut(&hold.stream())
+                .expect("held stream")
+                .generated = None;
+        });
         Ok(())
     }
 
     pub(super) fn generated_plan_for_hold_v1(
-        &self,
+        &mut self,
         hold: &ContextUnpublishedHoldV1,
     ) -> Result<crate::kfd_backend::GeneratedShellPlanV1, RuntimeErrorV1<KfdRuntimeBackendErrorV1>>
     {
@@ -181,6 +241,18 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
         }
+        let result = plan.members[..plan.count]
+            .iter()
+            .flatten()
+            .try_for_each(|member| {
+                let record = &self.allocations[&member.logical];
+                match &self.versions {
+                    Some(versions) => versions.validate_live(member.logical, record).map(|_| ()),
+                    None if record.journal.is_none() => Ok(()),
+                    None => Err(fe2o3_runtime_model::ContextVersionJournalErrorV1::InvalidState),
+                }
+            });
+        self.journal_result_v1(result)?;
         Ok(plan)
     }
 }

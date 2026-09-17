@@ -176,6 +176,72 @@ impl RuntimeBackendV1 for AllocationOnlyBackend {
 }
 
 #[test]
+fn journal_settled_no_owner_refunds_without_replacing_diagnostic_or_panic_payload() {
+    for credits in [false, true] {
+        for panic in [false, true] {
+            let mut context = RuntimeContextV1::open_with_version_journal_v1(
+                AllocationOnlyBackend::default(),
+                1,
+                1,
+            )
+            .unwrap();
+            let device = context.devices()[0].id();
+            if credits {
+                context
+                    .configure_allocation_admission_v1(device, 8, 1)
+                    .unwrap();
+            }
+            let drops = Arc::new(AtomicUsize::new(0));
+            let diagnostic = Box::new(Diagnostic {
+                drops: drops.clone(),
+            });
+            let pointer = &*diagnostic as *const Diagnostic;
+            context.backend.diagnostic = Some(diagnostic);
+            context.backend.panic_before_outcome = panic;
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                context.allocate(device, RuntimeMemoryKindV1::DeviceLocal, 8, 8)
+            }));
+            if panic {
+                let payload = result.unwrap_err().downcast::<Diagnostic>().unwrap();
+                assert_eq!(&*payload as *const Diagnostic, pointer);
+                assert!(context.is_terminal());
+                assert_eq!(
+                    context
+                        .version_journal_usage_v1()
+                        .unwrap()
+                        .provisional_records,
+                    1
+                );
+                drop(payload);
+            } else {
+                let Err(RuntimeErrorV1::BackendQuiescent(error)) = result.unwrap() else {
+                    panic!("wrong diagnostic class");
+                };
+                assert_eq!(&*error as *const Diagnostic, pointer);
+                assert_eq!(
+                    context
+                        .version_journal_usage_v1()
+                        .unwrap()
+                        .allocation_records,
+                    0
+                );
+                assert!(context.cleanup().is_complete());
+                drop(error);
+            }
+            assert_eq!(context.next_identity, 2);
+            assert_eq!(context.backend.attempts, 1);
+            assert_eq!(drops.load(Ordering::SeqCst), 1);
+            let report = context.cleanup();
+            assert_eq!(
+                report.allocation_credit_records_v1(),
+                usize::from(credits && panic)
+            );
+            assert_eq!(report.allocation_journal_records_v1(), usize::from(panic));
+        }
+    }
+}
+
+#[test]
 fn allocation_settlement_preserves_diagnostic_identity_neighbors_and_exact_credit_vector() {
     for configured in [false, true] {
         for neighbor in [false, true] {

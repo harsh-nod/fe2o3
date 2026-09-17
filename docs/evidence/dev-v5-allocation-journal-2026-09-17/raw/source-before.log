@@ -1,0 +1,13 @@
+crates/fe2o3-runtime-model/src/context_version_journal.rs: OK
+crates/fe2o3-runtime-model/src/context_version_journal/allocation_lifecycle.rs: OK
+crates/fe2o3-runtime-model/src/context_version_journal/allocation_lifecycle_tests.rs: OK
+crates/fe2o3-runtime-model/src/context_version_journal/tests.rs: OK
+crates/fe2o3-runtime/src/context.rs: OK
+crates/fe2o3-runtime/src/context/allocation_admission.rs: OK
+crates/fe2o3-runtime/src/context/generated_preparation/tests/shell_tests.rs: OK
+crates/fe2o3-runtime/src/context/generated_shells.rs: OK
+crates/fe2o3-runtime/src/context/tests/allocation_outcome_tests.rs: OK
+crates/fe2o3-runtime/src/context/tests/version_journal_tests.rs: OK
+crates/fe2o3-runtime/src/context/versions.rs: OK
+docs/runtime-context-version-journal-allocation-v1.md: OK
+docs/runtime-context-version-journal-v1.md: OK

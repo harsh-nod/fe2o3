@@ -1,0 +1,1 @@
+bash -c diff\ -u\ \<\(rg\ \"\^test\ \[\^\ \]+\ \\.\\.\\.\"\ docs/evidence/dev-v5-allocation-journal-2026-09-17/raw/gnu.log\ \|\ sort\)\ \<\(rg\ \"\^test\ \[\^\ \]+\ \\.\\.\\.\"\ docs/evidence/dev-v5-allocation-journal-2026-09-17/raw/musl.log\ \|\ sort\) 

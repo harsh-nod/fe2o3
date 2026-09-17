@@ -4,17 +4,19 @@
 
 R108 locally accepts VER-1A.2a's bounded writer-issuance model, with
 [retained source/test evidence](evidence/local-r108-context-writer-issuance-2026-09-12/README.md).
-No production Context-wide journal, new formal theorem or cross-run lease
-implementation is claimed.
+The [V5 allocation foundation](runtime-context-version-journal-allocation-v1.md)
+adds a construction-only production allocation-metadata consumer. It does not
+yet track writers or expose trustworthy lineage. No new formal theorem or
+cross-run lease implementation is claimed.
 Existing R65 graph versions remain graph-local history. This journal records
 mutation lineage, not initialized contents, native currentness, disposal
 authority or successful kernel semantics.
 
 R98 accepted the [contract/inventory only](evidence/local-r98-completion-contract-2026-09-11/README.md)
 against signed R97 `1b53ef417d0f4184e2b4e6024b37271b5f719832`.
-Resources next implements V2/.2b allocation membership and Begin, followed by
-V3 settlement and V4 authenticated proofs. The model remains separate from the
-actual bounded Context journal and its correspondence in V5/VER-1A.3.
+The subsequent V2/V3 models and V4-J1 issuance proof remain separate from
+complete production correspondence in V5/V6. Allocation integration is one
+prerequisite, not completion of those milestones.
 
 VER-1A first provides an explicitly opt-in bounded profile. It must not silently
 restrict existing ordinary-runtime behavior. Complete VER-1B hook coverage,

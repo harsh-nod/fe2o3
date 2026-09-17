@@ -752,3 +752,6 @@ mod membership;
 
 #[path = "settlement_tests.rs"]
 mod settlement;
+
+#[path = "allocation_lifecycle_tests.rs"]
+mod allocation_lifecycle;
