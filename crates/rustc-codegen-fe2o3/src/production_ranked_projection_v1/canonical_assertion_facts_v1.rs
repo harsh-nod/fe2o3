@@ -18,7 +18,7 @@ use fe2o3_kernel_ir::{
 use fe2o3_lower_mir_kernel::{
     ProductionArgumentCoverageV1, ProductionPreRankedKirOwnerV1, ProductionSliceAccessSiteV1,
     SemanticKirAssertConditionOutcomeV1, SemanticKirAssertOriginErrorV1,
-    SemanticKirAssertOriginsV1,
+    SemanticKirAssertOriginsV1, SemanticKirPrivateArrayQueryErrorV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{SemanticBlockIdV1, SemanticFunctionIdV1};
 use fe2o3_pliron::{CanonicalAnalysisScopeErrorV1, with_canonical_analysis_scope_v1};
@@ -30,6 +30,7 @@ pub(crate) enum CanonicalAssertionErrorV1 {
     Inventory(CanonicalKirInventoryErrorV1),
     Sparse(CanonicalKirSparseErrorV1),
     Origin(SemanticKirAssertOriginErrorV1),
+    PrivateArray(SemanticKirPrivateArrayQueryErrorV1),
     CallEffects(fe2o3_kernel_analysis::CanonicalKirCallEffectErrorV1),
     Binding(&'static str),
 }
@@ -40,6 +41,7 @@ impl fmt::Display for CanonicalAssertionErrorV1 {
             Self::Inventory(error) => error.fmt(f),
             Self::Sparse(error) => error.fmt(f),
             Self::Origin(error) => error.fmt(f),
+            Self::PrivateArray(error) => error.fmt(f),
             Self::CallEffects(error) => error.fmt(f),
             Self::Binding(detail) => f.write_str(detail),
         }
@@ -52,6 +54,7 @@ impl Error for CanonicalAssertionErrorV1 {
             Self::Inventory(error) => Some(error),
             Self::Sparse(error) => Some(error),
             Self::Origin(error) => Some(error),
+            Self::PrivateArray(error) => Some(error),
             Self::CallEffects(error) => Some(error),
             Self::Binding(_) => None,
         }
@@ -94,6 +97,12 @@ pub(super) enum ProjectedAssertionConditionV1 {
 /// isolated synthetic decision inputs explicitly.
 pub(super) trait ProjectedAssertionFactsV1 {
     fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError>;
+
+    fn private_array_initializer_count(
+        &mut self,
+        block: usize,
+        statement: usize,
+    ) -> Result<Option<u64>, ProjectionError>;
 
     fn slice_access(
         &mut self,
@@ -211,6 +220,27 @@ struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
 impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
     fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError> {
         self.budget.charge_work(amount).map_err(resource)
+    }
+
+    fn private_array_initializer_count(
+        &mut self,
+        block: usize,
+        statement: usize,
+    ) -> Result<Option<u64>, ProjectionError> {
+        self.budget.charge_work(3).map_err(resource)?;
+        let block = u32::try_from(block).map_err(|_| resource(Resource::Arithmetic))?;
+        let statement = u32::try_from(statement).map_err(|_| resource(Resource::Arithmetic))?;
+        self.owner
+            .materialized_private_array_initializer_count(
+                self.correspondence_owner,
+                self.semantic_function,
+                fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1::Statement {
+                    block: fe2o3_mir_model::SsaBlockIdV1::new(block),
+                    statement,
+                },
+                self.budget,
+            )
+            .map_err(|error| reject(CanonicalAssertionErrorV1::PrivateArray(error)))
     }
 
     fn slice_access(
