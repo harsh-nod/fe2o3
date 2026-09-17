@@ -1,4 +1,5 @@
 use super::*;
+include!("topology_gfx950_asrock_tests.rs");
 
 fn fixture() -> RenderFixture {
     let mut f = RenderFixture::valid();

@@ -7,6 +7,10 @@ use super::*;
 mod mi350_2;
 
 #[cfg(feature = "engineering-gfx950")]
+#[path = "device_gfx950_asrock.rs"]
+mod asrock;
+
+#[cfg(feature = "engineering-gfx950")]
 pub(crate) fn gfx950_mi350_2_platform_matches(
     kernel: &str,
     version: Option<&str>,
@@ -414,7 +418,9 @@ fn validate_platform(
     source: Option<&str>,
 ) -> Result<&'static str, DeviceBindingError> {
     #[cfg(feature = "engineering-gfx950")]
-    if let Some(manifest) = mi350_2::match_platform(kernel, version, source) {
+    if let Some(manifest) = mi350_2::match_platform(kernel, version, source)
+        .or_else(|| asrock::match_platform(kernel, version, source))
+    {
         return Ok(manifest);
     }
     if kernel != GFX950_ADMITTED_KERNEL_RELEASE_V1 {
@@ -644,6 +650,19 @@ mod tests {
                 "5.18.2-mi300-build-140423-ubuntu-22.04+",
                 Some("6.16.13"),
                 Some("975C4B2AA8AD01E2EA472C0"),
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(not(feature = "engineering-gfx950"))]
+    #[test]
+    fn asrock_is_not_admitted_without_engineering_feature() {
+        assert!(
+            validate_platform(
+                "5.15.160+",
+                Some("6.16.15"),
+                Some("9462451703604FCD7EC2365"),
             )
             .is_err()
         );
