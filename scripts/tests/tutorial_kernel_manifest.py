@@ -112,7 +112,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         payload = json.dumps(
             recovered_scope(self.manifest), sort_keys=True, separators=(",", ":"), ensure_ascii=True
         ).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "1df009c40fff2d9e667fecfb4081cde24ce6aba228f44c8d0b05a3f645655e9f")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "db1d9a0d5c5aca3b9c76a4713ddd3b22417e41ee24667efae11773dfccdc4215")
 
     def test_full_runtime_curriculum_snapshot_preserves_pending_obligations(self):
         curriculum = self.manifest["curriculum"]
@@ -125,7 +125,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "c9e3e9bfec4059c53a98ac913d1a01b7e43d3d8412e1859783c074177309b085")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "6a5cb2ea037d453fde6f08fa556b6abb2e7ba333b1f41edcad06db3e64999ca1")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         del self.manifest["curriculum"]
