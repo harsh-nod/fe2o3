@@ -87,6 +87,26 @@ fn discard_waker(waker: Option<Waker>) {
 }
 
 impl<R> RuntimeAsyncCommandFutureV1<R> {
+    #[cfg(test)]
+    pub(super) fn result_probe_for_test_v1(
+        &self,
+    ) -> impl Fn() -> Option<Result<R, RuntimeAsyncEngineCallErrorV1>> + Send + Sync + 'static
+    where
+        R: Clone + Send + 'static,
+    {
+        // Inspect the original cell during its wake without minting another
+        // future, consuming its result or extending its count-credit lifetime.
+        let state = Arc::downgrade(&self.state);
+        move || {
+            let state = state.upgrade()?;
+            state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .result
+                .clone()
+        }
+    }
+
     pub(super) fn clear_waker(&self) {
         let waker = self
             .state

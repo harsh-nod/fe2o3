@@ -3,6 +3,7 @@ use crate::{RuntimeAccessV1, RuntimeMemoryRegionV1};
 use crate::{RuntimeGfx942GeneratedReservationErrorV1, RuntimeValidationErrorV1};
 use generated_operation::adoption::{ActivationErrorV1, AdoptionHooksV1};
 
+mod completion_tests;
 mod issue_tests;
 
 struct Payload {

@@ -48,7 +48,7 @@ pub(super) trait EngineOperationV1<B: RuntimeBackendV1> {
     fn reserve_generated(
         &mut self,
         _context: &mut RuntimeContextV1<B>,
-        _completion: &mut Option<owned::Reply<()>>,
+        _completion: &mut Option<owned::Reply<generated_operation::GeneratedCompletionOutcomeV1>>,
     ) -> Result<(), crate::RuntimeGfx942GeneratedReservationErrorV1> {
         Err(crate::RuntimeGfx942GeneratedReservationErrorV1::UnsupportedPreparation)
     }
@@ -194,7 +194,7 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
         &mut self,
         context: &mut RuntimeContextV1<B>,
         key: &Arc<generated_operation::PreparedKeyV1>,
-        completion: &mut Option<owned::Reply<()>>,
+        completion: &mut Option<owned::Reply<generated_operation::GeneratedCompletionOutcomeV1>>,
     ) -> Result<(), crate::RuntimeGfx942GeneratedReservationErrorV1> {
         let entry = self
             .parked

@@ -141,7 +141,7 @@ impl ResultReadyGateV1 {
         self.ready.store(true, Ordering::Release);
     }
 
-    fn ready(&self) -> bool {
+    pub(crate) fn ready(&self) -> bool {
         self.ready.load(Ordering::Acquire)
     }
 }

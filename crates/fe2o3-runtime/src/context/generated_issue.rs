@@ -1,9 +1,11 @@
-//! First-run mutation attempts. No journal-backed reuse or typed completion.
+//! First-run mutation attempts and completion. No journal-backed reuse.
 
 use super::*;
 use crate::generated_source::GeneratedHostRosterV1;
 use crate::kfd_backend::GeneratedShellPlanV1;
 use crate::{KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1, RuntimeGfx942GeneratedCarrierV1};
+
+mod completion;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PhaseV1 {

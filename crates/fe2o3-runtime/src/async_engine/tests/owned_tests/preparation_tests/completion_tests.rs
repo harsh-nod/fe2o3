@@ -30,7 +30,7 @@ impl std::task::Wake for CompletionWake {
 fn poll_completion(
     ticket: &mut RuntimeAsyncReservedTicketV1,
     waker: &Waker,
-) -> Poll<Result<(), RuntimeAsyncEngineCallErrorV1>> {
+) -> Poll<Result<Result<(), crate::RuntimeGfx942ReadbackErrorV1>, RuntimeAsyncEngineCallErrorV1>> {
     Pin::new(ticket.completion_for_test_v1()).poll(&mut Context::from_waker(waker))
 }
 

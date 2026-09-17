@@ -1,0 +1,2123 @@
+diff --git a/crates/fe2o3-host/src/generated_runtime_arguments/charged_tests/invocation_tests/readback_tests.rs b/crates/fe2o3-host/src/generated_runtime_arguments/charged_tests/invocation_tests/readback_tests.rs
+index f89f27b38..8c3649596 100644
+--- a/crates/fe2o3-host/src/generated_runtime_arguments/charged_tests/invocation_tests/readback_tests.rs
++++ b/crates/fe2o3-host/src/generated_runtime_arguments/charged_tests/invocation_tests/readback_tests.rs
+@@ -1,6 +1,7 @@
+ use super::*;
+ 
+ mod completion_tests;
++mod lending_tests;
+ 
+ fn projected(
+     budget: &GeneratedRuntimeResultBudgetV1,
+diff --git a/crates/fe2o3-host/src/generated_runtime_arguments/charged_tests/invocation_tests/readback_tests/lending_tests.rs b/crates/fe2o3-host/src/generated_runtime_arguments/charged_tests/invocation_tests/readback_tests/lending_tests.rs
+new file mode 100644
+index 000000000..19c42020b
+--- /dev/null
++++ b/crates/fe2o3-host/src/generated_runtime_arguments/charged_tests/invocation_tests/readback_tests/lending_tests.rs
+@@ -0,0 +1,177 @@
++use super::*;
++
++fn destinations(
++    storage: &GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1>,
++) -> Vec<(*const u8, usize)> {
++    storage
++        .readback
++        .as_ref()
++        .unwrap()
++        .buffers()
++        .iter()
++        .map(|(_, bytes)| (bytes.as_ptr(), bytes.capacity()))
++        .collect()
++}
++
++#[test]
++fn readback_lending_checks_shape_before_read_only_contents() {
++    let budget = GeneratedRuntimeResultBudgetV1::new(80, 3).unwrap();
++    let (mut storage, mut observer) = mixed(&budget);
++    storage.install_readback(storage.prepare_readback().unwrap());
++    let original = destinations(&storage);
++    let usage = budget.usage();
++    assert!(matches!(
++        storage.validate_reserved_readback(),
++        Err(Error::BindingMismatch)
++    ));
++    let (source, buffers) = storage.borrow_reserved_readback_v1().unwrap();
++    assert_eq!(buffers.len(), 2);
++    assert_eq!(buffers[1].0, Gfx942RuntimeBufferAccessV1::ReadOnly);
++    assert!(
++        buffers
++            .iter()
++            .all(|(_, bytes)| bytes.iter().all(|byte| *byte == 0))
++    );
++    for ((_, bytes), input) in buffers.iter_mut().zip(source.buffers()) {
++        bytes.copy_from_slice(input.bytes());
++    }
++    buffers[0].1.fill(7);
++    storage.validate_reserved_readback().unwrap();
++    assert_eq!(destinations(&storage), original);
++    assert_eq!(budget.usage(), usage);
++    assert!(observer.try_take().unwrap().is_none());
++    storage.readback.as_mut().unwrap().buffers_mut()[1].1[15] ^= 1;
++    assert!(matches!(
++        storage.validate_reserved_readback(),
++        Err(Error::BindingMismatch)
++    ));
++    assert!(observer.try_take().unwrap().is_none());
++    drop(storage);
++    assert_empty(&budget);
++}
++
++#[test]
++fn readback_lending_rejects_complete_shape_and_gate_mutations_without_copy() {
++    for mutation in 0..9 {
++        let budget = GeneratedRuntimeResultBudgetV1::new(80, 3).unwrap();
++        let (mut storage, mut observer) = mixed(&budget);
++        storage.install_readback(storage.prepare_readback().unwrap());
++        match mutation {
++            0 => {
++                storage.readback.as_mut().unwrap().buffers_mut().pop();
++            }
++            1 => {
++                storage.readback.as_mut().unwrap().buffers_mut()[1].1.pop();
++            }
++            2 => storage.readback.as_mut().unwrap().buffers_mut()[1]
++                .1
++                .reserve_exact(1),
++            3 => {
++                storage.readback.as_mut().unwrap().buffers_mut()[1].0 =
++                    Gfx942RuntimeBufferAccessV1::ReadWrite
++            }
++            4 => storage.decoder.expectations[1].byte_len += 1,
++            5 => storage.decoder.expectations[1].access = Gfx942RuntimeBufferAccessV1::ReadWrite,
++            6 => storage.decoder.result_gate = None,
++            7 => storage.decoder.expectations[0].custody = None,
++            _ => {
++                let other_budget = GeneratedRuntimeResultBudgetV1::new(80, 3).unwrap();
++                let (other, _) = mixed(&other_budget);
++                storage.decoder.result_gate = other.decoder.result_gate.clone();
++            }
++        }
++        let original = destinations(&storage);
++        let usage = budget.usage();
++        let result = storage.borrow_reserved_readback_v1();
++        assert!(result.is_err(), "mutation {mutation}");
++        assert_eq!(destinations(&storage), original);
++        assert!(
++            storage
++                .readback
++                .as_ref()
++                .unwrap()
++                .buffers()
++                .iter()
++                .all(|(_, bytes)| bytes.iter().all(|byte| *byte == 0))
++        );
++        assert_eq!(budget.usage(), usage);
++        if mutation != 7 {
++            assert!(observer.try_take().unwrap().is_none());
++        }
++        drop(storage);
++        assert_empty(&budget);
++    }
++}
++
++#[test]
++fn readback_lending_error_and_unwind_keep_original_owner_and_copied_prefix() {
++    for panic in [false, true] {
++        let budget = GeneratedRuntimeResultBudgetV1::new(80, 3).unwrap();
++        let (mut storage, mut observer) = mixed(&budget);
++        storage.install_readback(storage.prepare_readback().unwrap());
++        let original = destinations(&storage);
++        let usage = budget.usage();
++        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            let (_, buffers) = storage.borrow_reserved_readback_v1().unwrap();
++            buffers[0].1[..7].fill(9);
++            if panic {
++                panic!("readback copy prefix");
++            }
++            Err::<(), _>("copy error")
++        }));
++        if panic {
++            assert_eq!(
++                result.unwrap_err().downcast_ref::<&str>(),
++                Some(&"readback copy prefix")
++            );
++        } else {
++            assert_eq!(result.unwrap(), Err("copy error"));
++        }
++        let buffers = storage.readback.as_ref().unwrap().buffers();
++        assert_eq!(&buffers[0].1[..7], &[9; 7]);
++        assert_eq!(&buffers[0].1[7..], &[0; 9]);
++        assert_eq!(buffers[1].1, vec![0; 16]);
++        assert_eq!(destinations(&storage), original);
++        assert_eq!(budget.usage(), usage);
++        assert!(observer.try_take().unwrap().is_none());
++        drop(storage);
++        assert_empty(&budget);
++    }
++}
++
++#[test]
++fn readback_lending_rejects_missing_owner_credit_and_committed_gate() {
++    let budget = GeneratedRuntimeResultBudgetV1::new(80, 3).unwrap();
++    let (mut storage, mut observer) = mixed(&budget);
++    assert!(matches!(
++        storage.borrow_reserved_readback_v1(),
++        Err(Error::BindingMismatch)
++    ));
++    storage.install_readback(storage.prepare_readback().unwrap());
++    storage
++        .readback
++        .as_mut()
++        .unwrap()
++        .quarantine_credit_for_test();
++    let usage = budget.usage();
++    assert!(matches!(
++        storage.borrow_reserved_readback_v1(),
++        Err(Error::ResultCredit(ResourceCreditErrorV1::Invariant))
++    ));
++    assert_eq!(budget.usage(), usage);
++    assert!(observer.try_take().unwrap().is_none());
++    drop(storage);
++    assert_eq!(budget.usage().quarantined_members, 1);
++
++    let budget = GeneratedRuntimeResultBudgetV1::new(80, 3).unwrap();
++    let (mut storage, observer) = mixed(&budget);
++    storage.install_readback(storage.prepare_readback().unwrap());
++    storage.decoder.result_gate.as_ref().unwrap().commit();
++    assert!(matches!(
++        storage.borrow_reserved_readback_v1(),
++        Err(Error::BindingMismatch)
++    ));
++    drop(storage);
++    drop(observer);
++    assert_empty(&budget);
++}
+diff --git a/crates/fe2o3-host/src/generated_runtime_arguments/readback.rs b/crates/fe2o3-host/src/generated_runtime_arguments/readback.rs
+index 3a32cf7ca..d0ac2bd45 100644
+--- a/crates/fe2o3-host/src/generated_runtime_arguments/readback.rs
++++ b/crates/fe2o3-host/src/generated_runtime_arguments/readback.rs
+@@ -7,6 +7,11 @@ use fe2o3_resource_accounting::{
+ use super::*;
+ use GeneratedRuntimeArgumentErrorV1 as Error;
+ 
++type ReservedReadbackBorrowV1<'a> = (
++    &'a GeneratedGfx942PersistentStorageV1,
++    &'a mut [(Gfx942RuntimeBufferAccessV1, Vec<u8>)],
++);
++
+ pub(crate) struct GeneratedRuntimeReadbackOwnerV1 {
+     buffers: Vec<(Gfx942RuntimeBufferAccessV1, Vec<u8>)>,
+     credit: Option<RetainedResourceCreditsV1>,
+@@ -63,10 +68,6 @@ impl Drop for PendingReadback {
+ }
+ 
+ impl GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1> {
+-    #[allow(
+-        dead_code,
+-        reason = "private host completion substrate; native admission is not installed"
+-    )]
+     pub(crate) fn decode_reserved_readback(self) -> Result<(), Error> {
+         self.decode_reserved_readback_with(|_| {})
+     }
+@@ -80,6 +81,30 @@ impl GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1> {
+     }
+ 
+     pub(super) fn validate_reserved_readback(&self) -> Result<(), Error> {
++        self.validate_reserved_readback_shape()?;
++        let readback = self.readback.as_ref().expect("validated readback");
++        for ((access, bytes), source) in readback.buffers.iter().zip(self.payload.buffers()) {
++            if *access == Gfx942RuntimeBufferAccessV1::ReadOnly
++                && bytes.as_slice() != source.bytes()
++            {
++                return Err(Error::BindingMismatch);
++            }
++        }
++        Ok(())
++    }
++
++    pub(crate) fn borrow_reserved_readback_v1(
++        &mut self,
++    ) -> Result<ReservedReadbackBorrowV1<'_>, Error> {
++        self.validate_reserved_readback_shape()?;
++        let readback = self.readback.as_mut().expect("validated readback");
++        if readback.credit.is_none() {
++            return Err(Error::ResultCredit(ResourceCreditErrorV1::Invariant));
++        }
++        Ok((&self.payload, &mut readback.buffers))
++    }
++
++    fn validate_reserved_readback_shape(&self) -> Result<(), Error> {
+         let readback = self.readback.as_ref().ok_or(Error::BindingMismatch)?;
+         let gate = self
+             .decoder
+@@ -92,12 +117,24 @@ impl GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1> {
+             .iter()
+             .filter(|expected| expected.byte_len != 0)
+             .count();
+-        if !Arc::ptr_eq(&readback.gate, gate)
++        if gate.ready()
++            || !Arc::ptr_eq(&readback.gate, gate)
+             || expected_count != self.payload.buffers().len()
+             || expected_count != readback.buffers.len()
+         {
+             return Err(Error::BindingMismatch);
+         }
++        for expected in &self.decoder.expectations {
++            if let Some(custody) = &expected.custody {
++                custody.bound_to(Some(gate))?;
++            } else if !expected
++                .read_credit
++                .as_ref()
++                .is_some_and(|credit| credit.bound_to(gate))
++            {
++                return Err(Error::BindingMismatch);
++            }
++        }
+         for (ordinal, expected) in self
+             .decoder
+             .expectations
+@@ -112,7 +149,6 @@ impl GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1> {
+                 || *access != expected.access
+                 || bytes.len() != expected.byte_len
+                 || bytes.capacity() != expected.byte_len
+-                || (*access == Gfx942RuntimeBufferAccessV1::ReadOnly && bytes.as_slice() != source)
+             {
+                 return Err(Error::BindingMismatch);
+             }
+diff --git a/crates/fe2o3-host/src/generated_runtime_invocation.rs b/crates/fe2o3-host/src/generated_runtime_invocation.rs
+index 9c18c7a3e..09060fc4c 100644
+--- a/crates/fe2o3-host/src/generated_runtime_invocation.rs
++++ b/crates/fe2o3-host/src/generated_runtime_invocation.rs
+@@ -8,7 +8,8 @@ use fe2o3_runtime::{
+     GeneratedGfx942PersistentStorageV1, Gfx942RuntimeProjectionErrorV1, KfdRuntimeBackendErrorV1,
+     KfdRuntimeBackendV1, PreparedGfx942RuntimeDispatchV1, RuntimeAsyncEngineCallErrorV1,
+     RuntimeAsyncPreparationV1, RuntimeAsyncProgressHandleV1, RuntimeContextV1, RuntimeDeviceIdV1,
+-    RuntimeErrorV1, RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedSourceMutV1,
++    RuntimeErrorV1, RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedCompletionCarrierV1,
++    RuntimeGfx942GeneratedCompletionViewV1, RuntimeGfx942GeneratedSourceMutV1,
+     RuntimeGfx942GeneratedSourceV1, RuntimeGfx942PreparationErrorV1, RuntimeGfx942PreparedV1,
+     RuntimeGfx942ReadbackErrorV1,
+ };
+@@ -131,6 +132,62 @@ impl<K: CompilerGeneratedKernelExpectationV1> RuntimeGfx942GeneratedCarrierV1
+     }
+ }
+ 
++// SAFETY: the private storage binds the original source, charged destinations,
++// gate and decoder. The borrowed view cannot replace or extract any owner, and
++// the existing consuming decoder commits only after complete validation and
++// disposal-credit settlement.
++unsafe impl<K: CompilerGeneratedKernelExpectationV1> RuntimeGfx942GeneratedCompletionCarrierV1
++    for GeneratedContextPreparationV1<K, GeneratedGfx942PersistentStorageV1>
++{
++    fn with_completion_view_v1(
++        &mut self,
++        callback: impl for<'a> FnOnce(
++            RuntimeGfx942GeneratedCompletionViewV1<'a, Self::CurrentnessError>,
++        ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>>,
++    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        let (payload, destinations) = self.storage.borrow_reserved_readback_v1().map_err(|_| {
++            RuntimeErrorV1::Validation(
++                fe2o3_runtime::RuntimeValidationErrorV1::InvalidBackendDescription,
++            )
++        })?;
++        let source = RuntimeGfx942GeneratedSourceV1::from_generated_storage(
++            payload,
++            self.authority
++                .binding
++                .authenticated
++                .current_publication_token()
++                .exact_artifact_bytes(),
++            &self.authority,
++        );
++        callback(RuntimeGfx942GeneratedCompletionViewV1::new(
++            source,
++            destinations,
++        ))
++    }
++
++    fn complete_readback_v1(self) -> Result<(), RuntimeGfx942ReadbackErrorV1> {
++        let Self {
++            storage,
++            authority,
++            footprint: _,
++            result_budget,
++        } = self;
++        drop(authority);
++        drop(result_budget);
++        storage
++            .decode_reserved_readback()
++            .map_err(|error| match error {
++                GeneratedRuntimeArgumentErrorV1::ResultCredit(error) => {
++                    RuntimeGfx942ReadbackErrorV1::Credit(error)
++                }
++                GeneratedRuntimeArgumentErrorV1::Allocation => {
++                    RuntimeGfx942ReadbackErrorV1::Allocation
++                }
++                _ => RuntimeGfx942ReadbackErrorV1::InvalidStorage,
++            })
++    }
++}
++
+ /// Generated custody prepared against an existing Context's retained device.
+ ///
+ /// The private payload and decoder remain owner-local. There is no native
+@@ -362,7 +419,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
+         self.require_runtime_evidence()?;
+         let result_budget = result_budget.clone();
+         owner
+-            .try_prepare_generated_gfx942_v1(device, move |device| {
++            .try_prepare_generated_gfx942_completion_v1(device, move |device| {
+                 self.prepare_context_payload(
+                     arguments,
+                     device,
+@@ -495,7 +552,9 @@ mod async_preparation_tests {
+         let budget = body
+             .find("let result_budget = result_budget.clone()")
+             .unwrap();
+-        let enqueue = body.find(".try_prepare_generated_gfx942_v1(").unwrap();
++        let enqueue = body
++            .find(".try_prepare_generated_gfx942_completion_v1(")
++            .unwrap();
+         let payload = body.find("self.prepare_context_payload(").unwrap();
+         let projection = body.find(".project_persistent()").unwrap();
+         assert!(
+diff --git a/crates/fe2o3-host/src/generated_runtime_results.rs b/crates/fe2o3-host/src/generated_runtime_results.rs
+index ff60490b7..73c44cbf2 100644
+--- a/crates/fe2o3-host/src/generated_runtime_results.rs
++++ b/crates/fe2o3-host/src/generated_runtime_results.rs
+@@ -141,7 +141,7 @@ impl ResultReadyGateV1 {
+         self.ready.store(true, Ordering::Release);
+     }
+ 
+-    fn ready(&self) -> bool {
++    pub(crate) fn ready(&self) -> bool {
+         self.ready.load(Ordering::Acquire)
+     }
+ }
+diff --git a/crates/fe2o3-runtime/src/async_engine/generated_operation.rs b/crates/fe2o3-runtime/src/async_engine/generated_operation.rs
+index 1e58912ad..36cfb4f16 100644
+--- a/crates/fe2o3-runtime/src/async_engine/generated_operation.rs
++++ b/crates/fe2o3-runtime/src/async_engine/generated_operation.rs
+@@ -94,6 +94,7 @@ impl Error for RuntimeAsyncPreparedDiscardFailureV1 {
+ 
+ type Prepare<B, P, E> = Box<dyn FnOnce(&mut RuntimeContextV1<B>) -> Result<P, E> + Send>;
+ type PreparationReply<E> = owned::Reply<Result<RuntimeAsyncPreparedTicketV1, E>>;
++pub(super) type GeneratedCompletionOutcomeV1 = Result<(), crate::RuntimeGfx942ReadbackErrorV1>;
+ 
+ struct PreparationFactory<B: RuntimeBackendV1, P, E> {
+     prepare: Option<Prepare<B, P, E>>,
+@@ -113,7 +114,7 @@ struct PreparationDriver<B: RuntimeBackendV1, P, E> {
+     control: RuntimeAsyncOperationControlV1,
+     reserve: Option<Reserve<B, P>>,
+     roster: Option<crate::generated_source::GeneratedHostRosterV1>,
+-    completion: Option<owned::Reply<()>>,
++    completion: Option<owned::Reply<GeneratedCompletionOutcomeV1>>,
+     adoption: Option<adoption::AdoptionHooksV1<B, P>>,
+     unpublished: Option<adoption::UnpublishedAdoptionV1>,
+     observations_stopped: bool,
+@@ -242,7 +243,7 @@ impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P,
+     fn reserve_generated(
+         &mut self,
+         context: &mut RuntimeContextV1<B>,
+-        completion: &mut Option<owned::Reply<()>>,
++        completion: &mut Option<owned::Reply<GeneratedCompletionOutcomeV1>>,
+     ) -> Result<(), RuntimeGfx942GeneratedReservationErrorV1> {
+         let reserve = self
+             .reserve
+@@ -393,6 +394,47 @@ impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
+     ) -> Result<
+         RuntimeAsyncPreparationV1<RuntimeGfx942PreparationErrorV1<E>>,
+         RuntimeAsyncEngineCallErrorV1,
++    > {
++        self.try_prepare_generated_with_completion_v1(device, prepare, None)
++    }
++
++    /// Host bridge retaining the original decoder for private completion.
++    /// Preparation alone does not activate work or expose its completion cell.
++    #[doc(hidden)]
++    pub fn try_prepare_generated_gfx942_completion_v1<
++        P: crate::RuntimeGfx942GeneratedCompletionCarrierV1 + 'static,
++        E: Send + 'static,
++    >(
++        &self,
++        device: RuntimeDeviceIdV1,
++        prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, E> + Send + 'static,
++    ) -> Result<
++        RuntimeAsyncPreparationV1<RuntimeGfx942PreparationErrorV1<E>>,
++        RuntimeAsyncEngineCallErrorV1,
++    > {
++        self.try_prepare_generated_with_completion_v1(
++            device,
++            prepare,
++            Some(adoption::CompletionHooksV1 {
++                settle: RuntimeContextV1::complete_gfx942_issue_v1::<P>,
++                decode: crate::RuntimeGfx942PreparedV1::<P>::complete_readback_v1,
++            }),
++        )
++    }
++
++    fn try_prepare_generated_with_completion_v1<
++        P: RuntimeGfx942GeneratedCarrierV1 + 'static,
++        E: Send + 'static,
++    >(
++        &self,
++        device: RuntimeDeviceIdV1,
++        prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, E> + Send + 'static,
++        completion: Option<
++            adoption::CompletionHooksV1<KfdRuntimeBackendV1, crate::RuntimeGfx942PreparedV1<P>>,
++        >,
++    ) -> Result<
++        RuntimeAsyncPreparationV1<RuntimeGfx942PreparationErrorV1<E>>,
++        RuntimeAsyncEngineCallErrorV1,
+     > {
+         self.enqueue_preparation_with_adoption_v1(
+             Box::new(move |context| context.with_gfx942_preparation_device_v1(device, prepare)),
+@@ -405,6 +447,7 @@ impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
+                 issue: Some(adoption::IssueHooksV1 {
+                     progress: RuntimeContextV1::progress_gfx942_issue_v1::<P>,
+                     retire_stopped: RuntimeContextV1::retire_gfx942_issued_v1,
++                    completion,
+                 }),
+             }),
+         )
+diff --git a/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs b/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs
+index 0fbe20ded..17bde31aa 100644
+--- a/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs
++++ b/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs
+@@ -1,4 +1,4 @@
+-//! Private nonpublishing lifecycle; ISSUE and COMPLETE are separate transitions.
++//! Private adoption, issue and original-owner completion lifecycle.
+ 
+ use super::*;
+ use crate::RuntimeValidationErrorV1;
+@@ -39,6 +39,21 @@ type IssueProgressV1<B, P> = fn(
+ pub(in crate::async_engine) struct IssueHooksV1<B: RuntimeBackendV1, P> {
+     pub progress: IssueProgressV1<B, P>,
+     pub retire_stopped: IssuedRetireV1<B>,
++    pub completion: Option<CompletionHooksV1<B, P>>,
++}
++
++pub(in crate::async_engine) struct CompletionHooksV1<B: RuntimeBackendV1, P> {
++    // Success includes native, Context record, credit and exact hold settlement.
++    // Failure must leave P rooted; it cannot authorize retry or decoding.
++    pub settle: AdoptV1<B, P>,
++    pub decode: fn(P) -> GeneratedCompletionOutcomeV1,
++}
++
++impl<B: RuntimeBackendV1, P> Copy for CompletionHooksV1<B, P> {}
++impl<B: RuntimeBackendV1, P> Clone for CompletionHooksV1<B, P> {
++    fn clone(&self) -> Self {
++        *self
++    }
+ }
+ 
+ impl<B: RuntimeBackendV1, P> Copy for IssueHooksV1<B, P> {}
+@@ -146,6 +161,43 @@ impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
+                 }
+                 _ => context.quarantine_after_async_command_panic_v1(),
+             }
++        } else if owner.phase == PhaseV1::PhysicallySettled
++            && !self.observations_stopped
++            && let Some(completion) = self
++                .adoption
++                .as_ref()
++                .expect("admitted hooks")
++                .issue
++                .and_then(|issue| issue.completion)
++        {
++            owner.phase = PhaseV1::Quarantined;
++            let result = (completion.settle)(
++                context,
++                self.prepared.as_mut().expect("retained payload"),
++                self.roster.as_ref().expect("retained roster"),
++                &owner.hold,
++            );
++            if result.is_err() || context.is_terminal() {
++                context.quarantine_after_async_command_panic_v1();
++                return false;
++            }
++            owner.phase = PhaseV1::Retired;
++            // Native/Context custody is now conclusively gone. Decoder failure
++            // consumes only host storage and resolves this original cell once.
++            let result = catch_unwind(AssertUnwindSafe(|| {
++                (completion.decode)(self.prepared.take().expect("settled payload"))
++            }));
++            let observation = match result {
++                Ok(decoded) => Ok(decoded),
++                Err(payload) => {
++                    core::mem::forget(payload);
++                    Err(RuntimeAsyncEngineCallErrorV1::CommandPanicked)
++                }
++            };
++            if let Some(mut reply) = self.completion.take() {
++                reply.complete(observation);
++            }
++            return true;
+         }
+         false
+     }
+@@ -160,7 +212,7 @@ impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
+         if matches!(owner.phase, PhaseV1::Issued | PhaseV1::PhysicallySettled) {
+             // Drain observes the accepted prefix without cancelling output.
+             // Only actual Stop, after stopping the reserved completion observer,
+-            // permits destructive disposal before C4 output delivery exists.
++            // permits destructive disposal without output delivery.
+             if !self.observations_stopped {
+                 return Ok(false);
+             }
+diff --git a/crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs b/crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs
+index 7fa6230cf..9442939d2 100644
+--- a/crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs
++++ b/crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs
+@@ -20,14 +20,14 @@ pub struct RuntimeAsyncReservedTicketV1 {
+         dead_code,
+         reason = "private completion consumer retained until native issue exists"
+     )]
+-    completion: RuntimeAsyncCommandFutureV1<()>,
++    completion: RuntimeAsyncCommandFutureV1<GeneratedCompletionOutcomeV1>,
+ }
+ 
+ #[cfg(test)]
+ impl RuntimeAsyncReservedTicketV1 {
+     pub(in crate::async_engine) fn completion_for_test_v1(
+         &mut self,
+-    ) -> &mut RuntimeAsyncCommandFutureV1<()> {
++    ) -> &mut RuntimeAsyncCommandFutureV1<GeneratedCompletionOutcomeV1> {
+         &mut self.completion
+     }
+ }
+@@ -78,8 +78,8 @@ pub(in crate::async_engine) struct ReserveCommandV1 {
+             Result<RuntimeAsyncReservedTicketV1, RuntimeAsyncPreparedReservationFailureV1>,
+         >,
+     >,
+-    completion: Option<owned::Reply<()>>,
+-    consumer: Option<RuntimeAsyncCommandFutureV1<()>>,
++    completion: Option<owned::Reply<GeneratedCompletionOutcomeV1>>,
++    consumer: Option<RuntimeAsyncCommandFutureV1<GeneratedCompletionOutcomeV1>>,
+ }
+ 
+ impl ReserveCommandV1 {
+diff --git a/crates/fe2o3-runtime/src/async_engine/operation.rs b/crates/fe2o3-runtime/src/async_engine/operation.rs
+index 68bae71ac..8d9a801b3 100644
+--- a/crates/fe2o3-runtime/src/async_engine/operation.rs
++++ b/crates/fe2o3-runtime/src/async_engine/operation.rs
+@@ -48,7 +48,7 @@ pub(super) trait EngineOperationV1<B: RuntimeBackendV1> {
+     fn reserve_generated(
+         &mut self,
+         _context: &mut RuntimeContextV1<B>,
+-        _completion: &mut Option<owned::Reply<()>>,
++        _completion: &mut Option<owned::Reply<generated_operation::GeneratedCompletionOutcomeV1>>,
+     ) -> Result<(), crate::RuntimeGfx942GeneratedReservationErrorV1> {
+         Err(crate::RuntimeGfx942GeneratedReservationErrorV1::UnsupportedPreparation)
+     }
+@@ -194,7 +194,7 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
+         &mut self,
+         context: &mut RuntimeContextV1<B>,
+         key: &Arc<generated_operation::PreparedKeyV1>,
+-        completion: &mut Option<owned::Reply<()>>,
++        completion: &mut Option<owned::Reply<generated_operation::GeneratedCompletionOutcomeV1>>,
+     ) -> Result<(), crate::RuntimeGfx942GeneratedReservationErrorV1> {
+         let entry = self
+             .parked
+diff --git a/crates/fe2o3-runtime/src/async_engine/owned.rs b/crates/fe2o3-runtime/src/async_engine/owned.rs
+index 41bc292d8..83ed2c040 100644
+--- a/crates/fe2o3-runtime/src/async_engine/owned.rs
++++ b/crates/fe2o3-runtime/src/async_engine/owned.rs
+@@ -87,6 +87,26 @@ fn discard_waker(waker: Option<Waker>) {
+ }
+ 
+ impl<R> RuntimeAsyncCommandFutureV1<R> {
++    #[cfg(test)]
++    pub(super) fn result_probe_for_test_v1(
++        &self,
++    ) -> impl Fn() -> Option<Result<R, RuntimeAsyncEngineCallErrorV1>> + Send + Sync + 'static
++    where
++        R: Clone + Send + 'static,
++    {
++        // Inspect the original cell during its wake without minting another
++        // future, consuming its result or extending its count-credit lifetime.
++        let state = Arc::downgrade(&self.state);
++        move || {
++            let state = state.upgrade()?;
++            state
++                .lock()
++                .unwrap_or_else(|error| error.into_inner())
++                .result
++                .clone()
++        }
++    }
++
+     pub(super) fn clear_waker(&self) {
+         let waker = self
+             .state
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs
+index 6871bcb67..6f894dda2 100644
+--- a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs
+@@ -3,6 +3,7 @@ use crate::{RuntimeAccessV1, RuntimeMemoryRegionV1};
+ use crate::{RuntimeGfx942GeneratedReservationErrorV1, RuntimeValidationErrorV1};
+ use generated_operation::adoption::{ActivationErrorV1, AdoptionHooksV1};
+ 
++mod completion_tests;
+ mod issue_tests;
+ 
+ struct Payload {
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests.rs
+new file mode 100644
+index 000000000..673359122
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests.rs
+@@ -0,0 +1,321 @@
++use super::*;
++use generated_operation::adoption::CompletionHooksV1;
++
++type Observation =
++    Result<Result<(), crate::RuntimeGfx942ReadbackErrorV1>, RuntimeAsyncEngineCallErrorV1>;
++type WakeRecord = (Observation, Vec<&'static str>, usize);
++
++struct ResultWake {
++    probe: Box<dyn Fn() -> Option<Observation> + Send + Sync>,
++    state: Arc<Mutex<MockState>>,
++    drops: Arc<AtomicUsize>,
++    observations: Arc<Mutex<Vec<WakeRecord>>>,
++    panic: bool,
++}
++
++impl std::task::Wake for ResultWake {
++    fn wake(self: Arc<Self>) {
++        self.observations.lock().unwrap().push((
++            (self.probe)().expect("original reply installed before wake"),
++            self.state.lock().unwrap().adoption_order.clone(),
++            self.drops.load(Ordering::SeqCst),
++        ));
++        assert!(!self.panic, "completion observer wake panic");
++    }
++}
++
++fn completion_hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
++    let mut hooks = issue_tests::issue_hooks();
++    hooks.issue.as_mut().unwrap().completion = Some(CompletionHooksV1 {
++        settle: |context: &mut RuntimeContextV1<B>, payload: &mut Payload, _, hold| {
++            assert_eq!(payload.stream, Some(hold.stream()));
++            assert_eq!(
++                payload.pointers,
++                (
++                    payload.source.as_ptr() as usize,
++                    payload.readback.as_ptr() as usize
++                )
++            );
++            for (index, step) in [
++                "copy",
++                "postcheck",
++                "native_retire",
++                "records_retire",
++                "hold_release",
++            ]
++            .into_iter()
++            .enumerate()
++            {
++                payload.state.lock().unwrap().adoption_order.push(step);
++                if payload.mode == 30 + index as u8 {
++                    return Err(RuntimeValidationErrorV1::Unsupported.into());
++                }
++                assert_ne!(
++                    payload.mode,
++                    40 + index as u8,
++                    "completion settlement panic"
++                );
++                match index {
++                    0 => payload.readback.copy_from_slice(&payload.source),
++                    2 => context
++                        .backend_mut_for_test_v1()
++                        .retire_adoption(hold.stream())?,
++                    4 => context.release_unpublished_hold_v1(hold)?,
++                    _ => {}
++                }
++            }
++            payload
++                .state
++                .lock()
++                .unwrap()
++                .adoption_order
++                .push("hold_released");
++            Ok(())
++        },
++        decode: |payload| {
++            {
++                let mut state = payload.state.lock().unwrap();
++                assert_eq!(state.adoption_order.last(), Some(&"hold_released"));
++                assert_eq!(payload.readback, payload.source);
++                state.adoption_order.push("decode");
++            }
++            match payload.mode {
++                23 => Err(crate::RuntimeGfx942ReadbackErrorV1::InvalidStorage),
++                24 => panic!("completed host decoder panic"),
++                _ => {
++                    payload
++                        .state
++                        .lock()
++                        .unwrap()
++                        .adoption_order
++                        .push("gate_commit");
++                    Ok(())
++                }
++            }
++        },
++    });
++    hooks
++}
++
++fn reserve_completion(
++    h: &mut Harness,
++    drops: Arc<AtomicUsize>,
++    mode: u8,
++) -> (RuntimeAsyncReservedTicketV1, RuntimeStreamIdV1) {
++    let stream = h
++        .context
++        .create_stream(h.context.devices()[0].id())
++        .unwrap();
++    let future = preparation_with_hooks(
++        &h.handle,
++        h.state.clone(),
++        drops,
++        mode,
++        Some(completion_hooks()),
++    );
++    h.command();
++    h.advance();
++    let ticket = ready(future).unwrap().unwrap();
++    let future = h.handle.try_reserve_prepared_v1(ticket).unwrap();
++    h.command();
++    (ready(future).unwrap().unwrap(), stream)
++}
++
++fn watch(
++    h: &Harness,
++    ticket: &mut RuntimeAsyncReservedTicketV1,
++    drops: Arc<AtomicUsize>,
++    panic: bool,
++) -> Arc<Mutex<Vec<WakeRecord>>> {
++    let observations = Arc::new(Mutex::new(Vec::new()));
++    let future = ticket.completion_for_test_v1();
++    let waker = Waker::from(Arc::new(ResultWake {
++        probe: Box::new(future.result_probe_for_test_v1()),
++        state: h.state.clone(),
++        drops,
++        observations: observations.clone(),
++        panic,
++    }));
++    assert!(
++        Pin::new(future)
++            .poll(&mut Context::from_waker(&waker))
++            .is_pending()
++    );
++    observations
++}
++
++#[test]
++fn generated_completion_settles_then_decodes_then_resolves_original_cell_once() {
++    for panic_wake in [false, true] {
++        let mut h = Harness::new(1, 2, true);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let (mut ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
++        let observations = watch(&h, &mut ticket, drops.clone(), panic_wake);
++        activate(&mut h, ticket, stream);
++        for _ in 0..3 {
++            h.advance();
++            assert!(observations.lock().unwrap().is_empty());
++            assert_eq!(drops.load(Ordering::SeqCst), 0);
++            assert!(h.context.destroy_stream(stream).is_err());
++        }
++        h.advance();
++        assert!(!h.context.is_terminal());
++        assert_eq!(h.registry.active_len(), 0);
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++        assert_eq!(drops.load(Ordering::SeqCst), 1);
++        h.context.destroy_stream(stream).unwrap();
++        let observations = observations.lock().unwrap();
++        assert_eq!(observations.len(), 1);
++        assert_eq!(observations[0].0, Ok(Ok(())));
++        assert_eq!(observations[0].2, 1);
++        assert_eq!(
++            observations[0].1,
++            [
++                "preflight",
++                "adopt",
++                "issue",
++                "poll",
++                "copy",
++                "postcheck",
++                "native_retire",
++                "retire",
++                "records_retire",
++                "hold_release",
++                "hold_released",
++                "decode",
++                "gate_commit",
++                "payload_drop"
++            ]
++        );
++    }
++}
++
++#[test]
++fn generated_completion_settlement_faults_keep_prepared_owner_and_forbid_decode_retry() {
++    for mode in (30..35).chain(40..45) {
++        let mut h = Harness::new(1, 2, true);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let (mut ticket, stream) = reserve_completion(&mut h, drops.clone(), mode);
++        let observations = watch(&h, &mut ticket, drops.clone(), false);
++        activate(&mut h, ticket, stream);
++        for _ in 0..4 {
++            h.advance();
++        }
++        assert!(h.context.is_terminal(), "mode {mode}");
++        let order = h.state.lock().unwrap().adoption_order.clone();
++        assert!(!order.contains(&"decode"));
++        assert!(!order.contains(&"gate_commit"));
++        for _ in 0..3 {
++            h.advance();
++            h.registry.retire_unpublished_v1(&mut h.context, 1);
++        }
++        assert_eq!(h.state.lock().unwrap().adoption_order, order);
++        assert_eq!(h.registry.active_len(), 1);
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        if mode < 40 {
++            assert!(observations.lock().unwrap().is_empty());
++            assert!(!h.registry.stop_observations());
++            let observations = observations.lock().unwrap();
++            assert_eq!(observations.len(), 1);
++            assert_eq!(
++                observations[0].0,
++                Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
++            );
++        } else {
++            let observations = observations.lock().unwrap();
++            assert_eq!(observations.len(), 1);
++            assert_eq!(
++                observations[0].0,
++                Err(RuntimeAsyncEngineCallErrorV1::CommandPanicked)
++            );
++        }
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        core::mem::forget(h.registry);
++    }
++}
++
++#[test]
++fn generated_completion_decoder_error_or_panic_is_conclusive_host_failure() {
++    for mode in [23, 24] {
++        let mut h = Harness::new(1, 2, true);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let (mut ticket, stream) = reserve_completion(&mut h, drops.clone(), mode);
++        let observations = watch(&h, &mut ticket, drops.clone(), false);
++        activate(&mut h, ticket, stream);
++        for _ in 0..4 {
++            h.advance();
++        }
++        assert!(!h.context.is_terminal());
++        assert_eq!(h.registry.active_len(), 0);
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++        assert_eq!(drops.load(Ordering::SeqCst), 1);
++        h.context.destroy_stream(stream).unwrap();
++        let observations = observations.lock().unwrap();
++        assert_eq!(observations.len(), 1);
++        assert!(!observations[0].1.contains(&"gate_commit"));
++        assert_eq!(observations[0].2, 1);
++        if mode == 23 {
++            assert_eq!(
++                observations[0].0,
++                Ok(Err(crate::RuntimeGfx942ReadbackErrorV1::InvalidStorage))
++            );
++        } else {
++            assert_eq!(
++                observations[0].0,
++                Err(RuntimeAsyncEngineCallErrorV1::CommandPanicked)
++            );
++        }
++    }
++}
++
++#[test]
++fn generated_completion_stop_preserves_disposal_without_decoding() {
++    let mut h = Harness::new(1, 2, true);
++    let drops = Arc::new(AtomicUsize::new(0));
++    let (mut ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
++    let observations = watch(&h, &mut ticket, drops.clone(), false);
++    activate(&mut h, ticket, stream);
++    for _ in 0..3 {
++        h.advance();
++    }
++    assert!(!h.registry.stop_observations());
++    h.advance();
++    h.registry.retire_unpublished_v1(&mut h.context, 1);
++    assert!(!h.context.is_terminal());
++    assert_eq!(h.registry.active_len(), 0);
++    assert_eq!(drops.load(Ordering::SeqCst), 1);
++    h.context.destroy_stream(stream).unwrap();
++    let observations = observations.lock().unwrap();
++    assert_eq!(observations.len(), 1);
++    assert_eq!(
++        observations[0].0,
++        Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
++    );
++    assert!(!h.state.lock().unwrap().adoption_order.contains(&"decode"));
++}
++
++#[test]
++fn generated_completion_does_not_require_observer_polling_and_drain_keeps_delivery() {
++    let mut h = Harness::new(1, 2, true);
++    let drops = Arc::new(AtomicUsize::new(0));
++    let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
++    activate(&mut h, ticket, stream);
++    for _ in 0..3 {
++        h.advance();
++    }
++    h.registry.retire_unpublished_v1(&mut h.context, 1);
++    assert_eq!(h.registry.active_len(), 1);
++    h.advance();
++    assert!(!h.context.is_terminal());
++    assert_eq!(h.registry.active_len(), 0);
++    assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++    assert_eq!(drops.load(Ordering::SeqCst), 1);
++    assert!(
++        h.state
++            .lock()
++            .unwrap()
++            .adoption_order
++            .contains(&"gate_commit")
++    );
++    h.context.destroy_stream(stream).unwrap();
++}
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs
+index bb2fcb235..9cb38a61e 100644
+--- a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs
+@@ -1,9 +1,10 @@
+ use super::*;
+ use generated_operation::adoption::IssueHooksV1;
+ 
+-fn issue_hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
++pub(super) fn issue_hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
+     let mut hooks: AdoptionHooksV1<B, Payload> = hooks();
+     hooks.issue = Some(IssueHooksV1 {
++        completion: None,
+         progress: |_, payload: &mut Payload, _, _| {
+             payload.issue_advances += 1;
+             payload
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs
+index 19af7783b..5e587305b 100644
+--- a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs
+@@ -30,7 +30,7 @@ impl std::task::Wake for CompletionWake {
+ fn poll_completion(
+     ticket: &mut RuntimeAsyncReservedTicketV1,
+     waker: &Waker,
+-) -> Poll<Result<(), RuntimeAsyncEngineCallErrorV1>> {
++) -> Poll<Result<Result<(), crate::RuntimeGfx942ReadbackErrorV1>, RuntimeAsyncEngineCallErrorV1>> {
+     Pin::new(ticket.completion_for_test_v1()).poll(&mut Context::from_waker(waker))
+ }
+ 
+diff --git a/crates/fe2o3-runtime/src/authorized_execution.rs b/crates/fe2o3-runtime/src/authorized_execution.rs
+index 293b4d0a2..f2ea9b019 100644
+--- a/crates/fe2o3-runtime/src/authorized_execution.rs
++++ b/crates/fe2o3-runtime/src/authorized_execution.rs
+@@ -17,6 +17,11 @@ use fe2o3_kfd::{
+ };
+ use sha2::{Digest, Sha256};
+ 
++mod generated_completion;
++pub use generated_completion::{
++    RuntimeGfx942GeneratedCompletionCarrierV1, RuntimeGfx942GeneratedCompletionViewV1,
++};
++
+ use crate::{
+     Gfx942RuntimeBufferAccessV1, Gfx942RuntimePreparedBufferPolicyV1,
+     PreparedGfx942RuntimeDispatchV1,
+@@ -1059,6 +1064,13 @@ pub(crate) mod tests {
+ 
+     fn source_projection_with_geometry(
+         geometry: fe2o3_aql::AqlDispatchGeometryV1,
++    ) -> (Vec<u8>, crate::PreparedGfx942PersistentDispatchV1) {
++        source_projection_with_access(geometry, [crate::Gfx942RuntimeBufferAccessV1::ReadWrite; 3])
++    }
++
++    fn source_projection_with_access(
++        geometry: fe2o3_aql::AqlDispatchGeometryV1,
++        accesses: [crate::Gfx942RuntimeBufferAccessV1; 3],
+     ) -> (Vec<u8>, crate::PreparedGfx942PersistentDispatchV1) {
+         let hsaco = crate::synthetic_cov6::preparation_module();
+         let mut explicit = vec![0; 16];
+@@ -1072,7 +1084,7 @@ pub(crate) mod tests {
+                     .map(|index| {
+                         crate::Gfx942RuntimeDispatchBufferV1::new(
+                             vec![index as u8; 16 + index * 4],
+-                            crate::Gfx942RuntimeBufferAccessV1::ReadWrite,
++                            accesses[index],
+                         )
+                         .unwrap()
+                     })
+@@ -1104,6 +1116,8 @@ pub(crate) mod tests {
+         }
+     }
+ 
++    mod completion_tests;
++
+     #[test]
+     fn generated_source_join_retains_full_roster_and_original_source() {
+         let (hsaco, projection) = source_projection();
+diff --git a/crates/fe2o3-runtime/src/authorized_execution/generated_completion.rs b/crates/fe2o3-runtime/src/authorized_execution/generated_completion.rs
+new file mode 100644
+index 000000000..d092721de
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/authorized_execution/generated_completion.rs
+@@ -0,0 +1,131 @@
++//! Trusted host correspondence, separate from native execution authority.
++
++use crate::{
++    Gfx942RuntimeBufferAccessV1, KfdRuntimeBackendErrorV1, RuntimeErrorV1,
++    RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedSourceV1, RuntimeGfx942ReadbackErrorV1,
++};
++
++/// Simultaneous borrows of the original source and reserved destinations.
++/// Construction is descriptive; only runtime can inspect or fill the destinations.
++///
++/// ```compile_fail,E0616
++/// use fe2o3_runtime::RuntimeGfx942GeneratedCompletionViewV1;
++/// fn extract(value: RuntimeGfx942GeneratedCompletionViewV1<'_, ()>) {
++///     let _ = value.destinations;
++/// }
++/// ```
++///
++/// A callback cannot keep the borrowed view after lending returns:
++///
++/// ```compile_fail,E0521
++/// use fe2o3_runtime::{
++///     RuntimeGfx942GeneratedCompletionCarrierV1, RuntimeGfx942GeneratedCompletionViewV1,
++/// };
++/// fn escape<C: RuntimeGfx942GeneratedCompletionCarrierV1>(
++///     carrier: &mut C,
++/// ) -> RuntimeGfx942GeneratedCompletionViewV1<'static, C::CurrentnessError> {
++///     let mut escaped = None;
++///     carrier.with_completion_view_v1(|view| {
++///         escaped = Some(view);
++///         Ok(())
++///     }).unwrap();
++///     escaped.unwrap()
++/// }
++/// ```
++#[doc(hidden)]
++pub struct RuntimeGfx942GeneratedCompletionViewV1<'a, E> {
++    source: RuntimeGfx942GeneratedSourceV1<'a, E>,
++    destinations: &'a mut [(Gfx942RuntimeBufferAccessV1, Vec<u8>)],
++}
++
++impl<'a, E> RuntimeGfx942GeneratedCompletionViewV1<'a, E> {
++    pub fn new(
++        source: RuntimeGfx942GeneratedSourceV1<'a, E>,
++        destinations: &'a mut [(Gfx942RuntimeBufferAccessV1, Vec<u8>)],
++    ) -> Self {
++        Self {
++            source,
++            destinations,
++        }
++    }
++
++    pub(crate) fn into_parts(
++        self,
++    ) -> (
++        RuntimeGfx942GeneratedSourceV1<'a, E>,
++        &'a mut [(Gfx942RuntimeBufferAccessV1, Vec<u8>)],
++    ) {
++        (self.source, self.destinations)
++    }
++}
++
++/// Trusted correspondence between reserved host storage and its original decoder.
++/// This does not grant Worker authority or authorize native publication.
++///
++/// The ordinary safe carrier cannot grant this correspondence:
++///
++/// ```compile_fail,E0200
++/// use fe2o3_runtime::{
++///     KfdRuntimeBackendErrorV1, RuntimeErrorV1, RuntimeGfx942GeneratedCarrierV1,
++///     RuntimeGfx942GeneratedCompletionCarrierV1, RuntimeGfx942GeneratedCompletionViewV1,
++///     RuntimeGfx942GeneratedSourceV1, RuntimeGfx942ReadbackErrorV1,
++/// };
++/// struct Wrapper<C>(C);
++/// impl<C: RuntimeGfx942GeneratedCarrierV1> RuntimeGfx942GeneratedCarrierV1 for Wrapper<C> {
++///     type CurrentnessError = C::CurrentnessError;
++///     type Readback = C::Readback;
++///     fn source(&self) -> RuntimeGfx942GeneratedSourceV1<'_, C::CurrentnessError> {
++///         self.0.source()
++///     }
++///     fn prepare_readback(&self) -> Result<C::Readback, RuntimeGfx942ReadbackErrorV1> {
++///         self.0.prepare_readback()
++///     }
++///     fn install_readback(&mut self, readback: C::Readback) {
++///         self.0.install_readback(readback);
++///     }
++/// }
++/// impl<C: RuntimeGfx942GeneratedCarrierV1> RuntimeGfx942GeneratedCompletionCarrierV1
++///     for Wrapper<C>
++/// {
++///     fn with_completion_view_v1(
++///         &mut self,
++///         _: impl for<'a> FnOnce(RuntimeGfx942GeneratedCompletionViewV1<'a, C::CurrentnessError>)
++///             -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>>,
++///     ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> { Ok(()) }
++///     fn complete_readback_v1(self) -> Result<(), RuntimeGfx942ReadbackErrorV1> { Ok(()) }
++/// }
++/// ```
++///
++/// # Safety
++///
++/// The view must lend the exact installed readback allocations in original source
++/// order, retaining their charged owner and the same uncommitted result gate.
++/// Complete shape, gate and output-custody validation must precede callback entry.
++/// The source must be the same immutable invocation that reserved those buffers.
++/// Success must invoke the callback exactly once and return its result unchanged.
++/// Callback errors and panics must propagate without retry or result publication.
++/// After callback entry no source, destination, decoder or gate may be replaced;
++/// after callback return no destination bytes or result state may be changed.
++/// Completion must consume that original owner and decoder exactly once, check
++/// all read-only bytes, decode every output, and settle disposed storage credits
++/// before committing the original gate as its final successful action. An error
++/// or unwind must leave the gate uncommitted and the result unavailable.
++/// It must not fabricate a result, replace
++/// the decoder or transfer completion to another invocation. Runtime calls it
++/// only after native and Context settlement. This unsafe boundary transports
++/// compiler/host correspondence that runtime cannot inspect, not Rust borrows.
++#[doc(hidden)]
++pub unsafe trait RuntimeGfx942GeneratedCompletionCarrierV1:
++    RuntimeGfx942GeneratedCarrierV1
++{
++    fn with_completion_view_v1(
++        &mut self,
++        callback: impl for<'a> FnOnce(
++            RuntimeGfx942GeneratedCompletionViewV1<'a, Self::CurrentnessError>,
++        ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>>,
++    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>>;
++
++    fn complete_readback_v1(self) -> Result<(), RuntimeGfx942ReadbackErrorV1>
++    where
++        Self: Sized;
++}
+diff --git a/crates/fe2o3-runtime/src/authorized_execution/tests/completion_tests.rs b/crates/fe2o3-runtime/src/authorized_execution/tests/completion_tests.rs
+new file mode 100644
+index 000000000..3b7b2d4c7
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/authorized_execution/tests/completion_tests.rs
+@@ -0,0 +1,169 @@
++use super::*;
++use crate::{RuntimeGfx942GeneratedCompletionViewV1, RuntimeGfx942GeneratedSourceV1};
++
++fn mixed_projection() -> (Vec<u8>, crate::PreparedGfx942PersistentDispatchV1) {
++    source_projection_with_access(
++        fe2o3_aql::AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
++        [
++            Gfx942RuntimeBufferAccessV1::ReadWrite,
++            Gfx942RuntimeBufferAccessV1::ReadOnly,
++            Gfx942RuntimeBufferAccessV1::WriteOnly,
++        ],
++    )
++}
++
++fn original_destinations(
++    projection: &crate::PreparedGfx942PersistentDispatchV1,
++) -> Vec<(Gfx942RuntimeBufferAccessV1, Vec<u8>)> {
++    projection
++        .buffers()
++        .iter()
++        .enumerate()
++        .map(|(index, buffer)| {
++            (
++                projection.buffer_access(index).unwrap(),
++                buffer.bytes().to_vec(),
++            )
++        })
++        .collect()
++}
++
++fn pointers(destinations: &[(Gfx942RuntimeBufferAccessV1, Vec<u8>)]) -> Vec<(*const u8, usize)> {
++    destinations
++        .iter()
++        .map(|(_, bytes)| (bytes.as_ptr(), bytes.capacity()))
++        .collect()
++}
++
++#[test]
++fn generated_completion_view_keeps_same_authority_and_original_roster() {
++    let (hsaco, projection) = mixed_projection();
++    let authority = source_authority(&projection);
++    let unrelated = source_authority(&projection);
++    let source = RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority);
++    let roster = source.validate(7).unwrap();
++    authority.checks.set(0);
++    let mut destinations = original_destinations(&projection);
++    let addresses = pointers(&destinations);
++    let view = RuntimeGfx942GeneratedCompletionViewV1::new(source, &mut destinations);
++    let (source, destinations) = view.into_parts();
++    source
++        .with_current_source_v1(7, &roster, || {
++            unrelated.current.set(false);
++            assert_eq!(destinations[1].0, Gfx942RuntimeBufferAccessV1::ReadOnly);
++            destinations[0].1.fill(0xee);
++            destinations[2].1.fill(0xff);
++            source.validate_completed_readback_v1(destinations).unwrap();
++            Ok::<(), ()>(())
++        })
++        .unwrap()
++        .unwrap();
++    assert_eq!(authority.checks.get(), 3);
++    assert_eq!(unrelated.checks.get(), 0);
++    assert_eq!(pointers(destinations), addresses);
++    assert_eq!(destinations[1].1, projection.buffers()[1].bytes());
++}
++
++#[test]
++fn generated_completion_readback_validates_every_extent_access_and_read_only_byte() {
++    let (hsaco, projection) = mixed_projection();
++    let authority = source_authority(&projection);
++    let source = RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority);
++    for mutation in 0..12 {
++        let mut destinations = original_destinations(&projection);
++        match mutation {
++            0 => {
++                destinations.pop();
++            }
++            1 => destinations.push((Gfx942RuntimeBufferAccessV1::ReadOnly, vec![1])),
++            2..=4 => {
++                destinations[mutation - 2].0 = match destinations[mutation - 2].0 {
++                    Gfx942RuntimeBufferAccessV1::ReadOnly => Gfx942RuntimeBufferAccessV1::ReadWrite,
++                    _ => Gfx942RuntimeBufferAccessV1::ReadOnly,
++                }
++            }
++            5..=7 => {
++                destinations[mutation - 5].1.pop();
++            }
++            8..=10 => destinations[mutation - 8].1.reserve_exact(1),
++            _ => destinations[1].1[19] ^= 1,
++        }
++        assert!(
++            source
++                .validate_completed_readback_v1(&destinations)
++                .is_err(),
++            "mutation {mutation}"
++        );
++    }
++}
++
++#[test]
++fn generated_completion_view_currentness_faults_retain_exact_copied_prefix() {
++    for check in 1..=3 {
++        for panic in [false, true] {
++            let (hsaco, projection) = mixed_projection();
++            let authority = source_authority(&projection);
++            let source = RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority);
++            let roster = source.validate(7).unwrap();
++            authority.checks.set(0);
++            authority.fault.set(Some(if panic {
++                CurrentnessFault::PanicAt(check)
++            } else {
++                CurrentnessFault::ErrorAt(check)
++            }));
++            let mut destinations = original_destinations(&projection);
++            let addresses = pointers(&destinations);
++            let called = Cell::new(0);
++            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++                let (source, destinations) =
++                    RuntimeGfx942GeneratedCompletionViewV1::new(source, &mut destinations)
++                        .into_parts();
++                source.with_current_source_v1(7, &roster, || {
++                    called.set(called.get() + 1);
++                    destinations[0].1[..7].fill(9);
++                    Ok::<(), ()>(())
++                })
++            }));
++            if panic {
++                assert!(result.is_err());
++            } else {
++                assert!(result.unwrap().is_err());
++            }
++            assert_eq!(called.get(), usize::from(check == 3));
++            assert_eq!(authority.checks.get(), check);
++            assert_eq!(pointers(&destinations), addresses);
++            assert_eq!(
++                &destinations[0].1[..7],
++                if check == 3 { &[9; 7] } else { &[0; 7] }
++            );
++            assert_eq!(&destinations[0].1[7..], &[0; 9]);
++            assert_eq!(destinations[1].1, projection.buffers()[1].bytes());
++            assert_eq!(destinations[2].1, projection.buffers()[2].bytes());
++        }
++    }
++}
++
++#[test]
++fn generated_completion_view_foreign_source_rejects_before_callback() {
++    let (hsaco, projection) = mixed_projection();
++    let (_, foreign) = mixed_projection();
++    assert_eq!(
++        projection.dispatch_contract_sha256(),
++        foreign.dispatch_contract_sha256()
++    );
++    let authority = source_authority(&projection);
++    let source = RuntimeGfx942GeneratedSourceV1::new(&projection, &hsaco, &authority);
++    let roster = crate::generated_source::GeneratedHostRosterV1::from_projection(&foreign).unwrap();
++    let mut destinations = original_destinations(&projection);
++    let addresses = pointers(&destinations);
++    let (source, destinations) =
++        RuntimeGfx942GeneratedCompletionViewV1::new(source, &mut destinations).into_parts();
++    assert!(matches!(
++        source.with_current_source_v1(7, &roster, || -> Result<(), ()> {
++            panic!("foreign source entered")
++        }),
++        Err(crate::RuntimeGfx942GeneratedReservationErrorV1::InvalidRoster)
++    ));
++    assert_eq!(pointers(destinations), addresses);
++    assert_eq!(authority.checks.get(), 1);
++}
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue.rs b/crates/fe2o3-runtime/src/context/generated_issue.rs
+index e01c7b15b..e3aceedf4 100644
+--- a/crates/fe2o3-runtime/src/context/generated_issue.rs
++++ b/crates/fe2o3-runtime/src/context/generated_issue.rs
+@@ -1,10 +1,12 @@
+-//! First-run mutation attempts. No journal-backed reuse or typed completion.
++//! First-run mutation attempts and completion. No journal-backed reuse.
+ 
+ use super::*;
+ use crate::generated_source::GeneratedHostRosterV1;
+ use crate::kfd_backend::GeneratedShellPlanV1;
+ use crate::{KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1, RuntimeGfx942GeneratedCarrierV1};
+ 
++mod completion;
++
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+ enum PhaseV1 {
+     Entering,
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue/completion.rs b/crates/fe2o3-runtime/src/context/generated_issue/completion.rs
+new file mode 100644
+index 000000000..05517817d
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/context/generated_issue/completion.rs
+@@ -0,0 +1,153 @@
++//! Original readback remains borrowed until native and Context settlement finish.
++
++use super::*;
++use crate::{RuntimeGfx942GeneratedCompletionCarrierV1, RuntimeGfx942GeneratedCompletionViewV1};
++
++pub(super) struct NativeSettlementV1 {
++    submission: RuntimeSubmissionIdV1,
++    backend_submission: u64,
++    stream: RuntimeStreamIdV1,
++    hold: u64,
++}
++
++#[cfg(test)]
++pub(super) fn assume_native_settlement_for_context_test_v1(
++    context: &RuntimeContextV1<KfdRuntimeBackendV1>,
++    hold: &ContextUnpublishedHoldV1,
++) -> NativeSettlementV1 {
++    let attempt = &context.generated_issues[&hold.stream()];
++    NativeSettlementV1 {
++        submission: attempt.id,
++        backend_submission: attempt.submission.as_ref().unwrap().backend_submission,
++        stream: hold.stream(),
++        hold: hold.identity(),
++    }
++}
++
++pub(super) fn require_completion_view_v1<T: RuntimeGfx942GeneratedCompletionCarrierV1>(
++    carrier: &mut T,
++    complete: impl for<'a> FnOnce(
++        RuntimeGfx942GeneratedCompletionViewV1<'a, T::CurrentnessError>,
++    ) -> Result<
++        NativeSettlementV1,
++        RuntimeErrorV1<KfdRuntimeBackendErrorV1>,
++    >,
++) -> Result<NativeSettlementV1, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++    let mut settled = None;
++    carrier.with_completion_view_v1(|view| {
++        settled = Some(complete(view)?);
++        Ok(())
++    })?;
++    settled.ok_or_else(|| RuntimeValidationErrorV1::InvalidBackendDescription.into())
++}
++
++impl RuntimeContextV1<KfdRuntimeBackendV1> {
++    pub(crate) fn complete_gfx942_issue_v1<T: RuntimeGfx942GeneratedCompletionCarrierV1>(
++        &mut self,
++        prepared: &mut RuntimeGfx942PreparedV1<T>,
++        roster: &GeneratedHostRosterV1,
++        hold: &ContextUnpublishedHoldV1,
++    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        let result = catch_unwind(AssertUnwindSafe(|| {
++            self.validate_gfx942_prepared_v1(prepared)?;
++            let plan = self.generated_plan_for_hold_v1(hold)?;
++            if !self.gfx942_prepared_matches_plan_v1(prepared, &plan) {
++                return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
++            }
++            let attempt = self
++                .generated_issues
++                .get(&hold.stream())
++                .ok_or(RuntimeValidationErrorV1::InvalidBackendDescription)?;
++            if attempt.plan != plan
++                || !attempt.roster.matches(roster)
++                || attempt.phase != PhaseV1::PhysicallyComplete
++            {
++                return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
++            }
++            let token = self.generated_issue_token_v1(hold, &plan)?;
++            let id = token.id;
++            let backend_submission = token.backend_submission;
++            let uid = self.generated_issue_device_uid_v1(plan.binding.backend_device)?;
++            self.generated_issues
++                .get_mut(&hold.stream())
++                .expect("retained attempt")
++                .phase = PhaseV1::Unknown;
++            let settled = require_completion_view_v1(prepared.value_mut_v1(), |view| {
++                let (source, destinations) = view.into_parts();
++                source
++                    .with_current_source_v1(uid, roster, || {
++                        self.backend
++                            .read_generated_submission_v1(
++                                &plan,
++                                backend_submission,
++                                roster,
++                                destinations,
++                            )
++                            .map_err(map_backend_error)?;
++                        source
++                            .validate_completed_readback_v1(destinations)
++                            .map_err(|_| {
++                                RuntimeErrorV1::Validation(
++                                    RuntimeValidationErrorV1::InvalidBackendDescription,
++                                )
++                            })?;
++                        self.backend
++                            .retire_generated_data_v1(&plan)
++                            .map_err(map_backend_error)?;
++                        self.backend
++                            .release_submission_v1(backend_submission)
++                            .map_err(map_backend_error)?;
++                        Ok::<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>>(())
++                    })
++                    .map_err(|_| {
++                        RuntimeErrorV1::Validation(
++                            RuntimeValidationErrorV1::InvalidBackendDescription,
++                        )
++                    })??;
++                Ok(NativeSettlementV1 {
++                    submission: id,
++                    backend_submission,
++                    stream: hold.stream(),
++                    hold: hold.identity(),
++                })
++            })?;
++            self.settle_completed_gfx942_context_v1(hold, settled)
++        }));
++        self.finish_generated_issue_v1(hold, result)
++    }
++
++    // Called only after required lending, closing currentness and native
++    // settlement. This tail releases Context metadata, not native authority.
++    pub(super) fn settle_completed_gfx942_context_v1(
++        &mut self,
++        hold: &ContextUnpublishedHoldV1,
++        settled: NativeSettlementV1,
++    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        let attempt = self
++            .generated_issues
++            .get(&hold.stream())
++            .ok_or(RuntimeValidationErrorV1::InvalidBackendDescription)?;
++        if attempt.phase != PhaseV1::Unknown {
++            return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
++        }
++        let token = self.generated_issue_token_v1(hold, &attempt.plan)?;
++        let (id, backend_submission) = (token.id, token.backend_submission);
++        if settled.submission != id
++            || settled.backend_submission != backend_submission
++            || settled.stream != hold.stream()
++            || settled.hold != hold.identity()
++        {
++            return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
++        }
++        self.retire_generated_shells_v1(hold)?;
++        self.require_live()?;
++        self.release_unpublished_hold_v1(hold)?;
++        // This status describes native execution. Typed output stays behind
++        // its original gate until the async driver consumes the decoder.
++        self.transition_submission_status(id, RuntimeCompletionStatusV1::Succeeded);
++        self.submissions.remove(&id);
++        self.backend_submissions.remove(&backend_submission);
++        self.generated_issues.remove(&hold.stream());
++        Ok(())
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue/tests.rs b/crates/fe2o3-runtime/src/context/generated_issue/tests.rs
+index d2355ab28..1fc7a7426 100644
+--- a/crates/fe2o3-runtime/src/context/generated_issue/tests.rs
++++ b/crates/fe2o3-runtime/src/context/generated_issue/tests.rs
+@@ -2,6 +2,8 @@ use super::*;
+ use crate::RuntimeGfx942GeneratedSourceMutV1;
+ use crate::authorized_execution::tests::{source_authority, source_projection};
+ 
++mod completion_tests;
++
+ fn install(
+     context: &mut RuntimeContextV1<KfdRuntimeBackendV1>,
+ ) -> (
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue/tests/completion_tests.rs b/crates/fe2o3-runtime/src/context/generated_issue/tests/completion_tests.rs
+new file mode 100644
+index 000000000..b6ca39440
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/context/generated_issue/tests/completion_tests.rs
+@@ -0,0 +1,409 @@
++use super::super::completion::assume_native_settlement_for_context_test_v1 as assumed_settlement;
++use super::*;
++use crate::{
++    RuntimeGfx942GeneratedCompletionCarrierV1, RuntimeGfx942GeneratedCompletionViewV1,
++    RuntimeGfx942GeneratedSourceV1, RuntimeGfx942ReadbackErrorV1,
++};
++use std::{cell::Cell, rc::Rc};
++
++struct OmittingCarrier {
++    calls: Rc<Cell<usize>>,
++    drops: Rc<Cell<usize>>,
++    destinations: Vec<Vec<u8>>,
++}
++
++impl Drop for OmittingCarrier {
++    fn drop(&mut self) {
++        self.drops.set(self.drops.get() + 1);
++    }
++}
++
++impl RuntimeGfx942GeneratedCarrierV1 for OmittingCarrier {
++    type CurrentnessError = ();
++    type Readback = ();
++    fn source(&self) -> RuntimeGfx942GeneratedSourceV1<'_, ()> {
++        panic!("inert omission fixture has no Worker or native authority")
++    }
++    fn prepare_readback(&self) -> Result<(), RuntimeGfx942ReadbackErrorV1> {
++        panic!("fixture cannot reserve readback")
++    }
++    fn install_readback(&mut self, _: ()) {
++        panic!("fixture cannot install readback")
++    }
++}
++
++// SAFETY: adversarial correspondence fixture only, used to reject missing
++// callbacks. It never creates a source/view, commits a gate or reaches native
++// execution. Its deliberate false success must fail the production guard.
++#[allow(unsafe_code)]
++unsafe impl RuntimeGfx942GeneratedCompletionCarrierV1 for OmittingCarrier {
++    fn with_completion_view_v1(
++        &mut self,
++        _: impl for<'a> FnOnce(
++            RuntimeGfx942GeneratedCompletionViewV1<'a, ()>,
++        ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>>,
++    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
++        self.calls.set(self.calls.get() + 1);
++        Ok(())
++    }
++    fn complete_readback_v1(self) -> Result<(), RuntimeGfx942ReadbackErrorV1> {
++        panic!("fixture must never decode")
++    }
++}
++
++fn carrier(calls: &Rc<Cell<usize>>, drops: &Rc<Cell<usize>>) -> OmittingCarrier {
++    OmittingCarrier {
++        calls: calls.clone(),
++        drops: drops.clone(),
++        destinations: vec![vec![0x5a; 16], vec![0xa5; 20], vec![0x3c; 24]],
++    }
++}
++
++#[test]
++fn generated_completion_missing_callback_rejects_without_consuming_original_owner() {
++    let calls = Rc::new(Cell::new(0));
++    let drops = Rc::new(Cell::new(0));
++    let mut carrier = carrier(&calls, &drops);
++    let pointers: Vec<_> = carrier.destinations.iter().map(Vec::as_ptr).collect();
++    let result = completion::require_completion_view_v1(&mut carrier, |_| {
++        panic!("omitted callback cannot settle completion")
++    });
++    assert!(matches!(
++        result,
++        Err(RuntimeErrorV1::Validation(
++            RuntimeValidationErrorV1::InvalidBackendDescription
++        ))
++    ));
++    assert_eq!(calls.get(), 1);
++    assert_eq!(drops.get(), 0);
++    assert_eq!(
++        carrier
++            .destinations
++            .iter()
++            .map(Vec::as_ptr)
++            .collect::<Vec<_>>(),
++        pointers
++    );
++    drop(carrier);
++    assert_eq!(drops.get(), 1);
++}
++
++fn installed_attempt(
++    context: &mut RuntimeContextV1<KfdRuntimeBackendV1>,
++    backend: u64,
++) -> (
++    ContextUnpublishedHoldV1,
++    GeneratedShellPlanV1,
++    GeneratedHostRosterV1,
++) {
++    let (hold, plan, roster) = install(context);
++    context
++        .begin_generated_issue_v1(&hold, plan, &roster)
++        .unwrap();
++    context
++        .install_generated_submission_v1(&hold, backend)
++        .unwrap();
++    context
++        .generated_issues
++        .get_mut(&hold.stream())
++        .unwrap()
++        .phase = PhaseV1::PhysicallyComplete;
++    (hold, plan, roster)
++}
++
++fn assert_submission_retained(
++    context: &RuntimeContextV1<KfdRuntimeBackendV1>,
++    id: RuntimeSubmissionIdV1,
++    before: SubmissionRecordV1,
++) {
++    let after = context.submissions[&id];
++    assert_eq!(after.backend_submission, before.backend_submission);
++    assert_eq!(after.stream, before.stream);
++    assert_eq!(after.device, before.device);
++    assert_eq!(after.quiescent, before.quiescent);
++    assert_eq!(after.status, before.status);
++}
++
++#[test]
++fn generated_completion_without_retained_device_preserves_all_pre_lending_custody() {
++    let mut context = context();
++    let (hold, plan, roster) = installed_attempt(&mut context, 900);
++    let calls = Rc::new(Cell::new(0));
++    let drops = Rc::new(Cell::new(0));
++    let mut prepared = context.bound_preparation_for_test_v1(carrier(&calls, &drops));
++    let snapshot = |carrier: &OmittingCarrier| {
++        carrier
++            .destinations
++            .iter()
++            .map(|bytes| (bytes.clone(), bytes.as_ptr(), bytes.len(), bytes.capacity()))
++            .collect::<Vec<_>>()
++    };
++    let destinations = snapshot(prepared.value());
++    let before = context
++        .allocation_admission_usage_v1(plan.binding.device)
++        .unwrap();
++    let id = context.generated_issues[&hold.stream()].id;
++    let record = context.submissions[&id];
++    assert_eq!(before.unwrap().retained_records, 3);
++    assert_eq!(
++        before.unwrap().used,
++        crate::RuntimeResourceVectorV1::ZERO
++            .with(crate::RuntimeResourceKindV1::RequestedAllocationBytes, 60)
++            .with(crate::RuntimeResourceKindV1::AllocationRecords, 3)
++    );
++    let next = context.next_identity;
++    assert!(
++        context
++            .complete_gfx942_issue_v1(&mut prepared, &roster, &hold)
++            .is_err()
++    );
++    assert!(context.is_terminal());
++    assert_eq!(
++        calls.get(),
++        0,
++        "no checked device means no completion lending"
++    );
++    assert_eq!(drops.get(), 0);
++    assert_eq!(context.next_identity, next);
++    let attempt = &context.generated_issues[&hold.stream()];
++    assert_eq!(attempt.phase, PhaseV1::Unknown);
++    assert_eq!(attempt.id, id);
++    assert_eq!(attempt.plan, plan);
++    assert!(attempt.roster.matches(&roster));
++    assert_eq!(attempt.submission.as_ref().unwrap().backend_submission, 900);
++    assert_submission_retained(&context, id, record);
++    assert_eq!(context.backend_submissions, [900].into_iter().collect());
++    assert_eq!(context.allocations.len(), 3);
++    for member in plan.members[..plan.count].iter().flatten() {
++        assert_eq!(
++            context.allocations[&member.logical].backend_allocation,
++            member.backend
++        );
++        assert!(context.backend_allocations.contains(&member.backend));
++    }
++    assert_eq!(context.streams[&hold.stream()].generated, Some(plan.key));
++    assert_eq!(
++        context.unpublished_identity_for_test_v1(hold.stream()),
++        Some(Some(hold.identity()))
++    );
++    assert_eq!(
++        context
++            .allocation_admission_usage_v1(plan.binding.device)
++            .unwrap(),
++        before
++    );
++    assert_eq!(snapshot(prepared.value()), destinations);
++    assert!(
++        context
++            .complete_gfx942_issue_v1(&mut prepared, &roster, &hold)
++            .is_err()
++    );
++    assert_eq!(calls.get(), 0);
++    assert_eq!(drops.get(), 0);
++    assert_submission_retained(&context, id, record);
++    assert_eq!(snapshot(prepared.value()), destinations);
++    assert_eq!(
++        context
++            .allocation_admission_usage_v1(plan.binding.device)
++            .unwrap(),
++        before
++    );
++    assert_eq!(
++        context.unpublished_identity_for_test_v1(hold.stream()),
++        Some(Some(hold.identity()))
++    );
++    // No native owner exists in this fixture. Preserve the terminal Context
++    // exactly as production requires, then dispose only the inert test carrier.
++    core::mem::forget(context);
++    drop(prepared);
++    assert_eq!(drops.get(), 1);
++}
++
++#[test]
++fn generated_completion_context_tail_releases_only_exact_invocation() {
++    let mut context = context();
++    let (first, first_plan, first_roster) = installed_attempt(&mut context, 900);
++    let (second, second_plan, second_roster) = installed_attempt(&mut context, 901);
++    let first_id = context.generated_issues[&first.stream()].id;
++    let second_id = context.generated_issues[&second.stream()].id;
++    let first_record = context.submissions[&first_id];
++    let second_record = context.submissions[&second_id];
++    let before = context
++        .allocation_admission_usage_v1(first_plan.binding.device)
++        .unwrap();
++    let notifications = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
++    let observed = notifications.clone();
++    let token = context
++        .generated_issues
++        .get_mut(&first.stream())
++        .unwrap()
++        .submission
++        .take()
++        .unwrap();
++    context
++        .on_completion(&token, move |status| observed.lock().unwrap().push(status))
++        .unwrap();
++    context
++        .generated_issues
++        .get_mut(&first.stream())
++        .unwrap()
++        .submission = Some(token);
++    assert_eq!(context.completion_callback_count, 1);
++
++    let unsettled = assumed_settlement(&context, &first);
++    assert!(
++        context
++            .settle_completed_gfx942_context_v1(&first, unsettled)
++            .is_err()
++    );
++    // This exercises actual post-native bookkeeping, not native completion.
++    context
++        .generated_issues
++        .get_mut(&first.stream())
++        .unwrap()
++        .phase = PhaseV1::Unknown;
++    let wrong = assumed_settlement(&context, &second);
++    assert!(
++        context
++            .settle_completed_gfx942_context_v1(&first, wrong)
++            .is_err()
++    );
++    assert_submission_retained(&context, first_id, first_record);
++    assert_submission_retained(&context, second_id, second_record);
++    assert_eq!(
++        context.backend_submissions,
++        [900, 901].into_iter().collect()
++    );
++    assert_eq!(context.allocations.len(), 6);
++    assert_eq!(context.backend_allocations.len(), 6);
++    for (hold, plan, roster) in [
++        (&first, first_plan, &first_roster),
++        (&second, second_plan, &second_roster),
++    ] {
++        let attempt = &context.generated_issues[&hold.stream()];
++        assert_eq!(attempt.plan, plan);
++        assert!(attempt.roster.matches(roster));
++        for member in plan.members[..plan.count].iter().flatten() {
++            let record = context.allocations[&member.logical];
++            assert_eq!(record.backend_allocation, member.backend);
++            assert_eq!(record.device, plan.binding.device);
++            assert_eq!(record.kind, member.description.kind);
++            assert_eq!(record.byte_len, member.description.byte_len);
++            assert!(context.backend_allocations.contains(&member.backend));
++        }
++        assert_eq!(context.streams[&hold.stream()].generated, Some(plan.key));
++        assert_eq!(
++            context.unpublished_identity_for_test_v1(hold.stream()),
++            Some(Some(hold.identity()))
++        );
++    }
++    assert_eq!(
++        context
++            .allocation_admission_usage_v1(first_plan.binding.device)
++            .unwrap(),
++        before
++    );
++    assert!(notifications.lock().unwrap().is_empty());
++    let settled = assumed_settlement(&context, &first);
++    context
++        .settle_completed_gfx942_context_v1(&first, settled)
++        .unwrap();
++    assert_eq!(
++        *notifications.lock().unwrap(),
++        [RuntimeCompletionStatusV1::Succeeded]
++    );
++    assert_eq!(context.completion_callback_count, 0);
++    assert!(!context.completion_callbacks.contains_key(&first_id));
++    assert!(!context.is_terminal());
++    assert!(!context.submissions.contains_key(&first_id));
++    assert_submission_retained(&context, second_id, second_record);
++    assert_eq!(context.backend_submissions, [901].into_iter().collect());
++    assert!(!context.generated_issues.contains_key(&first.stream()));
++    assert_eq!(context.generated_issues[&second.stream()].plan, second_plan);
++    assert!(
++        context.generated_issues[&second.stream()]
++            .roster
++            .matches(&second_roster)
++    );
++    assert_eq!(
++        context.generated_issues[&second.stream()].phase,
++        PhaseV1::PhysicallyComplete
++    );
++    assert_eq!(
++        context.generated_issues[&second.stream()]
++            .submission
++            .as_ref()
++            .unwrap()
++            .backend_submission,
++        901
++    );
++    assert_eq!(context.allocations.len(), 3);
++    assert_eq!(context.backend_allocations.len(), 3);
++    for member in first_plan.members[..first_plan.count].iter().flatten() {
++        assert!(!context.allocations.contains_key(&member.logical));
++        assert!(!context.backend_allocations.contains(&member.backend));
++    }
++    for member in second_plan.members[..second_plan.count].iter().flatten() {
++        assert_eq!(
++            context.allocations[&member.logical].backend_allocation,
++            member.backend
++        );
++        assert!(context.backend_allocations.contains(&member.backend));
++    }
++    let usage = context
++        .allocation_admission_usage_v1(first_plan.binding.device)
++        .unwrap()
++        .unwrap();
++    assert_eq!(usage.retained_records, 3);
++    assert_eq!(
++        usage.used,
++        crate::RuntimeResourceVectorV1::ZERO
++            .with(crate::RuntimeResourceKindV1::RequestedAllocationBytes, 60)
++            .with(crate::RuntimeResourceKindV1::AllocationRecords, 3)
++    );
++    assert_eq!(context.streams[&first.stream()].generated, None);
++    assert_eq!(
++        context.unpublished_identity_for_test_v1(first.stream()),
++        Some(None)
++    );
++    assert_eq!(
++        context.streams[&second.stream()].generated,
++        Some(second_plan.key)
++    );
++    assert_eq!(
++        context.unpublished_identity_for_test_v1(second.stream()),
++        Some(Some(second.identity()))
++    );
++    let other = assumed_settlement(&context, &second);
++    assert!(
++        context
++            .settle_completed_gfx942_context_v1(&first, other)
++            .is_err()
++    );
++    context
++        .generated_issues
++        .get_mut(&second.stream())
++        .unwrap()
++        .phase = PhaseV1::Unknown;
++    let settled = assumed_settlement(&context, &second);
++    context
++        .settle_completed_gfx942_context_v1(&second, settled)
++        .unwrap();
++    assert_eq!(
++        *notifications.lock().unwrap(),
++        [RuntimeCompletionStatusV1::Succeeded]
++    );
++    assert!(context.submissions.is_empty());
++    assert!(context.backend_submissions.is_empty());
++    assert!(context.generated_issues.is_empty());
++    assert!(context.allocations.is_empty());
++    assert!(context.backend_allocations.is_empty());
++    let usage = context
++        .allocation_admission_usage_v1(first_plan.binding.device)
++        .unwrap()
++        .unwrap();
++    assert_eq!(usage.retained_records, 0);
++    assert_eq!(usage.used, crate::RuntimeResourceVectorV1::ZERO);
++    context.destroy_stream(first.stream()).unwrap();
++    context.destroy_stream(second.stream()).unwrap();
++}
+diff --git a/crates/fe2o3-runtime/src/context/generated_preparation.rs b/crates/fe2o3-runtime/src/context/generated_preparation.rs
+index 2b9ee116a..29ff86878 100644
+--- a/crates/fe2o3-runtime/src/context/generated_preparation.rs
++++ b/crates/fe2o3-runtime/src/context/generated_preparation.rs
+@@ -61,6 +61,16 @@ impl<T> RuntimeGfx942PreparedV1<T> {
+     pub const fn value(&self) -> &T {
+         &self.value
+     }
++
++    pub(in crate::context) fn value_mut_v1(&mut self) -> &mut T {
++        &mut self.value
++    }
++}
++
++impl<T: crate::RuntimeGfx942GeneratedCompletionCarrierV1> RuntimeGfx942PreparedV1<T> {
++    pub(crate) fn complete_readback_v1(self) -> Result<(), crate::RuntimeGfx942ReadbackErrorV1> {
++        self.value.complete_readback_v1()
++    }
+ }
+ 
+ impl<T> fmt::Debug for RuntimeGfx942PreparedV1<T> {
+diff --git a/crates/fe2o3-runtime/src/context/generated_preparation/tests.rs b/crates/fe2o3-runtime/src/context/generated_preparation/tests.rs
+index e716aa3e8..9b1fc1e97 100644
+--- a/crates/fe2o3-runtime/src/context/generated_preparation/tests.rs
++++ b/crates/fe2o3-runtime/src/context/generated_preparation/tests.rs
+@@ -6,6 +6,13 @@ use super::*;
+ mod shell_tests;
+ 
+ impl RuntimeContextV1<KfdRuntimeBackendV1> {
++    pub(in crate::context) fn bound_preparation_for_test_v1<T>(
++        &self,
++        value: T,
++    ) -> RuntimeGfx942PreparedV1<T> {
++        bound(self, value)
++    }
++
+     #[cfg(feature = "hardware-qualification")]
+     pub(crate) fn generated_native_test_ids_v1(
+         backend_device: u64,
+diff --git a/crates/fe2o3-runtime/src/generated_source.rs b/crates/fe2o3-runtime/src/generated_source.rs
+index 3b9561e6e..02b687ace 100644
+--- a/crates/fe2o3-runtime/src/generated_source.rs
++++ b/crates/fe2o3-runtime/src/generated_source.rs
+@@ -75,6 +75,27 @@ impl<'a, E> RuntimeGfx942GeneratedSourceV1<'a, E> {
+             .map_err(|_| RuntimeGfx942GeneratedReservationErrorV1::AuthorityNotCurrent)
+     }
+ 
++    pub(crate) fn validate_completed_readback_v1(
++        &self,
++        destinations: &[(Gfx942RuntimeBufferAccessV1, Vec<u8>)],
++    ) -> Result<(), RuntimeGfx942ReadbackErrorV1> {
++        let inputs = self.projection.buffers();
++        if destinations.len() != inputs.len() {
++            return Err(RuntimeGfx942ReadbackErrorV1::InvalidStorage);
++        }
++        for (ordinal, ((access, bytes), input)) in destinations.iter().zip(inputs).enumerate() {
++            if Some(*access) != self.projection.buffer_access(ordinal)
++                || bytes.len() != input.bytes().len()
++                || bytes.capacity() != bytes.len()
++                || (*access == Gfx942RuntimeBufferAccessV1::ReadOnly
++                    && bytes.as_slice() != input.bytes())
++            {
++                return Err(RuntimeGfx942ReadbackErrorV1::InvalidStorage);
++            }
++        }
++        Ok(())
++    }
++
+     pub(crate) fn with_current_source_v1<F>(
+         &self,
+         device_unique_id: u64,
+@@ -238,7 +259,7 @@ pub trait RuntimeGfx942GeneratedCarrierV1 {
+     fn install_readback(&mut self, readback: Self::Readback);
+ }
+ 
+-#[derive(Debug)]
++#[derive(Clone, Debug, Eq, PartialEq)]
+ pub enum RuntimeGfx942ReadbackErrorV1 {
+     InvalidStorage,
+     AlreadyReserved,
+diff --git a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/readback.rs b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/readback.rs
+index 4f45a43c2..edec1bbeb 100644
+--- a/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/readback.rs
++++ b/crates/fe2o3-runtime/src/kfd_backend/generated_adoption/readback.rs
+@@ -66,10 +66,6 @@ fn read_roster_v1<E>(
+ }
+ 
+ impl KfdRuntimeBackendV1 {
+-    #[allow(
+-        dead_code,
+-        reason = "C4 native readback; Context/host completion is the next join"
+-    )]
+     pub(crate) fn read_generated_submission_v1(
+         &mut self,
+         plan: &GeneratedShellPlanV1,
+diff --git a/crates/fe2o3-runtime/src/lib.rs b/crates/fe2o3-runtime/src/lib.rs
+index 2a0a6fb42..a22d9d804 100644
+--- a/crates/fe2o3-runtime/src/lib.rs
++++ b/crates/fe2o3-runtime/src/lib.rs
+@@ -28,6 +28,7 @@ pub use authorized_execution::{
+     AuthorizedRuntimeDebugTelemetrySessionV1, AuthorizedRuntimeDebugTelemetrySessionV2,
+     Gfx942AuthorizedRuntimeCompletedBufferV1, Gfx942AuthorizedRuntimeDebugExecutionErrorV2,
+     Gfx942AuthorizedRuntimeDispatchResultV1, Gfx942AuthorizedRuntimeExecutionErrorV1,
++    RuntimeGfx942GeneratedCompletionCarrierV1, RuntimeGfx942GeneratedCompletionViewV1,
+     WorkerV3Gfx942ExecutionAuthorityV1, execute_authorized_gfx942_runtime_debug_target_dispatch_v1,
+     execute_authorized_gfx942_runtime_debug_target_dispatch_v2,
+     execute_authorized_gfx942_runtime_dispatch_v1,
+diff --git a/scripts/unsafe-source-baseline.json b/scripts/unsafe-source-baseline.json
+index b3ec7d8ac..b1fa48874 100644
+--- a/scripts/unsafe-source-baseline.json
++++ b/scripts/unsafe-source-baseline.json
+@@ -558,6 +558,9 @@
+   "crates/fe2o3-host/src/generated_runtime_arguments.rs": {
+     "trait": 1
+   },
++  "crates/fe2o3-host/src/generated_runtime_invocation.rs": {
++    "impl": 1
++  },
+   "crates/fe2o3-host/src/generated_worker_v3_dispatch.rs": {
+     "block": 5,
+     "trait": 1
+@@ -827,9 +830,15 @@
+     "impl": 1,
+     "trait": 1
+   },
++  "crates/fe2o3-runtime/src/authorized_execution/generated_completion.rs": {
++    "trait": 1
++  },
+   "crates/fe2o3-runtime/src/bin/fe2o3-runtime-kfd-worker-v5-qualification.rs": {
+     "impl": 1
+   },
++  "crates/fe2o3-runtime/src/context/generated_issue/tests/completion_tests.rs": {
++    "impl": 1
++  },
+   "crates/fe2o3-runtime/src/kfd_backend.rs": {
+     "block": 2,
+     "impl": 8,

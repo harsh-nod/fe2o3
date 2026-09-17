@@ -75,6 +75,27 @@ impl<'a, E> RuntimeGfx942GeneratedSourceV1<'a, E> {
             .map_err(|_| RuntimeGfx942GeneratedReservationErrorV1::AuthorityNotCurrent)
     }
 
+    pub(crate) fn validate_completed_readback_v1(
+        &self,
+        destinations: &[(Gfx942RuntimeBufferAccessV1, Vec<u8>)],
+    ) -> Result<(), RuntimeGfx942ReadbackErrorV1> {
+        let inputs = self.projection.buffers();
+        if destinations.len() != inputs.len() {
+            return Err(RuntimeGfx942ReadbackErrorV1::InvalidStorage);
+        }
+        for (ordinal, ((access, bytes), input)) in destinations.iter().zip(inputs).enumerate() {
+            if Some(*access) != self.projection.buffer_access(ordinal)
+                || bytes.len() != input.bytes().len()
+                || bytes.capacity() != bytes.len()
+                || (*access == Gfx942RuntimeBufferAccessV1::ReadOnly
+                    && bytes.as_slice() != input.bytes())
+            {
+                return Err(RuntimeGfx942ReadbackErrorV1::InvalidStorage);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn with_current_source_v1<F>(
         &self,
         device_unique_id: u64,
@@ -238,7 +259,7 @@ pub trait RuntimeGfx942GeneratedCarrierV1 {
     fn install_readback(&mut self, readback: Self::Readback);
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RuntimeGfx942ReadbackErrorV1 {
     InvalidStorage,
     AlreadyReserved,

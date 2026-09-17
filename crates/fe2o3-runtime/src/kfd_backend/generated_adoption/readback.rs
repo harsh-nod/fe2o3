@@ -66,10 +66,6 @@ fn read_roster_v1<E>(
 }
 
 impl KfdRuntimeBackendV1 {
-    #[allow(
-        dead_code,
-        reason = "C4 native readback; Context/host completion is the next join"
-    )]
     pub(crate) fn read_generated_submission_v1(
         &mut self,
         plan: &GeneratedShellPlanV1,

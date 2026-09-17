@@ -108,3 +108,8 @@ must lend the original installed host readback owner without extracting it,
 revalidate source/currentness, settle native/Context/hold custody, consume the
 existing R85 decoder exactly once, then resolve the original completion cell.
 Native readback tests do not supply protected Worker authority or prove that join.
+
+The later [private C4 implementation](runtime-generated-completion-v1.md) now
+implements that ordering and has separately sealed CPU qualification. It does
+not convert these lower native probes into protected end-to-end evidence or
+advance the accepted milestones.

@@ -1,4 +1,4 @@
-//! Private nonpublishing lifecycle; ISSUE and COMPLETE are separate transitions.
+//! Private adoption, issue and original-owner completion lifecycle.
 
 use super::*;
 use crate::RuntimeValidationErrorV1;
@@ -39,6 +39,21 @@ type IssueProgressV1<B, P> = fn(
 pub(in crate::async_engine) struct IssueHooksV1<B: RuntimeBackendV1, P> {
     pub progress: IssueProgressV1<B, P>,
     pub retire_stopped: IssuedRetireV1<B>,
+    pub completion: Option<CompletionHooksV1<B, P>>,
+}
+
+pub(in crate::async_engine) struct CompletionHooksV1<B: RuntimeBackendV1, P> {
+    // Success includes native, Context record, credit and exact hold settlement.
+    // Failure must leave P rooted; it cannot authorize retry or decoding.
+    pub settle: AdoptV1<B, P>,
+    pub decode: fn(P) -> GeneratedCompletionOutcomeV1,
+}
+
+impl<B: RuntimeBackendV1, P> Copy for CompletionHooksV1<B, P> {}
+impl<B: RuntimeBackendV1, P> Clone for CompletionHooksV1<B, P> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 impl<B: RuntimeBackendV1, P> Copy for IssueHooksV1<B, P> {}
@@ -146,6 +161,43 @@ impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
                 }
                 _ => context.quarantine_after_async_command_panic_v1(),
             }
+        } else if owner.phase == PhaseV1::PhysicallySettled
+            && !self.observations_stopped
+            && let Some(completion) = self
+                .adoption
+                .as_ref()
+                .expect("admitted hooks")
+                .issue
+                .and_then(|issue| issue.completion)
+        {
+            owner.phase = PhaseV1::Quarantined;
+            let result = (completion.settle)(
+                context,
+                self.prepared.as_mut().expect("retained payload"),
+                self.roster.as_ref().expect("retained roster"),
+                &owner.hold,
+            );
+            if result.is_err() || context.is_terminal() {
+                context.quarantine_after_async_command_panic_v1();
+                return false;
+            }
+            owner.phase = PhaseV1::Retired;
+            // Native/Context custody is now conclusively gone. Decoder failure
+            // consumes only host storage and resolves this original cell once.
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                (completion.decode)(self.prepared.take().expect("settled payload"))
+            }));
+            let observation = match result {
+                Ok(decoded) => Ok(decoded),
+                Err(payload) => {
+                    core::mem::forget(payload);
+                    Err(RuntimeAsyncEngineCallErrorV1::CommandPanicked)
+                }
+            };
+            if let Some(mut reply) = self.completion.take() {
+                reply.complete(observation);
+            }
+            return true;
         }
         false
     }
@@ -160,7 +212,7 @@ impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
         if matches!(owner.phase, PhaseV1::Issued | PhaseV1::PhysicallySettled) {
             // Drain observes the accepted prefix without cancelling output.
             // Only actual Stop, after stopping the reserved completion observer,
-            // permits destructive disposal before C4 output delivery exists.
+            // permits destructive disposal without output delivery.
             if !self.observations_stopped {
                 return Ok(false);
             }

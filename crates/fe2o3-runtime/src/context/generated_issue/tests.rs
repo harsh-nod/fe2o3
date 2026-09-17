@@ -2,6 +2,8 @@ use super::*;
 use crate::RuntimeGfx942GeneratedSourceMutV1;
 use crate::authorized_execution::tests::{source_authority, source_projection};
 
+mod completion_tests;
+
 fn install(
     context: &mut RuntimeContextV1<KfdRuntimeBackendV1>,
 ) -> (

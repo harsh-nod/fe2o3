@@ -8,7 +8,8 @@ use fe2o3_runtime::{
     GeneratedGfx942PersistentStorageV1, Gfx942RuntimeProjectionErrorV1, KfdRuntimeBackendErrorV1,
     KfdRuntimeBackendV1, PreparedGfx942RuntimeDispatchV1, RuntimeAsyncEngineCallErrorV1,
     RuntimeAsyncPreparationV1, RuntimeAsyncProgressHandleV1, RuntimeContextV1, RuntimeDeviceIdV1,
-    RuntimeErrorV1, RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedSourceMutV1,
+    RuntimeErrorV1, RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedCompletionCarrierV1,
+    RuntimeGfx942GeneratedCompletionViewV1, RuntimeGfx942GeneratedSourceMutV1,
     RuntimeGfx942GeneratedSourceV1, RuntimeGfx942PreparationErrorV1, RuntimeGfx942PreparedV1,
     RuntimeGfx942ReadbackErrorV1,
 };
@@ -128,6 +129,62 @@ impl<K: CompilerGeneratedKernelExpectationV1> RuntimeGfx942GeneratedCarrierV1
 
     fn install_readback(&mut self, readback: Self::Readback) {
         self.storage.install_readback(readback);
+    }
+}
+
+// SAFETY: the private storage binds the original source, charged destinations,
+// gate and decoder. The borrowed view cannot replace or extract any owner, and
+// the existing consuming decoder commits only after complete validation and
+// disposal-credit settlement.
+unsafe impl<K: CompilerGeneratedKernelExpectationV1> RuntimeGfx942GeneratedCompletionCarrierV1
+    for GeneratedContextPreparationV1<K, GeneratedGfx942PersistentStorageV1>
+{
+    fn with_completion_view_v1(
+        &mut self,
+        callback: impl for<'a> FnOnce(
+            RuntimeGfx942GeneratedCompletionViewV1<'a, Self::CurrentnessError>,
+        ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>>,
+    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+        let (payload, destinations) = self.storage.borrow_reserved_readback_v1().map_err(|_| {
+            RuntimeErrorV1::Validation(
+                fe2o3_runtime::RuntimeValidationErrorV1::InvalidBackendDescription,
+            )
+        })?;
+        let source = RuntimeGfx942GeneratedSourceV1::from_generated_storage(
+            payload,
+            self.authority
+                .binding
+                .authenticated
+                .current_publication_token()
+                .exact_artifact_bytes(),
+            &self.authority,
+        );
+        callback(RuntimeGfx942GeneratedCompletionViewV1::new(
+            source,
+            destinations,
+        ))
+    }
+
+    fn complete_readback_v1(self) -> Result<(), RuntimeGfx942ReadbackErrorV1> {
+        let Self {
+            storage,
+            authority,
+            footprint: _,
+            result_budget,
+        } = self;
+        drop(authority);
+        drop(result_budget);
+        storage
+            .decode_reserved_readback()
+            .map_err(|error| match error {
+                GeneratedRuntimeArgumentErrorV1::ResultCredit(error) => {
+                    RuntimeGfx942ReadbackErrorV1::Credit(error)
+                }
+                GeneratedRuntimeArgumentErrorV1::Allocation => {
+                    RuntimeGfx942ReadbackErrorV1::Allocation
+                }
+                _ => RuntimeGfx942ReadbackErrorV1::InvalidStorage,
+            })
     }
 }
 
@@ -362,7 +419,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         self.require_runtime_evidence()?;
         let result_budget = result_budget.clone();
         owner
-            .try_prepare_generated_gfx942_v1(device, move |device| {
+            .try_prepare_generated_gfx942_completion_v1(device, move |device| {
                 self.prepare_context_payload(
                     arguments,
                     device,
@@ -495,7 +552,9 @@ mod async_preparation_tests {
         let budget = body
             .find("let result_budget = result_budget.clone()")
             .unwrap();
-        let enqueue = body.find(".try_prepare_generated_gfx942_v1(").unwrap();
+        let enqueue = body
+            .find(".try_prepare_generated_gfx942_completion_v1(")
+            .unwrap();
         let payload = body.find("self.prepare_context_payload(").unwrap();
         let projection = body.find(".project_persistent()").unwrap();
         assert!(

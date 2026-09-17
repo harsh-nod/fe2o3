@@ -193,6 +193,16 @@ native accounting failures remain preserved and excluded. The host decoder,
 Context settlement and original completion-cell join remain next; this is not
 C4 or milestone acceptance.
 
+The subsequent [private C4 completion integration](runtime-generated-completion-v1.md)
+now joins original host destinations, full readback and closing currentness to
+exact native/Context settlement, the original decoder/result gate and original
+completion cell. Its sealed CPU cohort passes 908 runtime and 262 host tests
+on GNU and a musl build with optional legacy HIP linkage disabled. Strict gates
+and 53 doctests pass; canonical integration matches all thirty-eight frozen
+source/inventory identities. Protected Worker/carrier/native execution and
+native fault qualification remain unproven. Public C5 typed completion and C6
+generated graph/drain remain next; accepted checkpoints are unchanged.
+
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,865 tests with

@@ -94,6 +94,7 @@ impl Error for RuntimeAsyncPreparedDiscardFailureV1 {
 
 type Prepare<B, P, E> = Box<dyn FnOnce(&mut RuntimeContextV1<B>) -> Result<P, E> + Send>;
 type PreparationReply<E> = owned::Reply<Result<RuntimeAsyncPreparedTicketV1, E>>;
+pub(super) type GeneratedCompletionOutcomeV1 = Result<(), crate::RuntimeGfx942ReadbackErrorV1>;
 
 struct PreparationFactory<B: RuntimeBackendV1, P, E> {
     prepare: Option<Prepare<B, P, E>>,
@@ -113,7 +114,7 @@ struct PreparationDriver<B: RuntimeBackendV1, P, E> {
     control: RuntimeAsyncOperationControlV1,
     reserve: Option<Reserve<B, P>>,
     roster: Option<crate::generated_source::GeneratedHostRosterV1>,
-    completion: Option<owned::Reply<()>>,
+    completion: Option<owned::Reply<GeneratedCompletionOutcomeV1>>,
     adoption: Option<adoption::AdoptionHooksV1<B, P>>,
     unpublished: Option<adoption::UnpublishedAdoptionV1>,
     observations_stopped: bool,
@@ -242,7 +243,7 @@ impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P,
     fn reserve_generated(
         &mut self,
         context: &mut RuntimeContextV1<B>,
-        completion: &mut Option<owned::Reply<()>>,
+        completion: &mut Option<owned::Reply<GeneratedCompletionOutcomeV1>>,
     ) -> Result<(), RuntimeGfx942GeneratedReservationErrorV1> {
         let reserve = self
             .reserve
@@ -394,6 +395,47 @@ impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
         RuntimeAsyncPreparationV1<RuntimeGfx942PreparationErrorV1<E>>,
         RuntimeAsyncEngineCallErrorV1,
     > {
+        self.try_prepare_generated_with_completion_v1(device, prepare, None)
+    }
+
+    /// Host bridge retaining the original decoder for private completion.
+    /// Preparation alone does not activate work or expose its completion cell.
+    #[doc(hidden)]
+    pub fn try_prepare_generated_gfx942_completion_v1<
+        P: crate::RuntimeGfx942GeneratedCompletionCarrierV1 + 'static,
+        E: Send + 'static,
+    >(
+        &self,
+        device: RuntimeDeviceIdV1,
+        prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, E> + Send + 'static,
+    ) -> Result<
+        RuntimeAsyncPreparationV1<RuntimeGfx942PreparationErrorV1<E>>,
+        RuntimeAsyncEngineCallErrorV1,
+    > {
+        self.try_prepare_generated_with_completion_v1(
+            device,
+            prepare,
+            Some(adoption::CompletionHooksV1 {
+                settle: RuntimeContextV1::complete_gfx942_issue_v1::<P>,
+                decode: crate::RuntimeGfx942PreparedV1::<P>::complete_readback_v1,
+            }),
+        )
+    }
+
+    fn try_prepare_generated_with_completion_v1<
+        P: RuntimeGfx942GeneratedCarrierV1 + 'static,
+        E: Send + 'static,
+    >(
+        &self,
+        device: RuntimeDeviceIdV1,
+        prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, E> + Send + 'static,
+        completion: Option<
+            adoption::CompletionHooksV1<KfdRuntimeBackendV1, crate::RuntimeGfx942PreparedV1<P>>,
+        >,
+    ) -> Result<
+        RuntimeAsyncPreparationV1<RuntimeGfx942PreparationErrorV1<E>>,
+        RuntimeAsyncEngineCallErrorV1,
+    > {
         self.enqueue_preparation_with_adoption_v1(
             Box::new(move |context| context.with_gfx942_preparation_device_v1(device, prepare)),
             Some(RuntimeContextV1::reserve_gfx942_prepared_v1::<P>),
@@ -405,6 +447,7 @@ impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
                 issue: Some(adoption::IssueHooksV1 {
                     progress: RuntimeContextV1::progress_gfx942_issue_v1::<P>,
                     retire_stopped: RuntimeContextV1::retire_gfx942_issued_v1,
+                    completion,
                 }),
             }),
         )

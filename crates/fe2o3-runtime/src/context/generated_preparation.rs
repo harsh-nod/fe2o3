@@ -61,6 +61,16 @@ impl<T> RuntimeGfx942PreparedV1<T> {
     pub const fn value(&self) -> &T {
         &self.value
     }
+
+    pub(in crate::context) fn value_mut_v1(&mut self) -> &mut T {
+        &mut self.value
+    }
+}
+
+impl<T: crate::RuntimeGfx942GeneratedCompletionCarrierV1> RuntimeGfx942PreparedV1<T> {
+    pub(crate) fn complete_readback_v1(self) -> Result<(), crate::RuntimeGfx942ReadbackErrorV1> {
+        self.value.complete_readback_v1()
+    }
 }
 
 impl<T> fmt::Debug for RuntimeGfx942PreparedV1<T> {

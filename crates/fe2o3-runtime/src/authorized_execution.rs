@@ -17,6 +17,11 @@ use fe2o3_kfd::{
 };
 use sha2::{Digest, Sha256};
 
+mod generated_completion;
+pub use generated_completion::{
+    RuntimeGfx942GeneratedCompletionCarrierV1, RuntimeGfx942GeneratedCompletionViewV1,
+};
+
 use crate::{
     Gfx942RuntimeBufferAccessV1, Gfx942RuntimePreparedBufferPolicyV1,
     PreparedGfx942RuntimeDispatchV1,
@@ -1060,6 +1065,13 @@ pub(crate) mod tests {
     fn source_projection_with_geometry(
         geometry: fe2o3_aql::AqlDispatchGeometryV1,
     ) -> (Vec<u8>, crate::PreparedGfx942PersistentDispatchV1) {
+        source_projection_with_access(geometry, [crate::Gfx942RuntimeBufferAccessV1::ReadWrite; 3])
+    }
+
+    fn source_projection_with_access(
+        geometry: fe2o3_aql::AqlDispatchGeometryV1,
+        accesses: [crate::Gfx942RuntimeBufferAccessV1; 3],
+    ) -> (Vec<u8>, crate::PreparedGfx942PersistentDispatchV1) {
         let hsaco = crate::synthetic_cov6::preparation_module();
         let mut explicit = vec![0; 16];
         explicit[8..].copy_from_slice(&4u64.to_le_bytes());
@@ -1072,7 +1084,7 @@ pub(crate) mod tests {
                     .map(|index| {
                         crate::Gfx942RuntimeDispatchBufferV1::new(
                             vec![index as u8; 16 + index * 4],
-                            crate::Gfx942RuntimeBufferAccessV1::ReadWrite,
+                            accesses[index],
                         )
                         .unwrap()
                     })
@@ -1103,6 +1115,8 @@ pub(crate) mod tests {
             fault: Cell::new(None),
         }
     }
+
+    mod completion_tests;
 
     #[test]
     fn generated_source_join_retains_full_roster_and_original_source() {

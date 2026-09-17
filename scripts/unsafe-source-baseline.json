@@ -558,6 +558,9 @@
   "crates/fe2o3-host/src/generated_runtime_arguments.rs": {
     "trait": 1
   },
+  "crates/fe2o3-host/src/generated_runtime_invocation.rs": {
+    "impl": 1
+  },
   "crates/fe2o3-host/src/generated_worker_v3_dispatch.rs": {
     "block": 5,
     "trait": 1
@@ -827,7 +830,13 @@
     "impl": 1,
     "trait": 1
   },
+  "crates/fe2o3-runtime/src/authorized_execution/generated_completion.rs": {
+    "trait": 1
+  },
   "crates/fe2o3-runtime/src/bin/fe2o3-runtime-kfd-worker-v5-qualification.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/src/context/generated_issue/tests/completion_tests.rs": {
     "impl": 1
   },
   "crates/fe2o3-runtime/src/kfd_backend.rs": {

@@ -1,9 +1,10 @@
 use super::*;
 use generated_operation::adoption::IssueHooksV1;
 
-fn issue_hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
+pub(super) fn issue_hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
     let mut hooks: AdoptionHooksV1<B, Payload> = hooks();
     hooks.issue = Some(IssueHooksV1 {
+        completion: None,
         progress: |_, payload: &mut Payload, _, _| {
             payload.issue_advances += 1;
             payload

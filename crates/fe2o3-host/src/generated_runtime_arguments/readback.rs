@@ -7,6 +7,11 @@ use fe2o3_resource_accounting::{
 use super::*;
 use GeneratedRuntimeArgumentErrorV1 as Error;
 
+type ReservedReadbackBorrowV1<'a> = (
+    &'a GeneratedGfx942PersistentStorageV1,
+    &'a mut [(Gfx942RuntimeBufferAccessV1, Vec<u8>)],
+);
+
 pub(crate) struct GeneratedRuntimeReadbackOwnerV1 {
     buffers: Vec<(Gfx942RuntimeBufferAccessV1, Vec<u8>)>,
     credit: Option<RetainedResourceCreditsV1>,
@@ -63,10 +68,6 @@ impl Drop for PendingReadback {
 }
 
 impl GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1> {
-    #[allow(
-        dead_code,
-        reason = "private host completion substrate; native admission is not installed"
-    )]
     pub(crate) fn decode_reserved_readback(self) -> Result<(), Error> {
         self.decode_reserved_readback_with(|_| {})
     }
@@ -80,6 +81,30 @@ impl GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1> {
     }
 
     pub(super) fn validate_reserved_readback(&self) -> Result<(), Error> {
+        self.validate_reserved_readback_shape()?;
+        let readback = self.readback.as_ref().expect("validated readback");
+        for ((access, bytes), source) in readback.buffers.iter().zip(self.payload.buffers()) {
+            if *access == Gfx942RuntimeBufferAccessV1::ReadOnly
+                && bytes.as_slice() != source.bytes()
+            {
+                return Err(Error::BindingMismatch);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn borrow_reserved_readback_v1(
+        &mut self,
+    ) -> Result<ReservedReadbackBorrowV1<'_>, Error> {
+        self.validate_reserved_readback_shape()?;
+        let readback = self.readback.as_mut().expect("validated readback");
+        if readback.credit.is_none() {
+            return Err(Error::ResultCredit(ResourceCreditErrorV1::Invariant));
+        }
+        Ok((&self.payload, &mut readback.buffers))
+    }
+
+    fn validate_reserved_readback_shape(&self) -> Result<(), Error> {
         let readback = self.readback.as_ref().ok_or(Error::BindingMismatch)?;
         let gate = self
             .decoder
@@ -92,11 +117,23 @@ impl GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1> {
             .iter()
             .filter(|expected| expected.byte_len != 0)
             .count();
-        if !Arc::ptr_eq(&readback.gate, gate)
+        if gate.ready()
+            || !Arc::ptr_eq(&readback.gate, gate)
             || expected_count != self.payload.buffers().len()
             || expected_count != readback.buffers.len()
         {
             return Err(Error::BindingMismatch);
+        }
+        for expected in &self.decoder.expectations {
+            if let Some(custody) = &expected.custody {
+                custody.bound_to(Some(gate))?;
+            } else if !expected
+                .read_credit
+                .as_ref()
+                .is_some_and(|credit| credit.bound_to(gate))
+            {
+                return Err(Error::BindingMismatch);
+            }
         }
         for (ordinal, expected) in self
             .decoder
@@ -112,7 +149,6 @@ impl GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1> {
                 || *access != expected.access
                 || bytes.len() != expected.byte_len
                 || bytes.capacity() != expected.byte_len
-                || (*access == Gfx942RuntimeBufferAccessV1::ReadOnly && bytes.as_slice() != source)
             {
                 return Err(Error::BindingMismatch);
             }

@@ -1,6 +1,7 @@
 use super::*;
 
 mod completion_tests;
+mod lending_tests;
 
 fn projected(
     budget: &GeneratedRuntimeResultBudgetV1,

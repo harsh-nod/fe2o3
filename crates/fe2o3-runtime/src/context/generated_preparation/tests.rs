@@ -6,6 +6,13 @@ use super::*;
 mod shell_tests;
 
 impl RuntimeContextV1<KfdRuntimeBackendV1> {
+    pub(in crate::context) fn bound_preparation_for_test_v1<T>(
+        &self,
+        value: T,
+    ) -> RuntimeGfx942PreparedV1<T> {
+        bound(self, value)
+    }
+
     #[cfg(feature = "hardware-qualification")]
     pub(crate) fn generated_native_test_ids_v1(
         backend_device: u64,

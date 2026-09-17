@@ -20,14 +20,14 @@ pub struct RuntimeAsyncReservedTicketV1 {
         dead_code,
         reason = "private completion consumer retained until native issue exists"
     )]
-    completion: RuntimeAsyncCommandFutureV1<()>,
+    completion: RuntimeAsyncCommandFutureV1<GeneratedCompletionOutcomeV1>,
 }
 
 #[cfg(test)]
 impl RuntimeAsyncReservedTicketV1 {
     pub(in crate::async_engine) fn completion_for_test_v1(
         &mut self,
-    ) -> &mut RuntimeAsyncCommandFutureV1<()> {
+    ) -> &mut RuntimeAsyncCommandFutureV1<GeneratedCompletionOutcomeV1> {
         &mut self.completion
     }
 }
@@ -78,8 +78,8 @@ pub(in crate::async_engine) struct ReserveCommandV1 {
             Result<RuntimeAsyncReservedTicketV1, RuntimeAsyncPreparedReservationFailureV1>,
         >,
     >,
-    completion: Option<owned::Reply<()>>,
-    consumer: Option<RuntimeAsyncCommandFutureV1<()>>,
+    completion: Option<owned::Reply<GeneratedCompletionOutcomeV1>>,
+    consumer: Option<RuntimeAsyncCommandFutureV1<GeneratedCompletionOutcomeV1>>,
 }
 
 impl ReserveCommandV1 {
