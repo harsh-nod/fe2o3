@@ -255,6 +255,42 @@ fn every_admitted_instruction_lowers_to_a_canonical_static_template() {
 }
 
 #[test]
+fn shared_contract_preserves_signed_bit_carriers_and_register_selection() {
+    for (mnemonic, constraint, inputs) in [
+        ("v_mov_b32", AssemblyConstraint::Vgpr32, 1),
+        ("s_mov_b32", AssemblyConstraint::Sgpr32, 1),
+        ("v_add_u32", AssemblyConstraint::Vgpr32, 2),
+        ("v_sub_u32", AssemblyConstraint::Vgpr32, 2),
+        ("v_and_b32", AssemblyConstraint::Vgpr32, 2),
+        ("v_or_b32", AssemblyConstraint::Vgpr32, 2),
+        ("v_xor_b32", AssemblyConstraint::Vgpr32, 2),
+    ] {
+        let mut module = module_with(assembly(mnemonic, constraint, inputs));
+        let function = &mut module.functions[0];
+        function
+            .signature
+            .parameters
+            .fill(Type::Scalar(ScalarType::I32));
+        let operation = &mut function.body.as_mut().unwrap().blocks[0].operations[0];
+        operation.results[0].ty = Type::Scalar(ScalarType::I32);
+        let validated = validate_gfx942_inline_assembly_v1(operation, |_| Some(ScalarType::I32))
+            .expect("signed integer carrier preserves exact bits");
+        assert_eq!(validated.scalar_type(), ScalarType::I32);
+        assert_eq!(validated.instruction().constraint(), constraint);
+        let llvm = lower_compiler_module_to_gfx942_llvm_ir(&module).unwrap();
+        assert!(llvm.contains(&format!("asm \"{mnemonic} $0, $1")));
+        let register_constraints = if constraint == AssemblyConstraint::Sgpr32 {
+            "\"=s,s\""
+        } else if inputs == 1 {
+            "\"=v,v\""
+        } else {
+            "\"=v,v,v\""
+        };
+        assert!(llvm.contains(register_constraints), "{mnemonic}: {llvm}");
+    }
+}
+
+#[test]
 #[ignore = "requires ROCm LLVM tools with gfx942 support"]
 fn rocm_compiles_links_and_inspects_gfx942_inline_assembly() {
     let llc = std::env::var("FE2O3_LLC").expect("set FE2O3_LLC");

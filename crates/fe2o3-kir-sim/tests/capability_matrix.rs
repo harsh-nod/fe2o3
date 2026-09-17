@@ -62,6 +62,26 @@ fn matrix_is_complete_unique_bounded_and_authority_free() {
 }
 
 #[test]
+fn integer_assembly_is_scalar_bits_owned_with_explicit_remaining_rejection() {
+    let matrix = semantic_capability_matrix_v1();
+    let rows: Vec<_> = matrix
+        .top_level_rows
+        .iter()
+        .filter(|row| row.operation == SimulationOperationSurfaceV1::InlineAssembly)
+        .collect();
+    assert_eq!(rows.len(), 20);
+    for row in rows {
+        assert_eq!(
+            row.capability,
+            SimulationCapabilityDispositionV1::Owned {
+                owner: fe2o3_kir_sim::SimulationSemanticOwnerV1::ScalarBits,
+                typed_rejections: &[SimulationUnsupportedReasonCodeV1::InlineAssembly],
+            }
+        );
+    }
+}
+
+#[test]
 fn inert_v12_surfaces_keep_stable_ids_and_have_no_simulation_owner() {
     use SimulationOperationSurfaceV1 as Surface;
     assert_eq!(Surface::Constant as u8, 0);

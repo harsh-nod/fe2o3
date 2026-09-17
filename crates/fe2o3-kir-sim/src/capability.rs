@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_819_631;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_820_191;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -644,7 +644,9 @@ fn top_level_capability(
             owned(Owner::WaveCooperative, &[Reason::Wave])
         }
         Surface::Wave => owned(Owner::WaveCooperative, &[]),
-        Surface::InlineAssembly => unsupported(Reason::InlineAssembly),
+        // The closed gfx942 VGPR integer subset is evaluated as 32-bit data;
+        // other mnemonics/contracts and scalar-register execution remain rejected.
+        Surface::InlineAssembly => owned(Owner::ScalarBits, &[Reason::InlineAssembly]),
         Surface::Execution => unsupported(Reason::InertExecutionV15),
         Surface::VectorLoad
         | Surface::VectorStore

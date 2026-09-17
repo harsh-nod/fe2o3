@@ -74,6 +74,7 @@ mod debug_source_map_v2;
 mod effect_extraction;
 mod execution_operations_v15;
 mod formal_memory_obligations;
+mod gfx942_inline_assembly_v1;
 mod integer_semantic_oracle_v1;
 mod interprocedural_effects;
 mod ir;
@@ -143,6 +144,7 @@ pub use debug_source_map_v2::*;
 pub use effect_extraction::*;
 pub use execution_operations_v15::*;
 pub use formal_memory_obligations::*;
+pub use gfx942_inline_assembly_v1::*;
 pub use integer_semantic_oracle_v1::*;
 pub use interprocedural_effects::{
     InterproceduralEffectAnalysisV1, InterproceduralEffectDecisionV1,

@@ -8,6 +8,7 @@ use fe2o3_kernel_ir::{
     ComparePredicate, Constant, F32MathFunction, Function, FunctionId, FunctionRole, Kernel,
     LaunchExtent, MemoryElementType, MemoryIntrinsicOperation, Module, Operation, OperationKind,
     ScalarType, Terminator, Type, UnaryOp, ValueId, VolatileProvenanceContract,
+    validate_gfx942_inline_assembly_v1,
 };
 
 use crate::f32_surface::{F32ScalarOperationV1, admits_f32_scalar_operation};
@@ -1814,7 +1815,18 @@ fn scan_operation(
         },
         OperationKind::Wave(_) => {}
         OperationKind::Gfx950LdsTranspose(_) => {}
-        OperationKind::InlineAssembly(_) => reject!(UnsupportedFeatureV1::InlineAssembly),
+        OperationKind::InlineAssembly(_) => {
+            let admitted = validate_gfx942_inline_assembly_v1(operation, |value| {
+                value_types.get(&value).and_then(|ty| ty.as_scalar())
+            })
+            .is_ok_and(|validated| {
+                // Logical per-invocation values do not establish SGPR uniformity.
+                validated.instruction().constraint() == fe2o3_kernel_ir::AssemblyConstraint::Vgpr32
+            });
+            if !admitted {
+                reject!(UnsupportedFeatureV1::InlineAssembly);
+            }
+        }
         OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
         | OperationKind::VectorLayoutConvert(_)

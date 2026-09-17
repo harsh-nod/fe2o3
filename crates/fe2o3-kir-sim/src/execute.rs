@@ -18,6 +18,7 @@ use fe2o3_kernel_ir::{
     PointerDistanceKind, PointerDistanceUnit, ScalarType, SynchronizationScope, Terminator, Type,
     UnaryOp, ValueDef, ValueId, WaveF32ReductionKindV1, WaveOperation, WaveOperationKind,
     WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
+    validate_gfx942_inline_assembly_v1,
 };
 
 use crate::model::mask;
@@ -6356,6 +6357,36 @@ fn execute_operation(
     values: &HashMap<ValueId, RuntimeValue>,
     frame_allocations: &mut Vec<FrameAllocation>,
 ) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
+    // Choose the execution frame before entering either implementation. Calling the
+    // assembly helper from the large non-assembly match would combine their debug
+    // stack frames, even though an assembly operation needs only the small helper.
+    if matches!(&operation.kind, OperationKind::InlineAssembly(_)) {
+        let site = operation_site(function_index, block, ordinal);
+        execute_inline_assembly(engine, values, operation, &site)
+    } else {
+        execute_non_assembly_operation(
+            engine,
+            function_index,
+            block,
+            ordinal,
+            operation,
+            values,
+            frame_allocations,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn execute_non_assembly_operation(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    function_index: usize,
+    block: &BasicBlock,
+    ordinal: usize,
+    operation: &Operation,
+    values: &HashMap<ValueId, RuntimeValue>,
+    frame_allocations: &mut Vec<FrameAllocation>,
+) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
     let site = operation_site(function_index, block, ordinal);
     let one = |value| Ok(SmallResults::One(value));
     match &operation.kind {
@@ -6816,6 +6847,65 @@ fn execute_operation(
             ),
         )),
     }
+}
+
+// Keep contract-validation and error temporaries out of the dispatcher's debug-build
+// frame: unrelated operations must remain executable on the bounded 256 KiB stack.
+#[inline(never)]
+fn execute_inline_assembly(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    values: &HashMap<ValueId, RuntimeValue>,
+    operation: &Operation,
+    site: &CompactSite,
+) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
+    let validated =
+        validate_gfx942_inline_assembly_v1(operation, |value| match values.get(&value) {
+            Some(RuntimeValue::Scalar(scalar)) => Some(scalar.ty()),
+            _ => None,
+        })
+        .map_err(|_| {
+            engine.at(
+                *site,
+                SimulationExecutionErrorKindV1::InternalInvariant(
+                    "integer assembly contract changed after preflight",
+                ),
+            )
+        })?;
+    if validated.instruction().constraint() != fe2o3_kernel_ir::AssemblyConstraint::Vgpr32 {
+        return Err(engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::InternalInvariant(
+                "scalar-register assembly passed preflight",
+            ),
+        ));
+    }
+    let mut inputs = [0_u32; 2];
+    for (index, input) in validated.inputs().iter().enumerate() {
+        inputs[index] = scalar_value(engine, values, *input, site)?.bits() as u32;
+    }
+    let bits = validated
+        .instruction()
+        .evaluate_bits(&inputs[..validated.inputs().len()])
+        .map_err(|_| {
+            engine.at(
+                *site,
+                SimulationExecutionErrorKindV1::InternalInvariant(
+                    "validated integer assembly input arity",
+                ),
+            )
+        })?;
+    Ok(SmallResults::One(RuntimeValue::Scalar(
+        ScalarBitsV1::new(validated.scalar_type(), u128::from(bits), engine.target).map_err(
+            |_| {
+                engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "validated integer assembly result bits",
+                    ),
+                )
+            },
+        )?,
+    )))
 }
 
 fn execute_memory_intrinsic(

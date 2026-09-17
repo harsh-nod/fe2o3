@@ -22,7 +22,7 @@ unary/binary/compare/cast type combination. Rows name either the exact
 simulator owner or the typed preflight rejection; the document explicitly
 identifies V7, V9, V10, V11, and V12 separately, names those rows as declared tool-contract facts with no authority, and
 grants no hardware or performance authority. The complete newline-terminated
-compact V1 document is fixed at 4,819,631 bytes and its regression test rejects
+compact V1 document is fixed at 4,820,191 bytes and its regression test rejects
 any unreviewed schema-size change.
 
 The named `gfx942` and `gfx950` profiles select CPU simulation data-layout
@@ -39,6 +39,30 @@ rejects access widening, identity relabeling, write-only substitution, and any
 pointee or address-space change. Execution copies the pointer provenance and
 allocation identity while narrowing its access; it does not create Rust
 reference validity or aliasing evidence.
+
+The existing gfx942 `InlineAssembly` carrier supports `v_mov_b32`, `v_add_u32`,
+`v_sub_u32`, `v_and_b32`, `v_or_b32`, and `v_xor_b32` with exact `Vgpr32` SSA
+operands and a matching `i32` or `u32` result. Add/sub wrap modulo 2^32; their
+overflow behavior deliberately differs from ordinary KIR integer arithmetic.
+The operation semantics follow the unmodified integer forms in the
+[AMD Instinct MI300 ISA reference](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf);
+this carrier admits no saturation or other instruction modifiers.
+The shared kernel-IR validator enforces complete source-identity fields,
+input-only roles, one result, `NoMemory`, and no declared effects. Generic
+canonical verification and all existing source/target/capability gates still
+apply. Unknown instructions, mismatched contracts, and `s_mov_b32` remain
+typed `InlineAssembly` refusals; the interpreter does not model SGPR uniformity,
+physical registers, EXEC state, encodings, or scheduling hazards.
+
+These are semantics of already-verified KIR, available under each CPU scalar
+layout profile. They do not admit these instructions on gfx950 hardware. The
+six `amdgpu_asm!` source spellings still have no production semantic intrinsic
+expansion, so source export/readmission and the source-to-GPU milestone remain
+unavailable. Source identity presence is not source authentication. The source
+representation, importer, ranked projection, and production lowerer owners
+must provide that extension before an authored assembly kernel can enter this
+path. Instruction selection remains in the original `InlineAssembly` operation
+through simulation and its ordinary debug checkpoints.
 
 Ordinary admitted Rust can obtain these exact V7 bytes from a strict
 `VerifiedSimulationBundleV1` produced by the authority-free
@@ -270,7 +294,8 @@ legacy-request dynamic LDS, multiple dynamic bases, `DynamicAtLeast`,
 non-scalar workgroup memory, matrix operations, gfx950 LDS transpose
 operations, V7 memory intrinsics,
 V10/V11/V12 non-scalar, constant-address-space, or generic-address-space memory intrinsics, external-MMIO
-volatile access, target-layout mismatches, and inline assembly remain typed
+volatile access, target-layout mismatches, and inline assembly outside the closed
+gfx942 vector integer subset remain typed
 unsupported states. Pointer distance additionally rejects distinct logical
 allocations because the CPU model has no physical-address equality claim. The
 canonical sin/cos/exp/exp2/log/log2/log10 functions each retain a

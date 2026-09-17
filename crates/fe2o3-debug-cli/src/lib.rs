@@ -46,7 +46,8 @@ use fe2o3_kernel_ir::{
     DebugSourceMapKirSiteV1, DebugSourceMapSpanV1, DebugSourceVariableBindingV2,
     DebugSourceVariableFallbackV2, IndexedControlFlow, MemoryOrdering, OperationKind, ScalarType,
     SynchronizationScope, Type, ValueId, VerifiedSimulationBundleV2, VerifiedSimulationBundleV5,
-    analyze_control_flow, simulation_debug_map_identity_v1, simulation_debug_map_identity_v2,
+    VerifiedSimulationBundleV6, analyze_control_flow, simulation_debug_map_identity_v1,
+    simulation_debug_map_identity_v2,
 };
 use fe2o3_kir_debugger::{
     DebugBreakpointV1, DebugHitConditionV1, DebugInspectionUnavailableV1, DebugInspectionV1,
@@ -70,13 +71,14 @@ use fe2o3_kir_sim_cli::{
     AdmittedSimulationInputV1, SimulationInputErrorV1, load_debug_sidecar_v1,
     load_debug_simulation_bundle_v1, load_debug_simulation_bundle_v2,
     load_debug_simulation_bundle_v3, load_debug_simulation_bundle_v4,
-    load_debug_simulation_bundle_v5, load_debug_simulation_input_bytes_v1,
-    load_debug_simulation_input_v1, load_debug_simulation_schedule_v1,
+    load_debug_simulation_bundle_v5, load_debug_simulation_bundle_v6,
+    load_debug_simulation_input_bytes_v1, load_debug_simulation_input_v1,
+    load_debug_simulation_schedule_v1,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: fe2o3-debug sim ((--kir-v7 PATH | --bundle PATH | --bundle-v2 PATH | --bundle-v3 PATH | --bundle-v4 PATH | --bundle-v5 PATH) --request PATH | --kir-v7-fd FD --request-fd FD) [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug typed-layout (--bundle-v3 PATH | --bundle-v4 PATH) --request PATH\n       fe2o3-debug qualification --manifest /absolute/path/to/qualification.json\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug (live-rocgdb-kfd-v4 | live-rocgdb-kfd-v5) --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
+const USAGE: &str = "usage: fe2o3-debug sim ((--kir-v7 PATH | --bundle PATH | --bundle-v2 PATH | --bundle-v3 PATH | --bundle-v4 PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH | --kir-v7-fd FD --request-fd FD) [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug typed-layout (--bundle-v3 PATH | --bundle-v4 PATH) --request PATH\n       fe2o3-debug qualification --manifest /absolute/path/to/qualification.json\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug (live-rocgdb-kfd-v4 | live-rocgdb-kfd-v5) --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
 #[cfg(target_os = "linux")]
 const MAX_SEALED_DEBUG_INPUT_BYTES_V1: usize = 16 * 1024 * 1024;
@@ -114,11 +116,13 @@ enum ProgramInputV1 {
     BundleV3(PathBuf),
     BundleV4(PathBuf),
     BundleV5(PathBuf),
+    BundleV6(PathBuf),
 }
 
 enum EmbeddedBundleSourceMapV1 {
     V2(VerifiedSimulationBundleV2),
     V5(VerifiedSimulationBundleV5),
+    V6(VerifiedSimulationBundleV6),
 }
 
 impl EmbeddedBundleSourceMapV1 {
@@ -126,18 +130,21 @@ impl EmbeddedBundleSourceMapV1 {
         match self {
             Self::V2(bundle) => *bundle.subject_identity(),
             Self::V5(bundle) => *bundle.subject_identity(),
+            Self::V6(bundle) => *bundle.subject_identity(),
         }
     }
     fn debug_map_identity(&self) -> [u8; 32] {
         match self {
             Self::V2(bundle) => *bundle.debug_map_identity(),
             Self::V5(bundle) => bundle.debug_map_identity(),
+            Self::V6(bundle) => bundle.debug_map_identity(),
         }
     }
     fn debug_map(&self) -> &[u8] {
         match self {
             Self::V2(bundle) => bundle.debug_map(),
             Self::V5(bundle) => bundle.debug_map(),
+            Self::V6(bundle) => bundle.debug_map(),
         }
     }
 }
@@ -2154,6 +2161,18 @@ pub fn main() -> ExitCode {
                 }
             }
         }
+        (ProgramInputV1::BundleV6(path), RequestInputV1::Path(request)) => {
+            match load_debug_simulation_bundle_v6(path, request) {
+                Ok(admitted) => {
+                    let (input, bundle) = admitted.into_parts();
+                    (input, None, Some(EmbeddedBundleSourceMapV1::V6(bundle)))
+                }
+                Err(error) => {
+                    write_input_error(&error);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
         _ => unreachable!("argument parser pairs program and request input custody"),
     };
     let (source_map, caller_source_map_v2) =
@@ -2440,6 +2459,7 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
     let mut bundle_v3 = None;
     let mut bundle_v4 = None;
     let mut bundle_v5 = None;
+    let mut bundle_v6 = None;
     let mut request = None;
     let mut request_fd = None;
     let mut source_map = None;
@@ -2469,6 +2489,8 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             set_once(&mut bundle_v4, PathBuf::from(value), "--bundle-v4")?;
         } else if option == OsStr::new("--bundle-v5") {
             set_once(&mut bundle_v5, PathBuf::from(value), "--bundle-v5")?;
+        } else if option == OsStr::new("--bundle-v6") {
+            set_once(&mut bundle_v6, PathBuf::from(value), "--bundle-v6")?;
         } else if option == OsStr::new("--request") {
             set_once(&mut request, PathBuf::from(value), "--request")?;
         } else if option == OsStr::new("--request-fd") {
@@ -2522,16 +2544,17 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
         ));
     }
     let program = match (
-        kir_v7, kir_v7_fd, bundle, bundle_v2, bundle_v3, bundle_v4, bundle_v5,
+        kir_v7, kir_v7_fd, bundle, bundle_v2, bundle_v3, bundle_v4, bundle_v5, bundle_v6,
     ) {
-        (Some(path), None, None, None, None, None, None) => ProgramInputV1::KirV7(path),
-        (None, Some(fd), None, None, None, None, None) => ProgramInputV1::SealedKirV7Fd(fd),
-        (None, None, Some(path), None, None, None, None) => ProgramInputV1::Bundle(path),
-        (None, None, None, Some(path), None, None, None) => ProgramInputV1::BundleV2(path),
-        (None, None, None, None, Some(path), None, None) => ProgramInputV1::BundleV3(path),
-        (None, None, None, None, None, Some(path), None) => ProgramInputV1::BundleV4(path),
-        (None, None, None, None, None, None, Some(path)) => ProgramInputV1::BundleV5(path),
-        (None, None, None, None, None, None, None) => {
+        (Some(path), None, None, None, None, None, None, None) => ProgramInputV1::KirV7(path),
+        (None, Some(fd), None, None, None, None, None, None) => ProgramInputV1::SealedKirV7Fd(fd),
+        (None, None, Some(path), None, None, None, None, None) => ProgramInputV1::Bundle(path),
+        (None, None, None, Some(path), None, None, None, None) => ProgramInputV1::BundleV2(path),
+        (None, None, None, None, Some(path), None, None, None) => ProgramInputV1::BundleV3(path),
+        (None, None, None, None, None, Some(path), None, None) => ProgramInputV1::BundleV4(path),
+        (None, None, None, None, None, None, Some(path), None) => ProgramInputV1::BundleV5(path),
+        (None, None, None, None, None, None, None, Some(path)) => ProgramInputV1::BundleV6(path),
+        (None, None, None, None, None, None, None, None) => {
             return Err(format!("exactly one program input is required; {USAGE}"));
         }
         _ => {
@@ -2545,6 +2568,7 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             | ProgramInputV1::BundleV3(_)
             | ProgramInputV1::BundleV4(_)
             | ProgramInputV1::BundleV5(_)
+            | ProgramInputV1::BundleV6(_)
     ) && source_map.is_some()
     {
         return Err(format!(
