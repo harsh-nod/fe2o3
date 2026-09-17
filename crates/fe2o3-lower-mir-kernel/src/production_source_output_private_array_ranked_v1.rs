@@ -94,7 +94,7 @@ impl PrivateArrayOutputStoreV1 {
 pub struct CheckedPrivateArrayOutputRankedV1<'scope> {
     _receipt: &'scope ProductionMaterializedRankedModuleReceiptV1,
     _bound: &'scope fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
-    _output: &'scope fe2o3_pliron::CheckedNeutralKernelIrOwnerV1,
+    _output: SourceOutputCheckedEndpointV1<'scope>,
     rows: &'scope [PrivateArrayOutputFactV1],
     slot: usize,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
@@ -182,6 +182,61 @@ impl ProductionMaterializedRankedModuleReceiptV1 {
             &mut AssertOriginBudgetV1<'w>,
         ) -> Result<R, ProductionSourceOutputErrorV1>,
     ) -> Result<R, ProductionSourceOutputErrorV1> {
+        self.with_checked_private_array_output_endpoint_v1(
+            bound,
+            SourceOutputCheckedEndpointV1::Optimizer(output),
+            budget,
+            next,
+        )
+    }
+
+    /// Checks the same closed Store correspondence using the actual Policy3
+    /// output owner. Its execution witness stays borrowed, never converted to
+    /// the historical owner. All source, ledger, scope and admission restrictions
+    /// of `with_checked_private_array_output_v1` still apply.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_lower_mir_kernel::{ProductionMaterializedRankedModuleReceiptV1,
+    ///     PrivateArrayOutputFactV1, ProductionSourceOutputErrorV1};
+    /// use fe2o3_kernel_ir::{VerifiedCanonicalKernelIrModuleV12,
+    ///     CanonicalKernelIrVerificationResourceBudgetV1 as Budget};
+    /// use fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1;
+    /// fn escape<'a>(receipt: &'a ProductionMaterializedRankedModuleReceiptV1,
+    ///     bound: &'a VerifiedCanonicalKernelIrModuleV12,
+    ///     output: &'a CheckedNeutralKernelIrOwnerPolicy3V1,
+    ///     budget: &mut Budget<'_>) -> Result<&'a PrivateArrayOutputFactV1, ProductionSourceOutputErrorV1> {
+    ///     receipt.with_checked_private_array_output_policy3_v1(bound, output, budget,
+    ///         |scope, budget| Ok(scope.get(0, budget)?.unwrap()))
+    /// }
+    /// ```
+    pub fn with_checked_private_array_output_policy3_v1<'w, R>(
+        &self,
+        bound: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+        output: &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+        budget: &mut AssertOriginBudgetV1<'w>,
+        next: impl for<'scope> FnOnce(
+            CheckedPrivateArrayOutputRankedV1<'scope>,
+            &mut AssertOriginBudgetV1<'w>,
+        ) -> Result<R, ProductionSourceOutputErrorV1>,
+    ) -> Result<R, ProductionSourceOutputErrorV1> {
+        self.with_checked_private_array_output_endpoint_v1(
+            bound,
+            SourceOutputCheckedEndpointV1::OptimizerPolicy3(output),
+            budget,
+            next,
+        )
+    }
+
+    fn with_checked_private_array_output_endpoint_v1<'w, R>(
+        &self,
+        bound: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+        output: SourceOutputCheckedEndpointV1<'_>,
+        budget: &mut AssertOriginBudgetV1<'w>,
+        next: impl for<'scope> FnOnce(
+            CheckedPrivateArrayOutputRankedV1<'scope>,
+            &mut AssertOriginBudgetV1<'w>,
+        ) -> Result<R, ProductionSourceOutputErrorV1>,
+    ) -> Result<R, ProductionSourceOutputErrorV1> {
         use ProductionSourceOutputErrorV1 as Error;
         budget.charge_work(8).map_err(Error::Resource)?;
         let incoming = budget.storage();
@@ -217,7 +272,7 @@ impl ProductionMaterializedRankedModuleReceiptV1 {
             budget
                 .reserve_storage(coordinate_storage.retained_storage())
                 .map_err(Error::Resource)?;
-            let (view, view_storage) = derive_source_output_occurrences_v1(
+            let (view, view_storage) = derive_source_output_occurrences_with_endpoint_v1(
                 &self.materialized,
                 &coordinates,
                 output,

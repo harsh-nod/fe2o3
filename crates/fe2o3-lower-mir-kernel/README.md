@@ -267,17 +267,19 @@ and final attachment retains its independent 64*M correlation phase. The index
 query adds one fixed work unit before the unchanged boolean-query relation.
 No configured limits, Native gates, formal or launch authority change.
 
-This is a lowerer-only component. The default rustc backend still projects before
-materializing executable KIR and does not yet use these same-owner private-array
-queries. Its materialize-before-project transition and common-projector private
-effect support require separate qualification, including all tutorial compile
-gates; this library change does not activate that route.
+These are correspondence components, not acceptance of the complete optimized
+output pipeline. Default activation of the new checked optimizer policy and
+complete optimized private-effect support require separate qualification,
+including all tutorial compile gates.
 
 ## Checked Output Memory Analysis
 
-`analyze_checked_output_formal_memory_v1` derives fresh memory obligations from
-the actual fixed-rule checked V12 output and returns a report borrowing that
-owner. Every actual kernel must have complete extraction and no inter-invocation
+`analyze_checked_output_formal_memory_v1` and the separately typed
+`analyze_checked_output_formal_memory_policy3_v1` derive fresh memory obligations
+from their actual checked V12 output and return reports borrowing those exact
+owners. The Policy3 report retains the real eight-pass execution owner without
+converting it into the historical owner. Both APIs use one complete-only formal
+analysis implementation. Every actual kernel must have complete extraction and no inter-invocation
 conflict under the existing structural witness: exact static extents, extent two
 for dynamic active axes, and 64-bit indices. No old ranked or compiler discharge
 is accepted, and the executable is not copied.
@@ -308,6 +310,24 @@ pipeline lifecycle/effect correspondence, final ranked/formal correlation, or
 serialized final evidence. Old N-only assertion transport keeps its pointer
 contract unchanged. Canonical equality of separately admitted B owners is
 checked using complete bytes, never a digest alone.
+
+`derive_source_output_occurrences_policy3_v1` connects the actual checked
+Policy3 output to the same source/block/assertion/catalog/private-array queries.
+It and the existing `derive_source_output_occurrences_v1` share the exact
+custody and replay checks; neither accepts a receipt in place of a live checked
+owner. The private-array ranked receipt also has an explicitly typed
+`with_checked_private_array_output_policy3_v1` scope. It compares the complete
+closed Store subset with the actual output, including stored-value uses, under
+the original Work identity and storage floor. Scope records cannot escape the
+callback. The actual tagged borrowed-owner headers are included in their
+existing storage accounting.
+
+These additions do not attach final checks or authorize default Policy3 output.
+Unit-local helper source/output replay and unsupported private reads/effects
+remain refused; complete final source/control/memory/refinement validation is
+still required. Target-binding tests use the real binder and exact metadata
+checker for both profiles, but are semantic/ranked component tests, not rustc
+source, protected artifact, or GPU qualification.
 
 New indexes, queries, and temporary payloads share the caller canonical ledger.
 The caller retains N graph/source rows, B, checked O/history, and transfer receipts;

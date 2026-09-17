@@ -1163,3 +1163,6 @@ mod private_array_output_v1_tests;
 
 #[path = "production_local_helper_source_v1_tests.rs"]
 mod local_helper_source_v1_tests;
+
+#[path = "production_source_output_policy3_v1_tests.rs"]
+mod source_output_policy3_v1_tests;

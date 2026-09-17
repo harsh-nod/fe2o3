@@ -1090,5 +1090,8 @@ fn component_binding_and_seventh_comparison_have_literal_work_boundaries() {
 
 include!("production_private_array_ranked_output_v1_tests.rs");
 
+#[path = "production_private_array_ranked_policy3_v1_tests.rs"]
+mod private_array_ranked_policy3_v1_tests;
+
 #[path = "production_local_helper_output_refusal_v1_tests.rs"]
 mod local_helper_output_refusal_v1_tests;

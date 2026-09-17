@@ -22,5 +22,7 @@ sha2.workspace = true
 
 [dev-dependencies]
 dialect-amdgcn.workspace = true
+fe2o3-amd-target.workspace = true
+fe2o3-kernel-opt.workspace = true
 # Differential execution of lowered test programs; never a production dependency.
 fe2o3-kir-sim.workspace = true

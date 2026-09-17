@@ -370,7 +370,15 @@ impl CheckedOutputFormalMemoryAnalysisV1<'_> {
 pub fn analyze_checked_output_formal_memory_v1(
     checked: &fe2o3_pliron::CheckedNeutralKernelIrOwnerV1,
 ) -> Result<CheckedOutputFormalMemoryAnalysisV1<'_>, ProductionFormalMemoryErrorV1> {
-    let module = checked.owner().module();
+    Ok(CheckedOutputFormalMemoryAnalysisV1 {
+        checked,
+        kernels: derive_complete_output_obligations_v1(checked.owner().module())?,
+    })
+}
+
+fn derive_complete_output_obligations_v1(
+    module: &fe2o3_kernel_ir::Module,
+) -> Result<Box<[FormalMemoryObligations]>, ProductionFormalMemoryErrorV1> {
     if module.kernels.is_empty() {
         return Err(ProductionFormalMemoryErrorV1::KernelCount { actual: 0 });
     }
@@ -404,11 +412,10 @@ pub fn analyze_checked_output_formal_memory_v1(
         }
         kernels.push(obligations);
     }
-    Ok(CheckedOutputFormalMemoryAnalysisV1 {
-        checked,
-        kernels: kernels.into_boxed_slice(),
-    })
+    Ok(kernels.into_boxed_slice())
 }
+
+include!("production_checked_output_formal_policy3_v1.rs");
 
 fn derive_admitted_obligations(
     semantic_kir: &ProductionSemanticKirOwnerV1,
