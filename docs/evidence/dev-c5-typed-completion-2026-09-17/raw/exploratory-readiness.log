@@ -1,0 +1,52 @@
+
+running 1 test
+
+thread 'async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_readiness_error_or_panic_retains_custody_without_retry' (2752723) panicked at crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs:50:14:
+adoption readiness panic
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_readiness_error_or_panic_retains_custody_without_retry' (2752723) panicked at crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs:618:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+thread 'async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_readiness_error_or_panic_retains_custody_without_retry' (2752723) panicked at crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs:23:43:
+called `Result::unwrap()` on an `Err` value: PoisonError { .. }
+stack backtrace:
+   0:     0x5ebe72d3733a - <<std[ca0b0bcade21542d]::sys::backtrace::BacktraceLock>::print::DisplayBacktrace as core[db70abf3441067d4]::fmt::Display>::fmt
+   1:     0x5ebe72d4d87a - core[db70abf3441067d4]::fmt::write
+   2:     0x5ebe72d3cd62 - <std[ca0b0bcade21542d]::sys::stdio::unix::Stderr as std[ca0b0bcade21542d]::io::Write>::write_fmt
+   3:     0x5ebe72d149ef - std[ca0b0bcade21542d]::panicking::default_hook::{closure#0}
+   4:     0x5ebe72d2ea41 - std[ca0b0bcade21542d]::panicking::default_hook
+   5:     0x5ebe72d2ecbb - std[ca0b0bcade21542d]::panicking::panic_with_hook
+   6:     0x5ebe72d14aa8 - std[ca0b0bcade21542d]::panicking::panic_handler::{closure#0}
+   7:     0x5ebe72d09aa9 - std[ca0b0bcade21542d]::sys::backtrace::__rust_end_short_backtrace::<std[ca0b0bcade21542d]::panicking::panic_handler::{closure#0}, !>
+   8:     0x5ebe72d1569d - __rustc[2170a97d85da7901]::rust_begin_unwind
+   9:     0x5ebe72d4e03c - core[db70abf3441067d4]::panicking::panic_fmt
+  10:     0x5ebe72d4ddb2 - core[db70abf3441067d4]::result::unwrap_failed
+  11:     0x5ebe720c5b54 - <fe2o3_runtime[2b640d61aa5774bb]::async_engine::tests::owned_tests::preparation_tests::adoption_tests::Payload as core[db70abf3441067d4]::ops::drop::Drop>::drop
+  12:     0x5ebe723e4fed - core[db70abf3441067d4]::ptr::drop_in_place::<fe2o3_runtime[2b640d61aa5774bb]::async_engine::tests::owned_tests::preparation_tests::adoption_tests::Payload>
+  13:     0x5ebe723b05d5 - core[db70abf3441067d4]::ptr::drop_in_place::<core[db70abf3441067d4]::option::Option<fe2o3_runtime[2b640d61aa5774bb]::async_engine::tests::owned_tests::preparation_tests::adoption_tests::Payload>>
+  14:     0x5ebe723c8293 - core[db70abf3441067d4]::ptr::drop_in_place::<fe2o3_runtime[2b640d61aa5774bb]::async_engine::generated_operation::PreparationDriver<fe2o3_runtime[2b640d61aa5774bb]::async_engine::tests::MockBackend, fe2o3_runtime[2b640d61aa5774bb]::async_engine::tests::owned_tests::preparation_tests::adoption_tests::Payload, ()>>
+  15:     0x5ebe723ba5fe - core[db70abf3441067d4]::ptr::drop_in_place::<alloc[1873db2efb56cea0]::boxed::Box<dyn fe2o3_runtime[2b640d61aa5774bb]::async_engine::operation::EngineOperationV1<fe2o3_runtime[2b640d61aa5774bb]::async_engine::tests::MockBackend>>>
+  16:     0x5ebe723cc5ea - core[db70abf3441067d4]::ptr::drop_in_place::<fe2o3_runtime[2b640d61aa5774bb]::async_engine::operation::OperationEntryV1<fe2o3_runtime[2b640d61aa5774bb]::async_engine::tests::MockBackend>>
+  17:     0x5ebe723e6780 - core[db70abf3441067d4]::ptr::drop_in_place::<[fe2o3_runtime[2b640d61aa5774bb]::async_engine::operation::OperationEntryV1<fe2o3_runtime[2b640d61aa5774bb]::async_engine::tests::MockBackend>]>
+  18:     0x5ebe7213e9ca - <alloc[1873db2efb56cea0]::collections::vec_deque::VecDeque<fe2o3_runtime[2b640d61aa5774bb]::async_engine::operation::OperationEntryV1<fe2o3_runtime[2b640d61aa5774bb]::async_engine::tests::MockBackend>> as core[db70abf3441067d4]::ops::drop::Drop>::drop
+  19:     0x5ebe723c6e8d - core[db70abf3441067d4]::ptr::drop_in_place::<alloc[1873db2efb56cea0]::collections::vec_deque::VecDeque<fe2o3_runtime[2b640d61aa5774bb]::async_engine::operation::OperationEntryV1<fe2o3_runtime[2b640d61aa5774bb]::async_engine::tests::MockBackend>>>
+  20:     0x5ebe723cc741 - core[db70abf3441067d4]::ptr::drop_in_place::<fe2o3_runtime[2b640d61aa5774bb]::async_engine::operation::OperationRegistryV1<fe2o3_runtime[2b640d61aa5774bb]::async_engine::tests::MockBackend>>
+  21:     0x5ebe723e4a9d - core[db70abf3441067d4]::ptr::drop_in_place::<fe2o3_runtime[2b640d61aa5774bb]::async_engine::tests::owned_tests::preparation_tests::Harness>
+  22:     0x5ebe72094925 - fe2o3_runtime[2b640d61aa5774bb]::async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_readiness_error_or_panic_retains_custody_without_retry
+  23:     0x5ebe72007f33 - fe2o3_runtime[2b640d61aa5774bb]::async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_readiness_error_or_panic_retains_custody_without_retry::{closure#0}
+  24:     0x5ebe72448a96 - <fe2o3_runtime[2b640d61aa5774bb]::async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_readiness_error_or_panic_retains_custody_without_retry::{closure#0} as core[db70abf3441067d4]::ops::function::FnOnce<()>>::call_once
+  25:     0x5ebe726fa04b - test[23d2bd75115b0674]::__rust_begin_short_backtrace::<core[db70abf3441067d4]::result::Result<(), alloc[1873db2efb56cea0]::string::String>, fn() -> core[db70abf3441067d4]::result::Result<(), alloc[1873db2efb56cea0]::string::String>>
+  26:     0x5ebe72706a3b - test[23d2bd75115b0674]::run_test::{closure#0}
+  27:     0x5ebe72700e94 - std[ca0b0bcade21542d]::sys::backtrace::__rust_begin_short_backtrace::<test[23d2bd75115b0674]::run_test::{closure#1}, ()>
+  28:     0x5ebe72709642 - <std[ca0b0bcade21542d]::thread::lifecycle::spawn_unchecked<test[23d2bd75115b0674]::run_test::{closure#1}, ()>::{closure#1} as core[db70abf3441067d4]::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+  29:     0x5ebe72d365bf - <std[ca0b0bcade21542d]::sys::thread::unix::Thread>::new::thread_start
+  30:     0x700fba69cb84 - <unknown>
+  31:     0x700fba729ecc - <unknown>
+  32:                0x0 - <unknown>
+
+thread 'async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_readiness_error_or_panic_retains_custody_without_retry' (2752723) panicked at /rustc/55e86c996809902e8bbad512cfb4d2c18be446d9/library/core/src/panicking.rs:233:5:
+panic in a destructor during cleanup
+thread caused non-unwinding panic. aborting.

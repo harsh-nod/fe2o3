@@ -1,0 +1,2400 @@
+diff --git a/crates/fe2o3-host/src/generated_runtime_arguments/readback.rs b/crates/fe2o3-host/src/generated_runtime_arguments/readback.rs
+index d0ac2bd45..8af96edfb 100644
+--- a/crates/fe2o3-host/src/generated_runtime_arguments/readback.rs
++++ b/crates/fe2o3-host/src/generated_runtime_arguments/readback.rs
+@@ -68,6 +68,22 @@ impl Drop for PendingReadback {
+ }
+ 
+ impl GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1> {
++    pub(crate) fn completion_domain_v1(
++        &self,
++    ) -> Result<fe2o3_runtime::RuntimeGeneratedResultDomainV1, Error> {
++        let gate = self
++            .decoder
++            .result_gate
++            .as_ref()
++            .ok_or(Error::BindingMismatch)?;
++        if gate.ready() {
++            return Err(Error::StaleOrAliasedOutput);
++        }
++        Ok(fe2o3_runtime::RuntimeGeneratedResultDomainV1::from_owner(
++            Arc::clone(gate),
++        ))
++    }
++
+     pub(crate) fn decode_reserved_readback(self) -> Result<(), Error> {
+         self.decode_reserved_readback_with(|_| {})
+     }
+diff --git a/crates/fe2o3-host/src/generated_runtime_invocation.rs b/crates/fe2o3-host/src/generated_runtime_invocation.rs
+index 09060fc4c..6d43e5a44 100644
+--- a/crates/fe2o3-host/src/generated_runtime_invocation.rs
++++ b/crates/fe2o3-host/src/generated_runtime_invocation.rs
+@@ -133,12 +133,20 @@ impl<K: CompilerGeneratedKernelExpectationV1> RuntimeGfx942GeneratedCarrierV1
+ }
+ 
+ // SAFETY: the private storage binds the original source, charged destinations,
+-// gate and decoder. The borrowed view cannot replace or extract any owner, and
+-// the existing consuming decoder commits only after complete validation and
+-// disposal-credit settlement.
++// gate and decoder. The runtime path preserves the original allocations; the
++// consuming decoder commits only after complete validation and disposal-credit
++// settlement. The metadata domain retains that exact existing gate allocation.
+ unsafe impl<K: CompilerGeneratedKernelExpectationV1> RuntimeGfx942GeneratedCompletionCarrierV1
+     for GeneratedContextPreparationV1<K, GeneratedGfx942PersistentStorageV1>
+ {
++    fn completion_domain_v1(
++        &self,
++    ) -> Result<fe2o3_runtime::RuntimeGeneratedResultDomainV1, RuntimeGfx942ReadbackErrorV1> {
++        self.storage
++            .completion_domain_v1()
++            .map_err(|_| RuntimeGfx942ReadbackErrorV1::InvalidStorage)
++    }
++
+     fn with_completion_view_v1(
+         &mut self,
+         callback: impl for<'a> FnOnce(
+diff --git a/crates/fe2o3-host/src/generated_runtime_results.rs b/crates/fe2o3-host/src/generated_runtime_results.rs
+index 73c44cbf2..88f043121 100644
+--- a/crates/fe2o3-host/src/generated_runtime_results.rs
++++ b/crates/fe2o3-host/src/generated_runtime_results.rs
+@@ -15,6 +15,11 @@ use fe2o3_runtime::Gfx942RuntimeBufferAccessV1;
+ use crate::generated_argument_plan::GeneratedDeviceScalarV1;
+ use crate::generated_runtime_arguments::GeneratedRuntimeArgumentErrorV1 as Error;
+ 
++#[cfg(test)]
++mod completion_tests;
++mod typed_completion;
++pub use typed_completion::*;
++
+ /// Shared result-peak admission. Clones share the same account, not fresh limits.
+ ///
+ /// Each output reserves its encoded-plus-typed byte peak until typed storage is
+@@ -252,6 +257,50 @@ pub struct GeneratedRuntimeChargedResultV1<T: GeneratedDeviceScalarV1> {
+ }
+ 
+ impl<T: GeneratedDeviceScalarV1> GeneratedRuntimeChargedResultV1<T> {
++    /// Takes the original charged output only for this invocation's completion.
++    /// A foreign receipt leaves the output untouched. `None` means transient
++    /// mutex contention, not completion; callers may retry with the same receipt.
++    pub fn take_completed_v1(
++        &mut self,
++        receipt: &fe2o3_runtime::RuntimeGeneratedCompletionReceiptV1,
++    ) -> Result<Option<ChargedTypedResultV1<T>>, Error> {
++        self.take_completed_matching_v1(|gate| receipt.matches_owner(gate))
++    }
++
++    fn take_completed_matching_v1(
++        &mut self,
++        matches: impl FnOnce(&Arc<ResultReadyGateV1>) -> bool,
++    ) -> Result<Option<ChargedTypedResultV1<T>>, Error> {
++        let mut state = match self.slot.state.try_lock() {
++            Ok(state) => state,
++            Err(std::sync::TryLockError::WouldBlock) => return Ok(None),
++            Err(std::sync::TryLockError::Poisoned(_)) => return Err(Error::Custody),
++        };
++        Self::take_completed_state_v1(&mut state, matches)
++            .map(Some)
++            .map_err(Into::into)
++    }
++
++    fn take_completed_state_v1(
++        state: &mut OutputState<T>,
++        matches: impl FnOnce(&Arc<ResultReadyGateV1>) -> bool,
++    ) -> Result<ChargedTypedResultV1<T>, GeneratedRuntimeTypedOutputErrorV1> {
++        match &*state {
++            OutputState::Prepared { gate, .. } if matches(gate) && gate.ready() => {
++                let OutputState::Prepared { result, .. } =
++                    std::mem::replace(state, OutputState::Taken)
++                else {
++                    unreachable!("matched output retained under its lock")
++                };
++                Ok(result)
++            }
++            OutputState::Taken | OutputState::Unavailable => {
++                Err(GeneratedRuntimeTypedOutputErrorV1::OutputUnavailable)
++            }
++            _ => Err(GeneratedRuntimeTypedOutputErrorV1::BindingMismatch),
++        }
++    }
++
+     /// Takes committed data without waiting for the slot mutex. `None` also
+     /// covers transient contention; a future adapter must arrange its own wake/retry.
+     pub fn try_take(&mut self) -> Result<Option<ChargedTypedResultV1<T>>, Error> {
+diff --git a/crates/fe2o3-host/src/generated_runtime_results/completion_tests.rs b/crates/fe2o3-host/src/generated_runtime_results/completion_tests.rs
+new file mode 100644
+index 000000000..dc1ae11a4
+--- /dev/null
++++ b/crates/fe2o3-host/src/generated_runtime_results/completion_tests.rs
+@@ -0,0 +1,498 @@
++use super::*;
++use fe2o3_runtime::RuntimeGeneratedResultDomainV1;
++use std::future::Future;
++use std::pin::Pin;
++use std::sync::atomic::AtomicUsize;
++use std::task::{Context, Poll, Waker};
++
++// Inert metadata exercises the shared observer driver, never receipt authority.
++struct ScriptedCompletion {
++    domain: Option<RuntimeGeneratedResultDomainV1>,
++    ready: bool,
++    panics: bool,
++    polls: usize,
++    drops: Arc<AtomicUsize>,
++}
++
++impl Future for ScriptedCompletion {
++    type Output = RuntimeGeneratedResultDomainV1;
++    fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
++        self.polls += 1;
++        assert!(!self.panics, "scripted poll panic");
++        if self.ready {
++            Poll::Ready(self.domain.take().expect("one metadata outcome"))
++        } else {
++            Poll::Pending
++        }
++    }
++}
++
++impl Drop for ScriptedCompletion {
++    fn drop(&mut self) {
++        self.drops.fetch_add(1, Ordering::SeqCst);
++    }
++}
++
++fn scripted(gate: &Arc<ResultReadyGateV1>, drops: &Arc<AtomicUsize>) -> ScriptedCompletion {
++    ScriptedCompletion {
++        domain: Some(RuntimeGeneratedResultDomainV1::from_owner(gate.clone())),
++        ready: false,
++        panics: false,
++        polls: 0,
++        drops: drops.clone(),
++    }
++}
++
++#[test]
++fn typed_completion_poll_driver_preserves_pending_and_panicking_observers_then_extracts_once() {
++    let outputs = outputs();
++    let drops = Arc::new(AtomicUsize::new(0));
++    let mut completion = Some(scripted(&outputs.gate, &drops));
++    let pointer = outputs
++        .words
++        .with_seed::<u32, _>(|values| Ok(values.as_ptr()))
++        .unwrap();
++    let slot = Arc::downgrade(&outputs.word_result.slot);
++    let mut output = Some(outputs.word_result);
++    let usage = outputs.budget.usage();
++    let mut cx = Context::from_waker(Waker::noop());
++    for _ in 0..2 {
++        assert!(
++            typed_completion::poll_with(&mut completion, &mut output, &mut cx, |_, _| panic!(
++                "pending must not extract"
++            ))
++            .is_pending()
++        );
++        assert!(Arc::ptr_eq(
++            &slot.upgrade().unwrap(),
++            &output.as_ref().unwrap().slot
++        ));
++        assert_eq!(outputs.budget.usage(), usage);
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++    }
++    completion.as_mut().unwrap().panics = true;
++    assert!(
++        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            typed_completion::poll_with(&mut completion, &mut output, &mut cx, |_, _| {
++                panic!("panic must not extract")
++            })
++        }))
++        .is_err()
++    );
++    assert!(completion.is_some() && output.is_some());
++    assert_eq!(drops.load(Ordering::SeqCst), 0);
++    assert_eq!(outputs.budget.usage(), usage);
++    outputs
++        .words
++        .decode(&[10, 0, 0, 0, 20, 0, 0, 0], &outputs.gate)
++        .unwrap();
++    outputs.gate.commit();
++    let future = completion.as_mut().unwrap();
++    assert_eq!(future.polls, 3);
++    future.panics = false;
++    future.ready = true;
++    let result = typed_completion::poll_with(
++        &mut completion,
++        &mut output,
++        &mut cx,
++        |mut output, domain| {
++            assert_eq!(
++                drops.load(Ordering::SeqCst),
++                1,
++                "completion drops before extraction"
++            );
++            output
++                .take_completed_matching_v1(|gate| domain.matches_owner(gate))
++                .unwrap()
++                .unwrap()
++        },
++    );
++    let Poll::Ready(result) = result else {
++        panic!("completed metadata")
++    };
++    assert!(completion.is_none() && output.is_none());
++    assert_eq!(result.as_slice().as_ptr(), pointer);
++    assert_eq!(result.as_slice(), &[10, 20]);
++    assert_eq!(outputs.budget.usage(), usage);
++    drop(result);
++    assert_eq!(outputs.budget.usage().reserved_peak_bytes, 12);
++}
++
++#[test]
++fn typed_completion_pending_drop_keeps_producer_storage_and_credit() {
++    let outputs = outputs();
++    let drops = Arc::new(AtomicUsize::new(0));
++    let mut completion = Some(scripted(&outputs.gate, &drops));
++    let mut output = Some(outputs.word_result);
++    let usage = outputs.budget.usage();
++    assert!(
++        typed_completion::poll_with(
++            &mut completion,
++            &mut output,
++            &mut Context::from_waker(Waker::noop()),
++            |_, _| panic!("pending")
++        )
++        .is_pending()
++    );
++    drop(completion);
++    drop(output);
++    assert_eq!(drops.load(Ordering::SeqCst), 1);
++    assert_eq!(outputs.budget.usage(), usage);
++    assert_eq!(
++        outputs
++            .words
++            .with_seed::<u32, _>(|values| Ok(values.to_vec()))
++            .unwrap(),
++        [1, 2]
++    );
++    drop(outputs.words);
++    assert_eq!(outputs.budget.usage().reserved_peak_bytes, 12);
++}
++
++#[test]
++fn typed_completion_join_driver_restores_exact_observers_on_rejection() {
++    use fe2o3_runtime::RuntimeAsyncEngineCallErrorV1;
++    let outputs = outputs();
++    let drops = Arc::new(AtomicUsize::new(0));
++    let completion = scripted(&outputs.gate, &drops);
++    let slot = Arc::downgrade(&outputs.word_result.slot);
++    let usage = outputs.budget.usage();
++    let rejected = typed_completion::join_with(
++        completion,
++        outputs.word_result,
++        |completion| Err::<(), _>((completion, RuntimeAsyncEngineCallErrorV1::ReentrantCall)),
++        |_, _| panic!("rejected join must not extract"),
++    );
++    let (completion, output, error) = rejected.expect_err("rejected join");
++    assert_eq!(error, RuntimeAsyncEngineCallErrorV1::ReentrantCall);
++    assert!(
++        completion
++            .domain
++            .as_ref()
++            .unwrap()
++            .matches_owner(&outputs.gate)
++    );
++    assert!(Arc::ptr_eq(&slot.upgrade().unwrap(), &output.slot));
++    assert_eq!(drops.load(Ordering::SeqCst), 0);
++    assert_eq!(outputs.budget.usage(), usage);
++    outputs.gate.commit();
++    let result = typed_completion::join_with(
++        completion,
++        output,
++        |mut completion| {
++            Ok::<_, (ScriptedCompletion, RuntimeAsyncEngineCallErrorV1)>(
++                completion.domain.take().unwrap(),
++            )
++        },
++        |mut output, domain| {
++            assert_eq!(drops.load(Ordering::SeqCst), 1);
++            output
++                .take_completed_matching_v1(|gate| domain.matches_owner(gate))
++                .unwrap()
++                .unwrap()
++        },
++    )
++    .ok()
++    .expect("joined metadata");
++    assert_eq!(result.as_slice(), &[1, 2]);
++    drop(result);
++    assert_eq!(outputs.budget.usage().reserved_peak_bytes, 12);
++}
++
++#[test]
++fn typed_completion_poisoned_binding_preserves_original_storage_and_credits() {
++    let mut outputs = outputs();
++    let slot = outputs.word_result.slot.clone();
++    let usage = outputs.budget.usage();
++    assert!(
++        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            let _locked = slot.state.lock().unwrap();
++            panic!("scripted slot poison");
++        }))
++        .is_err()
++    );
++    assert!(matches!(
++        outputs.word_result.check_completion_binding_v1(|_| true),
++        Err(GeneratedRuntimeTypedBindErrorV1::Output(
++            GeneratedRuntimeTypedOutputErrorV1::Custody
++        ))
++    ));
++    assert!(matches!(
++        outputs.word_result.take_completed_matching_v1(|_| true),
++        Err(Error::Custody)
++    ));
++    assert_eq!(outputs.budget.usage(), usage);
++    drop(outputs.word_result);
++    assert_eq!(outputs.budget.usage(), usage);
++    drop(outputs.words);
++    assert_eq!(outputs.budget.usage().reserved_peak_bytes, 12);
++    assert!(matches!(
++        *slot.state.lock().err().expect("poisoned slot").into_inner(),
++        OutputState::Unavailable
++    ));
++}
++
++#[test]
++fn typed_completion_binding_rejects_foreign_or_busy_output_without_consumption() {
++    let mut outputs = outputs();
++    let domain = RuntimeGeneratedResultDomainV1::from_owner(outputs.gate.clone());
++    let foreign = RuntimeGeneratedResultDomainV1::from_owner(Arc::new(()));
++    let usage = outputs.budget.usage();
++    assert!(
++        outputs
++            .word_result
++            .check_completion_binding_v1(|gate| domain.matches_owner(gate))
++            .is_ok()
++    );
++    assert!(matches!(
++        outputs
++            .word_result
++            .check_completion_binding_v1(|gate| foreign.matches_owner(gate)),
++        Err(GeneratedRuntimeTypedBindErrorV1::Output(
++            GeneratedRuntimeTypedOutputErrorV1::BindingMismatch
++        ))
++    ));
++    let slot = outputs.word_result.slot.clone();
++    let guard = slot.state.lock().unwrap();
++    assert!(matches!(
++        outputs
++            .word_result
++            .check_completion_binding_v1(|_| panic!("no identity callback under contention")),
++        Err(GeneratedRuntimeTypedBindErrorV1::Busy)
++    ));
++    drop(guard);
++    assert_eq!(outputs.budget.usage(), usage);
++    assert!(
++        outputs
++            .word_result
++            .check_completion_binding_v1(|gate| domain.matches_owner(gate))
++            .is_ok()
++    );
++    outputs.gate.commit();
++    let result = outputs
++        .word_result
++        .take_completed_matching_v1(|gate| domain.matches_owner(gate))
++        .unwrap()
++        .unwrap();
++    assert!(matches!(
++        outputs.word_result.check_completion_binding_v1(|_| true),
++        Err(GeneratedRuntimeTypedBindErrorV1::Output(
++            GeneratedRuntimeTypedOutputErrorV1::OutputUnavailable
++        ))
++    ));
++    drop(result);
++    assert_eq!(outputs.budget.usage().reserved_peak_bytes, 12);
++}
++
++#[test]
++fn typed_completion_failure_preserves_observer_without_exposing_or_refunding_output() {
++    use fe2o3_runtime::{RuntimeAsyncEngineCallErrorV1, RuntimeGfx942ReadbackErrorV1};
++    for mode in 0..2 {
++        let outputs = outputs();
++        let original_slot = Arc::downgrade(&outputs.word_result.slot);
++        let usage = outputs.budget.usage();
++        let outcome = if mode == 0 {
++            Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
++        } else {
++            Ok(Err(RuntimeGfx942ReadbackErrorV1::InvalidStorage))
++        };
++        let mut failure = typed_completion::finish(outputs.word_result, outcome)
++            .err()
++            .expect("failed completion");
++        assert!(failure.receipt.is_none());
++        assert!(Arc::ptr_eq(
++            &original_slot.upgrade().unwrap(),
++            &failure.output.slot
++        ));
++        match mode {
++            0 => assert!(matches!(
++                failure.error,
++                GeneratedRuntimeTypedCompletionErrorV1::Engine(
++                    RuntimeAsyncEngineCallErrorV1::EngineStopped
++                )
++            )),
++            _ => assert!(matches!(
++                failure.error,
++                GeneratedRuntimeTypedCompletionErrorV1::Readback(
++                    RuntimeGfx942ReadbackErrorV1::InvalidStorage
++                )
++            )),
++        }
++        assert!(failure.output.try_take().unwrap().is_none());
++        assert_eq!(outputs.budget.usage(), usage);
++        drop(failure);
++        assert_eq!(
++            outputs.budget.usage(),
++            usage,
++            "original producer retains custody"
++        );
++        drop(outputs.words);
++        assert_eq!(outputs.budget.usage().reserved_peak_bytes, 12);
++        drop(outputs.halves);
++        assert_eq!(outputs.budget.usage().reserved_peak_bytes, 0);
++    }
++}
++
++struct Outputs {
++    budget: GeneratedRuntimeResultBudgetV1,
++    gate: Arc<ResultReadyGateV1>,
++    words: ChargedOutputCustodyV1,
++    word_result: GeneratedRuntimeChargedResultV1<u32>,
++    halves: ChargedOutputCustodyV1,
++    half_result: GeneratedRuntimeChargedResultV1<u16>,
++}
++
++fn outputs() -> Outputs {
++    let budget = GeneratedRuntimeResultBudgetV1::new(28, 2).unwrap();
++    let (words, word_result) = ChargedOutputCustodyV1::new::<u32>(2);
++    let (halves, half_result) = ChargedOutputCustodyV1::new::<u16>(3);
++    let word_descriptor = || {
++        ResultDescriptorV1::new::<u32>(2, Gfx942RuntimeBufferAccessV1::ReadWrite, Some(&words))
++            .unwrap()
++    };
++    let half_descriptor = || {
++        ResultDescriptorV1::new::<u16>(3, Gfx942RuntimeBufferAccessV1::WriteOnly, Some(&halves))
++            .unwrap()
++    };
++    let mut preflight = ResultPreflightV1::new().unwrap();
++    preflight.push(word_descriptor()).unwrap();
++    preflight.push(half_descriptor()).unwrap();
++    let mut binding = preflight.reserve(&budget).unwrap();
++    words
++        .bind_seed(
++            vec![1u32, 2].into_boxed_slice(),
++            binding.take(&word_descriptor()).unwrap(),
++        )
++        .unwrap();
++    halves
++        .bind_seed(
++            vec![3u16, 4, 5].into_boxed_slice(),
++            binding.take(&half_descriptor()).unwrap(),
++        )
++        .unwrap();
++    assert!(binding.complete());
++    Outputs {
++        budget,
++        gate: binding.gate.clone(),
++        words,
++        word_result,
++        halves,
++        half_result,
++    }
++}
++
++#[test]
++fn completed_domain_extraction_preserves_heterogeneous_storage_and_exact_credits() {
++    let mut outputs = outputs();
++    let domain = RuntimeGeneratedResultDomainV1::from_owner(outputs.gate.clone());
++    let foreign = RuntimeGeneratedResultDomainV1::from_owner(Arc::new(ResultReadyGateV1::new(
++        &outputs.budget,
++    )));
++    let words = outputs
++        .words
++        .with_seed::<u32, _>(|values| Ok((values.as_ptr(), values.len())))
++        .unwrap();
++    let halves = outputs
++        .halves
++        .with_seed::<u16, _>(|values| Ok((values.as_ptr(), values.len())))
++        .unwrap();
++    let before = outputs.budget.usage();
++    assert_eq!(before.reserved_peak_bytes, 28);
++    assert_eq!(before.retained_members, 2);
++    assert!(matches!(
++        outputs
++            .word_result
++            .take_completed_matching_v1(|gate| domain.matches_owner(gate)),
++        Err(Error::BindingMismatch)
++    ));
++    outputs
++        .words
++        .decode(&[10, 0, 0, 0, 20, 0, 0, 0], &outputs.gate)
++        .unwrap();
++    outputs
++        .halves
++        .decode(&[30, 0, 40, 0, 50, 0], &outputs.gate)
++        .unwrap();
++    // This fixture checks extraction and custody, not native execution or receipt minting.
++    outputs.gate.commit();
++    assert!(matches!(
++        outputs
++            .word_result
++            .take_completed_matching_v1(|gate| foreign.matches_owner(gate)),
++        Err(Error::BindingMismatch)
++    ));
++    assert_eq!(outputs.budget.usage(), before);
++    let word_result = outputs
++        .word_result
++        .take_completed_matching_v1(|gate| domain.matches_owner(gate))
++        .unwrap()
++        .unwrap();
++    let half_result = outputs
++        .half_result
++        .take_completed_matching_v1(|gate| domain.matches_owner(gate))
++        .unwrap()
++        .unwrap();
++    assert_eq!((word_result.as_slice().as_ptr(), word_result.len()), words);
++    assert_eq!((half_result.as_slice().as_ptr(), half_result.len()), halves);
++    assert_eq!(word_result.as_slice(), &[10, 20]);
++    assert_eq!(half_result.as_slice(), &[30, 40, 50]);
++    assert_eq!(outputs.budget.usage(), before);
++    assert!(matches!(
++        outputs
++            .word_result
++            .take_completed_matching_v1(|gate| domain.matches_owner(gate)),
++        Err(Error::OutputUnavailable)
++    ));
++    drop(word_result);
++    assert_eq!(outputs.budget.usage().reserved_peak_bytes, 12);
++    assert_eq!(outputs.budget.usage().retained_members, 1);
++    drop(half_result);
++    assert_eq!(outputs.budget.usage().reserved_peak_bytes, 0);
++    assert_eq!(outputs.budget.usage().retained_members, 0);
++    assert!(
++        domain.matches_owner(&outputs.gate),
++        "metadata holds no result debit"
++    );
++}
++
++#[test]
++fn completed_domain_extraction_retries_contention_without_taking_storage() {
++    let mut outputs = outputs();
++    let domain = RuntimeGeneratedResultDomainV1::from_owner(outputs.gate.clone());
++    outputs.gate.commit();
++    let usage = outputs.budget.usage();
++    let slot = outputs.word_result.slot.clone();
++    let locked = slot.state.lock().unwrap();
++    assert!(
++        outputs
++            .word_result
++            .take_completed_matching_v1(|gate| domain.matches_owner(gate))
++            .unwrap()
++            .is_none()
++    );
++    assert_eq!(outputs.budget.usage(), usage);
++    drop(locked);
++    let result = outputs
++        .word_result
++        .take_completed_matching_v1(|gate| domain.matches_owner(gate))
++        .unwrap()
++        .unwrap();
++    assert_eq!(result.as_slice(), &[1, 2]);
++    assert_eq!(outputs.budget.usage(), usage);
++}
++
++#[test]
++fn result_observer_loss_does_not_refund_retained_owner_and_domain_does_not_keep_debit() {
++    let outputs = outputs();
++    let domain = RuntimeGeneratedResultDomainV1::from_owner(outputs.gate.clone());
++    let usage = outputs.budget.usage();
++    drop(outputs.word_result);
++    drop(outputs.half_result);
++    assert_eq!(outputs.budget.usage(), usage);
++    drop(outputs.words);
++    drop(outputs.halves);
++    assert_eq!(outputs.budget.usage().reserved_peak_bytes, 0);
++    assert_eq!(outputs.budget.usage().retained_members, 0);
++    assert!(!outputs.gate.ready());
++    assert!(domain.matches_owner(&outputs.gate));
++}
+diff --git a/crates/fe2o3-host/src/generated_runtime_results/typed_completion.rs b/crates/fe2o3-host/src/generated_runtime_results/typed_completion.rs
+new file mode 100644
+index 000000000..be732290f
+--- /dev/null
++++ b/crates/fe2o3-host/src/generated_runtime_results/typed_completion.rs
+@@ -0,0 +1,337 @@
++//! Typed projection of the original completion; no second producer or wait protocol.
++
++use super::*;
++use std::future::Future;
++use std::pin::Pin;
++use std::task::{Context, Poll};
++
++use fe2o3_runtime::{
++    RuntimeAsyncEngineCallErrorV1, RuntimeAsyncGeneratedCompletionResultV1,
++    RuntimeAsyncGeneratedCompletionV1, RuntimeGeneratedCompletionReceiptV1,
++    RuntimeGfx942ReadbackErrorV1,
++};
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++#[non_exhaustive]
++pub enum GeneratedRuntimeTypedOutputErrorV1 {
++    BindingMismatch,
++    OutputUnavailable,
++    Custody,
++}
++
++impl From<GeneratedRuntimeTypedOutputErrorV1> for Error {
++    fn from(error: GeneratedRuntimeTypedOutputErrorV1) -> Self {
++        match error {
++            GeneratedRuntimeTypedOutputErrorV1::BindingMismatch => Self::BindingMismatch,
++            GeneratedRuntimeTypedOutputErrorV1::OutputUnavailable => Self::OutputUnavailable,
++            GeneratedRuntimeTypedOutputErrorV1::Custody => Self::Custody,
++        }
++    }
++}
++
++impl fmt::Display for GeneratedRuntimeTypedOutputErrorV1 {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        Error::from(*self).fmt(f)
++    }
++}
++impl std::error::Error for GeneratedRuntimeTypedOutputErrorV1 {}
++
++#[derive(Debug)]
++#[non_exhaustive]
++pub enum GeneratedRuntimeTypedBindErrorV1 {
++    Busy,
++    Output(GeneratedRuntimeTypedOutputErrorV1),
++}
++
++impl fmt::Display for GeneratedRuntimeTypedBindErrorV1 {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::Busy => f.write_str("generated output binding is temporarily busy"),
++            Self::Output(error) => error.fmt(f),
++        }
++    }
++}
++impl std::error::Error for GeneratedRuntimeTypedBindErrorV1 {}
++
++/// Binding rejection returns both unchanged observers; it does not cancel work.
++pub struct GeneratedRuntimeTypedBindFailureV1<T: GeneratedDeviceScalarV1> {
++    pub output: GeneratedRuntimeChargedResultV1<T>,
++    pub completion: RuntimeAsyncGeneratedCompletionV1,
++    pub error: GeneratedRuntimeTypedBindErrorV1,
++}
++
++/// The original charged output and its invocation's receipt for other outputs.
++#[must_use = "typed storage retains its result credit until disposal"]
++pub struct GeneratedRuntimeCompletedOutputV1<T: GeneratedDeviceScalarV1> {
++    pub result: ChargedTypedResultV1<T>,
++    pub receipt: RuntimeGeneratedCompletionReceiptV1,
++}
++
++#[derive(Debug)]
++#[non_exhaustive]
++pub enum GeneratedRuntimeTypedCompletionErrorV1 {
++    Engine(RuntimeAsyncEngineCallErrorV1),
++    Readback(RuntimeGfx942ReadbackErrorV1),
++    Output(GeneratedRuntimeTypedOutputErrorV1),
++}
++
++impl fmt::Display for GeneratedRuntimeTypedCompletionErrorV1 {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::Engine(error) => error.fmt(f),
++            Self::Readback(error) => error.fmt(f),
++            Self::Output(error) => error.fmt(f),
++        }
++    }
++}
++impl std::error::Error for GeneratedRuntimeTypedCompletionErrorV1 {}
++
++/// Failure preserves the output observer and any successful completion receipt.
++/// It does not establish that data is available or that native work may be retried.
++pub struct GeneratedRuntimeTypedCompletionFailureV1<T: GeneratedDeviceScalarV1> {
++    pub output: GeneratedRuntimeChargedResultV1<T>,
++    pub receipt: Option<RuntimeGeneratedCompletionReceiptV1>,
++    pub error: GeneratedRuntimeTypedCompletionErrorV1,
++}
++
++pub type GeneratedRuntimeTypedOutcomeV1<T> =
++    Result<GeneratedRuntimeCompletedOutputV1<T>, GeneratedRuntimeTypedCompletionFailureV1<T>>;
++
++/// A move-only, executor-neutral future for one original charged typed output.
++/// Only the original runtime completion future may return `Pending`. Drop loses
++/// observation, not runtime custody, and never cancels the invocation.
++///
++/// The completion receipt remains available for other heterogeneous outputs.
++/// Stop suppresses typed delivery; ordinary drain preserves it. This API does
++/// not add a per-invocation cancellation operation after activation.
++///
++/// ```no_run
++/// use fe2o3_host::{
++///     GeneratedRuntimeChargedResultV1, GeneratedRuntimeCompletedOutputV1,
++///     GeneratedRuntimeTypedCompletionV1,
++/// };
++/// use fe2o3_runtime::{
++///     KfdRuntimeBackendV1, RuntimeAsyncProgressHandleV1,
++///     RuntimeAsyncReservedTicketV1, RuntimeStreamIdV1,
++/// };
++/// async fn launch(
++///     handle: &RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1>,
++///     ticket: RuntimeAsyncReservedTicketV1,
++///     stream: RuntimeStreamIdV1,
++///     output: GeneratedRuntimeChargedResultV1<u32>,
++/// ) -> Result<GeneratedRuntimeCompletedOutputV1<u32>, Box<dyn std::error::Error>> {
++///     let completion = handle.try_activate_generated_v1(ticket, stream)?.await??;
++///     Ok(output.bind_completion_v1(completion)?.await?)
++/// }
++/// fn blocking(
++///     completion: GeneratedRuntimeTypedCompletionV1<u32>,
++/// ) -> Result<GeneratedRuntimeCompletedOutputV1<u32>, Box<dyn std::error::Error>> {
++///     Ok(completion.try_join()??)
++/// }
++/// fn observers_can_move_between_threads() {
++///     fn require_send<T: Send>() {}
++///     require_send::<GeneratedRuntimeTypedCompletionV1<u32>>();
++///     require_send::<GeneratedRuntimeCompletedOutputV1<u32>>();
++/// }
++/// ```
++///
++/// ```compile_fail,E0599
++/// use fe2o3_host::GeneratedRuntimeTypedCompletionV1;
++/// fn duplicate(value: GeneratedRuntimeTypedCompletionV1<u32>) { value.clone(); }
++/// ```
++#[must_use = "dropping this observer does not cancel the invocation"]
++pub struct GeneratedRuntimeTypedCompletionV1<T: GeneratedDeviceScalarV1> {
++    completion: Option<RuntimeAsyncGeneratedCompletionV1>,
++    output: Option<GeneratedRuntimeChargedResultV1<T>>,
++}
++
++/// Owner-thread blocking rejection preserves the complete typed future.
++pub struct GeneratedRuntimeTypedJoinFailureV1<T: GeneratedDeviceScalarV1> {
++    pub completion: GeneratedRuntimeTypedCompletionV1<T>,
++    pub error: RuntimeAsyncEngineCallErrorV1,
++}
++
++macro_rules! failure_display {
++    ($name:ident) => {
++        impl<T: GeneratedDeviceScalarV1> fmt::Debug for $name<T> {
++            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++                f.debug_struct(stringify!($name))
++                    .field("error", &self.error)
++                    .finish_non_exhaustive()
++            }
++        }
++        impl<T: GeneratedDeviceScalarV1> fmt::Display for $name<T> {
++            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++                self.error.fmt(f)
++            }
++        }
++        impl<T: GeneratedDeviceScalarV1> std::error::Error for $name<T> {}
++    };
++}
++failure_display!(GeneratedRuntimeTypedBindFailureV1);
++failure_display!(GeneratedRuntimeTypedCompletionFailureV1);
++failure_display!(GeneratedRuntimeTypedJoinFailureV1);
++
++impl<T: GeneratedDeviceScalarV1> GeneratedRuntimeChargedResultV1<T> {
++    /// Binds the move-only result to its exact invocation before awaiting it.
++    /// This allocates no storage or reply. Mismatch, contention or stale output
++    /// return both unchanged owners, so the caller can correct or retry binding.
++    pub fn bind_completion_v1(
++        self,
++        completion: RuntimeAsyncGeneratedCompletionV1,
++    ) -> Result<GeneratedRuntimeTypedCompletionV1<T>, GeneratedRuntimeTypedBindFailureV1<T>> {
++        match self.check_completion_binding_v1(|gate| completion.matches_owner(gate)) {
++            Ok(()) => Ok(GeneratedRuntimeTypedCompletionV1 {
++                completion: Some(completion),
++                output: Some(self),
++            }),
++            Err(error) => Err(GeneratedRuntimeTypedBindFailureV1 {
++                output: self,
++                completion,
++                error,
++            }),
++        }
++    }
++
++    pub(super) fn check_completion_binding_v1(
++        &self,
++        matches: impl FnOnce(&Arc<ResultReadyGateV1>) -> bool,
++    ) -> Result<(), GeneratedRuntimeTypedBindErrorV1> {
++        let state = match self.slot.state.try_lock() {
++            Ok(state) => state,
++            Err(std::sync::TryLockError::WouldBlock) => {
++                return Err(GeneratedRuntimeTypedBindErrorV1::Busy);
++            }
++            Err(std::sync::TryLockError::Poisoned(_)) => {
++                return Err(GeneratedRuntimeTypedBindErrorV1::Output(
++                    GeneratedRuntimeTypedOutputErrorV1::Custody,
++                ));
++            }
++        };
++        match &*state {
++            OutputState::Prepared { gate, .. } if matches(gate) => Ok(()),
++            OutputState::Taken | OutputState::Unavailable => {
++                Err(GeneratedRuntimeTypedBindErrorV1::Output(
++                    GeneratedRuntimeTypedOutputErrorV1::OutputUnavailable,
++                ))
++            }
++            _ => Err(GeneratedRuntimeTypedBindErrorV1::Output(
++                GeneratedRuntimeTypedOutputErrorV1::BindingMismatch,
++            )),
++        }
++    }
++}
++
++impl<T: GeneratedDeviceScalarV1> GeneratedRuntimeTypedCompletionV1<T> {
++    /// Joins the original completion future and uses the same extraction as poll.
++    /// No Context command, second reply or decoder is created. Owner-thread calls
++    /// return this unchanged future; other calls have no deadline and may remain
++    /// pending indefinitely if uncertain runtime custody is retained.
++    pub fn try_join(
++        mut self,
++    ) -> Result<GeneratedRuntimeTypedOutcomeV1<T>, GeneratedRuntimeTypedJoinFailureV1<T>> {
++        let completion = self.completion.take().expect("unconsumed typed completion");
++        let output = self.output.take().expect("owned output observer");
++        match join_with(
++            completion,
++            output,
++            |completion| {
++                completion
++                    .try_join()
++                    .map_err(|failure| (failure.completion, failure.error))
++            },
++            finish,
++        ) {
++            Ok(outcome) => Ok(outcome),
++            Err((completion, output, error)) => {
++                self.completion = Some(completion);
++                self.output = Some(output);
++                Err(GeneratedRuntimeTypedJoinFailureV1 {
++                    completion: self,
++                    error,
++                })
++            }
++        }
++    }
++}
++
++impl<T: GeneratedDeviceScalarV1> Future for GeneratedRuntimeTypedCompletionV1<T> {
++    type Output = GeneratedRuntimeTypedOutcomeV1<T>;
++
++    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
++        let this = self.get_mut();
++        poll_with(&mut this.completion, &mut this.output, cx, finish)
++    }
++}
++
++pub(super) fn poll_with<F: Future + Unpin, O, R>(
++    completion: &mut Option<F>,
++    output: &mut Option<O>,
++    cx: &mut Context<'_>,
++    finish: impl FnOnce(O, F::Output) -> R,
++) -> Poll<R> {
++    let future = completion.as_mut().expect("unconsumed typed completion");
++    let Poll::Ready(outcome) = Pin::new(future).poll(cx) else {
++        return Poll::Pending;
++    };
++    drop(completion.take());
++    Poll::Ready(finish(
++        output.take().expect("owned output observer"),
++        outcome,
++    ))
++}
++
++pub(super) fn join_with<C, O, V, R, E>(
++    completion: C,
++    output: O,
++    join: impl FnOnce(C) -> Result<V, (C, E)>,
++    finish: impl FnOnce(O, V) -> R,
++) -> Result<R, (C, O, E)> {
++    match join(completion) {
++        Ok(outcome) => Ok(finish(output, outcome)),
++        Err((completion, error)) => Err((completion, output, error)),
++    }
++}
++
++pub(super) fn finish<T: GeneratedDeviceScalarV1>(
++    output: GeneratedRuntimeChargedResultV1<T>,
++    outcome: RuntimeAsyncGeneratedCompletionResultV1,
++) -> GeneratedRuntimeTypedOutcomeV1<T> {
++    let receipt = match outcome {
++        Ok(Ok(receipt)) => receipt,
++        Ok(Err(error)) => {
++            return Err(GeneratedRuntimeTypedCompletionFailureV1 {
++                output,
++                receipt: None,
++                error: GeneratedRuntimeTypedCompletionErrorV1::Readback(error),
++            });
++        }
++        Err(error) => {
++            return Err(GeneratedRuntimeTypedCompletionFailureV1 {
++                output,
++                receipt: None,
++                error: GeneratedRuntimeTypedCompletionErrorV1::Engine(error),
++            });
++        }
++    };
++    // Prebinding excludes foreign in-flight decoders. The exact decoder has
++    // returned before this receipt, releasing every slot lock before publication.
++    let result = output
++        .slot
++        .state
++        .lock()
++        .map_err(|_| GeneratedRuntimeTypedOutputErrorV1::Custody)
++        .and_then(|mut state| {
++            GeneratedRuntimeChargedResultV1::take_completed_state_v1(&mut state, |gate| {
++                receipt.matches_owner(gate)
++            })
++        });
++    match result {
++        Ok(result) => Ok(GeneratedRuntimeCompletedOutputV1 { result, receipt }),
++        Err(error) => Err(GeneratedRuntimeTypedCompletionFailureV1 {
++            output,
++            receipt: Some(receipt),
++            error: GeneratedRuntimeTypedCompletionErrorV1::Output(error),
++        }),
++    }
++}
+diff --git a/crates/fe2o3-host/src/lib.rs b/crates/fe2o3-host/src/lib.rs
+index 72d2d1af3..1521cf910 100644
+--- a/crates/fe2o3-host/src/lib.rs
++++ b/crates/fe2o3-host/src/lib.rs
+@@ -209,8 +209,12 @@ pub use generated_runtime_arguments::{
+     GeneratedRuntimeResultV1, GeneratedRuntimeSliceBindingV1, GeneratedRuntimeWriteSlice,
+ };
+ pub use generated_runtime_results::{
+-    ChargedTypedResultV1, GeneratedRuntimeChargedResultV1, GeneratedRuntimeResultBudgetV1,
+-    GeneratedRuntimeResultUsageV1,
++    ChargedTypedResultV1, GeneratedRuntimeChargedResultV1, GeneratedRuntimeCompletedOutputV1,
++    GeneratedRuntimeResultBudgetV1, GeneratedRuntimeResultUsageV1,
++    GeneratedRuntimeTypedBindErrorV1, GeneratedRuntimeTypedBindFailureV1,
++    GeneratedRuntimeTypedCompletionErrorV1, GeneratedRuntimeTypedCompletionFailureV1,
++    GeneratedRuntimeTypedCompletionV1, GeneratedRuntimeTypedJoinFailureV1,
++    GeneratedRuntimeTypedOutcomeV1, GeneratedRuntimeTypedOutputErrorV1,
+ };
+ #[doc(hidden)]
+ #[cfg(feature = "qualification-legacy-hip-hsa")]
+diff --git a/crates/fe2o3-runtime/src/async_engine/generated_operation.rs b/crates/fe2o3-runtime/src/async_engine/generated_operation.rs
+index 36cfb4f16..6acee35da 100644
+--- a/crates/fe2o3-runtime/src/async_engine/generated_operation.rs
++++ b/crates/fe2o3-runtime/src/async_engine/generated_operation.rs
+@@ -6,7 +6,14 @@ use crate::{RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedReservationEr
+ use operation::{EngineOperationFactoryV1, EngineOperationV1, stop_reply};
+ 
+ pub(super) mod adoption;
++mod completion;
+ pub(super) mod completion_contract;
++pub use adoption::{
++    ActivationErrorV1 as RuntimeAsyncGeneratedActivationErrorV1,
++    ActivationFailureV1 as RuntimeAsyncGeneratedActivationFailureV1,
++    ActivationFutureV1 as RuntimeAsyncGeneratedActivationV1,
++};
++pub use completion::*;
+ mod reservation;
+ pub(super) use reservation::ReserveCommandV1;
+ pub use reservation::*;
+@@ -229,8 +236,10 @@ impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P,
+         &mut self,
+         hold: crate::context::ContextUnpublishedHoldV1,
+         ticket: RuntimeAsyncReservedTicketV1,
+-    ) {
+-        self.unpublished = Some(adoption::UnpublishedAdoptionV1::new(hold, ticket));
++    ) -> RuntimeAsyncGeneratedCompletionV1 {
++        let (key, completion) = ticket.into_completion_v1();
++        self.unpublished = Some(adoption::UnpublishedAdoptionV1::new(hold, key));
++        completion
+     }
+ 
+     fn retire_unpublished(
+@@ -244,15 +253,24 @@ impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P,
+         &mut self,
+         context: &mut RuntimeContextV1<B>,
+         completion: &mut Option<owned::Reply<GeneratedCompletionOutcomeV1>>,
+-    ) -> Result<(), RuntimeGfx942GeneratedReservationErrorV1> {
++    ) -> Result<Option<RuntimeGeneratedResultDomainV1>, RuntimeGfx942GeneratedReservationErrorV1>
++    {
+         let reserve = self
+             .reserve
+             .ok_or(RuntimeGfx942GeneratedReservationErrorV1::UnsupportedPreparation)?;
+         let prepared = self.prepared.as_mut().expect("parked preparation");
++        let domain = self
++            .adoption
++            .as_ref()
++            .and_then(|hooks| hooks.issue)
++            .and_then(|issue| issue.completion)
++            .map(|hooks| (hooks.domain)(prepared))
++            .transpose()
++            .map_err(RuntimeGfx942GeneratedReservationErrorV1::Readback)?;
+         let roster = reserve(context, prepared)?;
+         self.roster = Some(roster);
+         self.completion = completion.take();
+-        Ok(())
++        Ok(domain)
+     }
+ 
+     fn complete_preparation(&mut self) {
+@@ -418,6 +436,7 @@ impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
+             Some(adoption::CompletionHooksV1 {
+                 settle: RuntimeContextV1::complete_gfx942_issue_v1::<P>,
+                 decode: crate::RuntimeGfx942PreparedV1::<P>::complete_readback_v1,
++                domain: |prepared| prepared.value().completion_domain_v1(),
+             }),
+         )
+     }
+diff --git a/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs b/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs
+index 17bde31aa..af2dedce9 100644
+--- a/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs
++++ b/crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs
+@@ -47,6 +47,8 @@ pub(in crate::async_engine) struct CompletionHooksV1<B: RuntimeBackendV1, P> {
+     // Failure must leave P rooted; it cannot authorize retry or decoding.
+     pub settle: AdoptV1<B, P>,
+     pub decode: fn(P) -> GeneratedCompletionOutcomeV1,
++    pub domain:
++        fn(&P) -> Result<RuntimeGeneratedResultDomainV1, crate::RuntimeGfx942ReadbackErrorV1>,
+ }
+ 
+ impl<B: RuntimeBackendV1, P> Copy for CompletionHooksV1<B, P> {}
+@@ -96,19 +98,15 @@ enum PhaseV1 {
+ 
+ pub(super) struct UnpublishedAdoptionV1 {
+     hold: ContextUnpublishedHoldV1,
+-    // Keep the original completion consumer as well as the driver's producer.
+-    _ticket: RuntimeAsyncReservedTicketV1,
++    _key: Arc<PreparedKeyV1>,
+     phase: PhaseV1,
+ }
+ 
+ impl UnpublishedAdoptionV1 {
+-    pub(super) fn new(
+-        hold: ContextUnpublishedHoldV1,
+-        ticket: RuntimeAsyncReservedTicketV1,
+-    ) -> Self {
++    pub(super) fn new(hold: ContextUnpublishedHoldV1, key: Arc<PreparedKeyV1>) -> Self {
+         Self {
+             hold,
+-            _ticket: ticket,
++            _key: key,
+             phase: PhaseV1::Adopting,
+         }
+     }
+@@ -243,12 +241,12 @@ impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
+     }
+ }
+ 
+-pub(in crate::async_engine) enum ActivationErrorV1<E> {
++pub enum ActivationErrorV1<E> {
+     Engine(RuntimeAsyncEngineCallErrorV1),
+     Context(RuntimeErrorV1<E>),
+ }
+ 
+-pub(in crate::async_engine) struct ActivationFailureV1<E> {
++pub struct ActivationFailureV1<E> {
+     pub ticket: RuntimeAsyncReservedTicketV1,
+     pub error: ActivationErrorV1<E>,
+ }
+@@ -271,8 +269,26 @@ impl<E: fmt::Debug> fmt::Debug for ActivationFailureV1<E> {
+     }
+ }
+ 
+-type ActivationReplyV1<E> = owned::Reply<Result<(), ActivationFailureV1<E>>>;
+-type ActivationFutureV1<E> = RuntimeAsyncCommandFutureV1<Result<(), ActivationFailureV1<E>>>;
++impl<E: fmt::Display> fmt::Display for ActivationErrorV1<E> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::Engine(error) => error.fmt(f),
++            Self::Context(error) => error.fmt(f),
++        }
++    }
++}
++impl<E: Error + 'static> Error for ActivationErrorV1<E> {}
++impl<E: fmt::Display> fmt::Display for ActivationFailureV1<E> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        self.error.fmt(f)
++    }
++}
++impl<E: Error + 'static> Error for ActivationFailureV1<E> {}
++
++type ActivationReplyV1<E> =
++    owned::Reply<Result<RuntimeAsyncGeneratedCompletionV1, ActivationFailureV1<E>>>;
++pub type ActivationFutureV1<E> =
++    RuntimeAsyncCommandFutureV1<Result<RuntimeAsyncGeneratedCompletionV1, ActivationFailureV1<E>>>;
+ 
+ pub(in crate::async_engine) struct ActivateCommandV1<B: RuntimeBackendV1> {
+     ticket: Option<RuntimeAsyncReservedTicketV1>,
+@@ -303,9 +319,9 @@ impl<B: RuntimeBackendV1> ActivateCommandV1<B> {
+             operations.activate_reserved(context, &mut self.ticket, self.stream)
+         }));
+         match result {
+-            Ok(Ok(())) => {
++            Ok(Ok(completion)) => {
+                 if let Some(mut reply) = self.reply.take() {
+-                    reply.complete(Ok(Ok(())));
++                    reply.complete(Ok(Ok(completion)));
+                 }
+             }
+             Ok(Err(error)) if !context.is_terminal() => self.reject(error),
+@@ -333,7 +349,7 @@ impl<B: RuntimeBackendV1> Drop for ActivateCommandV1<B> {
+ }
+ 
+ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
+-    // Kept private until DATA, ISSUE and COMPLETE supply their real adapters.
++    // Internal domainless lifecycle fixtures do not expose a public launch path.
+     #[allow(
+         dead_code,
+         reason = "private integration boundary for native DATA adoption"
+@@ -342,6 +358,15 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
+         &self,
+         ticket: RuntimeAsyncReservedTicketV1,
+         stream: RuntimeStreamIdV1,
++    ) -> Result<ActivationFutureV1<B::Error>, ActivationFailureV1<B::Error>> {
++        self.enqueue_reserved_activation_v1(ticket, stream, false)
++    }
++
++    pub(in crate::async_engine) fn enqueue_reserved_activation_v1(
++        &self,
++        ticket: RuntimeAsyncReservedTicketV1,
++        stream: RuntimeStreamIdV1,
++        require_completion: bool,
+     ) -> Result<ActivationFutureV1<B::Error>, ActivationFailureV1<B::Error>> {
+         let failure = |ticket, error| ActivationFailureV1 {
+             ticket,
+@@ -359,6 +384,12 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
+                 RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket,
+             ));
+         }
++        if require_completion && ticket.domain.is_none() {
++            return Err(ActivationFailureV1 {
++                ticket,
++                error: ActivationErrorV1::Context(RuntimeValidationErrorV1::Unsupported.into()),
++            });
++        }
+         let (reply, future) = match owned::Reply::budgeted_pair(&self.observer.reply_budget) {
+             Ok(pair) => pair,
+             Err(error) => return Err(failure(ticket, error)),
+@@ -393,3 +424,23 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
+         }
+     }
+ }
++
++impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
++    /// Activates the exact reserved generated invocation and returns its original
++    /// completion observer after owner custody is rooted. Immediate admission and
++    /// ordinary live preflight rejection preserve the supplied ticket, as does
++    /// discarding a queued activation before execution. Terminal execution and
++    /// panic may instead retain it for owner shutdown and
++    /// resolve the outer future with an engine error. Observer loss never cancels
++    /// native work; the preparation control does not cancel activated execution.
++    pub fn try_activate_generated_v1(
++        &self,
++        ticket: RuntimeAsyncReservedTicketV1,
++        stream: RuntimeStreamIdV1,
++    ) -> Result<
++        ActivationFutureV1<crate::KfdRuntimeBackendErrorV1>,
++        ActivationFailureV1<crate::KfdRuntimeBackendErrorV1>,
++    > {
++        self.enqueue_reserved_activation_v1(ticket, stream, true)
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/async_engine/generated_operation/completion.rs b/crates/fe2o3-runtime/src/async_engine/generated_operation/completion.rs
+new file mode 100644
+index 000000000..ae2126636
+--- /dev/null
++++ b/crates/fe2o3-runtime/src/async_engine/generated_operation/completion.rs
+@@ -0,0 +1,285 @@
++//! The original completion observer, independent of owner-thread custody.
++
++use super::*;
++
++/// Opaque identity of the original host result gate, not execution authority.
++/// It extends only gate/account metadata lifetime, not charged output or native custody.
++#[doc(hidden)]
++#[derive(Clone)]
++pub struct RuntimeGeneratedResultDomainV1(Arc<dyn Send + Sync>);
++
++impl RuntimeGeneratedResultDomainV1 {
++    /// Retains an existing gate allocation without allocating another domain.
++    pub fn from_owner<T: Send + Sync + 'static>(owner: Arc<T>) -> Self {
++        Self(owner)
++    }
++
++    pub fn matches_owner<T: Send + Sync + 'static>(&self, owner: &Arc<T>) -> bool {
++        Arc::as_ptr(&self.0).cast::<()>() == Arc::as_ptr(owner).cast::<()>()
++    }
++}
++
++impl fmt::Debug for RuntimeGeneratedResultDomainV1 {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("RuntimeGeneratedResultDomainV1")
++            .finish_non_exhaustive()
++    }
++}
++
++/// Successful completion of the original decoder and its exact result gate.
++/// This is not a Worker proof, native capability, or permission to replay work.
++///
++/// ```compile_fail,E0599
++/// use fe2o3_runtime::RuntimeGeneratedCompletionReceiptV1;
++/// fn duplicate(value: RuntimeGeneratedCompletionReceiptV1) { value.clone(); }
++/// ```
++#[derive(Debug)]
++pub struct RuntimeGeneratedCompletionReceiptV1 {
++    domain: RuntimeGeneratedResultDomainV1,
++}
++
++impl RuntimeGeneratedCompletionReceiptV1 {
++    #[doc(hidden)]
++    pub fn matches_owner<T: Send + Sync + 'static>(&self, owner: &Arc<T>) -> bool {
++        self.domain.matches_owner(owner)
++    }
++}
++
++pub type RuntimeAsyncGeneratedCompletionResultV1 = Result<
++    Result<RuntimeGeneratedCompletionReceiptV1, crate::RuntimeGfx942ReadbackErrorV1>,
++    RuntimeAsyncEngineCallErrorV1,
++>;
++
++/// Move-only observer of an activated generated invocation's original reply.
++/// Dropping it does not cancel execution or release driver/native/readback custody.
++///
++/// ```compile_fail,E0599
++/// use fe2o3_runtime::RuntimeAsyncGeneratedCompletionV1;
++/// fn duplicate(value: RuntimeAsyncGeneratedCompletionV1) { value.clone(); }
++/// ```
++/// ```compile_fail,E0616
++/// use fe2o3_runtime::RuntimeAsyncGeneratedCompletionV1;
++/// fn extract(value: RuntimeAsyncGeneratedCompletionV1) { let _ = value.future; }
++/// ```
++#[must_use = "dropping the completion observer does not cancel the invocation"]
++pub struct RuntimeAsyncGeneratedCompletionV1 {
++    pub(super) future: RuntimeAsyncCommandFutureV1<GeneratedCompletionOutcomeV1>,
++    pub(super) domain: Option<RuntimeGeneratedResultDomainV1>,
++    pub(super) worker_thread: Arc<OnceLock<thread::ThreadId>>,
++}
++
++impl fmt::Debug for RuntimeAsyncGeneratedCompletionV1 {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("RuntimeAsyncGeneratedCompletionV1")
++            .finish_non_exhaustive()
++    }
++}
++
++/// Blocking admission failure returns the unchanged observer.
++#[derive(Debug)]
++pub struct RuntimeAsyncGeneratedJoinFailureV1 {
++    pub completion: RuntimeAsyncGeneratedCompletionV1,
++    pub error: RuntimeAsyncEngineCallErrorV1,
++}
++
++impl fmt::Display for RuntimeAsyncGeneratedJoinFailureV1 {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        self.error.fmt(f)
++    }
++}
++impl Error for RuntimeAsyncGeneratedJoinFailureV1 {}
++
++impl RuntimeAsyncGeneratedCompletionV1 {
++    /// Tests host output binding without granting completion or execution authority.
++    #[doc(hidden)]
++    pub fn matches_owner<T: Send + Sync + 'static>(&self, owner: &Arc<T>) -> bool {
++        self.domain
++            .as_ref()
++            .is_some_and(|domain| domain.matches_owner(owner))
++    }
++
++    /// Waits on the same future and reply, never by executing a Context command.
++    /// The owner thread is rejected before blocking and retains this observer.
++    /// This has no deadline: uncertain process-retained custody may remain pending.
++    pub fn try_join(
++        self,
++    ) -> Result<RuntimeAsyncGeneratedCompletionResultV1, RuntimeAsyncGeneratedJoinFailureV1> {
++        if self
++            .worker_thread
++            .get()
++            .is_some_and(|id| *id == thread::current().id())
++        {
++            return Err(RuntimeAsyncGeneratedJoinFailureV1 {
++                completion: self,
++                error: RuntimeAsyncEngineCallErrorV1::ReentrantCall,
++            });
++        }
++        Ok(owned::join_observer_v1(self))
++    }
++
++    #[cfg(test)]
++    pub(in crate::async_engine) fn result_probe_for_test_v1(
++        &self,
++    ) -> impl Fn() -> Option<Result<GeneratedCompletionOutcomeV1, RuntimeAsyncEngineCallErrorV1>>
++    + Send
++    + Sync
++    + 'static {
++        self.future.result_probe_for_test_v1()
++    }
++}
++
++impl Future for RuntimeAsyncGeneratedCompletionV1 {
++    type Output = RuntimeAsyncGeneratedCompletionResultV1;
++
++    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
++        match Pin::new(&mut self.future).poll(cx) {
++            Poll::Pending => Poll::Pending,
++            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
++            Poll::Ready(Ok(Err(error))) => Poll::Ready(Ok(Err(error))),
++            Poll::Ready(Ok(Ok(()))) => Poll::Ready(
++                self.domain
++                    .take()
++                    .map(|domain| Ok(RuntimeGeneratedCompletionReceiptV1 { domain }))
++                    .ok_or(RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket),
++            ),
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::sync::atomic::AtomicUsize;
++
++    fn observer(
++        budget: &Arc<reply_budget::ReplyBudgetV1>,
++        gate: &Arc<()>,
++        worker_thread: Arc<OnceLock<thread::ThreadId>>,
++    ) -> (
++        owned::Reply<GeneratedCompletionOutcomeV1>,
++        RuntimeAsyncGeneratedCompletionV1,
++    ) {
++        let (reply, future) = owned::Reply::budgeted_pair(budget).unwrap();
++        (
++            reply,
++            RuntimeAsyncGeneratedCompletionV1 {
++                future,
++                domain: Some(RuntimeGeneratedResultDomainV1::from_owner(gate.clone())),
++                worker_thread,
++            },
++        )
++    }
++
++    struct WakeCount(AtomicUsize);
++    impl std::task::Wake for WakeCount {
++        fn wake(self: Arc<Self>) {
++            self.0.fetch_add(1, Ordering::SeqCst);
++        }
++    }
++
++    #[test]
++    fn completion_observer_mints_only_exact_domain_after_original_reply() {
++        let budget = reply_budget::ReplyBudgetV1::new(1);
++        let gate = Arc::new(());
++        let foreign = Arc::new(());
++        let (mut reply, mut completion) = observer(&budget, &gate, Arc::new(OnceLock::new()));
++        let first = Arc::new(WakeCount(AtomicUsize::new(0)));
++        let second = Arc::new(WakeCount(AtomicUsize::new(0)));
++        for wake in [&first, &second] {
++            assert!(
++                Pin::new(&mut completion)
++                    .poll(&mut Context::from_waker(&Waker::from(wake.clone())))
++                    .is_pending()
++            );
++        }
++        reply.complete(Ok(Ok(())));
++        reply.complete(Err(RuntimeAsyncEngineCallErrorV1::EngineStopped));
++        assert_eq!(first.0.load(Ordering::SeqCst), 0);
++        assert_eq!(second.0.load(Ordering::SeqCst), 1);
++        let Poll::Ready(Ok(Ok(receipt))) =
++            Pin::new(&mut completion).poll(&mut Context::from_waker(Waker::noop()))
++        else {
++            panic!("completed original reply")
++        };
++        assert!(receipt.matches_owner(&gate));
++        assert!(!receipt.matches_owner(&foreign));
++        drop(completion);
++        drop(reply);
++        assert_eq!(Arc::strong_count(&gate), 2, "only receipt metadata remains");
++        assert!(
++            owned::Reply::<()>::budgeted_pair(&budget).is_ok(),
++            "no second reply or retained reply credit"
++        );
++        drop(receipt);
++        assert_eq!(Arc::strong_count(&gate), 1);
++    }
++
++    #[test]
++    fn completion_join_rejects_owner_thread_and_preserves_pending_observer() {
++        let budget = reply_budget::ReplyBudgetV1::new(1);
++        let gate = Arc::new(());
++        let worker = Arc::new(OnceLock::new());
++        worker.set(thread::current().id()).unwrap();
++        let (mut reply, completion) = observer(&budget, &gate, worker);
++        let failure = completion.try_join().unwrap_err();
++        assert_eq!(failure.error, RuntimeAsyncEngineCallErrorV1::ReentrantCall);
++        assert!(owned::Reply::<()>::budgeted_pair(&budget).is_err());
++        let (sent, received) = std::sync::mpsc::sync_channel(1);
++        let waiter = thread::spawn(move || {
++            sent.send(failure.completion.try_join().unwrap()).unwrap();
++        });
++        reply.complete(Ok(Ok(())));
++        drop(reply);
++        let receipt = received
++            .recv_timeout(Duration::from_secs(5))
++            .unwrap()
++            .unwrap()
++            .unwrap();
++        waiter.join().unwrap();
++        assert!(receipt.matches_owner(&gate));
++        assert!(owned::Reply::<()>::budgeted_pair(&budget).is_ok());
++    }
++
++    #[test]
++    fn completion_observer_errors_and_drop_never_mint_a_receipt_or_lose_credit() {
++        for mode in 0..4 {
++            let budget = reply_budget::ReplyBudgetV1::new(1);
++            let gate = Arc::new(());
++            let (mut reply, mut completion) = observer(&budget, &gate, Arc::new(OnceLock::new()));
++            match mode {
++                0 => reply.complete(Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)),
++                1 => reply.complete(Ok(Err(crate::RuntimeGfx942ReadbackErrorV1::InvalidStorage))),
++                2 => {
++                    completion.domain = None;
++                    reply.complete(Ok(Ok(())));
++                }
++                _ => {
++                    drop(completion);
++                    assert!(owned::Reply::<()>::budgeted_pair(&budget).is_err());
++                    reply.complete(Ok(Ok(())));
++                    drop(reply);
++                    assert!(owned::Reply::<()>::budgeted_pair(&budget).is_ok());
++                    continue;
++                }
++            }
++            let result = completion.try_join().unwrap();
++            match mode {
++                0 => assert!(matches!(
++                    result,
++                    Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
++                )),
++                1 => assert!(matches!(
++                    result,
++                    Ok(Err(crate::RuntimeGfx942ReadbackErrorV1::InvalidStorage))
++                )),
++                2 => assert!(matches!(
++                    result,
++                    Err(RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket)
++                )),
++                _ => unreachable!(),
++            }
++            drop(reply);
++            assert!(owned::Reply::<()>::budgeted_pair(&budget).is_ok());
++        }
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs b/crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs
+index 9442939d2..ad2ee1917 100644
+--- a/crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs
++++ b/crates/fe2o3-runtime/src/async_engine/generated_operation/reservation.rs
+@@ -16,20 +16,31 @@ use super::*;
+ #[must_use]
+ pub struct RuntimeAsyncReservedTicketV1 {
+     pub(in crate::async_engine) key: Arc<PreparedKeyV1>,
+-    #[allow(
+-        dead_code,
+-        reason = "private completion consumer retained until native issue exists"
+-    )]
+     completion: RuntimeAsyncCommandFutureV1<GeneratedCompletionOutcomeV1>,
++    pub(super) domain: Option<RuntimeGeneratedResultDomainV1>,
++    worker_thread: Arc<OnceLock<thread::ThreadId>>,
+ }
+ 
+-#[cfg(test)]
+ impl RuntimeAsyncReservedTicketV1 {
++    #[cfg(test)]
+     pub(in crate::async_engine) fn completion_for_test_v1(
+         &mut self,
+     ) -> &mut RuntimeAsyncCommandFutureV1<GeneratedCompletionOutcomeV1> {
+         &mut self.completion
+     }
++
++    pub(super) fn into_completion_v1(
++        self,
++    ) -> (Arc<PreparedKeyV1>, RuntimeAsyncGeneratedCompletionV1) {
++        (
++            self.key,
++            RuntimeAsyncGeneratedCompletionV1 {
++                future: self.completion,
++                domain: self.domain,
++                worker_thread: self.worker_thread,
++            },
++        )
++    }
+ }
+ 
+ impl fmt::Debug for RuntimeAsyncReservedTicketV1 {
+@@ -80,6 +91,7 @@ pub(in crate::async_engine) struct ReserveCommandV1 {
+     >,
+     completion: Option<owned::Reply<GeneratedCompletionOutcomeV1>>,
+     consumer: Option<RuntimeAsyncCommandFutureV1<GeneratedCompletionOutcomeV1>>,
++    worker_thread: Arc<OnceLock<thread::ThreadId>>,
+ }
+ 
+ impl ReserveCommandV1 {
+@@ -114,11 +126,13 @@ impl ReserveCommandV1 {
+             }))
+         };
+         match result {
+-            Ok(Ok(())) => {
++            Ok(Ok(domain)) => {
+                 let ticket = self.ticket.take().expect("reserved exact ticket");
+                 let reserved = RuntimeAsyncReservedTicketV1 {
+                     key: ticket.key,
+                     completion: self.consumer.take().expect("reserved completion consumer"),
++                    domain,
++                    worker_thread: Arc::clone(&self.worker_thread),
+                 };
+                 if let Some(mut reply) = self.reply.take() {
+                     reply.complete(Ok(Ok(reserved)));
+@@ -186,6 +200,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
+             reply: Some(reply),
+             completion: Some(completion),
+             consumer: Some(consumer),
++            worker_thread: Arc::clone(&self.observer.worker_thread),
+         };
+         match self
+             .observer
+diff --git a/crates/fe2o3-runtime/src/async_engine/operation.rs b/crates/fe2o3-runtime/src/async_engine/operation.rs
+index 8d9a801b3..ee2c50e96 100644
+--- a/crates/fe2o3-runtime/src/async_engine/operation.rs
++++ b/crates/fe2o3-runtime/src/async_engine/operation.rs
+@@ -49,7 +49,10 @@ pub(super) trait EngineOperationV1<B: RuntimeBackendV1> {
+         &mut self,
+         _context: &mut RuntimeContextV1<B>,
+         _completion: &mut Option<owned::Reply<generated_operation::GeneratedCompletionOutcomeV1>>,
+-    ) -> Result<(), crate::RuntimeGfx942GeneratedReservationErrorV1> {
++    ) -> Result<
++        Option<RuntimeGeneratedResultDomainV1>,
++        crate::RuntimeGfx942GeneratedReservationErrorV1,
++    > {
+         Err(crate::RuntimeGfx942GeneratedReservationErrorV1::UnsupportedPreparation)
+     }
+     fn preflight_adoption(
+@@ -63,7 +66,7 @@ pub(super) trait EngineOperationV1<B: RuntimeBackendV1> {
+         &mut self,
+         _hold: crate::context::ContextUnpublishedHoldV1,
+         _ticket: RuntimeAsyncReservedTicketV1,
+-    ) {
++    ) -> RuntimeAsyncGeneratedCompletionV1 {
+         unreachable!("only an admitted generated driver activates")
+     }
+     /// True permits disposal only after exact unpublished native retirement.
+@@ -195,7 +198,10 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
+         context: &mut RuntimeContextV1<B>,
+         key: &Arc<generated_operation::PreparedKeyV1>,
+         completion: &mut Option<owned::Reply<generated_operation::GeneratedCompletionOutcomeV1>>,
+-    ) -> Result<(), crate::RuntimeGfx942GeneratedReservationErrorV1> {
++    ) -> Result<
++        Option<RuntimeGeneratedResultDomainV1>,
++        crate::RuntimeGfx942GeneratedReservationErrorV1,
++    > {
+         let entry = self
+             .parked
+             .iter_mut()
+@@ -216,7 +222,10 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
+         context: &mut RuntimeContextV1<B>,
+         ticket: &mut Option<RuntimeAsyncReservedTicketV1>,
+         stream: RuntimeStreamIdV1,
+-    ) -> Result<(), generated_operation::adoption::ActivationErrorV1<B::Error>> {
++    ) -> Result<
++        RuntimeAsyncGeneratedCompletionV1,
++        generated_operation::adoption::ActivationErrorV1<B::Error>,
++    > {
+         use generated_operation::adoption::ActivationErrorV1 as Error;
+         if context.is_terminal() || !self.owner_cleanup {
+             return Err(Error::Engine(RuntimeAsyncEngineCallErrorV1::EngineStopped));
+@@ -258,12 +267,12 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
+         );
+         self.entries.push_back(entry);
+         // Root the same driver before its phase changes or any adapter effect.
+-        self.entries
++        Ok(self
++            .entries
+             .back_mut()
+             .expect("rooted adoption")
+             .driver
+-            .activate_adoption(hold, ticket.take().expect("consumed exact reserved ticket"));
+-        Ok(())
++            .activate_adoption(hold, ticket.take().expect("consumed exact reserved ticket")))
+     }
+ 
+     pub(super) fn retire_unpublished_v1(
+diff --git a/crates/fe2o3-runtime/src/async_engine/owned.rs b/crates/fe2o3-runtime/src/async_engine/owned.rs
+index 83ed2c040..26f8af3ed 100644
+--- a/crates/fe2o3-runtime/src/async_engine/owned.rs
++++ b/crates/fe2o3-runtime/src/async_engine/owned.rs
+@@ -156,6 +156,27 @@ impl<R> Drop for RuntimeAsyncCommandFutureV1<R> {
+     }
+ }
+ 
++pub(super) fn join_observer_v1<F: Future + Unpin>(mut future: F) -> F::Output {
++    struct ThreadWake(thread::Thread);
++    impl std::task::Wake for ThreadWake {
++        fn wake(self: Arc<Self>) {
++            self.0.unpark();
++        }
++        fn wake_by_ref(self: &Arc<Self>) {
++            self.0.unpark();
++        }
++    }
++    let waker = Waker::from(Arc::new(ThreadWake(thread::current())));
++    let mut cx = Context::from_waker(&waker);
++    loop {
++        if let Poll::Ready(result) = Pin::new(&mut future).poll(&mut cx) {
++            return result;
++        }
++        // Unpark's token closes the wake-before-park race; spurious wakes retry.
++        thread::park();
++    }
++}
++
+ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
+     /// Enqueues a command without waiting for the owner thread to execute it.
+     ///
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs
+index 6f894dda2..2af2d3be5 100644
+--- a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs
+@@ -15,6 +15,7 @@ struct Payload {
+     mode: u8,
+     stream: Option<RuntimeStreamIdV1>,
+     issue_advances: usize,
++    result_domain: Arc<()>,
+ }
+ 
+ impl Drop for Payload {
+@@ -202,6 +203,7 @@ fn preparation_with_hooks<B: RetireBackend + 'static>(
+         .enqueue_preparation_with_adoption_v1(
+             Box::new(move |_| {
+                 Ok(Payload {
++                    result_domain: Arc::new(()),
+                     _local: LocalPayload {
+                         local: Rc::new(Cell::new(0)),
+                         drops,
+@@ -249,7 +251,7 @@ pub(super) fn activate(
+ ) {
+     let future = h.handle.try_activate_reserved_v1(ticket, stream).unwrap();
+     assert!(!h.command());
+-    ready(future).unwrap().unwrap();
++    drop(ready(future).unwrap().unwrap());
+ }
+ 
+ #[test]
+@@ -324,7 +326,7 @@ fn adoption_panic_terminal_preflight_and_post_effect_errors_never_retry_or_drop(
+             assert!(ready(future).is_err());
+         } else {
+             assert!(!stopped);
+-            ready(future).unwrap().unwrap();
++            drop(ready(future).unwrap().unwrap());
+             h.advance();
+             assert!(!h.registry.discard_reserved(&key));
+         }
+@@ -451,9 +453,11 @@ fn adoption_owned_drain_and_shutdown_retire_before_carrier_disposal() {
+         let ticket = join(handle.try_reserve_prepared_v1(ticket).unwrap())
+             .unwrap()
+             .unwrap();
+-        join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+-            .unwrap()
+-            .unwrap();
++        drop(
++            join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
++                .unwrap()
++                .unwrap(),
++        );
+         if drain {
+             let report = join(handle.begin_drain(16).unwrap()).unwrap();
+             assert_eq!(report.outcome, RuntimeAsyncDrainOutcomeV1::Quiescent);
+@@ -504,9 +508,11 @@ fn adoption_owned_failed_retirement_quarantines_carrier_and_context() {
+         let ticket = join(handle.try_reserve_prepared_v1(ticket).unwrap())
+             .unwrap()
+             .unwrap();
+-        join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+-            .unwrap()
+-            .unwrap();
++        drop(
++            join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
++                .unwrap()
++                .unwrap(),
++        );
+         assert_eq!(
+             engine.shutdown().unwrap().disposition,
+             RuntimeAsyncOwnedDispositionV1::RetainedUntilProcessExit
+@@ -601,20 +607,38 @@ fn adoption_readiness_error_or_panic_retains_custody_without_retry() {
+         let drops = Arc::new(AtomicUsize::new(0));
+         let (ticket, stream) = reserved(&mut h, drops.clone(), 0, true);
+         h.state.lock().unwrap().adoption_ready_mode = mode;
+-        activate(&mut h, ticket, stream);
++        let activation = h.handle.try_activate_reserved_v1(ticket, stream).unwrap();
++        assert!(!h.command());
++        let completion = ready(activation).unwrap().unwrap();
+         h.advance();
+         assert!(h.context.is_terminal());
+         h.state.lock().unwrap().adoption_ready_mode = 0;
+         h.advance();
+         h.registry.retire_unpublished_v1(&mut h.context, 1);
+-        let state = h.state.lock().unwrap();
+-        assert_eq!(state.adoption_ready_calls, 1);
+-        assert_eq!(state.adoption_order, ["preflight"]);
+-        assert_eq!(state.adoption_retire_calls, 0);
++        let (ready_calls, order, retire_calls) = {
++            let state = h.state.lock().unwrap();
++            (
++                state.adoption_ready_calls,
++                state.adoption_order.clone(),
++                state.adoption_retire_calls,
++            )
++        };
++        assert_eq!(ready_calls, 1);
++        assert_eq!(order, ["preflight"]);
++        assert_eq!(retire_calls, 0);
+         assert_eq!(h.registry.len(), 1);
+         assert_eq!(drops.load(Ordering::SeqCst), 0);
+         assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
+-        drop(state);
++        assert!(!h.registry.stop_observations());
++        let expected = if mode == 2 {
++            RuntimeAsyncEngineCallErrorV1::EngineStopped
++        } else {
++            RuntimeAsyncEngineCallErrorV1::CommandPanicked
++        };
++        assert!(matches!(ready(completion), Err(error) if error == expected));
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++        assert_eq!(h.registry.len(), 1);
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
+         assert_eq!(h.context.cleanup().retained().streams, 1);
+     }
+ }
+@@ -639,9 +663,11 @@ fn adoption_readiness_owned_waiting_stop_and_drain_retire_empty_prefix() {
+         let ticket = join(handle.try_reserve_prepared_v1(ticket).unwrap())
+             .unwrap()
+             .unwrap();
+-        join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+-            .unwrap()
+-            .unwrap();
++        drop(
++            join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
++                .unwrap()
++                .unwrap(),
++        );
+         let deadline = Instant::now() + Duration::from_secs(5);
+         while state.lock().unwrap().adoption_ready_calls == 0 {
+             assert!(Instant::now() < deadline, "waiting driver was not polled");
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests.rs
+index 673359122..7709935b0 100644
+--- a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests.rs
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests.rs
+@@ -27,6 +27,11 @@ impl std::task::Wake for ResultWake {
+ fn completion_hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
+     let mut hooks = issue_tests::issue_hooks();
+     hooks.issue.as_mut().unwrap().completion = Some(CompletionHooksV1 {
++        domain: |payload| {
++            Ok(RuntimeGeneratedResultDomainV1::from_owner(
++                payload.result_domain.clone(),
++            ))
++        },
+         settle: |context: &mut RuntimeContextV1<B>, payload: &mut Payload, _, hold| {
+             assert_eq!(payload.stream, Some(hold.stream()));
+             assert_eq!(
+@@ -123,12 +128,11 @@ fn reserve_completion(
+ 
+ fn watch(
+     h: &Harness,
+-    ticket: &mut RuntimeAsyncReservedTicketV1,
++    future: &mut RuntimeAsyncGeneratedCompletionV1,
+     drops: Arc<AtomicUsize>,
+     panic: bool,
+ ) -> Arc<Mutex<Vec<WakeRecord>>> {
+     let observations = Arc::new(Mutex::new(Vec::new()));
+-    let future = ticket.completion_for_test_v1();
+     let waker = Waker::from(Arc::new(ResultWake {
+         probe: Box::new(future.result_probe_for_test_v1()),
+         state: h.state.clone(),
+@@ -144,14 +148,160 @@ fn watch(
+     observations
+ }
+ 
++fn activate_observer(
++    h: &mut Harness,
++    ticket: RuntimeAsyncReservedTicketV1,
++    stream: RuntimeStreamIdV1,
++) -> RuntimeAsyncGeneratedCompletionV1 {
++    let activation = h.handle.try_activate_reserved_v1(ticket, stream).unwrap();
++    assert!(!h.command());
++    ready(activation).unwrap().unwrap()
++}
++
++#[test]
++fn generated_completion_domain_failure_precedes_reservation_and_preserves_exact_owner() {
++    use generated_operation::adoption::IssueHooksV1;
++
++    type Trace = Arc<Mutex<Vec<(&'static str, usize, usize)>>>;
++    struct DomainPayload {
++        _local: LocalPayload,
++        source: Vec<u8>,
++        domain: Arc<()>,
++        mode: Arc<AtomicUsize>,
++        trace: Trace,
++    }
++    fn observe(payload: &DomainPayload, step: &'static str) {
++        assert_eq!(payload.source, [7; 16]);
++        payload.trace.lock().unwrap().push((
++            step,
++            payload as *const DomainPayload as usize,
++            payload.source.as_ptr() as usize,
++        ));
++    }
++
++    for panics in [false, true] {
++        let mut h = Harness::new(1, 2, true);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let domain = Arc::new(());
++        let mode = Arc::new(AtomicUsize::new(if panics { 2 } else { 1 }));
++        let trace: Trace = Arc::new(Mutex::new(Vec::new()));
++        let captured = (drops.clone(), domain.clone(), mode.clone(), trace.clone());
++        let preparation = h
++            .handle
++            .enqueue_preparation_with_adoption_v1(
++                Box::new(move |_| {
++                    Ok::<_, ()>(DomainPayload {
++                        _local: LocalPayload {
++                            local: Rc::new(Cell::new(0)),
++                            drops: captured.0,
++                            owner: thread::current().id(),
++                            panic_on_drop: false,
++                        },
++                        source: vec![7; 16],
++                        domain: captured.1,
++                        mode: captured.2,
++                        trace: captured.3,
++                    })
++                }),
++                Some(|_, payload| {
++                    observe(payload, "reserve");
++                    Ok(reservation_tests::roster())
++                }),
++                Some(AdoptionHooksV1 {
++                    preflight: |_, _, _, _| panic!("no adoption preflight"),
++                    ready: |_, _| panic!("no adoption readiness"),
++                    adopt: |_, _, _, _| panic!("no adoption"),
++                    retire: |_, _| panic!("no native retirement"),
++                    issue: Some(IssueHooksV1 {
++                        progress: |_, _, _, _| panic!("no issue"),
++                        retire_stopped: |_, _| panic!("no issued retirement"),
++                        completion: Some(CompletionHooksV1 {
++                            settle: |_, _, _, _| panic!("no settlement"),
++                            decode: |_| panic!("no decode"),
++                            domain: |payload| {
++                                observe(payload, "domain");
++                                match payload.mode.load(Ordering::SeqCst) {
++                                    1 => Err(crate::RuntimeGfx942ReadbackErrorV1::InvalidStorage),
++                                    2 => panic!("domain lookup panic"),
++                                    _ => Ok(RuntimeGeneratedResultDomainV1::from_owner(
++                                        payload.domain.clone(),
++                                    )),
++                                }
++                            },
++                        }),
++                    }),
++                }),
++            )
++            .unwrap();
++        assert!(!h.command());
++        h.advance();
++        let ticket = ready(preparation).unwrap().unwrap();
++        let key = ticket.key.clone();
++        let reservation = h.handle.try_reserve_prepared_v1(ticket).unwrap();
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 2);
++        assert_eq!(h.command(), panics);
++        let result = ready(reservation);
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++        assert_eq!((h.registry.len(), h.registry.active_len()), (1, 0));
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        assert_eq!(Arc::strong_count(&domain), 2);
++        let first = trace.lock().unwrap().clone();
++        assert_eq!(first.len(), 1);
++        assert_eq!(first[0].0, "domain");
++        mode.store(0, Ordering::SeqCst);
++        if panics {
++            assert!(matches!(
++                result,
++                Err(RuntimeAsyncEngineCallErrorV1::CommandPanicked)
++            ));
++            assert!(h.context.is_terminal());
++            for _ in 0..3 {
++                h.advance();
++                h.registry.retire_unpublished_v1(&mut h.context, 1);
++                assert!(!h.registry.stop_observations());
++            }
++            assert_eq!(*trace.lock().unwrap(), first);
++            assert_eq!(h.registry.len(), 1);
++            assert_eq!(drops.load(Ordering::SeqCst), 0);
++            core::mem::forget(h.registry);
++        } else {
++            let failure = result.unwrap().unwrap_err();
++            assert!(matches!(
++                failure.error,
++                RuntimeGfx942GeneratedReservationErrorV1::Readback(
++                    crate::RuntimeGfx942ReadbackErrorV1::InvalidStorage
++                )
++            ));
++            assert!(Arc::ptr_eq(&key, &failure.ticket.key));
++            assert!(!h.context.is_terminal());
++            let retry = h.handle.try_reserve_prepared_v1(failure.ticket).unwrap();
++            assert!(!h.command());
++            let reserved = ready(retry).unwrap().unwrap();
++            assert!(Arc::ptr_eq(&key, &reserved.key));
++            assert_eq!(Arc::strong_count(&domain), 3);
++            assert_eq!(
++                *trace.lock().unwrap(),
++                [first[0], first[0], ("reserve", first[0].1, first[0].2)]
++            );
++            assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
++            let discard = h.handle.try_discard_reserved_v1(reserved).unwrap();
++            assert!(!h.command());
++            assert_eq!(ready(discard), Ok(()));
++            assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++            assert_eq!(drops.load(Ordering::SeqCst), 1);
++            assert_eq!(Arc::strong_count(&domain), 1);
++        }
++    }
++}
++
+ #[test]
+ fn generated_completion_settles_then_decodes_then_resolves_original_cell_once() {
+     for panic_wake in [false, true] {
+         let mut h = Harness::new(1, 2, true);
+         let drops = Arc::new(AtomicUsize::new(0));
+-        let (mut ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
+-        let observations = watch(&h, &mut ticket, drops.clone(), panic_wake);
+-        activate(&mut h, ticket, stream);
++        let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
++        let mut completion = activate_observer(&mut h, ticket, stream);
++        let observations = watch(&h, &mut completion, drops.clone(), panic_wake);
+         for _ in 0..3 {
+             h.advance();
+             assert!(observations.lock().unwrap().is_empty());
+@@ -161,6 +311,8 @@ fn generated_completion_settles_then_decodes_then_resolves_original_cell_once()
+         h.advance();
+         assert!(!h.context.is_terminal());
+         assert_eq!(h.registry.active_len(), 0);
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
++        assert!(ready(completion).unwrap().is_ok());
+         assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
+         assert_eq!(drops.load(Ordering::SeqCst), 1);
+         h.context.destroy_stream(stream).unwrap();
+@@ -195,9 +347,9 @@ fn generated_completion_settlement_faults_keep_prepared_owner_and_forbid_decode_
+     for mode in (30..35).chain(40..45) {
+         let mut h = Harness::new(1, 2, true);
+         let drops = Arc::new(AtomicUsize::new(0));
+-        let (mut ticket, stream) = reserve_completion(&mut h, drops.clone(), mode);
+-        let observations = watch(&h, &mut ticket, drops.clone(), false);
+-        activate(&mut h, ticket, stream);
++        let (ticket, stream) = reserve_completion(&mut h, drops.clone(), mode);
++        let mut completion = activate_observer(&mut h, ticket, stream);
++        let observations = watch(&h, &mut completion, drops.clone(), false);
+         for _ in 0..4 {
+             h.advance();
+         }
+@@ -230,6 +382,7 @@ fn generated_completion_settlement_faults_keep_prepared_owner_and_forbid_decode_
+             );
+         }
+         assert_eq!(drops.load(Ordering::SeqCst), 0);
++        assert!(ready(completion).is_err());
+         core::mem::forget(h.registry);
+     }
+ }
+@@ -239,14 +392,27 @@ fn generated_completion_decoder_error_or_panic_is_conclusive_host_failure() {
+     for mode in [23, 24] {
+         let mut h = Harness::new(1, 2, true);
+         let drops = Arc::new(AtomicUsize::new(0));
+-        let (mut ticket, stream) = reserve_completion(&mut h, drops.clone(), mode);
+-        let observations = watch(&h, &mut ticket, drops.clone(), false);
+-        activate(&mut h, ticket, stream);
++        let (ticket, stream) = reserve_completion(&mut h, drops.clone(), mode);
++        let mut completion = activate_observer(&mut h, ticket, stream);
++        let observations = watch(&h, &mut completion, drops.clone(), false);
+         for _ in 0..4 {
+             h.advance();
+         }
+         assert!(!h.context.is_terminal());
+         assert_eq!(h.registry.active_len(), 0);
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
++        let result = ready(completion);
++        if mode == 23 {
++            assert!(matches!(
++                result,
++                Ok(Err(crate::RuntimeGfx942ReadbackErrorV1::InvalidStorage))
++            ));
++        } else {
++            assert!(matches!(
++                result,
++                Err(RuntimeAsyncEngineCallErrorV1::CommandPanicked)
++            ));
++        }
+         assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
+         assert_eq!(drops.load(Ordering::SeqCst), 1);
+         h.context.destroy_stream(stream).unwrap();
+@@ -272,9 +438,9 @@ fn generated_completion_decoder_error_or_panic_is_conclusive_host_failure() {
+ fn generated_completion_stop_preserves_disposal_without_decoding() {
+     let mut h = Harness::new(1, 2, true);
+     let drops = Arc::new(AtomicUsize::new(0));
+-    let (mut ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
+-    let observations = watch(&h, &mut ticket, drops.clone(), false);
+-    activate(&mut h, ticket, stream);
++    let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
++    let mut completion = activate_observer(&mut h, ticket, stream);
++    let observations = watch(&h, &mut completion, drops.clone(), false);
+     for _ in 0..3 {
+         h.advance();
+     }
+@@ -292,6 +458,10 @@ fn generated_completion_stop_preserves_disposal_without_decoding() {
+         Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
+     );
+     assert!(!h.state.lock().unwrap().adoption_order.contains(&"decode"));
++    assert!(matches!(
++        ready(completion),
++        Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
++    ));
+ }
+ 
+ #[test]
+@@ -299,7 +469,7 @@ fn generated_completion_does_not_require_observer_polling_and_drain_keeps_delive
+     let mut h = Harness::new(1, 2, true);
+     let drops = Arc::new(AtomicUsize::new(0));
+     let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
+-    activate(&mut h, ticket, stream);
++    let completion = activate_observer(&mut h, ticket, stream);
+     for _ in 0..3 {
+         h.advance();
+     }
+@@ -308,6 +478,8 @@ fn generated_completion_does_not_require_observer_polling_and_drain_keeps_delive
+     h.advance();
+     assert!(!h.context.is_terminal());
+     assert_eq!(h.registry.active_len(), 0);
++    assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
++    assert!(ready(completion).unwrap().is_ok());
+     assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
+     assert_eq!(drops.load(Ordering::SeqCst), 1);
+     assert!(
+@@ -319,3 +491,117 @@ fn generated_completion_does_not_require_observer_polling_and_drain_keeps_delive
+     );
+     h.context.destroy_stream(stream).unwrap();
+ }
++
++#[test]
++fn generated_completion_observer_drop_preserves_execution_and_original_owner() {
++    let mut h = Harness::new(1, 2, true);
++    let drops = Arc::new(AtomicUsize::new(0));
++    let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
++    let completion = activate_observer(&mut h, ticket, stream);
++    drop(completion);
++    assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
++    assert_eq!(drops.load(Ordering::SeqCst), 0);
++    for _ in 0..4 {
++        h.advance();
++    }
++    assert!(!h.context.is_terminal());
++    assert_eq!(h.registry.active_len(), 0);
++    assert_eq!(drops.load(Ordering::SeqCst), 1);
++    assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++    assert!(
++        h.state
++            .lock()
++            .unwrap()
++            .adoption_order
++            .contains(&"gate_commit")
++    );
++    h.context.destroy_stream(stream).unwrap();
++}
++
++#[test]
++fn generated_completion_activation_pressure_returns_exact_ticket_without_another_cell() {
++    let mut h = Harness::new(1, 2, true);
++    let drops = Arc::new(AtomicUsize::new(0));
++    let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
++    let key = ticket.key.clone();
++    let held = owned::Reply::<()>::budgeted_pair(&h.handle.observer.reply_budget).unwrap();
++    let failure = h
++        .handle
++        .enqueue_reserved_activation_v1(ticket, stream, true)
++        .err()
++        .expect("reply capacity rejection");
++    assert!(matches!(
++        failure.error,
++        ActivationErrorV1::Engine(RuntimeAsyncEngineCallErrorV1::ReplyCapacity)
++    ));
++    assert!(Arc::ptr_eq(&key, &failure.ticket.key));
++    assert_eq!(h.handle.observer.reply_cells_in_use(), 2);
++    assert!(h.state.lock().unwrap().adoption_order.is_empty());
++    assert_eq!(drops.load(Ordering::SeqCst), 0);
++    drop(held);
++    let activation = h
++        .handle
++        .enqueue_reserved_activation_v1(failure.ticket, stream, true)
++        .unwrap();
++    assert_eq!(h.handle.observer.reply_cells_in_use(), 2);
++    h.command();
++    let completion = ready(activation).unwrap().unwrap();
++    assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
++    for _ in 0..4 {
++        h.advance();
++    }
++    assert!(ready(completion).unwrap().is_ok());
++    assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++    h.context.destroy_stream(stream).unwrap();
++}
++
++#[test]
++fn generated_completion_activation_preserves_preflight_precedence_and_custody() {
++    for mode in 0..3 {
++        let mut h = Harness::new(1, 2, true);
++        let drops = Arc::new(AtomicUsize::new(0));
++        let (ticket, stream) = reserved(&mut h, drops.clone(), 0, true);
++        let key = ticket.key.clone();
++        let foreign = Harness::new(1, 2, true);
++        if mode == 0 {
++            h.handle
++                .observer
++                .worker_thread
++                .set(thread::current().id())
++                .unwrap();
++        }
++        let handle = if mode == 1 {
++            &foreign.handle
++        } else {
++            &h.handle
++        };
++        let failure = handle
++            .enqueue_reserved_activation_v1(ticket, stream, true)
++            .err()
++            .expect("preflight rejection");
++        match mode {
++            0 => assert!(matches!(
++                failure.error,
++                ActivationErrorV1::Engine(RuntimeAsyncEngineCallErrorV1::ReentrantCall)
++            )),
++            1 => assert!(matches!(
++                failure.error,
++                ActivationErrorV1::Engine(RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket)
++            )),
++            _ => assert!(matches!(
++                failure.error,
++                ActivationErrorV1::Context(RuntimeErrorV1::Validation(
++                    RuntimeValidationErrorV1::Unsupported
++                ))
++            )),
++        }
++        assert!(Arc::ptr_eq(&key, &failure.ticket.key));
++        assert!(h.state.lock().unwrap().adoption_order.is_empty());
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
++        assert_eq!(drops.load(Ordering::SeqCst), 0);
++        assert!(h.registry.discard_reserved(&key));
++        drop(failure.ticket);
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
++        h.context.destroy_stream(stream).unwrap();
++    }
++}
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs
+index 9cb38a61e..abeb1d4b9 100644
+--- a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs
+@@ -194,9 +194,11 @@ fn owned_generated_drain_does_not_cancel_a_physically_settled_result() {
+     let ticket = join(handle.try_reserve_prepared_v1(ticket).unwrap())
+         .unwrap()
+         .unwrap();
+-    join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+-        .unwrap()
+-        .unwrap();
++    drop(
++        join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
++            .unwrap()
++            .unwrap(),
++    );
+     let deadline = Instant::now() + Duration::from_secs(5);
+     loop {
+         if state.lock().unwrap().adoption_order.contains(&"poll") {
+@@ -240,9 +242,11 @@ fn owned_stop_retires_settled_work_without_claiming_successful_output() {
+     let ticket = join(handle.try_reserve_prepared_v1(ticket).unwrap())
+         .unwrap()
+         .unwrap();
+-    join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+-        .unwrap()
+-        .unwrap();
++    drop(
++        join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
++            .unwrap()
++            .unwrap(),
++    );
+     let deadline = Instant::now() + Duration::from_secs(5);
+     loop {
+         if state.lock().unwrap().adoption_order.contains(&"poll") {
+diff --git a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs
+index 5e587305b..9b78ef182 100644
+--- a/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs
++++ b/crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/completion_tests.rs
+@@ -273,6 +273,7 @@ fn unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor()
+             .unwrap()
+             .adoption_retire_modes
+             .insert(streams[1], mode);
++        let mut completions = Vec::new();
+         for (owner, (mut ticket, stream)) in reserved.into_iter().enumerate() {
+             let waker = Waker::from(Arc::new(CompletionWake {
+                 owner,
+@@ -281,7 +282,9 @@ fn unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor()
+                 panics: false,
+             }));
+             assert!(poll_completion(&mut ticket, &waker).is_pending());
+-            adoption_tests::activate(&mut h, ticket, stream);
++            let activation = h.handle.try_activate_reserved_v1(ticket, stream).unwrap();
++            assert!(!h.command());
++            completions.push(ready(activation).unwrap().unwrap());
+         }
+         h.advance();
+         assert!(!h.context.is_terminal());
+@@ -339,10 +342,7 @@ fn unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor()
+             assert_eq!(payload_drops, disposals);
+             assert!(no_issues && no_flushes);
+         }
+-        assert_eq!(
+-            h.handle.observer.reply_cells_in_use(),
+-            if success { 0 } else { 2 }
+-        );
++        assert_eq!(h.handle.observer.reply_cells_in_use(), 3);
+         let expected_wakes: Vec<_> = (0..3)
+             .map(|owner| WakeObservation {
+                 owner,
+@@ -352,6 +352,22 @@ fn unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor()
+             .collect();
+         let observed_wakes = wakes.lock().unwrap().clone();
+         assert_eq!(observed_wakes, expected_wakes);
++        for (index, completion) in completions.into_iter().enumerate() {
++            assert!(matches!(
++                ready(completion),
++                Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
++            ));
++            assert_eq!(h.handle.observer.reply_cells_in_use(), 2 - index);
++        }
++        assert_eq!(h.registry.len(), if success { 0 } else { 2 });
++        assert_eq!(
++            drops.each_ref().map(|v| v.load(Ordering::SeqCst)),
++            expected_drops
++        );
++        assert_eq!(
++            streams.map(|stream| h.context.unpublished_identity_for_test_v1(stream)),
++            expected_holds
++        );
+     }
+ }
+ 
+@@ -391,11 +407,15 @@ fn owned_shutdown_retires_in_order_and_retains_failed_and_unvisited_owners() {
+                 .unwrap()
+                 .unwrap()
+         });
+-        for (ticket, stream) in tickets.into_iter().zip(streams) {
+-            join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+-                .unwrap()
+-                .unwrap();
+-        }
++        let completions: Vec<_> = tickets
++            .into_iter()
++            .zip(streams)
++            .map(|(ticket, stream)| {
++                join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
++                    .unwrap()
++                    .unwrap()
++            })
++            .collect();
+         let deadline = Instant::now() + Duration::from_secs(5);
+         while state.lock().unwrap().adoption_completed.len() != 3 {
+             assert!(
+@@ -434,9 +454,17 @@ fn owned_shutdown_retires_in_order_and_retains_failed_and_unvisited_owners() {
+             drops.each_ref().map(|v| v.load(Ordering::SeqCst)),
+             if success { [1, 1, 1] } else { [1, 0, 0] }
+         );
++        assert_eq!(handle.observer.reply_cells_in_use(), 3);
++        for (index, completion) in completions.into_iter().enumerate() {
++            assert!(matches!(
++                ready(completion),
++                Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
++            ));
++            assert_eq!(handle.observer.reply_cells_in_use(), 2 - index);
++        }
+         assert_eq!(
+-            handle.observer.reply_cells_in_use(),
+-            if success { 0 } else { 2 }
++            drops.each_ref().map(|v| v.load(Ordering::SeqCst)),
++            if success { [1, 1, 1] } else { [1, 0, 0] }
+         );
+         let (retire_attempts, payload_drops, no_issues, no_flushes) = {
+             let state = state.lock().unwrap();
+diff --git a/crates/fe2o3-runtime/src/authorized_execution/generated_completion.rs b/crates/fe2o3-runtime/src/authorized_execution/generated_completion.rs
+index d092721de..f198f0755 100644
+--- a/crates/fe2o3-runtime/src/authorized_execution/generated_completion.rs
++++ b/crates/fe2o3-runtime/src/authorized_execution/generated_completion.rs
+@@ -87,6 +87,9 @@ impl<'a, E> RuntimeGfx942GeneratedCompletionViewV1<'a, E> {
+ /// impl<C: RuntimeGfx942GeneratedCarrierV1> RuntimeGfx942GeneratedCompletionCarrierV1
+ ///     for Wrapper<C>
+ /// {
++///     fn completion_domain_v1(&self) -> Result<fe2o3_runtime::RuntimeGeneratedResultDomainV1, RuntimeGfx942ReadbackErrorV1> {
++///         unimplemented!()
++///     }
+ ///     fn with_completion_view_v1(
+ ///         &mut self,
+ ///         _: impl for<'a> FnOnce(RuntimeGfx942GeneratedCompletionViewV1<'a, C::CurrentnessError>)
+@@ -100,6 +103,10 @@ impl<'a, E> RuntimeGfx942GeneratedCompletionViewV1<'a, E> {
+ ///
+ /// The view must lend the exact installed readback allocations in original source
+ /// order, retaining their charged owner and the same uncommitted result gate.
++/// The completion domain must identify that exact original gate allocation,
++/// shared only by outputs of this invocation. Returning it has no reservation,
++/// execution or result-publication effects. It must remain the same gate through
++/// completion; a domain retains metadata, not result-credit or native custody.
+ /// Complete shape, gate and output-custody validation must precede callback entry.
+ /// The source must be the same immutable invocation that reserved those buffers.
+ /// Success must invoke the callback exactly once and return its result unchanged.
+@@ -118,6 +125,12 @@ impl<'a, E> RuntimeGfx942GeneratedCompletionViewV1<'a, E> {
+ pub unsafe trait RuntimeGfx942GeneratedCompletionCarrierV1:
+     RuntimeGfx942GeneratedCarrierV1
+ {
++    fn completion_domain_v1(
++        &self,
++    ) -> Result<crate::RuntimeGeneratedResultDomainV1, RuntimeGfx942ReadbackErrorV1> {
++        Err(RuntimeGfx942ReadbackErrorV1::InvalidStorage)
++    }
++
+     fn with_completion_view_v1(
+         &mut self,
+         callback: impl for<'a> FnOnce(
+diff --git a/crates/fe2o3-runtime/src/context/generated_issue/tests/completion_tests.rs b/crates/fe2o3-runtime/src/context/generated_issue/tests/completion_tests.rs
+index b6ca39440..eadb522e9 100644
+--- a/crates/fe2o3-runtime/src/context/generated_issue/tests/completion_tests.rs
++++ b/crates/fe2o3-runtime/src/context/generated_issue/tests/completion_tests.rs
+@@ -37,6 +37,12 @@ impl RuntimeGfx942GeneratedCarrierV1 for OmittingCarrier {
+ // execution. Its deliberate false success must fail the production guard.
+ #[allow(unsafe_code)]
+ unsafe impl RuntimeGfx942GeneratedCompletionCarrierV1 for OmittingCarrier {
++    fn completion_domain_v1(
++        &self,
++    ) -> Result<crate::RuntimeGeneratedResultDomainV1, RuntimeGfx942ReadbackErrorV1> {
++        panic!("inert omission fixture has no result gate")
++    }
++
+     fn with_completion_view_v1(
+         &mut self,
+         _: impl for<'a> FnOnce(

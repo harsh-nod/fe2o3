@@ -15,6 +15,7 @@ struct Payload {
     mode: u8,
     stream: Option<RuntimeStreamIdV1>,
     issue_advances: usize,
+    result_domain: Arc<()>,
 }
 
 impl Drop for Payload {
@@ -202,6 +203,7 @@ fn preparation_with_hooks<B: RetireBackend + 'static>(
         .enqueue_preparation_with_adoption_v1(
             Box::new(move |_| {
                 Ok(Payload {
+                    result_domain: Arc::new(()),
                     _local: LocalPayload {
                         local: Rc::new(Cell::new(0)),
                         drops,
@@ -249,7 +251,7 @@ pub(super) fn activate(
 ) {
     let future = h.handle.try_activate_reserved_v1(ticket, stream).unwrap();
     assert!(!h.command());
-    ready(future).unwrap().unwrap();
+    drop(ready(future).unwrap().unwrap());
 }
 
 #[test]
@@ -324,7 +326,7 @@ fn adoption_panic_terminal_preflight_and_post_effect_errors_never_retry_or_drop(
             assert!(ready(future).is_err());
         } else {
             assert!(!stopped);
-            ready(future).unwrap().unwrap();
+            drop(ready(future).unwrap().unwrap());
             h.advance();
             assert!(!h.registry.discard_reserved(&key));
         }
@@ -451,9 +453,11 @@ fn adoption_owned_drain_and_shutdown_retire_before_carrier_disposal() {
         let ticket = join(handle.try_reserve_prepared_v1(ticket).unwrap())
             .unwrap()
             .unwrap();
-        join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
-            .unwrap()
-            .unwrap();
+        drop(
+            join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+                .unwrap()
+                .unwrap(),
+        );
         if drain {
             let report = join(handle.begin_drain(16).unwrap()).unwrap();
             assert_eq!(report.outcome, RuntimeAsyncDrainOutcomeV1::Quiescent);
@@ -504,9 +508,11 @@ fn adoption_owned_failed_retirement_quarantines_carrier_and_context() {
         let ticket = join(handle.try_reserve_prepared_v1(ticket).unwrap())
             .unwrap()
             .unwrap();
-        join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
-            .unwrap()
-            .unwrap();
+        drop(
+            join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+                .unwrap()
+                .unwrap(),
+        );
         assert_eq!(
             engine.shutdown().unwrap().disposition,
             RuntimeAsyncOwnedDispositionV1::RetainedUntilProcessExit
@@ -601,20 +607,38 @@ fn adoption_readiness_error_or_panic_retains_custody_without_retry() {
         let drops = Arc::new(AtomicUsize::new(0));
         let (ticket, stream) = reserved(&mut h, drops.clone(), 0, true);
         h.state.lock().unwrap().adoption_ready_mode = mode;
-        activate(&mut h, ticket, stream);
+        let activation = h.handle.try_activate_reserved_v1(ticket, stream).unwrap();
+        assert!(!h.command());
+        let completion = ready(activation).unwrap().unwrap();
         h.advance();
         assert!(h.context.is_terminal());
         h.state.lock().unwrap().adoption_ready_mode = 0;
         h.advance();
         h.registry.retire_unpublished_v1(&mut h.context, 1);
-        let state = h.state.lock().unwrap();
-        assert_eq!(state.adoption_ready_calls, 1);
-        assert_eq!(state.adoption_order, ["preflight"]);
-        assert_eq!(state.adoption_retire_calls, 0);
+        let (ready_calls, order, retire_calls) = {
+            let state = h.state.lock().unwrap();
+            (
+                state.adoption_ready_calls,
+                state.adoption_order.clone(),
+                state.adoption_retire_calls,
+            )
+        };
+        assert_eq!(ready_calls, 1);
+        assert_eq!(order, ["preflight"]);
+        assert_eq!(retire_calls, 0);
         assert_eq!(h.registry.len(), 1);
         assert_eq!(drops.load(Ordering::SeqCst), 0);
         assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
-        drop(state);
+        assert!(!h.registry.stop_observations());
+        let expected = if mode == 2 {
+            RuntimeAsyncEngineCallErrorV1::EngineStopped
+        } else {
+            RuntimeAsyncEngineCallErrorV1::CommandPanicked
+        };
+        assert!(matches!(ready(completion), Err(error) if error == expected));
+        assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
+        assert_eq!(h.registry.len(), 1);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
         assert_eq!(h.context.cleanup().retained().streams, 1);
     }
 }
@@ -639,9 +663,11 @@ fn adoption_readiness_owned_waiting_stop_and_drain_retire_empty_prefix() {
         let ticket = join(handle.try_reserve_prepared_v1(ticket).unwrap())
             .unwrap()
             .unwrap();
-        join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
-            .unwrap()
-            .unwrap();
+        drop(
+            join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+                .unwrap()
+                .unwrap(),
+        );
         let deadline = Instant::now() + Duration::from_secs(5);
         while state.lock().unwrap().adoption_ready_calls == 0 {
             assert!(Instant::now() < deadline, "waiting driver was not polled");

@@ -1,0 +1,83 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-host)
+    Finished `test` profile [unoptimized] target(s) in 36.87s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_host-083da7248fbfbff8)
+
+running 18 tests
+test generated_kfd_arguments::tests::write_only_binding_seeds_initialized_values_and_retains_completion_writeback ... ok
+test generated_kfd_arguments::tests::write_only_completion_preserves_seed_on_no_store_and_failure_or_drop_exposes_nothing ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_completion_preserves_owner_through_decode ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_decoder_panic_disposes_overlap_before_seed_refund ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_dropped_observer_retains_credits_until_completion ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_foreign_gate_rejects_with_shared_or_separate_budgets ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_late_shape_and_decoder_mutations_reject_before_delivery ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_missing_owner_never_decodes ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_read_only_only_completion_releases_all_members ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_settlement_failure_never_commits_ready_outputs ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_unused_read_only_mutation_rejects_all_outputs ... ok
+test generated_runtime_arguments::charged_tests::invocation_tests::readback_tests::completion_tests::reserved_readback_zero_output_does_not_shift_physical_ordinals ... ok
+test generated_runtime_results::completion_tests::completed_domain_extraction_preserves_heterogeneous_storage_and_exact_credits ... ok
+test generated_runtime_results::completion_tests::completed_domain_extraction_retries_contention_without_taking_storage ... ok
+test generated_runtime_results::completion_tests::result_observer_loss_does_not_refund_retained_owner_and_domain_does_not_keep_debit ... ok
+test generated_runtime_results::completion_tests::typed_completion_binding_rejects_foreign_or_busy_output_without_consumption ... ok
+test generated_runtime_results::completion_tests::typed_completion_failure_preserves_observer_without_exposing_or_refunding_output ... ok
+test hsa_executable_lifecycle::tests::implicit_kernarg_validation_rejects_explicit_mutation_identity_and_completion_changes ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 253 filtered out; finished in 0.11s
+
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-c38c0bc26fa7ec59)
+
+running 50 tests
+test async_engine::generated_operation::completion::tests::completion_join_rejects_owner_thread_and_preserves_pending_observer ... ok
+test async_engine::generated_operation::completion::tests::completion_observer_errors_and_drop_never_mint_a_receipt_or_lose_credit ... ok
+test async_engine::generated_operation::completion::tests::completion_observer_mints_only_exact_domain_after_original_reply ... ok
+test async_engine::tests::one_engine_observes_out_of_order_completions_independently ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_classifier_borrows_non_clone_errors_without_early_drop ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_classifier_covers_all_observation_families_without_allocation ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_existing_reply_gate_is_sticky_and_preserves_credit ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_ordinary_failure_and_quiescent_error_preserve_distinct_raw_results ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_ordinary_rejections_keep_one_issue_and_exact_last_error ... ok
+test async_engine::tests::owned_tests::control_tests::completion_tests::co1_terminal_raw_reply_does_not_retire_registry_or_context_custody ... ok
+test async_engine::tests::owned_tests::control_tests::r62_completion_inside_timer_poll_preserves_ready_result ... ok
+test async_engine::tests::owned_tests::control_tests::r62_timeout_racing_completion_retains_exactly_one_result ... ok
+test async_engine::tests::owned_tests::graph_tests::r63_terminal_poll_retains_reservation_and_no_completion_report ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::generated_completion_activation_preserves_preflight_precedence_and_custody ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::generated_completion_activation_pressure_returns_exact_ticket_without_another_cell ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::generated_completion_decoder_error_or_panic_is_conclusive_host_failure ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::generated_completion_does_not_require_observer_polling_and_drain_keeps_delivery ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::generated_completion_domain_failure_precedes_reservation_and_preserves_exact_owner ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::generated_completion_observer_drop_preserves_execution_and_original_owner ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::generated_completion_settlement_faults_keep_prepared_owner_and_forbid_decode_retry ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::generated_completion_settles_then_decodes_then_resolves_original_cell_once ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::generated_completion_stop_preserves_disposal_without_decoding ... ok
+test async_engine::tests::owned_tests::preparation_tests::completion_tests::owned_shutdown_retires_in_order_and_retains_failed_and_unvisited_owners ... ok
+test async_engine::tests::owned_tests::preparation_tests::completion_tests::reserved_completion_isolates_discard_order_and_abandoned_observers ... ok
+test async_engine::tests::owned_tests::preparation_tests::completion_tests::reserved_discard_wakes_before_payload_drop_even_when_wake_panics ... ok
+test async_engine::tests::owned_tests::preparation_tests::completion_tests::reserved_stop_notifies_latest_wakers_before_disposal_and_contains_wake_panic ... ok
+test async_engine::tests::owned_tests::preparation_tests::completion_tests::unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor ... ok
+test async_engine::tests::owned_tests::preparation_tests::preparation_completion_panic_preserves_parked_custody_before_and_after_reply ... ok
+test async_engine::tests::owned_tests::preparation_tests::reservation_tests::reservation_observer_loss_keeps_completion_producer_and_payload_until_stop ... ok
+test authorized_execution::tests::completion_tests::generated_completion_readback_validates_every_extent_access_and_read_only_byte ... ok
+test authorized_execution::tests::completion_tests::generated_completion_view_currentness_faults_retain_exact_copied_prefix ... ok
+test authorized_execution::tests::completion_tests::generated_completion_view_foreign_source_rejects_before_callback ... ok
+test authorized_execution::tests::completion_tests::generated_completion_view_keeps_same_authority_and_original_roster ... ok
+test authorized_execution::tests::native_v2_stale_post_completion_authority_emits_failed_not_completed ... ok
+test context::generated_issue::tests::completion_tests::generated_completion_context_tail_releases_only_exact_invocation ... ok
+test context::generated_issue::tests::completion_tests::generated_completion_missing_callback_rejects_without_consuming_original_owner ... ok
+test context::generated_issue::tests::completion_tests::generated_completion_without_retained_device_preserves_all_pre_lending_custody ... ok
+test context::tests::event_and_submission_observation_share_one_exact_once_completion ... ok
+test context::tests::stream_query_and_synchronize_preserve_aggregate_completion ... ok
+test context::tests::typed_completion_distinguishes_backend_codes_from_cancellation ... ok
+test kfd_backend::generated_adoption::receipt::tests::recycle_failure_without_returned_owner_never_fabricates_completion ... ok
+test kfd_backend::kfd_backend_sdma_seam::window_tests::same_device_wait_timeout_returns_the_exact_pair_for_later_completion ... ok
+test kfd_backend::tests::cooperative_copy_dependency_retains_prior_submission_until_completion ... ok
+test kfd_backend::tests::native_xgmi_completion_slots_cover_every_outstanding_submission ... ok
+test kfd_backend::tests::persistent_compute_poll_and_wait_share_one_completion_handler_without_poll_waiting ... ok
+test kfd_backend::tests::scripted_persistent_compute_completion_mismatch_quarantines_device ... ok
+test kfd_backend::tests::scripted_sdma_poll_pending_and_completion_preserve_facade_owner ... ok
+test kfd_backend::tests::scripted_sdma_wait_changed_completion_identity_is_terminal ... ok
+test kfd_backend::tests::scripted_sdma_wait_completion_leaves_continuation_for_explicit_flush ... ok
+test kfd_backend::tests::scripted_sdma_window_reordered_completion_is_terminal_with_exact_custody ... ok
+
+test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 882 filtered out; finished in 0.47s
+

@@ -37,6 +37,12 @@ impl RuntimeGfx942GeneratedCarrierV1 for OmittingCarrier {
 // execution. Its deliberate false success must fail the production guard.
 #[allow(unsafe_code)]
 unsafe impl RuntimeGfx942GeneratedCompletionCarrierV1 for OmittingCarrier {
+    fn completion_domain_v1(
+        &self,
+    ) -> Result<crate::RuntimeGeneratedResultDomainV1, RuntimeGfx942ReadbackErrorV1> {
+        panic!("inert omission fixture has no result gate")
+    }
+
     fn with_completion_view_v1(
         &mut self,
         _: impl for<'a> FnOnce(

@@ -1,0 +1,93 @@
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+    Checking fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-host)
+error: the `Err`-variant returned from this function is very large
+   --> crates/fe2o3-host/src/generated_runtime_results/typed_completion.rs:157:10
+    |
+157 |     ) -> Result<GeneratedRuntimeTypedCompletionV1<T>, GeneratedRuntimeTypedBindFailureV1<T>> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 160 bytes
+    |
+    = help: try reducing the size of `generated_runtime_results::typed_completion::GeneratedRuntimeTypedBindFailureV1<T>`, for example by boxing large elements or replacing it with `Box<generated_runtime_results::typed_completion::GeneratedRuntimeTypedBindFailureV1<T>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/fe2o3-host/src/generated_runtime_results/typed_completion.rs:270:6
+    |
+270 | ) -> GeneratedRuntimeTypedOutcomeV1<T> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 136 bytes
+    |
+    = help: try reducing the size of `generated_runtime_results::typed_completion::GeneratedRuntimeTypedCompletionFailureV1<T>`, for example by boxing large elements or replacing it with `Box<generated_runtime_results::typed_completion::GeneratedRuntimeTypedCompletionFailureV1<T>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+
+error: could not compile `fe2o3-host` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: called `.err().expect()` on a `Result` value
+   --> crates/fe2o3-host/src/generated_runtime_results/completion_tests.rs:166:48
+    |
+166 |     let (completion, output, error) = rejected.err().expect("rejected join");
+    |                                                ^^^^^^^^^^^^ help: try: `expect_err`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#err_expect
+    = note: `-D clippy::err-expect` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::err_expect)]`
+
+error: could not compile `fe2o3-host` (lib test) due to 3 previous errors
+error: non-binding `let` on a future
+   --> crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs:197:5
+    |
+197 | /     let _ = join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+198 | |         .unwrap()
+199 | |         .unwrap();
+    | |__________________^
+    |
+    = help: consider awaiting the future or dropping explicitly with `std::mem::drop`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#let_underscore_future
+    = note: `-D clippy::let-underscore-future` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::let_underscore_future)]`
+
+error: non-binding `let` on a future
+   --> crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/issue_tests.rs:243:5
+    |
+243 | /     let _ = join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+244 | |         .unwrap()
+245 | |         .unwrap();
+    | |__________________^
+    |
+    = help: consider awaiting the future or dropping explicitly with `std::mem::drop`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#let_underscore_future
+
+error: non-binding `let` on a future
+   --> crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs:456:9
+    |
+456 | /         let _ = join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+457 | |             .unwrap()
+458 | |             .unwrap();
+    | |______________________^
+    |
+    = help: consider awaiting the future or dropping explicitly with `std::mem::drop`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#let_underscore_future
+
+error: non-binding `let` on a future
+   --> crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs:509:9
+    |
+509 | /         let _ = join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+510 | |             .unwrap()
+511 | |             .unwrap();
+    | |______________________^
+    |
+    = help: consider awaiting the future or dropping explicitly with `std::mem::drop`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#let_underscore_future
+
+error: non-binding `let` on a future
+   --> crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests.rs:662:9
+    |
+662 | /         let _ = join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+663 | |             .unwrap()
+664 | |             .unwrap();
+    | |______________________^
+    |
+    = help: consider awaiting the future or dropping explicitly with `std::mem::drop`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#let_underscore_future
+
+error: could not compile `fe2o3-runtime` (lib test) due to 5 previous errors

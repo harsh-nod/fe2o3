@@ -15,6 +15,11 @@ use fe2o3_runtime::Gfx942RuntimeBufferAccessV1;
 use crate::generated_argument_plan::GeneratedDeviceScalarV1;
 use crate::generated_runtime_arguments::GeneratedRuntimeArgumentErrorV1 as Error;
 
+#[cfg(test)]
+mod completion_tests;
+mod typed_completion;
+pub use typed_completion::*;
+
 /// Shared result-peak admission. Clones share the same account, not fresh limits.
 ///
 /// Each output reserves its encoded-plus-typed byte peak until typed storage is
@@ -252,6 +257,50 @@ pub struct GeneratedRuntimeChargedResultV1<T: GeneratedDeviceScalarV1> {
 }
 
 impl<T: GeneratedDeviceScalarV1> GeneratedRuntimeChargedResultV1<T> {
+    /// Takes the original charged output only for this invocation's completion.
+    /// A foreign receipt leaves the output untouched. `None` means transient
+    /// mutex contention, not completion; callers may retry with the same receipt.
+    pub fn take_completed_v1(
+        &mut self,
+        receipt: &fe2o3_runtime::RuntimeGeneratedCompletionReceiptV1,
+    ) -> Result<Option<ChargedTypedResultV1<T>>, Error> {
+        self.take_completed_matching_v1(|gate| receipt.matches_owner(gate))
+    }
+
+    fn take_completed_matching_v1(
+        &mut self,
+        matches: impl FnOnce(&Arc<ResultReadyGateV1>) -> bool,
+    ) -> Result<Option<ChargedTypedResultV1<T>>, Error> {
+        let mut state = match self.slot.state.try_lock() {
+            Ok(state) => state,
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(None),
+            Err(std::sync::TryLockError::Poisoned(_)) => return Err(Error::Custody),
+        };
+        Self::take_completed_state_v1(&mut state, matches)
+            .map(Some)
+            .map_err(Into::into)
+    }
+
+    fn take_completed_state_v1(
+        state: &mut OutputState<T>,
+        matches: impl FnOnce(&Arc<ResultReadyGateV1>) -> bool,
+    ) -> Result<ChargedTypedResultV1<T>, GeneratedRuntimeTypedOutputErrorV1> {
+        match &*state {
+            OutputState::Prepared { gate, .. } if matches(gate) && gate.ready() => {
+                let OutputState::Prepared { result, .. } =
+                    std::mem::replace(state, OutputState::Taken)
+                else {
+                    unreachable!("matched output retained under its lock")
+                };
+                Ok(result)
+            }
+            OutputState::Taken | OutputState::Unavailable => {
+                Err(GeneratedRuntimeTypedOutputErrorV1::OutputUnavailable)
+            }
+            _ => Err(GeneratedRuntimeTypedOutputErrorV1::BindingMismatch),
+        }
+    }
+
     /// Takes committed data without waiting for the slot mutex. `None` also
     /// covers transient contention; a future adapter must arrange its own wake/retry.
     pub fn try_take(&mut self) -> Result<Option<ChargedTypedResultV1<T>>, Error> {

@@ -133,12 +133,20 @@ impl<K: CompilerGeneratedKernelExpectationV1> RuntimeGfx942GeneratedCarrierV1
 }
 
 // SAFETY: the private storage binds the original source, charged destinations,
-// gate and decoder. The borrowed view cannot replace or extract any owner, and
-// the existing consuming decoder commits only after complete validation and
-// disposal-credit settlement.
+// gate and decoder. The runtime path preserves the original allocations; the
+// consuming decoder commits only after complete validation and disposal-credit
+// settlement. The metadata domain retains that exact existing gate allocation.
 unsafe impl<K: CompilerGeneratedKernelExpectationV1> RuntimeGfx942GeneratedCompletionCarrierV1
     for GeneratedContextPreparationV1<K, GeneratedGfx942PersistentStorageV1>
 {
+    fn completion_domain_v1(
+        &self,
+    ) -> Result<fe2o3_runtime::RuntimeGeneratedResultDomainV1, RuntimeGfx942ReadbackErrorV1> {
+        self.storage
+            .completion_domain_v1()
+            .map_err(|_| RuntimeGfx942ReadbackErrorV1::InvalidStorage)
+    }
+
     fn with_completion_view_v1(
         &mut self,
         callback: impl for<'a> FnOnce(

@@ -87,6 +87,9 @@ impl<'a, E> RuntimeGfx942GeneratedCompletionViewV1<'a, E> {
 /// impl<C: RuntimeGfx942GeneratedCarrierV1> RuntimeGfx942GeneratedCompletionCarrierV1
 ///     for Wrapper<C>
 /// {
+///     fn completion_domain_v1(&self) -> Result<fe2o3_runtime::RuntimeGeneratedResultDomainV1, RuntimeGfx942ReadbackErrorV1> {
+///         unimplemented!()
+///     }
 ///     fn with_completion_view_v1(
 ///         &mut self,
 ///         _: impl for<'a> FnOnce(RuntimeGfx942GeneratedCompletionViewV1<'a, C::CurrentnessError>)
@@ -100,6 +103,10 @@ impl<'a, E> RuntimeGfx942GeneratedCompletionViewV1<'a, E> {
 ///
 /// The view must lend the exact installed readback allocations in original source
 /// order, retaining their charged owner and the same uncommitted result gate.
+/// The completion domain must identify that exact original gate allocation,
+/// shared only by outputs of this invocation. Returning it has no reservation,
+/// execution or result-publication effects. It must remain the same gate through
+/// completion; a domain retains metadata, not result-credit or native custody.
 /// Complete shape, gate and output-custody validation must precede callback entry.
 /// The source must be the same immutable invocation that reserved those buffers.
 /// Success must invoke the callback exactly once and return its result unchanged.
@@ -118,6 +125,12 @@ impl<'a, E> RuntimeGfx942GeneratedCompletionViewV1<'a, E> {
 pub unsafe trait RuntimeGfx942GeneratedCompletionCarrierV1:
     RuntimeGfx942GeneratedCarrierV1
 {
+    fn completion_domain_v1(
+        &self,
+    ) -> Result<crate::RuntimeGeneratedResultDomainV1, RuntimeGfx942ReadbackErrorV1> {
+        Err(RuntimeGfx942ReadbackErrorV1::InvalidStorage)
+    }
+
     fn with_completion_view_v1(
         &mut self,
         callback: impl for<'a> FnOnce(

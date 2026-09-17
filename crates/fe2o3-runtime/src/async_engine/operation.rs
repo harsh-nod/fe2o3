@@ -49,7 +49,10 @@ pub(super) trait EngineOperationV1<B: RuntimeBackendV1> {
         &mut self,
         _context: &mut RuntimeContextV1<B>,
         _completion: &mut Option<owned::Reply<generated_operation::GeneratedCompletionOutcomeV1>>,
-    ) -> Result<(), crate::RuntimeGfx942GeneratedReservationErrorV1> {
+    ) -> Result<
+        Option<RuntimeGeneratedResultDomainV1>,
+        crate::RuntimeGfx942GeneratedReservationErrorV1,
+    > {
         Err(crate::RuntimeGfx942GeneratedReservationErrorV1::UnsupportedPreparation)
     }
     fn preflight_adoption(
@@ -63,7 +66,7 @@ pub(super) trait EngineOperationV1<B: RuntimeBackendV1> {
         &mut self,
         _hold: crate::context::ContextUnpublishedHoldV1,
         _ticket: RuntimeAsyncReservedTicketV1,
-    ) {
+    ) -> RuntimeAsyncGeneratedCompletionV1 {
         unreachable!("only an admitted generated driver activates")
     }
     /// True permits disposal only after exact unpublished native retirement.
@@ -195,7 +198,10 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
         context: &mut RuntimeContextV1<B>,
         key: &Arc<generated_operation::PreparedKeyV1>,
         completion: &mut Option<owned::Reply<generated_operation::GeneratedCompletionOutcomeV1>>,
-    ) -> Result<(), crate::RuntimeGfx942GeneratedReservationErrorV1> {
+    ) -> Result<
+        Option<RuntimeGeneratedResultDomainV1>,
+        crate::RuntimeGfx942GeneratedReservationErrorV1,
+    > {
         let entry = self
             .parked
             .iter_mut()
@@ -216,7 +222,10 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
         context: &mut RuntimeContextV1<B>,
         ticket: &mut Option<RuntimeAsyncReservedTicketV1>,
         stream: RuntimeStreamIdV1,
-    ) -> Result<(), generated_operation::adoption::ActivationErrorV1<B::Error>> {
+    ) -> Result<
+        RuntimeAsyncGeneratedCompletionV1,
+        generated_operation::adoption::ActivationErrorV1<B::Error>,
+    > {
         use generated_operation::adoption::ActivationErrorV1 as Error;
         if context.is_terminal() || !self.owner_cleanup {
             return Err(Error::Engine(RuntimeAsyncEngineCallErrorV1::EngineStopped));
@@ -258,12 +267,12 @@ impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
         );
         self.entries.push_back(entry);
         // Root the same driver before its phase changes or any adapter effect.
-        self.entries
+        Ok(self
+            .entries
             .back_mut()
             .expect("rooted adoption")
             .driver
-            .activate_adoption(hold, ticket.take().expect("consumed exact reserved ticket"));
-        Ok(())
+            .activate_adoption(hold, ticket.take().expect("consumed exact reserved ticket")))
     }
 
     pub(super) fn retire_unpublished_v1(

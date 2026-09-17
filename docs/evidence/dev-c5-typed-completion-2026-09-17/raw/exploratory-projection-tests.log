@@ -1,0 +1,18 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-host)
+    Finished `test` profile [unoptimized] target(s) in 25.65s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_host-ba5114b53aa85ed7)
+
+running 9 tests
+test generated_runtime_results::completion_tests::completed_domain_extraction_preserves_heterogeneous_storage_and_exact_credits ... ok
+test generated_runtime_results::completion_tests::completed_domain_extraction_retries_contention_without_taking_storage ... ok
+test generated_runtime_results::completion_tests::result_observer_loss_does_not_refund_retained_owner_and_domain_does_not_keep_debit ... ok
+test generated_runtime_results::completion_tests::typed_completion_binding_rejects_foreign_or_busy_output_without_consumption ... ok
+test generated_runtime_results::completion_tests::typed_completion_failure_preserves_observer_without_exposing_or_refunding_output ... ok
+test generated_runtime_results::completion_tests::typed_completion_join_driver_restores_exact_observers_on_rejection ... ok
+test generated_runtime_results::completion_tests::typed_completion_pending_drop_keeps_producer_storage_and_credit ... ok
+test generated_runtime_results::completion_tests::typed_completion_poisoned_binding_preserves_original_storage_and_credits ... ok
+test generated_runtime_results::completion_tests::typed_completion_poll_driver_preserves_pending_and_panicking_observers_then_extracts_once ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 266 filtered out; finished in 0.01s
+

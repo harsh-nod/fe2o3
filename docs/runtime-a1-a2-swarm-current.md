@@ -10,6 +10,16 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
+Latest development (2026-09-17): private C4 completion and the
+[C5 typed completion API](runtime-generated-typed-completion-v1.md) now have
+separately sealed CPU qualification. C5 adds the original completion observer,
+identity-bound charged typed output and blocking join without another reply or
+decoder. GNU and scoped musl each pass 915 runtime and 271 host tests, with
+seventeen and four ignored respectively; all quality gates and 58 doctests pass.
+Protected native typed execution is not qualified. C6 generated graph/drain,
+heterogeneous bundle collection, production journals, formal correspondence and
+matched performance remain open; accepted milestones below are unchanged.
+
 Current accepted Native checkpoint: [R125 live prepared persistent cancellation](runtime-live-persistent-cancel-v1.md),
 above [R124 ordinary recycled detach](runtime-live-recycled-detach-v1.md).
 GNU/musl each pass 2,901 tests with five ignored; 25 leaf gates, 18 compiled
@@ -202,6 +212,15 @@ and 53 doctests pass; canonical integration matches all thirty-eight frozen
 source/inventory identities. Protected Worker/carrier/native execution and
 native fault qualification remain unproven. Public C5 typed completion and C6
 generated graph/drain remain next; accepted checkpoints are unchanged.
+
+The subsequent [C5 CPU candidate](evidence/dev-c5-typed-completion-2026-09-17/README.md)
+preserves the original completion cell and exact result gate across public
+activation. A one-output typed future prebinds both move-only observers, returns
+unchanged owners on binding rejection, and preserves its receipt for other
+heterogeneous outputs. Poll and blocking join use the same completion/extraction
+path. Eighteen frozen source identities and both complete GNU/musl rosters match;
+independent source and evidence review pass. This does not accept protected
+native completion, C5 as a whole, A1/A2 or issue #182.
 
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)

@@ -68,6 +68,22 @@ impl Drop for PendingReadback {
 }
 
 impl GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1> {
+    pub(crate) fn completion_domain_v1(
+        &self,
+    ) -> Result<fe2o3_runtime::RuntimeGeneratedResultDomainV1, Error> {
+        let gate = self
+            .decoder
+            .result_gate
+            .as_ref()
+            .ok_or(Error::BindingMismatch)?;
+        if gate.ready() {
+            return Err(Error::StaleOrAliasedOutput);
+        }
+        Ok(fe2o3_runtime::RuntimeGeneratedResultDomainV1::from_owner(
+            Arc::clone(gate),
+        ))
+    }
+
     pub(crate) fn decode_reserved_readback(self) -> Result<(), Error> {
         self.decode_reserved_readback_with(|_| {})
     }

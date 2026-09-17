@@ -36,7 +36,9 @@ settlement is a host-result failure, not an excuse to retry native work.
 
 Stop preserves destructive no-result disposal and never invokes the decoder.
 Ordinary progress and drain may now deliver completed generated output without
-requiring consumer polling. Public typed completion remains the later C5 API.
+requiring consumer polling. The subsequent
+[C5 typed API](runtime-generated-typed-completion-v1.md) has its own separately
+qualified CPU candidate; it does not change this packet's native acceptance.
 
 ## Trust Boundary
 

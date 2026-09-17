@@ -156,6 +156,27 @@ impl<R> Drop for RuntimeAsyncCommandFutureV1<R> {
     }
 }
 
+pub(super) fn join_observer_v1<F: Future + Unpin>(mut future: F) -> F::Output {
+    struct ThreadWake(thread::Thread);
+    impl std::task::Wake for ThreadWake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let waker = Waker::from(Arc::new(ThreadWake(thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    loop {
+        if let Poll::Ready(result) = Pin::new(&mut future).poll(&mut cx) {
+            return result;
+        }
+        // Unpark's token closes the wake-before-park race; spurious wakes retry.
+        thread::park();
+    }
+}
+
 impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
     /// Enqueues a command without waiting for the owner thread to execute it.
     ///

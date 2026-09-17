@@ -194,9 +194,11 @@ fn owned_generated_drain_does_not_cancel_a_physically_settled_result() {
     let ticket = join(handle.try_reserve_prepared_v1(ticket).unwrap())
         .unwrap()
         .unwrap();
-    join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
-        .unwrap()
-        .unwrap();
+    drop(
+        join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+            .unwrap()
+            .unwrap(),
+    );
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if state.lock().unwrap().adoption_order.contains(&"poll") {
@@ -240,9 +242,11 @@ fn owned_stop_retires_settled_work_without_claiming_successful_output() {
     let ticket = join(handle.try_reserve_prepared_v1(ticket).unwrap())
         .unwrap()
         .unwrap();
-    join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
-        .unwrap()
-        .unwrap();
+    drop(
+        join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+            .unwrap()
+            .unwrap(),
+    );
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if state.lock().unwrap().adoption_order.contains(&"poll") {

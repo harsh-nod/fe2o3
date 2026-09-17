@@ -47,6 +47,8 @@ pub(in crate::async_engine) struct CompletionHooksV1<B: RuntimeBackendV1, P> {
     // Failure must leave P rooted; it cannot authorize retry or decoding.
     pub settle: AdoptV1<B, P>,
     pub decode: fn(P) -> GeneratedCompletionOutcomeV1,
+    pub domain:
+        fn(&P) -> Result<RuntimeGeneratedResultDomainV1, crate::RuntimeGfx942ReadbackErrorV1>,
 }
 
 impl<B: RuntimeBackendV1, P> Copy for CompletionHooksV1<B, P> {}
@@ -96,19 +98,15 @@ enum PhaseV1 {
 
 pub(super) struct UnpublishedAdoptionV1 {
     hold: ContextUnpublishedHoldV1,
-    // Keep the original completion consumer as well as the driver's producer.
-    _ticket: RuntimeAsyncReservedTicketV1,
+    _key: Arc<PreparedKeyV1>,
     phase: PhaseV1,
 }
 
 impl UnpublishedAdoptionV1 {
-    pub(super) fn new(
-        hold: ContextUnpublishedHoldV1,
-        ticket: RuntimeAsyncReservedTicketV1,
-    ) -> Self {
+    pub(super) fn new(hold: ContextUnpublishedHoldV1, key: Arc<PreparedKeyV1>) -> Self {
         Self {
             hold,
-            _ticket: ticket,
+            _key: key,
             phase: PhaseV1::Adopting,
         }
     }
@@ -243,12 +241,12 @@ impl<B: RuntimeBackendV1, P, E> PreparationDriver<B, P, E> {
     }
 }
 
-pub(in crate::async_engine) enum ActivationErrorV1<E> {
+pub enum ActivationErrorV1<E> {
     Engine(RuntimeAsyncEngineCallErrorV1),
     Context(RuntimeErrorV1<E>),
 }
 
-pub(in crate::async_engine) struct ActivationFailureV1<E> {
+pub struct ActivationFailureV1<E> {
     pub ticket: RuntimeAsyncReservedTicketV1,
     pub error: ActivationErrorV1<E>,
 }
@@ -271,8 +269,26 @@ impl<E: fmt::Debug> fmt::Debug for ActivationFailureV1<E> {
     }
 }
 
-type ActivationReplyV1<E> = owned::Reply<Result<(), ActivationFailureV1<E>>>;
-type ActivationFutureV1<E> = RuntimeAsyncCommandFutureV1<Result<(), ActivationFailureV1<E>>>;
+impl<E: fmt::Display> fmt::Display for ActivationErrorV1<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Engine(error) => error.fmt(f),
+            Self::Context(error) => error.fmt(f),
+        }
+    }
+}
+impl<E: Error + 'static> Error for ActivationErrorV1<E> {}
+impl<E: fmt::Display> fmt::Display for ActivationFailureV1<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error.fmt(f)
+    }
+}
+impl<E: Error + 'static> Error for ActivationFailureV1<E> {}
+
+type ActivationReplyV1<E> =
+    owned::Reply<Result<RuntimeAsyncGeneratedCompletionV1, ActivationFailureV1<E>>>;
+pub type ActivationFutureV1<E> =
+    RuntimeAsyncCommandFutureV1<Result<RuntimeAsyncGeneratedCompletionV1, ActivationFailureV1<E>>>;
 
 pub(in crate::async_engine) struct ActivateCommandV1<B: RuntimeBackendV1> {
     ticket: Option<RuntimeAsyncReservedTicketV1>,
@@ -303,9 +319,9 @@ impl<B: RuntimeBackendV1> ActivateCommandV1<B> {
             operations.activate_reserved(context, &mut self.ticket, self.stream)
         }));
         match result {
-            Ok(Ok(())) => {
+            Ok(Ok(completion)) => {
                 if let Some(mut reply) = self.reply.take() {
-                    reply.complete(Ok(Ok(())));
+                    reply.complete(Ok(Ok(completion)));
                 }
             }
             Ok(Err(error)) if !context.is_terminal() => self.reject(error),
@@ -333,7 +349,7 @@ impl<B: RuntimeBackendV1> Drop for ActivateCommandV1<B> {
 }
 
 impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
-    // Kept private until DATA, ISSUE and COMPLETE supply their real adapters.
+    // Internal domainless lifecycle fixtures do not expose a public launch path.
     #[allow(
         dead_code,
         reason = "private integration boundary for native DATA adoption"
@@ -342,6 +358,15 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         &self,
         ticket: RuntimeAsyncReservedTicketV1,
         stream: RuntimeStreamIdV1,
+    ) -> Result<ActivationFutureV1<B::Error>, ActivationFailureV1<B::Error>> {
+        self.enqueue_reserved_activation_v1(ticket, stream, false)
+    }
+
+    pub(in crate::async_engine) fn enqueue_reserved_activation_v1(
+        &self,
+        ticket: RuntimeAsyncReservedTicketV1,
+        stream: RuntimeStreamIdV1,
+        require_completion: bool,
     ) -> Result<ActivationFutureV1<B::Error>, ActivationFailureV1<B::Error>> {
         let failure = |ticket, error| ActivationFailureV1 {
             ticket,
@@ -358,6 +383,12 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
                 ticket,
                 RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket,
             ));
+        }
+        if require_completion && ticket.domain.is_none() {
+            return Err(ActivationFailureV1 {
+                ticket,
+                error: ActivationErrorV1::Context(RuntimeValidationErrorV1::Unsupported.into()),
+            });
         }
         let (reply, future) = match owned::Reply::budgeted_pair(&self.observer.reply_budget) {
             Ok(pair) => pair,
@@ -391,5 +422,25 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
                 ))
             }
         }
+    }
+}
+
+impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
+    /// Activates the exact reserved generated invocation and returns its original
+    /// completion observer after owner custody is rooted. Immediate admission and
+    /// ordinary live preflight rejection preserve the supplied ticket, as does
+    /// discarding a queued activation before execution. Terminal execution and
+    /// panic may instead retain it for owner shutdown and
+    /// resolve the outer future with an engine error. Observer loss never cancels
+    /// native work; the preparation control does not cancel activated execution.
+    pub fn try_activate_generated_v1(
+        &self,
+        ticket: RuntimeAsyncReservedTicketV1,
+        stream: RuntimeStreamIdV1,
+    ) -> Result<
+        ActivationFutureV1<crate::KfdRuntimeBackendErrorV1>,
+        ActivationFailureV1<crate::KfdRuntimeBackendErrorV1>,
+    > {
+        self.enqueue_reserved_activation_v1(ticket, stream, true)
     }
 }

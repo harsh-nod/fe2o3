@@ -273,6 +273,7 @@ fn unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor() 
             .unwrap()
             .adoption_retire_modes
             .insert(streams[1], mode);
+        let mut completions = Vec::new();
         for (owner, (mut ticket, stream)) in reserved.into_iter().enumerate() {
             let waker = Waker::from(Arc::new(CompletionWake {
                 owner,
@@ -281,7 +282,9 @@ fn unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor() 
                 panics: false,
             }));
             assert!(poll_completion(&mut ticket, &waker).is_pending());
-            adoption_tests::activate(&mut h, ticket, stream);
+            let activation = h.handle.try_activate_reserved_v1(ticket, stream).unwrap();
+            assert!(!h.command());
+            completions.push(ready(activation).unwrap().unwrap());
         }
         h.advance();
         assert!(!h.context.is_terminal());
@@ -339,10 +342,7 @@ fn unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor() 
             assert_eq!(payload_drops, disposals);
             assert!(no_issues && no_flushes);
         }
-        assert_eq!(
-            h.handle.observer.reply_cells_in_use(),
-            if success { 0 } else { 2 }
-        );
+        assert_eq!(h.handle.observer.reply_cells_in_use(), 3);
         let expected_wakes: Vec<_> = (0..3)
             .map(|owner| WakeObservation {
                 owner,
@@ -352,6 +352,22 @@ fn unpublished_retirement_preserves_exact_failed_owner_and_untouched_neighbor() 
             .collect();
         let observed_wakes = wakes.lock().unwrap().clone();
         assert_eq!(observed_wakes, expected_wakes);
+        for (index, completion) in completions.into_iter().enumerate() {
+            assert!(matches!(
+                ready(completion),
+                Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
+            ));
+            assert_eq!(h.handle.observer.reply_cells_in_use(), 2 - index);
+        }
+        assert_eq!(h.registry.len(), if success { 0 } else { 2 });
+        assert_eq!(
+            drops.each_ref().map(|v| v.load(Ordering::SeqCst)),
+            expected_drops
+        );
+        assert_eq!(
+            streams.map(|stream| h.context.unpublished_identity_for_test_v1(stream)),
+            expected_holds
+        );
     }
 }
 
@@ -391,11 +407,15 @@ fn owned_shutdown_retires_in_order_and_retains_failed_and_unvisited_owners() {
                 .unwrap()
                 .unwrap()
         });
-        for (ticket, stream) in tickets.into_iter().zip(streams) {
-            join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
-                .unwrap()
-                .unwrap();
-        }
+        let completions: Vec<_> = tickets
+            .into_iter()
+            .zip(streams)
+            .map(|(ticket, stream)| {
+                join(handle.try_activate_reserved_v1(ticket, stream).unwrap())
+                    .unwrap()
+                    .unwrap()
+            })
+            .collect();
         let deadline = Instant::now() + Duration::from_secs(5);
         while state.lock().unwrap().adoption_completed.len() != 3 {
             assert!(
@@ -434,9 +454,17 @@ fn owned_shutdown_retires_in_order_and_retains_failed_and_unvisited_owners() {
             drops.each_ref().map(|v| v.load(Ordering::SeqCst)),
             if success { [1, 1, 1] } else { [1, 0, 0] }
         );
+        assert_eq!(handle.observer.reply_cells_in_use(), 3);
+        for (index, completion) in completions.into_iter().enumerate() {
+            assert!(matches!(
+                ready(completion),
+                Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
+            ));
+            assert_eq!(handle.observer.reply_cells_in_use(), 2 - index);
+        }
         assert_eq!(
-            handle.observer.reply_cells_in_use(),
-            if success { 0 } else { 2 }
+            drops.each_ref().map(|v| v.load(Ordering::SeqCst)),
+            if success { [1, 1, 1] } else { [1, 0, 0] }
         );
         let (retire_attempts, payload_drops, no_issues, no_flushes) = {
             let state = state.lock().unwrap();

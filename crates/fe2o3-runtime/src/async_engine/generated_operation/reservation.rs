@@ -16,19 +16,30 @@ use super::*;
 #[must_use]
 pub struct RuntimeAsyncReservedTicketV1 {
     pub(in crate::async_engine) key: Arc<PreparedKeyV1>,
-    #[allow(
-        dead_code,
-        reason = "private completion consumer retained until native issue exists"
-    )]
     completion: RuntimeAsyncCommandFutureV1<GeneratedCompletionOutcomeV1>,
+    pub(super) domain: Option<RuntimeGeneratedResultDomainV1>,
+    worker_thread: Arc<OnceLock<thread::ThreadId>>,
 }
 
-#[cfg(test)]
 impl RuntimeAsyncReservedTicketV1 {
+    #[cfg(test)]
     pub(in crate::async_engine) fn completion_for_test_v1(
         &mut self,
     ) -> &mut RuntimeAsyncCommandFutureV1<GeneratedCompletionOutcomeV1> {
         &mut self.completion
+    }
+
+    pub(super) fn into_completion_v1(
+        self,
+    ) -> (Arc<PreparedKeyV1>, RuntimeAsyncGeneratedCompletionV1) {
+        (
+            self.key,
+            RuntimeAsyncGeneratedCompletionV1 {
+                future: self.completion,
+                domain: self.domain,
+                worker_thread: self.worker_thread,
+            },
+        )
     }
 }
 
@@ -80,6 +91,7 @@ pub(in crate::async_engine) struct ReserveCommandV1 {
     >,
     completion: Option<owned::Reply<GeneratedCompletionOutcomeV1>>,
     consumer: Option<RuntimeAsyncCommandFutureV1<GeneratedCompletionOutcomeV1>>,
+    worker_thread: Arc<OnceLock<thread::ThreadId>>,
 }
 
 impl ReserveCommandV1 {
@@ -114,11 +126,13 @@ impl ReserveCommandV1 {
             }))
         };
         match result {
-            Ok(Ok(())) => {
+            Ok(Ok(domain)) => {
                 let ticket = self.ticket.take().expect("reserved exact ticket");
                 let reserved = RuntimeAsyncReservedTicketV1 {
                     key: ticket.key,
                     completion: self.consumer.take().expect("reserved completion consumer"),
+                    domain,
+                    worker_thread: Arc::clone(&self.worker_thread),
                 };
                 if let Some(mut reply) = self.reply.take() {
                     reply.complete(Ok(Ok(reserved)));
@@ -186,6 +200,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
             reply: Some(reply),
             completion: Some(completion),
             consumer: Some(consumer),
+            worker_thread: Arc::clone(&self.observer.worker_thread),
         };
         match self
             .observer

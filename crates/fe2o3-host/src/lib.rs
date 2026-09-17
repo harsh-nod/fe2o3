@@ -209,8 +209,12 @@ pub use generated_runtime_arguments::{
     GeneratedRuntimeResultV1, GeneratedRuntimeSliceBindingV1, GeneratedRuntimeWriteSlice,
 };
 pub use generated_runtime_results::{
-    ChargedTypedResultV1, GeneratedRuntimeChargedResultV1, GeneratedRuntimeResultBudgetV1,
-    GeneratedRuntimeResultUsageV1,
+    ChargedTypedResultV1, GeneratedRuntimeChargedResultV1, GeneratedRuntimeCompletedOutputV1,
+    GeneratedRuntimeResultBudgetV1, GeneratedRuntimeResultUsageV1,
+    GeneratedRuntimeTypedBindErrorV1, GeneratedRuntimeTypedBindFailureV1,
+    GeneratedRuntimeTypedCompletionErrorV1, GeneratedRuntimeTypedCompletionFailureV1,
+    GeneratedRuntimeTypedCompletionV1, GeneratedRuntimeTypedJoinFailureV1,
+    GeneratedRuntimeTypedOutcomeV1, GeneratedRuntimeTypedOutputErrorV1,
 };
 #[doc(hidden)]
 #[cfg(feature = "qualification-legacy-hip-hsa")]

@@ -1,0 +1,1 @@
+env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --offline -p fe2o3-runtime --all-features --lib generated_completion_domain_failure -- --test-threads=1 

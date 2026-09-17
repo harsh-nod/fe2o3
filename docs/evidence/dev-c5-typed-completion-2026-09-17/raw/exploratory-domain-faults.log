@@ -1,0 +1,9 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+error[E0616]: field `domain` of struct `reservation::RuntimeAsyncReservedTicketV1` is private
+   --> crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests.rs:277:30
+    |
+277 |             assert!(reserved.domain.as_ref().unwrap().matches_owner(&domain));
+    |                              ^^^^^^ private field
+
+For more information about this error, try `rustc --explain E0616`.
+error: could not compile `fe2o3-runtime` (lib test) due to 1 previous error

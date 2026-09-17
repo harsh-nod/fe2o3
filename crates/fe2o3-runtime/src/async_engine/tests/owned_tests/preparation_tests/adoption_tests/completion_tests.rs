@@ -27,6 +27,11 @@ impl std::task::Wake for ResultWake {
 fn completion_hooks<B: RetireBackend>() -> AdoptionHooksV1<B, Payload> {
     let mut hooks = issue_tests::issue_hooks();
     hooks.issue.as_mut().unwrap().completion = Some(CompletionHooksV1 {
+        domain: |payload| {
+            Ok(RuntimeGeneratedResultDomainV1::from_owner(
+                payload.result_domain.clone(),
+            ))
+        },
         settle: |context: &mut RuntimeContextV1<B>, payload: &mut Payload, _, hold| {
             assert_eq!(payload.stream, Some(hold.stream()));
             assert_eq!(
@@ -123,12 +128,11 @@ fn reserve_completion(
 
 fn watch(
     h: &Harness,
-    ticket: &mut RuntimeAsyncReservedTicketV1,
+    future: &mut RuntimeAsyncGeneratedCompletionV1,
     drops: Arc<AtomicUsize>,
     panic: bool,
 ) -> Arc<Mutex<Vec<WakeRecord>>> {
     let observations = Arc::new(Mutex::new(Vec::new()));
-    let future = ticket.completion_for_test_v1();
     let waker = Waker::from(Arc::new(ResultWake {
         probe: Box::new(future.result_probe_for_test_v1()),
         state: h.state.clone(),
@@ -144,14 +148,160 @@ fn watch(
     observations
 }
 
+fn activate_observer(
+    h: &mut Harness,
+    ticket: RuntimeAsyncReservedTicketV1,
+    stream: RuntimeStreamIdV1,
+) -> RuntimeAsyncGeneratedCompletionV1 {
+    let activation = h.handle.try_activate_reserved_v1(ticket, stream).unwrap();
+    assert!(!h.command());
+    ready(activation).unwrap().unwrap()
+}
+
+#[test]
+fn generated_completion_domain_failure_precedes_reservation_and_preserves_exact_owner() {
+    use generated_operation::adoption::IssueHooksV1;
+
+    type Trace = Arc<Mutex<Vec<(&'static str, usize, usize)>>>;
+    struct DomainPayload {
+        _local: LocalPayload,
+        source: Vec<u8>,
+        domain: Arc<()>,
+        mode: Arc<AtomicUsize>,
+        trace: Trace,
+    }
+    fn observe(payload: &DomainPayload, step: &'static str) {
+        assert_eq!(payload.source, [7; 16]);
+        payload.trace.lock().unwrap().push((
+            step,
+            payload as *const DomainPayload as usize,
+            payload.source.as_ptr() as usize,
+        ));
+    }
+
+    for panics in [false, true] {
+        let mut h = Harness::new(1, 2, true);
+        let drops = Arc::new(AtomicUsize::new(0));
+        let domain = Arc::new(());
+        let mode = Arc::new(AtomicUsize::new(if panics { 2 } else { 1 }));
+        let trace: Trace = Arc::new(Mutex::new(Vec::new()));
+        let captured = (drops.clone(), domain.clone(), mode.clone(), trace.clone());
+        let preparation = h
+            .handle
+            .enqueue_preparation_with_adoption_v1(
+                Box::new(move |_| {
+                    Ok::<_, ()>(DomainPayload {
+                        _local: LocalPayload {
+                            local: Rc::new(Cell::new(0)),
+                            drops: captured.0,
+                            owner: thread::current().id(),
+                            panic_on_drop: false,
+                        },
+                        source: vec![7; 16],
+                        domain: captured.1,
+                        mode: captured.2,
+                        trace: captured.3,
+                    })
+                }),
+                Some(|_, payload| {
+                    observe(payload, "reserve");
+                    Ok(reservation_tests::roster())
+                }),
+                Some(AdoptionHooksV1 {
+                    preflight: |_, _, _, _| panic!("no adoption preflight"),
+                    ready: |_, _| panic!("no adoption readiness"),
+                    adopt: |_, _, _, _| panic!("no adoption"),
+                    retire: |_, _| panic!("no native retirement"),
+                    issue: Some(IssueHooksV1 {
+                        progress: |_, _, _, _| panic!("no issue"),
+                        retire_stopped: |_, _| panic!("no issued retirement"),
+                        completion: Some(CompletionHooksV1 {
+                            settle: |_, _, _, _| panic!("no settlement"),
+                            decode: |_| panic!("no decode"),
+                            domain: |payload| {
+                                observe(payload, "domain");
+                                match payload.mode.load(Ordering::SeqCst) {
+                                    1 => Err(crate::RuntimeGfx942ReadbackErrorV1::InvalidStorage),
+                                    2 => panic!("domain lookup panic"),
+                                    _ => Ok(RuntimeGeneratedResultDomainV1::from_owner(
+                                        payload.domain.clone(),
+                                    )),
+                                }
+                            },
+                        }),
+                    }),
+                }),
+            )
+            .unwrap();
+        assert!(!h.command());
+        h.advance();
+        let ticket = ready(preparation).unwrap().unwrap();
+        let key = ticket.key.clone();
+        let reservation = h.handle.try_reserve_prepared_v1(ticket).unwrap();
+        assert_eq!(h.handle.observer.reply_cells_in_use(), 2);
+        assert_eq!(h.command(), panics);
+        let result = ready(reservation);
+        assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
+        assert_eq!((h.registry.len(), h.registry.active_len()), (1, 0));
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        assert_eq!(Arc::strong_count(&domain), 2);
+        let first = trace.lock().unwrap().clone();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].0, "domain");
+        mode.store(0, Ordering::SeqCst);
+        if panics {
+            assert!(matches!(
+                result,
+                Err(RuntimeAsyncEngineCallErrorV1::CommandPanicked)
+            ));
+            assert!(h.context.is_terminal());
+            for _ in 0..3 {
+                h.advance();
+                h.registry.retire_unpublished_v1(&mut h.context, 1);
+                assert!(!h.registry.stop_observations());
+            }
+            assert_eq!(*trace.lock().unwrap(), first);
+            assert_eq!(h.registry.len(), 1);
+            assert_eq!(drops.load(Ordering::SeqCst), 0);
+            core::mem::forget(h.registry);
+        } else {
+            let failure = result.unwrap().unwrap_err();
+            assert!(matches!(
+                failure.error,
+                RuntimeGfx942GeneratedReservationErrorV1::Readback(
+                    crate::RuntimeGfx942ReadbackErrorV1::InvalidStorage
+                )
+            ));
+            assert!(Arc::ptr_eq(&key, &failure.ticket.key));
+            assert!(!h.context.is_terminal());
+            let retry = h.handle.try_reserve_prepared_v1(failure.ticket).unwrap();
+            assert!(!h.command());
+            let reserved = ready(retry).unwrap().unwrap();
+            assert!(Arc::ptr_eq(&key, &reserved.key));
+            assert_eq!(Arc::strong_count(&domain), 3);
+            assert_eq!(
+                *trace.lock().unwrap(),
+                [first[0], first[0], ("reserve", first[0].1, first[0].2)]
+            );
+            assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
+            let discard = h.handle.try_discard_reserved_v1(reserved).unwrap();
+            assert!(!h.command());
+            assert_eq!(ready(discard), Ok(()));
+            assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
+            assert_eq!(drops.load(Ordering::SeqCst), 1);
+            assert_eq!(Arc::strong_count(&domain), 1);
+        }
+    }
+}
+
 #[test]
 fn generated_completion_settles_then_decodes_then_resolves_original_cell_once() {
     for panic_wake in [false, true] {
         let mut h = Harness::new(1, 2, true);
         let drops = Arc::new(AtomicUsize::new(0));
-        let (mut ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
-        let observations = watch(&h, &mut ticket, drops.clone(), panic_wake);
-        activate(&mut h, ticket, stream);
+        let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
+        let mut completion = activate_observer(&mut h, ticket, stream);
+        let observations = watch(&h, &mut completion, drops.clone(), panic_wake);
         for _ in 0..3 {
             h.advance();
             assert!(observations.lock().unwrap().is_empty());
@@ -161,6 +311,8 @@ fn generated_completion_settles_then_decodes_then_resolves_original_cell_once() 
         h.advance();
         assert!(!h.context.is_terminal());
         assert_eq!(h.registry.active_len(), 0);
+        assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
+        assert!(ready(completion).unwrap().is_ok());
         assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
         assert_eq!(drops.load(Ordering::SeqCst), 1);
         h.context.destroy_stream(stream).unwrap();
@@ -195,9 +347,9 @@ fn generated_completion_settlement_faults_keep_prepared_owner_and_forbid_decode_
     for mode in (30..35).chain(40..45) {
         let mut h = Harness::new(1, 2, true);
         let drops = Arc::new(AtomicUsize::new(0));
-        let (mut ticket, stream) = reserve_completion(&mut h, drops.clone(), mode);
-        let observations = watch(&h, &mut ticket, drops.clone(), false);
-        activate(&mut h, ticket, stream);
+        let (ticket, stream) = reserve_completion(&mut h, drops.clone(), mode);
+        let mut completion = activate_observer(&mut h, ticket, stream);
+        let observations = watch(&h, &mut completion, drops.clone(), false);
         for _ in 0..4 {
             h.advance();
         }
@@ -230,6 +382,7 @@ fn generated_completion_settlement_faults_keep_prepared_owner_and_forbid_decode_
             );
         }
         assert_eq!(drops.load(Ordering::SeqCst), 0);
+        assert!(ready(completion).is_err());
         core::mem::forget(h.registry);
     }
 }
@@ -239,14 +392,27 @@ fn generated_completion_decoder_error_or_panic_is_conclusive_host_failure() {
     for mode in [23, 24] {
         let mut h = Harness::new(1, 2, true);
         let drops = Arc::new(AtomicUsize::new(0));
-        let (mut ticket, stream) = reserve_completion(&mut h, drops.clone(), mode);
-        let observations = watch(&h, &mut ticket, drops.clone(), false);
-        activate(&mut h, ticket, stream);
+        let (ticket, stream) = reserve_completion(&mut h, drops.clone(), mode);
+        let mut completion = activate_observer(&mut h, ticket, stream);
+        let observations = watch(&h, &mut completion, drops.clone(), false);
         for _ in 0..4 {
             h.advance();
         }
         assert!(!h.context.is_terminal());
         assert_eq!(h.registry.active_len(), 0);
+        assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
+        let result = ready(completion);
+        if mode == 23 {
+            assert!(matches!(
+                result,
+                Ok(Err(crate::RuntimeGfx942ReadbackErrorV1::InvalidStorage))
+            ));
+        } else {
+            assert!(matches!(
+                result,
+                Err(RuntimeAsyncEngineCallErrorV1::CommandPanicked)
+            ));
+        }
         assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
         assert_eq!(drops.load(Ordering::SeqCst), 1);
         h.context.destroy_stream(stream).unwrap();
@@ -272,9 +438,9 @@ fn generated_completion_decoder_error_or_panic_is_conclusive_host_failure() {
 fn generated_completion_stop_preserves_disposal_without_decoding() {
     let mut h = Harness::new(1, 2, true);
     let drops = Arc::new(AtomicUsize::new(0));
-    let (mut ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
-    let observations = watch(&h, &mut ticket, drops.clone(), false);
-    activate(&mut h, ticket, stream);
+    let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
+    let mut completion = activate_observer(&mut h, ticket, stream);
+    let observations = watch(&h, &mut completion, drops.clone(), false);
     for _ in 0..3 {
         h.advance();
     }
@@ -292,6 +458,10 @@ fn generated_completion_stop_preserves_disposal_without_decoding() {
         Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
     );
     assert!(!h.state.lock().unwrap().adoption_order.contains(&"decode"));
+    assert!(matches!(
+        ready(completion),
+        Err(RuntimeAsyncEngineCallErrorV1::EngineStopped)
+    ));
 }
 
 #[test]
@@ -299,7 +469,7 @@ fn generated_completion_does_not_require_observer_polling_and_drain_keeps_delive
     let mut h = Harness::new(1, 2, true);
     let drops = Arc::new(AtomicUsize::new(0));
     let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
-    activate(&mut h, ticket, stream);
+    let completion = activate_observer(&mut h, ticket, stream);
     for _ in 0..3 {
         h.advance();
     }
@@ -308,6 +478,8 @@ fn generated_completion_does_not_require_observer_polling_and_drain_keeps_delive
     h.advance();
     assert!(!h.context.is_terminal());
     assert_eq!(h.registry.active_len(), 0);
+    assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
+    assert!(ready(completion).unwrap().is_ok());
     assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert!(
@@ -318,4 +490,118 @@ fn generated_completion_does_not_require_observer_polling_and_drain_keeps_delive
             .contains(&"gate_commit")
     );
     h.context.destroy_stream(stream).unwrap();
+}
+
+#[test]
+fn generated_completion_observer_drop_preserves_execution_and_original_owner() {
+    let mut h = Harness::new(1, 2, true);
+    let drops = Arc::new(AtomicUsize::new(0));
+    let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
+    let completion = activate_observer(&mut h, ticket, stream);
+    drop(completion);
+    assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    for _ in 0..4 {
+        h.advance();
+    }
+    assert!(!h.context.is_terminal());
+    assert_eq!(h.registry.active_len(), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
+    assert!(
+        h.state
+            .lock()
+            .unwrap()
+            .adoption_order
+            .contains(&"gate_commit")
+    );
+    h.context.destroy_stream(stream).unwrap();
+}
+
+#[test]
+fn generated_completion_activation_pressure_returns_exact_ticket_without_another_cell() {
+    let mut h = Harness::new(1, 2, true);
+    let drops = Arc::new(AtomicUsize::new(0));
+    let (ticket, stream) = reserve_completion(&mut h, drops.clone(), 0);
+    let key = ticket.key.clone();
+    let held = owned::Reply::<()>::budgeted_pair(&h.handle.observer.reply_budget).unwrap();
+    let failure = h
+        .handle
+        .enqueue_reserved_activation_v1(ticket, stream, true)
+        .err()
+        .expect("reply capacity rejection");
+    assert!(matches!(
+        failure.error,
+        ActivationErrorV1::Engine(RuntimeAsyncEngineCallErrorV1::ReplyCapacity)
+    ));
+    assert!(Arc::ptr_eq(&key, &failure.ticket.key));
+    assert_eq!(h.handle.observer.reply_cells_in_use(), 2);
+    assert!(h.state.lock().unwrap().adoption_order.is_empty());
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    drop(held);
+    let activation = h
+        .handle
+        .enqueue_reserved_activation_v1(failure.ticket, stream, true)
+        .unwrap();
+    assert_eq!(h.handle.observer.reply_cells_in_use(), 2);
+    h.command();
+    let completion = ready(activation).unwrap().unwrap();
+    assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
+    for _ in 0..4 {
+        h.advance();
+    }
+    assert!(ready(completion).unwrap().is_ok());
+    assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
+    h.context.destroy_stream(stream).unwrap();
+}
+
+#[test]
+fn generated_completion_activation_preserves_preflight_precedence_and_custody() {
+    for mode in 0..3 {
+        let mut h = Harness::new(1, 2, true);
+        let drops = Arc::new(AtomicUsize::new(0));
+        let (ticket, stream) = reserved(&mut h, drops.clone(), 0, true);
+        let key = ticket.key.clone();
+        let foreign = Harness::new(1, 2, true);
+        if mode == 0 {
+            h.handle
+                .observer
+                .worker_thread
+                .set(thread::current().id())
+                .unwrap();
+        }
+        let handle = if mode == 1 {
+            &foreign.handle
+        } else {
+            &h.handle
+        };
+        let failure = handle
+            .enqueue_reserved_activation_v1(ticket, stream, true)
+            .err()
+            .expect("preflight rejection");
+        match mode {
+            0 => assert!(matches!(
+                failure.error,
+                ActivationErrorV1::Engine(RuntimeAsyncEngineCallErrorV1::ReentrantCall)
+            )),
+            1 => assert!(matches!(
+                failure.error,
+                ActivationErrorV1::Engine(RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket)
+            )),
+            _ => assert!(matches!(
+                failure.error,
+                ActivationErrorV1::Context(RuntimeErrorV1::Validation(
+                    RuntimeValidationErrorV1::Unsupported
+                ))
+            )),
+        }
+        assert!(Arc::ptr_eq(&key, &failure.ticket.key));
+        assert!(h.state.lock().unwrap().adoption_order.is_empty());
+        assert_eq!(h.handle.observer.reply_cells_in_use(), 1);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        assert!(h.registry.discard_reserved(&key));
+        drop(failure.ticket);
+        assert_eq!(h.handle.observer.reply_cells_in_use(), 0);
+        h.context.destroy_stream(stream).unwrap();
+    }
 }

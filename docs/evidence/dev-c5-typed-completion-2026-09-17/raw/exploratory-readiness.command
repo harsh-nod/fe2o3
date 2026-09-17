@@ -1,0 +1,1 @@
+prlimit --core=0 target/debug/deps/fe2o3_runtime-c38c0bc26fa7ec59 --exact async_engine::tests::owned_tests::preparation_tests::adoption_tests::adoption_readiness_error_or_panic_retains_custody_without_retry --nocapture 

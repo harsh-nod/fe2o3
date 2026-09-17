@@ -6,7 +6,14 @@ use crate::{RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedReservationEr
 use operation::{EngineOperationFactoryV1, EngineOperationV1, stop_reply};
 
 pub(super) mod adoption;
+mod completion;
 pub(super) mod completion_contract;
+pub use adoption::{
+    ActivationErrorV1 as RuntimeAsyncGeneratedActivationErrorV1,
+    ActivationFailureV1 as RuntimeAsyncGeneratedActivationFailureV1,
+    ActivationFutureV1 as RuntimeAsyncGeneratedActivationV1,
+};
+pub use completion::*;
 mod reservation;
 pub(super) use reservation::ReserveCommandV1;
 pub use reservation::*;
@@ -229,8 +236,10 @@ impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P,
         &mut self,
         hold: crate::context::ContextUnpublishedHoldV1,
         ticket: RuntimeAsyncReservedTicketV1,
-    ) {
-        self.unpublished = Some(adoption::UnpublishedAdoptionV1::new(hold, ticket));
+    ) -> RuntimeAsyncGeneratedCompletionV1 {
+        let (key, completion) = ticket.into_completion_v1();
+        self.unpublished = Some(adoption::UnpublishedAdoptionV1::new(hold, key));
+        completion
     }
 
     fn retire_unpublished(
@@ -244,15 +253,24 @@ impl<B: RuntimeBackendV1, P, E> EngineOperationV1<B> for PreparationDriver<B, P,
         &mut self,
         context: &mut RuntimeContextV1<B>,
         completion: &mut Option<owned::Reply<GeneratedCompletionOutcomeV1>>,
-    ) -> Result<(), RuntimeGfx942GeneratedReservationErrorV1> {
+    ) -> Result<Option<RuntimeGeneratedResultDomainV1>, RuntimeGfx942GeneratedReservationErrorV1>
+    {
         let reserve = self
             .reserve
             .ok_or(RuntimeGfx942GeneratedReservationErrorV1::UnsupportedPreparation)?;
         let prepared = self.prepared.as_mut().expect("parked preparation");
+        let domain = self
+            .adoption
+            .as_ref()
+            .and_then(|hooks| hooks.issue)
+            .and_then(|issue| issue.completion)
+            .map(|hooks| (hooks.domain)(prepared))
+            .transpose()
+            .map_err(RuntimeGfx942GeneratedReservationErrorV1::Readback)?;
         let roster = reserve(context, prepared)?;
         self.roster = Some(roster);
         self.completion = completion.take();
-        Ok(())
+        Ok(domain)
     }
 
     fn complete_preparation(&mut self) {
@@ -418,6 +436,7 @@ impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
             Some(adoption::CompletionHooksV1 {
                 settle: RuntimeContextV1::complete_gfx942_issue_v1::<P>,
                 decode: crate::RuntimeGfx942PreparedV1::<P>::complete_readback_v1,
+                domain: |prepared| prepared.value().completion_domain_v1(),
             }),
         )
     }
