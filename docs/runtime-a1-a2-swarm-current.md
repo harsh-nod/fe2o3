@@ -150,9 +150,13 @@ and an owner-free callback result constrain escape. See the
 [development receipt](evidence/dev-n5-native-source-2026-09-17/README.md).
 GNU/musl each pass 852 runtime tests with eleven native tests ignored; ten
 focused tests per target, three compiled negatives and 33 doctests pass.
-Backend adoption phases, native binding/retirement, lane leasing and production
-async hooks remain unimplemented. This prerequisite does not complete N5 or
-advance the accepted milestones.
+That packet supplied the borrowed-source prerequisite only. Subsequent
+[N5 native adoption development](runtime-generated-native-adoption-v1.md) now
+implements backend phases, four binding routes, lane leasing, rooted retirement
+and the private generated async hooks. CPU validation and the unexecuted native
+probes are separated in its evidence receipt. All eight MI300X GPUs were occupied;
+native route/failure and production carrier/async qualification remain open.
+This does not complete N5 or advance the accepted milestones.
 
 Preceding accepted Native checkpoint: [R123 live retained-control release](runtime-live-retained-control-release-v1.md),
 with [336 raw artifacts](evidence/local-r123-live-retained-control-release-2026-09-15/README.md)

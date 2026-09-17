@@ -173,6 +173,66 @@ fn shell_registration_retains_exact_roster_and_refunds_only_after_retirement() {
 }
 
 #[test]
+fn generated_empty_prefix_stop_requires_the_original_live_hold() {
+    let mut fixture = Fixture::new(Some((60, 3)));
+    let snapshot = fixture.snapshot();
+    fixture
+        .context
+        .retire_gfx942_adoption_v1(&fixture.hold)
+        .unwrap();
+    assert_eq!(fixture.snapshot(), snapshot);
+    assert!(
+        fixture
+            .context
+            .validate_unpublished_hold_v1(&fixture.hold)
+            .is_ok()
+    );
+    let foreign = Fixture::new(None);
+    assert!(
+        fixture
+            .context
+            .retire_gfx942_adoption_v1(&foreign.hold)
+            .is_err()
+    );
+    assert_eq!(fixture.snapshot(), snapshot);
+    fixture
+        .context
+        .release_unpublished_hold_v1(&fixture.hold)
+        .unwrap();
+    assert!(
+        fixture
+            .context
+            .retire_gfx942_adoption_v1(&fixture.hold)
+            .is_err()
+    );
+}
+
+#[test]
+fn generated_shell_only_stop_disposes_credits_before_releasing_hold() {
+    let mut fixture = Fixture::new(Some((60, 3)));
+    fixture.install().unwrap();
+    fixture
+        .context
+        .retire_gfx942_adoption_v1(&fixture.hold)
+        .unwrap();
+    assert!(fixture.context.allocations.is_empty());
+    assert_eq!(
+        fixture.snapshot().usage.unwrap().used,
+        crate::RuntimeResourceVectorV1::ZERO
+    );
+    assert!(
+        fixture
+            .context
+            .validate_unpublished_hold_v1(&fixture.hold)
+            .is_ok()
+    );
+    fixture
+        .context
+        .release_unpublished_hold_v1(&fixture.hold)
+        .unwrap();
+}
+
+#[test]
 fn shell_credit_exhaustion_rejects_the_whole_roster_without_transfer() {
     for limits in [(59, 3), (60, 2)] {
         let mut fixture = Fixture::new(Some(limits));

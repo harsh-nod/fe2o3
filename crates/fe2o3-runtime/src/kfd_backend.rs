@@ -93,9 +93,10 @@ mod compute_state;
 mod drain_capture;
 #[cfg(test)]
 pub(crate) use drain_capture::tests::counted as counted_allocations_for_test_v1;
+mod generated_adoption;
 mod generated_preparation;
 mod generated_shells;
-pub(crate) use generated_shells::GeneratedShellBindingV1;
+pub(crate) use generated_shells::{GeneratedShellBindingV1, GeneratedShellPlanV1};
 mod native_budget;
 #[cfg(feature = "hardware-qualification")]
 mod qualification_coexistence;
@@ -5722,6 +5723,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         stream: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        self.require_no_generated_stream_v1(stream)?;
         if !self.streams.contains_key(&stream) {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::UnknownHandle,
@@ -6353,6 +6355,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         launch: BackendLaunchV1<'_>,
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        self.require_no_generated_stream_v1(launch.stream)?;
         for binding in launch.bindings {
             self.allocations
                 .reject_generated(binding.region.allocation)?;
@@ -11627,6 +11630,7 @@ impl RuntimeAsyncCopyBackendV1 for KfdRuntimeBackendV1 {
         dependencies: &[u64],
     ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
+        self.require_no_generated_stream_v1(stream)?;
         self.allocations.reject_generated(source.allocation)?;
         self.allocations.reject_generated(destination.allocation)?;
         if !self.native_available {
@@ -12603,6 +12607,7 @@ impl Drop for KfdRuntimeBackendV1 {
             || self.compute_completion_reservations != 0
             || self.sdma_completion_reservations != 0
             || self.terminal_memory.is_some()
+            || self.has_live_generated_native_v1()
             || self.terminal_sdma_custody.is_some()
             || !self.quiescent_sdma_submissions.is_empty()
         {

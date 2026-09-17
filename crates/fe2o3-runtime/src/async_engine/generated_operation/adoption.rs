@@ -1,4 +1,4 @@
-//! Private nonpublishing lifecycle. Native DATA hooks are not installed yet.
+//! Private nonpublishing lifecycle; ISSUE and COMPLETE are separate transitions.
 
 use super::*;
 use crate::RuntimeValidationErrorV1;

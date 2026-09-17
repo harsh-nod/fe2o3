@@ -1,0 +1,14 @@
+crates/fe2o3-runtime/src/async_engine/generated_operation.rs: OK
+crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs: OK
+crates/fe2o3-runtime/src/context/generated_preparation.rs: OK
+crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs: OK
+crates/fe2o3-runtime/src/context/generated_preparation/tests.rs: OK
+crates/fe2o3-runtime/src/context/generated_preparation/tests/shell_tests.rs: OK
+crates/fe2o3-runtime/src/context/generated_shells.rs: OK
+crates/fe2o3-runtime/src/generated_source.rs: OK
+crates/fe2o3-runtime/src/kfd_backend.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests/native.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_shells.rs: OK

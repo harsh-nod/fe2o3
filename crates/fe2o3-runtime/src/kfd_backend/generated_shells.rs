@@ -36,11 +36,12 @@ pub(crate) struct GeneratedShellPlanV1 {
 }
 
 pub(super) struct GeneratedShellRecordV1 {
-    plan: GeneratedShellPlanV1,
-    source_identity: Arc<()>,
+    pub(super) plan: GeneratedShellPlanV1,
+    pub(super) source_identity: Arc<()>,
     // This state owns only inert control. Native construction requires a distinct
     // rooted phase and must disable metadata-only disposal before its first effect.
-    control: Option<Gfx942FixedDispatchPacketV1>,
+    pub(super) control: Option<Gfx942FixedDispatchPacketV1>,
+    pub(super) native: Option<super::generated_adoption::GeneratedNativeAdoptionV1>,
 }
 
 impl KfdRuntimeBackendV1 {
@@ -169,6 +170,7 @@ impl KfdRuntimeBackendV1 {
                 plan,
                 source_identity: Arc::clone(&roster.source_identity),
                 control: None,
+                native: None,
             },
         );
         self.next_handle = plan.next_handle;
@@ -203,12 +205,23 @@ impl KfdRuntimeBackendV1 {
                 record.plan.binding.context_generation == generation
                     && record.plan.binding.stream == stream
                     && record.plan.binding.hold == hold
-                    && record.control.is_some()
             })
             .map(|record| record.plan)
     }
 
     pub(crate) fn validate_generated_shell_disposal_v1(&self, plan: &GeneratedShellPlanV1) -> bool {
+        self.validate_generated_shell_records_v1(plan)
+            && self.generated_shells.get(&plan.key).is_some_and(|record| {
+                record.native.as_ref().map_or_else(
+                    || record.control.is_some(),
+                    |native| {
+                        native.disposed_count() == Some(plan.count) && record.control.is_none()
+                    },
+                )
+            })
+    }
+
+    pub(crate) fn validate_generated_shell_records_v1(&self, plan: &GeneratedShellPlanV1) -> bool {
         plan.key != 0
             && plan.count > 0
             && plan.count <= GFX942_MAX_FIXED_DISPATCH_DATA_V1
@@ -217,7 +230,7 @@ impl KfdRuntimeBackendV1 {
             && self
                 .generated_shells
                 .get(&plan.key)
-                .is_some_and(|record| record.plan == *plan && record.control.is_some())
+                .is_some_and(|record| record.plan == *plan)
             && self.allocations.generated_count_for_adoption(plan.key) == plan.count
             && plan.members[..plan.count]
                 .iter()
@@ -247,7 +260,7 @@ impl KfdRuntimeBackendV1 {
             self.validate_generated_shell_disposal_v1(plan),
             "complete exact shell-only disposal"
         );
-        // Control is inert and closed: no native owner or callback can hide in it.
+        // Either control is inert, or native retirement has conclusively disposed DATA.
         drop(self.generated_shells.remove(&plan.key));
         for member in plan.members[..plan.count].iter().flatten() {
             assert!(

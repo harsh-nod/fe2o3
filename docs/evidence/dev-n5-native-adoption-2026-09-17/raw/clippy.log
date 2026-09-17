@@ -1,0 +1,72 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-kfd)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-r61-execution/crates/fe2o3-runtime)
+error: called `expect` on `self.queue` after checking its variant with `is_none`
+   --> crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs:310:13
+    |
+244 |           let result = if self.queue.is_none() {
+    |                        ----------------------- help: try: `if let Some(<item>) = &mut self.queue`
+...
+310 | /             self.queue
+311 | |                 .as_mut()
+312 | |                 .expect("retained queue")
+    | |_________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_unwrap
+    = note: `-D clippy::unnecessary-unwrap` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_unwrap)]`
+
+error: called `expect` on `self.queue` after checking its variant with `is_none`
+   --> crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs:331:25
+    |
+244 |         let result = if self.queue.is_none() {
+    |                      ----------------------- help: try: `if let Some(<item>) = &mut self.queue`
+...
+331 |             let queue = self.queue.as_mut().expect("bootstrap queue");
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_unwrap
+
+error: called `expect` on `self.queue` after checking its variant with `is_none`
+   --> crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs:346:13
+    |
+244 |           let result = if self.queue.is_none() {
+    |                        ----------------------- help: try: `if let Some(<item>) = &mut self.queue`
+...
+346 | /             self.queue
+347 | |                 .as_mut()
+348 | |                 .expect("retained queue")
+    | |_________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_unwrap
+
+error: could not compile `fe2o3-runtime` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: unnecessary closure used with `bool::then`
+  --> crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests/native.rs:24:13
+   |
+24 | /             (index < 3).then(|| crate::generated_source::GeneratedBufferSlotV1 {
+25 | |                 ordinal: index,
+26 | |                 bytes: GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as u64,
+27 | |                 access: if index < 2 {
+...  |
+31 | |                 },
+32 | |             })
+   | |______________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_lazy_evaluations
+   = note: `-D clippy::unnecessary-lazy-evaluations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::unnecessary_lazy_evaluations)]`
+help: use `then_some` instead
+   |
+24 ~             (index < 3).then_some(crate::generated_source::GeneratedBufferSlotV1 {
+25 +                 ordinal: index,
+26 +                 bytes: GFX942_VECADD_QUALIFICATION_BUFFER_BYTES_V1 as u64,
+27 +                 access: if index < 2 {
+28 +                     crate::Gfx942RuntimeBufferAccessV1::ReadOnly
+29 +                 } else {
+30 +                     crate::Gfx942RuntimeBufferAccessV1::WriteOnly
+31 +                 },
+32 +             })
+   |
+
+error: could not compile `fe2o3-runtime` (lib test) due to 4 previous errors

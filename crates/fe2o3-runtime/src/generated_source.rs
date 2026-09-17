@@ -80,10 +80,6 @@ impl<'a, E> RuntimeGfx942GeneratedSourceV1<'a, E> {
     /// admitted prefix in its backend. Closing failure cannot dispose or retry it.
     /// The `()` callback result cannot hide ownership discarded by a failed
     /// closing check; panics propagate to the caller's retained adoption envelope.
-    #[allow(
-        dead_code,
-        reason = "private input handoff for forthcoming native DATA adoption"
-    )]
     pub(crate) fn with_native_inputs_v1(
         &self,
         device_unique_id: u64,

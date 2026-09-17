@@ -1752,6 +1752,10 @@ impl KfdRuntimeBackendV1 {
             || self
                 .three_binding_persistent_admission_for_launch_v1(pending.launch.borrowed())
                 .is_some();
+        if persistent_selected && self.has_live_generated_native_v1() {
+            self.pending_compute.insert(pending.id, pending);
+            return Ok(BackendPollV1::Pending);
+        }
         if persistent_selected && let Some(copy) = self.persistent_compute_sdma_blocker_v1(&pending)
         {
             self.pending_compute.insert(pending.id, pending);
@@ -4208,7 +4212,8 @@ impl KfdRuntimeBackendV1 {
         &mut self,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
-        if !self.streams.is_empty()
+        if self.has_live_generated_native_v1()
+            || !self.streams.is_empty()
             || !self.events.is_empty()
             || !self.event_submission_retain_counts.is_empty()
             || !self.submissions.is_empty()

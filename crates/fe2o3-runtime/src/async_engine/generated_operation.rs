@@ -391,9 +391,14 @@ impl RuntimeAsyncProgressHandleV1<KfdRuntimeBackendV1> {
         RuntimeAsyncPreparationV1<RuntimeGfx942PreparationErrorV1<E>>,
         RuntimeAsyncEngineCallErrorV1,
     > {
-        self.enqueue_preparation_with_reservation_v1(
+        self.enqueue_preparation_with_adoption_v1(
             Box::new(move |context| context.with_gfx942_preparation_device_v1(device, prepare)),
             Some(RuntimeContextV1::reserve_gfx942_prepared_v1::<P>),
+            Some(adoption::AdoptionHooksV1 {
+                preflight: RuntimeContextV1::preflight_gfx942_adoption_v1::<P>,
+                adopt: RuntimeContextV1::adopt_gfx942_prepared_v1::<P>,
+                retire: RuntimeContextV1::retire_gfx942_adoption_v1,
+            }),
         )
     }
 

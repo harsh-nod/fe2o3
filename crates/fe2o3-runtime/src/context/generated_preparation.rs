@@ -8,6 +8,8 @@ use fe2o3_runtime_model::ModelDeviceAdmissionV1;
 use super::*;
 use crate::{KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1};
 
+mod adoption;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PreparationBindingV1 {
     context_generation: u64,
@@ -96,10 +98,6 @@ impl<E: Error + 'static> Error for RuntimeGfx942PreparationErrorV1<E> {
 }
 
 impl RuntimeContextV1<KfdRuntimeBackendV1> {
-    #[allow(
-        dead_code,
-        reason = "private DATA adoption handoff; native effects are not installed"
-    )]
     pub(crate) fn register_gfx942_generated_shells_v1<T: crate::RuntimeGfx942GeneratedCarrierV1>(
         &mut self,
         prepared: &mut RuntimeGfx942PreparedV1<T>,

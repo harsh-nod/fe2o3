@@ -6,6 +6,33 @@ use super::*;
 mod shell_tests;
 
 impl RuntimeContextV1<KfdRuntimeBackendV1> {
+    #[cfg(feature = "hardware-qualification")]
+    pub(crate) fn generated_native_test_ids_v1(
+        backend_device: u64,
+        backend_stream: u64,
+        native_device: ModelDeviceAdmissionV1,
+    ) -> (
+        crate::kfd_backend::GeneratedShellBindingV1,
+        Vec<RuntimeAllocationIdV1>,
+    ) {
+        // Descriptive test IDs only. The caller must separately retain a real
+        // checked device and admit the exact repository qualification fixture.
+        (
+            crate::kfd_backend::GeneratedShellBindingV1 {
+                context_generation: 1,
+                device: RuntimeDeviceIdV1::new(1, 1),
+                stream: RuntimeStreamIdV1::new(1, backend_stream),
+                hold: backend_stream,
+                backend_device,
+                backend_stream,
+                native_device,
+            },
+            (0..3)
+                .map(|id| RuntimeAllocationIdV1::new(1, backend_stream * 4 + id))
+                .collect(),
+        )
+    }
+
     // Descriptive IDs for backend metadata tests, never native device authority.
     pub(crate) fn generated_shell_test_binding_v1(
         backend: &mut KfdRuntimeBackendV1,

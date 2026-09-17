@@ -1,0 +1,27 @@
+crates/fe2o3-runtime/src/async_engine/generated_operation.rs: OK
+crates/fe2o3-runtime/src/async_engine/generated_operation/adoption.rs: OK
+crates/fe2o3-runtime/src/context/generated_preparation.rs: OK
+crates/fe2o3-runtime/src/context/generated_preparation/adoption.rs: OK
+crates/fe2o3-runtime/src/context/generated_preparation/tests.rs: OK
+crates/fe2o3-runtime/src/context/generated_preparation/tests/shell_tests.rs: OK
+crates/fe2o3-runtime/src/context/generated_shells.rs: OK
+crates/fe2o3-runtime/src/generated_source.rs: OK
+crates/fe2o3-runtime/src/kfd_backend.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/compute_dispatch.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_adoption/tests/native.rs: OK
+crates/fe2o3-runtime/src/kfd_backend/generated_shells.rs: OK
+test result: ok. 863 passed; 0 failed; 13 ignored; 0 measured; 0 filtered out;
+test kfd_backend::generated_adoption::tests::generated_native_entered_drop_fails_closed_before_owner_destruction ... ok
+test kfd_backend::generated_adoption::tests::generated_stream_guards_reject_without_generated_buffer_arguments ... ok
+test kfd_backend::generated_adoption::tests::native::generated_native_cold_primary_auxiliary_rebound_abort_and_shutdown ... ignored, requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID
+test kfd_backend::generated_adoption::tests::native::generated_native_bootstrap_primary_auxiliary_rebound_abort_and_shutdown ... ignored, requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID
+test result: ok. 863 passed; 0 failed; 13 ignored; 0 measured; 0 filtered out;
+test kfd_backend::generated_adoption::tests::generated_native_entered_drop_fails_closed_before_owner_destruction ... ok
+test kfd_backend::generated_adoption::tests::generated_stream_guards_reject_without_generated_buffer_arguments ... ok
+test kfd_backend::generated_adoption::tests::native::generated_native_cold_primary_auxiliary_rebound_abort_and_shutdown ... ignored, requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID
+test kfd_backend::generated_adoption::tests::native::generated_native_bootstrap_primary_auxiliary_rebound_abort_and_shutdown ... ignored, requires isolated MI300X, FE2O3_TEST_NATIVE_ISOLATED=1 and FE2O3_TEST_NATIVE_UNIQUE_ID
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 22.45s
+N5 development source and command-result audit passed; native probes remain unexecuted.

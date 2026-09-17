@@ -129,14 +129,32 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         Ok(())
     }
 
-    #[allow(
-        dead_code,
-        reason = "private DATA adoption handoff; native effects are not installed"
-    )]
     pub(crate) fn retire_generated_shells_v1(
         &mut self,
         hold: &ContextUnpublishedHoldV1,
     ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+        let plan = self.generated_plan_for_hold_v1(hold)?;
+        if !self.backend.validate_generated_shell_disposal_v1(&plan) {
+            return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
+        }
+        self.backend.dispose_generated_shells_v1(&plan);
+        for member in plan.members[..plan.count].iter().flatten() {
+            self.allocations.remove(&member.logical);
+            self.backend_allocations.remove(&member.backend);
+            self.dispose_allocation_credits_v1(member.logical);
+        }
+        self.streams
+            .get_mut(&hold.stream())
+            .expect("held stream")
+            .generated = None;
+        Ok(())
+    }
+
+    pub(super) fn generated_plan_for_hold_v1(
+        &self,
+        hold: &ContextUnpublishedHoldV1,
+    ) -> Result<crate::kfd_backend::GeneratedShellPlanV1, RuntimeErrorV1<KfdRuntimeBackendErrorV1>>
+    {
         self.validate_unpublished_hold_v1(hold)?;
         let stream = *self.streams.get(&hold.stream()).expect("exact held stream");
         let key = stream
@@ -148,7 +166,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             .ok_or(RuntimeValidationErrorV1::InvalidBackendDescription)?;
         if plan.binding.device != stream.device
             || plan.binding.backend_stream != stream.backend_stream
-            || !self.backend.validate_generated_shell_disposal_v1(&plan)
+            || !self.backend.validate_generated_shell_records_v1(&plan)
             || plan.members[..plan.count].iter().any(|member| {
                 member.is_none_or(|member| {
                     !self.backend_allocations.contains(&member.backend)
@@ -163,16 +181,6 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
         }
-        self.backend.dispose_generated_shells_v1(&plan);
-        for member in plan.members[..plan.count].iter().flatten() {
-            self.allocations.remove(&member.logical);
-            self.backend_allocations.remove(&member.backend);
-            self.dispose_allocation_credits_v1(member.logical);
-        }
-        self.streams
-            .get_mut(&hold.stream())
-            .expect("held stream")
-            .generated = None;
-        Ok(())
+        Ok(plan)
     }
 }
