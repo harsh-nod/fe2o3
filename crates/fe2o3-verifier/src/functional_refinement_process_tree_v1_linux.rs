@@ -36,10 +36,11 @@ const RLIMIT_CORE: i32 = 4;
 const RLIMIT_AS: i32 = 9;
 const CPU_LIMIT_MAX_SECONDS: u64 = 601;
 // RLIMIT_NPROC is charged to the real UID across the host, including unrelated
-// threads. Ptrace below supplies the strict per-proof one-descendant bound.
+// threads. Ptrace below separately bounds and authenticates proof descendants.
 const PROCESS_LIMIT: u64 = 4096;
 const DESCRIPTOR_LIMIT: u64 = 256;
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
+const ACTIVE_TREE_POLL_INTERVAL: Duration = Duration::from_micros(100);
 const CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
 
 const PTRACE_TRACEME: u32 = 0;
@@ -706,6 +707,7 @@ fn supervise(
         let mut auxiliary_started = false;
         let mut solver_started = false;
         let expected_process_descendants = if require_auxiliary_verifier { 2 } else { 1 };
+        let mut idle_interval = ACTIVE_TREE_POLL_INTERVAL;
         while !tracees.is_empty() {
             drain(&mut stdout, &mut stdout_capture, output_limit)?;
             drain(&mut stderr, &mut stderr_capture, output_limit)?;
@@ -899,8 +901,11 @@ fn supervise(
                 }
             }
             if !progressed {
-                thread::sleep(POLL_INTERVAL);
+                thread::sleep(
+                    idle_interval.min(deadline.saturating_duration_since(Instant::now())),
+                );
             }
+            idle_interval = next_tree_poll_interval(idle_interval, progressed);
         }
         let verifier_terminal = verifier_terminal
             .ok_or_else(|| process_failure("verifier terminal status is missing"))?;
@@ -1787,6 +1792,15 @@ fn drain_to_eof(
     Ok(())
 }
 
+// Closely spaced ptrace stops should not each pay the fully idle polling delay.
+fn next_tree_poll_interval(previous: Duration, progressed: bool) -> Duration {
+    if progressed {
+        ACTIVE_TREE_POLL_INTERVAL
+    } else {
+        previous.saturating_mul(2).min(POLL_INTERVAL)
+    }
+}
+
 fn process_failure(detail: impl Into<String>) -> RetainedFunctionalRefinementRuntimeErrorV1 {
     controller_error(
         RetainedFunctionalRefinementRuntimeErrorKindV1::Process,
@@ -1821,6 +1835,20 @@ fn controller_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tree_poll_interval_backs_off_caps_and_resets_after_progress() {
+        let mut interval = ACTIVE_TREE_POLL_INTERVAL;
+        for microseconds in [200, 400, 800, 1600, 2000, 2000] {
+            interval = next_tree_poll_interval(interval, false);
+            assert_eq!(interval, Duration::from_micros(microseconds));
+        }
+        assert_eq!(next_tree_poll_interval(Duration::MAX, false), POLL_INTERVAL);
+        assert_eq!(
+            next_tree_poll_interval(interval, true),
+            ACTIVE_TREE_POLL_INTERVAL,
+        );
+    }
 
     struct HostileRun {
         result: Result<

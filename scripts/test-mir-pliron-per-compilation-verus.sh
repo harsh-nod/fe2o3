@@ -22,29 +22,29 @@ printf '%s  %s\n' "$expected_verus_sha" "$verus" | sha256sum -c -
 "$verus" --version | grep -F "Version: $expected_version" >/dev/null
 printf '%s  %s\n' \
     0b958374e154e88a916f7573ffc7529f8e0ba40d19bd94dd49db5eb4630647f8 "$template" \
-    ffce962f103f6d518a2b629ad4a310f64630b53778a1315e91617558b254b9e8 "$generated" \
-    2425d9c3640de0f8476ba61e751485e7b0d02b7984fd303a12e601fdaf2cc8bc "$generated_multi" \
+    598c2c8378d82f99a2223c74d46cd9f0f179c507f180735a1b60fd89df74b174 "$generated" \
+    3956fabc391e749e60cababa9004f045fde446c9852681c718b49b1b26d21290 "$generated_multi" \
     7a12b2e498b43d7053d1cf24d2da0b126978edd27e0ccf6a734fdd696342a25d "$negative_dir/mir_pliron_per_compilation_missing_output_v1.rs" \
     f1103158bed21996729d9af15c8233c876d3ee9ff773cab49c85c188c140f168 "$negative_dir/mir_pliron_per_compilation_wrong_recurrence_v1.rs" \
-    b0406bca54d4f0b1bac434cc26d3ec80d9c117b48ecfbc78daa2a915807dbcd8 "$negative_dir/mir_pliron_per_compilation_multi_output_substitution_v1.rs" \
+    4608e0888a11cc87967de454a8b21498e4cf99d26922e57059898805cb1bfdea "$negative_dir/mir_pliron_per_compilation_multi_output_substitution_v1.rs" \
     | sha256sum -c -
 
-for token in 'assume(' 'admit(' '#[verifier::external_body]' '#[verifier::external]'; do
+for token in 'assume(' 'admit(' '#[verifier::external_body]' '#[verifier::external]' 'uninterp spec fn'; do
     if grep -F "$token" "$template" "$generated" "$generated_multi" >/dev/null; then
         printf 'forbidden trust token %s in generated proof sources\n' "$token" >&2
         exit 1
     fi
 done
 
-timeout "$timeout_seconds" "$verus" --crate-type lib --triggers-mode silent "$template" \
+timeout "$timeout_seconds" "$verus" --crate-type lib --triggers-mode silent --no-cheating "$template" \
     >"$tmp/template.log" 2>&1
 grep -F 'verification results:: 0 verified, 0 errors' "$tmp/template.log" >/dev/null
 
-timeout "$timeout_seconds" "$verus" --crate-type lib --triggers-mode silent "$generated" \
+timeout "$timeout_seconds" "$verus" --crate-type lib --triggers-mode silent --no-cheating "$generated" \
     >"$tmp/generated.log" 2>&1
 grep -F 'verification results:: 4 verified, 0 errors' "$tmp/generated.log" >/dev/null
 
-timeout "$timeout_seconds" "$verus" --crate-type lib --triggers-mode silent "$generated_multi" \
+timeout "$timeout_seconds" "$verus" --crate-type lib --triggers-mode silent --no-cheating "$generated_multi" \
     >"$tmp/generated-multi.log" 2>&1
 grep -F 'verification results:: 5 verified, 0 errors' "$tmp/generated-multi.log" >/dev/null
 
@@ -53,7 +53,7 @@ for name in \
     mir_pliron_per_compilation_wrong_recurrence_v1
 do
     file="$negative_dir/$name.rs"
-    if timeout "$timeout_seconds" "$verus" --crate-type lib --triggers-mode silent "$file" \
+    if timeout "$timeout_seconds" "$verus" --crate-type lib --triggers-mode silent --no-cheating "$file" \
         >"$tmp/$name.log" 2>&1; then
         printf 'negative Verus fixture unexpectedly verified: %s\n' "$file" >&2
         exit 1
@@ -62,7 +62,7 @@ do
 done
 
 readonly multi_substitution="$negative_dir/mir_pliron_per_compilation_multi_output_substitution_v1.rs"
-if timeout "$timeout_seconds" "$verus" --crate-type lib --triggers-mode silent "$multi_substitution" \
+if timeout "$timeout_seconds" "$verus" --crate-type lib --triggers-mode silent --no-cheating "$multi_substitution" \
     >"$tmp/multi-output-substitution.log" 2>&1; then
     printf 'multi-output formula substitution unexpectedly verified: %s\n' "$multi_substitution" >&2
     exit 1

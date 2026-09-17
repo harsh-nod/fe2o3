@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "reference_binding_v1/reviewed_host_tests.rs"]
+mod reviewed_host_tests;
 
 struct ScratchTarget(PathBuf);
 
@@ -33,7 +37,16 @@ fn workspace() -> PathBuf {
 }
 
 fn run_feature(target: &Path, feature: &str) -> String {
-    let output = Command::new(env!("CARGO"))
+    let (status, stderr) = run_feature_command(Command::new(env!("CARGO")), target, feature);
+    assert!(
+        !status.success(),
+        "reference fixture {feature} unexpectedly gained artifact authority:\n{stderr}",
+    );
+    stderr
+}
+
+fn run_feature_command(mut command: Command, target: &Path, feature: &str) -> (ExitStatus, String) {
+    let output = command
         .current_dir(workspace())
         .env(
             "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
@@ -77,11 +90,7 @@ fn run_feature(target: &Path, feature: &str) -> String {
         );
         eprintln!("write-only reference {feature} compiler stderr:\n{stderr}");
     }
-    assert!(
-        !output.status.success(),
-        "reference fixture {feature} unexpectedly gained artifact authority:\n{stderr}",
-    );
-    stderr
+    (output.status, stderr)
 }
 
 #[test]

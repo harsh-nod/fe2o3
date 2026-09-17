@@ -664,9 +664,6 @@ fn append_contract_instantiations_v1(
     source.push_str(
         crate::functional_refinement_receipt_v2::ranked_effect_formula_replay_prelude_v2(),
     );
-    source.push_str(
-        crate::functional_refinement_receipt_v2::ranked_effect_ieee_congruence_declaration_v2(),
-    );
     source.push('\n');
     let mut all_symbols = std::collections::BTreeSet::new();
     for replay in &replays {
@@ -686,25 +683,25 @@ fn append_contract_instantiations_v1(
         all_symbols.extend(replay.symbols().iter().copied());
     }
     source.push_str("    proof fn fe2o3_replay_all_output_effect_formulas_v1(");
-    for (index, symbol) in all_symbols.iter().enumerate() {
-        if index != 0 {
-            source.push_str(", ");
-        }
-        write!(source, "s{symbol}: int").map_err(generated_format_error)?;
+    source.push_str(
+        crate::functional_refinement_receipt_v2::ranked_effect_ieee_congruence_parameter_v2(),
+    );
+    for symbol in &all_symbols {
+        write!(source, ", s{symbol}: int").map_err(generated_format_error)?;
     }
     source.push_str(") {\n");
     for (index, replay) in replays.iter().enumerate() {
-        write!(source, "        fe2o3_output_{index}_effect_formula_v1(")
-            .map_err(generated_format_error)?;
-        for (symbol_index, symbol) in replay.symbols().iter().enumerate() {
-            if symbol_index != 0 {
-                source.push_str(", ");
-            }
-            write!(source, "s{symbol}").map_err(generated_format_error)?;
+        write!(
+            source,
+            "        fe2o3_output_{index}_effect_formula_v1(fe2o3_ieee_operator_congruence_v2"
+        )
+        .map_err(generated_format_error)?;
+        for symbol in replay.symbols() {
+            write!(source, ", s{symbol}").map_err(generated_format_error)?;
         }
         source.push_str(");\n");
     }
-    source.push_str("    }\n}\n\nfn fe2o3_contract_instantiations_v1() {}\n");
+    source.push_str("    }\n}\n");
     if source.len() > crate::MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3 {
         return Err(
             ProductionMirPlironPerCompilationVerusErrorV1::GeneratedSource(
@@ -1503,7 +1500,7 @@ mod tests {
         .unwrap();
         let text = std::str::from_utf8(source.source()).unwrap();
         assert!(text.contains("caller-provided relation premises"));
-        for forbidden in ["requires", "assume(", "admit(", "external_body"] {
+        for forbidden in ["requires", "assume(", "admit(", "external_body", "uninterp"] {
             assert!(!text.contains(forbidden));
         }
         for workload in ["gemm", "softmax", "attention", "moe"] {
@@ -1637,7 +1634,11 @@ mod tests {
         assert!(generated.contains("fe2o3_output_0_effect_formula_v1("));
         assert!(generated.contains("proof fn fe2o3_replay_all_output_effect_formulas_v1("));
         assert!(!generated.contains("output_product_refines"));
-        for forbidden in ["requires", "assume(", "admit(", "external_body"] {
+        assert!(
+            generated
+                .contains("fe2o3_output_0_effect_formula_v1(fe2o3_ieee_operator_congruence_v2);")
+        );
+        for forbidden in ["requires", "assume(", "admit(", "external_body", "uninterp"] {
             assert!(!generated.contains(forbidden));
         }
         assert_eq!(
