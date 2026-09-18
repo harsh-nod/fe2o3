@@ -248,6 +248,30 @@ pub(crate) fn with_backend_erased_bound_v1(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ),
 ) {
+    with_backend_erased_roster_v1(
+        expected,
+        roots,
+        profile,
+        |source, bound, verification, budget| {
+            next(source, bound, budget);
+            drop(verification);
+        },
+    );
+}
+
+/// Transfers only the genuine normal-projector roster, which this fixture has
+/// never signed. It is suitable for custody/refusal tests, not proof success.
+pub(crate) fn with_backend_erased_roster_v1(
+    expected: bool,
+    roots: usize,
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionUnitLocalErasedSourceOwnerV1,
+        fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
     use fe2o3_kernel_ir::{
         CanonicalKernelIrVerificationResourceBudgetV1 as B, CanonicalKernelIrWorkBudgetV1 as W,
         VerifiedCanonicalKernelIrModuleV12 as V,
@@ -301,9 +325,8 @@ pub(crate) fn with_backend_erased_bound_v1(
         .unwrap();
     drop(binding);
     let floor = budget.storage();
-    next(source, bound, &mut budget);
+    next(source, bound, verification, &mut budget);
     assert_eq!(budget.storage(), floor);
-    drop(verification);
     budget
         .release_storage(
             original_storage + source_receipt.retained_storage() + bound_receipt.retained_storage(),

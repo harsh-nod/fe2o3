@@ -705,41 +705,43 @@ fn float_checked_history_cannot_be_transplanted_between_source_bodies() {
 }
 
 #[test]
-fn admitted_source_float_division_is_not_a_raw_empty_policy3_recipe() {
-    for bits in [32, 64] {
-        // This first proves ordinary semantic MIR admission, not helper policy
-        // admission. The general source census must still refuse division.
-        assert!(
-            float_request(bits, SemanticBinaryOpV1::Divide)
-                .admit_current_production(SemanticMirLimitsV1::default())
-                .is_ok()
-        );
-        with_prepared(
-            prepare(
-                float_receipt(bits, SemanticBinaryOpV1::Divide),
-                Profile::Gfx942,
-                None,
-            ),
-            |input, budget| {
-                let floor = budget.storage();
-                let result = AdmittedOutput::try_admit_general_v1(
-                    input.receipt,
-                    input.bound,
-                    input.output,
-                    budget,
-                );
-                assert!(matches!(
-                    result,
-                    Err(AdmissionError::Unsupported {
-                        phase: "source",
-                        detail: "total scalar/global recipe; no unchecked arithmetic",
-                    })
-                ));
-                assert_eq!(budget.storage(), floor);
-            },
-        );
-    }
+fn admitted_source_f64_division_is_not_a_raw_empty_policy3_recipe() {
+    let bits = 64;
+    // This first proves ordinary semantic MIR admission, not helper policy
+    // admission. The general source census must still refuse F64 division.
+    assert!(
+        float_request(bits, SemanticBinaryOpV1::Divide)
+            .admit_current_production(SemanticMirLimitsV1::default())
+            .is_ok()
+    );
+    with_prepared(
+        prepare(
+            float_receipt(bits, SemanticBinaryOpV1::Divide),
+            Profile::Gfx942,
+            None,
+        ),
+        |input, budget| {
+            let floor = budget.storage();
+            let result = AdmittedOutput::try_admit_general_v1(
+                input.receipt,
+                input.bound,
+                input.output,
+                budget,
+            );
+            assert!(matches!(
+                result,
+                Err(AdmissionError::Unsupported {
+                    phase: "source",
+                    detail: "total scalar/global recipe; no unchecked arithmetic",
+                })
+            ));
+            assert_eq!(budget.storage(), floor);
+        },
+    );
 }
+
+#[path = "production_checked_output_f32_arithmetic_v1_tests.rs"]
+mod f32_arithmetic;
 
 #[test]
 fn actual_float_policy4_admission_restores_floor_at_exact_and_one_short_resources() {

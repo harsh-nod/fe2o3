@@ -11,6 +11,9 @@ mod original_source_replay_tests;
 #[path = "production_source_output_erased_v1_tests.rs"]
 mod erased_occurrence_tests;
 
+#[path = "native_erased_source_staging_v1_tests.rs"]
+mod native_staging_tests;
+
 type ErasedOwner = ProductionUnitLocalErasedSourceOwnerV1;
 
 fn erased_input_floor(

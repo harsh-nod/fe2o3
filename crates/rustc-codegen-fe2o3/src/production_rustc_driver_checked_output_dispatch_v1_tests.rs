@@ -32,7 +32,7 @@ impl Route {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct RouteObservation {
     route: Route,
     original_helpers: usize,
@@ -167,15 +167,22 @@ impl Stage {
         }
     }
 
-    pub(super) fn into_direct_proof_probe(
-        self,
-    ) -> Result<CheckedOutputTargetProductionCompilation, SourceFailure> {
+    pub(super) fn retained_storage_floor_v1(&self) -> usize {
         match self {
-            Self::Direct(stage) => Ok(*stage),
-            Self::Erased(_) => Err(SourceFailure::new(
-                SourceStage::NativeSourceProof,
-                "erased source has no protected native-lineage producer; legacy N-only proof probe is unavailable",
-            )),
+            Self::Direct(stage) => stage.retained_storage_floor_v1(),
+            Self::Erased(stage) => stage.retained_storage_floor_v1(),
+        }
+    }
+
+    /// Calls the actual owning producer. An unexpected prepared success is
+    /// dropped and returned as Ok, which the unsigned parent must reject.
+    pub(super) fn probe_native_source_lineage_v1(
+        self,
+        budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<(), ProductionPipelineError> {
+        match self {
+            Self::Direct(stage) => stage.prepare_native_source_lineage_v1(budget).map(drop),
+            Self::Erased(stage) => stage.prepare_native_source_lineage_v1(budget).map(drop),
         }
     }
 

@@ -408,6 +408,23 @@ This is not default activation or protected publication: the historical direct
 constructor still refuses UnitLocal, extraction still requires extraction-only
 custody, and the typed N/E proof-to-protected-native consuming join remains open.
 
+The distinct `prepare_native_source_lineage_v1` consuming stage now retains the
+original authenticated ranked roster, original N native packet, typed N/E proof,
+collector bindings and actual-O artifacts together. Packet assembly is shared
+with the direct route, but erased source is never converted into a direct/N-only
+owner. Ordered staging commitments come from the same original source owner;
+they do not independently authenticate signing or execution. A paid comparison
+joins the proof's semantic identity and complete catalog bytes to actual O.
+The new state is not a protected artifact or launch capability, and its final
+protected consumer remains unconnected.
+
+The ordinary private-helper source test first requires genuine silent-Unit
+erasure and actual-O native output, then reruns the owning lineage producer.
+Without approved signed ranked execution it must return the precise
+missing-receipt error, preserve its resource floor, and release no LLVM or
+descriptor output. The direct fill rejection remains covered. These unsigned
+tests do not qualify successful signed production execution.
+
 The ranked projector also represents eligible whole scalar-private root loads
 and stores as one-element private views at index zero. A paid per-function
 census excludes arguments, nonscalar storage, every projected use, borrows,
@@ -483,13 +500,38 @@ locals and copy edges; it is not a new alias, initialization or borrow theorem.
 The helper census requires complete empty memory effects and a closed scalar
 opcode set. F32/F64 constants, comparisons, selects and strict add/subtract/
 multiply are admitted without reassociation, contraction or fast-math permission.
-Float casts, division, remainder, negation, narrower float formats, pointers,
+Exact F32 negation and division are also admitted for roots and retained scalar
+helpers. Native lowering emits plain `fneg float` and `fdiv float`; it does not
+replace division with a reciprocal or apply integer nonzero checks to F32.
+Float casts, F64 division/negation, float remainder, narrower formats, pointers,
 aggregates, helper traps, external calls and recursion remain outside this subset.
 Calls remain ordered and block private
 store forwarding. This does not establish termination, helper-result bounds or
 extent facts, optimizer purity, or general tutorial-helper support. Policy4
 continues to forward only its admitted integer loads, not Bool loads. The
-existing actual-inventory nonzero checks still govern division and remainder.
+existing actual-inventory nonzero checks still govern integer division and
+remainder.
+
+The F32 component tests retain a real global output write and exercise both
+direct and retained-helper forms through source/N/B/C/O replay on both target
+profiles. The actual-O CPU model uses bit-exact sign inversion for negation and
+nearest-ties-to-even software division. Its vectors include signed zero,
+subnormals, infinities, rounding, overflow, underflow and dynamic NaNs. Division
+NaNs are compared by classification, not by a claimed native payload/sign
+choice. Literal NaN constants remain refused by native emission because its
+widened hexadecimal spelling cannot preserve every payload; exact source-NaN
+payload mutations still fail correspondence. Native text and descriptor replay
+is not LLVM execution, hardware qualification or protected artifact authority.
+
+`ordinary_rust_f32_arithmetic_reaches_actual_o_native_and_simulator` adds four
+ordinary-Rust source configurations: direct negation/division on normal MIR and
+scalar-helper variants with test-only `-Zinline-mir=no`. It requires actual O's
+two dynamic F32 inputs, output-slice ABI, retained arithmetic, and the expected
+helper call count. Its 56 scenarios each run twice across zero-length and
+workgroup-boundary output sizes, checking initialization, scalar preservation
+and canaries. Strict native `fneg`/`fdiv` and numerical attributes are checked
+after the ordinary actual-output handoff; no workload-name compiler dispatch is
+introduced. The existing fill, vecadd and scalar-GEMM oracles are unchanged.
 
 `ordinary_rust_shared_unit_helper_reaches_checked_native_output` exercises the
 ordinary two-root Rust fixture through the same callback as fill and vecadd.
@@ -545,3 +587,30 @@ The historical V2 optimizer report proves deterministic structural replay,
 not semantic equivalence. The canonical migration adds independent checks for
 specific scalar/CFG transformations; those checks do not establish universal
 compiler correctness or replace final source, memory and refinement admission.
+
+## Typed integer saturation
+
+Semantic MIR V30 adds exact signed/unsigned 8/16/32/64-bit saturating Add and
+Subtract. It inherits the ordinary V28 grammar, not the inert V29 Execution
+grammar. Content-based production checks and closed codec tags keep Execution
+unavailable even when a request also contains saturation. Old wire bytes remain
+unchanged; 128-bit, mixed-sign, floating-point and pointer operations are refused.
+
+The rustc adapter requires actual intrinsic metadata, an exact safe Rust
+`(T, T) -> T` signature and nounwind metadata. Retained primitive core wrappers
+are authenticated separately and their bodies still traverse collection. KIR
+lowering evaluates each operand once and uses the existing checked arithmetic
+result zero, an explicit overflow predicate and a clamp select. It neither
+introduces partial plain integer arithmetic nor assumes the unused overflow
+result proves source correspondence. Source expression reconstruction requires
+a unique unescaped call destination and bounded all-path lifetime checks.
+
+The ordinary-source regression enumerates ten integer body types, Add/Sub and
+normal/retained-wrapper MIR. The typed launch macro requires literal primitive
+spellings; pointer-sized body cases use explicit i64/u64 launch arguments on
+the AMD64 test lane. This does not add usize/isize launch-argument support.
+Actual optimized output is checked against an independent widened-integer
+clamping oracle, including backing bytes, initialization and canaries. Retained
+helper transport and exact source/N/B/C/O replay are not functional reference
+proofs through arbitrary Defined-helper results; that separate relation remains
+required and fail-closed. No protected/default or hardware authority is added.

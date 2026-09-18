@@ -357,6 +357,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes V30 typed integer saturation without V29 capability content.
+    pub fn decode_exact_v30_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V30),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -398,11 +410,13 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V14
                         | SemanticMirWireVersionV1::V15
                         | SemanticMirWireVersionV1::V28
+                        | SemanticMirWireVersionV1::V30
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
                     ));
                 }
+                saturating_integer_v30::check_current_production_content(&request)?;
                 request.admit_for_wire_version(wire_version, limits)?
             }
         };
@@ -1670,7 +1684,9 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V29 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V30 {
+            87
+        } else if self.wire_version == SemanticMirWireVersionV1::V29 {
             86
         } else if self.wire_version >= SemanticMirWireVersionV1::V15 {
             68
@@ -1698,7 +1714,9 @@ impl<'a> CanonicalDecoderV1<'a> {
         let offset = self.offset;
         let tag = self.tagged("compiler intrinsic", maximum_tag)?;
         // Historical capability drafts and synthetic scope exit are not callable grammar.
-        if matches!(tag, 69..=80 | 83) {
+        if matches!(tag, 69..=80 | 83)
+            || (matches!(tag, 81..=86) && self.wire_version != SemanticMirWireVersionV1::V29)
+        {
             return Err(SemanticMirDecodeErrorV1::InvalidTag {
                 context: "compiler intrinsic",
                 offset,
@@ -1706,6 +1724,13 @@ impl<'a> CanonicalDecoderV1<'a> {
             });
         }
         Ok(match tag {
+            87 => SemanticCompilerIntrinsicOperationV1::SaturatingInteger(
+                match self.tagged("saturating integer operation", 1)? {
+                    0 => SemanticSaturatingIntegerOpV1::Add,
+                    1 => SemanticSaturatingIntegerOpV1::Subtract,
+                    _ => unreachable!(),
+                },
+            ),
             81 => SemanticCompilerIntrinsicOperationV1::Execution(
                 SemanticExecutionOperationV29::ContextIssue {
                     context: SemanticTypeIdV1(self.u32()?),
@@ -2757,6 +2782,7 @@ mod tests {
     mod capability_v29_tests;
     mod frozen_v15;
     mod rust_call_local_tests;
+    mod saturating_integer_v30_tests;
 
     fn identity(tag: u8) -> [u8; 32] {
         [tag; 32]

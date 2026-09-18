@@ -9,6 +9,7 @@ mod analysis_multi_split_v1;
 mod canonical_assertion_facts_v1;
 mod materialized_callable_effect_v1;
 mod ranked_projection_source_v1;
+mod saturating_integer_expression_v2;
 mod scalar_singleton_projection_v1;
 mod slice_projection_v1;
 use slice_projection_v1::ProjectedViewsV1;
@@ -17,7 +18,7 @@ use slice_projection_v1::ProjectedViewsV1;
 pub(crate) use tests::{
     with_backend_checked_output_policy3_roster_v1, with_backend_checked_output_policy3_v1,
     with_backend_checked_output_policy4_owned_v1, with_backend_checked_output_policy4_v1,
-    with_backend_erased_bound_v1,
+    with_backend_erased_bound_v1, with_backend_erased_roster_v1,
 };
 
 use analysis_multi_split_v1::{
@@ -2109,7 +2110,8 @@ fn scalar_defined_callable_intrinsic_eligibility_v1(
     scalar_eligible: bool,
 ) -> DefinedCallableTerminatorEligibilityV1 {
     match operation {
-        SemanticCompilerIntrinsicOperationV1::FabsF32 => {
+        SemanticCompilerIntrinsicOperationV1::FabsF32
+        | SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_) => {
             DefinedCallableTerminatorEligibilityV1::shared(scalar_eligible)
         }
         SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
@@ -3727,7 +3729,8 @@ fn projected_reference_gpu_writes_v2(
     }
     let mut writes = Vec::new();
     let mut expressions =
-        GpuSemanticExpressionResolverV2::with_ranked_reads(types, function, blocks, sources)?;
+        GpuSemanticExpressionResolverV2::with_ranked_reads(types, function, blocks, sources)?
+            .with_scalar_callables_v1(callables)?;
     for source in sources
         .iter()
         .filter(|source| source.access.writes_memory())
@@ -3828,6 +3831,8 @@ struct GpuSemanticExpressionResolverV2<'a> {
     work: usize,
     loads: HashMap<*const SemanticRvalueV1, ProductionSemanticLoadV2>,
     place_loads: HashMap<*const SemanticPlaceV1, ProductionSemanticLoadV2>,
+    scalar_callables: &'a [SemanticCallableDeclV1],
+    scalar_calls: Vec<Option<(usize, &'a SemanticDirectCallV1)>>,
 }
 
 fn semantic_rvalue_read_places_v2<'a>(
@@ -3911,6 +3916,8 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             work: 0,
             loads: HashMap::new(),
             place_loads: HashMap::new(),
+            scalar_callables: &[],
+            scalar_calls: Vec::new(),
         })
     }
 
@@ -11516,6 +11523,7 @@ fn compiler_intrinsic_is_pure_total_scalar_dependency_v1(
     matches!(
         operation,
         SemanticCompilerIntrinsicOperationV1::FabsF32
+            | SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_)
             | SemanticCompilerIntrinsicOperationV1::MathF32 { .. }
             | SemanticCompilerIntrinsicOperationV1::Bf16Conversion { .. }
             | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor { .. }
@@ -24808,6 +24816,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_02_tests.rs");
     include!("production_ranked_projection_v1/projection_03_tests.rs");
     include!("production_ranked_projection_v1/aggregate_value_projection_v2_tests.rs");
+    include!("production_ranked_projection_v1/saturating_integer_expression_v2_tests.rs");
     include!("production_ranked_projection_v1/read_source_index_v1_tests.rs");
     include!("production_ranked_projection_v1/statement_definition_index_v1_tests.rs");
     include!("production_ranked_projection_v1/write_only_value_projection_v2_tests.rs");

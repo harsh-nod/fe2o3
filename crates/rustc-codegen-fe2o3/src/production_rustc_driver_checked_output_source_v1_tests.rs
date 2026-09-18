@@ -199,14 +199,14 @@ impl Callbacks for CheckedOutputCallbacks {
                     observation.reads += 1;
                 }
             }
-            if let Some(case) = simulation::requested()? {
+            let simulation_case = simulation::requested()?;
+            if let Some(case) = simulation_case {
                 observation.simulation =
                     Some(self.progress.run(SourceStage::Simulation, || {
                         simulation::observe(stage.output().canonical(), case)
                     })?);
             }
             if self.probe_missing_proof {
-                let stage = stage.into_direct_proof_probe()?;
                 use crate::production_native_source_lineage_v1::NativeSourceLineageErrorV1;
                 use crate::production_pipeline::{
                     ProductionPipelineError, checked_output_policy4_v1::CheckedOutputStageErrorV1,
@@ -225,7 +225,7 @@ impl Callbacks for CheckedOutputCallbacks {
                     .reserve_storage(floor)
                     .map_err(|e| SourceFailure::new(SourceStage::NativeSourceProof, e))?;
                 let refused = self.progress.run(SourceStage::NativeSourceProof, || {
-                    stage.prepare_native_source_lineage_v1(&mut budget)
+                    stage.probe_native_source_lineage_v1(&mut budget)
                 });
                 assert_eq!(budget.storage(), floor);
                 match refused {
@@ -263,6 +263,9 @@ impl Callbacks for CheckedOutputCallbacks {
             let llvm = std::str::from_utf8(handoff.module_bytes())
                 .map_err(|e| SourceFailure::new(SourceStage::NativeHandoff, e))?;
             assert!(llvm.contains("amdgpu_kernel"));
+            if let Some(case) = simulation_case {
+                simulation::check_native_arithmetic(case, llvm)?;
+            }
             observation.llvm_bytes = llvm.len();
             observation.descriptor_roots = descriptor.table().kernels().len();
             Ok(observation)
@@ -419,6 +422,7 @@ fn ordinary_rust_private_unit_helper_reaches_checked_native_output() {
 }
 
 enum OrdinarySourceCase {
+    SaturatingInteger(saturating_source::Config),
     Fill,
     Vecadd,
     WrappedFill,
@@ -426,6 +430,10 @@ enum OrdinarySourceCase {
     SharedUnitHelper,
     PrivateUnitHelper,
     RetainedPrivateUnitHelper,
+    F32Negate,
+    F32Divide,
+    RetainedF32Negate,
+    RetainedF32Divide,
 }
 
 fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
@@ -475,7 +483,20 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         {
             continue;
         }
+        let saturation_name = match case {
+            OrdinarySourceCase::SaturatingInteger(config) => config.name(),
+            _ => String::new(),
+        };
         let (name, package_path, feature, roots, reads, writes, calls) = match case {
+            OrdinarySourceCase::SaturatingInteger(config) => (
+                saturation_name.as_str(),
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("saturating-integer"),
+                &["saturating_integer"][..],
+                0,
+                1,
+                usize::from(config.retained),
+            ),
             OrdinarySourceCase::Fill => ("fill", "examples/fill", None, &["fill"][..], 0, 1, 0),
             OrdinarySourceCase::Vecadd => {
                 ("vecadd", "examples/vecadd", None, &["vecadd"][..], 2, 1, 0)
@@ -506,6 +527,42 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
                 0,
                 2,
                 2,
+            ),
+            OrdinarySourceCase::F32Negate => (
+                "f32-negate",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("f32-negate"),
+                &["f32_negate"][..],
+                0,
+                1,
+                0,
+            ),
+            OrdinarySourceCase::F32Divide => (
+                "f32-divide",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("f32-divide"),
+                &["f32_divide"][..],
+                0,
+                1,
+                0,
+            ),
+            OrdinarySourceCase::RetainedF32Negate => (
+                "retained-f32-negate",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("f32-helper-negate"),
+                &["f32_helper_negate"][..],
+                0,
+                1,
+                1,
+            ),
+            OrdinarySourceCase::RetainedF32Divide => (
+                "retained-f32-divide",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("f32-helper-divide"),
+                &["f32_helper_divide"][..],
+                0,
+                1,
+                1,
             ),
             OrdinarySourceCase::PrivateUnitHelper
             | OrdinarySourceCase::RetainedPrivateUnitHelper => (
@@ -571,9 +628,18 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         if let Some(feature) = feature {
             args.push(format!("--cfg=feature=\"{feature}\""));
         }
+        if let OrdinarySourceCase::SaturatingInteger(config) = case {
+            config.configure(&mut args);
+        }
         // Qualify both real frontend shapes. This changes only rustc's test
         // invocation, never the fixed fe2o3 optimizer or its admission policy.
         if matches!(case, OrdinarySourceCase::RetainedWrappedFill) {
+            args.push("-Zinline-mir=no".into());
+        }
+        if matches!(
+            case,
+            OrdinarySourceCase::RetainedF32Negate | OrdinarySourceCase::RetainedF32Divide
+        ) {
             args.push("-Zinline-mir=no".into());
         }
         if matches!(case, OrdinarySourceCase::RetainedPrivateUnitHelper) {
@@ -616,6 +682,9 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
             );
         progress::clear_inherited_jobserver(&mut command);
         let simulation_case = match case {
+            OrdinarySourceCase::SaturatingInteger(config) => {
+                Some(simulation::Case::SaturatingInteger(config.operation))
+            }
             OrdinarySourceCase::Fill
             | OrdinarySourceCase::WrappedFill
             | OrdinarySourceCase::RetainedWrappedFill
@@ -623,6 +692,12 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
             | OrdinarySourceCase::RetainedPrivateUnitHelper => Some(simulation::Case::Fill),
             OrdinarySourceCase::Vecadd => Some(simulation::Case::Vecadd),
             OrdinarySourceCase::SharedUnitHelper => None,
+            OrdinarySourceCase::F32Negate | OrdinarySourceCase::RetainedF32Negate => {
+                Some(simulation::Case::F32Negate)
+            }
+            OrdinarySourceCase::F32Divide | OrdinarySourceCase::RetainedF32Divide => {
+                Some(simulation::Case::F32Divide)
+            }
         };
         simulation::configure_child(&mut command, simulation_case);
         snapshots::configure_child(&mut command, name);
@@ -658,7 +733,31 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
             assert_eq!(result.helper_calls, calls);
             assert_eq!(result.internal_helpers == 0, calls == 0);
         }
+        if matches!(
+            case,
+            OrdinarySourceCase::F32Negate
+                | OrdinarySourceCase::F32Divide
+                | OrdinarySourceCase::RetainedF32Negate
+                | OrdinarySourceCase::RetainedF32Divide
+        ) {
+            assert_eq!(
+                dispatch::check_private_helper_route(&result, false).unwrap(),
+                dispatch::Route::DirectRawEmpty
+            );
+            eprintln!(
+                "ordinary F32 source {name}: actual O helpers={}, calls={}; -Zinline-mir=no={}",
+                result.internal_helpers,
+                result.helper_calls,
+                matches!(
+                    case,
+                    OrdinarySourceCase::RetainedF32Negate | OrdinarySourceCase::RetainedF32Divide
+                )
+            );
+        }
         assert_eq!((result.reads, result.writes), (reads, writes));
+        if let OrdinarySourceCase::SaturatingInteger(config) = case {
+            config.check(&result);
+        }
         assert_eq!(result.formal_accesses, reads + writes);
         assert_eq!(
             result.runtime_domains,
@@ -678,9 +777,21 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
             "actual-source checked native output {name}: {result:?}\n{}",
             String::from_utf8_lossy(&child.stdout)
         );
-        if name == "fill" {
+        if matches!(
+            case,
+            OrdinarySourceCase::Fill | OrdinarySourceCase::PrivateUnitHelper
+        ) {
+            let erased_probe = matches!(case, OrdinarySourceCase::PrivateUnitHelper);
+            if erased_probe {
+                assert_eq!(
+                    dispatch::check_private_helper_route(&result, true).unwrap(),
+                    dispatch::Route::SilentUnitLocal,
+                    "normal-MIR source must reach genuine silent Unit erasure before its proof probe"
+                );
+            }
             let expected_output = result.output_digest;
-            let proof_response = scratch.path().join("fill-proof-refusal.json");
+            let expected_route = result.source_route;
+            let proof_response = scratch.path().join(format!("{name}-proof-refusal.json"));
             simulation::configure_child(&mut command, None);
             snapshots::configure_child(&mut command, &format!("{name}-missing-proof"));
             let probe = output(
@@ -692,6 +803,13 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
                 serde_json::from_slice(&std::fs::read(proof_response).unwrap()).unwrap();
             let result = result.unwrap();
             assert!(result.missing_proof_refused);
+            assert_eq!(result.source_route, expected_route);
+            if erased_probe {
+                assert_eq!(
+                    dispatch::check_private_helper_route(&result, true).unwrap(),
+                    dispatch::Route::SilentUnitLocal
+                );
+            }
             assert_eq!(result.transparent_result_wrappers, Some(0));
             assert!(result.simulation.is_none());
             assert_eq!(
@@ -715,9 +833,13 @@ mod corpus;
 mod corpus_cargo;
 #[path = "production_rustc_driver_checked_output_dispatch_v1_tests.rs"]
 mod dispatch;
+#[path = "production_rustc_driver_checked_output_f32_source_v1_tests.rs"]
+mod f32_source;
 #[path = "production_rustc_driver_checked_output_progress_v1_tests.rs"]
 mod progress;
 #[path = "production_rustc_driver_checked_output_runtime_domains_v1_tests.rs"]
 mod runtime_domains;
+#[path = "production_rustc_driver_checked_output_saturating_source_v1_tests.rs"]
+mod saturating_source;
 #[path = "production_rustc_driver_checked_output_simulation_v1_tests.rs"]
 mod simulation;
