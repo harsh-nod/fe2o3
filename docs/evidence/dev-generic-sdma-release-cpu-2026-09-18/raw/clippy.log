@@ -1,0 +1,130 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kfd)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+error: replacing an `Option` with `Some(..)`
+   --> crates/fe2o3-kfd/src/sdma/retained_release/generic_fixture.rs:106:28
+    |
+106 |             let original = std::mem::replace(&mut owners(&mut set)[0].$field, $replacement);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider `Option::replace()` instead: `owners(&mut set)[0].$field.replace(2)`
+...
+117 |         1 => scoped!(engine_index, Some(2)),
+    |              ------------------------------ in this macro invocation
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#mem_replace_option_with_some
+    = note: `-D clippy::mem-replace-option-with-some` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::mem_replace_option_with_some)]`
+    = note: this error originates in the macro `scoped` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: replacing a value of type `T` with `T::default()` is better expressed using `std::mem::take`
+   --> crates/fe2o3-kfd/src/sdma/retained_release/generic_fixture.rs:106:28
+    |
+106 |             let original = std::mem::replace(&mut owners(&mut set)[0].$field, $replacement);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+126 |         6 => scoped!(records, Vec::new()),
+    |              ---------------------------- in this macro invocation
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#mem_replace_with_default
+    = note: `-D clippy::mem-replace-with-default` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::mem_replace_with_default)]`
+    = note: this error originates in the macro `scoped` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: replacing a value of type `T` with `T::default()` is better expressed using `std::mem::take`
+   --> crates/fe2o3-kfd/src/sdma/retained_release/generic_fixture.rs:106:28
+    |
+106 |             let original = std::mem::replace(&mut owners(&mut set)[0].$field, $replacement);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+127 |         7 => scoped!(xgmi_records, Vec::new()),
+    |              --------------------------------- in this macro invocation
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#mem_replace_with_default
+    = note: this error originates in the macro `scoped` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: replacing a value of type `T` with `T::default()` is better expressed using `std::mem::take`
+   --> crates/fe2o3-kfd/src/sdma/retained_release/generic_fixture.rs:106:28
+    |
+106 |             let original = std::mem::replace(&mut owners(&mut set)[0].$field, $replacement);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+128 |         8 => scoped!(persistent_window_slots, Vec::new()),
+    |              -------------------------------------------- in this macro invocation
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#mem_replace_with_default
+    = note: this error originates in the macro `scoped` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: replacing a value of type `T` with `T::default()` is better expressed using `std::mem::take`
+   --> crates/fe2o3-kfd/src/sdma/retained_release/generic_fixture.rs:106:28
+    |
+106 |             let original = std::mem::replace(&mut owners(&mut set)[0].$field, $replacement);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+129 |         9 => scoped!(persistent_window_records, Vec::new()),
+    |              ---------------------------------------------- in this macro invocation
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#mem_replace_with_default
+    = note: this error originates in the macro `scoped` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: replacing an `Option` with `None`
+   --> crates/fe2o3-kfd/src/sdma/retained_release/generic_fixture.rs:106:28
+    |
+106 |             let original = std::mem::replace(&mut owners(&mut set)[0].$field, $replacement);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider `Option::take()` instead: `owners(&mut set)[0].$field.take()`
+...
+130 |         10 => scoped!(ring, None),
+    |               ------------------- in this macro invocation
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#mem_replace_option_with_none
+    = note: `-D clippy::mem-replace-option-with-none` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::mem_replace_option_with_none)]`
+    = note: this error originates in the macro `scoped` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: replacing an `Option` with `None`
+   --> crates/fe2o3-kfd/src/sdma/retained_release/generic_fixture.rs:106:28
+    |
+106 |             let original = std::mem::replace(&mut owners(&mut set)[0].$field, $replacement);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider `Option::take()` instead: `owners(&mut set)[0].$field.take()`
+...
+131 |         11 => scoped!(control, None),
+    |               ---------------------- in this macro invocation
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#mem_replace_option_with_none
+    = note: this error originates in the macro `scoped` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: replacing an `Option` with `None`
+   --> crates/fe2o3-kfd/src/sdma/retained_release/generic_fixture.rs:106:28
+    |
+106 |             let original = std::mem::replace(&mut owners(&mut set)[0].$field, $replacement);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider `Option::take()` instead: `owners(&mut set)[0].$field.take()`
+...
+132 |         12 => scoped!(completions, None),
+    |               -------------------------- in this macro invocation
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#mem_replace_option_with_none
+    = note: this error originates in the macro `scoped` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: replacing an `Option` with `None`
+   --> crates/fe2o3-kfd/src/sdma/retained_release/generic_fixture.rs:106:28
+    |
+106 |             let original = std::mem::replace(&mut owners(&mut set)[0].$field, $replacement);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider `Option::take()` instead: `owners(&mut set)[0].$field.take()`
+...
+133 |         13 => scoped!(doorbell, None),
+    |               ----------------------- in this macro invocation
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#mem_replace_option_with_none
+    = note: this error originates in the macro `scoped` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: replacing an `Option` with `Some(..)`
+   --> crates/fe2o3-kfd/src/sdma/retained_release/generic_fixture.rs:106:28
+    |
+106 |             let original = std::mem::replace(&mut owners(&mut set)[0].$field, $replacement);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider `Option::replace()` instead: `owners(&mut set)[0].$field.replace(ticket)`
+...
+142 |             scoped!(uncertain_xgmi_ticket, Some(ticket));
+    |             -------------------------------------------- in this macro invocation
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#mem_replace_option_with_some
+    = note: this error originates in the macro `scoped` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: could not compile `fe2o3-kfd` (lib test) due to 10 previous errors
+warning: build failed, waiting for other jobs to finish...

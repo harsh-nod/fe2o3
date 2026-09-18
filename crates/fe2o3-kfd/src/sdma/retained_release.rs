@@ -1,4 +1,4 @@
-//! Borrowed directional teardown, rooted before any destructive operation.
+//! Borrowed single/directional teardown, rooted before any destructive operation.
 
 #![forbid(unsafe_code)]
 
@@ -51,7 +51,7 @@ impl SdmaReleaseMemoryV1 for SharedGttMemorySessionV1 {
         self.release_queue_resources_in_place_v1(resources)
     }
     fn sdma_release_poison(&mut self) {
-        let _ = self.quarantine_queue_composition("terminal directional SDMA release");
+        let _ = self.quarantine_queue_composition("terminal retained SDMA release");
         permanently_poison_process_global_kfd_runtime_gate_v1();
     }
 }
@@ -65,10 +65,30 @@ struct OwnerProgressV1 {
     resources: Option<SdmaResourceCleanupCustodyV1>,
 }
 
-pub(crate) struct DirectionalSdmaReleaseCustodyV1 {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RetainedSdmaReleaseProfileV1 {
+    Generic { targeted: bool },
+    Directional,
+}
+
+impl RetainedSdmaReleaseProfileV1 {
+    fn owner_indices(self) -> &'static [usize] {
+        match self {
+            Self::Generic { .. } => &[0],
+            Self::Directional => &[GFX942_SDMA_H2D_OWNER_SLOT_V1, GFX942_SDMA_D2H_OWNER_SLOT_V1],
+        }
+    }
+
+    fn requires_topology(self) -> bool {
+        !matches!(self, Self::Generic { targeted: false })
+    }
+}
+
+pub(crate) struct RetainedSdmaReleaseCustodyV1 {
     set: Gfx942SdmaQueueSetV1,
     owner: QueueKeyV1,
     primary_id: u32,
+    profile: Option<RetainedSdmaReleaseProfileV1>,
     progress: [OwnerProgressV1; 2],
     started: bool,
     resources_started: bool,
@@ -78,37 +98,57 @@ pub(crate) struct DirectionalSdmaReleaseCustodyV1 {
 }
 
 impl Gfx942SdmaQueueSetV1 {
-    pub(crate) fn supports_retained_directional_release_v1(
+    fn retained_release_profile_v1(
         &self,
-    ) -> Result<bool, Gfx942SdmaErrorV1> {
+    ) -> Result<Option<RetainedSdmaReleaseProfileV1>, Gfx942SdmaErrorV1> {
         match self {
-            Self::Directional(owners) if owners.len() == 2 => Ok(true),
+            Self::Generic(owners) => match owners.as_slice() {
+                [owner] if matches!(owner.engine_index, None | Some(0 | 1)) => {
+                    Ok(Some(RetainedSdmaReleaseProfileV1::Generic {
+                        targeted: owner.engine_index.is_some(),
+                    }))
+                }
+                _ => Err(Gfx942SdmaErrorV1::Contract("generic SDMA owner roster")),
+            },
+            Self::Directional(owners) if owners.len() == 2 => {
+                Ok(Some(RetainedSdmaReleaseProfileV1::Directional))
+            }
             Self::Directional(_) => {
                 Err(Gfx942SdmaErrorV1::Contract("directional SDMA owner roster"))
             }
             Self::TerminalRetained { .. } => Err(Gfx942SdmaErrorV1::Contract(
                 "terminal retained SDMA queues require process teardown",
             )),
-            _ => Ok(false),
+            _ => Ok(None),
         }
     }
 
-    pub(crate) fn preflight_retained_directional_release_v1(
+    pub(crate) fn supports_retained_sdma_release_v1(&self) -> Result<bool, Gfx942SdmaErrorV1> {
+        Ok(self.retained_release_profile_v1()?.is_some())
+    }
+
+    pub(crate) fn preflight_retained_sdma_release_v1(
         &self,
         key: QueueKeyV1,
         primary_id: u32,
     ) -> Result<(), Gfx942SdmaErrorV1> {
-        let Self::Directional(owners) = self else {
+        let Some(profile) = self.retained_release_profile_v1()? else {
             return Err(Gfx942SdmaErrorV1::Contract("retained SDMA release profile"));
         };
-        if owners.len() != 2 || owners[0].queue_id == owners[1].queue_id {
+        let (Self::Generic(owners) | Self::Directional(owners)) = self else {
+            unreachable!()
+        };
+        if profile == RetainedSdmaReleaseProfileV1::Directional
+            && owners[0].queue_id == owners[1].queue_id
+        {
             return Err(Gfx942SdmaErrorV1::Contract("directional SDMA owner roster"));
         }
         for (index, owner) in owners.iter().enumerate() {
             owner.require_live()?;
             if owner.owner != key
                 || owner.queue_id == primary_id
-                || owner.engine_index != Some(index as u32)
+                || (profile == RetainedSdmaReleaseProfileV1::Directional
+                    && owner.engine_index != Some(index as u32))
                 || owner.records.len() != GFX942_SDMA_RING_SLOT_COUNT_V1
                 || owner.xgmi_records.len() != GFX942_SDMA_RING_SLOT_COUNT_V1
                 || owner.persistent_window_slots.len() != GFX942_SDMA_RING_SLOT_COUNT_V1
@@ -117,9 +157,7 @@ impl Gfx942SdmaQueueSetV1 {
                 || owner.control.is_none()
                 || owner.completions.is_none()
             {
-                return Err(Gfx942SdmaErrorV1::Contract(
-                    "directional SDMA release owners",
-                ));
+                return Err(Gfx942SdmaErrorV1::Contract("retained SDMA release owners"));
             }
             if owner.records.iter().any(Option::is_some)
                 || owner.xgmi_records.iter().any(Option::is_some)
@@ -140,12 +178,13 @@ impl Gfx942SdmaQueueSetV1 {
     }
 }
 
-impl DirectionalSdmaReleaseCustodyV1 {
+impl RetainedSdmaReleaseCustodyV1 {
     pub(crate) fn new(set: Gfx942SdmaQueueSetV1, owner: QueueKeyV1, primary_id: u32) -> Self {
         Self {
             set,
             owner,
             primary_id,
+            profile: None,
             progress: std::array::from_fn(|_| OwnerProgressV1::default()),
             started: false,
             resources_started: false,
@@ -164,7 +203,9 @@ impl DirectionalSdmaReleaseCustodyV1 {
             Ok(Ok(())) => Ok(()),
             result => {
                 self.failed = true;
-                if let Gfx942SdmaQueueSetV1::Directional(owners) = &mut self.set {
+                if let Gfx942SdmaQueueSetV1::Generic(owners)
+                | Gfx942SdmaQueueSetV1::Directional(owners) = &mut self.set
+                {
                     for owner in owners {
                         owner.poisoned = true;
                     }
@@ -189,12 +230,21 @@ impl DirectionalSdmaReleaseCustodyV1 {
         self.started = true;
         let result = catch_unwind(AssertUnwindSafe(|| {
             self.set
-                .preflight_retained_directional_release_v1(self.owner, self.primary_id)?;
-            memory.sdma_release_topology()?;
-            let Gfx942SdmaQueueSetV1::Directional(owners) = &mut self.set else {
+                .preflight_retained_sdma_release_v1(self.owner, self.primary_id)?;
+            let profile = self
+                .set
+                .retained_release_profile_v1()?
+                .expect("preflight profile");
+            self.profile = Some(profile);
+            if profile.requires_topology() {
+                memory.sdma_release_topology()?;
+            }
+            let (Gfx942SdmaQueueSetV1::Generic(owners) | Gfx942SdmaQueueSetV1::Directional(owners)) =
+                &mut self.set
+            else {
                 unreachable!()
             };
-            for index in [GFX942_SDMA_H2D_OWNER_SLOT_V1, GFX942_SDMA_D2H_OWNER_SLOT_V1] {
+            for &index in profile.owner_indices() {
                 let owner = &mut owners[index];
                 let progress = &mut self.progress[index];
                 memory.sdma_release_currentness()?;
@@ -223,7 +273,9 @@ impl DirectionalSdmaReleaseCustodyV1 {
                 owner.poisoned = false;
                 self.destroyed += 1;
             }
-            memory.sdma_release_topology()?;
+            if profile.requires_topology() {
+                memory.sdma_release_topology()?;
+            }
             Ok(())
         }));
         self.settle(memory, result)
@@ -233,17 +285,28 @@ impl DirectionalSdmaReleaseCustodyV1 {
         &mut self,
         memory: &mut impl SdmaReleaseMemoryV1,
     ) -> Result<(), Gfx942SdmaErrorV1> {
-        if !self.started || self.failed || self.destroyed != 2 || self.resources_started {
+        let Some(profile) = self.profile else {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "SDMA resources are not releasable",
+            ));
+        };
+        if !self.started
+            || self.failed
+            || self.destroyed != profile.owner_indices().len()
+            || self.resources_started
+        {
             return Err(Gfx942SdmaErrorV1::Contract(
                 "SDMA resources are not releasable",
             ));
         }
         self.resources_started = true;
         let result = catch_unwind(AssertUnwindSafe(|| {
-            let Gfx942SdmaQueueSetV1::Directional(owners) = &mut self.set else {
+            let (Gfx942SdmaQueueSetV1::Generic(owners) | Gfx942SdmaQueueSetV1::Directional(owners)) =
+                &mut self.set
+            else {
                 unreachable!()
             };
-            for index in [GFX942_SDMA_H2D_OWNER_SLOT_V1, GFX942_SDMA_D2H_OWNER_SLOT_V1] {
+            for &index in profile.owner_indices() {
                 let owner = &mut owners[index];
                 // All owners were checked before destruction; extraction is pure and infallible.
                 self.progress[index].resources = Some(SdmaResourceCleanupCustodyV1::new_sdma(
@@ -271,6 +334,18 @@ impl DirectionalSdmaReleaseCustodyV1 {
     }
 
     pub(crate) fn is_complete(&self) -> bool {
-        !self.failed && self.destroyed == 2 && self.released == 2
+        self.profile.is_some_and(|profile| {
+            !self.failed
+                && self.destroyed == profile.owner_indices().len()
+                && self.released == profile.owner_indices().len()
+        })
+    }
+
+    pub(crate) fn additional_resource_count(&self) -> u8 {
+        match self.profile {
+            None => 0,
+            Some(RetainedSdmaReleaseProfileV1::Generic { .. }) => 3,
+            Some(RetainedSdmaReleaseProfileV1::Directional) => 6,
+        }
     }
 }

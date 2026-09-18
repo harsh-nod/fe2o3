@@ -13,6 +13,8 @@ use crate::shared_memory::{ControlCleanupCustodyV1, QueueResourceCleanupCustodyV
 mod detached_cases;
 #[path = "integration_release_fault_tests.rs"]
 mod fault_cases;
+#[path = "integration_release_generic_sdma_tests.rs"]
+mod generic_sdma_cases;
 #[path = "integration_initial_bind_tests.rs"]
 mod initial_bind_cases;
 #[path = "integration_release_late_tests.rs"]
@@ -73,7 +75,7 @@ impl PrimaryReleaseParentV1<Fixture> for Parent {
             dispatch.ensure_releasable()?;
         }
         if let Some(sdma) = &self.sdma {
-            sdma.preflight_retained_directional_release_v1(self.key, self.queue_id)?;
+            sdma.preflight_retained_sdma_release_v1(self.key, self.queue_id)?;
         }
         preflight_primary_owners_v1::<Fixture>(
             &self.engine,

@@ -1047,5 +1047,41 @@ prefix, certified lower-path six-revision headroom (without inventing a certific
 after permanent restoration), inert retries, native completed Drop, and actual
 public runtime allocate/release/shutdown selection with accounting
 and profiler events. ID-only fixtures cannot establish successful cleanup.
-Striped, Generic, LogicalMux and terminal-creation profiles remain explicit later
-requirements; this handoff implements none of them and adds no acceptance claim.
+The initial directional handoff did not implement Generic, Striped, LogicalMux
+or terminal-creation profiles. Generic is now implemented at the development
+CPU boundary below; the other profiles remain explicit later requirements.
+
+## Single SDMA Release Development
+
+`RetainedSdmaReleaseCustodyV1` extends the same retained driver to an exact
+one-owner Generic set: untargeted (`None`), engine 0 or engine 1. The original
+vector and owner stay rooted before destructive operations. A validated profile
+selects one original slot and three resources, or the existing directional
+H2D/D2H order and six resources. Primary destruction reports eight resources for
+the single-queue composition and eleven for directional. The driver adds no
+new unsafe code or success-path owner allocation.
+
+Untargeted Generic release deliberately does not consult the targeted-topology
+capability. Both targeted choices retain opening and closing topology checks;
+all profiles retain per-owner opening and closing queue currentness. Errors,
+panics, modified destroy arguments and incomplete cleanup keep the original
+owners, exact call progress and completed prefix, poison authority and forbid
+retry. Missing/malformed Generic owners or invalid engine indices are hard
+errors, never permission to fall back to consuming cleanup.
+
+Five constructed-parent test functions cover all three engine choices, success
+with/without dispatch, exact resource refunds, original vector/token identities,
+topology selection, error/panic prefixes, mutated destroy arguments and the
+last native SDMA disposal failure. Admission rows cover empty/oversized rosters,
+invalid engine/key/queue identity, non-live owners, each malformed record vector,
+missing resources/doorbell and all five pending fields. Removed genuine owners
+stay in test-local custody and are restored after borrowed preflight assertions.
+Pending-record payloads are metadata-only structural fixtures, not submitted
+ordinary, XGMI or window work. Existing lower SDMA cleanup tests cover all native
+calls, currentness boundaries and projection/commit boundaries; the new parent
+integration tests do not repeat every one of those lower boundaries.
+
+This remains R126 development. Native success/failure qualification of the three
+single-queue profiles, formal implementation correspondence and matched HIP/HSA
+performance remain unclaimed. Earlier sealed native receipts describe their
+exact historical source, not this extension.

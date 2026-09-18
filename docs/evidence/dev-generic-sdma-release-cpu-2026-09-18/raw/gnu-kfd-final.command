@@ -1,0 +1,1 @@
+env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_BUILD_JOBS=2 CARGO_TERM_COLOR=never RUST_TEST_THREADS=1 cargo test --frozen -p fe2o3-kfd --all-features --lib -- constructed_generic_release constructed_directional_release constructed_primary_release primary_release::tests shared_memory::tests::pristine_abort 

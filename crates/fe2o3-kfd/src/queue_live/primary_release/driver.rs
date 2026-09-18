@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::queue::dispatch_binding::pristine_abort::PristineControlReleaseV1;
-use crate::sdma::retained_release::{DirectionalSdmaReleaseCustodyV1, SdmaReleaseMemoryV1};
+use crate::sdma::retained_release::{RetainedSdmaReleaseCustodyV1, SdmaReleaseMemoryV1};
 use crate::shared_memory::DispatchDataReleaseV1;
 
 pub(in crate::queue::live) trait PrimaryReleaseMemoryV1:
@@ -82,7 +82,7 @@ pub(in crate::queue::live) struct PrimaryReleaseStateV1<E: PrimaryReleaseEnviron
     pub(in crate::queue::live) resources: Option<QueueResourceCleanupCustodyV1>,
     pub(in crate::queue::live) dispatch: Option<ReturningControlCleanupCustodyV1>,
     pub(in crate::queue::live) signals: Option<ControlCleanupCustodyV1>,
-    pub(in crate::queue::live) sdma: Option<DirectionalSdmaReleaseCustodyV1>,
+    pub(in crate::queue::live) sdma: Option<RetainedSdmaReleaseCustodyV1>,
     pub(in crate::queue::live) gate: Option<E::TeardownArm>,
     pub(in crate::queue::live) destroy: NativeQueueDestroyProgressV1,
     pub(in crate::queue::live) started: bool,
@@ -189,7 +189,7 @@ where
         self.sdma = parts
             .sdma
             .take()
-            .map(|set| DirectionalSdmaReleaseCustodyV1::new(set, parts.key, parts.queue_id));
+            .map(|set| RetainedSdmaReleaseCustodyV1::new(set, parts.key, parts.queue_id));
         self.gate = Some(E::arm_teardown());
         self.platform = Some(E::retain_platform(
             parts.exception.take().expect("preflight exception owner"),
@@ -249,7 +249,7 @@ where
             sdma.release_resources_in_place(memory)?;
             if !sdma.is_complete() {
                 return Err(ComputeAqlQueueSessionErrorV1::Contract(
-                    "incomplete directional SDMA release",
+                    "incomplete retained SDMA release",
                 ));
             }
         }
@@ -284,7 +284,9 @@ where
         self.complete = true;
         Ok(destroyed_queue_observation_with_additional_resources(
             parts.queue_id,
-            if self.sdma.is_some() { 6 } else { 0 },
+            self.sdma
+                .as_ref()
+                .map_or(0, RetainedSdmaReleaseCustodyV1::additional_resource_count),
         ))
     }
 }

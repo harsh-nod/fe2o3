@@ -2,6 +2,16 @@ use super::*;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 pub(super) fn with_sdma(dispatch: bool) -> (Parent, Rc<RefCell<Trace>>, LocalGateV1) {
+    with_sdma_profile(
+        dispatch,
+        crate::sdma::retained_release::fixture::directional,
+    )
+}
+
+pub(super) fn with_sdma_profile(
+    dispatch: bool,
+    create: impl FnOnce(&mut Memory, QueueKeyV1) -> Gfx942SdmaQueueSetV1,
+) -> (Parent, Rc<RefCell<Trace>>, LocalGateV1) {
     let (mut parent, t, gate) = constructed(dispatch);
     let engine = &mut parent.engine;
     let loan = engine
@@ -9,10 +19,7 @@ pub(super) fn with_sdma(dispatch: bool) -> (Parent, Rc<RefCell<Trace>>, LocalGat
         .session
         .primary_loan(&mut engine.foundation)
         .unwrap();
-    parent.sdma = Some(crate::sdma::retained_release::fixture::directional(
-        &mut engine.backend.session,
-        parent.key,
-    ));
+    parent.sdma = Some(create(&mut engine.backend.session, parent.key));
     engine
         .backend
         .session

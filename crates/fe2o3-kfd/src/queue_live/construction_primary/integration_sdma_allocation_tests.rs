@@ -323,7 +323,7 @@ fn constructed_sdma_allocation_success_preserves_extents_owners_and_refunds() {
                 .sdma
                 .as_ref()
                 .unwrap()
-                .preflight_retained_directional_release_v1(f.parent.key, f.parent.queue_id)
+                .preflight_retained_sdma_release_v1(f.parent.key, f.parent.queue_id)
                 .unwrap();
             memory.assert_original_records_unchanged(&accounting);
             memory.primary_assert_accounts_and_records(memory.primary_session_id());

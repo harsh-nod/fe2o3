@@ -1,0 +1,1 @@
+python3 -I -c import\ ast\;\ from\ pathlib\ import\ Path\;\ p\ =\ Path\(\"docs/evidence/dev-generic-sdma-release-cpu-2026-09-18/verify.py\"\)\;\ ast.parse\(p.read_text\(\)\,\ filename=str\(p\)\)\;\ print\(\"archive\ verifier\ syntax:\ PASS\"\) 

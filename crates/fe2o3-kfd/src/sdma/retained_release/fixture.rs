@@ -6,11 +6,25 @@ use crate::shared_memory::PreparationMemoryFixtureV1;
 mod creation;
 pub(crate) use creation::*;
 
+#[path = "generic_fixture.rs"]
+mod generic;
+pub(crate) use generic::*;
+
 pub(crate) fn directional(
     memory: &mut PreparationMemoryFixtureV1,
     key: QueueKeyV1,
 ) -> Gfx942SdmaQueueSetV1 {
     directional_with_ids(memory, key, 100)
+}
+
+pub(crate) fn generic(
+    memory: &mut PreparationMemoryFixtureV1,
+    key: QueueKeyV1,
+    engine: Option<u32>,
+) -> Gfx942SdmaQueueSetV1 {
+    let mut owners = creation_owners(memory, key, 100, 1);
+    owners[0].engine_index = engine;
+    Gfx942SdmaQueueSetV1::Generic(owners)
 }
 
 pub(crate) fn directional_with_ids(
@@ -71,12 +85,12 @@ fn creation_owners(
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct OwnerObservation {
-    key: QueueKeyV1,
-    id: u32,
-    engine: Option<u32>,
+    pub(crate) key: QueueKeyV1,
+    pub(crate) id: u32,
+    pub(crate) engine: Option<u32>,
     pub(crate) destroyed: bool,
     pub(crate) poisoned: bool,
-    identities: [Option<SharedGttAllocationIdentityV1>; 3],
+    pub(crate) identities: [Option<SharedGttAllocationIdentityV1>; 3],
     pub(crate) request: Option<KfdIoctlDestroyQueueArgs>,
     pub(crate) attempted: bool,
     pub(crate) result: Option<Result<(), rustix::io::Errno>>,
@@ -88,10 +102,44 @@ pub(crate) struct OwnerObservation {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct Observation {
     pub(crate) owners: Vec<OwnerObservation>,
+    roster_address: usize,
+    profile: Option<RetainedSdmaReleaseProfileV1>,
     pub(crate) state: (bool, bool, bool, usize, usize),
 }
 
-impl DirectionalSdmaReleaseCustodyV1 {
+impl Observation {
+    pub(crate) fn assert_original_owners(&self, before: &Self) {
+        assert_eq!(self.roster_address, before.roster_address);
+        assert_eq!(self.owners.len(), before.owners.len());
+        for (owner, original) in self.owners.iter().zip(&before.owners) {
+            assert_eq!(
+                (owner.key, owner.id, owner.engine),
+                (original.key, original.id, original.engine)
+            );
+            let identities = owner
+                .resources
+                .as_ref()
+                .map_or(owner.identities, |resources| {
+                    resources
+                        .controls
+                        .each_ref()
+                        .map(|control| Some(control.identity))
+                });
+            assert_eq!(identities, original.identities);
+        }
+    }
+}
+
+pub(crate) fn unreleased_observation(set: &Gfx942SdmaQueueSetV1) -> Observation {
+    observe(
+        set,
+        &std::array::from_fn(|_| OwnerProgressV1::default()),
+        None,
+        (false, false, false, 0, 0),
+    )
+}
+
+impl RetainedSdmaReleaseCustodyV1 {
     pub(crate) fn assert_late_resource_failure(
         &self,
         memory: &PreparationMemoryFixtureV1,
@@ -99,64 +147,41 @@ impl DirectionalSdmaReleaseCustodyV1 {
         occurrence: usize,
         panic: bool,
     ) {
-        let index = 2 - occurrence;
+        let indices = self.profile.unwrap().owner_indices();
+        let index = indices[occurrence - 1];
         before.assert_sdma_late_cleanup_v1(
             memory,
             self.progress[index].resources.as_ref().unwrap(),
             panic,
         );
         assert_eq!(self.released, occurrence - 1);
-        assert_eq!(self.destroyed, 2);
-        if occurrence == 1 {
-            assert!(self.progress[0].resources.is_none());
-        } else {
-            assert!(self.progress[1].resources.as_ref().unwrap().is_complete());
+        assert_eq!(self.destroyed, indices.len());
+        for &index in &indices[..occurrence - 1] {
+            assert!(
+                self.progress[index]
+                    .resources
+                    .as_ref()
+                    .unwrap()
+                    .is_complete()
+            );
+        }
+        for &index in &indices[occurrence..] {
+            assert!(self.progress[index].resources.is_none());
         }
     }
     pub(crate) fn observation(&self) -> Observation {
-        let Gfx942SdmaQueueSetV1::Directional(owners) = &self.set else {
-            panic!("fixture profile")
-        };
-        Observation {
-            owners: owners
-                .iter()
-                .enumerate()
-                .map(|(index, owner)| {
-                    let p = &self.progress[index];
-                    OwnerObservation {
-                        key: owner.owner,
-                        id: owner.queue_id,
-                        engine: owner.engine_index,
-                        destroyed: owner.destroyed,
-                        poisoned: owner.poisoned,
-                        identities: [
-                            owner.completions.as_ref().map(|t| t.storage_identity()),
-                            owner
-                                .control
-                                .as_ref()
-                                .map(PreparationMemoryFixtureV1::primary_token_identity),
-                            owner
-                                .ring
-                                .as_ref()
-                                .map(PreparationMemoryFixtureV1::primary_token_identity),
-                        ],
-                        request: p.request,
-                        attempted: p.attempted,
-                        result: p.result,
-                        doorbell: p.doorbell,
-                        doorbell_present: owner.doorbell.is_some(),
-                        resources: p.resources.as_ref().map(|r| r.observation()),
-                    }
-                })
-                .collect(),
-            state: (
+        observe(
+            &self.set,
+            &self.progress,
+            self.profile,
+            (
                 self.started,
                 self.resources_started,
                 self.failed,
                 self.destroyed,
                 self.released,
             ),
-        }
+        )
     }
 
     pub(crate) fn cleanup_local_mappings(&mut self) {
@@ -164,8 +189,57 @@ impl DirectionalSdmaReleaseCustodyV1 {
     }
 }
 
+fn observe(
+    set: &Gfx942SdmaQueueSetV1,
+    progress: &[OwnerProgressV1; 2],
+    profile: Option<RetainedSdmaReleaseProfileV1>,
+    state: (bool, bool, bool, usize, usize),
+) -> Observation {
+    let (Gfx942SdmaQueueSetV1::Generic(owners) | Gfx942SdmaQueueSetV1::Directional(owners)) = set
+    else {
+        panic!("fixture profile")
+    };
+    Observation {
+        roster_address: owners.as_ptr() as usize,
+        profile,
+        owners: owners
+            .iter()
+            .enumerate()
+            .map(|(index, owner)| {
+                let p = &progress[index];
+                OwnerObservation {
+                    key: owner.owner,
+                    id: owner.queue_id,
+                    engine: owner.engine_index,
+                    destroyed: owner.destroyed,
+                    poisoned: owner.poisoned,
+                    identities: [
+                        owner.completions.as_ref().map(|t| t.storage_identity()),
+                        owner
+                            .control
+                            .as_ref()
+                            .map(PreparationMemoryFixtureV1::primary_token_identity),
+                        owner
+                            .ring
+                            .as_ref()
+                            .map(PreparationMemoryFixtureV1::primary_token_identity),
+                    ],
+                    request: p.request,
+                    attempted: p.attempted,
+                    result: p.result,
+                    doorbell: p.doorbell,
+                    doorbell_present: owner.doorbell.is_some(),
+                    resources: p.resources.as_ref().map(|r| r.observation()),
+                }
+            })
+            .collect(),
+        state,
+    }
+}
+
 pub(crate) fn cleanup_set(set: &mut Gfx942SdmaQueueSetV1) {
-    let Gfx942SdmaQueueSetV1::Directional(owners) = set else {
+    let (Gfx942SdmaQueueSetV1::Generic(owners) | Gfx942SdmaQueueSetV1::Directional(owners)) = set
+    else {
         panic!("fixture profile")
     };
     for owner in owners {

@@ -1,0 +1,1 @@
+{"kfd_filtered_per_target": 1351, "kfd_passed_per_target": 66, "rejected_harness_mutations": 25, "runtime_ignored_per_target": 20, "runtime_passed_per_target": 1105, "scope": "CPU development checks; no native, binary-closure, performance or formal-refinement qualification", "source_files": 5555}

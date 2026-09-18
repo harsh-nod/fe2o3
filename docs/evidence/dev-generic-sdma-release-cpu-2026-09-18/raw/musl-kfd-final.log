@@ -1,0 +1,74 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized] target(s) in 48.16s
+     Running unittests src/lib.rs (target/x86_64-unknown-linux-musl/debug/deps/fe2o3_kfd-651f18105a2bee25)
+
+running 66 tests
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_currentness_failures_keep_destroy_receipt_and_memory ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_destroy_outcomes_retain_full_parent ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_failed_permanent_restore_keeps_authority_and_flag ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_native_dispatch_failures_keep_signal_and_gate ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_native_resource_failures_retain_exact_prefix_and_suffix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_native_signal_failures_keep_refunds_and_gate_pending ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_platform_prefix_errors_and_panics_keep_suffixes ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_shared_lease_does_not_disable_other_constructed_queue ... ok
+test queue::live::construction_primary::integration_tests::release_cases::constructed_primary_release_success_keeps_original_owners_and_completes_gate_last ... ok
+test queue::live::construction_primary::integration_tests::release_cases::detached_cases::constructed_primary_release_after_pristine_abort_requires_settled_detached_ledger ... ok
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_corrupt_destroy_observation_retains_exact_native_receipt ... ok
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_dispatch_data_currentness_keeps_disposal_receipts ... ok
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_dispatch_data_native_failures_keep_original_suffix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_dispatch_host_data_model_boundaries_retain_charge_truth ... ok
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_publication_commit_rejection_retains_engine_authority ... ok
+test queue::live::construction_primary::integration_tests::release_cases::fault_cases::constructed_primary_release_resource_model_boundaries_keep_native_and_model_prefixes ... ok
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_failures_keep_original_owner_and_completed_prefix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_late_native_resource_failure_keeps_real_prefix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_orders_original_owner_and_refunds_all_backing ... ok
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_rejects_malformed_or_pending_owner_without_effects ... ok
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_retains_mutated_destroy_argument_and_raw_outcome ... ok
+test queue::live::construction_primary::integration_tests::release_cases::late_cases::constructed_primary_release_late_resource_currentness_keeps_all_original_suffixes ... ok
+test queue::live::construction_primary::integration_tests::release_cases::late_cases::constructed_primary_release_signal_currentness_preserves_unsettled_disposal_receipts ... ok
+test queue::live::construction_primary::integration_tests::release_cases::late_cases::constructed_primary_release_signal_model_boundaries_keep_refunds_and_model_commits_separate ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_failures_keep_prefix_and_do_not_complete_primary ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_late_native_resource_failure_keeps_real_prefix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_orders_original_owners_and_refunds_all_backing ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_rejects_bad_second_owner_before_any_effect ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_retains_mutated_destroy_argument_and_raw_outcome ... ok
+test queue::live::primary_release::tests::primary_release_explicit_deferred_profile_is_not_admitted ... ok
+test queue::live::primary_release::tests::primary_release_missing_owner_is_error_not_legacy_profile ... ok
+test queue::live::primary_release::tests::primary_release_unfinished_drop_aborts_and_failed_preflight_keeps_parent ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_actual_commit_rejection_keeps_unmapped_or_disposed_custody ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_currentness_sweep_retains_disposed_receipt_before_final_check ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_mapping_snapshot_zero_encoding_preserves_every_byte_and_length ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_native_failure_retains_typed_control_and_exact_destructive_prefix ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_preserves_two_separate_revision_preflights_and_last_valid_commit ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_projection_failures_keep_native_disposal_distinct_from_model_commit ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_success_commits_original_model_and_exact_native_control_order ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::cleanup_unmap_outcomes_preserve_prefix_errno_precedence_without_retag ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::public_typed_disposal_bridges_route_through_retained_cleanup ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_checks_all_currentness_boundaries_and_disposal_receipts ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_all_five_inputs_and_refunds_once ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_preserves_partial_unmap_results ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_retains_native_error_and_panic_prefixes ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_cleanup_retains_terminal_receipt_on_accounting_underflow ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_consuming_wrapper_returns_success_without_retention ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_owned_wrapper_retains_errors_panics_and_incomplete_callbacks ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_data_rejection_keeps_healthy_receiving_session_unchanged ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::data::typed_host_cleanup_retains_projection_and_actual_commit_failures ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::queue::queue_cleanup_certified_revision_boundaries_preserve_exact_prefix ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::queue::queue_cleanup_currentness_sweep_preserves_userptr_reservation_and_disposal_boundaries ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::queue::queue_cleanup_four_real_resources_keep_two_phase_order_and_unrelated_backing ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::queue::queue_cleanup_model_failure_keeps_native_success_separate_from_committed_prefix ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::queue::queue_cleanup_native_failures_preserve_exact_batch_prefix_and_original_panic ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::queue::queue_cleanup_unmap_partial_results_never_retag_or_advance_failed_resource ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::sdma::sdma_cleanup_all_currentness_boundaries_retain_unsettled_disposal ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::sdma::sdma_cleanup_all_native_failures_retain_exact_prefix_and_panic ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::sdma::sdma_cleanup_exact_two_phase_order_and_account_refund ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::sdma::sdma_cleanup_projection_and_commit_boundaries_keep_native_receipts_separate ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::sdma::sdma_cleanup_requires_six_revision_headroom_before_native_effects ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::split::split_cleanup_poison_callback_panic_preserves_original_payload_and_custody ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::split::split_cleanup_projection_failures_are_terminal_in_either_phase ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::split::split_cleanup_rechecks_revision_capacity_after_other_unmaps ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::split::split_cleanup_release_currentness_failure_preserves_successful_unmap_roster ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::split::split_cleanup_unmaps_all_controls_before_releasing_any ... ok
+
+test result: ok. 66 passed; 0 failed; 0 ignored; 0 measured; 1351 filtered out; finished in 393.72s
+
