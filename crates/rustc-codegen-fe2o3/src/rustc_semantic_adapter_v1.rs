@@ -39,7 +39,7 @@ const BLOCK_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-basic-block/v1";
 const SOURCE_FILE_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-source-file/v1";
 const EXPANSION_CHAIN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-expansion-chain/v1";
 const TYPE_LAYOUT_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-type-layout/v1";
-const SEMANTIC_LAYOUT_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/semantic-layout/v1";
+const SEMANTIC_LAYOUT_DOMAIN_V2: &[u8] = b"fe2o3/semantic-mir/semantic-layout/v2";
 const SEMANTIC_FN_ABI_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-fn-abi/v1";
 const SEMANTIC_FN_ABI_LAYOUT_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-fn-abi-layout/v1";
 const RUSTC_FN_ABI_PREFLIGHT_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-fn-abi-preflight/v1";
@@ -280,21 +280,22 @@ pub(crate) fn rustc_type_layout_sha256_v1<'tcx>(
     )
 }
 
-/// Identifies target-resolved layout facts independently of the source type.
+/// Identifies target-resolved layout facts for one normalized source type.
 ///
-/// Equal rustc layouts in the same authenticated target session receive the
-/// same semantic layout identity. This is still a record identity, not
-/// compiler or artifact authority.
+/// Semantic details depend on the type even when rustc shares its physical
+/// layout (for example, unit and an empty closure). Bind both inputs, with a
+/// new digest domain so previously issued identities cannot alias this scheme.
+/// This remains a record identity, not compiler or artifact authority.
 pub(crate) fn rustc_semantic_layout_identity_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     target: SemanticTargetDataLayoutV1,
     layout: TyAndLayout<'tcx>,
 ) -> SemanticLayoutIdentityV1 {
     SemanticLayoutIdentityV1::from_sha256(domain_digest(
-        SEMANTIC_LAYOUT_DOMAIN_V1,
+        SEMANTIC_LAYOUT_DOMAIN_V2,
         &[
             target.identity().as_bytes(),
-            &stable_fingerprint!(tcx, layout.layout),
+            &rustc_type_layout_sha256_v1(tcx, layout),
         ],
     ))
 }

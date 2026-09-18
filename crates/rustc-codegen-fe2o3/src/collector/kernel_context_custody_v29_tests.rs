@@ -128,6 +128,7 @@ enum Mutation {
     ExtraIssue,
     HelperIdentity,
     ContextIdentity,
+    LayoutIdentity,
 }
 
 fn fixture(mutation: Mutation) -> AdmittedInertSemanticMirV1 {
@@ -149,7 +150,13 @@ fn fixture_roots(mutation: Mutation, roots: u8) -> AdmittedInertSemanticMirV1 {
     let declaration = |tag, layout, shape| {
         SemanticTypeDeclV1::new(
             SemanticTypeIdentityV1::from_sha256([tag; 32]),
-            SemanticLayoutIdentityV1::from_sha256([tag; 32]),
+            SemanticLayoutIdentityV1::from_sha256(
+                [if tag == 1 && matches!(mutation, Mutation::LayoutIdentity) {
+                    99
+                } else {
+                    tag
+                }; 32],
+            ),
             layout,
             shape,
         )
@@ -585,6 +592,7 @@ fn borrowed_context_visits_reject_source_substitution_before_callbacks() {
         Mutation::ExtraIssue,
         Mutation::HelperIdentity,
         Mutation::ContextIdentity,
+        Mutation::LayoutIdentity,
     ] {
         let semantic = fixture(mutation);
         let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100);
