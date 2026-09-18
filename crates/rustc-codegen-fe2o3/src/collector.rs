@@ -47,6 +47,11 @@ mod closure_flow_v1;
 mod kernel_context_frontend_v1;
 mod production_importer_v1;
 
+#[cfg(test)]
+pub(crate) use production_importer_v1::check_wave64_descriptor_mutations_v1;
+#[cfg(test)]
+pub(crate) mod semantic_import_observation_v1_tests;
+
 pub(crate) use production_importer_v1::{
     AuthenticatedRustcIdentityInventoryV3, AuthenticatedRustcPreflightPlanV3,
     ConstructedProductionSemanticMirV1, ProductionSemanticImportErrorV1,
@@ -3175,6 +3180,11 @@ impl<'tcx> DeviceCollector<'tcx> {
             && self.tcx.fn_sig(*def_id).skip_binder().safety() == Safety::Unsafe
             && !crate::production_rustc_intrinsic_v1::is_reviewed_core_atomic_function_v1(
                 self.tcx, resolved,
+            )
+            && !crate::trusted_device_items::is_authenticated_gfx942_wave64_shuffle_instance_v1(
+                self.tcx,
+                resolved,
+                &self.expected_target,
             )
         {
             let caller_identity = self.instance_identity(*caller);

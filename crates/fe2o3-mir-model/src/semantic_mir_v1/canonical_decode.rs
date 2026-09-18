@@ -369,6 +369,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes inert Wave64 primitive capture, not execution authority.
+    pub fn decode_exact_v33_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V33),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -411,6 +423,7 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V15
                         | SemanticMirWireVersionV1::V28
                         | SemanticMirWireVersionV1::V30
+                        | SemanticMirWireVersionV1::V33
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -1684,7 +1697,9 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V30 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V33 {
+            90
+        } else if self.wire_version == SemanticMirWireVersionV1::V30 {
             87
         } else if self.wire_version == SemanticMirWireVersionV1::V29 {
             86
@@ -1716,6 +1731,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         // Historical capability drafts and synthetic scope exit are not callable grammar.
         if matches!(tag, 69..=80 | 83)
             || (matches!(tag, 81..=86) && self.wire_version != SemanticMirWireVersionV1::V29)
+            || matches!(tag, 88 | 89)
         {
             return Err(SemanticMirDecodeErrorV1::InvalidTag {
                 context: "compiler intrinsic",
@@ -1731,6 +1747,10 @@ impl<'a> CanonicalDecoderV1<'a> {
                     _ => unreachable!(),
                 },
             ),
+            90 => SemanticCompilerIntrinsicOperationV1::Gfx942Wave64ShuffleIndex {
+                context: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+            },
             81 => SemanticCompilerIntrinsicOperationV1::Execution(
                 SemanticExecutionOperationV29::ContextIssue {
                     context: SemanticTypeIdV1(self.u32()?),
@@ -2783,6 +2803,7 @@ mod tests {
     mod frozen_v15;
     mod rust_call_local_tests;
     mod saturating_integer_v30_tests;
+    mod wave64_shuffle_v33_tests;
 
     fn identity(tag: u8) -> [u8; 32] {
         [tag; 32]

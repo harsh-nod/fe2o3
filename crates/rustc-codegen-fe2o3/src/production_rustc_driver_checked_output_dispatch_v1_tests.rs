@@ -117,47 +117,7 @@ impl Stage {
                 Some(*stage.output().erased().canonical().identity().digest()),
             ),
         };
-        let helpers: std::collections::BTreeSet<_> = original
-            .functions
-            .iter()
-            .filter(|f| f.role == fe2o3_kernel_ir::FunctionRole::InternalHelper)
-            .map(|f| &f.id)
-            .collect();
-        let mut original_helper_calls = 0;
-        let mut original_private_accesses = 0;
-        for function in &original.functions {
-            for operation in function
-                .body
-                .as_ref()
-                .into_iter()
-                .flat_map(|body| &body.blocks)
-                .flat_map(|block| &block.operations)
-            {
-                match &operation.kind {
-                    OperationKind::Call { callee, .. } => {
-                        original_helper_calls += usize::from(helpers.contains(callee));
-                    }
-                    OperationKind::Load { access, .. }
-                    | OperationKind::Store { access, .. }
-                    | OperationKind::GuardedLoad { access, .. }
-                    | OperationKind::GuardedStore { access, .. }
-                        if helpers.contains(&function.id)
-                            && access.address_space == fe2o3_kernel_ir::AddressSpace::Private =>
-                    {
-                        original_private_accesses += 1;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        RouteObservation {
-            route,
-            original_helpers: helpers.len(),
-            original_helper_calls,
-            original_private_accesses,
-            original_digest,
-            erased_digest,
-        }
+        observe_route_parts(route, original, original_digest, erased_digest)
     }
 
     pub(super) fn retained_storage_floor_v1(&self) -> usize {
@@ -192,6 +152,72 @@ impl Stage {
             Self::Direct(stage) => stage.into_worker_handoff_extraction_v1(),
             Self::Erased(stage) => stage.into_worker_handoff_extraction_v1(),
         }
+    }
+}
+
+pub(super) fn observe_fixed(
+    stage: &crate::production_pipeline::fixed_checked_output_v1::FixedCheckedOutputProductionCompilationV1,
+) -> RouteObservation {
+    let erased = stage.erased_digest().copied();
+    let route = if erased.is_some() {
+        Route::SilentUnitLocal
+    } else {
+        Route::DirectRawEmpty
+    };
+    observe_route_parts(
+        route,
+        stage.original_module(),
+        erased.map(|_| stage.original_digest()),
+        erased,
+    )
+}
+
+fn observe_route_parts(
+    route: Route,
+    original: &fe2o3_kernel_ir::Module,
+    original_digest: Option<[u8; 32]>,
+    erased_digest: Option<[u8; 32]>,
+) -> RouteObservation {
+    let helpers: std::collections::BTreeSet<_> = original
+        .functions
+        .iter()
+        .filter(|f| f.role == fe2o3_kernel_ir::FunctionRole::InternalHelper)
+        .map(|f| &f.id)
+        .collect();
+    let mut original_helper_calls = 0;
+    let mut original_private_accesses = 0;
+    for function in &original.functions {
+        for operation in function
+            .body
+            .as_ref()
+            .into_iter()
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+        {
+            match &operation.kind {
+                OperationKind::Call { callee, .. } => {
+                    original_helper_calls += usize::from(helpers.contains(callee));
+                }
+                OperationKind::Load { access, .. }
+                | OperationKind::Store { access, .. }
+                | OperationKind::GuardedLoad { access, .. }
+                | OperationKind::GuardedStore { access, .. }
+                    if helpers.contains(&function.id)
+                        && access.address_space == fe2o3_kernel_ir::AddressSpace::Private =>
+                {
+                    original_private_accesses += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    RouteObservation {
+        route,
+        original_helpers: helpers.len(),
+        original_helper_calls,
+        original_private_accesses,
+        original_digest,
+        erased_digest,
     }
 }
 
