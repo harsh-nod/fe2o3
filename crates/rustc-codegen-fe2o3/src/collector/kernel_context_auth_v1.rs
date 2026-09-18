@@ -14,7 +14,7 @@ mod flow;
 mod semantic;
 pub(crate) use semantic::{
     BoundContextEntryV29, CallBoundaryV29, ContextRootVisitErrorV29, RetainedContextEntriesV29,
-    RetainedContextEntryV29,
+    RetainedContextEntryV29, RetainedExecutionSourceV29,
 };
 
 pub(crate) struct CapturedContextProducersV1<'tcx> {

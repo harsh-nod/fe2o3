@@ -1,14 +1,26 @@
 //! Project retained source anchors into the shared lowerer check before materialization.
 //! Root agreement does not establish callback expansion, scope closure or authority.
 
-use crate::collector::{CallBoundaryV29, ContextRootVisitErrorV29, RetainedContextEntriesV29};
-use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1;
+use crate::collector::workgroup_scope_custody_v29::{
+    ScopeCallKindV29, ScopeCallableV29, ScopeEventKindV29,
+};
+use crate::collector::{
+    CallBoundaryV29, ContextRootVisitErrorV29, RetainedContextEntriesV29,
+    RetainedExecutionSourceV29,
+};
+use fe2o3_kernel_ir::{
+    CanonicalKernelIrVerificationResourceBudgetV1,
+    CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+};
 use fe2o3_lower_mir_kernel::{
     ProductionCheckedContextRootV29, ProductionContextCallBoundaryV29,
-    ProductionContextRootErrorV29, ProductionContextRootInputV29, ProductionSourceLaunchRosterV1,
-    with_checked_context_root_v29,
+    ProductionContextRootErrorV29, ProductionContextRootInputV29,
+    ProductionExecutionSourceInputV29, ProductionScopeCallKindV29,
+    ProductionScopeCallableCandidateV29, ProductionScopeEventCandidateV29,
+    ProductionScopeEventKindV29, ProductionSourceLaunchRosterV1, with_checked_execution_source_v29,
 };
 use fe2o3_pliron::ProductionSemanticSsaOwnerV1;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use super::ProductionPipelineError;
 
@@ -30,7 +42,7 @@ pub(crate) fn check_context_handoff_v29(
     ssa: &ProductionSemanticSsaOwnerV1,
     launch: &ProductionSourceLaunchRosterV1,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
-    mut use_root: impl for<'a> FnMut(
+    use_root: impl for<'a> FnMut(
         ProductionCheckedContextRootV29<'a>,
         &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ) -> Result<(), ProductionContextRootErrorV29>,
@@ -51,14 +63,106 @@ pub(crate) fn check_context_handoff_v29(
     let Some(source) = source else {
         return Ok(());
     };
-    for entry in source.roots() {
-        let mut check = |budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>| {
-            budget.charge_work(32)?;
+    with_projected_execution_source_v29(&source, budget, |input, budget| {
+        with_checked_execution_source_v29(ssa, launch, input, budget, use_root)
+    })
+    .map_err(ProductionPipelineError::ContextHandoff)
+}
+
+fn projection_bytes<T>(count: usize) -> Result<usize, ProductionContextRootErrorV29> {
+    count
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or(Resource::Arithmetic.into())
+}
+
+fn projection_rows<T>(count: usize) -> Result<Vec<T>, ProductionContextRootErrorV29> {
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(count)
+        .map_err(|_| Resource::Allocation)?;
+    Ok(rows)
+}
+
+fn project_class(class: ScopeCallableV29) -> ProductionScopeCallableCandidateV29 {
+    match class {
+        ScopeCallableV29::Ordinary => ProductionScopeCallableCandidateV29::Ordinary,
+        ScopeCallableV29::Provider { function, identity } => {
+            ProductionScopeCallableCandidateV29::Provider { function, identity }
+        }
+        ScopeCallableV29::Derive {
+            binding,
+            operation,
+            context,
+            workgroup,
+        } => ProductionScopeCallableCandidateV29::Derive {
+            binding,
+            operation,
+            context,
+            workgroup,
+        },
+    }
+}
+
+fn project_event(kind: ScopeEventKindV29) -> ProductionScopeEventKindV29 {
+    match kind {
+        ScopeEventKindV29::Call { callee, kind } => ProductionScopeEventKindV29::Call {
+            callee,
+            kind: match kind {
+                ScopeCallKindV29::Ordinary => ProductionScopeCallKindV29::Ordinary,
+                ScopeCallKindV29::Provider => ProductionScopeCallKindV29::Provider,
+                ScopeCallKindV29::Derive => ProductionScopeCallKindV29::Derive,
+            },
+        },
+        ScopeEventKindV29::Return => ProductionScopeEventKindV29::Return,
+        ScopeEventKindV29::Assert => ProductionScopeEventKindV29::Assert,
+        ScopeEventKindV29::Unreachable => ProductionScopeEventKindV29::Unreachable,
+        ScopeEventKindV29::UnwindResume => ProductionScopeEventKindV29::UnwindResume,
+        ScopeEventKindV29::UnwindTerminate => ProductionScopeEventKindV29::UnwindTerminate,
+        ScopeEventKindV29::Abort => ProductionScopeEventKindV29::Abort,
+    }
+}
+
+pub(crate) fn with_projected_execution_source_v29<R>(
+    source: &RetainedExecutionSourceV29<'_>,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    use_source: impl for<'a> FnOnce(
+        ProductionExecutionSourceInputV29<'a>,
+        &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<R, ProductionContextRootErrorV29>,
+) -> Result<R, ProductionContextRootErrorV29> {
+    let ledger = budget.work_ledger_identity_v1();
+    let bytes = [
+        projection_bytes::<ProductionContextRootInputV29<'_>>(source.roots().len())?,
+        projection_bytes::<ProductionScopeCallableCandidateV29>(source.classes().len())?,
+        projection_bytes::<ProductionScopeEventCandidateV29>(source.events().len())?,
+    ]
+    .into_iter()
+    .try_fold(0_usize, |sum, bytes| {
+        sum.checked_add(bytes).ok_or(Resource::Arithmetic)
+    })?;
+    let work = [
+        (source.roots().len(), 32),
+        (source.classes().len(), 12),
+        (source.events().len(), 8),
+    ]
+    .into_iter()
+    .try_fold(0_usize, |sum, (count, width)| {
+        count
+            .checked_mul(width)
+            .and_then(|amount| sum.checked_add(amount))
+            .ok_or(Resource::Arithmetic)
+    })?;
+    budget.charge_work(work)?;
+    budget.reserve_storage(bytes)?;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let mut roots = projection_rows(source.roots().len())?;
+        let mut classes = projection_rows(source.classes().len())?;
+        let mut events = projection_rows(source.events().len())?;
+        for entry in source.roots() {
             let (root, root_identity) = entry.root();
             let (helper, helper_identity) = entry.helper();
             let (issuer, issuer_identity) = entry.issuer();
             let (context_type, context_identity) = entry.context();
-            let input = ProductionContextRootInputV29 {
+            roots.push(ProductionContextRootInputV29 {
                 semantic_sha256: source.semantic_sha256(),
                 root,
                 root_identity,
@@ -72,14 +176,44 @@ pub(crate) fn check_context_handoff_v29(
                 helper_call: project_boundary(entry.helper_call()),
                 helper_context_local: entry.helper_argument(),
                 helper_arguments: entry.helper_operands(),
-            };
-            with_checked_context_root_v29(ssa, launch, input, budget, |root, budget| {
-                use_root(root, budget)
-            })
-        };
-        check(budget).map_err(ProductionPipelineError::ContextHandoff)?;
+            });
+        }
+        classes.extend(source.classes().iter().copied().map(project_class));
+        events.extend(
+            source
+                .events()
+                .iter()
+                .map(|event| ProductionScopeEventCandidateV29 {
+                    function: event.function,
+                    block: event.block,
+                    statement_count: event.statement_count,
+                    kind: project_event(event.kind),
+                }),
+        );
+        use_source(
+            ProductionExecutionSourceInputV29 {
+                semantic_sha256: source.semantic_sha256(),
+                roots: &roots,
+                classes: &classes,
+                events: &events,
+            },
+            budget,
+        )
+    }));
+    // The temporary row backing has dropped. Consumer-owned storage is not ours
+    // to refund, and a replaced ledger must never receive our release.
+    let cleanup = if budget.work_ledger_identity_v1() == ledger {
+        budget.release_storage(bytes)
+    } else {
+        Err(Resource::Accounting)
+    };
+    match result {
+        Ok(result) => {
+            cleanup?;
+            result
+        }
+        Err(payload) => resume_unwind(payload),
     }
-    Ok(())
 }
 
 #[cfg(test)]

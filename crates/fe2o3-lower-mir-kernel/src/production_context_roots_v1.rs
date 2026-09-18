@@ -85,6 +85,12 @@ pub enum ProductionContextRootErrorV29 {
     Ssa,
     /// Source and launch roster disagree.
     Launch,
+    /// Missing, duplicated, reordered or extra physical context issuance.
+    RootCensus,
+    /// Incomplete callable classifications or mismatched provider/derive identity.
+    CallableCensus,
+    /// Missing, extra or changed scope events in the complete source census.
+    ScopeEventCensus,
     /// The shared ledger refused further work.
     Resource(ResourceError),
 }

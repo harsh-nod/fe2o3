@@ -188,7 +188,7 @@ fn materialization_source_keeps_context_subset_of_the_physical_root_roster() {
     let launch = launch_roster(&semantic);
     let owner = ssa_owner(semantic);
     let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(10_000);
-    let mut budget = VisitBudget::new(&mut work, 7);
+    let mut budget = VisitBudget::new(&mut work, projection_storage(&receipt) + 7);
     budget.reserve_storage(7).unwrap();
     let view = receipt
         .materialization_source_v29(owner.source_semantic(), &mut budget)

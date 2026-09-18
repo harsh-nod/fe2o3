@@ -3463,7 +3463,9 @@ impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
 #[path = "production_context_handoff_v29.rs"]
 mod context_handoff_v29;
 #[cfg(test)]
-pub(crate) use context_handoff_v29::check_context_handoff_v29;
+pub(crate) use context_handoff_v29::{
+    check_context_handoff_v29, with_projected_execution_source_v29,
+};
 
 impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
     fn require_target_neutral_lowering(self) -> ProductionPipelineError {
