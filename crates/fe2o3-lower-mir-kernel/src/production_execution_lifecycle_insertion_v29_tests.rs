@@ -116,11 +116,11 @@ fn check_inserted_lifecycle(
         let mut changed_contexts = 0;
         for row in &mut donor.as_mut().unwrap().pending.sidecars.rows {
             for event in &mut row.lifecycle_events.as_mut().unwrap().rows {
-                if let DeferredLifecycleKindV29::Derive { context, .. } = &mut event.kind {
-                    if *context == original {
-                        *context = collision;
-                        changed_contexts += 1;
-                    }
+                if let DeferredLifecycleKindV29::Derive { context, .. } = &mut event.kind
+                    && *context == original
+                {
+                    *context = collision;
+                    changed_contexts += 1;
                 }
             }
         }
@@ -128,10 +128,10 @@ fn check_inserted_lifecycle(
         reject(&mut donor, budget);
         for row in &mut donor.as_mut().unwrap().pending.sidecars.rows {
             for event in &mut row.lifecycle_events.as_mut().unwrap().rows {
-                if let DeferredLifecycleKindV29::Derive { context, .. } = &mut event.kind {
-                    if *context == collision {
-                        *context = original;
-                    }
+                if let DeferredLifecycleKindV29::Derive { context, .. } = &mut event.kind
+                    && *context == collision
+                {
+                    *context = original;
                 }
             }
         }
