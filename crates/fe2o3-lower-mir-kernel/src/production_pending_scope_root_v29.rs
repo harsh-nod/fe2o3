@@ -124,7 +124,17 @@ fn pending_scope_preflight_v29(
         if row.source_call_instance != instances.id_at(index) {
             return Err(execution_call_error_v29());
         }
-        statements = argument_sum_v1(&[statements, row.statement_operation_spans.len()])?;
+        let source = instances
+            .instance(
+                instances
+                    .id_at(index)
+                    .ok_or_else(execution_call_error_v29)?,
+            )
+            .ok_or_else(execution_call_error_v29)?;
+        for block in source.declaration().blocks() {
+            budget.charge_work(1)?;
+            statements = argument_sum_v1(&[statements, block.statements().len()])?;
+        }
         let body = row
             .function
             .body

@@ -53,6 +53,18 @@ fn pending_root_retains_scalar_instance_sidecars_and_nested_capabilities() {
             last.function
                 .required_capabilities
                 .insert(fe2o3_kernel_ir::TargetCapability::Float64);
+            slots[0]
+                .as_mut()
+                .unwrap()
+                .function
+                .required_capabilities
+                .insert(fe2o3_kernel_ir::TargetCapability::Int64);
+            slots[1]
+                .as_mut()
+                .unwrap()
+                .function
+                .required_capabilities
+                .insert(fe2o3_kernel_ir::TargetCapability::Float64);
             let before: Vec<_> = slots
                 .iter()
                 .map(|row| {
@@ -82,6 +94,23 @@ fn pending_root_retains_scalar_instance_sidecars_and_nested_capabilities() {
                     .required_capabilities
                     .contains(&fe2o3_kernel_ir::TargetCapability::Float64,)
             );
+            assert_eq!(pending.function.required_capabilities.len(), 2);
+            assert!(
+                pending
+                    .function
+                    .required_capabilities
+                    .contains(&fe2o3_kernel_ir::TargetCapability::Int64,)
+            );
+            let mut module = Module::new("pending_scalar_root");
+            module.functions.push(pending.function.clone());
+            module.kernels.push(Kernel::new(
+                "scalar_instance_root",
+                "scalar_instance_root",
+                LaunchDomain::D1 {
+                    x: LaunchExtent::Static(64),
+                },
+            ));
+            verify_module(&module).unwrap();
             assert!(
                 !pending
                     .function
@@ -117,7 +146,7 @@ fn pending_root_preflight_does_not_consume_missing_swapped_or_aliased_inputs() {
         with_emitted(true, |instances, slots, budget| {
             match fault {
                 0 => {
-                    slots[1].take();
+                    drop(slots[1].take());
                 }
                 1 => slots.swap(1, 2),
                 2 => {
