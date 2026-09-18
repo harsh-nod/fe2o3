@@ -3,6 +3,18 @@ use std::io;
 
 use super::*;
 
+#[cfg(feature = "hardware-diagnostic")]
+#[path = "directional_native_wait_diagnostic_tests.rs"]
+mod native_tests;
+
+#[cfg(not(feature = "hardware-diagnostic"))]
+#[test]
+fn native_modes_are_not_admitted_without_the_feature() {
+    for mode in ["diagnostic-native-sleep1ms", "diagnostic-native-sleep25us"] {
+        assert!(parse_config_v1(&arguments(mode)).is_err());
+    }
+}
+
 fn arguments(mode: &str) -> Vec<String> {
     ["0x54f88318ca05093d", "268435456", "3", "10", mode]
         .map(String::from)
@@ -341,6 +353,8 @@ fn completed_fixture() -> CompletedRunV1 {
         .unwrap()
     };
     CompletedRunV1 {
+        #[cfg(feature = "hardware-diagnostic")]
+        native: None,
         config,
         rounds: (0..3)
             .map(|index| RoundV1 {

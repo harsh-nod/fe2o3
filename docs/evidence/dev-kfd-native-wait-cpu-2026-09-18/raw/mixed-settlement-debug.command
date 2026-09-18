@@ -1,0 +1,1 @@
+env RUST_BACKTRACE=1 RUST_TEST_THREADS=1 timeout --kill-after=5s 90s target/debug/deps/fe2o3_runtime-47b18d551c529e90 --exact kfd_backend::tests::directional_wait_diagnostic_tests::unprofiled_settlement_invalidates_even_a_later_complete_capture --nocapture 

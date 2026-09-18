@@ -1,24 +1,24 @@
-//! Best-effort Linux thread-cost observations for the profiled striped-tail wait.
+//! Best-effort Linux thread-cost observations for explicitly profiled SDMA waits.
 
 use core::mem::MaybeUninit;
 use rustix::time::{ClockId, DynamicClockId, Timespec, clock_gettime_dynamic};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct ThreadWaitCpuSnapshotV1 {
+pub(in crate::sdma) struct ThreadWaitCpuSnapshotV1 {
     thread_cpu_ns: u64,
     voluntary_context_switches: u64,
     involuntary_context_switches: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ThreadWaitCpuSnapshotOutcomeV1 {
+pub(in crate::sdma) enum ThreadWaitCpuSnapshotOutcomeV1 {
     Available(ThreadWaitCpuSnapshotV1),
     Unavailable,
     Invalid,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ThreadWaitCpuMeasurementV1 {
+pub(in crate::sdma) enum ThreadWaitCpuMeasurementV1 {
     Available {
         thread_cpu_ns: u64,
         voluntary_context_switches: u64,
@@ -29,7 +29,7 @@ pub(super) enum ThreadWaitCpuMeasurementV1 {
 }
 
 #[inline]
-pub(super) fn profile_tail_cpu_snapshot_v1<const PROFILE: bool>()
+pub(in crate::sdma) fn profile_tail_cpu_snapshot_v1<const PROFILE: bool>()
 -> Option<ThreadWaitCpuSnapshotOutcomeV1> {
     profile_thread_wait_cpu_snapshot_with_v1::<PROFILE>(observe_thread_wait_cpu_snapshot_v1)
 }
@@ -41,7 +41,7 @@ fn profile_thread_wait_cpu_snapshot_with_v1<const PROFILE: bool>(
     if PROFILE { Some(observe()) } else { None }
 }
 
-pub(super) fn finish_tail_cpu_measurement_v1(
+pub(in crate::sdma) fn finish_tail_cpu_measurement_v1(
     started: Option<ThreadWaitCpuSnapshotOutcomeV1>,
 ) -> ThreadWaitCpuMeasurementV1 {
     finish_thread_wait_cpu_measurement_with_v1(started, observe_thread_wait_cpu_snapshot_v1)

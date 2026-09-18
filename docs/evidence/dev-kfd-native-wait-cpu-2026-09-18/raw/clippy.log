@@ -1,0 +1,42 @@
+   Compiling rustix v1.1.4
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kfd)
+    Checking fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-profiler-protocol)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+error: this `if` statement can be collapsed
+   --> crates/fe2o3-runtime/src/kfd_backend/directional_wait_diagnostic.rs:101:9
+    |
+101 | /         if settled {
+102 | |             if let Some(recorder) = self.directional_wait_diagnostic.as_mut() {
+103 | |                 recorder.record(observation);
+104 | |             }
+105 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+101 ~         if settled
+102 ~             && let Some(recorder) = self.directional_wait_diagnostic.as_mut() {
+103 |                 recorder.record(observation);
+104 ~             }
+    |
+
+error: could not compile `fe2o3-runtime` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: items after a test module
+   --> crates/fe2o3-kfd/src/sdma/persistent_wait_diagnostic.rs:214:1
+    |
+214 | mod tests {
+    | ^^^^^^^^^
+...
+402 | impl Gfx942SdmaQueueSetV1 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#items_after_test_module
+    = note: `-D clippy::items-after-test-module` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::items_after_test_module)]`
+    = help: move the items to before the test module was defined
+
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error

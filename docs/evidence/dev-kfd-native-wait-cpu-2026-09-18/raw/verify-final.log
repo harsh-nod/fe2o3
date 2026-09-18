@@ -1,0 +1,14 @@
+{
+  "scope": "CPU qualification only; no new native, performance, or formal-proof claim",
+  "complete_harnesses": 9,
+  "source_files": 5532,
+  "binaries": 8,
+  "rejected_harness_mutations": 11,
+  "kfd_distinct_tests": 160,
+  "runtime_per_target": {
+    "passed": 1067,
+    "ignored": 17
+  },
+  "new_runtime_tests": 10,
+  "incomplete_full_kfd_attempts": 2
+}

@@ -1,0 +1,34 @@
+{
+  "gnu-kfd-sdma-final": {
+    "path": "target/debug/deps/fe2o3_kfd-ca42ead382ff5903",
+    "sha256": "2400888bb639bdbe4f9bc49a28a9a9ddb28e2c00b6cb462511e3065558b8ceb5"
+  },
+  "gnu-example-default": {
+    "path": "target/debug/examples/gfx942_runtime_directional_window_benchmark-cfa0bf330958b982",
+    "sha256": "12558a9199a0b27951558151370937b26b01312c6d9dfd3eb74087337eb15d08"
+  },
+  "gnu-example-qualified": {
+    "path": "target/debug/examples/gfx942_runtime_directional_window_benchmark-dab8357a73d76d71",
+    "sha256": "6dbcaf32f60113721c736d0ab8964d46f12cbd70899c360e39d7d0e500318492"
+  },
+  "gnu-runtime-fixed": {
+    "path": "target/debug/deps/fe2o3_runtime-47b18d551c529e90",
+    "sha256": "3cb7b4fdcdad0840ca32d6cfbd1b5bfa32386098ddba82923d478c25e7b774ce"
+  },
+  "musl-example": {
+    "path": "target/x86_64-unknown-linux-musl/debug/examples/gfx942_runtime_directional_window_benchmark-ca9dfae1f4f2e29b",
+    "sha256": "76c3b2215bc6e1aa9e1e4ee2cca1fa6f6f4b253c5fc433a99f33d7556bc531bb"
+  },
+  "musl-runtime": {
+    "path": "target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-afaad0775e07e3e7",
+    "sha256": "a43498aaa2489b3c51474c4be3061b1f3a45d3198d4f49fd555fe376e4f33b9f"
+  },
+  "model-r39": {
+    "path": "target/debug/deps/fe2o3_runtime_model-ecfbec6a415a8132",
+    "sha256": "58d3d9f576cde51e51639be5931fe56fb1342854264bce67ba94fbc8285e9fb5"
+  },
+  "unsafe-source": {
+    "path": "target/debug/deps/unsafe_source_policy-ddb7f8c7e86cd1e0",
+    "sha256": "d2e47d4afb93fc68e21a9bcacfcc227fdabf503178e49df281a3b459ebecfa98"
+  }
+}

@@ -14,7 +14,7 @@ name = "fe2o3_runtime"
 [features]
 default = []
 # Unsafe, exact-artifact hardware diagnosis only. This grants no Worker V3 authority.
-hardware-diagnostic = []
+hardware-diagnostic = ["fe2o3-kfd/hardware-diagnostic"]
 # Repository-owned exact-artifact KFD/HSA qualification. This exposes no
 # general launch authority and is excluded from the default community API.
 hardware-qualification = []

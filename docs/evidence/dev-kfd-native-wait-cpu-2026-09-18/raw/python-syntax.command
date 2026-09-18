@@ -1,0 +1,1 @@
+python3 -I -c import\ ast\,pathlib\;\ paths=sorted\(pathlib.Path\(\"docs/evidence/dev-kfd-native-wait-cpu-2026-09-18\"\).glob\(\"\*.py\"\)\)\;\ \[ast.parse\(p.read_text\(\)\,filename=str\(p\)\)\ for\ p\ in\ paths\]\;\ print\(\"parsed_scripts\"\,\ len\(paths\)\) 

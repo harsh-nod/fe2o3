@@ -1,0 +1,10 @@
+{
+  "scope": "incomplete development test attempt, not passing evidence",
+  "exec_session": 2273,
+  "resume_result": "write_stdin failed: Unknown process id 2273",
+  "raw_log": "raw/gnu-kfd-serial.log",
+  "recorder_exit_file_present": false,
+  "test_summary_present": false,
+  "cause": "not established; preceding tool call was aborted at continuation",
+  "remaining_process_check": "pgrep for the exact KFD binary and qualification/recorder commands returned no matches"
+}

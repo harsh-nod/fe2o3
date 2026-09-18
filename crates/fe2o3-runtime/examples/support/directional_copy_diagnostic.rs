@@ -4,14 +4,25 @@ use std::io::Write;
 
 use super::*;
 
+#[cfg(feature = "hardware-diagnostic")]
+#[path = "directional_native_wait_diagnostic.rs"]
+mod native_wait;
+
 const SCHEMA: &str = "fe2o3.kfd-directional-progress-diagnostic.v1";
 const MAX_ROUNDS: usize = 10_000;
+#[cfg(not(feature = "hardware-diagnostic"))]
 const DIAGNOSTIC_USAGE: &str = "diagnostic usage: gfx942-runtime-directional-window-benchmark <unique-id> <bytes> <warmups> <samples> <diagnostic-slice50us|diagnostic-window-deadline>";
+#[cfg(feature = "hardware-diagnostic")]
+const DIAGNOSTIC_USAGE: &str = "diagnostic usage: gfx942-runtime-directional-window-benchmark <unique-id> <bytes> <warmups> <samples> <diagnostic-slice50us|diagnostic-window-deadline|diagnostic-native-sleep1ms|diagnostic-native-sleep25us>";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WaitPolicyV1 {
     Slice50us,
     WindowDeadline,
+    #[cfg(feature = "hardware-diagnostic")]
+    NativeSleep1ms,
+    #[cfg(feature = "hardware-diagnostic")]
+    NativeSleep25us,
 }
 
 impl WaitPolicyV1 {
@@ -19,6 +30,10 @@ impl WaitPolicyV1 {
         match self {
             Self::Slice50us => "slice50us",
             Self::WindowDeadline => "window-deadline",
+            #[cfg(feature = "hardware-diagnostic")]
+            Self::NativeSleep1ms => "native-sleep1ms",
+            #[cfg(feature = "hardware-diagnostic")]
+            Self::NativeSleep25us => "native-sleep25us",
         }
     }
 
@@ -26,6 +41,18 @@ impl WaitPolicyV1 {
         match self {
             Self::Slice50us => remaining.min(COMPLETION_WAIT_SLICE),
             Self::WindowDeadline => remaining,
+            #[cfg(feature = "hardware-diagnostic")]
+            Self::NativeSleep1ms | Self::NativeSleep25us => remaining,
+        }
+    }
+
+    #[cfg(feature = "hardware-diagnostic")]
+    fn native_policy(self) -> Option<fe2o3_kfd::Gfx942SdmaPersistentDiagnosticSleepCeilingV1> {
+        use fe2o3_kfd::Gfx942SdmaPersistentDiagnosticSleepCeilingV1 as Ceiling;
+        match self {
+            Self::NativeSleep1ms => Some(Ceiling::Millis1),
+            Self::NativeSleep25us => Some(Ceiling::Micros25),
+            Self::Slice50us | Self::WindowDeadline => None,
         }
     }
 }
@@ -50,6 +77,10 @@ pub(super) fn parse_config_v1(args: &[String]) -> BenchmarkResult<Option<Diagnos
     let policy = match args[4].as_str() {
         "diagnostic-slice50us" => WaitPolicyV1::Slice50us,
         "diagnostic-window-deadline" => WaitPolicyV1::WindowDeadline,
+        #[cfg(feature = "hardware-diagnostic")]
+        "diagnostic-native-sleep1ms" => WaitPolicyV1::NativeSleep1ms,
+        #[cfg(feature = "hardware-diagnostic")]
+        "diagnostic-native-sleep25us" => WaitPolicyV1::NativeSleep25us,
         _ => return Err(DIAGNOSTIC_USAGE.into()),
     };
     let unique_id = parse_unique_id(&args[0])?;
@@ -59,6 +90,12 @@ pub(super) fn parse_config_v1(args: &[String]) -> BenchmarkResult<Option<Diagnos
     let rounds = warmups.checked_add(samples).ok_or("round count overflow")?;
     if bytes == 0 || bytes > MAX_COPY_BYTES || samples == 0 || rounds > MAX_ROUNDS {
         return Err("diagnostic copy size or statistical controls are out of range".into());
+    }
+    #[cfg(feature = "hardware-diagnostic")]
+    if policy.native_policy().is_some() && bytes != MAX_COPY_BYTES {
+        return Err(
+            "native wait diagnostic requires exactly 256 MiB and 63+2 packet windows".into(),
+        );
     }
     Ok(Some(DiagnosticConfigV1 {
         unique_id,
@@ -193,6 +230,8 @@ struct RoundV1 {
 struct CompletedRunV1 {
     config: DiagnosticConfigV1,
     rounds: Vec<RoundV1>,
+    #[cfg(feature = "hardware-diagnostic")]
+    native: Option<Vec<fe2o3_runtime::KfdRuntimeDirectionalWaitObservationV1>>,
 }
 
 fn execute_v1(config: DiagnosticConfigV1) -> BenchmarkResult<CompletedRunV1> {
@@ -206,6 +245,22 @@ fn execute_v1(config: DiagnosticConfigV1) -> BenchmarkResult<CompletedRunV1> {
     observed.resize(config.bytes, 0_u8);
 
     let backend = KfdRuntimeBackendV1::open_default(config.unique_id, CopyOnlyAuthorityV1)?;
+    #[cfg(feature = "hardware-diagnostic")]
+    let backend = {
+        let mut backend = backend;
+        if let Some(policy) = config.policy.native_policy() {
+            backend
+                .enable_directional_sdma_wait_diagnostics_v1(
+                    policy,
+                    config
+                        .rounds
+                        .checked_mul(4)
+                        .ok_or("native diagnostic record count overflow")?,
+                )
+                .map_err(facade_error)?;
+        }
+        backend
+    };
     let mut context = RuntimeContextV1::open(backend).map_err(facade_error)?;
     if context.devices().len() != 1 || context.devices()[0].target() != "gfx942:xnack-" {
         return Err("direct KFD diagnostic did not enumerate one gfx942:xnack- device".into());
@@ -266,7 +321,22 @@ fn execute_v1(config: DiagnosticConfigV1) -> BenchmarkResult<CompletedRunV1> {
     context.destroy_stream(stream).map_err(facade_error)?;
     let mut backend = context.shutdown().map_err(facade_error)?;
     backend.shutdown_native_v1().map_err(facade_error)?;
-    Ok(CompletedRunV1 { config, rounds })
+    #[cfg(feature = "hardware-diagnostic")]
+    let native = config
+        .policy
+        .native_policy()
+        .map(|_| {
+            backend
+                .finish_directional_sdma_wait_diagnostics_v1()
+                .map_err(facade_error)
+        })
+        .transpose()?;
+    Ok(CompletedRunV1 {
+        config,
+        rounds,
+        #[cfg(feature = "hardware-diagnostic")]
+        native,
+    })
 }
 
 impl CompletedRunV1 {
@@ -274,6 +344,10 @@ impl CompletedRunV1 {
         let config = self.config;
         if self.rounds.len() != config.rounds {
             return Err("incomplete diagnostic round roster".into());
+        }
+        #[cfg(feature = "hardware-diagnostic")]
+        if config.policy.native_policy().is_some() || self.native.is_some() {
+            return native_wait::write_v1(self, output);
         }
         let packet_bytes = usize::try_from(fe2o3_kfd::GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1)?;
         let packets = config.bytes.div_ceil(packet_bytes);

@@ -1,0 +1,17 @@
+
+running 1 test
+test kfd_backend::tests::directional_wait_diagnostic_tests::unprofiled_settlement_invalidates_even_a_later_complete_capture ... 
+thread 'kfd_backend::tests::directional_wait_diagnostic_tests::unprofiled_settlement_invalidates_even_a_later_complete_capture' (21952) panicked at crates/fe2o3-runtime/src/kfd_backend/tests/directional_wait_diagnostic_tests.rs:78:9:
+assertion `left == right` failed
+  left: Pending
+ right: Succeeded
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+   1: core::panicking::panic_fmt
+   2: core::panicking::assert_failed_inner
+   3: core::panicking::assert_failed::<fe2o3_runtime::context::BackendPollV1, fe2o3_runtime::context::BackendPollV1>
+   4: fe2o3_runtime::kfd_backend::tests::directional_wait_diagnostic_tests::unprofiled_settlement_invalidates_even_a_later_complete_capture
+   5: fe2o3_runtime::kfd_backend::tests::directional_wait_diagnostic_tests::unprofiled_settlement_invalidates_even_a_later_complete_capture::{closure#0}
+   6: <fe2o3_runtime::kfd_backend::tests::directional_wait_diagnostic_tests::unprofiled_settlement_invalidates_even_a_later_complete_capture::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+timeout: the monitored command dumped core

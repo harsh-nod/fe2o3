@@ -1,0 +1,14 @@
+   Compiling fe2o3-runtime-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime-model)
+    Finished `test` profile [unoptimized] target(s) in 18.92s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime_model-ecfbec6a415a8132)
+
+running 6 tests
+test r39_scoped_persistent_sdma_wait_policy_tests::executable_model_owner_is_private_and_not_cloneable ... ok
+test r39_scoped_persistent_sdma_wait_policy_tests::exhaustive_156_case_policy_domain_preserves_every_r37_snapshot_coordinate ... ok
+test r39_scoped_persistent_sdma_wait_policy_tests::floor_addition_is_checked_clamped_and_strict_at_its_boundary ... ok
+test r39_scoped_persistent_sdma_wait_policy_tests::profile_allowlist_and_seven_exclusions_are_exact ... ok
+test r39_scoped_persistent_sdma_wait_policy_tests::ready_wins_and_pending_times_out_after_one_zero_deadline_observation ... ok
+test r39_scoped_persistent_sdma_wait_policy_tests::start_after_deadline_is_admitted_but_invalid_sleep_and_observation_times_are_rejected ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 792 filtered out; finished in 0.00s
+

@@ -13,6 +13,8 @@ name = "fe2o3_kfd"
 
 [features]
 default = []
+# Opt-in native observations only; no additional execution authority.
+hardware-diagnostic = []
 # Process-forking hardware validation only. This is not runtime authority.
 live-validation = ["rustix/process", "rustix/runtime"]
 

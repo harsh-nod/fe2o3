@@ -1,0 +1,11 @@
+{
+  "scope": "development qualification attempt, not a passing test receipt",
+  "exec_session": 45148,
+  "observed_exit_code": 143,
+  "command": "bash docs/evidence/dev-kfd-native-wait-cpu-2026-09-18/qualify.sh",
+  "raw_log": "raw/gnu-kfd.log",
+  "recorder_exit_file_present": false,
+  "test_summary_present": false,
+  "cause": "not established",
+  "remaining_process_check": "pgrep for the exact KFD binary and qualification/recorder commands returned no matches"
+}

@@ -8579,6 +8579,75 @@ impl ComputeAqlQueueSessionV1 {
         Gfx942DirectionalPersistentSdmaWindowCompletedV1,
         Gfx942DirectionalPersistentSdmaWindowExecutionFailureV1,
     > {
+        self.wait_directional_persistent_sdma_window_with_v1(
+            submission,
+            timeout,
+            |owner, memory, tickets, timeout| {
+                owner.wait_persistent_window_for(
+                    memory,
+                    tickets,
+                    timeout,
+                    SdmaWaitProfileV1::PersistentElapsedSpinFloor(
+                        PERSISTENT_SDMA_ACTIVE_SPIN_FLOOR_V1,
+                    ),
+                )
+            },
+        )
+    }
+
+    /// Diagnostic-only wait with the same custody/currentness transition as the
+    /// ordinary route. Timeout and errors return no diagnostic observations.
+    #[cfg(feature = "hardware-diagnostic")]
+    #[allow(clippy::result_large_err)]
+    pub fn wait_directional_persistent_sdma_window_profiled_for_v1(
+        &mut self,
+        submission: Gfx942DirectionalPersistentSdmaWindowSubmissionV1,
+        timeout: Duration,
+        policy: crate::Gfx942SdmaPersistentDiagnosticSleepCeilingV1,
+    ) -> Result<
+        (
+            Gfx942DirectionalPersistentSdmaWindowCompletedV1,
+            crate::Gfx942SdmaPersistentWaitDiagnosticsV1,
+        ),
+        Gfx942DirectionalPersistentSdmaWindowExecutionFailureV1,
+    > {
+        let mut diagnostics = None;
+        let completed = self.wait_directional_persistent_sdma_window_with_v1(
+            submission,
+            timeout,
+            |owner, memory, tickets, timeout| {
+                owner
+                    .wait_persistent_window_profiled_for_v1(memory, tickets, timeout, policy)
+                    .map(|(completed, observed)| {
+                        diagnostics = Some(observed);
+                        completed
+                    })
+            },
+        )?;
+        Ok((
+            completed,
+            diagnostics.expect("profiled lower completion retains its observations"),
+        ))
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn wait_directional_persistent_sdma_window_with_v1(
+        &mut self,
+        submission: Gfx942DirectionalPersistentSdmaWindowSubmissionV1,
+        timeout: Duration,
+        lower_wait: impl FnOnce(
+            &mut crate::sdma::Gfx942SdmaQueueSetV1,
+            &mut SharedGttMemorySessionV1,
+            &[crate::sdma::Gfx942SdmaCopyTicketV1],
+            Duration,
+        ) -> Result<
+            crate::sdma::CompletedPersistentSdmaWindowV1,
+            Gfx942SdmaErrorV1,
+        >,
+    ) -> Result<
+        Gfx942DirectionalPersistentSdmaWindowCompletedV1,
+        Gfx942DirectionalPersistentSdmaWindowExecutionFailureV1,
+    > {
         let pending = |error, submission| Gfx942DirectionalPersistentSdmaWindowExecutionFailureV1 {
             error,
             custody: Gfx942DirectionalPersistentSdmaWindowExecutionCustodyV1::Pending(submission),
@@ -8644,12 +8713,7 @@ impl ComputeAqlQueueSessionV1 {
         }
         let mut wait_result = None;
         let wait_operation = self.with_sdma_owner_memory(|owner, memory| {
-            wait_result = Some(owner.wait_persistent_window_for(
-                memory,
-                &submission.tickets,
-                timeout,
-                SdmaWaitProfileV1::PersistentElapsedSpinFloor(PERSISTENT_SDMA_ACTIVE_SPIN_FLOOR_V1),
-            ));
+            wait_result = Some(lower_wait(owner, memory, &submission.tickets, timeout));
             Ok(())
         });
         let Some(wait_result) = wait_result else {

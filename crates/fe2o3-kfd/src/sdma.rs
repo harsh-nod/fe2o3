@@ -48,6 +48,14 @@ pub(crate) use host_pool_policy::{
 };
 
 mod multi_queue;
+#[cfg(feature = "hardware-diagnostic")]
+mod persistent_wait_diagnostic;
+#[cfg(feature = "hardware-diagnostic")]
+pub use persistent_wait_diagnostic::{
+    GFX942_PERSISTENT_SDMA_WAIT_DIAGNOSTIC_MANIFEST_V1,
+    Gfx942SdmaPersistentDiagnosticSleepCeilingV1, Gfx942SdmaPersistentWaitCountersV1,
+    Gfx942SdmaPersistentWaitCpuV1, Gfx942SdmaPersistentWaitDiagnosticsV1,
+};
 pub(crate) mod retained_release;
 mod single_copy;
 use multi_queue::next_striped_owner;

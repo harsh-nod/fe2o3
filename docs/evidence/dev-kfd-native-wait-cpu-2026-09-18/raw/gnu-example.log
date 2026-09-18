@@ -1,0 +1,16 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+error[E0603]: module `kfd_backend` is private
+  --> crates/fe2o3-runtime/examples/support/directional_native_wait_diagnostic_tests.rs:6:20
+   |
+ 6 | use fe2o3_runtime::kfd_backend::KfdRuntimeDirectionalWaitObservationV1 as Observation;
+   |                    ^^^^^^^^^^^ private module
+   |
+note: the module `kfd_backend` is defined here
+  --> crates/fe2o3-runtime/src/lib.rs:10:1
+   |
+10 | mod kfd_backend;
+   | ^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0603`.
+error: could not compile `fe2o3-runtime` (example "gfx942-runtime-directional-window-benchmark" test) due to 1 previous error

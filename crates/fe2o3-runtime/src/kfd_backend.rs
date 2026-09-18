@@ -90,7 +90,11 @@ mod allocation_table;
 use allocation_table::AllocationTableV1;
 mod compute_dispatch;
 mod compute_state;
+#[cfg(feature = "hardware-diagnostic")]
+mod directional_wait_diagnostic;
 mod drain_capture;
+#[cfg(feature = "hardware-diagnostic")]
+pub use directional_wait_diagnostic::KfdRuntimeDirectionalWaitObservationV1;
 #[cfg(test)]
 pub(crate) use drain_capture::tests::counted as counted_allocations_for_test_v1;
 mod generated_adoption;
@@ -1207,6 +1211,8 @@ pub struct KfdRuntimeBackendV1 {
     sdma_dependency_retain_counts: HashMap<u64, usize>,
     quiescent_sdma_submissions: HashSet<u64>,
     last_launch_performance: Option<KfdRuntimeLaunchPerformanceV1>,
+    #[cfg(feature = "hardware-diagnostic")]
+    directional_wait_diagnostic: Option<directional_wait_diagnostic::DirectionalWaitRecorderV1>,
     next_ready_promotion_ordinal: Option<u64>,
     last_ready_promotion_performance: Option<KfdRuntimeReadyPromotionPerformanceV1>,
     staging_budgets: StagingBudgetsV1,
@@ -1573,6 +1579,8 @@ impl KfdRuntimeBackendV1 {
             sdma_dependency_retain_counts: HashMap::new(),
             quiescent_sdma_submissions: HashSet::new(),
             last_launch_performance: None,
+            #[cfg(feature = "hardware-diagnostic")]
+            directional_wait_diagnostic: None,
             next_ready_promotion_ordinal: Some(0),
             last_ready_promotion_performance: None,
             staging_budgets,
@@ -5593,10 +5601,29 @@ impl KfdRuntimeBackendV1 {
         match phase {
             ActiveSdmaPhaseV1::Ready => self.observe_unpublished_sdma_copy_v1(active),
             ActiveSdmaPhaseV1::DirectionalPublished(native_submission) => {
-                match self
-                    .directional_sdma_ops_v1()
-                    .wait(*native_submission, timeout)
+                #[cfg(feature = "hardware-diagnostic")]
+                let (outcome, diagnostic) = if let Some(policy) = self
+                    .directional_wait_diagnostic
+                    .as_ref()
+                    .map(|recorder| recorder.policy())
                 {
+                    self.directional_sdma_ops_v1().wait_with_diagnostics_v1(
+                        *native_submission,
+                        timeout,
+                        policy,
+                    )
+                } else {
+                    (
+                        self.directional_sdma_ops_v1()
+                            .wait(*native_submission, timeout),
+                        None,
+                    )
+                };
+                #[cfg(not(feature = "hardware-diagnostic"))]
+                let outcome = self
+                    .directional_sdma_ops_v1()
+                    .wait(*native_submission, timeout);
+                match outcome {
                     Ok(DirectionalSdmaWaitV1::Timeout(native_submission)) => {
                         active.phase =
                             ActiveSdmaPhaseV1::DirectionalPublished(Box::new(native_submission));
@@ -5605,7 +5632,16 @@ impl KfdRuntimeBackendV1 {
                         Ok(BackendPollV1::Pending)
                     }
                     Ok(DirectionalSdmaWaitV1::Completed(completed)) => {
-                        self.finish_sdma_copy_v1(active, completed)
+                        #[cfg(feature = "hardware-diagnostic")]
+                        let observation = diagnostic.map(|observed| {
+                            KfdRuntimeDirectionalWaitObservationV1::new(
+                                &active, &completed, observed,
+                            )
+                        });
+                        let result = self.finish_sdma_copy_v1(active, completed);
+                        #[cfg(feature = "hardware-diagnostic")]
+                        self.record_directional_wait_settlement_v1(result.is_ok(), observation);
+                        result
                     }
                     Err(DirectionalSdmaExecutionFailureV1::Retryable {
                         detail,
@@ -5638,7 +5674,10 @@ impl KfdRuntimeBackendV1 {
                         Ok(BackendPollV1::Pending)
                     }
                     Ok(SameDeviceSdmaWaitV1::Completed(completed)) => {
-                        self.finish_same_device_sdma_copy_v1(active, completed)
+                        let result = self.finish_same_device_sdma_copy_v1(active, completed);
+                        #[cfg(feature = "hardware-diagnostic")]
+                        self.record_directional_wait_settlement_v1(result.is_ok(), None);
+                        result
                     }
                     Err(SameDeviceSdmaExecutionFailureV1::Retryable {
                         detail,
@@ -6634,7 +6673,10 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                             Ok(BackendPollV1::Pending)
                         }
                         Ok(DirectionalSdmaPollV1::Completed(completed)) => {
-                            self.finish_sdma_copy_v1(active, completed)
+                            let result = self.finish_sdma_copy_v1(active, completed);
+                            #[cfg(feature = "hardware-diagnostic")]
+                            self.record_directional_wait_settlement_v1(result.is_ok(), None);
+                            result
                         }
                         Err(DirectionalSdmaExecutionFailureV1::Retryable {
                             detail,
@@ -6671,7 +6713,10 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
                             Ok(BackendPollV1::Pending)
                         }
                         Ok(SameDeviceSdmaPollV1::Completed(completed)) => {
-                            self.finish_same_device_sdma_copy_v1(active, completed)
+                            let result = self.finish_same_device_sdma_copy_v1(active, completed);
+                            #[cfg(feature = "hardware-diagnostic")]
+                            self.record_directional_wait_settlement_v1(result.is_ok(), None);
+                            result
                         }
                         Err(SameDeviceSdmaExecutionFailureV1::Retryable {
                             detail,
@@ -12654,6 +12699,8 @@ mod retained_release_tests;
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "hardware-diagnostic")]
+    mod directional_wait_diagnostic_tests;
     mod sdma_allocation_tests;
     mod sdma_demotion_tests;
     mod sdma_host_read_tests;

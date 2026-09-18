@@ -1,0 +1,25 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 10.32s
+     Running unittests examples/gfx942-runtime-directional-window-benchmark.rs (target/debug/examples/gfx942_runtime_directional_window_benchmark-dab8357a73d76d71)
+
+running 17 tests
+test diagnostic::tests::completed_output_has_a_distinct_schema_and_exact_ordered_rounds ... ok
+test diagnostic::tests::counters_fail_closed_instead_of_wrapping_or_saturating ... ok
+test diagnostic::tests::deadline_exhaustion_after_pending_does_not_start_another_wait ... ok
+test diagnostic::tests::early_late_and_flush_output_failures_are_errors ... ok
+test diagnostic::tests::every_pending_observation_keeps_an_explicit_flush ... ok
+test diagnostic::tests::exact_diagnostic_modes_do_not_change_legacy_admission ... ok
+test diagnostic::tests::malformed_diagnostic_controls_reject_before_execution ... ok
+test diagnostic::tests::native_tests::invalid_native_captures_reject_before_writing_any_bytes ... ok
+test diagnostic::tests::native_tests::native_modes_require_the_closed_shape_and_use_full_remaining_budgets ... ok
+test diagnostic::tests::native_tests::native_output_propagates_early_late_and_flush_failures ... ok
+test diagnostic::tests::native_tests::native_schema_preserves_order_cpu_statuses_and_policy ... ok
+test diagnostic::tests::progress_errors_stop_without_later_publication_or_observation ... ok
+test diagnostic::tests::shared_timestamps_preserve_exact_decomposition_and_reject_invalid_results ... ok
+test diagnostic::tests::sliced_diagnostic_configuration_reports_the_exact_budget ... ok
+test diagnostic::tests::window_frontier_flushes_and_wait_budgets_follow_the_selected_policy ... ok
+test diagnostic::tests::zero_remaining_times_out_after_initial_flush_without_waiting ... ok
+test tests::sixty_three_plus_two_window_copy_flushes_without_full_timeout_wait ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

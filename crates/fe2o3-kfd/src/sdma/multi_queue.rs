@@ -16,7 +16,7 @@ use crate::shared_memory::SharedGttMemorySessionV1;
 mod logical_mux;
 mod tail_wait;
 #[allow(unsafe_code)]
-mod tail_wait_cpu;
+pub(super) mod tail_wait_cpu;
 pub(crate) use logical_mux::LogicalMuxSdmaSubmitFailureV2;
 pub use logical_mux::{
     GFX942_SDMA_LOGICAL_MUX_MAX_REQUESTS_PER_NATIVE_QUEUE_V2,

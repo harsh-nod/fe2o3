@@ -1,0 +1,33 @@
+    Finished `test` profile [unoptimized] target(s) in 0.18s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_kfd-ca42ead382ff5903)
+
+running 26 tests
+test sdma::multi_queue::tail_wait::tests::bound_tail_rejects_every_ordered_roster_identity_substitution ... ok
+test sdma::multi_queue::tail_wait::tests::compile_time_disabled_tail_scan_does_not_update_diagnostics ... ok
+test sdma::multi_queue::tail_wait::tests::cpu_measurement_status_never_substitutes_missing_or_invalid_values ... ok
+test sdma::multi_queue::tail_wait::tests::every_bound_queue_requires_the_exact_modulo_two_engine ... ok
+test sdma::multi_queue::tail_wait::tests::exact_fence_encoding_carries_system_scope_and_snoop ... ok
+test sdma::multi_queue::tail_wait::tests::final_audit_distinguishes_completion_timeout_and_tail_contract_violation ... ok
+test sdma::multi_queue::tail_wait::tests::injected_all_ready_epoch_counts_tail_rounds_one_audit_and_separate_moves ... ok
+test sdma::multi_queue::tail_wait::tests::injected_deadline_occurs_only_after_one_complete_pending_round ... ok
+test sdma::multi_queue::tail_wait::tests::injected_fallible_currentness_step_retains_exact_outer_custody ... ok
+test sdma::multi_queue::tail_wait::tests::injected_final_audit_observes_every_entry_once_before_timeout ... ok
+test sdma::multi_queue::tail_wait::tests::injected_identity_substitution_fails_at_exact_tail_or_roster_entry ... ok
+test sdma::multi_queue::tail_wait::tests::injected_tail_error_stops_without_a_full_roster_observation ... ok
+test sdma::multi_queue::tail_wait::tests::injected_tail_rounds_visit_every_tail_until_ready ... ok
+test sdma::multi_queue::tail_wait::tests::noncurrent_spin_budgets_are_confined_to_the_profiled_path ... ok
+test sdma::multi_queue::tail_wait::tests::optimized_source_has_no_post_bind_allocation_or_second_full_scan ... ok
+test sdma::multi_queue::tail_wait::tests::profiled_tail_rounds_count_actions_and_readiness_without_changing_order ... ok
+test sdma::multi_queue::tail_wait::tests::retained_record_header_is_derived_from_each_emitted_ordinary_packet ... ok
+test wait::tests::active_spin_floor_is_elapsed_and_clamped_to_deadline ... ok
+test wait::tests::active_spin_floor_preserves_the_explicit_sleep_ceiling ... ok
+test wait::tests::deadline_without_floor_preserves_the_default_action_sequence ... ok
+test wait::tests::explicit_sleep_ceiling_is_applied_before_and_after_backoff ... ok
+test wait::tests::observation_loop_propagates_closure_error_without_pausing ... ok
+test wait::tests::observation_loop_retries_pending_then_returns_ready ... ok
+test wait::tests::profiled_observation_loop_checks_zero_deadline_only_after_observing ... ok
+test wait::tests::sustained_waits_progress_from_spin_to_yield_to_bounded_sleep ... ok
+test wait::tests::zero_deadline_is_immediately_expired ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 1383 filtered out; finished in 0.01s
+

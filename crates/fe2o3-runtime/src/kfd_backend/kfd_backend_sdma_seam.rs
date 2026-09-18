@@ -1508,6 +1508,41 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         submission: DirectionalSdmaSubmissionOwnerV1,
         timeout: Duration,
     ) -> Result<DirectionalSdmaWaitV1, DirectionalSdmaExecutionFailureV1> {
+        self.wait_impl_v1(
+            submission,
+            timeout,
+            #[cfg(feature = "hardware-diagnostic")]
+            None,
+        )
+    }
+
+    #[cfg(feature = "hardware-diagnostic")]
+    pub(super) fn wait_with_diagnostics_v1(
+        &mut self,
+        submission: DirectionalSdmaSubmissionOwnerV1,
+        timeout: Duration,
+        policy: fe2o3_kfd::Gfx942SdmaPersistentDiagnosticSleepCeilingV1,
+    ) -> (
+        Result<DirectionalSdmaWaitV1, DirectionalSdmaExecutionFailureV1>,
+        Option<fe2o3_kfd::Gfx942SdmaPersistentWaitDiagnosticsV1>,
+    ) {
+        let mut observed = None;
+        let result = self.wait_impl_v1(submission, timeout, Some((policy, &mut observed)));
+        if !matches!(result, Ok(DirectionalSdmaWaitV1::Completed(_))) {
+            observed = None;
+        }
+        (result, observed)
+    }
+
+    fn wait_impl_v1(
+        &mut self,
+        submission: DirectionalSdmaSubmissionOwnerV1,
+        timeout: Duration,
+        #[cfg(feature = "hardware-diagnostic")] diagnostic: Option<(
+            fe2o3_kfd::Gfx942SdmaPersistentDiagnosticSleepCeilingV1,
+            &mut Option<fe2o3_kfd::Gfx942SdmaPersistentWaitDiagnosticsV1>,
+        )>,
+    ) -> Result<DirectionalSdmaWaitV1, DirectionalSdmaExecutionFailureV1> {
         match (self, submission) {
             (
                 Self::Native(queue),
@@ -1588,7 +1623,23 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
                 let expected_device_offset = submission.device_offset();
                 let expected_copy_bytes = submission.copy_bytes();
                 let expected_packet_count = submission.packet_count();
-                match queue.wait_directional_persistent_sdma_window_for_v1(submission, timeout) {
+                #[cfg(feature = "hardware-diagnostic")]
+                let result = if let Some((policy, output)) = diagnostic {
+                    queue
+                        .wait_directional_persistent_sdma_window_profiled_for_v1(
+                            submission, timeout, policy,
+                        )
+                        .map(|(completed, observed)| {
+                            *output = Some(observed);
+                            completed
+                        })
+                } else {
+                    queue.wait_directional_persistent_sdma_window_for_v1(submission, timeout)
+                };
+                #[cfg(not(feature = "hardware-diagnostic"))]
+                let result =
+                    queue.wait_directional_persistent_sdma_window_for_v1(submission, timeout);
+                match result {
                     Ok(completed) => Ok(DirectionalSdmaWaitV1::Completed(
                         DirectionalSdmaCompletedOwnerV1::NativeWindow { completed },
                     )),
@@ -1643,7 +1694,14 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
             }
             #[cfg(test)]
             (Self::Scripted(driver), DirectionalSdmaSubmissionOwnerV1::Scripted(submission)) => {
-                driver.wait(submission)
+                let result = driver.wait(submission);
+                #[cfg(feature = "hardware-diagnostic")]
+                if matches!(result, Ok(DirectionalSdmaWaitV1::Completed(_)))
+                    && let Some((_, output)) = diagnostic
+                {
+                    *output = driver.wait_diagnostics.pop_front();
+                }
+                result
             }
             #[cfg(test)]
             (_, submission) => Err(DirectionalSdmaExecutionFailureV1::ProcessTeardown {
@@ -2395,6 +2453,8 @@ mod scripted {
 
     pub(crate) struct ScriptedSdmaDriverV1 {
         steps: VecDeque<ScriptedSdmaStepV1>,
+        #[cfg(feature = "hardware-diagnostic")]
+        pub(crate) wait_diagnostics: VecDeque<fe2o3_kfd::Gfx942SdmaPersistentWaitDiagnosticsV1>,
         ledger: Rc<RefCell<ScriptedCustodyLedgerV1>>,
         promotion_custody: Option<ScriptedBufferOwnerV1>,
         demotion_custody: Option<ScriptedDeviceOwnerV1>,
@@ -2418,6 +2478,8 @@ mod scripted {
         pub(crate) fn new(steps: impl IntoIterator<Item = ScriptedSdmaStepV1>) -> Self {
             Self {
                 steps: steps.into_iter().collect(),
+                #[cfg(feature = "hardware-diagnostic")]
+                wait_diagnostics: VecDeque::new(),
                 ledger: Rc::new(RefCell::new(ScriptedCustodyLedgerV1::default())),
                 promotion_custody: None,
                 demotion_custody: None,
