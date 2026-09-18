@@ -1,0 +1,74 @@
+/tmp/fe2o3-kfd-native-wait-5d70cb0a-20260918.CgOcvGXS/target/release/examples/gfx942-runtime-directional-window-benchmark: OK
+/tmp/fe2o3-kfd-native-wait-5d70cb0a-20260918.CgOcvGXS/hsa-copy-pool-engine: OK
+topology schema=fe2o3.r26-host-topology.v1 placement=taskset-cpulist-then-numactl-physcpubind-membind-v1 gpu_index=4 pci_bdf=0000:85:00.0 unique_id=0x54f88318ca05093d numa_node=1 device_local_cpu_list=48-95 allowed_cpu_list=0-95 allowed_mem_node_list=0-1 measurement_cpu_list=48-95 observer_cpu=47 kfd_node=6 kfd_gpu_id=53458 topology_sha256=8c7286133d538e8f9b84cdf997f6f3a343ba1b9e31ed73b0aa4ecf90561e35eb
+policy: bind
+preferred node: 1
+physcpubind: 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95 
+cpubind: 1 
+nodebind: 1 
+membind: 1 
+preferred: 1 
+context diagnostic=shared-host-kfd-native-wait git_commit=5d70cb0a6e16fb265fe224690274fdb0be2b0055 gpu=4 unique_id=0x54f88318ca05093d bytes=268435456 depth=1 warmups=3 samples=10 repetitions=4 optional_context_journal=disabled placement=cpu48-95-memory1
+phase repetition=1 cell=A
+2026-09-18T07:37:26.996253914Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91542904832"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298713088"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298651648"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298647552"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=4 uid=0x54f88318ca05093d bdf=0000:85:00.0
+schema=fe2o3.kfd-directional-progress-diagnostic.v1 record=config backend=kfd unique_id=54f88318ca05093d target=gfx942:xnack- bytes=268435456 depth=1 warmups=3 samples=10 wait_policy=slice50us wait_slice_ns=50000 outer_timeout_ns=60000000000 packets_per_transfer=65 windows_per_transfer=2 max_packets_per_window=63 h2d_engine_index=1 d2h_engine_index=0 optional_context_journal=disabled timing=host-submit-and-progress
+schema=fe2o3.kfd-directional-progress-diagnostic.v1 record=round index=0 phase=warmup pattern=2 h2d_submit_ns=75102 h2d_progress_ns=6037093 h2d_total_ns=6112195 h2d_wait_calls=110 h2d_flush_calls=110 d2h_submit_ns=3485 d2h_progress_ns=5082877 d2h_total_ns=5086362 d2h_wait_calls=93 d2h_flush_calls=93 checked_bytes=268435456
+schema=fe2o3.kfd-directional-progress-diagnostic.v1 record=round index=1 phase=warmup pattern=69 h2d_submit_ns=16615 h2d_progress_ns=6028019 h2d_total_ns=6044634 h2d_wait_calls=109 h2d_flush_calls=109 d2h_submit_ns=3355 d2h_progress_ns=5076257 d2h_total_ns=5079612 d2h_wait_calls=93 d2h_flush_calls=93 checked_bytes=268435456
+schema=fe2o3.kfd-directional-progress-diagnostic.v1 record=round index=2 phase=warmup pattern=136 h2d_submit_ns=14823 h2d_progress_ns=6030763 h2d_total_ns=6045586 h2d_wait_calls=109 h2d_flush_calls=109 d2h_submit_ns=2784 d2h_progress_ns=5068275 d2h_total_ns=5071059 d2h_wait_calls=93 d2h_flush_calls=93 checked_bytes=268435456
+schema=fe2o3.kfd-directional-progress-diagnostic.v1 record=round index=3 phase=sample pattern=203 h2d_submit_ns=15473 h2d_progress_ns=6100177 h2d_total_ns=6115650 h2d_wait_calls=110 h2d_flush_calls=110 d2h_submit_ns=3055 d2h_progress_ns=5064469 d2h_total_ns=5067524 d2h_wait_calls=92 d2h_flush_calls=92 checked_bytes=268435456
+schema=fe2o3.kfd-directional-progress-diagnostic.v1 record=round index=4 phase=sample pattern=19 h2d_submit_ns=15513 h2d_progress_ns=6021670 h2d_total_ns=6037183 h2d_wait_calls=109 h2d_flush_calls=109 d2h_submit_ns=1623 d2h_progress_ns=5070098 d2h_total_ns=5071721 d2h_wait_calls=93 d2h_flush_calls=93 checked_bytes=268435456
+schema=fe2o3.kfd-directional-progress-diagnostic.v1 record=round index=5 phase=sample pattern=86 h2d_submit_ns=14512 h2d_progress_ns=6122811 h2d_total_ns=6137323 h2d_wait_calls=110 h2d_flush_calls=110 d2h_submit_ns=3315 d2h_progress_ns=5064570 d2h_total_ns=5067885 d2h_wait_calls=92 d2h_flush_calls=92 checked_bytes=268435456
+schema=fe2o3.kfd-directional-progress-diagnostic.v1 record=round index=6 phase=sample pattern=153 h2d_submit_ns=15363 h2d_progress_ns=6041410 h2d_total_ns=6056773 h2d_wait_calls=109 h2d_flush_calls=109 d2h_submit_ns=2554 d2h_progress_ns=5073313 d2h_total_ns=5075867 d2h_wait_calls=93 d2h_flush_calls=93 checked_bytes=268435456
+schema=fe2o3.kfd-directional-progress-diagnostic.v1 record=round index=7 phase=sample pattern=220 h2d_submit_ns=14982 h2d_progress_ns=5041425 h2d_total_ns=5056407 h2d_wait_calls=91 h2d_flush_calls=91 d2h_submit_ns=1542 d2h_progress_ns=5945927 d2h_total_ns=5947469 d2h_wait_calls=109 d2h_flush_calls=109 checked_bytes=268435456
+schema=fe2o3.kfd-directional-progress-diagnostic.v1 record=round index=8 phase=sample pattern=36 h2d_submit_ns=15653 h2d_progress_ns=6134629 h2d_total_ns=6150282 h2d_wait_calls=110 h2d_flush_calls=110 d2h_submit_ns=2714 d2h_progress_ns=5074625 d2h_total_ns=5077339 d2h_wait_calls=93 d2h_flush_calls=93 checked_bytes=268435456
+schema=fe2o3.kfd-directional-progress-diagnostic.v1 record=round index=9 phase=sample pattern=103 h2d_submit_ns=15292 h2d_progress_ns=5996273 h2d_total_ns=6011565 h2d_wait_calls=108 h2d_flush_calls=108 d2h_submit_ns=2523 d2h_progress_ns=5063739 d2h_total_ns=5066262 d2h_wait_calls=92 d2h_flush_calls=92 checked_bytes=268435456
+schema=fe2o3.kfd-directional-progress-diagnostic.v1 record=round index=10 phase=sample pattern=170 h2d_submit_ns=14712 h2d_progress_ns=5936863 h2d_total_ns=5951575 h2d_wait_calls=107 h2d_flush_calls=107 d2h_submit_ns=1823 d2h_progress_ns=5064650 d2h_total_ns=5066473 d2h_wait_calls=92 d2h_flush_calls=92 checked_bytes=268435456
+schema=fe2o3.kfd-directional-progress-diagnostic.v1 record=round index=11 phase=sample pattern=237 h2d_submit_ns=16394 h2d_progress_ns=6146597 h2d_total_ns=6162991 h2d_wait_calls=111 h2d_flush_calls=111 d2h_submit_ns=2514 d2h_progress_ns=5062957 d2h_total_ns=5065471 d2h_wait_calls=92 d2h_flush_calls=92 checked_bytes=268435456
+schema=fe2o3.kfd-directional-progress-diagnostic.v1 record=round index=12 phase=sample pattern=53 h2d_submit_ns=15703 h2d_progress_ns=6075050 h2d_total_ns=6090753 h2d_wait_calls=109 h2d_flush_calls=109 d2h_submit_ns=1362 d2h_progress_ns=5063608 d2h_total_ns=5064970 d2h_wait_calls=92 d2h_flush_calls=92 checked_bytes=268435456
+schema=fe2o3.kfd-directional-progress-diagnostic.v1 record=complete validated_rounds=13 measured_rounds=10 checked_bytes_per_round=268435456 validation=full-returned-buffer-every-round teardown=explicit-complete
+completed repetition=1 cell=A exit=0
+2026-09-18T07:38:07.634359191Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "4", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "92162809856"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "1", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "918548480"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "901832704"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "0", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "648642560"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "648634368"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "1", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "648638464"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "1", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "648630272"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "648638464"}}
+postflight repetition=1 cell=A exit=1
+/tmp/fe2o3-kfd-native-wait-5d70cb0a-20260918.CgOcvGXS/target/release/examples/gfx942-runtime-directional-window-benchmark: OK
+/tmp/fe2o3-kfd-native-wait-5d70cb0a-20260918.CgOcvGXS/hsa-copy-pool-engine: OK
+post_run_porcelain=
+2026-09-18T07:38:08.943881562Z
+{"card0": {"Unique ID": "0x6ced1647a296545c", "GPU use (%)": "0", "PCI Bus": "0000:05:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "91892862976"}, "card1": {"Unique ID": "0xab83d2ffef0d3cdf", "GPU use (%)": "0", "PCI Bus": "0000:26:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "648601600"}, "card2": {"Unique ID": "0xd2e26fef80cf5c33", "GPU use (%)": "0", "PCI Bus": "0000:46:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "648679424"}, "card3": {"Unique ID": "0x189ca857de1ef2fb", "GPU use (%)": "1", "PCI Bus": "0000:65:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "648404992"}, "card4": {"Unique ID": "0x54f88318ca05093d", "GPU use (%)": "0", "PCI Bus": "0000:85:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298754048"}, "card5": {"Unique ID": "0xb7baafd0fb173d8e", "GPU use (%)": "0", "PCI Bus": "0000:A6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298758144"}, "card6": {"Unique ID": "0x10a254ce4987e716", "GPU use (%)": "0", "PCI Bus": "0000:C6:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298749952"}, "card7": {"Unique ID": "0x53691ef168a0147d", "GPU use (%)": "0", "PCI Bus": "0000:E5:00.0", "VRAM Total Memory (B)": "206141652992", "VRAM Total Used Memory (B)": "298758144"}}
+
+
+============================ ROCm System Management Interface ============================
+================================== GPUs Indexed by PID ===================================
+PID 865597 is using 2 DRM device(s):
+6 7 
+PID 3161407 is using 0 DRM device(s)
+PID 3161415 is using 0 DRM device(s)
+PID 3161403 is using 1 DRM device(s):
+0 
+PID 3161411 is using 0 DRM device(s)
+PID 3161428 is using 0 DRM device(s)
+PID 3161424 is using 0 DRM device(s)
+PID 3161432 is using 0 DRM device(s)
+PID 3161419 is using 0 DRM device(s)
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+admitted gpu=4 uid=0x54f88318ca05093d bdf=0000:85:00.0
+2026-09-18T07:38:11.027113527Z
+finished exit=1 source_after_exit=0 binaries_after_exit=0 clean_exit=0 occupancy_exit=0

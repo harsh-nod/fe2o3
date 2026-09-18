@@ -23,6 +23,14 @@ Synchronous calls still reject blocking self-waits. Protected application/native
 execution, formal refinement and performance remain separate; accepted
 checkpoints, A1/A2 and #182 are unchanged.
 
+Separate native retry (2026-09-18): the [pinned-source GPU 4 attempt](evidence/dev-kfd-native-wait-5d70cb0a-2026-09-18/README.md)
+completed thirteen validated A/1 KFD round trips, then failed the unchanged
+postflight VRAM guard. The guard returned before its PID query, so this is an
+unexplained VRAM refusal, not established contention. The later passing guard
+does not restore acceptance. B/C/HSA did not run, no HIP cell exists in this
+protocol, and no matched ratio is available. Only the owned 454 MiB remote
+directory was removed; an independent absence/reference scan passed.
+
 Earlier development (2026-09-18): [caller-driven owned progress](runtime-generated-typed-completion-v1.md#canonical-application-integration)
 adds a thread-affine runtime owner that shares the background scheduler and
 retirement rules without spawning a thread. Its cooperative ticks and borrowed

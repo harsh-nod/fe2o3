@@ -1,0 +1,45 @@
+{
+  "source_commit": "5d70cb0a6e16fb265fe224690274fdb0be2b0055",
+  "campaign_exit": 1,
+  "completed_processes": [
+    {
+      "repetition": 1,
+      "cell": "A",
+      "exit": 0,
+      "validated_rounds": 13,
+      "measured_rounds": 10,
+      "checked_bytes_per_round": 268435456,
+      "teardown": "explicit-complete"
+    }
+  ],
+  "not_launched": [
+    "B",
+    "C",
+    "D"
+  ],
+  "gpu4": [
+    {
+      "timestamp": "2026-09-18T07:37:26.996253914Z",
+      "utilization_percent": 0,
+      "vram_bytes": 298647552
+    },
+    {
+      "timestamp": "2026-09-18T07:38:07.634359191Z",
+      "utilization_percent": 0,
+      "vram_bytes": 648634368
+    },
+    {
+      "timestamp": "2026-09-18T07:38:08.943881562Z",
+      "utilization_percent": 0,
+      "vram_bytes": 298754048
+    }
+  ],
+  "failed_postflight": "VRAM exceeded 536870912 bytes; guard returned before collecting PID attachments",
+  "final_guard": "passed with no reported GPU 4 attachment; does not override prior failure",
+  "cause": "unexplained transient usage; no causal or execution-overlap inference",
+  "matched_comparison": false,
+  "timing_ratios_reported": false,
+  "source_after_exit": 0,
+  "binaries_after_exit": 0,
+  "exact_source_roster_exit": 0
+}

@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/kfd-native-wait-5d70cb0a-20260918.6fSWSPIY/summarize.py", line 25, in <module>
+    assert (STAGE / "raw/benchmark.exit").read_text() == "0\n"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

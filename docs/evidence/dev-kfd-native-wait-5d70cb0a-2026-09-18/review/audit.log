@@ -1,0 +1,27 @@
+{
+  "audit": "PASS",
+  "closed_original_records": 17,
+  "source_files": 5538,
+  "source_commit": "5d70cb0a6e16fb265fe224690274fdb0be2b0055",
+  "export_sha256": "abb3ee3a4be431584a1303bda58828a2c89160d1d1c9461cebad95d64f7eb9b4",
+  "recorded_binary_hashes": {
+    "/tmp/fe2o3-kfd-native-wait-5d70cb0a-20260918.CgOcvGXS/target/release/examples/gfx942-runtime-directional-window-benchmark": "883fd7cf04888bfaa3e3c539d088e94341e92841fe038caa981285930afc46d1",
+    "/tmp/fe2o3-kfd-native-wait-5d70cb0a-20260918.CgOcvGXS/hsa-copy-pool-engine": "5d7e0578ea8078bf10066bbd7f36fe78608449af6fb6d647f2ec4503e86d9e33"
+  },
+  "source_and_binary_checks": "recorded before/after checks, not retained executables",
+  "completed_processes": [
+    {
+      "repetition": 1,
+      "cell": "A",
+      "exit": 0,
+      "validated_rounds": 13,
+      "measured_rounds": 10,
+      "checked_bytes_per_round": 268435456,
+      "teardown": "explicit-complete"
+    }
+  ],
+  "campaign_exit": 1,
+  "failure": "VRAM exceeded 536870912 bytes; guard returned before collecting PID attachments",
+  "matched_comparison": false,
+  "owned_absence_scan_finished": "2026-09-18T07:40:22.397035159Z"
+}

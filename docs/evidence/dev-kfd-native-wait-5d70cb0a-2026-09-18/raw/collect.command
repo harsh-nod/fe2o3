@@ -1,0 +1,1 @@
+scp -rq mi300x:/tmp/fe2o3-kfd-native-wait-5d70cb0a-20260918.CgOcvGXS/results results 

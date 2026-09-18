@@ -1,0 +1,21 @@
+2026-09-18T07:35:44.860246202Z
+5a84319f76f671a6c3ad26f78627c7297dfe02dfe7472a2ffb6c57dadb31e87c  prepare.sh
+3c9c1408c8afcd6bdb1a85f208ed9af6a96ba363f9a2f069529fa047d1ebfa89  guard.sh
+e6e6408b44ad8c6e5b11bf484f67566747de9f9ced80567af8c0e49d44566ea7  run.sh
+7e521ef7f9ed1d025044e2ac645c004ec0e2a443cbd343c6cdf6053e407ad00e  cleanup.sh
+09685a2cbb945489c02c7b78066e44172c55db5e03a62d589252796ba8556585  inspect.sh
+d71ad724b681ee7ff284b74fa851644590895c52985eb7a0949cd338de2ee373  owner
+a883ac0ca759b0b14ca76a038fea5cfdb67111ffcfa9450af11f21df135ba8a0  source.commit
+abb3ee3a4be431584a1303bda58828a2c89160d1d1c9461cebad95d64f7eb9b4  source.tar
+4488272e20c4ad752d6108e2d5099d369993b8bc3a55c5dd4b8b0fff930e022b  source-tree.txt
+Filesystem         1B-blocks          Used   Available Use% Mounted on
+/dev/nvme2n1p2 3778190245888 3539733032960 46459121664  99% /
+73M	/tmp/fe2o3-kfd-native-wait-5d70cb0a-20260918.CgOcvGXS
+inherited_environment HSA_XNACK=<unset>
+inherited_environment HSA_ENABLE_SDMA=<unset>
+inherited_environment HSA_ENABLE_PEER_SDMA=<unset>
+inherited_environment HSA_OVERRIDE_GFX_VERSION=<unset>
+inherited_environment HSA_TOOLS_LIB=<unset>
+inherited_environment LD_PRELOAD=<unset>
+inherited_environment LD_LIBRARY_PATH=<unset>
+2026-09-18T07:35:44.930067788Z
