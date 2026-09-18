@@ -1,6 +1,7 @@
 //! Private custody fixtures, not authenticated Rust providers or executable proofs.
 use super::*;
 
+#[path = "kernel_context_custody_v29_tests/scope_tests.rs"]
 mod scope_tests;
 
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
