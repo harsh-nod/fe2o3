@@ -1,5 +1,9 @@
 use super::*;
 
+fn no_constants(_: Ty<'_>, _: &mut SourceClosureWorkV1) -> Result<bool, ClosureProfileErrorV1> {
+    panic!("local-only scanner fixture must not classify constants")
+}
+
 fn environment(local: usize, call_kind: ClosureCallKindV1) -> ClosureEnvironmentV1 {
     ClosureEnvironmentV1 {
         local,
@@ -61,6 +65,7 @@ fn forwarding_requires_the_exact_block_and_source_ordinal() {
     let aliases = BTreeMap::from([(Local::from_usize(2), Local::from_usize(1))]);
     let forwarding = BTreeMap::from([(7, BTreeSet::from([0, 2]))]);
     let mut work = SourceClosureWorkV1::default();
+    let mut classify_constant = no_constants;
     let mut scanner = ClosureUseScannerV1::new(
         ClosureUsesV1 {
             environments: &environments,
@@ -69,6 +74,7 @@ fn forwarding_requires_the_exact_block_and_source_ordinal() {
             forwarding: &forwarding,
         },
         &mut work,
+        &mut classify_constant,
     )
     .unwrap();
 
@@ -81,20 +87,12 @@ fn forwarding_requires_the_exact_block_and_source_ordinal() {
     assert!(calls.is_empty());
     assert_eq!(forwards.len(), 2);
     assert_eq!(
-        (
-            forwards[0].block,
-            forwards[0].argument,
-            forwards[0].closure_local
-        ),
-        (7, 0, 1)
+        (forwards[0].block, forwards[0].argument, &forwards[0].source),
+        (7, 0, &ClosureForwardSourceV1::Local(1))
     );
     assert_eq!(
-        (
-            forwards[1].block,
-            forwards[1].argument,
-            forwards[1].closure_local
-        ),
-        (7, 2, 1)
+        (forwards[1].block, forwards[1].argument, &forwards[1].source),
+        (7, 2, &ClosureForwardSourceV1::Local(1))
     );
 }
 
@@ -108,6 +106,7 @@ fn alias_assignment_requires_the_recorded_root() {
     let aliases = BTreeMap::from([(Local::from_usize(3), Local::from_usize(1))]);
     let forwarding = BTreeMap::new();
     let mut work = SourceClosureWorkV1::default();
+    let mut classify_constant = no_constants;
     let mut scanner = ClosureUseScannerV1::new(
         ClosureUsesV1 {
             environments: &environments,
@@ -116,6 +115,7 @@ fn alias_assignment_requires_the_recorded_root() {
             forwarding: &forwarding,
         },
         &mut work,
+        &mut classify_constant,
     )
     .unwrap();
     let destination = Place::from(Local::from_usize(3));
@@ -144,6 +144,7 @@ fn assertion_diagnostics_cannot_use_closures_or_aliases() {
     let aliases = BTreeMap::from([(Local::from_usize(2), Local::from_usize(1))]);
     let forwarding = BTreeMap::new();
     let mut work = SourceClosureWorkV1::default();
+    let mut classify_constant = no_constants;
     let mut scanner = ClosureUseScannerV1::new(
         ClosureUsesV1 {
             environments: &environments,
@@ -152,6 +153,7 @@ fn assertion_diagnostics_cannot_use_closures_or_aliases() {
             forwarding: &forwarding,
         },
         &mut work,
+        &mut classify_constant,
     )
     .unwrap();
     for (len, index) in [(1, 3), (3, 1), (2, 3), (3, 2)] {
@@ -193,6 +195,7 @@ fn fn_once_counts_invocations_and_forwards_together() {
         (0, 2, false),
     ] {
         let mut work = SourceClosureWorkV1::default();
+        let mut classify_constant = no_constants;
         let mut scanner = ClosureUseScannerV1::new(
             ClosureUsesV1 {
                 environments: &environments,
@@ -201,6 +204,7 @@ fn fn_once_counts_invocations_and_forwards_together() {
                 forwarding: &forwarding,
             },
             &mut work,
+            &mut classify_constant,
         )
         .unwrap();
         for block in 0..invocations {
@@ -221,6 +225,7 @@ fn unused_fn_and_fn_mut_are_rejected() {
     for kind in [ClosureCallKindV1::Fn, ClosureCallKindV1::FnMut] {
         let environments = [environment(1, kind)];
         let mut work = SourceClosureWorkV1::default();
+        let mut classify_constant = no_constants;
         let scanner = ClosureUseScannerV1::new(
             ClosureUsesV1 {
                 environments: &environments,
@@ -229,6 +234,7 @@ fn unused_fn_and_fn_mut_are_rejected() {
                 forwarding: &forwarding,
             },
             &mut work,
+            &mut classify_constant,
         )
         .unwrap();
         assert!(scanner.finish().is_err());
@@ -244,6 +250,7 @@ fn static_use_limit_includes_both_record_kinds() {
         .map(|block| (block, BTreeSet::from([0])))
         .collect();
     let mut work = SourceClosureWorkV1::default();
+    let mut classify_constant = no_constants;
     let mut scanner = ClosureUseScannerV1::new(
         ClosureUsesV1 {
             environments: &environments,
@@ -252,6 +259,7 @@ fn static_use_limit_includes_both_record_kinds() {
             forwarding: &forwarding,
         },
         &mut work,
+        &mut classify_constant,
     )
     .unwrap();
     for block in 0..MAX_STATIC_CALLS {

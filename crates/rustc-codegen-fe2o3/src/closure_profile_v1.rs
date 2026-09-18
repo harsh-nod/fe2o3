@@ -27,6 +27,8 @@ use std::fmt;
 
 #[path = "closure_profile_v1/alias_flow_v1.rs"]
 mod alias_flow_v1;
+#[path = "closure_profile_v1/constants_v1.rs"]
+mod constants_v1;
 #[path = "closure_profile_v1/once_shim_v1.rs"]
 mod once_shim_v1;
 #[path = "closure_profile_v1/uses_v1.rs"]
@@ -102,7 +104,13 @@ pub(crate) struct StaticClosureCallV1 {
 pub(crate) struct ClosureForwardV1 {
     pub(crate) block: usize,
     pub(crate) argument: usize,
-    pub(crate) closure_local: usize,
+    pub(crate) source: ClosureForwardSourceV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ClosureForwardSourceV1 {
+    Local(usize),
+    EmptyConstant(constants_v1::EmptyClosureConstantV1),
 }
 
 /// Layout and uses observed before caller provenance is resolved. This cannot
@@ -197,10 +205,17 @@ pub(crate) fn observe_closures_v2<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
 ) -> Result<Option<BoundedClosureAdmissionV2>, ClosureProfileErrorV1> {
-    if !contains_concrete_closure_v1(tcx, instance)? {
-        return Ok(None);
-    }
-    analyze_bounded_closures_v2(tcx, instance, ClosureOriginPolicyV1::Either).map(Some)
+    let mut work = SourceClosureWorkV1::default();
+    observe_raw_closures_v1(tcx, instance, &BTreeMap::new(), &mut work)?
+        .map(|raw| {
+            let origins = raw
+                .environments
+                .iter()
+                .map(|env| (env.local, env.origin))
+                .collect();
+            raw.admit(&origins, ClosureOriginPolicyV1::Either, &mut work)
+        })
+        .transpose()
 }
 
 #[cfg(test)]
@@ -270,19 +285,6 @@ pub(crate) fn observe_raw_closures_v1<'tcx>(
     let body = tcx.instance_mir(instance.def);
     charge_work(work, body.local_decls.len())?;
     reject_dynamic_types(tcx, instance, body, work)?;
-    if !contains_concrete_closure_v1(tcx, instance)? {
-        return Ok(None);
-    }
-    let target = rustc_semantic_layout_target_v1(tcx).map_err(|error| {
-        ClosureProfileErrorV1::new(format!(
-            "live closure layout target is unavailable: {error}"
-        ))
-    })?;
-    if tcx.sess.target.pointer_width != 64 {
-        return Err(ClosureProfileErrorV1::new(
-            "the bounded closure profile requires a 64-bit compiler target",
-        ));
-    }
     let own_receiver = own_closure_receiver_v1(tcx, instance, body)?;
     let creations = closure_creations(body, work)?;
     charge_work(work, body.local_decls.len())?;
@@ -435,17 +437,12 @@ pub(crate) fn observe_raw_closures_v1<'tcx>(
         });
     }
 
-    if environments.is_empty() {
-        return Err(ClosureProfileErrorV1::new(
-            "the requested closure profile contains no concrete closure environment",
-        ));
-    }
     environments.sort_by_key(|environment| environment.local);
     let aliases =
         alias_flow_v1::reference_aliases(body, &closure_locals, &value_aliases, &mut |amount| {
             charge_work(work, amount)
         })?;
-    let (calls, forwards) = uses_v1::validate_uses_and_calls(
+    let (calls, forwards, saw_closure_constant) = uses_v1::validate_uses_and_calls(
         tcx,
         instance,
         body,
@@ -457,6 +454,19 @@ pub(crate) fn observe_raw_closures_v1<'tcx>(
         },
         work,
     )?;
+    if environments.is_empty() && !saw_closure_constant {
+        return Ok(None);
+    }
+    let target = rustc_semantic_layout_target_v1(tcx).map_err(|error| {
+        ClosureProfileErrorV1::new(format!(
+            "live closure layout target is unavailable: {error}"
+        ))
+    })?;
+    if tcx.sess.target.pointer_width != 64 {
+        return Err(ClosureProfileErrorV1::new(
+            "the bounded closure profile requires a 64-bit compiler target",
+        ));
+    }
     Ok(Some(RawClosureObservationV1 {
         environments,
         calls,
@@ -474,22 +484,26 @@ fn charge_work(work: &mut SourceClosureWorkV1, amount: usize) -> Result<(), Clos
         .map_err(|error| ClosureProfileErrorV1::new(error.to_string()))
 }
 
-pub(crate) fn contains_concrete_closure_v1<'tcx>(
+#[cfg(test)]
+pub(crate) fn scan_untracked_uses_for_test<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
+    body: &Body<'tcx>,
+    work: &mut SourceClosureWorkV1,
 ) -> Result<bool, ClosureProfileErrorV1> {
-    let body = tcx.instance_mir(instance.def);
-    let own_receiver = own_closure_receiver_v1(tcx, instance, body)?;
-    for (local, declaration) in body.local_decls.iter_enumerated() {
-        if Some(local) == own_receiver {
-            continue;
-        }
-        let ty = normalized_ty(tcx, instance, declaration.ty, "closure presence check")?;
-        if matches!(ty.kind(), TyKind::Closure(..)) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    uses_v1::validate_uses_and_calls(
+        tcx,
+        instance,
+        body,
+        uses_v1::ClosureUsesV1 {
+            environments: &[],
+            closure_locals: &BTreeSet::new(),
+            aliases: &BTreeMap::new(),
+            forwarding: &BTreeMap::new(),
+        },
+        work,
+    )
+    .map(|(_, _, constant)| constant)
 }
 
 fn own_closure_receiver_v1<'tcx>(

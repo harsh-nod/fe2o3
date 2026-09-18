@@ -2,8 +2,9 @@
 
 use super::{CollectedFunction, CollectedFunctionRole, CollectionResult};
 use crate::closure_profile_v1::{
-    BoundedClosureAdmissionV2, ClosureOriginPolicyV1, ClosureOriginV1, ClosureProfileErrorV1,
-    is_shim_receiver_call_v1, normalized_ty, observe_raw_closures_v1, resolve_direct_call,
+    BoundedClosureAdmissionV2, ClosureForwardSourceV1, ClosureOriginPolicyV1, ClosureOriginV1,
+    ClosureProfileErrorV1, is_shim_receiver_call_v1, normalized_ty, observe_raw_closures_v1,
+    resolve_direct_call,
 };
 use crate::device_ffi::{DeviceFfiInstanceIdentity, stable_instance_identity};
 use crate::rustc_semantic_adapter_v1::rustc_mir_body_sha256_v1;
@@ -209,7 +210,11 @@ fn observe_v1<'tcx>(
                         return Err(Error::new("one call occurrence has multiple callees"));
                     }
                     charge(work, ordinals.len())?;
-                    forwarding.insert(block.as_usize(), ordinals.iter().copied().collect());
+                    let arguments = ordinals.iter().copied().collect::<BTreeSet<_>>();
+                    if arguments.len() != ordinals.len() {
+                        return Err(Error::new("duplicate closure call argument"));
+                    }
+                    forwarding.insert(block.as_usize(), arguments);
                 }
             }
         }
@@ -275,13 +280,28 @@ fn observe_v1<'tcx>(
                 forward.argument,
                 work,
             )?;
-            let source = *nodes.get(&(caller, forward.closure_local)).ok_or_else(|| {
-                Error::new("closure forwarding source is not an observed environment")
-            })?;
             let destination = *nodes.get(&(callee, formal)).ok_or_else(|| {
                 Error::new("closure forwarding formal is not an observed environment")
             })?;
-            edges[source].push(destination);
+            match &forward.source {
+                ClosureForwardSourceV1::Local(local) => {
+                    let source = *nodes.get(&(caller, *local)).ok_or_else(|| {
+                        Error::new("closure forwarding source is not an observed environment")
+                    })?;
+                    edges[source].push(destination);
+                }
+                ClosureForwardSourceV1::EmptyConstant(constant) => {
+                    constant.revalidate(
+                        tcx,
+                        functions[caller].instance,
+                        forward.block,
+                        forward.argument,
+                        work,
+                    )?;
+                    charge(work, 1)?;
+                    origins[destination] |= LOCAL;
+                }
+            }
         }
     }
     propagate_origins_v1(&mut origins, &edges, work)?;
@@ -406,9 +426,15 @@ fn validate_forward_v1<'tcx>(
         .basic_blocks
         .get(BasicBlock::from_usize(block))
         .ok_or_else(|| Error::new("closure forwarding block is absent"))?;
-    let TerminatorKind::Call { args, .. } = &data.terminator().kind else {
+    let TerminatorKind::Call { func, args, .. } = &data.terminator().kind else {
         return Err(Error::new("closure forwarding occurrence is not a call"));
     };
+    charge(work, 1)?;
+    if resolve_direct_call(tcx, caller, func)? != callee || args.len() != signature.inputs().len() {
+        return Err(Error::new(
+            "closure forwarding callee or argument roster changed",
+        ));
+    }
     let operand = args
         .get(argument)
         .ok_or_else(|| Error::new("closure caller argument is absent"))?;

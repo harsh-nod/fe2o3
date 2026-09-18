@@ -20,8 +20,17 @@ pub(super) fn validate_uses_and_calls<'tcx>(
     body: &Body<'tcx>,
     uses: ClosureUsesV1<'_>,
     work: &mut SourceClosureWorkV1,
-) -> Result<(Vec<StaticClosureCallV1>, Vec<ClosureForwardV1>), ClosureProfileErrorV1> {
-    let mut scanner = ClosureUseScannerV1::new(uses, work)?;
+) -> Result<(Vec<StaticClosureCallV1>, Vec<ClosureForwardV1>, bool), ClosureProfileErrorV1> {
+    let mut classify_constant = |ty, work: &mut SourceClosureWorkV1| {
+        charge(work, 1)?;
+        let mut ty = normalized_ty(tcx, instance, ty, "closure constant use")?;
+        while let TyKind::Ref(_, pointee, _) = ty.kind() {
+            charge(work, 1)?;
+            ty = *pointee;
+        }
+        Ok(matches!(ty.kind(), TyKind::Closure(..)))
+    };
+    let mut scanner = ClosureUseScannerV1::new(uses, work, &mut classify_constant)?;
     for (block_index, block) in body.basic_blocks.iter_enumerated() {
         scanner.charge(1)?;
         let block_index = block_index.as_usize();
@@ -49,22 +58,34 @@ pub(super) fn validate_uses_and_calls<'tcx>(
             scanner.validate_terminator(tcx, instance, body, block_index, &terminator.kind)?;
         }
     }
-    scanner.finish()
+    let saw_closure_constant = scanner.saw_closure_constant;
+    let (calls, forwards) = scanner.finish()?;
+    Ok((calls, forwards, saw_closure_constant))
 }
 
-struct ClosureUseScannerV1<'a, 'work> {
+struct ClosureUseScannerV1<'a, 'work, 'tcx> {
     uses: ClosureUsesV1<'a>,
     work: &'work mut SourceClosureWorkV1,
     by_local: BTreeMap<Local, (&'a ClosureEnvironmentV1, usize)>,
     total_uses: usize,
     calls: Vec<StaticClosureCallV1>,
     forwards: Vec<ClosureForwardV1>,
+    classify_constant: &'a mut dyn FnMut(
+        Ty<'tcx>,
+        &mut SourceClosureWorkV1,
+    ) -> Result<bool, ClosureProfileErrorV1>,
+    saw_closure_constant: bool,
+    constant_uses: usize,
 }
 
-impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
+impl<'a, 'work, 'tcx> ClosureUseScannerV1<'a, 'work, 'tcx> {
     fn new(
         uses: ClosureUsesV1<'a>,
         work: &'work mut SourceClosureWorkV1,
+        classify_constant: &'a mut dyn FnMut(
+            Ty<'tcx>,
+            &mut SourceClosureWorkV1,
+        ) -> Result<bool, ClosureProfileErrorV1>,
     ) -> Result<Self, ClosureProfileErrorV1> {
         let mut by_local = BTreeMap::new();
         for environment in uses.environments {
@@ -78,6 +99,9 @@ impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
             total_uses: 0,
             calls: Vec::new(),
             forwards: Vec::new(),
+            classify_constant,
+            saw_closure_constant: false,
+            constant_uses: 0,
         })
     }
 
@@ -96,7 +120,7 @@ impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
 
     fn operand_root(
         &mut self,
-        operand: &Operand<'_>,
+        operand: &Operand<'tcx>,
     ) -> Result<Option<Local>, ClosureProfileErrorV1> {
         match operand_local(operand, self.work)? {
             Some(local) => self.root(local),
@@ -104,7 +128,7 @@ impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
         }
     }
 
-    fn validate_terminator<'tcx>(
+    fn validate_terminator(
         &mut self,
         tcx: TyCtxt<'tcx>,
         instance: Instance<'tcx>,
@@ -177,7 +201,7 @@ impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
         }
     }
 
-    fn validate_call<'tcx>(
+    fn validate_call(
         &mut self,
         tcx: TyCtxt<'tcx>,
         instance: Instance<'tcx>,
@@ -211,6 +235,25 @@ impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
                         "closure receiver must be one unprojected closure or receiver alias",
                     )
                 })?);
+            } else if matches!(argument.node, Operand::Constant(_)) {
+                self.require_forward_candidate(block, ordinal)?;
+                if self.uses.environments.len() + self.constant_uses >= MAX_CLOSURES {
+                    return Err(ClosureProfileErrorV1::new(format!(
+                        "closure count exceeds {MAX_CLOSURES}"
+                    )));
+                }
+                let constant = constants_v1::EmptyClosureConstantV1::observe(
+                    tcx, instance, block, ordinal, self.work,
+                )?;
+                self.check_static_use_limit()?;
+                self.charge(1)?;
+                self.forwards.push(ClosureForwardV1 {
+                    block,
+                    argument: ordinal,
+                    source: ClosureForwardSourceV1::EmptyConstant(constant),
+                });
+                self.total_uses += 1;
+                self.constant_uses += 1;
             } else {
                 self.record_forward(block, ordinal, &argument.node)?;
             }
@@ -285,7 +328,28 @@ impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
         &mut self,
         block: usize,
         argument: usize,
-        operand: &Operand<'_>,
+        operand: &Operand<'tcx>,
+    ) -> Result<(), ClosureProfileErrorV1> {
+        self.require_forward_candidate(block, argument)?;
+        let closure_local = self.operand_root(operand)?.ok_or_else(|| {
+            ClosureProfileErrorV1::new(
+                "closure forwarding requires one unprojected closure or receiver alias",
+            )
+        })?;
+        self.record_use(closure_local)?;
+        self.charge(1)?;
+        self.forwards.push(ClosureForwardV1 {
+            block,
+            argument,
+            source: ClosureForwardSourceV1::Local(closure_local.as_usize()),
+        });
+        Ok(())
+    }
+
+    fn require_forward_candidate(
+        &mut self,
+        block: usize,
+        argument: usize,
     ) -> Result<(), ClosureProfileErrorV1> {
         self.charge(2)?;
         if !self
@@ -298,18 +362,6 @@ impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
                 "closure value escapes to a non-closure call without a forwarding candidate",
             ));
         }
-        let closure_local = self.operand_root(operand)?.ok_or_else(|| {
-            ClosureProfileErrorV1::new(
-                "closure forwarding requires one unprojected closure or receiver alias",
-            )
-        })?;
-        self.record_use(closure_local)?;
-        self.charge(1)?;
-        self.forwards.push(ClosureForwardV1 {
-            block,
-            argument,
-            closure_local: closure_local.as_usize(),
-        });
         Ok(())
     }
 
@@ -321,18 +373,23 @@ impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
     }
 
     fn record_use(&mut self, local: Local) -> Result<(), ClosureProfileErrorV1> {
-        self.charge(1)?;
-        if self.total_uses >= MAX_STATIC_CALLS {
-            return Err(ClosureProfileErrorV1::new(format!(
-                "closure static use count exceeds {MAX_STATIC_CALLS}"
-            )));
-        }
+        self.check_static_use_limit()?;
         let (_, count) = self
             .by_local
             .get_mut(&local)
             .ok_or_else(|| ClosureProfileErrorV1::new("closure use has no recorded environment"))?;
         *count += 1;
         self.total_uses += 1;
+        Ok(())
+    }
+
+    fn check_static_use_limit(&mut self) -> Result<(), ClosureProfileErrorV1> {
+        self.charge(1)?;
+        if self.total_uses >= MAX_STATIC_CALLS {
+            return Err(ClosureProfileErrorV1::new(format!(
+                "closure static use count exceeds {MAX_STATIC_CALLS}"
+            )));
+        }
         Ok(())
     }
 
@@ -354,8 +411,8 @@ impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
 
     fn allowed_closure_assignment(
         &mut self,
-        destination: Place<'_>,
-        value: &Rvalue<'_>,
+        destination: Place<'tcx>,
+        value: &Rvalue<'tcx>,
     ) -> Result<bool, ClosureProfileErrorV1> {
         self.charge(1)?;
         let Some(destination) = destination.as_local() else {
@@ -405,7 +462,7 @@ impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
 
     fn statement_mentions_closure(
         &mut self,
-        statement: &StatementKind<'_>,
+        statement: &StatementKind<'tcx>,
     ) -> Result<bool, ClosureProfileErrorV1> {
         self.charge(1)?;
         match statement {
@@ -435,7 +492,7 @@ impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
 
     fn assert_message_mentions_closure(
         &mut self,
-        message: &AssertMessage<'_>,
+        message: &AssertMessage<'tcx>,
     ) -> Result<bool, ClosureProfileErrorV1> {
         self.charge(1)?;
         match message {
@@ -463,7 +520,7 @@ impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
 
     fn inline_asm_mentions_closure(
         &mut self,
-        operand: &InlineAsmOperand<'_>,
+        operand: &InlineAsmOperand<'tcx>,
     ) -> Result<bool, ClosureProfileErrorV1> {
         self.charge(1)?;
         match operand {
@@ -484,8 +541,8 @@ impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
                     None => Ok(false),
                 }
             }
+            InlineAsmOperand::Const { value } => self.constant_mentions_closure(value),
             InlineAsmOperand::Out { place: None, .. }
-            | InlineAsmOperand::Const { .. }
             | InlineAsmOperand::SymFn { .. }
             | InlineAsmOperand::SymStatic { .. }
             | InlineAsmOperand::Label { .. } => Ok(false),
@@ -494,7 +551,7 @@ impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
 
     fn rvalue_mentions_closure(
         &mut self,
-        rvalue: &Rvalue<'_>,
+        rvalue: &Rvalue<'tcx>,
     ) -> Result<bool, ClosureProfileErrorV1> {
         self.charge(1)?;
         match rvalue {
@@ -523,17 +580,30 @@ impl<'a, 'work> ClosureUseScannerV1<'a, 'work> {
 
     fn operand_mentions_closure(
         &mut self,
-        operand: &Operand<'_>,
+        operand: &Operand<'tcx>,
     ) -> Result<bool, ClosureProfileErrorV1> {
         self.charge(1)?;
         match operand {
             // A projection changes the accessed value, not the tracked environment root.
             Operand::Copy(place) | Operand::Move(place) => self.place_mentions_closure(*place),
-            Operand::Constant(_) | Operand::RuntimeChecks(_) => Ok(false),
+            Operand::Constant(constant) => self.constant_mentions_closure(constant),
+            Operand::RuntimeChecks(_) => Ok(false),
         }
     }
 
-    fn place_mentions_closure(&mut self, place: Place<'_>) -> Result<bool, ClosureProfileErrorV1> {
+    fn constant_mentions_closure(
+        &mut self,
+        constant: &rustc_middle::mir::ConstOperand<'tcx>,
+    ) -> Result<bool, ClosureProfileErrorV1> {
+        let mentions = (self.classify_constant)(constant.const_.ty(), self.work)?;
+        self.saw_closure_constant |= mentions;
+        Ok(mentions)
+    }
+
+    fn place_mentions_closure(
+        &mut self,
+        place: Place<'tcx>,
+    ) -> Result<bool, ClosureProfileErrorV1> {
         self.charge(2)?;
         Ok(self.uses.closure_locals.contains(&place.local)
             || self.uses.aliases.contains_key(&place.local))

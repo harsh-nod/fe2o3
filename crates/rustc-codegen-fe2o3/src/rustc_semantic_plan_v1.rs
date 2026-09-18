@@ -353,6 +353,11 @@ pub(crate) struct SourceClosureWorkV1 {
 }
 
 impl SourceClosureWorkV1 {
+    #[cfg(test)]
+    pub(crate) fn validation_work_for_test(&self) -> u64 {
+        self.counts.validation_work
+    }
+
     pub(crate) fn charge(
         &mut self,
         amount: usize,
