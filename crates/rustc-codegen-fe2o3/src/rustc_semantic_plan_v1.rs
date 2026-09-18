@@ -3927,6 +3927,7 @@ const fn terminal_expansion_tag_for_schema_v1(
             TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 112,
         },
         ProductionTerminalExpansionV1::RustcFabsF32 => 113,
+        ProductionTerminalExpansionV1::Gfx942Wave64Shuffle(scalar) => scalar.terminal_tag(),
         ProductionTerminalExpansionV1::RustcSaturatingInteger(operation) => match operation {
             fe2o3_mir_model::semantic_mir_v1::SemanticSaturatingIntegerOpV1::Add => 127,
             fe2o3_mir_model::semantic_mir_v1::SemanticSaturatingIntegerOpV1::Subtract => 128,

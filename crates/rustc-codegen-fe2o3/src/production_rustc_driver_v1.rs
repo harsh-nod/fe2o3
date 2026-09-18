@@ -19,6 +19,10 @@ const EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1: &str =
 #[path = "production_rustc_driver_checked_output_source_v1_tests.rs"]
 mod checked_output_source_v1_tests;
 
+#[path = "production_rustc_driver_fixed_checked_output_v1.rs"]
+mod fixed_checked_output_v1;
+pub use fixed_checked_output_v1::run_production_fixed_checked_output_extraction_driver_v1;
+
 #[derive(Default)]
 struct ProductionExtractionCallbacksV1 {
     ranked_memory: bool,
@@ -591,8 +595,29 @@ fn publish_new_simulation_bundle(
     bytes: &[u8],
     maximum: usize,
 ) -> Result<(), String> {
+    publish_new_extraction_bytes_v1(output, bytes, maximum, "simulation bundle")
+}
+
+fn publish_new_extraction_bytes_v1(
+    output: &Path,
+    bytes: &[u8],
+    maximum: usize,
+    label: &'static str,
+) -> Result<(), String> {
+    publish_new_extraction_bytes_with_writer_v1(output, bytes, maximum, label, |file, bytes| {
+        file.write_all(bytes).and_then(|()| file.sync_all())
+    })
+}
+
+fn publish_new_extraction_bytes_with_writer_v1(
+    output: &Path,
+    bytes: &[u8],
+    maximum: usize,
+    label: &'static str,
+    write_and_sync: impl FnOnce(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
+) -> Result<(), String> {
     if bytes.is_empty() || bytes.len() > maximum {
-        return Err("refusing to publish an empty or oversized simulation bundle".to_owned());
+        return Err(format!("refusing to publish an empty or oversized {label}"));
     }
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -600,13 +625,13 @@ fn publish_new_simulation_bundle(
     options.mode(0o600);
     let mut file = options.open(output).map_err(|error| {
         format!(
-            "failed to create new simulation bundle output `{}`: {error}",
+            "failed to create new {label} output `{}`: {error}",
             output.display()
         )
     })?;
-    if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+    if let Err(error) = write_and_sync(&mut file, bytes) {
         return Err(format!(
-            "failed to publish simulation bundle `{}`; the create-new partial output was retained for fail-closed cleanup: {error}",
+            "failed to publish {label} `{}`; the create-new partial output was retained for fail-closed cleanup: {error}",
             output.display()
         ));
     }
@@ -614,13 +639,13 @@ fn publish_new_simulation_bundle(
     {
         let descriptor = file.metadata().map_err(|error| {
             format!(
-                "failed to inspect published simulation bundle descriptor `{}`: {error}",
+                "failed to inspect published {label} descriptor `{}`: {error}",
                 output.display()
             )
         })?;
         let path = std::fs::symlink_metadata(output).map_err(|error| {
             format!(
-                "failed to re-inspect published simulation bundle path `{}`: {error}",
+                "failed to re-inspect published {label} path `{}`: {error}",
                 output.display()
             )
         })?;
@@ -631,7 +656,7 @@ fn publish_new_simulation_bundle(
             || path.file_type().is_symlink()
         {
             return Err(format!(
-                "simulation bundle output `{}` changed identity during publication",
+                "{label} output `{}` changed identity during publication",
                 output.display()
             ));
         }

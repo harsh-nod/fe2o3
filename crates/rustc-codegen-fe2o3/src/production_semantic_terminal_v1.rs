@@ -76,6 +76,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     /// The exact rustc `core::intrinsics::fabs::<f32>` compiler intrinsic.
     RustcFabsF32,
     RustcSaturatingInteger(fe2o3_mir_model::semantic_mir_v1::SemanticSaturatingIntegerOpV1),
+    Gfx942Wave64Shuffle(crate::trusted_device_items::Wave64ShuffleScalarV1),
     /// The exact checked `fe2o3_device::memory::volatile_load` provider.
     MemoryVolatileLoad,
     Bf16Conversion(ProductionBf16ConversionV1),
@@ -151,6 +152,9 @@ pub(crate) const fn is_traversed_reviewed_helper_v1(item: TrustedDeviceItem) -> 
         item,
         TrustedDeviceItem::Invocation3DCurrent
             | TrustedDeviceItem::ExecutionWithWorkgroup
+            | TrustedDeviceItem::Gfx942Wave64ReduceSum
+            | TrustedDeviceItem::Gfx942Wave64InclusiveScanSum
+            | TrustedDeviceItem::Gfx942Wave64ExclusiveScanSum
             | TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic
             | TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic
             | TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic
@@ -360,6 +364,9 @@ impl ProductionSemanticTerminalRuleV1 {
             )),
             TrustedDeviceItem::Gfx942CollectivesCurrent => {
                 Self::Expand(ProductionTerminalExpansionV1::CollectiveContextCurrent)
+            }
+            TrustedDeviceItem::Gfx942Wave64Shuffle(scalar) => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx942Wave64Shuffle(scalar))
             }
             TrustedDeviceItem::WorkgroupCollectivesCurrent => {
                 Self::Expand(ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent)
@@ -839,6 +846,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::MemoryVolatileLoad) => {
                 TrustedDeviceItem::MemoryVolatileLoad
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx942Wave64Shuffle(scalar)) => {
+                TrustedDeviceItem::Gfx942Wave64Shuffle(scalar)
             }
             Self::Expand(
                 ProductionTerminalExpansionV1::ColdPath

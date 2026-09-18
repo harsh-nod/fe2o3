@@ -63,6 +63,10 @@ use crate::trusted_device_items::{self, TrustedDeviceItem};
 mod execution_terminals;
 #[path = "production_saturating_terminal_v1.rs"]
 mod saturating_terminal;
+#[path = "production_wave64_shuffle_terminal_v1.rs"]
+mod wave64_shuffle_terminal;
+#[cfg(test)]
+pub(crate) use wave64_shuffle_terminal::check_wave64_descriptor_mutations_v1;
 
 const IDENTITY_INVENTORY_DOMAIN_V2: &[u8] = b"fe2o3/semantic-mir/rustc-identity-inventory/v2";
 #[cfg(test)]
@@ -392,6 +396,8 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         semantic_function_abis,
         semantic_terminal_abis,
     )?;
+    #[cfg(test)]
+    super::semantic_import_observation_v1_tests::observe_actual(tcx, &semantic_mir);
     let (
         rustc_preflight_plan_sha256,
         rustc_preflight_plan_transcript,
@@ -1307,6 +1313,10 @@ fn terminal_operation_v1<'tcx>(
             Ok(SemanticCompilerIntrinsicOperationV1::SaturatingInteger(
                 operation,
             ))
+        }
+        ProductionTerminalExpansionV1::Gfx942Wave64Shuffle(scalar) => {
+            wave64_shuffle_terminal::construct(tcx, instance, scalar, abi, types)
+                .ok_or_else(|| body_owner_table_mismatch_v1("exact Wave64 shuffle primitive"))
         }
         ProductionTerminalExpansionV1::MemoryVolatileLoad
             if inputs.len() == 2
@@ -4279,6 +4289,7 @@ const fn terminal_operation_tag_for_schema_v1(
             TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 112,
         },
         ProductionTerminalExpansionV1::RustcFabsF32 => 113,
+        ProductionTerminalExpansionV1::Gfx942Wave64Shuffle(scalar) => scalar.terminal_tag(),
         ProductionTerminalExpansionV1::RustcSaturatingInteger(operation) => match operation {
             fe2o3_mir_model::semantic_mir_v1::SemanticSaturatingIntegerOpV1::Add => 127,
             fe2o3_mir_model::semantic_mir_v1::SemanticSaturatingIntegerOpV1::Subtract => 128,

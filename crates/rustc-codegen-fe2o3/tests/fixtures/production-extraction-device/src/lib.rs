@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "wave64-capture")]
+mod wave64_capture;
+
 #[cfg(feature = "scalar-borrow-policy5")]
 mod scalar_borrow_policy5;
 
@@ -42,6 +45,7 @@ mod saturating_integer;
 mod write_only_reference;
 
 #[cfg(not(any(
+    feature = "wave64-capture",
     feature = "constant-shift",
     feature = "scalar-borrow-policy5",
     feature = "defined-helper-reference",

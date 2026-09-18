@@ -8,6 +8,12 @@ rust-version.workspace = true
 publish = false
 
 [features]
+wave64-capture = []
+wave64-capture-u32 = ["wave64-capture"]
+wave64-capture-i32 = ["wave64-capture"]
+wave64-capture-f32 = ["wave64-capture"]
+wave64-capture-direct-unsafe = ["wave64-capture-u32"]
+wave64-capture-inclusive = ["wave64-capture-u32"]
 scalar-borrow-policy5 = []
 scalar-borrow-policy5-barrier = ["scalar-borrow-policy5"]
 defined-helper-reference = []

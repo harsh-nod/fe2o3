@@ -32,6 +32,14 @@ use dialect_amdgcn::{
 use fe2o3_kernel_ir::{NarrowFloatFormat, WidenedFloatBinaryOp};
 use fe2o3_rustc_invocation::CARGO_METADATA_BUILD_OBSERVATION_ENV_V2;
 
+mod wave64_shuffle_provider_v1;
+#[cfg(test)]
+pub(crate) use wave64_shuffle_provider_v1::check_actual_sealed_trait_chain_paths_v1;
+pub(crate) use wave64_shuffle_provider_v1::{
+    Wave64ShuffleScalarV1, is_authenticated_gfx942_wave64_shuffle_instance_v1,
+    scalar_for_instance as wave64_shuffle_scalar_for_instance_v1,
+};
+
 const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-IDENTITY/V1\0";
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
@@ -290,6 +298,7 @@ pub(crate) enum TrustedDeviceItem {
     Gfx942StaticLdsU32x256,
     Gfx942StaticLdsU32x256Type,
     Gfx942Wave64ReduceActiveU32,
+    Gfx942Wave64Shuffle(Wave64ShuffleScalarV1),
     Gfx942Workgroup256ReduceActiveU32,
     Gfx942Wave64ReduceSum,
     Gfx942Wave64InclusiveScanSum,
@@ -939,6 +948,21 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::Gfx942Collectives::wave64_reduce_sum_active_u32",
     ),
     (
+        TrustedDeviceItem::Gfx942Wave64Shuffle(Wave64ShuffleScalarV1::U32),
+        "fe2o3_device_gfx942_wave64_shuffle_u32_v1",
+        "<u32 as fe2o3_device::Gfx942CollectiveElement>::__fe2o3_wave64_shuffle_index",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Wave64Shuffle(Wave64ShuffleScalarV1::I32),
+        "fe2o3_device_gfx942_wave64_shuffle_i32_v1",
+        "<i32 as fe2o3_device::Gfx942CollectiveElement>::__fe2o3_wave64_shuffle_index",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Wave64Shuffle(Wave64ShuffleScalarV1::F32),
+        "fe2o3_device_gfx942_wave64_shuffle_f32_v1",
+        "<f32 as fe2o3_device::Gfx942CollectiveElement>::__fe2o3_wave64_shuffle_index",
+    ),
+    (
         TrustedDeviceItem::Gfx942Workgroup256ReduceActiveU32,
         "fe2o3_device_gfx942_workgroup256_reduce_active_u32_v1",
         "fe2o3_device::Gfx942Collectives::workgroup256_reduce_sum_active_u32",
@@ -1573,7 +1597,11 @@ pub(crate) fn rejected_provider(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Reject
 
 fn provider_rule(tcx: TyCtxt<'_>, def_id: DefId, item: TrustedDeviceItem) -> Result<(), String> {
     let definition = reviewed_provider_semantic_definition_v1(tcx, def_id)?;
-    validate_reviewed_fe2o3_device_provider_definition_v1(item, &definition)
+    validate_reviewed_fe2o3_device_provider_definition_v1(item, &definition)?;
+    if let TrustedDeviceItem::Gfx942Wave64Shuffle(scalar) = item {
+        wave64_shuffle_provider_v1::validate_definition(tcx, def_id, scalar, &definition)?;
+    }
+    Ok(())
 }
 
 fn validate_reviewed_fe2o3_device_provider_definition_v1(
@@ -3259,6 +3287,7 @@ const fn narrow_format(value: DeviceValueDiagnosticItem) -> Option<NarrowFloatFo
 mod tests {
     include!("trusted_device_items/core_01_tests.rs");
     include!("trusted_device_items/generative_provider_v1_tests.rs");
+    include!("trusted_device_items/wave64_shuffle_provider_v1_tests.rs");
     include!("trusted_device_items/materialization_v1_tests.rs");
 
     include!("trusted_device_items/wrapping_integer_v1_tests.rs");
@@ -3993,6 +4022,9 @@ mod tests {
             TrustedDeviceItem::Gfx942StaticLdsU32x256,
             TrustedDeviceItem::Gfx942StaticLdsU32x256Type,
             TrustedDeviceItem::Gfx942Wave64ReduceActiveU32,
+            TrustedDeviceItem::Gfx942Wave64Shuffle(Wave64ShuffleScalarV1::U32),
+            TrustedDeviceItem::Gfx942Wave64Shuffle(Wave64ShuffleScalarV1::I32),
+            TrustedDeviceItem::Gfx942Wave64Shuffle(Wave64ShuffleScalarV1::F32),
             TrustedDeviceItem::Gfx942Workgroup256ReduceActiveU32,
             TrustedDeviceItem::Gfx942Wave64ReduceSum,
             TrustedDeviceItem::Gfx942Wave64InclusiveScanSum,

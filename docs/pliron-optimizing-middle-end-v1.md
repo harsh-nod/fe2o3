@@ -813,3 +813,50 @@ the remaining LLVM shift direction. Separate raw dynamic-count cases must
 refuse at the unchanged source-admission boundary. The retained-MIR setting is
 test-only. These regressions do not establish protected publication, hardware
 execution, dynamic-shift support or full tutorial-corpus qualification.
+
+## Fixed checked-output extraction
+
+`RankedVerifiedProductionCompilation::lower_fixed_checked_output_v1` consumes
+the actual ranked compilation and selects the fixed Policy5 route from its
+retained helper-source policy. `RawEmpty` uses direct checked output;
+`UnitLocal` uses independently checked silent-helper erasure followed by the
+same optimizer policy. No caller supplies a pass list or chooses a fallback.
+
+The move-only facade retains the complete original N, optional erased E,
+optimizer B/C/S/O history, ranked roster, collector bindings and native output.
+Its additional header storage is checked together with the inherited retained
+floor. This bounded logical accounting is not a whole-process memory bound.
+
+`run_production_fixed_checked_output_extraction_driver_v1` performs one real
+rustc transaction and writes LLVM text from actual O through the existing
+extraction-only handoff checks. Its capped create-new writer refuses existing
+files and verifies the output file identity. The diagnostic identities and
+bytes are not protected compiler, artifact, load or launch authority.
+
+This route does not replace `lower_production_target` or the protected default
+publisher. The latter still needs a general signed source-proof producer and
+a consuming final-output publication contract. Missing aggregate receipts
+continue to refuse; simulator agreement and output hashes cannot replace them.
+
+## Authenticated Wave64 capture
+
+Semantic MIR V33 adds inert capture of the reviewed gfx942 shuffle-index
+primitive for u32, i32 and f32. Collection checks the actual resolved definition,
+sealed trait chain, primitive Self, provider source closure, shared context
+identity and exact `gfx942:xnack-` profile. Import reconstructs the actual Rust
+FnAbi, including its unwind bit. This is not permission for user-written unsafe
+code, arbitrary unsafe helpers, or an unmarked collective primitive.
+The existing admitted-function ABI contract still rejects an unwinding ABI;
+capture must not fabricate a non-unwinding bit to pass that check.
+
+V33 explicitly extends the ordinary V30 grammar. It does not inherit V29
+Execution capabilities or the independently reserved assembly grammars merely
+because its version number is larger. The shuffle uses intrinsic tag 90 and
+private terminal tags 135-137; historical encodings remain unchanged.
+
+Executable lowering deliberately refuses this captured primitive until checked
+lane range, physical participation, context transport and convergence facts are
+available. Source tests observe the actual semantic owner inside its single
+production transaction, then preserve the subsequent compilation refusal.
+Successful inert capture is not successful kernel compilation, simulation,
+native execution or hardware qualification.

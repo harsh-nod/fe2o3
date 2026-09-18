@@ -22,6 +22,7 @@ mod declaration_commitment_v1;
 mod function_commitment_v1;
 mod saturating_integer_v30;
 mod target_properties;
+mod wave64_shuffle_v33;
 
 pub use canonical_decode::SemanticMirDecodeErrorV1;
 pub use capability_v29::{SemanticExecutionOperationV29, SemanticExecutionRoleV29};
@@ -58,6 +59,8 @@ pub const INERT_SEMANTIC_MIR_VERSION_V15: u16 = 15;
 pub const INERT_SEMANTIC_MIR_VERSION_V28: u16 = 28;
 pub const INERT_SEMANTIC_MIR_VERSION_V29: u16 = 29;
 pub const INERT_SEMANTIC_MIR_VERSION_V30: u16 = 30;
+// V31/V32 and their assembly grammars are independently reserved.
+pub const INERT_SEMANTIC_MIR_VERSION_V33: u16 = 33;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -83,6 +86,7 @@ pub enum SemanticMirWireVersionV1 {
     V28,
     V29,
     V30,
+    V33,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -105,6 +109,7 @@ impl SemanticMirWireVersionV1 {
             Self::V28 => INERT_SEMANTIC_MIR_VERSION_V28,
             Self::V29 => INERT_SEMANTIC_MIR_VERSION_V29,
             Self::V30 => INERT_SEMANTIC_MIR_VERSION_V30,
+            Self::V33 => INERT_SEMANTIC_MIR_VERSION_V33,
         }
     }
 
@@ -127,6 +132,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V28 => Some(Self::V28),
             INERT_SEMANTIC_MIR_VERSION_V29 => Some(Self::V29),
             INERT_SEMANTIC_MIR_VERSION_V30 => Some(Self::V30),
+            INERT_SEMANTIC_MIR_VERSION_V33 => Some(Self::V33),
             _ => None,
         }
     }
@@ -5416,6 +5422,15 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     FabsF32,
     /// Defined, non-unwinding integer saturation with an exact `(T, T) -> T` ABI.
     SaturatingInteger(SemanticSaturatingIntegerOpV1),
+    /// Inert capture of the exact unsafe gfx942 Wave64 shuffle-index primitive.
+    ///
+    /// Requires full physical participation, a valid lane and authenticated
+    /// context/profile at later executable boundaries. This record grants none
+    /// of those premises and does not change the provider's Rust unwind ABI.
+    Gfx942Wave64ShuffleIndex {
+        context: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+    },
     /// Performs one bounds-checked volatile read from an immutable Rust slice.
     MemoryVolatileLoad {
         element: SemanticTypeIdV1,
@@ -6296,6 +6311,15 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V30, limits)
     }
 
+    /// Admits inert Wave64 primitive capture plus the V30 ordinary grammar.
+    /// V29 Execution and independently reserved assembly schemas are excluded.
+    pub fn admit_exact_v33(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V33, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
@@ -6305,7 +6329,8 @@ impl InertSemanticMirRequestV1 {
     /// V14 for checked disjoint-block component projection, and V15 for checked
     /// column-major BF16 B operands. V28 retains RustCall tuple-field locals
     /// and the unit spelling of an empty RustCall source tuple. V30 adds typed
-    /// integer saturation. Inert capability content remains independently refused.
+    /// integer saturation; V33 adds inert gfx942 Wave64 primitive capture.
+    /// Inert capability content remains independently refused.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -7947,6 +7972,7 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::FabsF32
         | SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_)
         | SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { .. }
+        | SemanticCompilerIntrinsicOperationV1::Gfx942Wave64ShuffleIndex { .. }
         | SemanticCompilerIntrinsicOperationV1::MathContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::MathF32 { .. }
         | SemanticCompilerIntrinsicOperationV1::Bf16Conversion { .. }
@@ -8204,6 +8230,9 @@ fn compiler_intrinsic_signature_matches(
         }
         SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_) => {
             saturating_integer_v30::signature_matches(request, abi)
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx942Wave64ShuffleIndex { context, element } => {
+            wave64_shuffle_v33::signature_matches(request, abi, context, element)
         }
         SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element } => {
             inputs.len() == 2
@@ -15870,6 +15899,10 @@ fn enqueue_compiler_intrinsic_type_references(
         SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element } => {
             pending.push_back(element);
         }
+        SemanticCompilerIntrinsicOperationV1::Gfx942Wave64ShuffleIndex { context, element } => {
+            pending.push_back(context);
+            pending.push_back(element);
+        }
         SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
             scope,
             dynamic_lds,
@@ -16718,6 +16751,9 @@ fn uses_bf16_conversion(request: &InertSemanticMirRequestV1) -> bool {
 }
 
 fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
+    if wave64_shuffle_v33::uses_wave64_shuffle(request) {
+        return SemanticMirWireVersionV1::V33;
+    }
     if saturating_integer_v30::uses_saturating_integer(request) {
         return SemanticMirWireVersionV1::V30;
     }
@@ -17821,11 +17857,23 @@ fn encode_compiler_intrinsic_operation(
     if matches!(
         operation,
         SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_)
-    ) && wire_version != SemanticMirWireVersionV1::V30
-    {
+    ) && !matches!(
+        wire_version,
+        SemanticMirWireVersionV1::V30 | SemanticMirWireVersionV1::V33
+    ) {
         return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
             requested: wire_version,
             required: SemanticMirWireVersionV1::V30,
+        });
+    }
+    if matches!(
+        operation,
+        SemanticCompilerIntrinsicOperationV1::Gfx942Wave64ShuffleIndex { .. }
+    ) && wire_version != SemanticMirWireVersionV1::V33
+    {
+        return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+            requested: wire_version,
+            required: SemanticMirWireVersionV1::V33,
         });
     }
     if matches!(
@@ -17844,6 +17892,7 @@ fn encode_compiler_intrinsic_operation(
         SemanticMirWireVersionV1::V28
             | SemanticMirWireVersionV1::V29
             | SemanticMirWireVersionV1::V30
+            | SemanticMirWireVersionV1::V33
     ) {
         SemanticMirWireVersionV1::V15
     } else {
@@ -17851,6 +17900,11 @@ fn encode_compiler_intrinsic_operation(
     };
     match operation {
         SemanticCompilerIntrinsicOperationV1::Execution(operation) => operation.encode(writer),
+        SemanticCompilerIntrinsicOperationV1::Gfx942Wave64ShuffleIndex { context, element } => {
+            writer.u8(90)?;
+            writer.u32(context.0)?;
+            writer.u32(element.0)
+        }
         SemanticCompilerIntrinsicOperationV1::SaturatingInteger(operation) => {
             writer.u8(87)?;
             writer.u8(match operation {
