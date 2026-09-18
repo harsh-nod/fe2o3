@@ -340,6 +340,7 @@ impl Gfx942SdmaQueueSetV1 {
         owner: QueueKeyV1,
         logical_lane_count: u32,
         reserved_queue_ids: &[u32],
+        escrow: &mut super::super::SdmaCreationEscrowV1,
     ) -> Result<(Self, Gfx942SdmaLogicalMuxObservationV2), Gfx942SdmaQueueSetCreationFailureV1>
     {
         if !gfx942_sdma_logical_mux_lane_count_is_admitted_v2(logical_lane_count) {
@@ -349,15 +350,17 @@ impl Gfx942SdmaQueueSetV1 {
                 ),
             ));
         }
-        let (created, observations) = Self::create_striped(
+        let (created, _, observations) = super::super::creation::create_set(
             memory,
             owner,
-            GFX942_SDMA_LOGICAL_MUX_NATIVE_QUEUE_COUNT_V2 as u32,
             reserved_queue_ids,
+            super::super::SdmaCreationProfileV1::LogicalMux {
+                logical_lane_count: logical_lane_count as u8,
+                next_logical_lane: 0,
+            },
+            None,
+            escrow,
         )?;
-        let Self::Striped { owners, .. } = created else {
-            std::process::abort();
-        };
         let [first, second] = observations.as_slice() else {
             std::process::abort();
         };
@@ -365,14 +368,7 @@ impl Gfx942SdmaQueueSetV1 {
             logical_lane_count: logical_lane_count as u8,
             native_queues: [*first, *second],
         };
-        Ok((
-            Self::LogicalMuxV2 {
-                owners,
-                logical_lane_count: logical_lane_count as u8,
-                next_logical_lane: 0,
-            },
-            observation,
-        ))
+        Ok((created, observation))
     }
 
     #[allow(clippy::result_large_err)]

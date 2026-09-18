@@ -6367,11 +6367,13 @@ impl ComputeAqlQueueSessionV1 {
         }
         let reserved = self.active_compute_queue_ids_for_sdma_creation_v1()?;
         let key = self.key;
-        let created =
-            self.with_sdma_queue_creation_custody_v1("generic SDMA queue creation", |memory| {
-                Gfx942SdmaQueueSetV1::create_generic(memory, key, &reserved)
+        let created = self.with_sdma_queue_creation_custody_v1(
+            "generic SDMA queue creation",
+            |memory, escrow| {
+                Gfx942SdmaQueueSetV1::create_generic(memory, key, &reserved, escrow)
                     .map(|owner| ReturnedSdmaCreationV1::single(owner, ()))
-            })?;
+            },
+        )?;
         self.sdma = Some(created.into_single().0);
         let observation = self
             .sdma
@@ -6404,8 +6406,8 @@ impl ComputeAqlQueueSessionV1 {
         let key = self.key;
         let created = self.with_sdma_queue_creation_custody_v1(
             "directional SDMA queue creation",
-            |memory| {
-                Gfx942SdmaQueueSetV1::create_directional(memory, key, &reserved)
+            |memory, escrow| {
+                Gfx942SdmaQueueSetV1::create_directional(memory, key, &reserved, escrow)
                     .map(|owner| ReturnedSdmaCreationV1::single(owner, ()))
             },
         )?;
@@ -6440,11 +6442,13 @@ impl ComputeAqlQueueSessionV1 {
         }
         let reserved = self.active_compute_queue_ids_for_sdma_creation_v1()?;
         let key = self.key;
-        let created =
-            self.with_sdma_queue_creation_custody_v1("targeted SDMA queue creation", |memory| {
-                Gfx942SdmaQueueSetV1::create_targeted(memory, key, engine_index, &reserved)
+        let created = self.with_sdma_queue_creation_custody_v1(
+            "targeted SDMA queue creation",
+            |memory, escrow| {
+                Gfx942SdmaQueueSetV1::create_targeted(memory, key, engine_index, &reserved, escrow)
                     .map(|owner| ReturnedSdmaCreationV1::single(owner, ()))
-            })?;
+            },
+        )?;
         self.sdma = Some(created.into_single().0);
         let observation = self
             .sdma
@@ -6481,12 +6485,15 @@ impl ComputeAqlQueueSessionV1 {
         }
         let reserved = self.active_compute_queue_ids_for_sdma_creation_v1()?;
         let key = self.key;
-        let created =
-            self.with_sdma_queue_creation_custody_v1("striped SDMA queue creation", |memory| {
-                Gfx942SdmaQueueSetV1::create_striped(memory, key, queue_count, &reserved).map(
-                    |(owner, observations)| ReturnedSdmaCreationV1::single(owner, observations),
-                )
-            })?;
+        let created = self.with_sdma_queue_creation_custody_v1(
+            "striped SDMA queue creation",
+            |memory, escrow| {
+                Gfx942SdmaQueueSetV1::create_striped(memory, key, queue_count, &reserved, escrow)
+                    .map(|(owner, observations)| {
+                        ReturnedSdmaCreationV1::single(owner, observations)
+                    })
+            },
+        )?;
         let (owner, observations) = created.into_single();
         self.sdma = Some(owner);
         Ok(observations)
@@ -6520,12 +6527,13 @@ impl ComputeAqlQueueSessionV1 {
         let key = self.key;
         let created = self.with_sdma_queue_creation_custody_v1(
             "logical-mux SDMA queue creation",
-            |memory| {
+            |memory, escrow| {
                 Gfx942SdmaQueueSetV1::create_logical_mux_v2(
                     memory,
                     key,
                     logical_lane_count,
                     &reserved,
+                    escrow,
                 )
                 .map(|(owner, observation)| ReturnedSdmaCreationV1::single(owner, observation))
             },
@@ -6560,18 +6568,21 @@ impl ComputeAqlQueueSessionV1 {
         }
         let reserved_queue_ids = self.active_compute_queue_ids_for_sdma_creation_v1()?;
         let key = self.key;
-        let created =
-            self.with_sdma_queue_creation_custody_v1("combined SDMA queue creation", |memory| {
+        let created = self.with_sdma_queue_creation_custody_v1(
+            "combined SDMA queue creation",
+            |memory, escrow| {
                 Gfx942SdmaQueueSetV1::create_combined_directional_and_striped(
                     memory,
                     key,
                     striped_queue_count,
                     &reserved_queue_ids,
+                    escrow,
                 )
                 .map(|(directional, striped, capacity)| {
                     ReturnedSdmaCreationV1::combined(directional, striped, capacity)
                 })
-            })?;
+            },
+        )?;
         let (directional, striped, capacity) = created.into_combined();
         self.sdma = Some(directional);
         self.striped_sdma = Some(striped);
@@ -12975,6 +12986,7 @@ impl ComputeAqlQueueSessionV1 {
         stage: &'static str,
         operation: impl FnOnce(
             &mut SharedGttMemorySessionV1,
+            &mut crate::sdma::creation::SdmaCreationEscrowV1,
         ) -> Result<
             ReturnedSdmaCreationV1<R>,
             crate::sdma::Gfx942SdmaQueueSetCreationFailureV1,

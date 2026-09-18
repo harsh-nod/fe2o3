@@ -47,6 +47,9 @@ pub(crate) use host_pool_policy::{
     HostPoolDispositionV1, host_pool_recycle_decision_v1, host_pool_usage_v1,
 };
 
+pub(crate) mod creation;
+use creation::{SdmaCreationEscrowV1, SdmaCreationProfileV1};
+
 mod multi_queue;
 #[cfg(feature = "hardware-diagnostic")]
 mod persistent_wait_diagnostic;
@@ -148,7 +151,7 @@ impl SdmaWaitProfileV1 {
 
 /// Frozen claim boundary for the bounded native gfx942 SDMA implementation.
 pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v14\n",
+    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v15\n",
     "kfd_sdma_queue_schema_sha256=f489ae5735f8230e4ee788fe1fa9e62b307301c13cf88ee70889b0f455af0b5b\n",
     "sdma_topology_capability_sha256=51236bbd70ece3ee4e14cc1a3e7e7cfbbe0960e745130e1a3943f9e39bc36a26\n",
     "rocm_systems_commit=1b648038a0ac164cf2f06f2a581ced12cf5f7378\n",
@@ -175,6 +178,7 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
     "dispatch-data-bridge=exact-full-extent-host-content-or-completed-h2d-only,move-only-storage-identity-and-queue-and-pool-generation-binding,no-rematerialization,demotion-advances-pool-generation\n",
     "currentness=one-operational-pre-post-envelope-per-submit-batch-or-wait-batch-or-combined-submit-through-observed-completion,authenticated-full-host-write-retains-one-pre-post-envelope-per-max-linear-chunk,persistent-ready-certificate-validation-retains-one-pre-post-envelope,internal-atomics-and-mapped-writes-only-inside-envelope\n",
     "failure=structural-preflight-before-the-first-live-shared-memory-or-currentness-operation-recovers-inputs,retryable-no-native-effect-availability-detached-compute-foreign-buffer-and-recoverable-preparation-failures-preserve-inputs-and-do-not-poison,every-terminal-error-or-caught-unwind-at-or-after-that-boundary-permanently-poisons-process-global-kfd-admission-and-requires-process-teardown-independent-of-whether-a-confirmed-queue-roster-exists,prepared-live-and-terminal-creation-custody-are-distinct,validated-xgmi-route-scope-failure-quarantines-both-participating-sessions,currentness-counter-generation-and-post-preflight-uncertainty-terminally-poison-and-retain-native-custody,every-striped-submit-poll-or-wait-process-teardown-return-invokes-one-central-terminalizer-that-poisons-both-the-local-session-and-process-global-admission,striped-terminal-failure-exposes-audit-only-confirmed-and-at-most-one-indeterminate-and-untouched-observations-without-drain-or-resubmit-authority,striped-wait-timeout-retains-exact-pending-custody-and-does-not-invoke-the-terminalizer,striped-wait-panic-before-the-abort-only-retirement-suffix-preserves-the-exact-sealed-plan-shards-and-ordered-completion-roster-in-terminal-custody-and-invokes-the-same-terminalizer,striped-cursor-commits-only-after-complete-publication-and-closing-currentness\n",
+    "creation-unwind=ordinary-generic-targeted-directional-striped-logical-mux-and-combined-constructors-borrow-one-profile-aware-escrow-outside-the-catch,preallocated-separate-primary-secondary-rosters,confirmed-prefixes-and-prepared-attempt-with-mutable-untrusted-create-args-and-mapped-doorbell-rooted-before-resuming-original-panic,retake-and-final-poison-panics-do-not-replace-original,pre-prepared-memory-operation-custody-remains-opaque,no-arbitrary-consuming-memory-primitive-unwind-refinement,no-public-xgmi-creation-unwind-guarantee,no-terminal-cleanup-authority\n",
     "teardown=combined-striped-before-directional-before-compute,standalone-sdma-before-compute,then-release-ring-control-completions-and-pooled-buffers-explicitly,terminal-creation-custody-has-no-in-process-cleanup-authority\n",
     "proof=abstract-pool-generation-retention-and-cross-device-coordinate-theorems-only,r46-model-is-not-an-executable-rust-refinement,host-thread-cpu-and-context-switch-measurements-are-not-proof\n",
     "contracted=ioctl-truth,doorbell-mapping,cpu-gpu-coherence,sha256-collision-resistance,userspace-certificate-is-not-kernel-attestation-or-loaded-kernel-proof,kernel-firmware-packet-consumption,completion,event-driven-completion,gpu-clock-calibration,progress,liveness\n",
@@ -183,7 +187,7 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_SDMA_COPY_MANIFEST_V1`].
 pub const GFX942_SDMA_COPY_MANIFEST_SHA256_V1: &str =
-    "6ae8a129c33783ba8f0ff95c66f925221a8af127972e0f5093aa676fb311a59b";
+    "f0c2af0746f004f9d90cb64367a995c41122f87ad9572c5c5fcabe64bfe2e115";
 
 const SDMA_OP_COPY: u32 = 1;
 const SDMA_OP_FENCE: u32 = 5;
@@ -1224,7 +1228,7 @@ impl PreparedGfx942SdmaQueueV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Gfx942SdmaQueueCreationNativeObservationV1 {
-    UntrustedIoctlOutputs { queue_id: u32, doorbell_offset: u64 },
+    UntrustedIoctlOutputs { actual: KfdIoctlCreateQueueArgs },
     ValidatedQueueId(u32),
 }
 
@@ -1356,13 +1360,16 @@ fn prepare_sdma_queue_host_resources()
 #[allow(clippy::result_large_err)]
 fn prepare_sdma_queue_host_resource_roster(
     queue_count: usize,
-) -> Result<Vec<PreparedGfx942SdmaQueueHostResourcesV1>, Gfx942SdmaQueueOwnerCreationFailureV1> {
-    let mut roster = Vec::new();
-    roster.try_reserve_exact(queue_count).map_err(|_| {
-        Gfx942SdmaQueueOwnerCreationFailureV1::retryable(Gfx942SdmaErrorV1::Contract(
-            "SDMA prepared host-resource roster allocation",
-        ))
-    })?;
+) -> Result<
+    arrayvec::ArrayVec<PreparedGfx942SdmaQueueHostResourcesV1, GFX942_SDMA_MAX_STRIPED_QUEUES_V1>,
+    Gfx942SdmaQueueOwnerCreationFailureV1,
+> {
+    if !(1..=GFX942_SDMA_MAX_STRIPED_QUEUES_V1).contains(&queue_count) {
+        return Err(Gfx942SdmaQueueOwnerCreationFailureV1::retryable(
+            Gfx942SdmaErrorV1::Contract("SDMA prepared host-resource roster count"),
+        ));
+    }
+    let mut roster = arrayvec::ArrayVec::new();
     for _ in 0..queue_count {
         roster.push(prepare_sdma_queue_host_resources()?);
     }
@@ -1521,23 +1528,6 @@ impl Gfx942SdmaQueueOwnerV1 {
     }
 
     #[allow(clippy::result_large_err)]
-    fn create_on_engine_in_armed_scope(
-        memory: &mut SharedGttMemorySessionV1,
-        owner: QueueKeyV1,
-        engine: KfdGfx942SdmaEngineId,
-        host: PreparedGfx942SdmaQueueHostResourcesV1,
-        creation_arm: &ProcessGlobalKfdRuntimeCreationArmV1,
-    ) -> Result<Self, Gfx942SdmaQueueOwnerCreationFailureV1> {
-        Self::create_with_engine_in_armed_scope(
-            memory,
-            owner,
-            Some(Gfx942SdmaEngineProfileV1::Ordinary(engine)),
-            host,
-            creation_arm,
-        )
-    }
-
-    #[allow(clippy::result_large_err)]
     fn create_on_xgmi_engine_in_armed_scope(
         memory: &mut SharedGttMemorySessionV1,
         owner: QueueKeyV1,
@@ -1551,6 +1541,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             Some(Gfx942SdmaEngineProfileV1::Xgmi(engine)),
             host,
             creation_arm,
+            &mut None,
         )
     }
 
@@ -1561,7 +1552,15 @@ impl Gfx942SdmaQueueOwnerV1 {
         engine: Option<Gfx942SdmaEngineProfileV1>,
         host: PreparedGfx942SdmaQueueHostResourcesV1,
         _creation_arm: &ProcessGlobalKfdRuntimeCreationArmV1,
+        attempted: &mut Option<TerminalGfx942SdmaQueueCreationV1>,
     ) -> Result<Self, Gfx942SdmaQueueOwnerCreationFailureV1> {
+        if matches!(
+            attempted,
+            Some(TerminalGfx942SdmaQueueCreationV1::QueueAttempt { .. })
+        ) {
+            std::process::abort();
+        }
+        *attempted = Some(TerminalGfx942SdmaQueueCreationV1::OpaqueAfterFirstMemoryOperation);
         let PreparedGfx942SdmaQueueHostResourcesV1 {
             records,
             xgmi_records,
@@ -1656,91 +1655,24 @@ impl Gfx942SdmaQueueOwnerV1 {
             Err(error) => {
                 return Err(Gfx942SdmaQueueOwnerCreationFailureV1::terminal(
                     error,
-                    TerminalGfx942SdmaQueueCreationV1::OpaqueAfterFirstMemoryOperation,
+                    attempted.take().unwrap_or_else(|| std::process::abort()),
                 ));
             }
         };
-        let mut actual = expected;
-        if create_queue(memory.kfd_fd(), &mut actual).is_err() {
-            return Err(Gfx942SdmaQueueOwnerCreationFailureV1::terminal(
-                Gfx942SdmaErrorV1::QueueCreationIndeterminate,
-                TerminalGfx942SdmaQueueCreationV1::QueueAttempt {
-                    prepared,
-                    native: Gfx942SdmaQueueCreationNativeObservationV1::UntrustedIoctlOutputs {
-                        queue_id: actual.queue_id,
-                        doorbell_offset: actual.doorbell_offset,
-                    },
-                    doorbell: None,
-                },
-            ));
+        *attempted = Some(TerminalGfx942SdmaQueueCreationV1::QueueAttempt {
+            prepared,
+            native: Gfx942SdmaQueueCreationNativeObservationV1::UntrustedIoctlOutputs {
+                actual: expected,
+            },
+            doorbell: None,
+        });
+        match creation::finish_native_attempt(memory, attempted, expected, doorbell_failure) {
+            Ok(owner) => Ok(owner),
+            Err(error) => Err(Gfx942SdmaQueueOwnerCreationFailureV1::terminal(
+                error,
+                attempted.take().unwrap_or_else(|| std::process::abort()),
+            )),
         }
-        let output_queue_id = actual.queue_id;
-        let output_doorbell = actual.doorbell_offset;
-        actual.queue_id = u32::MAX;
-        actual.doorbell_offset = u64::MAX;
-        if actual != expected {
-            return Err(Gfx942SdmaQueueOwnerCreationFailureV1::terminal(
-                Gfx942SdmaErrorV1::Contract("kernel changed immutable SDMA CREATE_QUEUE inputs"),
-                TerminalGfx942SdmaQueueCreationV1::QueueAttempt {
-                    prepared,
-                    native: Gfx942SdmaQueueCreationNativeObservationV1::UntrustedIoctlOutputs {
-                        queue_id: output_queue_id,
-                        doorbell_offset: output_doorbell,
-                    },
-                    doorbell: None,
-                },
-            ));
-        }
-        let outputs = match admit_kfd_gfx942_create_queue_outputs(
-            output_queue_id,
-            output_doorbell,
-            memory.gpu_id(),
-        ) {
-            Ok(outputs) => outputs,
-            Err(_) => {
-                return Err(Gfx942SdmaQueueOwnerCreationFailureV1::terminal(
-                    Gfx942SdmaErrorV1::Contract("SDMA CREATE_QUEUE outputs"),
-                    TerminalGfx942SdmaQueueCreationV1::QueueAttempt {
-                        prepared,
-                        native: Gfx942SdmaQueueCreationNativeObservationV1::UntrustedIoctlOutputs {
-                            queue_id: output_queue_id,
-                            doorbell_offset: output_doorbell,
-                        },
-                        doorbell: None,
-                    },
-                ));
-            }
-        };
-        let queue_id = outputs.queue_id().value();
-        let doorbell =
-            match LinuxDoorbellSliceV1::map(memory.kfd_fd(), outputs, memory.opener_pid()) {
-                Ok(doorbell) => doorbell,
-                Err(_) => {
-                    return Err(Gfx942SdmaQueueOwnerCreationFailureV1::terminal(
-                        Gfx942SdmaErrorV1::Doorbell(doorbell_failure),
-                        TerminalGfx942SdmaQueueCreationV1::QueueAttempt {
-                            prepared,
-                            native: Gfx942SdmaQueueCreationNativeObservationV1::ValidatedQueueId(
-                                queue_id,
-                            ),
-                            doorbell: None,
-                        },
-                    ));
-                }
-            };
-        if let Err(error) = memory.check_queue_currentness() {
-            return Err(Gfx942SdmaQueueOwnerCreationFailureV1::terminal(
-                error.into(),
-                TerminalGfx942SdmaQueueCreationV1::QueueAttempt {
-                    prepared,
-                    native: Gfx942SdmaQueueCreationNativeObservationV1::ValidatedQueueId(queue_id),
-                    doorbell: Some(doorbell),
-                },
-            ));
-        }
-
-        let owner = prepared.into_live(queue_id, doorbell);
-        Ok(owner)
     }
 
     pub(crate) const fn observation(&self) -> Gfx942SdmaQueueObservationV1 {
@@ -4868,54 +4800,15 @@ pub(crate) enum Gfx942SdmaQueueSetV1 {
     },
     /// All known and indeterminate native queues retained after creation failure.
     TerminalRetained {
+        primary_profile: SdmaCreationProfileV1,
+        secondary_profile: Option<SdmaCreationProfileV1>,
         primary: Vec<Gfx942SdmaQueueOwnerV1>,
         secondary: Vec<Gfx942SdmaQueueOwnerV1>,
         attempted: Option<TerminalGfx942SdmaQueueCreationV1>,
     },
 }
 
-fn append_confirmed_sdma_owners(
-    retained: &mut Vec<Gfx942SdmaQueueOwnerV1>,
-    mut owners: Vec<Gfx942SdmaQueueOwnerV1>,
-) {
-    retained.append(&mut owners);
-}
-
-fn finish_sdma_owner_creation_failure(
-    retained: Vec<Gfx942SdmaQueueOwnerV1>,
-    failure: Gfx942SdmaQueueOwnerCreationFailureV1,
-    earlier_memory_boundary_crossed: bool,
-) -> Gfx942SdmaQueueSetCreationFailureV1 {
-    let (error, owner_failure_terminal, attempted) = match failure {
-        Gfx942SdmaQueueOwnerCreationFailureV1::RetryableBeforeCreate(error) => (error, false, None),
-        Gfx942SdmaQueueOwnerCreationFailureV1::TerminalAfterMemoryOperation { error, retained } => {
-            (error, true, Some(retained))
-        }
-    };
-    let disposition = classify_sdma_queue_set_creation_failure(
-        earlier_memory_boundary_crossed,
-        !retained.is_empty(),
-        owner_failure_terminal,
-    );
-    let retained = if retained.is_empty() && attempted.is_none() {
-        None
-    } else {
-        Some(Gfx942SdmaQueueSetV1::TerminalRetained {
-            primary: retained,
-            secondary: Vec::new(),
-            attempted,
-        })
-    };
-    if disposition == Gfx942SdmaQueueSetCreationDispositionV1::Terminal {
-        permanently_poison_process_global_kfd_runtime_gate_v1();
-    }
-    Gfx942SdmaQueueSetCreationFailureV1 {
-        error,
-        disposition,
-        retained,
-    }
-}
-
+#[cfg(test)]
 const fn classify_sdma_queue_set_creation_failure(
     earlier_memory_boundary_crossed: bool,
     confirmed_owner_retained: bool,
@@ -4928,39 +4821,12 @@ const fn classify_sdma_queue_set_creation_failure(
     }
 }
 
-fn finish_known_terminal_sdma_creation_failure(
-    error: Gfx942SdmaErrorV1,
-    retained: Vec<Gfx942SdmaQueueOwnerV1>,
-) -> Gfx942SdmaQueueSetCreationFailureV1 {
-    permanently_poison_process_global_kfd_runtime_gate_v1();
-    Gfx942SdmaQueueSetCreationFailureV1 {
-        error,
-        disposition: Gfx942SdmaQueueSetCreationDispositionV1::Terminal,
-        retained: Some(Gfx942SdmaQueueSetV1::TerminalRetained {
-            primary: retained,
-            secondary: Vec::new(),
-            attempted: None,
-        }),
-    }
-}
-
 fn retryable_sdma_queue_set_creation_failure(
     error: Gfx942SdmaErrorV1,
 ) -> Gfx942SdmaQueueSetCreationFailureV1 {
     Gfx942SdmaQueueSetCreationFailureV1 {
         error,
         disposition: Gfx942SdmaQueueSetCreationDispositionV1::Retryable,
-        retained: None,
-    }
-}
-
-fn terminal_sdma_queue_set_creation_failure(
-    error: Gfx942SdmaErrorV1,
-) -> Gfx942SdmaQueueSetCreationFailureV1 {
-    permanently_poison_process_global_kfd_runtime_gate_v1();
-    Gfx942SdmaQueueSetCreationFailureV1 {
-        error,
-        disposition: Gfx942SdmaQueueSetCreationDispositionV1::Terminal,
         retained: None,
     }
 }
@@ -5103,54 +4969,17 @@ impl Gfx942SdmaQueueSetV1 {
         memory: &mut SharedGttMemorySessionV1,
         owner: QueueKeyV1,
         reserved_queue_ids: &[u32],
+        escrow: &mut SdmaCreationEscrowV1,
     ) -> Result<Self, Gfx942SdmaQueueSetCreationFailureV1> {
-        let mut owners = Vec::new();
-        owners
-            .try_reserve_exact(GFX942_SDMA_SINGLE_OWNER_COUNT_V1)
-            .map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "generic SDMA owner roster allocation",
-                ))
-            })?;
-        let mut retained = Vec::new();
-        retained
-            .try_reserve_exact(GFX942_SDMA_SINGLE_OWNER_COUNT_V1)
-            .map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "generic SDMA terminal roster allocation",
-                ))
-            })?;
-        let host = prepare_sdma_queue_host_resources()
-            .map_err(recover_sdma_owner_preflight_error)
-            .map_err(retryable_sdma_queue_set_creation_failure)?;
-        let creation_arm = arm_process_global_kfd_runtime_gate_for_creation_v1().map_err(|_| {
-            retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                "process-global KFD creation gate unavailable",
-            ))
-        })?;
-        let created = match Gfx942SdmaQueueOwnerV1::create_with_engine_in_armed_scope(
+        creation::create_set(
             memory,
             owner,
+            reserved_queue_ids,
+            SdmaCreationProfileV1::Generic { engine_index: None },
             None,
-            host,
-            &creation_arm,
-        ) {
-            Ok(created) => created,
-            Err(failure) => {
-                return Err(finish_sdma_owner_creation_failure(retained, failure, true));
-            }
-        };
-        let duplicate = reserved_queue_ids.contains(&created.queue_id);
-        owners.push(created);
-        if duplicate {
-            append_confirmed_sdma_owners(&mut retained, owners);
-            return Err(finish_known_terminal_sdma_creation_failure(
-                Gfx942SdmaErrorV1::Contract("generic SDMA queue ID collides with a compute queue"),
-                retained,
-            ));
-        }
-        creation_arm.disarm();
-        Ok(Self::Generic(owners))
+            escrow,
+        )
+        .map(|(primary, _, _)| primary)
     }
 
     #[allow(clippy::result_large_err)]
@@ -5158,115 +4987,17 @@ impl Gfx942SdmaQueueSetV1 {
         memory: &mut SharedGttMemorySessionV1,
         owner: QueueKeyV1,
         reserved_queue_ids: &[u32],
+        escrow: &mut SdmaCreationEscrowV1,
     ) -> Result<Self, Gfx942SdmaQueueSetCreationFailureV1> {
-        let (engine_count, queues_per_engine) = memory.gfx942_sdma_engine_inventory();
-        if engine_count != Some(KFD_GFX942_SDMA_ENGINE_COUNT_V1)
-            || queues_per_engine != Some(KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1)
-        {
-            return Err(retryable_sdma_queue_set_creation_failure(
-                Gfx942SdmaErrorV1::Contract(
-                    "directional SDMA engine inventory is not the exact gfx942 profile",
-                ),
-            ));
-        }
-        let mut directional = Vec::new();
-        directional
-            .try_reserve_exact(GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1)
-            .map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "directional SDMA owner roster allocation",
-                ))
-            })?;
-        let mut retained = Vec::new();
-        retained
-            .try_reserve_exact(GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1)
-            .map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "directional SDMA terminal roster allocation",
-                ))
-            })?;
-        let d2h_engine =
-            admit_kfd_gfx942_sdma_engine_id(GFX942_SDMA_D2H_ENGINE_INDEX_V1).map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "D2H SDMA engine index",
-                ))
-            })?;
-        let h2d_engine =
-            admit_kfd_gfx942_sdma_engine_id(GFX942_SDMA_H2D_ENGINE_INDEX_V1).map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "H2D SDMA engine index",
-                ))
-            })?;
-        let mut host_resources =
-            prepare_sdma_queue_host_resource_roster(GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1)
-                .map_err(recover_sdma_owner_preflight_error)
-                .map_err(retryable_sdma_queue_set_creation_failure)?;
-        let h2d_host = host_resources
-            .pop()
-            .unwrap_or_else(|| std::process::abort());
-        let d2h_host = host_resources
-            .pop()
-            .unwrap_or_else(|| std::process::abort());
-        let creation_arm = arm_process_global_kfd_runtime_gate_for_creation_v1().map_err(|_| {
-            retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                "process-global KFD creation gate unavailable",
-            ))
-        })?;
-        memory
-            .check_gfx942_sdma_topology_capability_currentness()
-            .map_err(|error| terminal_sdma_queue_set_creation_failure(error.into()))?;
-        match Gfx942SdmaQueueOwnerV1::create_on_engine_in_armed_scope(
+        creation::create_set(
             memory,
             owner,
-            d2h_engine,
-            d2h_host,
-            &creation_arm,
-        ) {
-            Ok(created) => directional.push(created),
-            Err(failure) => {
-                return Err(finish_sdma_owner_creation_failure(retained, failure, true));
-            }
-        }
-        if reserved_queue_ids.contains(&directional[0].queue_id) {
-            append_confirmed_sdma_owners(&mut retained, directional);
-            return Err(finish_known_terminal_sdma_creation_failure(
-                Gfx942SdmaErrorV1::Contract(
-                    "directional SDMA queue ID collides with a compute queue",
-                ),
-                retained,
-            ));
-        }
-        match Gfx942SdmaQueueOwnerV1::create_on_engine_in_armed_scope(
-            memory,
-            owner,
-            h2d_engine,
-            h2d_host,
-            &creation_arm,
-        ) {
-            Ok(created) => directional.push(created),
-            Err(failure) => {
-                append_confirmed_sdma_owners(&mut retained, directional);
-                return Err(finish_sdma_owner_creation_failure(retained, failure, true));
-            }
-        }
-        if !directional_queue_ids_are_distinct(directional[0].queue_id, directional[1].queue_id)
-            || reserved_queue_ids.contains(&directional[1].queue_id)
-        {
-            append_confirmed_sdma_owners(&mut retained, directional);
-            return Err(finish_known_terminal_sdma_creation_failure(
-                Gfx942SdmaErrorV1::Contract("directional SDMA queue ID is not session-wide unique"),
-                retained,
-            ));
-        }
-        if let Err(error) = memory.check_gfx942_sdma_topology_capability_currentness() {
-            append_confirmed_sdma_owners(&mut retained, directional);
-            return Err(finish_known_terminal_sdma_creation_failure(
-                error.into(),
-                retained,
-            ));
-        }
-        creation_arm.disarm();
-        Ok(Self::Directional(directional))
+            reserved_queue_ids,
+            SdmaCreationProfileV1::Directional,
+            None,
+            escrow,
+        )
+        .map(|(primary, _, _)| primary)
     }
 
     #[allow(clippy::result_large_err)]
@@ -5275,79 +5006,19 @@ impl Gfx942SdmaQueueSetV1 {
         owner: QueueKeyV1,
         engine_index: u32,
         reserved_queue_ids: &[u32],
+        escrow: &mut SdmaCreationEscrowV1,
     ) -> Result<Self, Gfx942SdmaQueueSetCreationFailureV1> {
-        let (engine_count, queues_per_engine) = memory.gfx942_sdma_engine_inventory();
-        if engine_count != Some(KFD_GFX942_SDMA_ENGINE_COUNT_V1)
-            || queues_per_engine != Some(KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1)
-        {
-            return Err(retryable_sdma_queue_set_creation_failure(
-                Gfx942SdmaErrorV1::Contract(
-                    "targeted SDMA engine inventory is not the exact gfx942 profile",
-                ),
-            ));
-        }
-        let engine = admit_kfd_gfx942_sdma_engine_id(engine_index).map_err(|_| {
-            retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                "targeted SDMA engine index",
-            ))
-        })?;
-        let mut owners = Vec::new();
-        owners
-            .try_reserve_exact(GFX942_SDMA_SINGLE_OWNER_COUNT_V1)
-            .map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "targeted SDMA owner roster allocation",
-                ))
-            })?;
-        let mut retained = Vec::new();
-        retained
-            .try_reserve_exact(GFX942_SDMA_SINGLE_OWNER_COUNT_V1)
-            .map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "targeted SDMA terminal roster allocation",
-                ))
-            })?;
-        let host = prepare_sdma_queue_host_resources()
-            .map_err(recover_sdma_owner_preflight_error)
-            .map_err(retryable_sdma_queue_set_creation_failure)?;
-        let creation_arm = arm_process_global_kfd_runtime_gate_for_creation_v1().map_err(|_| {
-            retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                "process-global KFD creation gate unavailable",
-            ))
-        })?;
-        memory
-            .check_gfx942_sdma_topology_capability_currentness()
-            .map_err(|error| terminal_sdma_queue_set_creation_failure(error.into()))?;
-        let created = match Gfx942SdmaQueueOwnerV1::create_on_engine_in_armed_scope(
+        creation::create_set(
             memory,
             owner,
-            engine,
-            host,
-            &creation_arm,
-        ) {
-            Ok(created) => created,
-            Err(failure) => {
-                return Err(finish_sdma_owner_creation_failure(retained, failure, true));
-            }
-        };
-        let duplicate = reserved_queue_ids.contains(&created.queue_id);
-        owners.push(created);
-        if duplicate {
-            append_confirmed_sdma_owners(&mut retained, owners);
-            return Err(finish_known_terminal_sdma_creation_failure(
-                Gfx942SdmaErrorV1::Contract("targeted SDMA queue ID collides with a compute queue"),
-                retained,
-            ));
-        }
-        if let Err(error) = memory.check_gfx942_sdma_topology_capability_currentness() {
-            append_confirmed_sdma_owners(&mut retained, owners);
-            return Err(finish_known_terminal_sdma_creation_failure(
-                error.into(),
-                retained,
-            ));
-        }
-        creation_arm.disarm();
-        Ok(Self::Generic(owners))
+            reserved_queue_ids,
+            SdmaCreationProfileV1::Generic {
+                engine_index: Some(engine_index),
+            },
+            None,
+            escrow,
+        )
+        .map(|(primary, _, _)| primary)
     }
 
     #[allow(clippy::result_large_err)]
@@ -5356,110 +5027,21 @@ impl Gfx942SdmaQueueSetV1 {
         owner: QueueKeyV1,
         queue_count: u32,
         reserved_queue_ids: &[u32],
+        escrow: &mut SdmaCreationEscrowV1,
     ) -> Result<(Self, Vec<Gfx942SdmaQueueObservationV1>), Gfx942SdmaQueueSetCreationFailureV1>
     {
-        let (engine_count, queues_per_engine) = memory.gfx942_sdma_engine_inventory();
-        if engine_count != Some(KFD_GFX942_SDMA_ENGINE_COUNT_V1)
-            || queues_per_engine != Some(KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1)
-            || !striped_sdma_queue_count_is_admitted(queue_count)
-        {
-            return Err(retryable_sdma_queue_set_creation_failure(
-                Gfx942SdmaErrorV1::Contract("striped SDMA queue topology or count"),
-            ));
-        }
-        let mut owners = Vec::new();
-        owners
-            .try_reserve_exact(queue_count as usize)
-            .map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "striped SDMA owner roster allocation",
-                ))
-            })?;
-        let mut observations = Vec::new();
-        observations
-            .try_reserve_exact(queue_count as usize)
-            .map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "striped SDMA observation allocation",
-                ))
-            })?;
-        let mut retained = Vec::new();
-        retained
-            .try_reserve_exact(queue_count as usize)
-            .map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "striped SDMA terminal roster allocation",
-                ))
-            })?;
-        let mut host_resources = prepare_sdma_queue_host_resource_roster(queue_count as usize)
-            .map_err(recover_sdma_owner_preflight_error)
-            .map_err(retryable_sdma_queue_set_creation_failure)?
-            .into_iter();
-        let creation_arm = arm_process_global_kfd_runtime_gate_for_creation_v1().map_err(|_| {
-            retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                "process-global KFD creation gate unavailable",
-            ))
-        })?;
-        memory
-            .check_gfx942_sdma_topology_capability_currentness()
-            .map_err(|error| terminal_sdma_queue_set_creation_failure(error.into()))?;
-        for queue_index in 0..queue_count {
-            let engine_index = queue_index % KFD_GFX942_SDMA_ENGINE_COUNT_V1;
-            let engine = match admit_kfd_gfx942_sdma_engine_id(engine_index) {
-                Ok(engine) => engine,
-                Err(_) => {
-                    append_confirmed_sdma_owners(&mut retained, owners);
-                    return Err(finish_known_terminal_sdma_creation_failure(
-                        Gfx942SdmaErrorV1::Contract("striped SDMA engine index"),
-                        retained,
-                    ));
-                }
-            };
-            let host = host_resources
-                .next()
-                .unwrap_or_else(|| std::process::abort());
-            let created = match Gfx942SdmaQueueOwnerV1::create_on_engine_in_armed_scope(
-                memory,
-                owner,
-                engine,
-                host,
-                &creation_arm,
-            ) {
-                Ok(created) => created,
-                Err(failure) => {
-                    append_confirmed_sdma_owners(&mut retained, owners);
-                    return Err(finish_sdma_owner_creation_failure(retained, failure, true));
-                }
-            };
-            let duplicate = reserved_queue_ids.contains(&created.queue_id)
-                || owners
-                    .iter()
-                    .any(|owner| owner.queue_id == created.queue_id);
-            observations.push(created.observation());
-            owners.push(created);
-            if duplicate {
-                append_confirmed_sdma_owners(&mut retained, owners);
-                return Err(finish_known_terminal_sdma_creation_failure(
-                    Gfx942SdmaErrorV1::Contract("striped SDMA queue ID is not session-wide unique"),
-                    retained,
-                ));
-            }
-        }
-        if let Err(error) = memory.check_gfx942_sdma_topology_capability_currentness() {
-            append_confirmed_sdma_owners(&mut retained, owners);
-            return Err(finish_known_terminal_sdma_creation_failure(
-                error.into(),
-                retained,
-            ));
-        }
-        creation_arm.disarm();
-        Ok((
-            Self::Striped {
-                owners,
+        creation::create_set(
+            memory,
+            owner,
+            reserved_queue_ids,
+            SdmaCreationProfileV1::Striped {
+                queue_count,
                 next_owner: 0,
             },
-            observations,
-        ))
+            None,
+            escrow,
+        )
+        .map(|(primary, _, observations)| (primary, observations))
     }
 
     #[allow(clippy::result_large_err)]
@@ -5468,218 +5050,33 @@ impl Gfx942SdmaQueueSetV1 {
         owner: QueueKeyV1,
         striped_queue_count: u32,
         reserved_queue_ids: &[u32],
+        escrow: &mut SdmaCreationEscrowV1,
     ) -> Result<(Self, Self, Gfx942CombinedSdmaCapacityV1), Gfx942SdmaQueueSetCreationFailureV1>
     {
-        if !combined_striped_sdma_queue_count_is_admitted(striped_queue_count)
-            || queue_ids_have_duplicates(reserved_queue_ids)
-        {
-            return Err(retryable_sdma_queue_set_creation_failure(
-                Gfx942SdmaErrorV1::Contract("combined SDMA striped queue count or reserved IDs"),
-            ));
-        }
-        let (engine_count, queues_per_engine) = memory.gfx942_sdma_engine_inventory();
-        if engine_count != Some(KFD_GFX942_SDMA_ENGINE_COUNT_V1)
-            || queues_per_engine != Some(KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1)
-        {
-            return Err(retryable_sdma_queue_set_creation_failure(
-                Gfx942SdmaErrorV1::Contract(
-                    "combined SDMA engine inventory is not the exact gfx942 profile",
-                ),
-            ));
-        }
-
-        let mut directional = Vec::new();
-        directional
-            .try_reserve_exact(GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1)
-            .map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "combined directional owner roster",
-                ))
-            })?;
-        let mut striped = Vec::new();
-        striped
-            .try_reserve_exact(striped_queue_count as usize)
-            .map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "combined striped owner roster",
-                ))
-            })?;
-        let mut striped_observations = Vec::new();
-        striped_observations
-            .try_reserve_exact(striped_queue_count as usize)
-            .map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "combined striped observation roster",
-                ))
-            })?;
-        let mut retained = Vec::new();
-        retained
-            .try_reserve_exact(
-                GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1 + striped_queue_count as usize,
-            )
-            .map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "combined SDMA terminal roster",
-                ))
-            })?;
-        let d2h_engine =
-            admit_kfd_gfx942_sdma_engine_id(GFX942_SDMA_D2H_ENGINE_INDEX_V1).map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "D2H SDMA engine index",
-                ))
-            })?;
-        let h2d_engine =
-            admit_kfd_gfx942_sdma_engine_id(GFX942_SDMA_H2D_ENGINE_INDEX_V1).map_err(|_| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "H2D SDMA engine index",
-                ))
-            })?;
-        let creation_queue_count = GFX942_SDMA_DIRECTIONAL_OWNER_COUNT_V1
-            .checked_add(striped_queue_count as usize)
-            .ok_or_else(|| {
-                retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                    "combined SDMA host-resource roster count",
-                ))
-            })?;
-        let mut host_resources = prepare_sdma_queue_host_resource_roster(creation_queue_count)
-            .map_err(recover_sdma_owner_preflight_error)
-            .map_err(retryable_sdma_queue_set_creation_failure)?
-            .into_iter();
-        let d2h_host = host_resources
-            .next()
-            .unwrap_or_else(|| std::process::abort());
-        let h2d_host = host_resources
-            .next()
-            .unwrap_or_else(|| std::process::abort());
-        let creation_arm = arm_process_global_kfd_runtime_gate_for_creation_v1().map_err(|_| {
-            retryable_sdma_queue_set_creation_failure(Gfx942SdmaErrorV1::Contract(
-                "process-global KFD creation gate unavailable",
-            ))
-        })?;
-        memory
-            .check_gfx942_sdma_topology_capability_currentness()
-            .map_err(|error| terminal_sdma_queue_set_creation_failure(error.into()))?;
-        match Gfx942SdmaQueueOwnerV1::create_on_engine_in_armed_scope(
+        let (primary, secondary, mut observations) = creation::create_set(
             memory,
             owner,
-            d2h_engine,
-            d2h_host,
-            &creation_arm,
-        ) {
-            Ok(created) => directional.push(created),
-            Err(failure) => {
-                return Err(finish_sdma_owner_creation_failure(retained, failure, true));
-            }
-        }
-        if reserved_queue_ids.contains(&directional[0].queue_id) {
-            append_confirmed_sdma_owners(&mut retained, directional);
-            return Err(finish_known_terminal_sdma_creation_failure(
-                Gfx942SdmaErrorV1::Contract("combined SDMA queue ID collides with a compute queue"),
-                retained,
-            ));
-        }
-        match Gfx942SdmaQueueOwnerV1::create_on_engine_in_armed_scope(
-            memory,
-            owner,
-            h2d_engine,
-            h2d_host,
-            &creation_arm,
-        ) {
-            Ok(created) => directional.push(created),
-            Err(failure) => {
-                append_confirmed_sdma_owners(&mut retained, directional);
-                return Err(finish_sdma_owner_creation_failure(retained, failure, true));
-            }
-        }
-        if !directional_queue_ids_are_distinct(
-            directional[GFX942_SDMA_D2H_OWNER_SLOT_V1].queue_id,
-            directional[GFX942_SDMA_H2D_OWNER_SLOT_V1].queue_id,
-        ) || reserved_queue_ids.contains(&directional[GFX942_SDMA_H2D_OWNER_SLOT_V1].queue_id)
-        {
-            append_confirmed_sdma_owners(&mut retained, directional);
-            return Err(finish_known_terminal_sdma_creation_failure(
-                Gfx942SdmaErrorV1::Contract(
-                    "combined directional SDMA queue ID is not session-wide unique",
-                ),
-                retained,
-            ));
-        }
-        let directional_observation = Gfx942DirectionalSdmaQueueObservationV1 {
-            host_to_device: directional[GFX942_SDMA_H2D_OWNER_SLOT_V1].observation(),
-            device_to_host: directional[GFX942_SDMA_D2H_OWNER_SLOT_V1].observation(),
+            reserved_queue_ids,
+            SdmaCreationProfileV1::Directional,
+            Some(SdmaCreationProfileV1::Striped {
+                queue_count: striped_queue_count,
+                next_owner: 0,
+            }),
+            escrow,
+        )?;
+        let directional = Gfx942DirectionalSdmaQueueObservationV1 {
+            device_to_host: observations[0],
+            host_to_device: observations[1],
             admitted_engine_count: KFD_GFX942_SDMA_ENGINE_COUNT_V1,
             admitted_queues_per_engine: KFD_GFX942_SDMA_QUEUES_PER_ENGINE_V1,
         };
-        let directional_ids = [
-            directional_observation.host_to_device.queue_id,
-            directional_observation.device_to_host.queue_id,
-        ];
-        for queue_index in 0..striped_queue_count {
-            let engine_index = queue_index % KFD_GFX942_SDMA_ENGINE_COUNT_V1;
-            let engine = match admit_kfd_gfx942_sdma_engine_id(engine_index) {
-                Ok(engine) => engine,
-                Err(_) => {
-                    append_confirmed_sdma_owners(&mut retained, directional);
-                    append_confirmed_sdma_owners(&mut retained, striped);
-                    return Err(finish_known_terminal_sdma_creation_failure(
-                        Gfx942SdmaErrorV1::Contract("striped SDMA engine index"),
-                        retained,
-                    ));
-                }
-            };
-            let host = host_resources
-                .next()
-                .unwrap_or_else(|| std::process::abort());
-            let created = match Gfx942SdmaQueueOwnerV1::create_on_engine_in_armed_scope(
-                memory,
-                owner,
-                engine,
-                host,
-                &creation_arm,
-            ) {
-                Ok(created) => created,
-                Err(failure) => {
-                    append_confirmed_sdma_owners(&mut retained, directional);
-                    append_confirmed_sdma_owners(&mut retained, striped);
-                    return Err(finish_sdma_owner_creation_failure(retained, failure, true));
-                }
-            };
-            let duplicate = reserved_queue_ids.contains(&created.queue_id)
-                || directional_ids.contains(&created.queue_id)
-                || striped
-                    .iter()
-                    .any(|existing: &Gfx942SdmaQueueOwnerV1| existing.queue_id == created.queue_id);
-            striped_observations.push(created.observation());
-            striped.push(created);
-            if duplicate {
-                append_confirmed_sdma_owners(&mut retained, directional);
-                append_confirmed_sdma_owners(&mut retained, striped);
-                return Err(finish_known_terminal_sdma_creation_failure(
-                    Gfx942SdmaErrorV1::Contract(
-                        "combined SDMA queue ID is not session-wide unique",
-                    ),
-                    retained,
-                ));
-            }
-        }
-        if let Err(error) = memory.check_gfx942_sdma_topology_capability_currentness() {
-            append_confirmed_sdma_owners(&mut retained, directional);
-            append_confirmed_sdma_owners(&mut retained, striped);
-            return Err(finish_known_terminal_sdma_creation_failure(
-                error.into(),
-                retained,
-            ));
-        }
-        creation_arm.disarm();
+        observations.drain(..2);
         Ok((
-            Self::Directional(directional),
-            Self::Striped {
-                owners: striped,
-                next_owner: 0,
-            },
+            primary,
+            secondary.unwrap_or_else(|| std::process::abort()),
             Gfx942CombinedSdmaCapacityV1 {
-                directional: directional_observation,
-                striped: striped_observations,
+                directional,
+                striped: observations,
                 maximum_striped_queue_count: GFX942_SDMA_MAX_COMBINED_STRIPED_QUEUES_V1 as u32,
             },
         ))
@@ -5756,20 +5153,49 @@ impl Gfx942SdmaQueueSetV1 {
     }
 
     pub(crate) fn retain_created_for_terminal(primary: Self, secondary: Option<Self>) -> Self {
-        fn confirmed_owners(owner: Gfx942SdmaQueueSetV1) -> Vec<Gfx942SdmaQueueOwnerV1> {
+        fn confirmed_owners(
+            owner: Gfx942SdmaQueueSetV1,
+        ) -> (SdmaCreationProfileV1, Vec<Gfx942SdmaQueueOwnerV1>) {
             match owner {
-                Gfx942SdmaQueueSetV1::Generic(owners)
-                | Gfx942SdmaQueueSetV1::Directional(owners)
-                | Gfx942SdmaQueueSetV1::Striped { owners, .. }
-                | Gfx942SdmaQueueSetV1::LogicalMuxV2 { owners, .. } => owners,
+                Gfx942SdmaQueueSetV1::Generic(owners) => {
+                    let engine_index = owners.first().and_then(|owner| owner.engine_index);
+                    (SdmaCreationProfileV1::Generic { engine_index }, owners)
+                }
+                Gfx942SdmaQueueSetV1::Directional(owners) => {
+                    (SdmaCreationProfileV1::Directional, owners)
+                }
+                Gfx942SdmaQueueSetV1::Striped { owners, next_owner } => (
+                    SdmaCreationProfileV1::Striped {
+                        queue_count: owners.len() as u32,
+                        next_owner,
+                    },
+                    owners,
+                ),
+                Gfx942SdmaQueueSetV1::LogicalMuxV2 {
+                    owners,
+                    logical_lane_count,
+                    next_logical_lane,
+                } => (
+                    SdmaCreationProfileV1::LogicalMux {
+                        logical_lane_count,
+                        next_logical_lane,
+                    },
+                    owners,
+                ),
                 Gfx942SdmaQueueSetV1::TerminalRetained { .. } => std::process::abort(),
             }
         }
-
-        let primary = confirmed_owners(primary);
-        let secondary = secondary.map_or_else(Vec::new, confirmed_owners);
-        // The creation adapter installs this owner before terminal poisoning.
+        let (primary_profile, primary) = confirmed_owners(primary);
+        let (secondary_profile, secondary) = match secondary {
+            Some(secondary) => {
+                let (profile, owners) = confirmed_owners(secondary);
+                (Some(profile), owners)
+            }
+            None => (None, Vec::new()),
+        };
         Self::TerminalRetained {
+            primary_profile,
+            secondary_profile,
             primary,
             secondary,
             attempted: None,
@@ -6239,6 +5665,7 @@ impl Gfx942SdmaQueueSetV1 {
                 primary,
                 secondary,
                 attempted,
+                ..
             } => {
                 let attempted = attempted.as_ref().map_or(
                     0,
@@ -6666,6 +6093,7 @@ fn checked_sdma_write_end(
     Ok(end)
 }
 
+#[cfg(test)]
 const fn directional_queue_ids_are_distinct(
     device_to_host_queue_id: u32,
     host_to_device_queue_id: u32,
@@ -7605,18 +7033,17 @@ mod tests {
         let opening_currentness = owner_create
             .find("memory.check_queue_currentness()")
             .unwrap();
-        let promotion = owner_create.find("prepared.into_live").unwrap();
+        let promotion = owner_create
+            .find("creation::finish_native_attempt")
+            .unwrap();
         assert!(opening_currentness < promotion);
 
-        let generic_create = source
-            .split("pub(crate) fn create_generic(")
+        let generic_create = include_str!("sdma/creation.rs")
+            .split("pub(super) fn create_set(")
             .nth(1)
-            .unwrap()
-            .split("pub(crate) fn create_directional")
-            .next()
             .unwrap();
         let host = generic_create
-            .find("prepare_sdma_queue_host_resources")
+            .find("prepare_sdma_queue_host_resource_roster")
             .unwrap();
         let arm = generic_create
             .find("arm_process_global_kfd_runtime_gate_for_creation_v1")

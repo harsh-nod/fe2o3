@@ -1,6 +1,7 @@
 //! Root returned SDMA creation owners before model-retake failure escapes.
 
 use super::*;
+use crate::sdma::creation::SdmaCreationEscrowV1;
 use crate::sdma::{Gfx942SdmaQueueSetCreationDispositionV1, Gfx942SdmaQueueSetCreationFailureV1};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
@@ -125,14 +126,17 @@ fn retain_and_resume<O>(
 pub(in crate::queue) fn create_with_custody_v1<C: SdmaCreationContextV1, O>(
     context: &mut C,
     stage: &'static str,
-    operation: impl FnOnce(&mut C::Memory) -> CreationResultV1<O>,
+    operation: impl FnOnce(&mut C::Memory, &mut SdmaCreationEscrowV1) -> CreationResultV1<O>,
 ) -> Result<ReturnedSdmaCreationV1<O>, ComputeAqlQueueSessionErrorV1> {
     context.require_vacant()?;
     let mut created = None;
+    let mut escrow = SdmaCreationEscrowV1::default();
     let envelope = catch_unwind(AssertUnwindSafe(|| {
         let ((), retake) = context.with_memory_custody(|memory| {
             // Keep a lower panic outside model retake and its poison callbacks.
-            created = Some(catch_unwind(AssertUnwindSafe(|| operation(memory))));
+            created = Some(catch_unwind(AssertUnwindSafe(|| {
+                operation(memory, &mut escrow)
+            })));
         })?;
         retake
     }));
@@ -140,10 +144,20 @@ pub(in crate::queue) fn create_with_custody_v1<C: SdmaCreationContextV1, O>(
         Some(Ok(created)) => Some(created),
         Some(Err(payload)) => {
             core::mem::forget(envelope);
+            if let Some(owner) = escrow.take_terminal() {
+                install(context, owner);
+            }
             resume_poisoned(context, payload)
         }
         None => None,
     };
+    // Returned custody and the borrowed escrow must never both own a queue.
+    if !escrow.is_empty() {
+        core::mem::forget(created);
+        core::mem::forget(envelope);
+        core::mem::forget(escrow);
+        std::process::abort();
+    }
     let envelope = match envelope {
         Ok(envelope) => envelope,
         Err(payload) => retain_and_resume(context, created, payload),

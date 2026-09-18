@@ -64,7 +64,7 @@ impl CreationParent {
             create_with_custody_v1(
                 self,
                 "retry",
-                |_| -> Result<ReturnedSdmaCreationV1<()>, _> {
+                |_, _escrow| -> Result<ReturnedSdmaCreationV1<()>, _> {
                     panic!("terminal creation cannot retry")
                 }
             )
@@ -183,7 +183,7 @@ fn constructed_sdma_creation_success_preserves_owner_and_normal_teardown() {
         let local = f.trace.borrow().local_resources.clone();
         let key = f.parent.key;
         let mut before = None;
-        let created = create_with_custody_v1(&mut f, "fixture success", |memory| {
+        let created = create_with_custody_v1(&mut f, "fixture success", |memory, _escrow| {
             let owner = directional_with_ids(memory, key, 100);
             before = Some(creation_observation(&owner));
             Ok(ReturnedSdmaCreationV1::single(owner, 17_u32))
@@ -229,7 +229,7 @@ fn constructed_sdma_creation_retake_faults_retain_exact_single_and_combined_owne
                 let mut secondary = None;
                 let mut backing = None;
                 let result = catch_unwind(AssertUnwindSafe(|| {
-                    create_with_custody_v1(&mut f, "fixture retake", |memory| {
+                    create_with_custody_v1(&mut f, "fixture retake", |memory, _escrow| {
                         let owner = directional_with_ids(memory, key, 100);
                         primary = Some(creation_observation(&owner).primary);
                         let created = if combined {
@@ -326,7 +326,7 @@ fn constructed_sdma_creation_real_reclaim_rejection_retains_exact_custody() {
         let mut secondary = None;
         let mut completed = None;
         f.regress_reclaim = true;
-        let error = create_with_custody_v1(&mut f, "real reclaim rejection", |memory| {
+        let error = create_with_custody_v1(&mut f, "real reclaim rejection", |memory, _escrow| {
             let owner = directional_with_ids(memory, key, 100);
             primary = Some(creation_observation(&owner).primary);
             let created = if combined {
@@ -396,7 +396,7 @@ fn constructed_sdma_creation_lower_failure_retains_attempted_owner_and_error_pre
                 create_with_custody_v1(
                     &mut f,
                     "fixture lower",
-                    |memory| -> Result<ReturnedSdmaCreationV1<()>, _> {
+                    |memory, _escrow| -> Result<ReturnedSdmaCreationV1<()>, _> {
                         let owner = directional_with_ids(memory, key, 100);
                         let mut retained =
                             Gfx942SdmaQueueSetV1::retain_created_for_terminal(owner, None);
@@ -464,7 +464,7 @@ fn constructed_sdma_creation_no_output_and_lower_panic_do_not_invent_custody() {
             create_with_custody_v1(
                 &mut f,
                 "fixture no output",
-                |_| -> Result<ReturnedSdmaCreationV1<()>, _> {
+                |_, _escrow| -> Result<ReturnedSdmaCreationV1<()>, _> {
                     calls.set(calls.get() + 1);
                     std::panic::panic_any("creation-operation")
                 },
@@ -499,7 +499,9 @@ fn constructed_sdma_creation_retryable_failure_and_occupied_preflight_are_inert(
     let result = create_with_custody_v1(
         &mut f,
         "retryable",
-        |_| -> Result<ReturnedSdmaCreationV1<()>, _> { Err(creation_failure(None, false)) },
+        |_, _escrow| -> Result<ReturnedSdmaCreationV1<()>, _> {
+            Err(creation_failure(None, false))
+        },
     );
     assert!(matches!(
         result,
@@ -508,7 +510,7 @@ fn constructed_sdma_creation_retryable_failure_and_occupied_preflight_are_inert(
     assert!(!f.parent.poisoned && f.parent.sdma.is_none());
     assert!(f.final_poison_roots.is_empty());
     let key = f.parent.key;
-    let created = create_with_custody_v1(&mut f, "success", |memory| {
+    let created = create_with_custody_v1(&mut f, "success", |memory, _escrow| {
         Ok(ReturnedSdmaCreationV1::single(
             directional_with_ids(memory, key, 100),
             (),
@@ -530,7 +532,7 @@ fn constructed_sdma_creation_every_profile_retains_its_original_roster() {
         f.fault("creation-retake-after", false);
         let key = f.parent.key;
         let mut original = None;
-        let result = create_with_custody_v1(&mut f, "profile retention", |memory| {
+        let result = create_with_custody_v1(&mut f, "profile retention", |memory, _escrow| {
             let owner = creation_profile(memory, key, profile);
             original = Some(creation_observation(&owner).primary);
             Ok(ReturnedSdmaCreationV1::single(owner, ()))
@@ -561,7 +563,7 @@ fn constructed_sdma_creation_ownerless_failure_distinguishes_retryable_from_tran
                 create_with_custody_v1(
                     &mut f,
                     "ownerless failure",
-                    |_| -> Result<ReturnedSdmaCreationV1<()>, _> {
+                    |_, _escrow| -> Result<ReturnedSdmaCreationV1<()>, _> {
                         calls.set(calls.get() + 1);
                         Err(creation_failure(None, terminal))
                     },
@@ -602,7 +604,7 @@ fn constructed_sdma_creation_first_panic_survives_retake_and_final_poison_panics
             create_with_custody_v1(
                 &mut f,
                 "panic",
-                |_| -> Result<ReturnedSdmaCreationV1<()>, _> {
+                |_, _escrow| -> Result<ReturnedSdmaCreationV1<()>, _> {
                     std::panic::panic_any("original lower panic")
                 },
             )
@@ -627,7 +629,7 @@ fn constructed_sdma_creation_roots_before_metadata_drop_and_preserves_retake_pan
         let mut before = None;
         let metadata_drops = Arc::new(AtomicUsize::new(0));
         let result = catch_unwind(AssertUnwindSafe(|| {
-            create_with_custody_v1(&mut f, "metadata", |memory| {
+            create_with_custody_v1(&mut f, "metadata", |memory, _escrow| {
                 let owner = directional_with_ids(memory, key, 100);
                 before = Some(creation_observation(&owner).primary);
                 Ok(ReturnedSdmaCreationV1::single(
@@ -656,6 +658,367 @@ fn constructed_sdma_creation_roots_before_metadata_drop_and_preserves_retake_pan
         );
         assert_eq!(f.final_poison_roots, [true]);
         f.assert_no_retry();
+    }
+}
+
+type CreationPlan = (
+    crate::sdma::creation::SdmaCreationProfileV1,
+    Option<crate::sdma::creation::SdmaCreationProfileV1>,
+    usize,
+);
+
+fn creation_plans() -> Vec<CreationPlan> {
+    use crate::sdma::creation::SdmaCreationProfileV1::*;
+    let mut plans = vec![
+        (Generic { engine_index: None }, None, 1),
+        (
+            Generic {
+                engine_index: Some(0),
+            },
+            None,
+            1,
+        ),
+        (
+            Generic {
+                engine_index: Some(1),
+            },
+            None,
+            1,
+        ),
+        (Directional, None, 2),
+    ];
+    for count in (2..=16).step_by(2) {
+        plans.push((
+            Striped {
+                queue_count: count,
+                next_owner: 0,
+            },
+            None,
+            count as usize,
+        ));
+    }
+    for lanes in [2, 4, 8, 14, 16] {
+        plans.push((
+            LogicalMux {
+                logical_lane_count: lanes,
+                next_logical_lane: 0,
+            },
+            None,
+            2,
+        ));
+    }
+    for count in (2..=14).step_by(2) {
+        plans.push((
+            Directional,
+            Some(Striped {
+                queue_count: count,
+                next_owner: 0,
+            }),
+            2 + count as usize,
+        ));
+    }
+    plans
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct CreatorPanic(usize);
+
+#[test]
+fn constructed_sdma_creation_unwind_retains_every_profile_prefix_before_poison() {
+    use crate::sdma::retained_release::fixture::{escrow_observation, escrow_prefix};
+    for (primary, secondary, count) in creation_plans() {
+        for prefix in 1..=count {
+            // Every prefix; settlement cross-product at the final and combined boundary prefixes.
+            let settlement_matrix = prefix == count || (secondary.is_some() && prefix == 2);
+            for retake in 0..if settlement_matrix { 5 } else { 1 } {
+                for poison_panic in [false, true] {
+                    if poison_panic && !settlement_matrix {
+                        continue;
+                    }
+                    let mut f = CreationParent::new(true);
+                    let local = f.trace.borrow().local_resources.clone();
+                    let key = f.parent.key;
+                    let drops = f.trace.borrow().drops;
+                    f.final_poison_panic = poison_panic;
+                    if retake != 0 {
+                        f.fault(
+                            if retake < 3 {
+                                "creation-retake-before"
+                            } else {
+                                "creation-retake-after"
+                            },
+                            retake == 2 || retake == 4,
+                        );
+                    }
+                    let mut before = None;
+                    let mut backing = None;
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        create_with_custody_v1(
+                            &mut f,
+                            "creator unwind",
+                            |memory, escrow| -> Result<ReturnedSdmaCreationV1<()>, _> {
+                                escrow_prefix(memory, key, escrow, primary, secondary, prefix);
+                                before = Some(escrow_observation(escrow));
+                                backing = Some(memory.retained_cleanup_memory_snapshot_v1());
+                                std::panic::panic_any(CreatorPanic(prefix))
+                            },
+                        )
+                    }));
+                    assert_eq!(
+                        result.err().unwrap().downcast_ref::<CreatorPanic>(),
+                        Some(&CreatorPanic(prefix))
+                    );
+                    let root = f.parent.sdma.as_ref().unwrap();
+                    assert_eq!(creation_observation(root), before.unwrap());
+                    assert_eq!(creation_observation(root).profiles, (primary, secondary));
+                    assert!(root.supports_retained_sdma_release_v1().is_err());
+                    assert!(
+                        crate::sdma::retained_release::supports_retained_sdma_composition_v1(
+                            Some(root),
+                            None,
+                        )
+                        .is_err()
+                    );
+                    assert_eq!(
+                        f.parent
+                            .engine
+                            .backend
+                            .session
+                            .retained_queue_memory_snapshot_v1(&f.parent.engine.foundation),
+                        backing.unwrap()
+                    );
+                    assert_eq!(f.trace.borrow().drops, drops);
+                    assert_eq!(f.final_poison_roots, [true]);
+                    assert_eq!(f.secondary_drops.load(Ordering::SeqCst), 0);
+                    f.assert_no_retry();
+                    drop(f);
+                    assert_eq!(local.live(), (0, 0, 0));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn constructed_sdma_creation_opaque_unwind_preserves_profile_without_inventing_queue() {
+    use crate::sdma::retained_release::fixture::{
+        escrow_observation, escrow_opaque, escrow_prefix,
+    };
+    for (primary, secondary, _) in creation_plans() {
+        let mut f = CreationParent::new(false);
+        let local = f.trace.borrow().local_resources.clone();
+        let key = f.parent.key;
+        let mut before = None;
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            create_with_custody_v1(
+                &mut f,
+                "opaque unwind",
+                |memory, escrow| -> Result<ReturnedSdmaCreationV1<()>, _> {
+                    escrow_prefix(memory, key, escrow, primary, secondary, 0);
+                    escrow_opaque(escrow);
+                    before = Some(escrow_observation(escrow));
+                    std::panic::panic_any(CreatorPanic(0))
+                },
+            )
+        }));
+        assert_eq!(
+            result.err().unwrap().downcast_ref::<CreatorPanic>(),
+            Some(&CreatorPanic(0))
+        );
+        let root = f.parent.sdma.as_ref().unwrap();
+        assert_eq!(creation_observation(root), before.unwrap());
+        assert!(!root.contains_confirmed_queue_id(0));
+        assert!(root.supports_retained_sdma_release_v1().is_err());
+        assert_eq!(f.final_poison_roots, [true]);
+        f.assert_no_retry();
+        drop(f);
+        assert_eq!(local.live(), (0, 0, 0));
+    }
+}
+
+#[test]
+fn constructed_sdma_creation_native_attempt_faults_retain_exact_mutated_arguments_and_resources() {
+    use crate::sdma::retained_release::fixture::{
+        CreationNativeFault::*, escrow_native_attempt, escrow_owner_failure, escrow_prefix,
+    };
+    for (primary, secondary, count) in creation_plans() {
+        let mut prefixes = vec![count - 1];
+        if secondary.is_some() {
+            prefixes.push(2);
+        }
+        prefixes.sort_unstable();
+        prefixes.dedup();
+        for prefix in prefixes {
+            for fault in [
+                BeforeIoctlPanic,
+                AfterIoctlPanic,
+                IoctlError,
+                ImmutableMutation,
+                InvalidOutput,
+                DoorbellPanic,
+                DoorbellError,
+                CurrentnessPanic,
+                CurrentnessError,
+            ] {
+                let mut f = CreationParent::new(false);
+                let local = f.trace.borrow().local_resources.clone();
+                let key = f.parent.key;
+                let drops = f.trace.borrow().drops;
+                let mut expected = None;
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    create_with_custody_v1(
+                        &mut f,
+                        "native attempt",
+                        |memory, escrow| -> Result<ReturnedSdmaCreationV1<()>, _> {
+                            escrow_prefix(memory, key, escrow, primary, secondary, prefix);
+                            let error =
+                                escrow_native_attempt(memory, key, escrow, fault, &mut expected)
+                                    .unwrap_err();
+                            assert!(matches!(
+                                (fault, &error),
+                                (IoctlError, Gfx942SdmaErrorV1::QueueCreationIndeterminate)
+                                    | (
+                                        ImmutableMutation,
+                                        Gfx942SdmaErrorV1::Contract(
+                                            "kernel changed immutable SDMA CREATE_QUEUE inputs"
+                                        )
+                                    )
+                                    | (
+                                        InvalidOutput,
+                                        Gfx942SdmaErrorV1::Contract("SDMA CREATE_QUEUE outputs")
+                                    )
+                                    | (DoorbellError, Gfx942SdmaErrorV1::Doorbell(_))
+                                    | (
+                                        CurrentnessError,
+                                        Gfx942SdmaErrorV1::Contract(
+                                            "injected creation currentness"
+                                        )
+                                    )
+                            ));
+                            Err(escrow_owner_failure(escrow, error))
+                        },
+                    )
+                }));
+                if fault.panics() {
+                    assert_eq!(result.err().unwrap().downcast_ref(), Some(&fault));
+                } else {
+                    assert!(result.ok().unwrap().err().unwrap().is_terminal_creation());
+                }
+                let root = f.parent.sdma.as_ref().unwrap();
+                assert_eq!(creation_observation(root), expected.unwrap());
+                assert!(root.supports_retained_sdma_release_v1().is_err());
+                assert_eq!(f.trace.borrow().drops, drops);
+                assert_eq!(f.final_poison_roots, [true]);
+                f.assert_no_retry();
+                drop(f);
+                assert_eq!(local.live(), (0, 0, 0));
+            }
+        }
+    }
+}
+
+#[test]
+fn constructed_sdma_creation_native_success_fills_and_extracts_every_profile() {
+    use crate::sdma::retained_release::fixture::{
+        CreationNativeFault::Success, cleanup_creation_set, escrow_native_attempt,
+        escrow_observation, escrow_prefix, finish_creation_escrow,
+    };
+    for (primary_profile, secondary_profile, count) in creation_plans() {
+        let mut f = CreationParent::new(false);
+        let local = f.trace.borrow().local_resources.clone();
+        let key = f.parent.key;
+        let mut before = None;
+        let created = create_with_custody_v1(&mut f, "native success", |memory, escrow| {
+            escrow_prefix(memory, key, escrow, primary_profile, secondary_profile, 0);
+            for _ in 0..count {
+                escrow_native_attempt(memory, key, escrow, Success, &mut None).unwrap();
+            }
+            before = Some(escrow_observation(escrow));
+            let (primary, secondary) = finish_creation_escrow(escrow);
+            let primary_observation = creation_observation(&primary);
+            assert_eq!(
+                primary_observation.primary,
+                before.as_ref().unwrap().primary
+            );
+            assert_eq!(primary_observation.profiles, (primary_profile, None));
+            if let Some(secondary) = &secondary {
+                assert_eq!(
+                    creation_observation(secondary).primary,
+                    *before.as_ref().unwrap().secondary.as_ref().unwrap()
+                );
+                assert_eq!(
+                    creation_observation(secondary).profiles,
+                    (secondary_profile.unwrap(), None)
+                );
+            }
+            Ok(match secondary {
+                Some(secondary) => ReturnedSdmaCreationV1::combined(primary, secondary, ()),
+                None => ReturnedSdmaCreationV1::single(primary, ()),
+            })
+        })
+        .unwrap();
+        assert!(f.parent.sdma.is_none() && !f.parent.poisoned);
+        assert!(f.final_poison_roots.is_empty());
+        let (primary, secondary) = if secondary_profile.is_some() {
+            let (primary, secondary, ()) = created.into_combined();
+            (primary, Some(secondary))
+        } else {
+            (created.into_single().0, None)
+        };
+        let mut retained = Gfx942SdmaQueueSetV1::retain_created_for_terminal(primary, secondary);
+        assert_eq!(creation_observation(&retained), before.unwrap());
+        cleanup_creation_set(&mut retained);
+        drop(retained);
+        drop(f);
+        assert_eq!(local.live(), (0, 0, 0));
+    }
+}
+
+#[test]
+fn constructed_sdma_creation_attempt_panic_wins_retake_and_poison_with_doorbell_rooted() {
+    use crate::sdma::creation::SdmaCreationProfileV1::Directional;
+    use crate::sdma::retained_release::fixture::{
+        CreationNativeFault::CurrentnessPanic, escrow_native_attempt, escrow_prefix,
+    };
+    for after in [false, true] {
+        let mut f = CreationParent::new(false);
+        let local = f.trace.borrow().local_resources.clone();
+        let key = f.parent.key;
+        f.fault(
+            if after {
+                "creation-retake-after"
+            } else {
+                "creation-retake-before"
+            },
+            true,
+        );
+        f.final_poison_panic = true;
+        let mut expected = None;
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            create_with_custody_v1(
+                &mut f,
+                "attempt unwind",
+                |memory, escrow| -> Result<ReturnedSdmaCreationV1<()>, _> {
+                    escrow_prefix(memory, key, escrow, Directional, None, 1);
+                    escrow_native_attempt(memory, key, escrow, CurrentnessPanic, &mut expected)
+                        .unwrap();
+                    panic!("unreachable")
+                },
+            )
+        }));
+        assert_eq!(
+            result.err().unwrap().downcast_ref(),
+            Some(&CurrentnessPanic)
+        );
+        assert_eq!(
+            creation_observation(f.parent.sdma.as_ref().unwrap()),
+            expected.unwrap()
+        );
+        assert_eq!(f.final_poison_roots, [true]);
+        assert_eq!(f.secondary_drops.load(Ordering::SeqCst), 0);
+        f.assert_no_retry();
+        drop(f);
+        assert_eq!(local.live(), (0, 0, 0));
     }
 }
 
