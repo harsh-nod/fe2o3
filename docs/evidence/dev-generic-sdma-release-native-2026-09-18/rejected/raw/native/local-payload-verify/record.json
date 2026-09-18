@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "-c",
+    "import json,pathlib,protocol; root=pathlib.Path.cwd(); manifest=protocol.payload(root); print(json.dumps({'payload_sha256':protocol.sha(root/'payload.json'),'files':len(manifest),'verified':True},sort_keys=True))"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-single-sdma-native-bundle-20260918",
+  "started_ns": 1789739903722332006,
+  "bound_seconds": 30,
+  "process_group": 2176615,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789739903840360261,
+  "stdout_sha256": "9525f155b1531dcaa7060dbb3034a89763f0334cb337ae412e375c108b19b6e1",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

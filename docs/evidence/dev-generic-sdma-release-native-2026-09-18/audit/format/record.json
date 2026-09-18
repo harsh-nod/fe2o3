@@ -1,0 +1,20 @@
+{
+  "command": [
+    "/home/harsh/.local/bin/ruff",
+    "format",
+    "--check",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-generic-sdma-release-native-2026-09-18/verify.py",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-generic-sdma-release-native-2026-09-18/test_verify.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-single-sdma-native-bundle-v2-20260918",
+  "started_ns": 1789740849512699003,
+  "bound_seconds": 60,
+  "process_group": 2260623,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789740849581461168,
+  "stdout_sha256": "3bc53bf3e981a98a34a852e175bf9b77af841edea74fca595d9aedcbaf9a4938",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

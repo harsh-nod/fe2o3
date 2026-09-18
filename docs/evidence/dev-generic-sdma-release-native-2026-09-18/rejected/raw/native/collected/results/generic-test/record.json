@@ -1,0 +1,50 @@
+{
+  "name": "generic-test",
+  "command": [
+    "/usr/bin/timeout",
+    "--signal=TERM",
+    "--kill-after=5s",
+    "180s",
+    "/usr/bin/prlimit",
+    "--core=0:0",
+    "--fsize=16777216:16777216",
+    "--",
+    "/usr/bin/numactl",
+    "--physcpubind=48-95",
+    "--membind=1",
+    "/tmp/fe2o3-single-sdma-20260918.yxqxau8y/queue-example",
+    "--retained-release-sdma",
+    "generic",
+    "0x54f88318ca05093d"
+  ],
+  "cwd": "/tmp/fe2o3-single-sdma-20260918.yxqxau8y",
+  "environment": {
+    "HOME": "/home/harsh",
+    "PATH": "/usr/bin:/bin:/opt/rocm/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "HSA_XNACK": "0"
+  },
+  "started": {
+    "realtime_ns": 1789739913837549468,
+    "monotonic_ns": 7238811259221510
+  },
+  "spawned": {
+    "realtime_ns": 1789739913841194894,
+    "monotonic_ns": 7238811262866836
+  },
+  "status": 1,
+  "error": null,
+  "process_group": 3607280,
+  "group_absent": true,
+  "t0": {
+    "realtime_ns": 1789739914506617001,
+    "monotonic_ns": 7238811928289754
+  },
+  "outer_bound_seconds": 200,
+  "finished": {
+    "realtime_ns": 1789739914506693245,
+    "monotonic_ns": 7238811928364946
+  },
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "cf54e0d3069e9928ea970ade4aef1ffc23bb21879693cf92065ddb109332e86c"
+}

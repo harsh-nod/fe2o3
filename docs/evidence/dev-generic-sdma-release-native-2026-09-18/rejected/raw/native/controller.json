@@ -1,0 +1,79 @@
+{
+  "owned": "/tmp/fe2o3-single-sdma-20260918.yxqxau8y",
+  "payload_sha256": "a14984f90e5ddecab7de82dd8e1db1d029109c75683d7106e527b0ac0af4388f",
+  "native_attempted": true,
+  "collected_verified": true,
+  "cleanup_closed": true,
+  "independent_absence_closed": true,
+  "failure": "RuntimeError: native campaign rejected; receipts and cleanup retained",
+  "local_only": false,
+  "native_outer_passed": false,
+  "records": [
+    {
+      "name": "local-protocol-tests",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "local-payload-verify",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "local-controller-wiring-tests",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "remote-empty",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "upload",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "remote-approve",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "native-outer",
+      "status": 1,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "remote-inventory",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "collect",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "remote-cleanup",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "remote-independent-absence",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    }
+  ]
+}

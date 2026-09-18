@@ -1,0 +1,7 @@
+
+thread 'main' (3607282) panicked at crates/fe2o3-kfd/examples/kfd-compute-aql-queue.rs:112:5:
+assertion `left == right` failed
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+Error: "isolated compute-AQL queue child for unique ID 54f88318ca05093d failed with exit status: 101"

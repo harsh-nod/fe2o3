@@ -1,0 +1,64 @@
+{
+  "archive_integrity_sealed": false,
+  "historical_audit": "passed",
+  "native_campaign": "passed",
+  "profiles": [
+    "generic",
+    "engine-0",
+    "engine-1"
+  ],
+  "native_commands_passed": 3,
+  "observations": 9,
+  "strict_endpoints": 9,
+  "refused_endpoints": 0,
+  "post_observation_offsets": [
+    {
+      "case": "generic",
+      "endpoint": "immediate",
+      "start_offset_ns": 32712925,
+      "strict_admitted": true
+    },
+    {
+      "case": "generic",
+      "endpoint": "delayed",
+      "start_offset_ns": 20031334203,
+      "strict_admitted": true
+    },
+    {
+      "case": "engine-0",
+      "endpoint": "immediate",
+      "start_offset_ns": 31534684,
+      "strict_admitted": true
+    },
+    {
+      "case": "engine-0",
+      "endpoint": "delayed",
+      "start_offset_ns": 20031157969,
+      "strict_admitted": true
+    },
+    {
+      "case": "engine-1",
+      "endpoint": "immediate",
+      "start_offset_ns": 31892870,
+      "strict_admitted": true
+    },
+    {
+      "case": "engine-1",
+      "endpoint": "delayed",
+      "start_offset_ns": 20031637515,
+      "strict_admitted": true
+    }
+  ],
+  "recorded_native_pids_groups_absent": 15,
+  "cleanup": "closed",
+  "current_source_files_revalidated": 5555,
+  "current_binary_revalidated": true,
+  "performance_claim": false,
+  "real_ioctl_failure_claim": false,
+  "prior_attempt": {
+    "disposition": "rejected-before-SDMA-creation",
+    "strict_endpoints": 3,
+    "cleanup": "closed",
+    "recorded_groups_absent": 7
+  }
+}

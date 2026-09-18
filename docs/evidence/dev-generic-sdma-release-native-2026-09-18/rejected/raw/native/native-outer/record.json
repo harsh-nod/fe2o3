@@ -1,0 +1,27 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -B - launch /tmp/fe2o3-single-sdma-20260918.yxqxau8y"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-single-sdma-native-bundle-20260918",
+  "started_ns": 1789739910808434351,
+  "bound_seconds": 1300,
+  "process_group": 2176878,
+  "status": 1,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": "6870381be1f882c30fdba0ee88cb3abc28cbe040b4db66c4fd8e878792815828",
+  "finished_ns": 1789739936898586128,
+  "stdout_sha256": "4ef4ece648b1dd1bf4f6e0b7a2b0a1ef97650b8259479d6486ba0fa673336540",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

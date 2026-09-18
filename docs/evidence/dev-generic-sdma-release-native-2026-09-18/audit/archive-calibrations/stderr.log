@@ -1,0 +1,20 @@
+test_absence_requires_exact_roster_and_scope (__main__.ArchiveTests.test_absence_requires_exact_roster_and_scope) ... ok
+test_cleanup_commands_bind_mode_roster_and_archived_helper (__main__.ArchiveTests.test_cleanup_commands_bind_mode_roster_and_archived_helper) ... ok
+test_complete_historical_audit (__main__.ArchiveTests.test_complete_historical_audit) ... ok
+test_controller_requires_success_and_cleanup (__main__.ArchiveTests.test_controller_requires_success_and_cleanup) ... ok
+test_cpu_binary_receipt_bridge (__main__.ArchiveTests.test_cpu_binary_receipt_bridge) ... ok
+test_delayed_endpoint_cannot_move_to_a_later_window (__main__.ArchiveTests.test_delayed_endpoint_cannot_move_to_a_later_window) ... ok
+test_endpoint_capture_clock_bracket (__main__.ArchiveTests.test_endpoint_capture_clock_bracket) ... ok
+test_endpoint_rederives_raw_values (__main__.ArchiveTests.test_endpoint_rederives_raw_values) ... ok
+test_inventory_cannot_omit_or_replace_retained_files (__main__.ArchiveTests.test_inventory_cannot_omit_or_replace_retained_files) ... ok
+test_missing_seal_requires_explicit_review_mode (__main__.ArchiveTests.test_missing_seal_requires_explicit_review_mode) ... ok
+test_native_cases_require_exact_profile_and_complete_release (__main__.ArchiveTests.test_native_cases_require_exact_profile_and_complete_release) ... ok
+test_observer_command_contract (__main__.ArchiveTests.test_observer_command_contract) ... ok
+test_outer_timeout_contract (__main__.ArchiveTests.test_outer_timeout_contract) ... ok
+test_serial_command_chains_reject_overlap_and_bad_intervals (__main__.ArchiveTests.test_serial_command_chains_reject_overlap_and_bad_intervals) ... ok
+test_whole_native_transcript_rejects_unconsumed_text (__main__.ArchiveTests.test_whole_native_transcript_rejects_unconsumed_text) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 0.190s
+
+OK

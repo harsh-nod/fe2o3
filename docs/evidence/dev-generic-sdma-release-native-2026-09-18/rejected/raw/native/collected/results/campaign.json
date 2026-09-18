@@ -1,0 +1,28 @@
+{
+  "commit": "a0ab05f38ab28b81f8a3080268d07421f118ac87",
+  "started": {
+    "realtime_ns": 1789739911571885556,
+    "monotonic_ns": 7238808993557418
+  },
+  "cases": [
+    {
+      "case": "generic",
+      "test_record": "generic-test/record.json",
+      "failures": [
+        "test: ValueError: native test command passed"
+      ],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    }
+  ],
+  "failure": "ValueError: case rejected; no later case may run",
+  "native_ioctl_failure_claim": false,
+  "performance_claim": false,
+  "payload_after": "matched",
+  "finished": {
+    "realtime_ns": 1789739936650051726,
+    "monotonic_ns": 7238834071723988
+  }
+}
