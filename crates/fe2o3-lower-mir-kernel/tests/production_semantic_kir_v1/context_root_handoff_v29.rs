@@ -209,10 +209,10 @@ fn fixture(transport: Transport, binding: u8) -> ProductionSemanticSsaOwnerV1 {
         .unwrap(),
     ));
     let helper = function(
-        70,
+        50,
         SemanticFunctionRoleV1::InternalHelper,
         abi(
-            70,
+            50,
             false,
             vec![
                 ignored(CONTEXT),
@@ -303,7 +303,7 @@ fn input(ssa: &ProductionSemanticSsaOwnerV1) -> Input<'_> {
         root: ROOT,
         root_identity: SemanticFunctionIdentityV1::from_sha256(bytes(60)),
         helper: HELPER,
-        helper_identity: SemanticFunctionIdentityV1::from_sha256(bytes(70)),
+        helper_identity: SemanticFunctionIdentityV1::from_sha256(bytes(50)),
         issuer: ISSUER,
         issuer_identity: SemanticFunctionIdentityV1::from_sha256(bytes(90)),
         context_type: CONTEXT,
@@ -523,6 +523,7 @@ fn detached_identity_and_argument_substitutions_never_reach_the_callback() {
         (
             Input {
                 context_type: MARKER,
+                context_identity: SemanticTypeIdentityV1::from_sha256(bytes(10)),
                 ..exact
             },
             Error::ContextType,
