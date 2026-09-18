@@ -1,5 +1,6 @@
 //! Bounded diagnostic publication tests; bytes here grant no compiler authority.
 use super::*;
+use std::io::Write as _;
 
 struct Scratch(PathBuf);
 
