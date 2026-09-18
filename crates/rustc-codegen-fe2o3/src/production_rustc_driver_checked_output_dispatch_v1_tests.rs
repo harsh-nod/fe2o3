@@ -17,10 +17,17 @@ pub(super) enum Route {
 }
 
 impl Route {
-    fn from_policy(policy: ProductionHelperSourcePolicyV1) -> Self {
+    fn from_policy(
+        policy: ProductionHelperSourcePolicyV1,
+    ) -> Result<Self, ProductionPipelineError> {
         match policy {
-            ProductionHelperSourcePolicyV1::RawEmpty => Self::DirectRawEmpty,
-            ProductionHelperSourcePolicyV1::UnitLocal => Self::SilentUnitLocal,
+            ProductionHelperSourcePolicyV1::RawEmpty => Ok(Self::DirectRawEmpty),
+            ProductionHelperSourcePolicyV1::UnitLocal => Ok(Self::SilentUnitLocal),
+            ProductionHelperSourcePolicyV1::Borrowed => Err(ProductionPipelineError::TargetNeutralLowering(
+                fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::LocalHelperSourceConsumerUnavailable {
+                    consumer: "source qualification dispatch",
+                },
+            )),
         }
     }
 }
@@ -44,7 +51,7 @@ impl Stage {
     pub(super) fn lower(
         ranked: RankedVerifiedProductionCompilation,
     ) -> Result<Self, ProductionPipelineError> {
-        match Route::from_policy(ranked.checked_output_source_policy_v1()) {
+        match Route::from_policy(ranked.checked_output_source_policy_v1())? {
             Route::DirectRawEmpty => ranked
                 .lower_checked_output_policy4_v1()
                 .map(Box::new)
@@ -230,13 +237,17 @@ pub(super) fn check_private_helper_route(
 #[test]
 fn qualification_route_exhaustively_classifies_source_policy() {
     assert_eq!(
-        Route::from_policy(ProductionHelperSourcePolicyV1::RawEmpty),
+        Route::from_policy(ProductionHelperSourcePolicyV1::RawEmpty).unwrap(),
         Route::DirectRawEmpty
     );
     assert_eq!(
-        Route::from_policy(ProductionHelperSourcePolicyV1::UnitLocal),
+        Route::from_policy(ProductionHelperSourcePolicyV1::UnitLocal).unwrap(),
         Route::SilentUnitLocal
     );
+    assert!(matches!(Route::from_policy(ProductionHelperSourcePolicyV1::Borrowed),
+        Err(ProductionPipelineError::TargetNeutralLowering(
+            fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::LocalHelperSourceConsumerUnavailable { .. }
+        ))));
 }
 
 #[test]
