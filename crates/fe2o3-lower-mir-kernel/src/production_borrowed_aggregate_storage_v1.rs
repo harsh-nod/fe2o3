@@ -148,19 +148,19 @@ fn prepare_borrowed_aggregates_v1(
 }
 
 impl SemanticFunctionLoweringV1<'_> {
-    fn with_borrowed_aggregate_budget_v1<T>(
+    fn with_emission_budget_v1<T>(
         &mut self,
         body: impl FnOnce(
             &mut Self,
-            &mut dyn BorrowedAggregateBudgetV1,
+            &mut dyn SemanticEmissionBudgetV1,
         ) -> Result<T, ProductionSemanticKirErrorV1>,
     ) -> Result<T, ProductionSemanticKirErrorV1> {
-        let budget = self.borrowed_aggregate_work.take().ok_or_else(|| {
-            borrowed_aggregate_error_v1("borrowed aggregate emission has no shared resource ledger")
+        let budget = self.emission_work.take().ok_or_else(|| {
+            borrowed_aggregate_error_v1("semantic emission has no shared resource ledger")
         })?;
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self, &mut *budget)));
-        self.borrowed_aggregate_work = Some(budget);
+        self.emission_work = Some(budget);
         match result {
             Ok(result) => result,
             Err(payload) => std::panic::resume_unwind(payload),
@@ -197,7 +197,7 @@ impl SemanticFunctionLoweringV1<'_> {
         value: &SemanticValueBindingV1,
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        self.with_borrowed_aggregate_budget_v1(|this, budget| {
+        self.with_emission_budget_v1(|this, budget| {
             budget.charge_work(8)?;
             if this.borrowed_aggregate_storage.contains_key(&local.index()) { return Err(borrowed_aggregate_error_v1("borrowed aggregate owner reinitialization is unsupported")); }
             let shape = this.borrowed_aggregate_preparation.owners.get(&local.index()).ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?.clone_in(budget)?;
@@ -276,7 +276,7 @@ impl SemanticFunctionLoweringV1<'_> {
             self.locals[local.index() as usize] = Some(value);
             result?;
         }
-        self.with_borrowed_aggregate_budget_v1(|this, budget| {
+        self.with_emission_budget_v1(|this, budget| {
             let shape = borrowed_aggregate_shape_v1(this.types, reference_type, budget)?;
             let storage = this
                 .borrowed_aggregate_storage
@@ -307,7 +307,7 @@ impl SemanticFunctionLoweringV1<'_> {
         reference_type: SemanticTypeIdV1,
         operations: &mut Vec<Operation>,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
-        self.with_borrowed_aggregate_budget_v1(|this, budget| {
+        self.with_emission_budget_v1(|this, budget| {
             let shape = borrowed_aggregate_shape_v1(this.types, reference_type, budget)?;
             let old = this.borrowed_aggregate_view_v1(view, budget)?;
             if !shape.same_fields(&old.shape, budget)?
@@ -406,7 +406,7 @@ impl SemanticFunctionLoweringV1<'_> {
         view: usize,
         component: usize,
     ) -> Result<(ValueId, Type), ProductionSemanticKirErrorV1> {
-        self.with_borrowed_aggregate_budget_v1(|this, budget| {
+        self.with_emission_budget_v1(|this, budget| {
             let view = this.borrowed_aggregate_view_v1(view, budget)?;
             let value = view
                 .values
@@ -429,7 +429,7 @@ impl SemanticFunctionLoweringV1<'_> {
         {
             return Ok(());
         }
-        self.with_borrowed_aggregate_budget_v1(|this, budget| {
+        self.with_emission_budget_v1(|this, budget| {
             budget.charge_work(8)?;
             if let Some(storage) = this.borrowed_aggregate_storage.get_mut(&local.index()) {
                 storage.live = false;
@@ -455,7 +455,7 @@ impl SemanticFunctionLoweringV1<'_> {
         {
             return Ok(());
         }
-        self.with_borrowed_aggregate_budget_v1(|this, budget| {
+        self.with_emission_budget_v1(|this, budget| {
             budget.charge_work(parameters.len())?;
             for (slot, parameter) in parameters.iter().enumerate() {
                 let Some(formal) = &parameter.borrowed else {

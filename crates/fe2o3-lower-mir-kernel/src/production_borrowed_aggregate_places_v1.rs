@@ -24,7 +24,7 @@ impl SemanticFunctionLoweringV1<'_> {
         if !owner && place.projections().is_empty() {
             return Ok(None);
         }
-        self.with_borrowed_aggregate_budget_v1(|this, budget| {
+        self.with_emission_budget_v1(|this, budget| {
             budget.charge_work(8)?;
             let (shape, values, mut ordinal) = if let Some(view) = view {
                 let view = this.borrowed_aggregate_view_v1(view, budget)?;
@@ -167,7 +167,7 @@ impl SemanticFunctionLoweringV1<'_> {
         if self.borrowed_aggregate_preparation.locals.is_empty() {
             return Ok(None);
         }
-        let selected = self.with_borrowed_aggregate_budget_v1(|this, budget| {
+        let selected = self.with_emission_budget_v1(|this, budget| {
             budget.charge_work(argument_sum_v1(&[
                 this.borrowed_aggregate_preparation.locals.len(),
                 2,

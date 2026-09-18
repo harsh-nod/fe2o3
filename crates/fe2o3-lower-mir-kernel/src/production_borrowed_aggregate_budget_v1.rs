@@ -1,13 +1,19 @@
 // Erases only the lifetime of the shared work ledger, not its identity. This
 // permits the existing one-lifetime lowerer to borrow the enclosing call budget.
-trait BorrowedAggregateBudgetV1 {
+trait SemanticEmissionBudgetV1 {
+    fn work_ledger_identity_v1(&self) -> fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1;
     fn charge_work(&mut self, amount: usize) -> Result<(), ProductionSemanticKirErrorV1>;
     fn reserve_storage(&mut self, amount: usize) -> Result<(), ProductionSemanticKirErrorV1>;
     fn release_storage(&mut self, amount: usize) -> Result<(), ProductionSemanticKirErrorV1>;
     fn storage(&self) -> usize;
 }
 
-impl BorrowedAggregateBudgetV1 for ArgumentBudgetV1<'_> {
+use SemanticEmissionBudgetV1 as BorrowedAggregateBudgetV1;
+
+impl SemanticEmissionBudgetV1 for ArgumentBudgetV1<'_> {
+    fn work_ledger_identity_v1(&self) -> fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1 {
+        ArgumentBudgetV1::work_ledger_identity_v1(self)
+    }
     fn charge_work(&mut self, amount: usize) -> Result<(), ProductionSemanticKirErrorV1> {
         ArgumentBudgetV1::charge_work(self, amount).map_err(Into::into)
     }

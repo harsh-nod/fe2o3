@@ -30,11 +30,62 @@ impl SemanticFunctionLoweringV1<'_> {
     }
 
     fn try_lower_execution_borrow_v29(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        result_type: SemanticTypeIdV1,
+        value: &SemanticRvalueKindV1,
+    ) -> Result<Option<SemanticValueBindingV1>, ProductionSemanticKirErrorV1> {
+        let source = match value {
+            SemanticRvalueKindV1::Borrow { place, .. }
+            | SemanticRvalueKindV1::AddressOf { place, .. } => place,
+            _ => return Ok(None),
+        };
+        if !self.execution_local_v29(source.local())? {
+            return Ok(None);
+        }
+        let instance = self
+            .execution
+            .as_ref()
+            .ok_or_else(execution_availability_error_v29)?
+            .instance;
+        let result = self.try_lower_execution_borrow_binding_v29(
+            block,
+            statement,
+            result_type,
+            value,
+            instance,
+        )?;
+        self.with_emission_budget_v1(|this, budget| {
+            let cursor = this
+                .execution
+                .as_mut()
+                .ok_or_else(execution_availability_error_v29)?;
+            let definition = cursor.use_place(
+                execution_site_v29(block, statement),
+                ExecutionOperandV29::RvaluePlace,
+                source,
+                false,
+                budget,
+            )?;
+            check_execution_archive_v29(
+                &this.locals,
+                &this.semantic_ssa_bindings,
+                source,
+                definition,
+                budget,
+            )
+        })?;
+        Ok(result)
+    }
+
+    fn try_lower_execution_borrow_binding_v29(
         &self,
         block: SemanticBlockIdV1,
         statement: Option<u32>,
         result_type: SemanticTypeIdV1,
         value: &SemanticRvalueKindV1,
+        instance: ProductionCallInstanceIdV1,
     ) -> Result<Option<SemanticValueBindingV1>, ProductionSemanticKirErrorV1> {
         let (source, kind) = match value {
             SemanticRvalueKindV1::Borrow { place, kind } => (place, Some(*kind)),
@@ -54,9 +105,6 @@ impl SemanticFunctionLoweringV1<'_> {
         let error = |detail| self.execution_transport_error_v29(block, statement, detail);
         let kind =
             kind.ok_or_else(|| error("execution roles cannot acquire a physical address"))?;
-        let instance = self
-            .execution_instance
-            .ok_or_else(|| error("execution borrow lacks a source call instance"))?;
         let ordinal =
             statement.ok_or_else(|| error("execution borrow lacks a source statement"))? as usize;
         let source_statement = self

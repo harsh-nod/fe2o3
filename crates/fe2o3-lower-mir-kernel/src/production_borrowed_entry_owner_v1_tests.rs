@@ -217,6 +217,7 @@ fn placed_owned_entry_keeps_source_anchors_and_relocates_borrowed_operations() {
         &ids, &signatures, Some([64, 1, 1]), BTreeSet::new(), 1, false, 10_000,
         None, &mut private, None, &mut budget,
         SemanticEmissionPlacementV1 { first_block: 17, first_value: 100 },
+        None,
     ).unwrap();
     let function = &placed.function;
     let body = function.body.as_ref().unwrap();

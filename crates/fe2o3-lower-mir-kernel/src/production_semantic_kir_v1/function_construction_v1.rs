@@ -104,6 +104,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             BorrowedAggregatePreparationV1::default(),
             None,
             emission_placement,
+            None,
         )
     }
 
@@ -129,9 +130,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
         call_returns: CallReturnBufferV1,
         borrowed_aggregate_preparation: BorrowedAggregatePreparationV1,
-        mut borrowed_aggregate_work: Option<&'a mut dyn BorrowedAggregateBudgetV1>,
+        mut emission_work: Option<&'a mut dyn SemanticEmissionBudgetV1>,
         emission_placement: SemanticEmissionPlacementV1,
+        execution: Option<ExecutionAvailabilityV29<'a>>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        if let Some(execution) = &execution {
+            execution.check_source(function, semantic_ssa)?;
+        }
         let mut locals = vec![None; function.locals().len()];
         let mut borrowed_aggregate_views = Vec::new();
         let option_producers = semantic_option_producers_v1(function, callables)
@@ -148,7 +153,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         shape,
                         values,
                     } => {
-                        let budget = borrowed_aggregate_work.as_deref_mut().ok_or_else(|| {
+                        let budget = emission_work.as_deref_mut().ok_or_else(|| {
                             borrowed_aggregate_error_v1(
                                 "borrowed entry has no shared resource ledger",
                             )
@@ -246,7 +251,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             max_operations,
             max_operations,
             &borrowed_aggregate_preparation.locals,
-            borrowed_aggregate_work.as_deref_mut(),
+            emission_work.as_deref_mut(),
         )?;
         let workgroup_pipeline_contracts = workgroup_pipeline_type_contracts_v1(
             types,
@@ -334,7 +339,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
         }
         Ok(Self {
-            borrowed_aggregate_work,
+            emission_work,
             borrowed_aggregate_function: None,
             borrowed_aggregate_preparation,
             borrowed_aggregate_views,
@@ -375,7 +380,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             pending_semantic_ssa_definitions,
             next_value,
             emission_placement,
-            execution_instance: None,
+            execution,
             assert_failure_block,
             required_workgroup,
             infallible_asserts,

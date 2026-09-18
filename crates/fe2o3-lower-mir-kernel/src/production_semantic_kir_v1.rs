@@ -121,9 +121,15 @@ include!("production_emission_placement_v1.rs");
 #[path = "production_call_instance_ids_v1.rs"]
 mod production_call_instance_ids_v1;
 
-// Expanded graphs stay diagnostic-only until instance-qualified source replay
-// and capability scope discharge are integrated with the production owner.
-#[cfg(test)]
+// Borrowed source plans feed availability; expanded graphs still require
+// instance-qualified source replay and capability scope discharge.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Source-instance production consumers remain gated on custody"
+    )
+)]
 #[path = "production_call_instances_v1.rs"]
 mod production_call_instances_v1;
 #[cfg(test)]
@@ -10214,6 +10220,14 @@ enum PlannedParameterLocalBindingV1 {
 }
 
 struct LoweredFunctionResultV1 {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Expanded instance correspondence remains diagnostic-only"
+        )
+    )]
+    source_call_instance: Option<ProductionCallInstanceIdV1>,
     borrowed_parameter_bindings: Vec<SemanticKirBorrowedParameterBindingV1>,
     borrowed_aggregate_fields: Vec<BorrowedAggregateFieldCandidateV1>,
     borrowed_aggregate_calls: Vec<BorrowedAggregateCallCandidateV1>,
@@ -10608,7 +10622,9 @@ fn lower_one_semantic_function_v1(
     private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
     call_budget: &mut ArgumentBudgetV1<'_>,
     placement: SemanticEmissionPlacementV1,
+    execution: Option<ExecutionAvailabilityV29<'_>>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
+    let source_call_instance = execution.as_ref().map(|cursor| cursor.instance);
     let function = semantic
         .functions()
         .get(plan.semantic_function.index() as usize)
@@ -10701,6 +10717,7 @@ fn lower_one_semantic_function_v1(
         borrowed_preparation,
         Some(call_budget),
         placement,
+        execution,
     )?;
     lowering.borrowed_aggregate_function = Some(plan.kernel_ir_function.clone());
 
@@ -10865,7 +10882,7 @@ fn lower_one_semantic_function_v1(
     let emitted_operations = lowering.emitted_operations;
     let borrowed_aggregate_fields = lowering.borrowed_aggregate_fields;
     let borrowed_aggregate_calls = lowering.borrowed_aggregate_calls;
-    drop(lowering.borrowed_aggregate_work.take());
+    drop(lowering.emission_work.take());
     let generated_terminator_values = lowering.generated_terminator_values;
     let mut call_returns = lowering.call_returns;
     let private_arrays = lowering.private_arrays.into_rows()?;
@@ -10926,6 +10943,7 @@ fn lower_one_semantic_function_v1(
         .required_capabilities
         .extend(operation_capabilities.iter().cloned());
     Ok(LoweredFunctionResultV1 {
+        source_call_instance,
         private_arrays,
         function: lowered,
         borrowed_parameter_bindings: clone_borrowed_parameter_bindings_v1(
@@ -12286,6 +12304,7 @@ fn lower_single_root_module(
             Some((&private_arrays, outer_private_arrays)),
             call_budget,
             SemanticEmissionPlacementV1::default(),
+            None,
         )?;
         remaining_operations = remaining_operations
             .checked_sub(lowered.emitted_operations)
@@ -12581,12 +12600,13 @@ include!("production_semantic_kir_v1/semantic_ssa_intrinsics_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_plan_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 include!("production_execution_bindings_v1.rs");
+include!("production_execution_availability_v29.rs");
 include!("production_execution_transport_v1.rs");
 include!("production_call_destination_v1.rs");
 include!("production_semantic_kir_v1/dynamic_local_array_v1.rs");
 
 struct SemanticFunctionLoweringV1<'a> {
-    borrowed_aggregate_work: Option<&'a mut dyn BorrowedAggregateBudgetV1>,
+    emission_work: Option<&'a mut dyn SemanticEmissionBudgetV1>,
     borrowed_aggregate_function: Option<FunctionId>,
     borrowed_aggregate_preparation: BorrowedAggregatePreparationV1,
     borrowed_aggregate_views: Vec<BorrowedAggregateViewV1>,
@@ -12623,7 +12643,7 @@ struct SemanticFunctionLoweringV1<'a> {
     pending_semantic_ssa_definitions: BTreeMap<(u32, u32), VecDeque<SsaValueV1>>,
     next_value: u32,
     emission_placement: SemanticEmissionPlacementV1,
-    execution_instance: Option<ProductionCallInstanceIdV1>,
+    execution: Option<ExecutionAvailabilityV29<'a>>,
     assert_failure_block: Option<BlockId>,
     required_workgroup: Option<[u32; 3]>,
     infallible_asserts: BTreeSet<u32>,
@@ -12655,6 +12675,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         block: SemanticBlockIdV1,
         target: &mut BasicBlock,
     ) -> Result<SemanticBlockPrologueSpansV1, ProductionSemanticKirErrorV1> {
+        if self.execution.is_some() {
+            self.with_emission_budget_v1(|this, budget| {
+                this.execution.as_mut().unwrap().begin_block(block, budget)
+            })?;
+        }
         self.private_arrays.begin_block(block, target.id)?;
         self.retained_local_initialized = self
             .control_flow_ssa
@@ -13381,6 +13406,20 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticStatementKindV1::StorageLive(local)
             | SemanticStatementKindV1::StorageDead(local) => {
+                if self.execution.is_some() && self.execution_local_v29(*local)? {
+                    self.with_emission_budget_v1(|this, budget| {
+                        this.execution.as_mut().unwrap().storage_kill(
+                            execution_site_v29(block, statement),
+                            if matches!(kind, SemanticStatementKindV1::StorageLive(_)) {
+                                ExecutionOperandV29::StorageLive
+                            } else {
+                                ExecutionOperandV29::StorageDead
+                            },
+                            *local,
+                            budget,
+                        )
+                    })?;
+                }
                 self.borrowed_aggregate_invalidate_owner_v1(*local)?;
                 let local = self.require_local(block, statement, local.index())?;
                 self.locals[local] = None;
@@ -13634,9 +13673,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             return Ok(binding);
         }
         match value {
-            SemanticRvalueKindV1::Use(operand) => {
-                self.lower_operand(block, statement, operand, operations)
-            }
+            SemanticRvalueKindV1::Use(operand) => self.lower_source_operand_v29(
+                block,
+                statement,
+                Some(ExecutionOperandV29::RvalueOperand(0)),
+                operand,
+                operations,
+            ),
             SemanticRvalueKindV1::Borrow { place, .. }
             | SemanticRvalueKindV1::AddressOf { place, .. } => {
                 if let Some(binding) =
@@ -14389,8 +14432,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     .expect("emitted enum discriminant")
                     .0;
                 let mut fields = Vec::with_capacity(aggregate.operands().len());
-                for operand in aggregate.operands() {
-                    fields.push(self.lower_operand(block, statement, operand, operations)?);
+                for (index, operand) in aggregate.operands().iter().enumerate() {
+                    fields.push(self.lower_source_operand_v29(
+                        block,
+                        statement,
+                        Some(ExecutionOperandV29::RvalueOperand(
+                            u32::try_from(index).map_err(|_| execution_availability_error_v29())?,
+                        )),
+                        operand,
+                        operations,
+                    )?);
                 }
                 Ok(SemanticValueBindingV1::Enum {
                     discriminant,
@@ -14409,8 +14460,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 ) =>
             {
                 let mut fields = Vec::with_capacity(aggregate.operands().len());
-                for operand in aggregate.operands() {
-                    fields.push(self.lower_operand(block, statement, operand, operations)?);
+                for (index, operand) in aggregate.operands().iter().enumerate() {
+                    fields.push(self.lower_source_operand_v29(
+                        block,
+                        statement,
+                        Some(ExecutionOperandV29::RvalueOperand(
+                            u32::try_from(index).map_err(|_| execution_availability_error_v29())?,
+                        )),
+                        operand,
+                        operations,
+                    )?);
                 }
                 if let Some(binding) =
                     self.reauthenticate_compiler_capability_zst(block, result_type)?
@@ -14429,6 +14488,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     }
 
     fn lower_operand(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        operand: &SemanticOperandV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.lower_source_operand_v29(block, statement, None, operand, operations)
+    }
+
+    fn lower_operand_inner_v1(
         &mut self,
         block: SemanticBlockIdV1,
         statement: Option<u32>,
@@ -21830,6 +21899,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 .get_mut(&(block.index(), destination.local().index()))
                 .and_then(VecDeque::pop_front)
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            if self.execution.is_some() {
+                self.with_emission_budget_v1(|this, budget| {
+                    this.execution.as_mut().unwrap().define(
+                        execution_site_v29(block, statement),
+                        destination.local(),
+                        definition,
+                        budget,
+                    )
+                })?;
+            }
             insert_semantic_ssa_binding_v1(
                 &mut self.semantic_ssa_bindings,
                 self.semantic_function.index(),
