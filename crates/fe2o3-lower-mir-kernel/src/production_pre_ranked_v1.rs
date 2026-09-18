@@ -1,7 +1,10 @@
 // This shard shares private correspondence and lowering helpers with its owner.
 
 include!("production_pre_ranked_local_frames_v1.rs");
+include!("production_local_helper_erased_owner_v1.rs");
 include!("production_local_helper_ranked_stage_v1.rs");
+include!("production_unit_local_source_replay_v1.rs");
+include!("production_local_helper_deletion_v1.rs");
 
 /// Construction failure before ranked checking starts.
 #[derive(Debug)]

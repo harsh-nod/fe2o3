@@ -26,6 +26,8 @@ const CHILD_TEST: &str =
 struct Observation {
     roots: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_route: Option<dispatch::RouteObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     transparent_result_wrappers: Option<usize>,
     internal_helpers: usize,
     helper_calls: usize,
@@ -113,19 +115,13 @@ impl Callbacks for CheckedOutputCallbacks {
             // This call contains B/C admission and fresh O checks; an error alone
             // does not identify which internal endpoint failed.
             let stage = snapshots::with_directory(self.endpoint_directory.as_deref(), || {
-                self.progress.run(SourceStage::Policy4, || {
-                    ranked.lower_checked_output_policy4_v1()
-                })
+                self.progress
+                    .run(SourceStage::Policy4, || dispatch::Stage::lower(ranked))
             })
             .map_err(|e| SourceFailure::new(SourceStage::Policy4, format!("{e:?}")))?;
-            let admitted = stage.output();
-            assert!(!admitted.grants_artifact_or_launch_authority());
-            assert!(std::ptr::eq(
-                admitted.output(),
-                admitted.checked_output().owner()
-            ));
-            let module = admitted.output().module();
-            let semantic = admitted.source_semantic_kir().semantic().semantic();
+            assert!(std::ptr::eq(stage.output(), stage.checked_output().owner()));
+            let module = stage.output().module();
+            let semantic = stage.semantic();
             let mut transparent_result_wrappers = 0;
             for root in semantic.roots() {
                 let selection = semantic
@@ -149,6 +145,7 @@ impl Callbacks for CheckedOutputCallbacks {
                     .iter()
                     .map(|k| k.id.as_str().to_owned())
                     .collect(),
+                source_route: Some(stage.observe_route()),
                 transparent_result_wrappers: Some(transparent_result_wrappers),
                 internal_helpers: helpers.len(),
                 helper_calls: 0,
@@ -160,11 +157,11 @@ impl Callbacks for CheckedOutputCallbacks {
                 private_writes: 0,
                 other_reads: 0,
                 other_writes: 0,
-                formal_accesses: admitted.kernels().iter().map(|k| k.accesses().len()).sum(),
-                runtime_domains: Some(runtime_domains::observe(admitted.kernels())?),
+                formal_accesses: stage.kernels().iter().map(|k| k.accesses().len()).sum(),
+                runtime_domains: Some(runtime_domains::observe(stage.kernels())?),
                 simulation: None,
-                policy: admitted.checked_output().execution().policy_version(),
-                output_digest: *admitted.output().canonical().identity().digest(),
+                policy: stage.checked_output().execution().policy_version(),
+                output_digest: *stage.output().canonical().identity().digest(),
                 llvm_bytes: 0,
                 descriptor_roots: 0,
                 missing_proof_refused: false,
@@ -205,10 +202,11 @@ impl Callbacks for CheckedOutputCallbacks {
             if let Some(case) = simulation::requested()? {
                 observation.simulation =
                     Some(self.progress.run(SourceStage::Simulation, || {
-                        simulation::observe(admitted.output().canonical(), case)
+                        simulation::observe(stage.output().canonical(), case)
                     })?);
             }
             if self.probe_missing_proof {
+                let stage = stage.into_direct_proof_probe()?;
                 use crate::production_native_source_lineage_v1::NativeSourceLineageErrorV1;
                 use crate::production_pipeline::{
                     ProductionPipelineError, checked_output_policy4_v1::CheckedOutputStageErrorV1,
@@ -411,12 +409,23 @@ fn ordinary_rust_shared_unit_helper_reaches_checked_native_output() {
     ordinary_rust_checked_output_cases(&[OrdinarySourceCase::SharedUnitHelper]);
 }
 
+#[test]
+#[ignore = "requires pinned nightly rust-src, AMD dependencies, and ordinary-source compilation"]
+fn ordinary_rust_private_unit_helper_reaches_checked_native_output() {
+    ordinary_rust_checked_output_cases(&[
+        OrdinarySourceCase::PrivateUnitHelper,
+        OrdinarySourceCase::RetainedPrivateUnitHelper,
+    ]);
+}
+
 enum OrdinarySourceCase {
     Fill,
     Vecadd,
     WrappedFill,
     RetainedWrappedFill,
     SharedUnitHelper,
+    PrivateUnitHelper,
+    RetainedPrivateUnitHelper,
 }
 
 fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
@@ -459,7 +468,13 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
     let rustc = env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
     let sysroot = output(clean_command(&rustc).args(["--print", "sysroot"]));
     let sysroot = String::from_utf8(sysroot.stdout).unwrap();
+    let mut private_helper_needs_retained_mir = true;
     for case in cases {
+        if matches!(case, OrdinarySourceCase::RetainedPrivateUnitHelper)
+            && !private_helper_needs_retained_mir
+        {
+            continue;
+        }
         let (name, package_path, feature, roots, reads, writes, calls) = match case {
             OrdinarySourceCase::Fill => ("fill", "examples/fill", None, &["fill"][..], 0, 1, 0),
             OrdinarySourceCase::Vecadd => {
@@ -491,6 +506,20 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
                 0,
                 2,
                 2,
+            ),
+            OrdinarySourceCase::PrivateUnitHelper
+            | OrdinarySourceCase::RetainedPrivateUnitHelper => (
+                if matches!(case, OrdinarySourceCase::RetainedPrivateUnitHelper) {
+                    "retained-private-unit-helper"
+                } else {
+                    "private-unit-helper"
+                },
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("private-unit-helper"),
+                &["private_helper_fill"][..],
+                0,
+                1,
+                0,
             ),
         };
         let package_dir = workspace.join(package_path);
@@ -547,6 +576,10 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         if matches!(case, OrdinarySourceCase::RetainedWrappedFill) {
             args.push("-Zinline-mir=no".into());
         }
+        if matches!(case, OrdinarySourceCase::RetainedPrivateUnitHelper) {
+            args.push("-Zinline-mir=no".into());
+            args.push("-Zmir-opt-level=0".into());
+        }
         let original: Vec<OsString> = args.iter().map(OsString::from).collect();
         let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&original).unwrap()
         else {
@@ -585,7 +618,9 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         let simulation_case = match case {
             OrdinarySourceCase::Fill
             | OrdinarySourceCase::WrappedFill
-            | OrdinarySourceCase::RetainedWrappedFill => Some(simulation::Case::Fill),
+            | OrdinarySourceCase::RetainedWrappedFill
+            | OrdinarySourceCase::PrivateUnitHelper
+            | OrdinarySourceCase::RetainedPrivateUnitHelper => Some(simulation::Case::Fill),
             OrdinarySourceCase::Vecadd => Some(simulation::Case::Vecadd),
             OrdinarySourceCase::SharedUnitHelper => None,
         };
@@ -603,8 +638,26 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
                 OrdinarySourceCase::RetainedWrappedFill
             )))
         );
-        assert_eq!(result.helper_calls, calls);
-        assert_eq!(result.internal_helpers == 0, calls == 0);
+        if matches!(
+            case,
+            OrdinarySourceCase::PrivateUnitHelper | OrdinarySourceCase::RetainedPrivateUnitHelper
+        ) {
+            let route = dispatch::check_private_helper_route(
+                &result,
+                matches!(case, OrdinarySourceCase::RetainedPrivateUnitHelper),
+            )
+            .unwrap();
+            if matches!(case, OrdinarySourceCase::PrivateUnitHelper) {
+                private_helper_needs_retained_mir = route != dispatch::Route::SilentUnitLocal;
+            }
+            eprintln!(
+                "ordinary private helper observed route: {route:?}; retained-MIR test configuration: {}",
+                matches!(case, OrdinarySourceCase::RetainedPrivateUnitHelper)
+            );
+        } else {
+            assert_eq!(result.helper_calls, calls);
+            assert_eq!(result.internal_helpers == 0, calls == 0);
+        }
         assert_eq!((result.reads, result.writes), (reads, writes));
         assert_eq!(result.formal_accesses, reads + writes);
         assert_eq!(
@@ -660,6 +713,8 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
 mod corpus;
 #[path = "production_rustc_driver_checked_output_cargo_v1_tests.rs"]
 mod corpus_cargo;
+#[path = "production_rustc_driver_checked_output_dispatch_v1_tests.rs"]
+mod dispatch;
 #[path = "production_rustc_driver_checked_output_progress_v1_tests.rs"]
 mod progress;
 #[path = "production_rustc_driver_checked_output_runtime_domains_v1_tests.rs"]

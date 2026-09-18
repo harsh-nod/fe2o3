@@ -20,6 +20,7 @@ struct QueriedSliceV1 {
 
 pub(super) struct ProjectedViewsV1<'a> {
     locals: Vec<Option<ProjectedViewV1>>,
+    scalar_private_singletons: &'a [u8],
     facts: Option<&'a mut dyn ProjectedAssertionFactsV1>,
     site: Option<ProjectedSemanticAccessSiteV1>,
     source_start: usize,
@@ -51,6 +52,7 @@ impl<'a> ProjectedViewsV1<'a> {
     pub(super) fn new(locals: usize, facts: Option<&'a mut dyn ProjectedAssertionFactsV1>) -> Self {
         Self {
             locals: vec![None; locals],
+            scalar_private_singletons: &[],
             facts,
             site: None,
             source_start: 0,
@@ -58,6 +60,25 @@ impl<'a> ProjectedViewsV1<'a> {
             next_access: 0,
             queried: Vec::new(),
         }
+    }
+
+    pub(super) fn with_scalar_private_singletons(mut self, census: &'a [u8]) -> Self {
+        self.scalar_private_singletons = census;
+        self
+    }
+
+    pub(super) fn scalar_private_singleton(
+        &mut self,
+        local: SemanticLocalIdV1,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        if self.scalar_private_singletons.is_empty() {
+            return Ok(false);
+        }
+        self.charge_private_array_work(2)?;
+        Ok(scalar_singleton_projection_v1::eligible(
+            self.scalar_private_singletons,
+            local,
+        ))
     }
 
     pub(super) fn begin_site(

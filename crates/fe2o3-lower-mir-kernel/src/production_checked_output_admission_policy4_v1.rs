@@ -2,6 +2,8 @@ use super::*;
 use fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12 as Owner;
 use fe2o3_kernel_opt::CheckedCanonicalKernelIrOwnerPolicy4V1 as Checked;
 
+include!("production_checked_output_erased_policy4_v1.rs");
+
 /// Failure to compose source/B/C admission with independently checked C/O.
 #[derive(Debug)]
 pub enum ProductionCheckedOutputAdmissionErrorPolicy4V1 {

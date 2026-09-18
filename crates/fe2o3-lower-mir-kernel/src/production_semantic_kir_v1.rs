@@ -95,6 +95,7 @@ pub use slice_view_v1::*;
 include!("production_optimized_assert_origins_v1.rs");
 include!("production_source_output_catalog_v1.rs");
 include!("production_source_output_occurrences_v1.rs");
+include!("production_source_output_erased_v1.rs");
 include!("production_source_output_private_arrays_v1.rs");
 include!("production_private_array_facts_v1.rs");
 include!("production_private_array_records_v1.rs");

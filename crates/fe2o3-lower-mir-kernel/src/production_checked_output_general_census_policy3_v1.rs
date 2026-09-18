@@ -8,7 +8,14 @@ pub(super) fn source(
     owner: &ProductionSemanticKirOwnerV1,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<()> {
-    let source = owner.semantic().semantic();
+    source_parts(owner.semantic().semantic(), &owner.correspondence, budget)
+}
+
+pub(super) fn source_parts(
+    source: &AdmittedInertSemanticMirV1,
+    correspondence: &SemanticKirCorrespondenceV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<()> {
     charge(budget, 4)?;
     if source.roots().is_empty() || !source.statics().is_empty() || !source.allocations().is_empty()
     {
@@ -17,7 +24,7 @@ pub(super) fn source(
             "nonempty roots without source statics or allocations",
         ));
     }
-    let roles = source_roles::check_source(owner, budget)?;
+    let roles = source_roles::check_source_parts(source, correspondence, budget)?;
     for (ordinal, function) in source.functions().iter().enumerate() {
         charge(budget, 7)?;
         let helper = roles.retained_helper(ordinal)?;

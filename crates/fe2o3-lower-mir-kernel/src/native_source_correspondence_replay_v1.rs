@@ -695,12 +695,52 @@ pub fn replay_native_source_correspondence_v1(
     launch_inputs: &[ProductionSourceLaunchRootInputV1<'_>],
     budget: &mut Budget<'_>,
 ) -> Result<(ReplayedNativeSourceV1, NativeSourceReplayStorageV1), NativeSourceReplayErrorV1> {
+    let (parts, storage) = replay_native_source_parts_v1(
+        semantic_bytes,
+        native_n_bytes,
+        catalog_bytes,
+        launch_inputs,
+        NativeSourceReplayRouteV1::RawEmpty,
+        std::mem::size_of::<ReplayedNativeSourceV1>(),
+        budget,
+    )?;
+    Ok((
+        ReplayedNativeSourceV1 {
+            source: parts.source,
+            catalog: parts.catalog,
+            retained_storage: storage.retained_storage(),
+        },
+        storage,
+    ))
+}
+
+#[derive(Clone, Copy)]
+enum NativeSourceReplayRouteV1 {
+    RawEmpty,
+    UnitLocal,
+}
+
+struct ReplayedNativeSourcePartsV1 {
+    source: ProductionPreRankedKirOwnerV1,
+    catalog: Catalog,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn replay_native_source_parts_v1(
+    semantic_bytes: &[u8],
+    native_n_bytes: &[u8],
+    catalog_bytes: &[u8],
+    launch_inputs: &[ProductionSourceLaunchRootInputV1<'_>],
+    route: NativeSourceReplayRouteV1,
+    wrapper_bytes: usize,
+    budget: &mut Budget<'_>,
+) -> Result<(ReplayedNativeSourcePartsV1, NativeSourceReplayStorageV1), NativeSourceReplayErrorV1> {
     budget.charge_work(4)?;
     let floor = budget.storage();
     let token = budget.work_ledger_identity_v1();
     let slot = budget as *const Budget<'_> as usize;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let wrapper = std::mem::size_of::<ReplayedNativeSourceV1>()
+        let wrapper = wrapper_bytes
             .checked_add(semantic_bytes.len())
             .ok_or(Resource::Arithmetic)?;
         budget.reserve_storage(wrapper)?;
@@ -728,10 +768,19 @@ pub fn replay_native_source_correspondence_v1(
             budget,
         )
         .map_err(NativeSourceReplayErrorV1::Materialize)?;
-        let source_storage = source.retained_analysis_storage_v1();
+        let source_storage = match route {
+            NativeSourceReplayRouteV1::RawEmpty => source.retained_analysis_storage_v1(),
+            NativeSourceReplayRouteV1::UnitLocal => source
+                .unit_local_source_storage_floor_v1()
+                .map_err(NativeSourceReplayErrorV1::RankedSource)?,
+        };
         budget.reserve_storage(source_storage)?;
         budget.charge_work(1)?;
-        if source.helper_source_policy_v1() != ProductionHelperSourcePolicyV1::RawEmpty {
+        let expected = match route {
+            NativeSourceReplayRouteV1::RawEmpty => ProductionHelperSourcePolicyV1::RawEmpty,
+            NativeSourceReplayRouteV1::UnitLocal => ProductionHelperSourcePolicyV1::UnitLocal,
+        };
+        if source.helper_source_policy_v1() != expected {
             return Err(NativeSourceReplayErrorV1::Mismatch(
                 "local helper source policy",
             ));
@@ -776,11 +825,7 @@ pub fn replay_native_source_correspondence_v1(
             .and_then(|n| n.checked_add(catalog_storage.retained_storage()))
             .ok_or(Resource::Arithmetic)?;
         Ok((
-            ReplayedNativeSourceV1 {
-                source,
-                catalog,
-                retained_storage: retained,
-            },
+            ReplayedNativeSourcePartsV1 { source, catalog },
             NativeSourceReplayStorageV1(retained),
         ))
     }));
@@ -801,3 +846,7 @@ pub fn replay_native_source_correspondence_v1(
         Err(payload) => std::panic::resume_unwind(payload),
     }
 }
+
+#[path = "native_unit_local_source_replay_v1.rs"]
+mod unit_local;
+pub use unit_local::*;

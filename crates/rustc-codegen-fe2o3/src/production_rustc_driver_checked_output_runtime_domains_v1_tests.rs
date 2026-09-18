@@ -196,6 +196,7 @@ mod tests {
 
     fn observation() -> super::super::Observation {
         super::super::Observation {
+            source_route: None,
             roots: vec!["kernel".to_owned()],
             transparent_result_wrappers: None,
             internal_helpers: 0,

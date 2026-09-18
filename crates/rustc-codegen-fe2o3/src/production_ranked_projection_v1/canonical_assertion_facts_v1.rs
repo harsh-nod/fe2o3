@@ -118,6 +118,22 @@ pub(super) trait ProjectedAssertionFactsV1 {
 
     fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError>;
 
+    fn scalar_private_storage_v1(&self) -> Result<usize, ProjectionError> {
+        Err(ProjectionError::Incomplete(
+            "scalar private projection requires canonical storage custody",
+        ))
+    }
+    fn reserve_scalar_private_storage_v1(&mut self, _amount: usize) -> Result<(), ProjectionError> {
+        Err(ProjectionError::Incomplete(
+            "scalar private projection requires canonical storage custody",
+        ))
+    }
+    fn release_scalar_private_storage_v1(&mut self, _amount: usize) -> Result<(), ProjectionError> {
+        Err(ProjectionError::Incomplete(
+            "scalar private projection requires canonical storage custody",
+        ))
+    }
+
     fn private_array_initializer_count(
         &mut self,
         block: usize,
@@ -275,6 +291,16 @@ impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '
 
     fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError> {
         self.budget.charge_work(amount).map_err(resource)
+    }
+
+    fn scalar_private_storage_v1(&self) -> Result<usize, ProjectionError> {
+        Ok(self.budget.storage())
+    }
+    fn reserve_scalar_private_storage_v1(&mut self, amount: usize) -> Result<(), ProjectionError> {
+        self.budget.reserve_storage(amount).map_err(resource)
+    }
+    fn release_scalar_private_storage_v1(&mut self, amount: usize) -> Result<(), ProjectionError> {
+        self.budget.release_storage(amount).map_err(resource)
     }
 
     fn private_array_initializer_count(

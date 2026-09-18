@@ -23,6 +23,7 @@ mod write_only_reference;
     feature = "multi-root-ownership",
     feature = "multi-root-target-lineage",
     feature = "wrapped-fill",
+    feature = "private-unit-helper",
     feature = "three-root-ownership",
     feature = "write-only-output",
     feature = "write-only-disjoint-output",
@@ -73,6 +74,24 @@ pub fn wrapped_fill(mut output: DisjointSlice<f32>) -> KernelResult {
         *element = 42.5;
     }
     Ok(())
+}
+
+#[cfg(feature = "private-unit-helper")]
+#[inline(never)]
+fn private_unit_helper() {
+    let index = 0_usize;
+    let mut values = [7_u32, 11_u32];
+    values[index] = 13;
+    let _observed = values[index];
+}
+
+#[cfg(feature = "private-unit-helper")]
+#[kernel(typed)]
+pub fn private_helper_fill(mut output: DisjointSlice<f32>) {
+    private_unit_helper();
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = 42.5;
+    }
 }
 
 #[cfg(feature = "scalar-transmute")]

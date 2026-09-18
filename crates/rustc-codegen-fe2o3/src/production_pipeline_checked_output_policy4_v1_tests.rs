@@ -1,5 +1,7 @@
 //! Constructed semantic fixtures, genuine backend-ranked admission and actual
 //! native replay. These tests do not authenticate rustc or protected publication.
+#[path = "production_pipeline_direct_progress_neutrality_v1_tests.rs"]
+mod progress_neutrality;
 use super::*;
 
 #[test]
