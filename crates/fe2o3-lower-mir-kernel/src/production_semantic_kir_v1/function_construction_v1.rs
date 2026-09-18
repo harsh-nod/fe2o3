@@ -254,6 +254,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 private_array_enabled,
                 max_operations,
                 private_array_outer,
+                emission_placement,
             ),
             types,
             callables,

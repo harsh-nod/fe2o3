@@ -42,13 +42,6 @@ fn execution_availability_error_v29() -> ProductionSemanticKirErrorV1 {
 
 // Audited private consumers drop the cursor; they must not extract its vectors.
 // Only its fixed scratch reservation is released. Escaping output rows stay paid.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "V29 production admission remains gated on source custody"
-    )
-)]
 fn with_execution_availability_v29<R>(
     instances: &ExecutionInstancesV29<'_>,
     instance: ProductionCallInstanceIdV1,

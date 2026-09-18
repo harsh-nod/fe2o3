@@ -175,10 +175,6 @@ fn check_execution_instance_abi_v29(
     result
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Scope materializer integration remains gated")
-)]
 fn execution_instance_plan_v29(
     instances: &ExecutionInstancesV29<'_>,
     instance: ProductionCallInstanceIdV1,
@@ -260,10 +256,6 @@ fn execution_function_layout_v29(
     result
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Scope materializer integration remains gated")
-)]
 fn execution_function_signature_v29(
     instances: &ExecutionInstancesV29<'_>,
     instance: ProductionCallInstanceIdV1,

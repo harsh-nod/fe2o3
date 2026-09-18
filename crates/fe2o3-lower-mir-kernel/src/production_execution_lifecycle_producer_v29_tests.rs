@@ -255,6 +255,11 @@ fn lifecycle_owner(branches: bool) -> ProductionSemanticSsaOwnerV1 {
 
 fn root_input(owner: &ProductionSemanticSsaOwnerV1) -> RootInput<'_> {
     let semantic = owner.source_semantic();
+    let SemanticTerminatorKindV1::Call(issuer) =
+        semantic.functions()[0].blocks()[0].terminator().kind()
+    else {
+        panic!("issuer call");
+    };
     let SemanticTerminatorKindV1::Call(helper) =
         semantic.functions()[0].blocks()[1].terminator().kind()
     else {
@@ -266,7 +271,7 @@ fn root_input(owner: &ProductionSemanticSsaOwnerV1) -> RootInput<'_> {
         root_identity: semantic.functions()[0].identity(),
         helper: HELPER,
         helper_identity: semantic.functions()[1].identity(),
-        issuer: ISSUER,
+        issuer: issuer.callee(),
         issuer_identity: SemanticFunctionIdentityV1::from_sha256([120; 32]),
         context_type: CONTEXT,
         context_identity: semantic.types()[CONTEXT.index() as usize].identity(),
@@ -292,6 +297,14 @@ fn root_input(owner: &ProductionSemanticSsaOwnerV1) -> RootInput<'_> {
 }
 
 #[derive(Clone, Copy, Debug)]
+enum ScopedFixture {
+    Plain,
+    Assertion,
+    Repeated,
+    Arrays,
+}
+
+#[derive(Clone, Copy, Debug)]
 enum Fault {
     None,
     MissingConsumer,
@@ -302,7 +315,7 @@ enum Fault {
     Orchestrated {
         groups: u32,
         limits: ProductionSemanticKirLimitsV1,
-        assertion: bool,
+        fixture: ScopedFixture,
     },
 }
 
@@ -316,18 +329,23 @@ fn run_lifecycle(
     usize,
     usize,
 ) {
-    let assertion = matches!(
-        fault,
-        Fault::Orchestrated {
-            assertion: true,
-            ..
+    let fixture = match fault {
+        Fault::Orchestrated { fixture, .. } => fixture,
+        _ => ScopedFixture::Plain,
+    };
+    let assertion = matches!(fixture, ScopedFixture::Assertion);
+    let repeated = matches!(fixture, ScopedFixture::Repeated);
+    let mut owner = match fixture {
+        ScopedFixture::Plain => lifecycle_owner(branches),
+        ScopedFixture::Assertion => {
+            assert!(!branches);
+            scoped_root_tests::assertion_owner()
         }
-    );
-    let mut owner = if assertion {
-        assert!(!branches);
-        scoped_root_tests::assertion_owner()
-    } else {
-        lifecycle_owner(branches)
+        ScopedFixture::Repeated => {
+            assert!(!branches);
+            scoped_root_tests::fixtures::repeated_owner()
+        }
+        ScopedFixture::Arrays => scoped_root_tests::fixtures::array_owner(branches),
     };
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
     let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
@@ -365,7 +383,7 @@ fn run_lifecycle(
         .unwrap();
         let roots = [root_input(&owner)];
         let workgroup = semantic.functions()[2].abi().source_input_types()[0];
-        let classes = [
+        let mut classes = vec![
             ProductionScopeCallableCandidateV29::Ordinary,
             ProductionScopeCallableCandidateV29::Provider {
                 function: HELPER,
@@ -380,6 +398,14 @@ fn run_lifecycle(
                 workgroup,
             },
         ];
+        if repeated {
+            classes.insert(3, ProductionScopeCallableCandidateV29::Ordinary);
+        }
+        let SemanticTerminatorKindV1::Call(derive) =
+            semantic.functions()[1].blocks()[0].terminator().kind()
+        else {
+            panic!("derive call");
+        };
         let mut events = vec![
             (
                 ROOT,
@@ -393,9 +419,9 @@ fn run_lifecycle(
             (
                 HELPER,
                 0,
-                1,
+                semantic.functions()[1].blocks()[0].statements().len() as u32,
                 ProductionScopeEventKindV29::Call {
-                    callee: DERIVE,
+                    callee: derive.callee(),
                     kind: ProductionScopeCallKindV29::Derive,
                 },
             ),
@@ -453,6 +479,7 @@ fn run_lifecycle(
                 roots[0],
                 groups,
                 limits,
+                fixture,
                 &mut budget,
             );
         }

@@ -1,5 +1,12 @@
 use super::*;
 
+include!("production_scoped_array_v29_tests.rs");
+
+pub(super) mod fixtures {
+    use super::*;
+    include!("production_scoped_root_fixtures_v29_tests.rs");
+}
+
 pub(super) fn assertion_owner() -> ProductionSemanticSsaOwnerV1 {
     let original = lifecycle_owner(false);
     let semantic = original.source_semantic();
@@ -83,6 +90,7 @@ pub(super) fn emit_checked(
     root: RootInput<'_>,
     groups: u32,
     limits: ProductionSemanticKirLimitsV1,
+    fixture: ScopedFixture,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<Vec<DeferredLifecycleEventV29>, ProductionSemanticKirErrorV1> {
     let floor = budget.storage();
@@ -148,10 +156,14 @@ pub(super) fn emit_checked(
                 outer_private,
                 budget,
             );
-            assert!(
-                private.active.is_none(),
-                "array-free roots must keep lazy accounting inactive"
-            );
+            if !matches!(fixture, ScopedFixture::Arrays) {
+                assert!(
+                    private.active.is_none(),
+                    "array-free roots keep lazy accounting inactive"
+                );
+            } else if output.is_ok() {
+                assert!(private.active.is_some());
+            }
             Ok(output)
         },
     )
@@ -159,7 +171,7 @@ pub(super) fn emit_checked(
         crate::ProductionContextRootErrorV29::Resource(error) => error.into(),
         _ => execution_lifecycle_error_v29(),
     })?;
-    let output = match result {
+    let mut output = match result {
         Ok(output) => output,
         Err(error) => {
             assert_eq!(
@@ -171,8 +183,28 @@ pub(super) fn emit_checked(
         }
     };
     assert!(output.ledger == budget.work_ledger_identity_v1());
-    assert_eq!(output.private_payload.occupied, outer_private.occupied);
-    assert_eq!(output.private_payload.capacity, outer_private.capacity);
+    assert_eq!(
+        output.private_payload.occupied,
+        outer_private.occupied
+            + output
+                .pending
+                .sidecars
+                .rows
+                .iter()
+                .map(|row| row.private_arrays.payload.occupied)
+                .sum::<usize>()
+    );
+    assert_eq!(
+        output.private_payload.capacity,
+        outer_private.capacity
+            + output
+                .pending
+                .sidecars
+                .rows
+                .iter()
+                .map(|row| row.private_arrays.payload.capacity)
+                .sum::<usize>()
+    );
     assert_eq!(budget.storage() - floor, output.retained_emission_storage);
     assert!(output.pending.additional_storage_bytes <= output.retained_emission_storage);
     assert_eq!(output.kernel.entry.as_str(), "lifecycle_fixture");
@@ -191,7 +223,14 @@ pub(super) fn emit_checked(
             },
         }
     );
-    assert_eq!(output.pending.sidecars.rows.len(), 3);
+    assert_eq!(
+        output.pending.sidecars.rows.len(),
+        if matches!(fixture, ScopedFixture::Repeated) {
+            5
+        } else {
+            3
+        }
+    );
     assert_eq!(output.pending.coordinates.root, ROOT);
     let body = output.pending.function.body.as_ref().unwrap();
     let mut blocks = BTreeSet::new();
@@ -217,6 +256,21 @@ pub(super) fn emit_checked(
         assert!(row.instance_assert_origins.is_some());
         let events = row.lifecycle_events.as_ref().unwrap();
         assert_eq!(events.instance.index(), index);
+        for event in &events.rows {
+            if let DeferredLifecycleKindV29::Issue { result }
+            | DeferredLifecycleKindV29::Derive { result, .. } = event.kind
+            {
+                assert!(
+                    values.insert(result.value),
+                    "deferred result IDs must not alias physical definitions"
+                );
+            }
+        }
+        if matches!(fixture, ScopedFixture::Arrays) && index != 0 {
+            check_array_rows(row, if index == 1 { HELPER } else { CALLBACK });
+        } else {
+            assert!(!row.private_arrays.active);
+        }
         observations.extend_from_slice(&events.rows);
         operations += row.emitted_operations + events.rows.len();
     }
@@ -250,6 +304,8 @@ pub(super) fn emit_checked(
             SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap
         );
         assert_eq!(failure.kernel_ir_block, BlockId(first + 5));
+        assert_eq!(failure.first_operation_ordinal, 0);
+        assert_eq!(failure.operation_count, 1);
         assert_eq!(
             output.pending.sidecars.rows[2]
                 .lifecycle_events
@@ -265,12 +321,47 @@ pub(super) fn emit_checked(
             .find(|block| block.id == failure.kernel_ir_block)
             .unwrap();
         assert_eq!(trap.terminator, Some(Terminator::Unreachable));
+        assert_eq!(
+            trap.operations,
+            vec![AmdGpuDiagnosticOperation::Trap.operation(None)]
+        );
+        let captures = &provider.instance_assert_origins.as_ref().unwrap().records;
+        assert_eq!(captures.len(), 1);
+        assert_eq!(
+            captures[0].site,
+            SemanticKirAssertSiteV1::new(ROOT, HELPER, SemanticBlockIdV1::from_index(1))
+        );
+        assert_eq!(captures[0].block, BlockId(first + 1));
+        assert_eq!(captures[0].physical_success, BlockId(first + 3));
         assert_eq!(provider.blocks.len(), 4);
         assert!(
             provider.diagnostic_declarations.values().any(|function| {
                 function.id == AmdGpuDiagnosticOperation::Trap.declaration().id
             })
         );
+    }
+    if matches!(fixture, ScopedFixture::Repeated) {
+        check_repeated_instances(&output.pending.coordinates);
+    }
+    if matches!(fixture, ScopedFixture::Arrays) {
+        for row in &mut output.pending.sidecars.rows[1..] {
+            let mut legacy = PrivateArrayMergeV1::new(limits.max_operations);
+            let mut work = PrivateArrayLazyBudgetV1::new(1, limits.max_operations);
+            assert!(matches!(
+                legacy.append_function(
+                    ROOT,
+                    row.lifecycle_events.as_ref().unwrap().function,
+                    0,
+                    row.emitted_operations,
+                    std::mem::take(&mut row.private_arrays),
+                    None,
+                    &mut work,
+                ),
+                Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+            ));
+            assert!(!legacy.active);
+            assert!(work.active.is_none());
+        }
     }
     let retained = output.retained_emission_storage;
     drop(output);
@@ -283,8 +374,76 @@ fn fault(groups: u32, limits: ProductionSemanticKirLimitsV1) -> Fault {
     Fault::Orchestrated {
         groups,
         limits,
-        assertion: false,
+        fixture: ScopedFixture::Plain,
     }
+}
+
+fn check_repeated_instances(coords: &OwnedInstanceCoordinatesV1) {
+    let repeated: Vec<_> = coords
+        .sources
+        .rows
+        .iter()
+        .filter(|row| row.function == SemanticFunctionIdV1::from_index(3))
+        .collect();
+    assert_eq!(repeated.len(), 2);
+    assert_ne!(repeated[0].instance, repeated[1].instance);
+    assert_eq!(repeated[0].identity, repeated[1].identity);
+    let callback = coords
+        .sources
+        .rows
+        .iter()
+        .find(|row| row.function == CALLBACK)
+        .unwrap();
+    let root = coords
+        .sources
+        .rows
+        .iter()
+        .find(|row| row.function == ROOT)
+        .unwrap();
+    let mut parameters = BTreeSet::new();
+    let mut names = BTreeSet::new();
+    for (index, row) in repeated.iter().enumerate() {
+        assert_eq!(
+            row.incoming,
+            Some(ProductionCallOccurrenceV1 {
+                caller: callback.instance,
+                block: SemanticBlockIdV1::from_index(index as u32),
+            })
+        );
+        let seed = coords
+            .seeds
+            .rows
+            .iter()
+            .find(|seed| seed.instance == row.instance)
+            .unwrap();
+        assert_eq!(seed.container, root.instance);
+        assert!(names.insert(seed.function_name.as_str()));
+        let values = &coords.values.rows[seed.parameters.clone()];
+        assert_eq!(values.len(), 1);
+        assert!(parameters.insert(values[0]));
+    }
+    let anchors: Vec<_> = (0..2)
+        .map(|block| {
+            coords
+                .anchors
+                .rows
+                .iter()
+                .find(|row| {
+                    row.instance == callback.instance
+                        && row.source.semantic_block == SemanticBlockIdV1::from_index(block)
+                })
+                .unwrap()
+        })
+        .collect();
+    for anchor in &anchors {
+        assert!(anchor.removed);
+        assert_eq!(anchor.arguments.len(), 1);
+        assert_eq!(anchor.results.len(), 1);
+    }
+    assert_eq!(
+        coords.values.rows[anchors[0].results.clone()],
+        coords.values.rows[anchors[1].arguments.clone()]
+    );
 }
 
 #[test]
@@ -294,7 +453,7 @@ fn checked_root_placement_accounts_for_assert_failure_and_unreachable_holes() {
         Fault::Orchestrated {
             groups: 2,
             limits: ProductionSemanticKirLimitsV1::default(),
-            assertion: true,
+            fixture: ScopedFixture::Assertion,
         },
         10_000_000,
         10_000_000,
@@ -336,12 +495,63 @@ fn checked_root_orchestrates_real_launch_and_retains_lifecycle_sidecars() {
 
 #[test]
 fn checked_root_orchestration_obeys_exact_ledger_boundaries() {
-    let mode = fault(2, ProductionSemanticKirLimitsV1::default());
-    let (result, work, storage) = run_lifecycle(true, mode, 10_000_000, 10_000_000);
-    result.unwrap();
-    assert!(run_lifecycle(true, mode, work, storage).0.is_ok());
-    assert!(run_lifecycle(true, mode, work - 1, storage).0.is_err());
-    assert!(run_lifecycle(true, mode, work, storage - 1).0.is_err());
+    for fixture in [
+        ScopedFixture::Plain,
+        ScopedFixture::Repeated,
+        ScopedFixture::Arrays,
+    ] {
+        let mode = Fault::Orchestrated {
+            groups: 2,
+            limits: ProductionSemanticKirLimitsV1::default(),
+            fixture,
+        };
+        let branches = !matches!(fixture, ScopedFixture::Repeated);
+        let (result, work, storage) = run_lifecycle(branches, mode, 10_000_000, 10_000_000);
+        result.unwrap();
+        assert!(run_lifecycle(branches, mode, work, storage).0.is_ok());
+        assert!(run_lifecycle(branches, mode, work - 1, storage).0.is_err());
+        assert!(run_lifecycle(branches, mode, work, storage - 1).0.is_err());
+    }
+}
+
+#[test]
+fn checked_root_preserves_repeated_instances_and_scoped_arrays() {
+    for (branches, fixture) in [
+        (false, ScopedFixture::Repeated),
+        (false, ScopedFixture::Arrays),
+        (true, ScopedFixture::Arrays),
+    ] {
+        let result = run_lifecycle(
+            branches,
+            Fault::Orchestrated {
+                groups: 2,
+                limits: ProductionSemanticKirLimitsV1::default(),
+                fixture,
+            },
+            10_000_000,
+            10_000_000,
+        )
+        .0
+        .unwrap();
+        assert_eq!(result.len(), if branches { 4 } else { 3 });
+    }
+}
+
+#[test]
+fn checked_root_counts_splice_blocks_at_the_exact_limit() {
+    let limits =
+        |blocks| ProductionSemanticKirLimitsV1::new_with_max_operations(16, blocks, 128, 1024);
+    run_lifecycle(false, fault(2, limits(11)), 10_000_000, 10_000_000)
+        .0
+        .unwrap();
+    assert!(matches!(
+        run_lifecycle(false, fault(2, limits(10)), 10_000_000, 10_000_000).0,
+        Err(ProductionSemanticKirErrorV1::ResourceLimit {
+            resource: ProductionSemanticKirResourceV1::Blocks,
+            actual: 11,
+            limit: 10
+        })
+    ));
 }
 
 #[test]

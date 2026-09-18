@@ -39,6 +39,7 @@ struct PrivateArrayFunctionRecorderV1<'a> {
     cursor: usize,
     pending: Option<PrivateArrayPendingAddressV1>,
     outer_payload: PrivateArrayPayloadV1,
+    placement: SemanticEmissionPlacementV1,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -224,6 +225,7 @@ impl<'a> PrivateArrayFunctionRecorderV1<'a> {
         enabled: bool,
         limit: usize,
         outer_payload: PrivateArrayPayloadV1,
+        placement: SemanticEmissionPlacementV1,
     ) -> Self {
         Self {
             work,
@@ -238,6 +240,7 @@ impl<'a> PrivateArrayFunctionRecorderV1<'a> {
             cursor: 0,
             pending: None,
             outer_payload,
+            placement,
         }
     }
 
@@ -286,8 +289,8 @@ impl<'a> PrivateArrayFunctionRecorderV1<'a> {
         if !self.enabled {
             return Ok(());
         }
-        self.work.charge_private_array_work(2)?;
-        if actual != BlockId(block.index()) {
+        self.work.charge_private_array_work(3)?;
+        if actual != self.placement.block(block.index())? {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
         let ordinal = match self.block {
@@ -413,6 +416,7 @@ impl<'a> PrivateArrayFunctionRecorderV1<'a> {
         };
         Ok(PrivateArrayFunctionRowsV1 {
             active: self.enabled,
+            placement: self.placement,
             slots: self.slots.into_rows(),
             effects: self.effects.into_rows(),
             payload,
@@ -947,6 +951,7 @@ impl<'a> PrivateArrayFunctionRecorderV1<'a> {
 #[derive(Default)]
 struct PrivateArrayFunctionRowsV1 {
     active: bool,
+    placement: SemanticEmissionPlacementV1,
     slots: Vec<PrivateArraySlotV1>,
     effects: Vec<PrivateArrayEffectV1>,
     payload: PrivateArrayPayloadV1,
@@ -1094,6 +1099,11 @@ impl PrivateArrayMergeV1 {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
             return Ok(());
+        }
+        // The ordinary owner/function map has no call-instance relocation.
+        // Placed rows remain in scoped sidecars until coordinate-aware replay.
+        if rows.placement != SemanticEmissionPlacementV1::default() {
+            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
         work.charge_private_array_work(1)?;
         if rows.slots.is_empty() {
