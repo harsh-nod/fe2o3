@@ -113,6 +113,7 @@ include!("production_call_view_v1.rs");
 include!("production_call_assembly_v1.rs");
 include!("production_canonical_calls_v1.rs");
 include!("production_emission_placement_v1.rs");
+include!("production_kernel_entry_plan_v1.rs");
 
 #[path = "production_call_instance_ids_v1.rs"]
 mod production_call_instance_ids_v1;
@@ -12016,152 +12017,15 @@ fn lower_single_root_module(
         ));
     }
 
-    let entry_parameters = semantic_function_parameters_v1(selection.body(), body)?;
-    let mut entry_parameter_types = Vec::new();
-    let mut entry_parameter_values = Vec::new();
-    let mut entry_parameter_local_bindings = Vec::new();
-    let mut entry_parameter_component_bindings = Vec::new();
-    let mut entry_ignored_parameter_bindings = Vec::new();
-    entry_parameter_types
-        .try_reserve_exact(entry_parameters.len())
-        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-            resource: ProductionSemanticKirResourceV1::DebugBindings,
-        })?;
-    entry_parameter_local_bindings
-        .try_reserve_exact(entry_parameters.len())
-        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-            resource: ProductionSemanticKirResourceV1::DebugBindings,
-        })?;
-    entry_parameter_values
-        .try_reserve_exact(entry_parameters.len())
-        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-            resource: ProductionSemanticKirResourceV1::DebugBindings,
-        })?;
-    entry_ignored_parameter_bindings
-        .try_reserve_exact(entry_parameters.len())
-        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-            resource: ProductionSemanticKirResourceV1::DebugBindings,
-        })?;
-    let mut next_component_value = u32::try_from(body.locals().len()).map_err(|_| {
-        unsupported(
-            selection.body().index(),
-            None,
-            None,
-            "local count does not fit Kernel IR",
-        )
-    })?;
-    for (argument, local, ty) in &entry_parameters {
-        let components = match kernel_parameter_shape_v1(semantic, body, *argument, *ty)? {
-            KernelParameterShapeV1::Direct(parameter_ty) => {
-                closure_budget.charge_parameter_expansion(
-                    logical_argument_rows_v1(body),
-                    entry_parameter_types.len(),
-                    1,
-                    limits.max_operations,
-                )?;
-                let value = u32::try_from(*local).map(ValueId).map_err(|_| {
-                    unsupported(
-                        selection.body().index(),
-                        None,
-                        None,
-                        "local identity does not fit Kernel IR",
-                    )
-                })?;
-                entry_parameter_types.push(parameter_ty.clone());
-                entry_parameter_values.push(value);
-                entry_parameter_local_bindings.push(PlannedParameterLocalBindingV1::Direct {
-                    local: *local,
-                    value,
-                    ty: parameter_ty,
-                });
-                continue;
-            }
-            KernelParameterShapeV1::Components(components) => components,
-        };
-        closure_budget.charge_parameter_expansion(
-            logical_argument_rows_v1(body),
-            entry_parameter_types.len(),
-            components.len(),
-            limits.max_operations,
-        )?;
-        if components.is_empty() {
-            entry_ignored_parameter_bindings.push(SemanticKirIgnoredParameterBindingV1 {
-                correspondence_owner: selected_root,
-                semantic_function: selection.body(),
-                semantic_local: SemanticLocalIdV1::from_index(*local as u32),
-                semantic_type: *ty,
-            });
-        }
-        let mut values = Vec::new();
-        values.try_reserve_exact(components.len()).map_err(|_| {
-            ProductionSemanticKirErrorV1::AllocationFailure {
-                resource: ProductionSemanticKirResourceV1::DebugBindings,
-            }
-        })?;
-        entry_parameter_types
-            .try_reserve_exact(components.len())
-            .and_then(|_| entry_parameter_values.try_reserve_exact(components.len()))
-            .and_then(|_| entry_parameter_component_bindings.try_reserve_exact(components.len()))
-            .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-                resource: ProductionSemanticKirResourceV1::DebugBindings,
-            })?;
-        for (component_index, (projection, component_type, parameter_ty, _, _)) in
-            components.into_iter().enumerate()
-        {
-            let value = if component_index == 0 {
-                ValueId(u32::try_from(*local).map_err(|_| {
-                    unsupported(
-                        selection.body().index(),
-                        None,
-                        None,
-                        "aggregate local identity does not fit Kernel IR",
-                    )
-                })?)
-            } else {
-                let value = ValueId(next_component_value);
-                next_component_value = next_component_value.checked_add(1).ok_or_else(|| {
-                    unsupported(
-                        selection.body().index(),
-                        None,
-                        None,
-                        "aggregate parameter value identity overflow",
-                    )
-                })?;
-                value
-            };
-            entry_parameter_types.push(parameter_ty.clone());
-            entry_parameter_values.push(value);
-            values.push(ValueDef::new(value, parameter_ty));
-            entry_parameter_component_bindings.push(SemanticKirParameterComponentBindingV1 {
-                correspondence_owner: selected_root,
-                semantic_function: selection.body(),
-                semantic_local: SemanticLocalIdV1::from_index(*local as u32),
-                semantic_component_type: component_type,
-                projection: projection.into_boxed_slice(),
-                kernel_ir_value: value,
-            });
-        }
-        entry_parameter_local_bindings.push(PlannedParameterLocalBindingV1::Flattened {
-            local: *local,
-            semantic_type: *ty,
-            values,
-        });
-    }
     let mut plans = Vec::with_capacity(closure.len());
-    plans.push(LoweredFunctionPlanV1 {
-        correspondence_owner: selected_root,
-        semantic_function: selection.body(),
-        kernel_ir_function: FunctionId::new(symbol),
-        role: SemanticKirFunctionRoleV1::KernelEntry,
-        parameter_declarations: entry_parameters,
-        parameter_types: entry_parameter_types,
-        parameter_values: entry_parameter_values,
-        call_arguments: Vec::new(),
-        parameter_local_bindings: entry_parameter_local_bindings,
-        parameter_component_bindings: entry_parameter_component_bindings,
-        ignored_parameter_bindings: entry_ignored_parameter_bindings,
-        result_types: Vec::new(),
-    });
+    plans.push(kernel_entry_plan_v1(
+        semantic,
+        selected_root,
+        selection.body(),
+        FunctionId::new(symbol),
+        limits.max_operations,
+        closure_budget,
+    )?);
     for function_id in closure.iter().copied().skip(1) {
         plans.push(direct_scalar_helper_plan_v1(
             semantic,

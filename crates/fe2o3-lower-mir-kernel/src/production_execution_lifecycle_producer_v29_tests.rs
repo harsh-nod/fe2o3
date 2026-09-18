@@ -82,7 +82,19 @@ fn lifecycle_owner(branches: bool) -> ProductionSemanticSsaOwnerV1 {
     .with_kernel_entry(SemanticKernelEntryV1::new(
         SemanticLinkSymbolV1::new(b"lifecycle_fixture".to_vec()).unwrap(),
         SemanticKernelBindingIdentityV1::from_sha256([88; 32]),
-        SemanticKernelSourceContractV1::new(None, None, None).unwrap(),
+        SemanticKernelSourceContractV1::new(
+            Some(
+                SemanticKernelLaunchBoundsV1::new(
+                    Some(SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap()),
+                    Some(SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap()),
+                    None,
+                )
+                .unwrap(),
+            ),
+            None,
+            None,
+        )
+        .unwrap(),
     ));
     let mut provider_blocks = vec![
         block(
@@ -420,26 +432,14 @@ fn run_lifecycle(
                                 },
                             );
                         }
-                        let root_plan = LoweredFunctionPlanV1 {
-                            correspondence_owner: ROOT,
-                            semantic_function: ROOT,
-                            kernel_ir_function: FunctionId::new("lifecycle_fixture"),
-                            role: SemanticKirFunctionRoleV1::KernelEntry,
-                            parameter_declarations: vec![(0, 1, U32)],
-                            parameter_types: vec![Type::Scalar(ScalarType::U32)],
-                            parameter_values: vec![ValueId(1)],
-                            call_arguments: vec![],
-                            parameter_local_bindings: vec![
-                                PlannedParameterLocalBindingV1::Direct {
-                                    local: 1,
-                                    value: ValueId(1),
-                                    ty: Type::Scalar(ScalarType::U32),
-                                },
-                            ],
-                            parameter_component_bindings: vec![],
-                            ignored_parameter_bindings: vec![],
-                            result_types: vec![],
-                        };
+                        let root_plan = kernel_entry_plan_v1(
+                            semantic,
+                            ROOT,
+                            ROOT,
+                            FunctionId::new("lifecycle_fixture"),
+                            1024,
+                            &mut ReachableClosureBudgetV1::new(1024),
+                        )?;
                         let mut private = PrivateArrayLazyBudgetV1::new(1, 1024);
                         let placement = SemanticEmissionPlacementV1 {
                             first_block: 0,
