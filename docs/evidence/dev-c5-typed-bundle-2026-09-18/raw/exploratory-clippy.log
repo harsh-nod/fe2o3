@@ -1,0 +1,28 @@
+    Checking fe2o3-kernel-ir v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kernel-ir)
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kfd)
+    Checking dialect-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/dialect-kernel)
+    Checking fe2o3-source-isa-observation v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-source-isa-observation)
+    Checking dialect-proof v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/dialect-proof)
+    Checking fe2o3-kernel-analysis v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kernel-analysis)
+    Checking fe2o3-service-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-service-host)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+    Checking fe2o3-pliron v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-pliron)
+    Checking fe2o3-kernel-opt v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kernel-opt)
+    Checking fe2o3-lower-mir-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-lower-mir-kernel)
+    Checking fe2o3-amdgcn-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-amdgcn-model)
+    Checking dialect-amdgcn v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/dialect-amdgcn)
+    Checking fe2o3-hsaco-finalize v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-hsaco-finalize)
+    Checking fe2o3-verifier v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-verifier)
+    Checking fe2o3-runtime-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime-protocol)
+    Checking fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-host)
+error: called `.err().expect()` on a `Result` value
+   --> crates/fe2o3-host/src/generated_runtime_results/completion_tests/bundle_tests.rs:403:48
+    |
+403 |     let (completion, bundle, error) = rejected.err().expect("join rejection");
+    |                                                ^^^^^^^^^^^^ help: try: `expect_err`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#err_expect
+    = note: `-D clippy::err-expect` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::err_expect)]`
+
+error: could not compile `fe2o3-host` (lib test) due to 1 previous error

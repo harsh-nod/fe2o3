@@ -1,0 +1,36 @@
+    Checking fe2o3-kernel-ir v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kernel-ir)
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kfd)
+    Checking dialect-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/dialect-kernel)
+    Checking fe2o3-source-isa-observation v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-source-isa-observation)
+    Checking dialect-proof v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/dialect-proof)
+    Checking fe2o3-kernel-analysis v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kernel-analysis)
+    Checking fe2o3-service-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-service-host)
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+    Checking fe2o3-pliron v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-pliron)
+    Checking fe2o3-kernel-opt v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kernel-opt)
+    Checking fe2o3-lower-mir-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-lower-mir-kernel)
+    Checking fe2o3-amdgcn-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-amdgcn-model)
+    Checking dialect-amdgcn v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/dialect-amdgcn)
+    Checking fe2o3-hsaco-finalize v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-hsaco-finalize)
+    Checking fe2o3-verifier v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-verifier)
+    Checking fe2o3-runtime-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime-protocol)
+    Checking fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-host)
+error[E0220]: associated type `Results` not found for `Self`
+   --> crates/fe2o3-host/src/generated_runtime_results/bundle_completion.rs:264:33
+    |
+264 |                   -> Result<Self::Results, GeneratedRuntimeTypedOutputErrorV1>
+    |                                   ^^^^^^^ associated type `Results` not found
+...
+310 | / bundle_prefixes!([T0: 0, T1: 1]; T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7,
+311 | |     T8: 8, T9: 9, T10: 10, T11: 11, T12: 12, T13: 13, T14: 14, T15: 15,
+312 | |     T16: 16, T17: 17, T18: 18, T19: 19, T20: 20, T21: 21, T22: 22, T23: 23,
+313 | |     T24: 24, T25: 25, T26: 26, T27: 27, T28: 28, T29: 29, T30: 30, T31: 31,
+...   |
+316 | |     T48: 48, T49: 49, T50: 50, T51: 51, T52: 52, T53: 53, T54: 54, T55: 55,
+317 | |     T56: 56, T57: 57, T58: 58, T59: 59, T60: 60, T61: 61, T62: 62, T63: 63);
+    | |___________________________________________________________________________- in this macro invocation
+    |
+    = note: this error originates in the macro `bundle_impl` which comes from the expansion of the macro `bundle_prefixes` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+For more information about this error, try `rustc --explain E0220`.
+error: could not compile `fe2o3-host` (lib) due to 63 previous errors

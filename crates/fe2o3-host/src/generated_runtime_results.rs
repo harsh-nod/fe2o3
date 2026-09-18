@@ -15,9 +15,11 @@ use fe2o3_runtime::Gfx942RuntimeBufferAccessV1;
 use crate::generated_argument_plan::GeneratedDeviceScalarV1;
 use crate::generated_runtime_arguments::GeneratedRuntimeArgumentErrorV1 as Error;
 
+mod bundle_completion;
 #[cfg(test)]
 mod completion_tests;
 mod typed_completion;
+pub use bundle_completion::*;
 pub use typed_completion::*;
 
 /// Shared result-peak admission. Clones share the same account, not fresh limits.
@@ -285,20 +287,29 @@ impl<T: GeneratedDeviceScalarV1> GeneratedRuntimeChargedResultV1<T> {
         state: &mut OutputState<T>,
         matches: impl FnOnce(&Arc<ResultReadyGateV1>) -> bool,
     ) -> Result<ChargedTypedResultV1<T>, GeneratedRuntimeTypedOutputErrorV1> {
-        match &*state {
-            OutputState::Prepared { gate, .. } if matches(gate) && gate.ready() => {
-                let OutputState::Prepared { result, .. } =
-                    std::mem::replace(state, OutputState::Taken)
-                else {
-                    unreachable!("matched output retained under its lock")
-                };
-                Ok(result)
-            }
+        Self::validate_completed_state_v1(state, matches)?;
+        Ok(Self::take_validated_state_v1(state))
+    }
+
+    fn validate_completed_state_v1(
+        state: &OutputState<T>,
+        matches: impl FnOnce(&Arc<ResultReadyGateV1>) -> bool,
+    ) -> Result<(), GeneratedRuntimeTypedOutputErrorV1> {
+        match state {
+            OutputState::Prepared { gate, .. } if matches(gate) && gate.ready() => Ok(()),
             OutputState::Taken | OutputState::Unavailable => {
                 Err(GeneratedRuntimeTypedOutputErrorV1::OutputUnavailable)
             }
             _ => Err(GeneratedRuntimeTypedOutputErrorV1::BindingMismatch),
         }
+    }
+
+    fn take_validated_state_v1(state: &mut OutputState<T>) -> ChargedTypedResultV1<T> {
+        let OutputState::Prepared { result, .. } = std::mem::replace(state, OutputState::Taken)
+        else {
+            unreachable!("validated output retained under its lock")
+        };
+        result
     }
 
     /// Takes committed data without waiting for the slot mutex. `None` also

@@ -5,6 +5,8 @@ use std::pin::Pin;
 use std::sync::atomic::AtomicUsize;
 use std::task::{Context, Poll, Waker};
 
+mod bundle_tests;
+
 // Inert metadata exercises the shared observer driver, never receipt authority.
 struct ScriptedCompletion {
     domain: Option<RuntimeGeneratedResultDomainV1>,

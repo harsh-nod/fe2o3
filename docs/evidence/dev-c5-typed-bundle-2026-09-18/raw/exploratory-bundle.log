@@ -1,0 +1,47 @@
+   Compiling fe2o3-kernel-ir v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kernel-ir)
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kfd)
+   Compiling dialect-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/dialect-kernel)
+   Compiling fe2o3-source-isa-observation v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-source-isa-observation)
+   Compiling dialect-proof v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/dialect-proof)
+   Compiling fe2o3-kernel-analysis v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kernel-analysis)
+   Compiling fe2o3-service-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-service-host)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+   Compiling fe2o3-pliron v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-pliron)
+   Compiling fe2o3-kernel-opt v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kernel-opt)
+   Compiling fe2o3-amdgcn-model v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-amdgcn-model)
+   Compiling dialect-amdgcn v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/dialect-amdgcn)
+   Compiling fe2o3-lower-mir-kernel v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-lower-mir-kernel)
+   Compiling fe2o3-hsaco-finalize v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-hsaco-finalize)
+   Compiling fe2o3-runtime-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime-protocol)
+   Compiling fe2o3-verifier v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-verifier)
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-host)
+    Finished `test` profile [unoptimized] target(s) in 1m 36s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_host-1014760b34c2f8f2)
+
+running 11 tests
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_binding_accepts_unready_and_ready_then_moves_original_storage ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_busy_second_binding_preserves_every_slot_and_credit ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_duplicate_slots_reject_before_any_lock_or_callback ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_failure_and_observer_loss_preserve_producer_owned_storage ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_join_rejection_preserves_complete_tuple_for_retry ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_late_foreign_unready_unbound_and_stale_states_preserve_prefix ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_late_poison_never_consumes_an_earlier_result ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_maximum_abi_tuple_preserves_every_original_slot ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_poll_preserves_pending_and_panicking_observers_then_extracts_once ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_public_observers_and_results_are_send ... ok
+test generated_runtime_results::completion_tests::bundle_tests::bundle_completion_three_members_never_commit_before_middle_or_last_validation ... FAILED
+
+failures:
+
+---- generated_runtime_results::completion_tests::bundle_tests::bundle_completion_three_members_never_commit_before_middle_or_last_validation stdout ----
+
+thread 'generated_runtime_results::completion_tests::bundle_tests::bundle_completion_three_members_never_commit_before_middle_or_last_validation' (249720) panicked at crates/fe2o3-host/src/generated_runtime_results/completion_tests/bundle_tests.rs:268:26:
+called `Result::unwrap()` on an `Err` value: StaleOrAliasedOutput
+
+
+failures:
+    generated_runtime_results::completion_tests::bundle_tests::bundle_completion_three_members_never_commit_before_middle_or_last_validation
+
+test result: FAILED. 10 passed; 1 failed; 0 ignored; 0 measured; 154 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p fe2o3-host --lib`

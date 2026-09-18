@@ -1,0 +1,18 @@
+{
+  "gnu-host": {
+    "path": "target/debug/deps/fe2o3_host-ba5114b53aa85ed7",
+    "sha256": "3761ad1a49fe4980ee97f6d9cbf4f81ff9210d43f7acad365d0dcee1b12fd563"
+  },
+  "gnu-runtime": {
+    "path": "target/debug/deps/fe2o3_runtime-47b18d551c529e90",
+    "sha256": "3cb7b4fdcdad0840ca32d6cfbd1b5bfa32386098ddba82923d478c25e7b774ce"
+  },
+  "musl-host": {
+    "path": "target/x86_64-unknown-linux-musl/debug/deps/fe2o3_host-0526106949c2dcd0",
+    "sha256": "d42aa0b97207e533193c7888356f13ca71c44c1a307cf348122d4000c5645060"
+  },
+  "musl-runtime": {
+    "path": "target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-afaad0775e07e3e7",
+    "sha256": "a43498aaa2489b3c51474c4be3061b1f3a45d3198d4f49fd555fe376e4f33b9f"
+  }
+}

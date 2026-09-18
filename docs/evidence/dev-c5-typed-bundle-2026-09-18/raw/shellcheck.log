@@ -1,0 +1,8 @@
+
+In docs/evidence/dev-c5-typed-bundle-2026-09-18/seal.sh line 11:
+find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
+                       ^--------^ SC2094 (info): Make sure not to read and write the same file in the same pipeline.
+                                                                                    ^--------^ SC2094 (info): Make sure not to read and write the same file in the same pipeline.
+
+For more information:
+  https://www.shellcheck.net/wiki/SC2094 -- Make sure not to read and write t...

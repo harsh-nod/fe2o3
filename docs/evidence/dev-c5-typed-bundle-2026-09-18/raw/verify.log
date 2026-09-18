@@ -1,0 +1,52 @@
+{
+  "scope": "CPU compositional qualification, not protected/native execution, performance, or formal refinement",
+  "source_base": "8058fd785e9d73f80d704a9cf726250a11865264",
+  "source_files": 5534,
+  "test_executables": {
+    "gnu-host": {
+      "path": "target/debug/deps/fe2o3_host-ba5114b53aa85ed7",
+      "sha256": "3761ad1a49fe4980ee97f6d9cbf4f81ff9210d43f7acad365d0dcee1b12fd563"
+    },
+    "gnu-runtime": {
+      "path": "target/debug/deps/fe2o3_runtime-47b18d551c529e90",
+      "sha256": "3cb7b4fdcdad0840ca32d6cfbd1b5bfa32386098ddba82923d478c25e7b774ce"
+    },
+    "musl-host": {
+      "path": "target/x86_64-unknown-linux-musl/debug/deps/fe2o3_host-0526106949c2dcd0",
+      "sha256": "d42aa0b97207e533193c7888356f13ca71c44c1a307cf348122d4000c5645060"
+    },
+    "musl-runtime": {
+      "path": "target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-afaad0775e07e3e7",
+      "sha256": "a43498aaa2489b3c51474c4be3061b1f3a45d3198d4f49fd555fe376e4f33b9f"
+    }
+  },
+  "host_per_target": {
+    "passed": 282,
+    "ignored": 4
+  },
+  "runtime_per_target": {
+    "passed": 1067,
+    "ignored": 17
+  },
+  "new_bundle_tests": [
+    "generated_runtime_results::completion_tests::bundle_tests::bundle_completion_binding_accepts_unready_and_ready_then_moves_original_storage",
+    "generated_runtime_results::completion_tests::bundle_tests::bundle_completion_busy_second_binding_preserves_every_slot_and_credit",
+    "generated_runtime_results::completion_tests::bundle_tests::bundle_completion_duplicate_slots_reject_before_any_lock_or_callback",
+    "generated_runtime_results::completion_tests::bundle_tests::bundle_completion_failure_and_observer_loss_preserve_producer_owned_storage",
+    "generated_runtime_results::completion_tests::bundle_tests::bundle_completion_join_rejection_preserves_complete_tuple_for_retry",
+    "generated_runtime_results::completion_tests::bundle_tests::bundle_completion_late_foreign_unready_unbound_and_stale_states_preserve_prefix",
+    "generated_runtime_results::completion_tests::bundle_tests::bundle_completion_late_poison_never_consumes_an_earlier_result",
+    "generated_runtime_results::completion_tests::bundle_tests::bundle_completion_maximum_abi_tuple_preserves_every_original_slot",
+    "generated_runtime_results::completion_tests::bundle_tests::bundle_completion_poll_preserves_pending_and_panicking_observers_then_extracts_once",
+    "generated_runtime_results::completion_tests::bundle_tests::bundle_completion_public_observers_and_results_are_send",
+    "generated_runtime_results::completion_tests::bundle_tests::bundle_completion_three_members_never_commit_before_middle_or_last_validation"
+  ],
+  "doctests": 67,
+  "new_bundle_doctests": 6,
+  "unsafe_policy": {
+    "passed": 5,
+    "ignored": 1
+  },
+  "rejected_transcript_mutations": 16,
+  "preserved_exploratory_failures": 3
+}

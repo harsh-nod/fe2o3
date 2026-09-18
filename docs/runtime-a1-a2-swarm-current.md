@@ -10,7 +10,17 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest development (2026-09-18): the opt-in persistent SDMA native-wait
+Latest development (2026-09-18): the [C5 typed bundle adapter](runtime-generated-typed-completion-v1.md#heterogeneous-bundles)
+collects 2 through 64 heterogeneous outputs atomically under the original
+completion receipt, preserving the original storage and independent credits.
+Eleven new CPU tests cover late-slot failures, maximum arity and observer
+lifecycle. GNU and scoped musl each pass 282 host and 1,067 runtime tests, with
+four and seventeen ignored respectively; 67 public API doctests pass. The
+[qualification archive](evidence/dev-c5-typed-bundle-2026-09-18/README.md)
+separates this compositional CPU evidence from protected native bundle execution,
+formal refinement and performance. Accepted checkpoints, A1/A2 and #182 are unchanged.
+
+Earlier development (2026-09-18): the opt-in persistent SDMA native-wait
 [diagnostic success paths](evidence/dev-kfd-native-wait-smoke-mi300x-2026-09-18/README.md)
 now run on MI300X with both 1 ms and 25 us requested-sleep ceilings. Each policy
 validates 13 full-buffer round trips, 52 identity-bound window records and
@@ -133,8 +143,9 @@ identity-bound charged typed output and blocking join without another reply or
 decoder. GNU and scoped musl each pass 915 runtime and 271 host tests, with
 seventeen and four ignored respectively; all quality gates and 58 doctests pass.
 Protected native typed execution is not qualified. Beyond the C6 development
-above, heterogeneous bundle collection, production journals, formal correspondence and
-matched performance remain open; accepted milestones below are unchanged.
+above and the typed bundle adapter described first, protected native bundle
+qualification, remaining production journal integration, formal correspondence
+and matched performance remain open; accepted milestones below are unchanged.
 
 Current accepted Native checkpoint: [R125 live prepared persistent cancellation](runtime-live-persistent-cancel-v1.md),
 above [R124 ordinary recycled detach](runtime-live-recycled-detach-v1.md).

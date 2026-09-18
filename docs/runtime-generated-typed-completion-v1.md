@@ -47,14 +47,63 @@ The result retains its full result-peak credit until storage disposal. Successfu
 typed completion also returns the same receipt, so other heterogeneous outputs
 can use `take_completed_v1`. Extraction failure preserves both the original
 output observer and the successful receipt; engine/readback failure preserves the
-observer without manufacturing a receipt. Automatic heterogeneous tuple/bundle
-collection is not implemented by this one-output adapter.
+observer without manufacturing a receipt. The tuple adapter below adds
+all-or-nothing collection of multiple selected outputs without changing this
+one-output adapter's public behavior.
 
 `try_join` waits on the original completion future and uses exactly the same
 typed extraction as async polling. Runtime's park/unpark loop handles wake-before-
 park and spurious wakeups without polling the GPU or issuing a Context command.
 Owner-thread blocking is rejected with the unchanged observer. There is no
 deadline: uncertain process-retained custody can remain pending indefinitely.
+
+## Heterogeneous Bundles
+
+`GeneratedRuntimeTypedOutputBundleV1` is sealed and implemented for tuples of
+2 through 64 `GeneratedRuntimeChargedResultV1<T>` observers, covering the current
+`MAX_ABI_FIELDS` bound. Each element may have a different supported scalar type.
+The existing scalar API remains available for one output. A compile-time check
+forces tuple coverage to be revisited if the ABI bound changes.
+
+`(words, halves).bind_completion_bundle_v1(completion)` consumes the provided
+tuple and the same original completion observer. It rejects duplicate slots
+before locking, then checks each slot nonblockingly against that completion.
+Already-ready outputs may bind, as with the scalar API. Rejection returns the
+entire unchanged tuple and completion. Binding does not assert that the tuple
+contains every output of the invocation; omitted outputs remain independently
+owned and can use the returned original receipt.
+
+After the original completion supplies its receipt, collection acquires every
+slot mutex and retains every guard. Duplicate checking and lock acquisition
+precede left-to-right state validation. A poisoned later lock or invalid later
+state leaves every earlier output untouched. Only after every member is Prepared,
+ready, and matched to the same receipt does an infallible move phase replace all
+states with Taken and return the corresponding tuple of original
+`ChargedTypedResultV1<T>` owners. No typed allocation is copied or re-created.
+Each result independently retains its exact debit until storage disposal.
+
+Slot lock contention after a valid prebinding is excluded by the existing C4
+completion ordering and unique public observers: decoding and producer cleanup
+release their slot locks before publishing the reply. The adapter uses the same
+blocking post-receipt lock policy as scalar completion, not another source of
+Pending or a wake loop. It does not add a producer, decoder, gate, reply,
+Context operation or cancellation protocol. Duplicate detection uses bounded
+stack storage and at most 2,016 pointer comparisons for 64 members; the guarded
+validation and move phases are linear in bundle size.
+
+`GeneratedRuntimeCompletedBundleV1` carries the result tuple and the one original
+receipt. Post-receipt failure returns all observers plus that receipt;
+engine/readback failure returns all observers without a receipt. Await and
+`try_join` use the existing shared poll/join drivers. Owner-thread join rejection
+preserves the complete bundle future. Drop and Stop/drain semantics remain those
+of the original completion, not a new bundle-specific execution mechanism.
+
+The [bundle development archive](evidence/dev-c5-typed-bundle-2026-09-18/README.md)
+records its separate CPU qualification. The original C5 archive below predates
+this adapter. Host tests use the real charged storage and transaction code with
+inert domain metadata; they do not mint protected completion receipts. Genuine
+public protected/native bundle completion, formal Rust/native refinement and
+performance remain separate requirements.
 
 ## Cancellation Boundary
 
