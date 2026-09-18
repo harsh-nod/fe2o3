@@ -3,7 +3,7 @@
 // inactive enum variants, or unused type rows. The existing V29 gate remains.
 fn require_execution_free_types_v29(
     types: &[SemanticTypeDeclV1],
-    budget: &mut ArgumentBudgetV1<'_>,
+    budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     budget.charge_work(types.len())?;
     for declaration in types {

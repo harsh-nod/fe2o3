@@ -339,10 +339,23 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "defined scalar call does not have an unreachable unwind edge",
             ));
         }
-        if self.execution.is_some() != self.execution_calls.is_some() {
+        let scoped = self.execution_calls.is_some();
+        if scoped && self.execution.is_none() {
             return Err(execution_call_error_v29());
         }
-        let ordinary_target = if self.execution.is_some() {
+        if !scoped && self.execution.is_some() {
+            // Ordinary diagnostic cursors track source instances without roles.
+            // No capability-bearing type may take the ordinary argument route.
+            match self.with_emission_budget_v1(|this, budget| {
+                require_execution_free_types_v29(this.types, budget)
+            }) {
+                Err(ProductionSemanticKirErrorV1::Unsupported { .. }) => {
+                    return Err(execution_call_error_v29());
+                }
+                result => result?,
+            }
+        }
+        let ordinary_target = if scoped {
             None
         } else {
             Some(
@@ -436,7 +449,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
         };
         let arguments_first = call_operation_ordinal_v1(operations, block)?;
-        let (callee_id, arguments) = if self.execution.is_some() {
+        let (callee_id, arguments) = if scoped {
             self.prepare_execution_defined_call_v29(
                 block,
                 call,
