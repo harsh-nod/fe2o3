@@ -19,6 +19,10 @@ SCHEMA = "fe2o3-tutorial-kernel-identities-v1"
 MAX_TEXT_BYTES = 4 * 1024 * 1024
 MAX_RUNTIME_BYTES = 16 * 1024 * 1024
 MAX_IDENTITY_BYTES = 16 * 1024 * 1024
+MAX_FIXTURE_CFG_BYTES = 8192
+MAX_FIXTURE_CFG_TOKENS = 512
+MAX_FIXTURE_CFG_DEPTH = 32
+MAX_FIXTURE_CFG_WORK = 1024 * 1024
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 KERNEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}")
 ISSUE_URL = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*")
@@ -83,12 +87,18 @@ class _Budget:
         self.used = 0
         self.identity_bytes = 0
         self.source_bytes = 0
+        self.cfg_work = 0
 
     def rows(self, value: Any, label: str) -> list[Any]:
         if not isinstance(value, list) or len(value) > self.maximum - self.used:
             _fail(f"{label} exceeds the record bound or is not an array")
         self.used += len(value)
         return value
+
+    def charge_cfg_work(self, amount: int) -> None:
+        if amount > MAX_FIXTURE_CFG_WORK - self.cfg_work:
+            _fail("fixture cfg exceeds its aggregate work bound")
+        self.cfg_work += amount
 
 
 def _reference(value: Any) -> tuple[tuple[Any, ...], dict[str, Any]]:
@@ -170,16 +180,25 @@ def _fragment_intervals(tab: dict[str, Any], runtime: dict[str, Any], encoded: b
     return intervals
 
 
-def _fixture_cfg(body: str, features: set[str]) -> bool:
+def _fixture_cfg(body: str, features: set[str], budget: _Budget) -> bool:
     """Evaluate only literal feature/AMDGPU cfg expressions, without expansion."""
-    if len(body) > 8192 or len(body.encode("utf-8")) > 8192:
+    if len(body) > MAX_FIXTURE_CFG_BYTES:
         _fail("fixture cfg exceeds its byte bound")
+    try:
+        byte_count = len(body.encode("utf-8"))
+    except UnicodeError:
+        _fail("fixture cfg is not valid UTF-8")
+    if byte_count > MAX_FIXTURE_CFG_BYTES:
+        _fail("fixture cfg exceeds its byte bound")
+    budget.charge_cfg_work(byte_count)
     tokens = re.findall(r'\s+|[A-Za-z_][A-Za-z0-9_]*|"[A-Za-z0-9_-]+"|[(),=]', body)
     if "".join(tokens) != body:
         _fail("unsupported fixture cfg syntax")
     tokens = [token for token in tokens if not token.isspace()]
-    if len(tokens) > 256:
+    if len(tokens) > MAX_FIXTURE_CFG_TOKENS:
         _fail("fixture cfg exceeds its token bound")
+    # Prepay the complete parse, including predicates in false/true branches.
+    budget.charge_cfg_work(len(tokens))
     cursor = 0
 
     def take() -> str:
@@ -191,7 +210,7 @@ def _fixture_cfg(body: str, features: set[str]) -> bool:
         return token
 
     def expression(depth: int) -> bool:
-        if depth > 32:
+        if depth > MAX_FIXTURE_CFG_DEPTH:
             _fail("fixture cfg exceeds its nesting bound")
         name = take()
         if name in {"all", "any", "not"}:
@@ -247,7 +266,7 @@ def _fixture_declarations(
             masked = code[opening + 1:end - 1].strip()
             cfg = re.fullmatch(r"cfg\s*\((.*)\)", body, re.DOTALL)
             if cfg is not None:
-                enabled = _fixture_cfg(cfg[1], features) and enabled
+                enabled = _fixture_cfg(cfg[1], features, budget) and enabled
             elif re.fullmatch(r'cfg_attr\s*\(\s*target_arch\s*=\s*"amdgpu"\s*,\s*no_std\s*\)', body) and match[1]:
                 pass
             else:

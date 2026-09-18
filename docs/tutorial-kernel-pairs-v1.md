@@ -249,6 +249,14 @@ the fixture inputs, source-driver contracts or curriculum source metadata.
   duplicate modules or selected symbols reject a claimed binding. Such sources
   retain `pending` until an exact selection can be established. This bounded
   check does not replace rustc or qualify kernel implementations.
+  Each literal cfg expression is limited to 8 KiB of UTF-8, 512 non-whitespace
+  tokens and nesting depth 32. One inventory validation shares a 1,048,576-unit
+  cfg work budget across fixture selections and modules, charging each input
+  byte before lexing and each token before parsing. Every predicate is parsed,
+  including branches whose truth value is already determined. Unknown cfg and
+  enabled item macros, including conflicting-feature `compile_error!`, still
+  reject. The larger token bound admits the existing advanced-attention
+  318-token feature-exclusion expression without changing its semantics.
   Supported non-cfg forms are bare `kernel`/`inline`, parenthesized
   `allow`/`deny`/`forbid`/`warn`/`doc`/`kernel`, and `inline(always)`/`inline(never)`.
   Qualified attribute paths and name-value forms such as `#[doc = "..."]` are
@@ -265,6 +273,16 @@ unqualified candidates: the retained compiler-rejected display labels do not
 make them required-negative cases. CPU-reference coverage remains pending;
 their Bundle V7 / KIR V12 simulation requests and independent oracles remain
 `pending-design`, without content pins or execution receipts.
+
+The unchanged `examples/gfx950_advanced_attention/src/ablation.rs` matches
+`gfx950-attnres-gr-mhc` tab 1 at byte offsets 1111, 3730 and 5895 for the existing
+explicit-reuse, explicit-residual and scalar-mHC fixtures. The larger cfg token
+budget alone does not establish these bindings. Their library unconditionally
+includes `src/kernel.rs`, which contains `cfg(any(target_arch = "amdgpu", test))`,
+enabled `macro_rules!` definitions and `cfg(test)`. The restricted selector
+rejects the unsupported predicate and item forms; these three occurrences remain
+pending until that complete module selection can be established without guessing
+cfg values or ignoring macros. Matching only the ablation file is insufficient.
 
 The inventory derives 50 fixtures, 60 known identities and 56 pending display
 bindings. The GPT-OSS lesson-level source gap is cleared; `gemm-proof-plan`'s

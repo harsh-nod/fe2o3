@@ -528,6 +528,29 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertIsNone(without_runtime["requiredPairCount"])
         self.assertEqual(sum("selection" in row for row in without_runtime["unresolvedBindings"]), 8)
 
+    def test_real_ablation_bindings_still_reject_the_unsupported_module_census(self):
+        fixtures = {
+            "gfx950_attnres_aggregate": "gfx950-attnres-aggregate-explicit-reuse",
+            "gfx950_four_branch_residual": "gfx950-four-branch-residual-explicit",
+            "gfx950_mhc_sinkhorn_mix": "gfx950-mhc-sinkhorn-mix-scalar",
+        }
+        rows = [row for row in self.manifest["kernelInventory"]["displayItems"]
+                if row["lessonId"] == "gfx950-attnres-gr-mhc" and row["tabOrdinal"] == 1]
+        self.assertEqual(len(rows), 3)
+        self.assertEqual([row["functionUtf8Offset"] for row in rows], [1111, 3730, 5895])
+        for original in rows:
+            self.assertEqual(original["bindingStatus"], "pending")
+            self.assertEqual(original["kernelIds"], [])
+            document = copy.deepcopy(self.original)
+            row = next(row for row in document["kernelInventory"]["displayItems"]
+                       if row["lessonId"] == original["lessonId"] and row["tabOrdinal"] == 1
+                       and row["kernelSymbol"] == original["kernelSymbol"])
+            symbol = row["kernelSymbol"]
+            row.update(bindingStatus="fixture-source-contract",
+                       kernelIds=[f"fixture:{fixtures[symbol]}:{symbol}"])
+            with self.subTest(symbol=symbol), self.assertRaisesRegex(SystemExit, "unsupported fixture cfg predicate"):
+                self.validator.validate_kernel_inventory(document, None)
+
     def test_attention_candidates_retain_exact_inputs_and_pending_obligations(self):
         lesson_id = "gfx950-gpt-oss-120b-megakernel"
         lesson = self.curriculum_lesson(lesson_id)

@@ -505,9 +505,112 @@ class FixtureDisplayTests(unittest.TestCase):
             with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "aggregate byte bound"):
                 self.validate(False)
         for cfg in ("not(" * 34 + 'feature="left"' + ")" * 34,
-                    "all(" + ','.join(['feature="left"'] * 70) + ")", " " * 8193):
+                    "all(" + ','.join(['feature="left"'] * 130) + ")", " " * 8193):
             with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "bound"):
-                IDENTITIES._fixture_cfg(cfg, {"left"})
+                IDENTITIES._fixture_cfg(cfg, {"left"}, IDENTITIES._Budget(4096))
+
+    def test_fixture_cfg_exact_byte_token_and_nesting_limits(self):
+        def evaluate(body):
+            return IDENTITIES._fixture_cfg(body, {"left"}, IDENTITIES._Budget(4096))
+
+        atom = 'feature="left"'
+        for padding in ("", "\u2003"):
+            body = atom + padding
+            body += " " * (8192 - len(body.encode("utf-8")))
+            with self.subTest(padding=padding):
+                self.assertTrue(evaluate(body))
+                with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "byte bound"):
+                    evaluate(body + " ")
+        # 126 atoms, 125 commas, three openers and three closers: 512 tokens.
+        body = "not(not(all(" + ",".join([atom] * 126) + ")))"
+        self.assertTrue(evaluate(body))
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "token bound"):
+            evaluate(body[:-3] + ",)))")
+        self.assertTrue(evaluate("not(" * 32 + atom + ")" * 32))
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "nesting bound"):
+            evaluate("not(" * 33 + atom + ")" * 33)
+
+    def test_fixture_cfg_shared_work_exact_and_one_short(self):
+        body = 'feature="left"'
+        cost = len(body.encode("utf-8")) + 3
+        for maximum, accepted in ((2 * cost, True), (2 * cost - 1, False)):
+            budget = IDENTITIES._Budget(4096)
+            with self.subTest(maximum=maximum), mock.patch.object(IDENTITIES, "MAX_FIXTURE_CFG_WORK", maximum):
+                self.assertTrue(IDENTITIES._fixture_cfg(body, {"left"}, budget))
+                if accepted:
+                    self.assertTrue(IDENTITIES._fixture_cfg(body, {"left"}, budget))
+                    self.assertEqual(budget.cfg_work, maximum)
+                else:
+                    with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "aggregate work bound"):
+                        IDENTITIES._fixture_cfg(body, {"left"}, budget)
+                with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "aggregate work bound"):
+                    IDENTITIES._fixture_cfg(body, {"left"}, budget)
+
+    def test_fixture_cfg_work_is_shared_across_modules_and_selections(self):
+        with mock.patch.object(IDENTITIES._Budget, "charge_cfg_work", autospec=True,
+                               side_effect=IDENTITIES._Budget.charge_cfg_work) as charge:
+            self.validate(False)
+        owners = {id(call.args[0]) for call in charge.call_args_list}
+        self.assertEqual(len(owners), 1)
+        work = sum(call.args[1] for call in charge.call_args_list)
+        with mock.patch.object(IDENTITIES, "MAX_FIXTURE_CFG_WORK", work):
+            self.validate(False)
+        with mock.patch.object(IDENTITIES, "MAX_FIXTURE_CFG_WORK", work - 1):
+            with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "aggregate work bound"):
+                self.validate(False)
+        other = copy.deepcopy(self.fixture)
+        other["fixtureId"] = "second"
+        other["compilerInput"]["features"].append("unrelated")
+        self.manifest["compilerFixtures"].append(other)
+        identity = copy.deepcopy(self.manifest["kernelInventory"]["kernels"][0])
+        identity.update(kernelId="second")
+        identity["selections"][0]["fixtureId"] = "second"
+        self.manifest["kernelInventory"]["kernels"].append(identity)
+        self.row["kernelIds"].append("second")
+        with mock.patch.object(IDENTITIES, "MAX_FIXTURE_CFG_WORK", 2 * work):
+            self.validate(False)
+        with mock.patch.object(IDENTITIES, "MAX_FIXTURE_CFG_WORK", 2 * work - 1):
+            with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "aggregate work bound"):
+                self.validate(False)
+
+    def test_fixture_cfg_malformed_and_unsupported_predicates_never_short_circuit(self):
+        cases = [
+            "", "all(", "not()", 'not(feature="left", feature="right")',
+            'all(feature="left" feature="right")', 'any(,feature="left")',
+            'all(feature="left",,)', 'feature="left" trailing', 'feature=left',
+            'feature="le\\ft"', 'feature=r"left"', 'feature="left" /* comment */',
+            'target_os="linux"', 'all(feature="absent", target_os="linux")',
+            'any(feature="left", unknown)', 'all(feature="absent", unknown())',
+            'any(feature="left", feature=123)', '\ud800',
+        ]
+        for body in cases:
+            with self.subTest(body=body), self.assertRaises(IDENTITIES.KernelInventoryError):
+                IDENTITIES._fixture_cfg(body, {"left"}, IDENTITIES._Budget(4096))
+
+    def test_supported_cfg_does_not_admit_macro_definitions_or_invocations(self):
+        for item in ('macro_rules! make_kernel { () => {} }', 'make_kernel!();',
+                     'compile_error!("conflicting features");'):
+            self.setUp()
+            self.sources[self.library] = f'#[cfg(target_arch = "amdgpu")]\n{item}\nmod left;'
+            with self.subTest(item=item), self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "unsupported fixture item"):
+                self.validate(False)
+
+    def test_real_318_token_exclusion_matches_independent_feature_count(self):
+        source = (PATH.parents[1] / "examples/gfx950_advanced_attention/src/lib.rs").read_text(encoding="utf-8")
+        code = self.scanner._rust_code_without_comments_and_literals(source)
+        pairs = self.scanner._rust_delimiters(code)
+        start = code.index("#[cfg(", code.index("#[cfg(") + 1) + len("#[cfg")
+        body = source[start + 1:pairs[start] - 1]
+        features = [f"kernel-{name}" for name in (
+            "kda-decode", "kda-prefill", "content-sparse-attention", "deepseek-sparse-attention",
+            "compressed-hybrid-attention", "attnres-aggregate", "four-branch-residual", "mhc-sinkhorn-mix",
+        )]
+        for bits in range(1 << len(features)):
+            enabled = {name for index, name in enumerate(features) if bits & (1 << index)}
+            budget = IDENTITIES._Budget(4096)
+            with self.subTest(enabled=enabled):
+                self.assertEqual(IDENTITIES._fixture_cfg(body, enabled, budget), bits.bit_count() > 1)
+                self.assertEqual(budget.cfg_work, len(body.encode("utf-8")) + 318)
 
     def test_repeated_displays_use_one_fixture_selection_cache(self):
         self.manifest["curriculum"]["lessons"][0]["codeTabs"].append(copy.deepcopy(self.tab))
