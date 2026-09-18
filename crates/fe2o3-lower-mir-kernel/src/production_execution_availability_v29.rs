@@ -24,7 +24,7 @@ struct ExecutionAvailabilityV29<'a> {
     block: Option<SsaBlockIdV1>,
     cfg: ExecutionCfgV29<'a>,
     events: ExecutionEventsV29,
-    parameters: Option<PreparedExecutionParametersV29>,
+    parameters: Option<PreparedExecutionParametersV29<'a>>,
     #[cfg(test)]
     entry_seeds: Vec<(u32, SemanticValueBindingV1)>,
     #[cfg(test)]

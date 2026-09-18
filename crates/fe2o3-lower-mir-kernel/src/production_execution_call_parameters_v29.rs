@@ -1,9 +1,35 @@
 // Instance-bound call transport. This does not issue roles, discharge borrows,
 // or replace source replay and lifecycle verification before production admission.
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum DefinedCallProjectionV29 {
+#[derive(Clone, Copy)]
+struct ExecutionCallScopeV29<'scope> {
+    ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    _lifetime: std::marker::PhantomData<&'scope ()>,
+}
+
+#[derive(Clone, Copy)]
+enum DefinedCallProjectionV29<'scope> {
     Ordinary,
-    Execution,
+    Execution(ExecutionCallScopeV29<'scope>),
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Scope materializer integration remains gated")
+)]
+fn with_execution_call_scope_v29<R>(
+    budget: &mut ArgumentBudgetV1<'_>,
+    consume: impl for<'scope> FnOnce(
+        ExecutionCallScopeV29<'scope>,
+        &mut ArgumentBudgetV1<'_>,
+    ) -> Result<R, ProductionSemanticKirErrorV1>,
+) -> Result<R, ProductionSemanticKirErrorV1> {
+    consume(
+        ExecutionCallScopeV29 {
+            ledger: budget.work_ledger_identity_v1(),
+            _lifetime: std::marker::PhantomData,
+        },
+        budget,
+    )
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -30,7 +56,8 @@ impl ExecutionCallSourceV29 {
     }
 }
 
-struct PreparedExecutionCallOriginV29 {
+struct PreparedExecutionCallOriginV29<'scope> {
+    scope: ExecutionCallScopeV29<'scope>,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     source: ExecutionCallSourceV29,
     function: SemanticFunctionIdV1,
@@ -40,7 +67,8 @@ struct PreparedExecutionCallOriginV29 {
     parameter_types: Vec<Type>,
 }
 
-struct PreparedExecutionParametersV29 {
+struct PreparedExecutionParametersV29<'scope> {
+    _scope: ExecutionCallScopeV29<'scope>,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     instance: ProductionCallInstanceIdV1,
     source: ExecutionCallSourceV29,
@@ -98,16 +126,17 @@ fn execution_call_shape_v29(
 }
 
 impl<'a> SemanticFunctionLoweringV1<'a> {
-    fn prepare_execution_call_origin_v29(
+    fn prepare_execution_call_origin_v29<'scope>(
         &mut self,
         block: SemanticBlockIdV1,
         call: &SemanticDirectCallV1,
         callee: SemanticFunctionIdV1,
-        signature: &DefinedCallArgumentSignatureV1<'_>,
-    ) -> Result<Option<PreparedExecutionCallOriginV29>, ProductionSemanticKirErrorV1> {
-        if signature.projection == DefinedCallProjectionV29::Ordinary {
-            return Ok(None);
-        }
+        signature: &DefinedCallArgumentSignatureV1<'_, 'scope>,
+    ) -> Result<Option<PreparedExecutionCallOriginV29<'scope>>, ProductionSemanticKirErrorV1> {
+        let scope = match signature.projection {
+            DefinedCallProjectionV29::Ordinary => return Ok(None),
+            DefinedCallProjectionV29::Execution(scope) => scope,
+        };
         let cursor = self
             .execution
             .as_ref()
@@ -117,6 +146,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .as_deref_mut()
             .ok_or(ArgumentResourceV1::Accounting)?;
         cursor.check_ledger(budget)?;
+        if scope.ledger != budget.work_ledger_identity_v1() {
+            return Err(execution_call_error_v29());
+        }
         budget.charge_work(8)?;
         let actual = self
             .function
@@ -139,6 +171,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             parameter_types.push(execution_cfg_clone_type_v29(ty, budget)?);
         }
         Ok(Some(PreparedExecutionCallOriginV29 {
+            scope,
             ledger: budget.work_ledger_identity_v1(),
             source: cursor.source,
             function: cursor.function_id,
@@ -159,13 +192,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     not(test),
     expect(dead_code, reason = "Scope materializer integration remains gated")
 )]
-fn prepare_execution_parameters_v29(
+fn prepare_execution_parameters_v29<'scope>(
     instances: &ExecutionInstancesV29<'_>,
     child: ProductionCallInstanceIdV1,
-    prepared: PreparedDefinedCallArgumentsV1,
+    prepared: PreparedDefinedCallArgumentsV1<'scope>,
     plan: &LoweredFunctionPlanV1,
     budget: &mut ArgumentBudgetV1<'_>,
-) -> Result<(Vec<ValueId>, PreparedExecutionParametersV29), ProductionSemanticKirErrorV1> {
+) -> Result<(Vec<ValueId>, PreparedExecutionParametersV29<'scope>), ProductionSemanticKirErrorV1> {
     budget.charge_work(12)?;
     let origin = prepared.execution.ok_or_else(execution_call_error_v29)?;
     let incoming = instances
@@ -301,6 +334,7 @@ fn prepare_execution_parameters_v29(
     Ok((
         prepared.arguments,
         PreparedExecutionParametersV29 {
+            _scope: origin.scope,
             ledger: budget.work_ledger_identity_v1(),
             instance: child,
             source: origin.source,
@@ -312,12 +346,24 @@ fn prepare_execution_parameters_v29(
     ))
 }
 
-impl ExecutionAvailabilityV29<'_> {
-    fn install_call_parameters_v29(
+impl<'a> ExecutionAvailabilityV29<'a> {
+    fn with_call_parameters_v29<'scope>(
+        self,
+        parameters: PreparedExecutionParametersV29<'scope>,
+    ) -> ExecutionAvailabilityV29<'scope>
+    where
+        'a: 'scope,
+    {
+        let mut cursor: ExecutionAvailabilityV29<'scope> = self;
+        cursor.parameters = Some(parameters);
+        cursor
+    }
+
+    fn install_call_parameters_v29<'work>(
         &mut self,
         parameters: &SemanticParameterBindingsV1<'_>,
         locals: &mut [Option<SemanticValueBindingV1>],
-        budget: Option<&mut dyn SemanticEmissionBudgetV1>,
+        budget: Option<&mut (dyn SemanticEmissionBudgetV1 + 'work)>,
     ) -> Result<u32, ProductionSemanticKirErrorV1> {
         let Some(prepared) = self.parameters.take() else {
             return Ok(0);
@@ -343,7 +389,7 @@ impl ExecutionAvailabilityV29<'_> {
             || prepared
                 .locals
                 .iter()
-                .any(|(local, _)| locals.get(*local) != Some(&None))
+                .any(|(local, _)| !matches!(locals.get(*local), Some(None)))
         {
             return Err(execution_call_error_v29());
         }

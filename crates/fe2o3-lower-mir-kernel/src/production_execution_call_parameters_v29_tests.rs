@@ -261,156 +261,178 @@ fn run(
             .map_err(|_| execution_call_error_v29())?;
         budget.reserve_storage(captured.retained_storage())?;
         with_production_call_instances_v1(&owner, ROOT, &mut budget, |instances, budget| {
-            let first = instances.calls(instances.root()).unwrap()[0]
-                .child()
-                .unwrap();
-            let second = instances.calls(instances.root()).unwrap()[1]
-                .child()
-                .unwrap();
-            let prepared = with_execution_availability_v29(
-                instances,
-                instances.root(),
-                budget,
-                |mut cursor, budget| {
-                    let semantic = owner.source_semantic();
-                    let seed = SemanticExecutionBindingV29::context(
-                        semantic.types(),
-                        CONTEXT,
-                        ProductionCallOccurrenceV1 {
-                            caller: instances.root(),
-                            block: SemanticBlockIdV1::from_index(0),
+            Ok::<_, production_call_instances_v1::ProductionCallInstanceErrorV1>(
+                with_execution_call_scope_v29(budget, |scope, budget| {
+                    let first = instances.calls(instances.root()).unwrap()[0]
+                        .child()
+                        .unwrap();
+                    let second = instances.calls(instances.root()).unwrap()[1]
+                        .child()
+                        .unwrap();
+                    let prepared = with_execution_availability_v29(
+                        instances,
+                        instances.root(),
+                        budget,
+                        |mut cursor, budget| {
+                            let semantic = owner.source_semantic();
+                            let seed = SemanticExecutionBindingV29::context(
+                                semantic.types(),
+                                CONTEXT,
+                                ProductionCallOccurrenceV1 {
+                                    caller: instances.root(),
+                                    block: SemanticBlockIdV1::from_index(0),
+                                },
+                                ValueId(90),
+                            )
+                            .unwrap();
+                            let binding = |id| {
+                                SemanticValueBindingV1::Aggregate(vec![
+                                    if matches!(fault, Fault::Moved) {
+                                        SemanticValueBindingV1::MovedExecution
+                                    } else {
+                                        SemanticValueBindingV1::Execution(seed.clone())
+                                    },
+                                    SemanticValueBindingV1::Value {
+                                        id: ValueId(id),
+                                        ty: Type::Scalar(ScalarType::U32),
+                                    },
+                                ])
+                            };
+                            cursor.entry_seeds = vec![(1, binding(20)), (2, binding(21))];
+                            let mut parent = SemanticFunctionLoweringV1::new_interprocedural(
+                                semantic.types(),
+                                semantic.callables(),
+                                &semantic.functions()[0],
+                                owner.plan_for_function(ROOT).unwrap(),
+                                ROOT,
+                                ROOT,
+                                BTreeMap::new(),
+                                BTreeMap::new(),
+                                vec![],
+                                SemanticParameterBindingsV1 {
+                                    declarations: &[],
+                                    values: &[ValueId(20), ValueId(21)],
+                                    types: &[
+                                        Type::Scalar(ScalarType::U32),
+                                        Type::Scalar(ScalarType::U32),
+                                    ],
+                                    local_bindings: Some(&[]),
+                                },
+                                None,
+                                Some([64, 1, 1]),
+                                BTreeSet::new(),
+                                1,
+                                false,
+                                1024,
+                                PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(
+                                    1, 1024,
+                                )),
+                                None,
+                                CallReturnBufferV1::empty(),
+                                Some(budget),
+                                SemanticEmissionPlacementV1 {
+                                    first_block: 0,
+                                    first_value: 200,
+                                },
+                                Some(cursor),
+                            )?;
+                            let mut block = BasicBlock::new(BlockId(0));
+                            parent.begin_block(SemanticBlockIdV1::from_index(0), &mut block)?;
+                            let incoming = instances.incoming(first).unwrap();
+                            let rust_call = matches!(shape, Shape::RustCall);
+                            let projections = [HelperCallArgumentV1 {
+                                source_argument: u32::from(rust_call),
+                                tuple_field: rust_call.then_some(1),
+                                component: Some(0),
+                            }];
+                            let prepared = parent.prepare_defined_call_arguments_v1(
+                                SemanticBlockIdV1::from_index(0),
+                                incoming.source(),
+                                HELPER,
+                                DefinedCallArgumentSignatureV1 {
+                                    projection: DefinedCallProjectionV29::Execution(scope),
+                                    semantic_types: semantic.functions()[1]
+                                        .abi()
+                                        .source_input_types(),
+                                    projections: &projections,
+                                    parameter_types: vec![Type::Scalar(ScalarType::U32)],
+                                },
+                                &mut block.operations,
+                            )?;
+                            assert_eq!(prepared.arguments, [ValueId(20)]);
+                            Ok(prepared)
                         },
-                        ValueId(90),
-                    )
-                    .unwrap();
-                    let binding = |id| {
-                        SemanticValueBindingV1::Aggregate(vec![
-                            if matches!(fault, Fault::Moved) {
-                                SemanticValueBindingV1::MovedExecution
-                            } else {
-                                SemanticValueBindingV1::Execution(seed.clone())
-                            },
-                            SemanticValueBindingV1::Value {
-                                id: ValueId(id),
-                                ty: Type::Scalar(ScalarType::U32),
-                            },
-                        ])
+                    )?;
+                    let mut prepared = prepared;
+                    let mut plan = child_plan();
+                    match fault {
+                        Fault::WrongType => {
+                            prepared.execution.as_mut().unwrap().parameter_types[0] = Type::INDEX
+                        }
+                        Fault::WrongSource => {
+                            prepared.execution.as_mut().unwrap().source.semantic[0] ^= 1
+                        }
+                        Fault::WrongSsa => {
+                            prepared.execution.as_mut().unwrap().source.ssa =
+                                self::owner(Shape::Struct).identity()
+                        }
+                        Fault::WrongRoot => {
+                            prepared.execution.as_mut().unwrap().source.root = HELPER
+                        }
+                        Fault::WrongProjection => {
+                            prepared.execution.as_mut().unwrap().projections[0].source_argument = 99
+                        }
+                        Fault::Alias => plan.parameter_values[0] = ValueId(90),
+                        _ => {}
+                    }
+                    let selected = if matches!(fault, Fault::OtherInstance) {
+                        second
+                    } else {
+                        first
                     };
-                    cursor.entry_seeds = vec![(1, binding(20)), (2, binding(21))];
-                    let mut parent = SemanticFunctionLoweringV1::new_interprocedural(
-                        semantic.types(),
-                        semantic.callables(),
-                        &semantic.functions()[0],
-                        owner.plan_for_function(ROOT).unwrap(),
-                        ROOT,
-                        ROOT,
-                        BTreeMap::new(),
-                        BTreeMap::new(),
-                        vec![],
-                        SemanticParameterBindingsV1 {
-                            declarations: &[],
-                            values: &[ValueId(20), ValueId(21)],
-                            types: &[Type::Scalar(ScalarType::U32), Type::Scalar(ScalarType::U32)],
-                            local_bindings: Some(&[]),
-                        },
-                        None,
-                        Some([64, 1, 1]),
-                        BTreeSet::new(),
-                        1,
-                        false,
-                        1024,
-                        PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(1, 1024)),
-                        None,
-                        CallReturnBufferV1::empty(),
-                        Some(budget),
-                        SemanticEmissionPlacementV1 {
-                            first_block: 0,
-                            first_value: 200,
-                        },
-                        Some(cursor),
+                    let (arguments, parameters) = prepare_execution_parameters_v29(
+                        instances, selected, prepared, &plan, budget,
                     )?;
-                    let mut block = BasicBlock::new(BlockId(0));
-                    parent.begin_block(SemanticBlockIdV1::from_index(0), &mut block)?;
-                    let incoming = instances.incoming(first).unwrap();
-                    let rust_call = matches!(shape, Shape::RustCall);
-                    let projections = [HelperCallArgumentV1 {
-                        source_argument: u32::from(rust_call),
-                        tuple_field: rust_call.then_some(1),
-                        component: Some(0),
-                    }];
-                    let prepared = parent.prepare_defined_call_arguments_v1(
-                        SemanticBlockIdV1::from_index(0),
-                        incoming.source(),
-                        HELPER,
-                        DefinedCallArgumentSignatureV1 {
-                            projection: DefinedCallProjectionV29::Execution,
-                            semantic_types: semantic.functions()[1].abi().source_input_types(),
-                            projections: &projections,
-                            parameter_types: vec![Type::Scalar(ScalarType::U32)],
+                    assert_eq!(arguments, [ValueId(20)]);
+                    let selected = if matches!(fault, Fault::ConstructorInstance) {
+                        second
+                    } else {
+                        first
+                    };
+                    with_execution_availability_v29(
+                        instances,
+                        selected,
+                        budget,
+                        |cursor, budget| {
+                            let cursor = cursor.with_call_parameters_v29(parameters);
+                            let mut private = PrivateArrayLazyBudgetV1::new(1, 1024);
+                            lower_one_semantic_function_v1(
+                                owner.source_semantic(),
+                                &plan,
+                                owner.plan_for_function(HELPER).unwrap(),
+                                &BTreeMap::new(),
+                                &BTreeMap::new(),
+                                None,
+                                BTreeSet::new(),
+                                1,
+                                false,
+                                1024,
+                                None,
+                                &mut private,
+                                None,
+                                budget,
+                                SemanticEmissionPlacementV1 {
+                                    first_block: 17,
+                                    first_value: 300,
+                                },
+                                Some(cursor),
+                            )
                         },
-                        &mut block.operations,
-                    )?;
-                    assert_eq!(prepared.arguments, [ValueId(20)]);
-                    Ok(prepared)
-                },
-            )?;
-            let mut prepared = prepared;
-            let mut plan = child_plan();
-            match fault {
-                Fault::WrongType => {
-                    prepared.execution.as_mut().unwrap().parameter_types[0] = Type::INDEX
-                }
-                Fault::WrongSource => prepared.execution.as_mut().unwrap().source.semantic[0] ^= 1,
-                Fault::WrongSsa => {
-                    prepared.execution.as_mut().unwrap().source.ssa =
-                        self::owner(Shape::Struct).identity()
-                }
-                Fault::WrongRoot => prepared.execution.as_mut().unwrap().source.root = HELPER,
-                Fault::WrongProjection => {
-                    prepared.execution.as_mut().unwrap().projections[0].source_argument = 99
-                }
-                Fault::Alias => plan.parameter_values[0] = ValueId(90),
-                _ => {}
-            }
-            let selected = if matches!(fault, Fault::OtherInstance) {
-                second
-            } else {
-                first
-            };
-            let (arguments, parameters) =
-                prepare_execution_parameters_v29(instances, selected, prepared, &plan, budget)?;
-            assert_eq!(arguments, [ValueId(20)]);
-            let selected = if matches!(fault, Fault::ConstructorInstance) {
-                second
-            } else {
-                first
-            };
-            with_execution_availability_v29(instances, selected, budget, |mut cursor, budget| {
-                cursor.parameters = Some(parameters);
-                let mut private = PrivateArrayLazyBudgetV1::new(1, 1024);
-                lower_one_semantic_function_v1(
-                    owner.source_semantic(),
-                    &plan,
-                    owner.plan_for_function(HELPER).unwrap(),
-                    &BTreeMap::new(),
-                    &BTreeMap::new(),
-                    None,
-                    BTreeSet::new(),
-                    1,
-                    false,
-                    1024,
-                    None,
-                    &mut private,
-                    None,
-                    budget,
-                    SemanticEmissionPlacementV1 {
-                        first_block: 17,
-                        first_value: 300,
-                    },
-                    Some(cursor),
-                )
-            })
+                    )
+                }),
+            )
         })
+        .map_err(|_| execution_call_error_v29())?
     })();
     drop(budget);
     (result, work.work())
@@ -442,6 +464,9 @@ fn scoped_arguments_reach_shared_constructor_entry_archive_and_scalar_emission()
         assert!(
             result
                 .function
+                .body
+                .as_ref()
+                .unwrap()
                 .blocks
                 .iter()
                 .flat_map(|block| &block.operations)

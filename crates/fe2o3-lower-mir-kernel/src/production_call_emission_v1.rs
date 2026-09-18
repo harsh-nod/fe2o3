@@ -1,14 +1,14 @@
-struct DefinedCallArgumentSignatureV1<'a> {
-    projection: DefinedCallProjectionV29,
+struct DefinedCallArgumentSignatureV1<'a, 'scope> {
+    projection: DefinedCallProjectionV29<'scope>,
     semantic_types: &'a [SemanticTypeIdV1],
     projections: &'a [HelperCallArgumentV1],
     parameter_types: Vec<Type>,
 }
 
-struct PreparedDefinedCallArgumentsV1 {
+struct PreparedDefinedCallArgumentsV1<'scope> {
     source_bindings: Vec<SemanticValueBindingV1>,
     arguments: Vec<ValueId>,
-    execution: Option<PreparedExecutionCallOriginV29>,
+    execution: Option<PreparedExecutionCallOriginV29<'scope>>,
 }
 
 impl<'a> SemanticFunctionLoweringV1<'a> {
@@ -127,14 +127,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         Ok((returned, components))
     }
 
-    fn prepare_defined_call_arguments_v1(
+    fn prepare_defined_call_arguments_v1<'scope>(
         &mut self,
         block: SemanticBlockIdV1,
         call: &SemanticDirectCallV1,
         callee: SemanticFunctionIdV1,
-        signature: DefinedCallArgumentSignatureV1<'_>,
+        signature: DefinedCallArgumentSignatureV1<'_, 'scope>,
         operations: &mut Vec<Operation>,
-    ) -> Result<PreparedDefinedCallArgumentsV1, ProductionSemanticKirErrorV1> {
+    ) -> Result<PreparedDefinedCallArgumentsV1<'scope>, ProductionSemanticKirErrorV1> {
         if call.arguments().len() != signature.semantic_types.len()
             || signature.projections.len() != signature.parameter_types.len()
         {
