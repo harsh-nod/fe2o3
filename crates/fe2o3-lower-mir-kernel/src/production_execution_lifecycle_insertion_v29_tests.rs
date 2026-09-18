@@ -98,6 +98,11 @@ fn check_inserted_lifecycle(
     donor.as_mut().unwrap().pending.coordinates.spans.rows[span_index] = original_span;
 
     if let Some(parameter) = before.body.as_ref().unwrap().parameters.first() {
+        let DeferredLifecycleKindV29::Issue { result: original } = issuance.kind else {
+            panic!("expected a context issuance");
+        };
+        let mut collision = original;
+        collision.value = *parameter;
         if let DeferredLifecycleKindV29::Issue { result } =
             &mut donor.as_mut().unwrap().pending.sidecars.rows[0]
                 .lifecycle_events
@@ -106,9 +111,30 @@ fn check_inserted_lifecycle(
                 .rows[0]
                 .kind
         {
-            result.value = *parameter;
+            *result = collision;
         }
+        let mut changed_contexts = 0;
+        for row in &mut donor.as_mut().unwrap().pending.sidecars.rows {
+            for event in &mut row.lifecycle_events.as_mut().unwrap().rows {
+                if let DeferredLifecycleKindV29::Derive { context, .. } = &mut event.kind {
+                    if *context == original {
+                        *context = collision;
+                        changed_contexts += 1;
+                    }
+                }
+            }
+        }
+        assert!(changed_contexts > 0);
         reject(&mut donor, budget);
+        for row in &mut donor.as_mut().unwrap().pending.sidecars.rows {
+            for event in &mut row.lifecycle_events.as_mut().unwrap().rows {
+                if let DeferredLifecycleKindV29::Derive { context, .. } = &mut event.kind {
+                    if *context == collision {
+                        *context = original;
+                    }
+                }
+            }
+        }
         donor.as_mut().unwrap().pending.sidecars.rows[0]
             .lifecycle_events
             .as_mut()
@@ -209,9 +235,30 @@ fn check_inserted_lifecycle(
     let mut validation = ArgumentBudgetV1::new(&mut work, 10_000_000);
     let admission = fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV15::from_module_ref_with_verification_budget_v15(&module, &mut validation);
     if matches!(fixture, ScopedFixture::Assertion) {
+        let fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15::Verification(errors) =
+            admission.unwrap_err()
+        else {
+            panic!("live-scope trap must reach semantic verification");
+        };
+        let function = &module.functions[0];
+        let trap = AmdGpuDiagnosticOperation::Trap.operation(None);
+        let mut traps = Vec::new();
+        for block in &function.body.as_ref().unwrap().blocks {
+            for (index, operation) in block.operations.iter().enumerate() {
+                if operation == &trap {
+                    traps.push((block.id, index));
+                }
+            }
+        }
+        assert_eq!(traps.len(), 1);
         assert!(
-            admission.is_err(),
-            "current lifecycle admission rejects a trap in a live scope"
+            errors.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code == fe2o3_kernel_ir::DiagnosticCode::InvalidSemanticOperation
+                    && diagnostic.location.function.as_ref() == Some(&function.id)
+                    && diagnostic.location.block == Some(traps[0].0)
+                    && diagnostic.location.operation == Some(traps[0].1)
+            }),
+            "current lifecycle admission must reject the retained trap: {errors:?}"
         );
     } else {
         admission.unwrap();
