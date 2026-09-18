@@ -1,0 +1,45 @@
+{
+  "name": "topology",
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/tmp/fe2o3-striped-sdma-20260918.ee30bc89/source/r26-host-guard.py",
+    "topology",
+    "--gpu-index",
+    "1",
+    "--pci-bdf",
+    "0000:26:00.0",
+    "--unique-id",
+    "0xab83d2ffef0d3cdf"
+  ],
+  "cwd": "/tmp/fe2o3-striped-sdma-20260918.ee30bc89",
+  "environment": {
+    "HOME": "/home/harsh",
+    "PATH": "/usr/bin:/bin:/opt/rocm/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "HSA_XNACK": "0"
+  },
+  "started": {
+    "realtime_ns": 1789746462262259980,
+    "monotonic_ns": 7245359683931571
+  },
+  "spawned": {
+    "realtime_ns": 1789746462265183869,
+    "monotonic_ns": 7245359686855520
+  },
+  "status": 0,
+  "error": null,
+  "process_group": 4183028,
+  "group_absent": true,
+  "t0": {
+    "realtime_ns": 1789746462328706477,
+    "monotonic_ns": 7245359750379140
+  },
+  "outer_bound_seconds": 75,
+  "finished": {
+    "realtime_ns": 1789746462328767768,
+    "monotonic_ns": 7245359750439419
+  },
+  "stdout_sha256": "112eb35820b531e4c3040a740d52596e2f53fa47e4be9b157ed6f8db47198380",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

@@ -1,0 +1,27 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -B - 602fda830307f9818cbff5d57d4be68a897e75b7 503683e379673cebf6711e99f82dcccf9a39f1c4c8d3b787c6f940a375c164c2"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-striped-sdma-native-bundle-v2-20260918",
+  "started_ns": 1789746374570043108,
+  "bound_seconds": 45,
+  "process_group": 2601506,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": "9214cde8f4f2476932a8ed49822dda4474466e273bb2ca604288178fe7158011",
+  "finished_ns": 1789746375443375315,
+  "stdout_sha256": "ea0ea4503c9121c23c0d2d1a08783d3443a00ce9f7c1be2c86464a3a2f2483b7",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

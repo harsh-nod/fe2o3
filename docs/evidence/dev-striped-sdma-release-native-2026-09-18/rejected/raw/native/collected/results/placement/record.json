@@ -1,0 +1,40 @@
+{
+  "name": "placement",
+  "command": [
+    "/usr/bin/numactl",
+    "--physcpubind=48-95",
+    "--membind=1",
+    "/usr/bin/numactl",
+    "--show"
+  ],
+  "cwd": "/tmp/fe2o3-striped-sdma-20260918.q34ifzz7",
+  "environment": {
+    "HOME": "/home/harsh",
+    "PATH": "/usr/bin:/bin:/opt/rocm/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "HSA_XNACK": "0"
+  },
+  "started": {
+    "realtime_ns": 1789746145936347679,
+    "monotonic_ns": 7245043358019600
+  },
+  "spawned": {
+    "realtime_ns": 1789746145939654220,
+    "monotonic_ns": 7245043361326132
+  },
+  "status": 0,
+  "error": null,
+  "process_group": 4158375,
+  "group_absent": true,
+  "t0": {
+    "realtime_ns": 1789746145942845819,
+    "monotonic_ns": 7245043364517321
+  },
+  "outer_bound_seconds": 15,
+  "finished": {
+    "realtime_ns": 1789746145942868093,
+    "monotonic_ns": 7245043364539564
+  },
+  "stdout_sha256": "23d6010acf0e31aa5be42d14c633c510d8202cf16d1025afe6cd7c8f32378d10",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

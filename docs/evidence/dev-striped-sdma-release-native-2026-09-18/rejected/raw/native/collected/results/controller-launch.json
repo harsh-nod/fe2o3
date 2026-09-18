@@ -1,0 +1,18 @@
+{
+  "command": [
+    "/usr/bin/timeout",
+    "--signal=TERM",
+    "--kill-after=15s",
+    "3600s",
+    "/usr/bin/python3",
+    "-B",
+    "/tmp/fe2o3-striped-sdma-20260918.q34ifzz7/run.py",
+    "--parent-ready-approved"
+  ],
+  "process_group": 4158356,
+  "started_ns": 1789746145823237312,
+  "status": 1,
+  "group_absent": true,
+  "error": null,
+  "finished_ns": 1789746148143369609
+}

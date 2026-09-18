@@ -1,0 +1,16 @@
+{
+  "commit": "602fda830307f9818cbff5d57d4be68a897e75b7",
+  "started": {
+    "realtime_ns": 1789746145868404772,
+    "monotonic_ns": 7245043290076934
+  },
+  "cases": [],
+  "failure": "ValueError: fresh preflight command passed",
+  "native_ioctl_failure_claim": false,
+  "performance_claim": false,
+  "payload_after": "matched",
+  "finished": {
+    "realtime_ns": 1789746148097390666,
+    "monotonic_ns": 7245045519062548
+  }
+}

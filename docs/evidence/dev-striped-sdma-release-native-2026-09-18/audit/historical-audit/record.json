@@ -1,0 +1,23 @@
+{
+  "command": [
+    "python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-striped-sdma-release-native-2026-09-18/verify.py",
+    "--allow-unsealed",
+    "--source-root",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+    "--binary",
+    "/home/harsh/.codex-tmp/fe2o3-striped-sdma-native-bundle-v2-20260918/queue-example"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-striped-sdma-native-bundle-v2-20260918",
+  "started_ns": 1789746891597218082,
+  "bound_seconds": 30,
+  "process_group": 2655777,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789746892319755693,
+  "stdout_sha256": "a3ea5c98d8b21df1ff45e6518050e8e3695953589249c522bc9594a473d50220",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

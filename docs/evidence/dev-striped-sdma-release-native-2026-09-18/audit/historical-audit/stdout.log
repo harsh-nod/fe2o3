@@ -1,0 +1,137 @@
+{
+  "archive_integrity_sealed": false,
+  "historical_audit": "passed",
+  "native_campaign": "passed",
+  "profiles": [
+    "striped-2",
+    "striped-4",
+    "striped-6",
+    "striped-8",
+    "striped-10",
+    "striped-12",
+    "striped-14",
+    "striped-16"
+  ],
+  "native_commands_passed": 8,
+  "observations": 24,
+  "strict_endpoints": 24,
+  "refused_endpoints": 0,
+  "post_observation_offsets": [
+    {
+      "case": "striped-2",
+      "endpoint": "immediate",
+      "start_offset_ns": 33189518,
+      "strict_admitted": true
+    },
+    {
+      "case": "striped-2",
+      "endpoint": "delayed",
+      "start_offset_ns": 20032002616,
+      "strict_admitted": true
+    },
+    {
+      "case": "striped-4",
+      "endpoint": "immediate",
+      "start_offset_ns": 33273253,
+      "strict_admitted": true
+    },
+    {
+      "case": "striped-4",
+      "endpoint": "delayed",
+      "start_offset_ns": 20031371419,
+      "strict_admitted": true
+    },
+    {
+      "case": "striped-6",
+      "endpoint": "immediate",
+      "start_offset_ns": 32699586,
+      "strict_admitted": true
+    },
+    {
+      "case": "striped-6",
+      "endpoint": "delayed",
+      "start_offset_ns": 20031920778,
+      "strict_admitted": true
+    },
+    {
+      "case": "striped-8",
+      "endpoint": "immediate",
+      "start_offset_ns": 32177015,
+      "strict_admitted": true
+    },
+    {
+      "case": "striped-8",
+      "endpoint": "delayed",
+      "start_offset_ns": 20031678244,
+      "strict_admitted": true
+    },
+    {
+      "case": "striped-10",
+      "endpoint": "immediate",
+      "start_offset_ns": 31742865,
+      "strict_admitted": true
+    },
+    {
+      "case": "striped-10",
+      "endpoint": "delayed",
+      "start_offset_ns": 20032740462,
+      "strict_admitted": true
+    },
+    {
+      "case": "striped-12",
+      "endpoint": "immediate",
+      "start_offset_ns": 31949875,
+      "strict_admitted": true
+    },
+    {
+      "case": "striped-12",
+      "endpoint": "delayed",
+      "start_offset_ns": 20032475398,
+      "strict_admitted": true
+    },
+    {
+      "case": "striped-14",
+      "endpoint": "immediate",
+      "start_offset_ns": 33377328,
+      "strict_admitted": true
+    },
+    {
+      "case": "striped-14",
+      "endpoint": "delayed",
+      "start_offset_ns": 20032345278,
+      "strict_admitted": true
+    },
+    {
+      "case": "striped-16",
+      "endpoint": "immediate",
+      "start_offset_ns": 33335857,
+      "strict_admitted": true
+    },
+    {
+      "case": "striped-16",
+      "endpoint": "delayed",
+      "start_offset_ns": 20033717725,
+      "strict_admitted": true
+    }
+  ],
+  "recorded_native_pids_groups_absent": 35,
+  "cleanup": "closed",
+  "current_source_files_revalidated": 5556,
+  "current_binary_revalidated": true,
+  "performance_claim": false,
+  "real_ioctl_failure_claim": false,
+  "cursor_scope": "initial-0-no-advance-source-qualified",
+  "prior_attempt": {
+    "disposition": "rejected-before-runtime-binary-launch",
+    "native_commands": 0,
+    "refused_endpoints": 1,
+    "remote_files_collected": 37,
+    "owned_groups_absent": 4,
+    "cleanup": "closed"
+  },
+  "setup_rejection": {
+    "disposition": "invalid-marker-name-marker-only-cleaned",
+    "exact_cleanup": "closed",
+    "native_commands": 0
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "name": "striped-4-test",
+  "command": [
+    "/usr/bin/timeout",
+    "--signal=TERM",
+    "--kill-after=5s",
+    "180s",
+    "/usr/bin/prlimit",
+    "--core=0:0",
+    "--fsize=16777216:16777216",
+    "--",
+    "/usr/bin/numactl",
+    "--physcpubind=0-47",
+    "--membind=0",
+    "/tmp/fe2o3-striped-sdma-20260918.ee30bc89/queue-example",
+    "--retained-release-striped-sdma",
+    "4",
+    "0xab83d2ffef0d3cdf"
+  ],
+  "cwd": "/tmp/fe2o3-striped-sdma-20260918.ee30bc89",
+  "environment": {
+    "HOME": "/home/harsh",
+    "PATH": "/usr/bin:/bin:/opt/rocm/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "HSA_XNACK": "0"
+  },
+  "started": {
+    "realtime_ns": 1789746490684003092,
+    "monotonic_ns": 7245388105675124
+  },
+  "spawned": {
+    "realtime_ns": 1789746490688083711,
+    "monotonic_ns": 7245388109755783
+  },
+  "status": 0,
+  "error": null,
+  "process_group": 4185353,
+  "group_absent": true,
+  "t0": {
+    "realtime_ns": 1789746493358080708,
+    "monotonic_ns": 7245390779754102
+  },
+  "outer_bound_seconds": 200,
+  "finished": {
+    "realtime_ns": 1789746493358149220,
+    "monotonic_ns": 7245390779820922
+  },
+  "stdout_sha256": "d6308cc31fe75a01fb86bc9c7708d9c6400c0b14d04db599546612c61177323f",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

@@ -1,0 +1,6 @@
+raw/**/*.log whitespace=-blank-at-eof
+audit/**/*.log whitespace=-blank-at-eof
+rejected/raw/**/*.log whitespace=-blank-at-eof
+# Preserve numactl's original trailing spaces in these two captured outputs.
+raw/native/collected/results/placement/stdout.log whitespace=-blank-at-eof,-blank-at-eol
+rejected/raw/native/collected/results/placement/stdout.log whitespace=-blank-at-eof,-blank-at-eol

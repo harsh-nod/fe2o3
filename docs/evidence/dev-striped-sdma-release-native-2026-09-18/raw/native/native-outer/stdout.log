@@ -1,0 +1,363 @@
+{"owned": "/tmp/fe2o3-striped-sdma-20260918.ee30bc89", "process_group": 4183025, "record": "outer-launch-started", "started_ns": 1789746462216548299}
+{
+  "commit": "602fda830307f9818cbff5d57d4be68a897e75b7",
+  "started": {
+    "realtime_ns": 1789746462262207091,
+    "monotonic_ns": 7245359683879373
+  },
+  "cases": [
+    {
+      "case": "striped-2",
+      "test_record": "striped-2-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "striped-2",
+        "queue_count": 2,
+        "engine_placement": [
+          0,
+          1
+        ],
+        "cursor_scope": "initial-0-no-advance-source-qualified",
+        "host_delta_bytes": 8192,
+        "host_delta_records": 2,
+        "primary_queue_id": 0,
+        "sdma_queue_ids": [
+          1,
+          2
+        ],
+        "event_id": 1,
+        "doorbell_byte_offset": 0,
+        "released_resources": 11,
+        "public_root_drop_completed": true
+      }
+    },
+    {
+      "case": "striped-4",
+      "test_record": "striped-4-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "striped-4",
+        "queue_count": 4,
+        "engine_placement": [
+          0,
+          1,
+          0,
+          1
+        ],
+        "cursor_scope": "initial-0-no-advance-source-qualified",
+        "host_delta_bytes": 16384,
+        "host_delta_records": 4,
+        "primary_queue_id": 0,
+        "sdma_queue_ids": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "event_id": 1,
+        "doorbell_byte_offset": 0,
+        "released_resources": 17,
+        "public_root_drop_completed": true
+      }
+    },
+    {
+      "case": "striped-6",
+      "test_record": "striped-6-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "striped-6",
+        "queue_count": 6,
+        "engine_placement": [
+          0,
+          1,
+          0,
+          1,
+          0,
+          1
+        ],
+        "cursor_scope": "initial-0-no-advance-source-qualified",
+        "host_delta_bytes": 24576,
+        "host_delta_records": 6,
+        "primary_queue_id": 0,
+        "sdma_queue_ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "event_id": 1,
+        "doorbell_byte_offset": 0,
+        "released_resources": 23,
+        "public_root_drop_completed": true
+      }
+    },
+    {
+      "case": "striped-8",
+      "test_record": "striped-8-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "striped-8",
+        "queue_count": 8,
+        "engine_placement": [
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1
+        ],
+        "cursor_scope": "initial-0-no-advance-source-qualified",
+        "host_delta_bytes": 32768,
+        "host_delta_records": 8,
+        "primary_queue_id": 0,
+        "sdma_queue_ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8
+        ],
+        "event_id": 1,
+        "doorbell_byte_offset": 0,
+        "released_resources": 29,
+        "public_root_drop_completed": true
+      }
+    },
+    {
+      "case": "striped-10",
+      "test_record": "striped-10-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "striped-10",
+        "queue_count": 10,
+        "engine_placement": [
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1
+        ],
+        "cursor_scope": "initial-0-no-advance-source-qualified",
+        "host_delta_bytes": 40960,
+        "host_delta_records": 10,
+        "primary_queue_id": 0,
+        "sdma_queue_ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "event_id": 1,
+        "doorbell_byte_offset": 0,
+        "released_resources": 35,
+        "public_root_drop_completed": true
+      }
+    },
+    {
+      "case": "striped-12",
+      "test_record": "striped-12-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "striped-12",
+        "queue_count": 12,
+        "engine_placement": [
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1
+        ],
+        "cursor_scope": "initial-0-no-advance-source-qualified",
+        "host_delta_bytes": 49152,
+        "host_delta_records": 12,
+        "primary_queue_id": 0,
+        "sdma_queue_ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12
+        ],
+        "event_id": 1,
+        "doorbell_byte_offset": 0,
+        "released_resources": 41,
+        "public_root_drop_completed": true
+      }
+    },
+    {
+      "case": "striped-14",
+      "test_record": "striped-14-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "striped-14",
+        "queue_count": 14,
+        "engine_placement": [
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1
+        ],
+        "cursor_scope": "initial-0-no-advance-source-qualified",
+        "host_delta_bytes": 57344,
+        "host_delta_records": 14,
+        "primary_queue_id": 0,
+        "sdma_queue_ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14
+        ],
+        "event_id": 1,
+        "doorbell_byte_offset": 0,
+        "released_resources": 47,
+        "public_root_drop_completed": true
+      }
+    },
+    {
+      "case": "striped-16",
+      "test_record": "striped-16-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "striped-16",
+        "queue_count": 16,
+        "engine_placement": [
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1
+        ],
+        "cursor_scope": "initial-0-no-advance-source-qualified",
+        "host_delta_bytes": 65536,
+        "host_delta_records": 16,
+        "primary_queue_id": 0,
+        "sdma_queue_ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16
+        ],
+        "event_id": 1,
+        "doorbell_byte_offset": 0,
+        "released_resources": 53,
+        "public_root_drop_completed": true
+      }
+    }
+  ],
+  "failure": null,
+  "native_ioctl_failure_claim": false,
+  "performance_claim": false,
+  "payload_after": "matched",
+  "finished": {
+    "realtime_ns": 1789746694550337554,
+    "monotonic_ns": 7245591972010147
+  }
+}
+{"command": ["/usr/bin/timeout", "--signal=TERM", "--kill-after=15s", "3600s", "/usr/bin/python3", "-B", "/tmp/fe2o3-striped-sdma-20260918.ee30bc89/run.py", "--parent-ready-approved"], "error": null, "finished_ns": 1789746694597747402, "group_absent": true, "process_group": 4183025, "record": "outer-launch-finished", "started_ns": 1789746462216548299, "status": 0}

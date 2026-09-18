@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-striped-sdma-control-20260918/test_controller.py",
+    "-v"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-striped-sdma-native-bundle-20260918",
+  "started_ns": 1789746138945435430,
+  "bound_seconds": 30,
+  "process_group": 2583386,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789746139064311538,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "e9a6da3b312287bc1c2fd103bec714d87abff867869587d09fecbe270afe8a84"
+}

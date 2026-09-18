@@ -1,0 +1,79 @@
+{
+  "owned": "/tmp/fe2o3-striped-sdma-20260918.ee30bc89",
+  "payload_sha256": "503683e379673cebf6711e99f82dcccf9a39f1c4c8d3b787c6f940a375c164c2",
+  "native_attempted": true,
+  "collected_verified": true,
+  "cleanup_closed": true,
+  "independent_absence_closed": true,
+  "failure": null,
+  "local_only": false,
+  "native_outer_passed": true,
+  "records": [
+    {
+      "name": "local-protocol-tests",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "local-payload-verify",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "local-controller-wiring-tests",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "remote-empty",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "upload",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "remote-approve",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "native-outer",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "remote-inventory",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "collect",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "remote-cleanup",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "remote-independent-absence",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    }
+  ]
+}

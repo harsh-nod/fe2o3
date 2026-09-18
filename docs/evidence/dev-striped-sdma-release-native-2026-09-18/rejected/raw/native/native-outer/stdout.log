@@ -1,0 +1,18 @@
+{"owned": "/tmp/fe2o3-striped-sdma-20260918.q34ifzz7", "process_group": 4158356, "record": "outer-launch-started", "started_ns": 1789746145823237312}
+{
+  "commit": "602fda830307f9818cbff5d57d4be68a897e75b7",
+  "started": {
+    "realtime_ns": 1789746145868404772,
+    "monotonic_ns": 7245043290076934
+  },
+  "cases": [],
+  "failure": "ValueError: fresh preflight command passed",
+  "native_ioctl_failure_claim": false,
+  "performance_claim": false,
+  "payload_after": "matched",
+  "finished": {
+    "realtime_ns": 1789746148097390666,
+    "monotonic_ns": 7245045519062548
+  }
+}
+{"command": ["/usr/bin/timeout", "--signal=TERM", "--kill-after=15s", "3600s", "/usr/bin/python3", "-B", "/tmp/fe2o3-striped-sdma-20260918.q34ifzz7/run.py", "--parent-ready-approved"], "error": null, "finished_ns": 1789746148143369609, "group_absent": true, "process_group": 4158356, "record": "outer-launch-finished", "started_ns": 1789746145823237312, "status": 1}
