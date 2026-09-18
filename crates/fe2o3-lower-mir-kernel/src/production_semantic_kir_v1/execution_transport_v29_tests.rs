@@ -293,8 +293,13 @@ fn execution_borrow_requires_the_retained_assignment_not_an_equal_clone() {
             ),
         )),
     );
+    let empty = function(CONTEXT, vec![]);
     let function = function(CONTEXT, vec![statement]);
-    let mut lowering = lowering(&types, &function);
+    let mut lowering = lowering(&types, &empty);
+    // The ordinary SSA gate rejects this borrow without an authenticated
+    // consumer. Point only the hook's borrowed source declaration at the real
+    // assignment; this is not a materialized or admitted source/SSA owner.
+    lowering.function = &function;
     let expected = context(&types, 100);
     lowering.locals[1] = Some(SemanticValueBindingV1::Execution(expected.clone()));
     let SemanticStatementKindV1::Assign(assignment) = function.blocks()[0].statements()[0].kind()

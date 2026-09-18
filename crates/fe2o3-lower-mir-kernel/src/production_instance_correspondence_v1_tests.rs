@@ -57,7 +57,8 @@ fn statement_order_owner() -> ProductionSemanticMirOwnerV1 {
         }),
     ));
     let mut locals = root.locals().to_vec();
-    for tag in [152, 153] {
+    // The inherited return local has identity 207; appended locals stay canonical.
+    for tag in [220, 221] {
         locals.push(SemanticLocalDeclV1::new(
             SemanticLocalIdentityV1::from_sha256([tag; 32]),
             scalar,

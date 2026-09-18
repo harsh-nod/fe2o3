@@ -73,11 +73,30 @@ fn types() -> Vec<SemanticTypeDeclV1> {
     ]
 }
 
-fn array(tag: u8, element: SemanticTypeIdV1, length: u64, size: u64) -> SemanticTypeDeclV1 {
+fn array(
+    tag: u8,
+    element: SemanticTypeIdV1,
+    length: u64,
+    stride: u64,
+    alignment: u64,
+) -> SemanticTypeDeclV1 {
     SemanticTypeDeclV1::new(
         SemanticTypeIdentityV1::from_sha256([tag; 32]),
         SemanticLayoutIdentityV1::from_sha256([tag; 32]),
-        SemanticTypeLayoutV1::new(Some(size), if size == 0 { 1 } else { 8 }).unwrap(),
+        SemanticTypeLayoutV1::with_exact_rustc_layout(
+            stride.checked_mul(length).unwrap(),
+            alignment,
+            SemanticFieldsShapeV1::array(stride, length),
+            SemanticRustcVariantsV1::Single { index: 0 },
+            SemanticBackendReprV1::memory(true),
+            None,
+            false,
+            None,
+            alignment,
+            0,
+            SemanticTypeLayoutDetailsV1::None,
+        )
+        .unwrap(),
         SemanticTypeShapeV1::Array { element, length },
     )
 }
@@ -323,8 +342,8 @@ fn nominal_execution_roles_do_not_use_their_physical_aggregate_layout() {
 #[test]
 fn nested_tuple_and_nonempty_array_cannot_erase_nominal_execution_roles() {
     let mut types = types();
-    let nominal_array = push(&mut types, array(60, WORKGROUP, 1, 16));
-    let ordinary_array = push(&mut types, array(61, PLAIN_WORKGROUP, 1, 16));
+    let nominal_array = push(&mut types, array(60, WORKGROUP, 1, 16, 8));
+    let ordinary_array = push(&mut types, array(61, PLAIN_WORKGROUP, 1, 16, 8));
     check_pair(&types, nominal_array, ordinary_array);
     let nominal = push(
         &mut types,
@@ -347,8 +366,8 @@ fn nested_tuple_and_nonempty_array_cannot_erase_nominal_execution_roles() {
 #[test]
 fn zero_length_arrays_still_require_an_ordinary_element_type() {
     let mut types = types();
-    let nominal_array = push(&mut types, array(70, CONTEXT, 0, 0));
-    let ordinary_array = push(&mut types, array(71, PLAIN_CONTEXT, 0, 0));
+    let nominal_array = push(&mut types, array(70, CONTEXT, 0, 0, 1));
+    let ordinary_array = push(&mut types, array(71, PLAIN_CONTEXT, 0, 0, 1));
     check_erased_pair(&types, nominal_array, ordinary_array);
     let nominal = push(
         &mut types,
