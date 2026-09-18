@@ -1,0 +1,3 @@
+benchmarks/runtime_gfx942/async_copy_hip.cpp: OK
+benchmarks/runtime_gfx942/copy-host-observe.py: OK
+benchmarks/runtime_gfx942/native_benchmark_args.hpp: OK

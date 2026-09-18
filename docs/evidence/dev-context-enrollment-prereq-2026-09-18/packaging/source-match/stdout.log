@@ -1,0 +1,14 @@
+{
+  "corrected_positive_runs": 2,
+  "verified_per_positive": 168,
+  "inherited_obligations": 155,
+  "new_obligations": 13,
+  "corrected_negative_runs": 7,
+  "verified_per_negative": 167,
+  "intended_errors_per_negative": 1,
+  "preliminary_retained_solver_runs": 2,
+  "closed_owned_process_receipts": 14,
+  "current_tool_installation_revalidated": false,
+  "complete_batch_enrollment_verified": false,
+  "current_source_files_matched": 24
+}

@@ -10,6 +10,35 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
+The latest [primary teardown CPU campaign](evidence/dev-primary-envelope-cpu-2026-09-18/README.md)
+passes 1,102 runtime tests on both GNU and scoped musl, with twenty ignored,
+plus 46 runtime doctests and the static checks. Two newly compiled hardware-only
+error/panic probes enter the production-shared installed-primary helper and
+check original custody and terminal-state preservation. Neither has run on
+hardware; deterministic post-install faults are not native ioctl failures.
+R125 remains the accepted Native checkpoint, with R126 under development.
+
+Latest development (2026-09-18): the
+[enrollment prerequisite proof](runtime-context-version-enrollment-v1.md)
+verifies the ordered admission prefix and conditional final write/truncate
+loop, deriving reader preservation from vacant selected slots. Both positive
+runs report 168 verified obligations; seven executable mutations each fail the
+intended postcondition. Production sorting/search, collision-path output
+restoration, allocation partition preservation and an end-to-end enrollment
+witness remain unproved. R116/V3 remains the accepted Resources checkpoint.
+
+The [HIP payload validator](evidence/dev-hip-copy-payload-cpu-2026-09-18/README.md)
+passes eleven parser calibration groups, ten comparator/mock groups and two
+argument tests. Its independent expected configuration, exact round roster,
+cleanup counts and native status checks do not establish host admission or
+performance. The separately
+[prepared native smoke](evidence/dev-hip-native-copy-smoke-1890a64e1-2026-09-18/README.md)
+was refused before launch: GPU 4 exceeded the unchanged busy/VRAM bounds and
+the PID capture reported a process attached to all eight GPUs. No native HIP
+process ran, no retry replaced that result, and the exact owned remote directory
+was removed with independent path and recorded-process absence checks. No
+matched performance ratio is available.
+
 Latest bootstrap development (2026-09-18): the
 [Worker V3 generated-only bootstrap](evidence/dev-worker-generated-bootstrap-2026-09-18/README.md)
 opens allocation/stream/copy facilities without generic launch authority and

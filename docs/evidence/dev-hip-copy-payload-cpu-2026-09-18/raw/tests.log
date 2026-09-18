@@ -1,0 +1,26 @@
+test_cleanup_failures_cannot_emit_success (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_cleanup_failures_cannot_emit_success) ... ok
+test_complete_round_roster_and_no_allocator_exercise (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_complete_round_roster_and_no_allocator_exercise) ... ok
+test_full_buffer_corruption_prevents_results (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_full_buffer_corruption_prevents_results) ... ok
+test_identity_and_target_rejection_precede_allocations (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_identity_and_target_rejection_precede_allocations) ... ok
+test_invalid_arguments_reject_before_native_selection (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_invalid_arguments_reject_before_native_selection) ... ok
+test_late_output_failure_is_not_success (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_late_output_failure_is_not_success) ... ok
+test_legacy_mode_preserves_allocator_exercise_and_single_row (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_legacy_mode_preserves_allocator_exercise_and_single_row) ... ok
+test_maximum_round_count_without_warmups (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_maximum_round_count_without_warmups) ... ok
+test_setup_failures_never_submit (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_setup_failures_never_submit) ... ok
+test_unproved_completion_never_reuses_or_releases (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_unproved_completion_never_reuses_or_releases) ... ok
+test_bounded_file_and_cli_failure_emit_no_result (test_hip_copy_payload.HipCopyPayloadTests.test_bounded_file_and_cli_failure_emit_no_result) ... ok
+test_configuration_limits (test_hip_copy_payload.HipCopyPayloadTests.test_configuration_limits) ... ok
+test_every_configuration_field_is_bound (test_hip_copy_payload.HipCopyPayloadTests.test_every_configuration_field_is_bound) ... ok
+test_exact_payload_without_performance_authority (test_hip_copy_payload.HipCopyPayloadTests.test_exact_payload_without_performance_authority) ... ok
+test_external_expected_configuration_cannot_be_self_selected (test_hip_copy_payload.HipCopyPayloadTests.test_external_expected_configuration_cannot_be_self_selected) ... ok
+test_field_syntax_and_closed_rosters (test_hip_copy_payload.HipCopyPayloadTests.test_field_syntax_and_closed_rosters) ... ok
+test_missing_duplicate_reordered_and_extra_rows (test_hip_copy_payload.HipCopyPayloadTests.test_missing_duplicate_reordered_and_extra_rows) ... ok
+test_noncanonical_zero_and_overflow_intervals (test_hip_copy_payload.HipCopyPayloadTests.test_noncanonical_zero_and_overflow_intervals) ... ok
+test_nonzero_exit_or_stderr_overrides_success_payload (test_hip_copy_payload.HipCopyPayloadTests.test_nonzero_exit_or_stderr_overrides_success_payload) ... ok
+test_wrong_round_or_release_facts (test_hip_copy_payload.HipCopyPayloadTests.test_wrong_round_or_release_facts) ... ok
+test_zero_warmup_and_maximum_workload (test_hip_copy_payload.HipCopyPayloadTests.test_zero_warmup_and_maximum_workload) ... ok
+
+----------------------------------------------------------------------
+Ran 21 tests in 3.110s
+
+OK

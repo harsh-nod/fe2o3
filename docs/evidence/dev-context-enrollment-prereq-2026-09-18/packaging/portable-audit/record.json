@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-context-enrollment-prereq-2026-09-18/verify.py",
+    "--unsealed"
+  ],
+  "started_ns": 1789725958864319991,
+  "process_group": 1188273,
+  "group_absent": true,
+  "finished_ns": 1789725961687037782,
+  "status": 0
+}

@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 import unittest
 
+import hip_copy_diagnostic as payload
+
 DIRECTORY = Path(__file__).resolve().parent
 
 
@@ -61,6 +63,17 @@ class HipCopyDiagnosticTests(unittest.TestCase):
     def test_complete_round_roster_and_no_allocator_exercise(self):
         result = self.run_adapter()
         self.assertEqual(result.returncode, 0, result.stderr)
+        # The mock's stderr is its call trace, not native HIP diagnostic output.
+        checked = payload.validate(
+            result.stdout,
+            "",
+            result.returncode,
+            payload.Expected(
+                1, 0xAB83D2FFEF0D3CDF, "gfx942:sramecc+:xnack-", 4096, 1, 2
+            ),
+        )
+        self.assertTrue(checked["payload_valid"])
+        self.assertFalse(checked["performance_accepted"])
         rows = [
             dict(field.split("=", 1) for field in line.split())
             for line in result.stdout.splitlines()

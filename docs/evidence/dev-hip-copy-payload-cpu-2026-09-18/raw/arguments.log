@@ -1,0 +1,7 @@
+test_legacy_comparators_use_checked_arguments (test_native_benchmark_args.NativeBenchmarkArgumentTests.test_legacy_comparators_use_checked_arguments) ... ok
+test_strict_parsing_and_checked_arithmetic (test_native_benchmark_args.NativeBenchmarkArgumentTests.test_strict_parsing_and_checked_arithmetic) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.841s
+
+OK

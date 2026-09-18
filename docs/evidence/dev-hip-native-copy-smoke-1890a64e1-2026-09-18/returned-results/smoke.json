@@ -1,0 +1,58 @@
+{
+  "schema": "fe2o3.hip-smoke-fixed-deadline.v1",
+  "source_commit": "1890a64e1911a2a346c5a9e70a8ff5ad45b19231",
+  "started": {
+    "utc": "2026-09-18T09:57:20.399396406Z",
+    "monotonic_ns": 7224337821079605
+  },
+  "native_launched": false,
+  "native_reaped": null,
+  "observations": {
+    "pre": {
+      "started": {
+        "monotonic_ns": 7224338202946304,
+        "utc": "2026-09-18T09:57:20.781264557Z"
+      },
+      "finished": {
+        "monotonic_ns": 7224340279579992,
+        "utc": "2026-09-18T09:57:22.857900509Z"
+      },
+      "reasons": [
+        "sysfs-before-busy",
+        "sysfs-before-vram",
+        "sysfs-between-busy",
+        "sysfs-between-vram",
+        "sysfs-after-vram",
+        "smi-busy",
+        "smi-vram",
+        "selected-gpu-attachments"
+      ],
+      "selected_pids": [
+        1661511
+      ],
+      "original_admitted": false,
+      "protocol_phase_accepted": false
+    }
+  },
+  "failures": [
+    "pre: refused by fixed protocol"
+  ],
+  "performance_accepted": false,
+  "smoke_accepted": false,
+  "records": [
+    "000-source-before",
+    "001-binary-before",
+    "002-platform-before",
+    "003-scripts-before",
+    "004-topology",
+    "005-pre",
+    "006-source-after",
+    "007-binary-after",
+    "008-platform-after",
+    "009-scripts-after"
+  ],
+  "finished": {
+    "utc": "2026-09-18T09:57:23.165658321Z",
+    "monotonic_ns": 7224340587339847
+  }
+}

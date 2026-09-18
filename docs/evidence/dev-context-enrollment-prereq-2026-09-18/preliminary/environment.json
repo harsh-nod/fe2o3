@@ -1,0 +1,7 @@
+{
+  "HOME": "/home/harsh",
+  "RUSTUP_HOME": "/home/harsh/.rustup",
+  "CARGO_HOME": "/home/harsh/.cargo",
+  "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+  "VERUS_Z3_PATH": "/home/harsh/.local/opt/verus-0.2026.08.09.92f466f/z3"
+}

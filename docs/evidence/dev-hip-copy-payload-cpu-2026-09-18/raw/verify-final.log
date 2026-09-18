@@ -1,0 +1,10 @@
+{
+  "audit": "PASS",
+  "source_files": 90,
+  "payload_calibration_groups": 11,
+  "hip_mock_groups": 10,
+  "argument_tests": 2,
+  "closed_receipts": 8,
+  "gpu_used": false,
+  "performance_accepted": false
+}

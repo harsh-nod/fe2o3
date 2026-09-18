@@ -1,0 +1,9 @@
+{
+  "scope": "admission prefix and conditional commit suffix only",
+  "positive_obligations": 168,
+  "inherited_obligations": 155,
+  "negative_cases": 7,
+  "full_batch_enrollment_verified": false,
+  "rust_sorting_search_refined": false,
+  "native_or_performance_acceptance": false
+}

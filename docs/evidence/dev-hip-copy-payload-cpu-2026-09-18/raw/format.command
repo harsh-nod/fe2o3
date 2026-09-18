@@ -1,0 +1,1 @@
+ruff format --check --no-cache benchmarks/runtime_gfx942/hip_copy_diagnostic.py benchmarks/runtime_gfx942/test_hip_copy_payload.py benchmarks/runtime_gfx942/test_hip_copy_diagnostic.py /home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-hip-copy-payload-cpu-2026-09-18/verify.py 

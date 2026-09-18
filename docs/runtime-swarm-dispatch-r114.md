@@ -32,6 +32,13 @@ post-pristine-abort ledger admission. GNU/musl each pass 308 selected KFD tests
 and 745 runtime tests. Native faults, other profiles and full qualification
 remain open; R125 remains accepted.
 
+The ordinary-primary runtime envelope now has two hardware-only fault probes
+through the production-shared installed-root helper: error and original panic
+after genuine primary custody is installed. They assert retained Box identity,
+terminal state, inert reentry, accounting visibility and no destroyed event.
+They are not native ioctl-failure injections and have not yet run on hardware;
+full native R126 qualification and the accepted R125 checkpoint are unchanged.
+
 Preceding Native checkpoint: [R124 ordinary recycled detach is locally accepted](runtime-live-recycled-detach-v1.md),
 with [476 raw artifacts](evidence/local-r124-live-recycled-detach-2026-09-15/README.md)
 and two passing independent archive reviews. GNU/musl each pass 2,882 tests with
@@ -96,6 +103,15 @@ Rust count-guard tests. The [development receipt](evidence/dev-v4j1-issuance-202
 separates model proof qualification from Rust/storage correspondence and production
 Context integration. R116/V3 remains accepted. The external candidate history
 below is preserved and does not substitute for this canonical-source campaign.
+
+The subsequent [batch enrollment prerequisite proof](runtime-context-version-enrollment-v1.md)
+includes unchanged J1-J4 and proves the admission prefix and conditional final
+commit loop with reader preservation. Two positive runs report 168 verified
+obligations (155 inherited, 13 new); seven executable mutations each reach their
+intended postcondition error. The production sorting/search middle, rejection
+restoration, full allocation partition and enrollment-based reader witness are
+still open. This is development model evidence, not full batch or Rust/native
+refinement; R116/V3 remains accepted.
 
 Resources development update: the external V13 issuance candidate
 `r120-journal-issuance-v13.rs`, SHA-256

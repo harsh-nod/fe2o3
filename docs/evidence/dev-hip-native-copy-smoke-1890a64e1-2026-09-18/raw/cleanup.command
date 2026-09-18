@@ -1,0 +1,1 @@
+bash -c ssh\ -o\ BatchMode=yes\ -o\ ConnectTimeout=10\ mi300x\ /usr/bin/python3\ -B\ -\ --cleanup\ 1667810\,1667811\,1667812\,1667849\,1667850\,1667852\,1667964\,1667965\,1667966\,1667974\ \<\ cleanup.py 

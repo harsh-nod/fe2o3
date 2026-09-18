@@ -1,0 +1,106 @@
+2026-09-18T09:43:51.474875804Z
+disk_available_bytes=44225384448
+MemAvailable:   1623467428 kB
+source.tar: OK
+source-files.sha256: OK
+Linux sharkmi300x-1 6.8.0-124-generic #124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+/opt/rocm-7.2.4
+HIP version: 7.2.53211-97f5574fe2
+AMD clang version 22.0.0git (https://github.com/RadeonOpenCompute/llvm-project roc-7.2.4 26084 f58b06dce1f9c15707c5f808fd002e18c2accf7e)
+Target: x86_64-unknown-linux-gnu
+Thread model: posix
+InstalledDir: /opt/rocm-7.2.4/lib/llvm/bin
+Configuration file: /opt/rocm-7.2.4/lib/llvm/bin/clang++.cfg
+HIP version: 7.2.53211-97f5574fe2
+
+==hipconfig
+HIP_PATH           :/opt/rocm-7.2.4
+ROCM_PATH          :/opt/rocm-7.2.4
+HIP_COMPILER       :clang
+HIP_PLATFORM       :amd
+HIP_RUNTIME        :rocclr
+CPP_CONFIG         : -D__HIP_PLATFORM_HCC__= -D__HIP_PLATFORM_AMD__= -I/opt/rocm-7.2.4/include -I/include
+
+==hip-clang
+HIP_CLANG_PATH     :/opt/rocm-7.2.4/lib/llvm/bin
+AMD clang version 22.0.0git (https://github.com/RadeonOpenCompute/llvm-project roc-7.2.4 26084 f58b06dce1f9c15707c5f808fd002e18c2accf7e)
+Target: x86_64-unknown-linux-gnu
+Thread model: posix
+InstalledDir: /opt/rocm-7.2.4/lib/llvm/bin
+Configuration file: /opt/rocm-7.2.4/lib/llvm/bin/clang++.cfg
+AMD LLVM version 22.0.0git
+  Optimized build.
+  Default target: x86_64-unknown-linux-gnu
+  Host CPU: znver4
+
+  Registered Targets:
+    amdgcn - AMD GCN GPUs
+    r600   - AMD GPUs HD2XXX-HD6XXX
+    x86    - 32-bit X86: Pentium-Pro and above
+    x86-64 - 64-bit X86: EM64T and AMD64
+hip-clang-cxxflags :
+ -O3
+hip-clang-ldflags :
+--driver-mode=g++ -O3 --hip-link
+
+== Environment Variables
+PATH =/opt/rocm/bin:/usr/bin:/bin
+
+== Linux Kernel
+Hostname      :
+sharkmi300x-1
+Linux sharkmi300x-1 6.8.0-124-generic #124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+Distributor ID:	Ubuntu
+Description:	Ubuntu 24.04.4 LTS
+Release:	24.04
+Codename:	noble
+
+g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+Copyright (C) 2023 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+amdgpu-dkms	1:6.16.13.30300400-2341068.24.04
+hip-runtime-amd	7.2.53211.70204-93~24.04
+hsa-rocr	1.18.0.70204-93~24.04
+rocm-core	7.2.4.70204-93~24.04
+rocm-smi-lib	7.8.0.70204-93~24.04
+build_command=/usr/bin/timeout --signal=TERM --kill-after=5s 180s /usr/bin/prlimit --core=0 -- /usr/bin/taskset -c 48\,49 /opt/rocm/bin/hipcc --offload-arch=gfx942 -std=c++17 -O3 -Wall -Wextra -Werror -MD -MF /tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS/results/hip.d benchmarks/runtime_gfx942/async_copy_hip.cpp -o /tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS/async-copy-hip 
+HIP_PATH=/opt/rocm-7.2.4
+HIP_PLATFORM=amd
+HIP_COMPILER=clang
+HIP_RUNTIME=rocclr
+ROCM_PATH=/opt/rocm-7.2.4
+HIP_ROCCLR_HOME=/opt/rocm-7.2.4
+HIP_CLANG_PATH=/opt/rocm-7.2.4/lib/llvm/bin
+HIP_INCLUDE_PATH=/opt/rocm-7.2.4/include
+HIP_LIB_PATH=
+DEVICE_LIB_PATH=/opt/rocm-7.2.4/amdgcn/bitcode
+hipcc-args: --offload-arch=gfx942 -std=c++17 -O3 -Wall -Wextra -Werror -MD -MF /tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS/results/hip.d benchmarks/runtime_gfx942/async_copy_hip.cpp -o /tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS/async-copy-hip 
+hipcc-cmd: /opt/rocm-7.2.4/lib/llvm/bin/clang++  --offload-arch=gfx942 --driver-mode=g++ --hip-link  -std=c++17 -O3 -Wall -Wextra -Werror -MD -MF /tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS/results/hip.d -x hip benchmarks/runtime_gfx942/async_copy_hip.cpp -o "/tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS/async-copy-hip"
+/tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS/async-copy-hip: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, not stripped
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00 
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              EXEC (Executable file)
+  Machine:                           Advanced Micro Devices X86-64
+  Version:                           0x1
+  Entry point address:               0x202d50
+  Start of program headers:          64 (bytes into file)
+  Start of section headers:          22720 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               64 (bytes)
+  Size of program headers:           56 (bytes)
+  Number of program headers:         11
+  Size of section headers:           64 (bytes)
+  Number of section headers:         30
+  Section header string table index: 28
+{"actual_dependency_files": 350, "mock_linked": false}
+/tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS/async-copy-hip: OK
+d2c012774e2321266d2708d7d7f40745d332ebbebf9d26c9c5f61c4bc57ad976  /tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS/async-copy-hip
+prepare_complete=true native_launched=false source_commit=1890a64e1911a2a346c5a9e70a8ff5ad45b19231 cpu_affinity=48,49 offload_arch=gfx942
+2026-09-18T09:43:53.984015958Z

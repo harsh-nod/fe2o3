@@ -1,0 +1,14 @@
+{
+  "portable_audit": "PASS",
+  "original_files": 214,
+  "local_receipts": 24,
+  "remote_records": 10,
+  "cpu_test_groups_final": 13,
+  "source_files": 3,
+  "dependency_files": 350,
+  "native_launched": false,
+  "smoke_accepted": false,
+  "performance_accepted": false,
+  "cleanup_absent": true,
+  "scope": "preflight refusal only; no native HIP qualification"
+}

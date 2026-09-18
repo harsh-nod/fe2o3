@@ -890,6 +890,44 @@ does not recover owners consumed inside a panicking creator or qualify Generic,
 Striped, LogicalMux or terminal-creation teardown. Native failure, formal and
 performance qualification remain open. R125 is still the accepted checkpoint.
 
+## Runtime Failure Envelope
+
+The ordinary-primary shutdown path now uses one private production-shared
+installation/settlement helper. It installs the original
+`PrimaryQueueReleaseCustodyV1` Box before entering the lower release operation,
+removes that Box only after a successful lower return, and otherwise preserves
+the existing terminal error and original-panic precedence. Queue-destroyed
+profiling and final runtime retirement remain after successful settlement, so
+neither can be published by an error or unwind from the retained operation.
+
+Two opt-in ignored hardware tests enter this helper through the ordinary public
+Context launch, cleanup and owned-backend shutdown sequence with the exact
+repository vecadd qualification authority. Each test runs its terminal case in
+a separate subprocess and injects either an error or an original typed panic
+only after the genuine primary Box is installed. Their assertions cover Box
+address retention, terminal and non-retired runtime state, inert reentry with
+exactly one wrapper entry, retained host- and device-account visibility before
+and after retry, one unmatched assigned-queue
+creation event, absence of a queue-destroyed observation, and exact panic
+payload identity and drop count. The parent requires an exact one-test child
+marker and replays the complete captured child transcript. The terminal backend
+is deliberately retained until subprocess exit.
+
+These probes require a freshly guarded MI300X and an explicit
+`FE2O3_TEST_NATIVE_UNIQUE_ID`; they have not been executed as part of the local
+CPU implementation step. Their deterministic post-install fault is runtime
+envelope evidence. It is not a native ioctl-failure injection and does not
+replace the constructed-parent destructive-prefix matrices or the remaining
+native failure qualification below. R125 remains the accepted checkpoint.
+
+The [CPU qualification packet](evidence/dev-primary-envelope-cpu-2026-09-18/README.md)
+records 1,102 passing runtime tests and twenty ignored on both GNU and scoped
+musl, including discovery but not execution of these two new probes. All 46
+runtime doctests, strict all-target/all-feature runtime Clippy, no-default
+compilation, workspace formatting and the reviewed unsafe-source policy pass.
+The production helper adds no unsafe code. This does not substitute for the
+unexecuted hardware cases or establish complete R126 qualification.
+
 ## Remaining Qualification
 
 Allocation settlement still needs native failure qualification beyond the two

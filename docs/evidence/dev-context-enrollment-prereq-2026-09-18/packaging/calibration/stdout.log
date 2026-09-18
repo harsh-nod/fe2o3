@@ -1,0 +1,32 @@
+{
+  "passed": [
+    "positive_count",
+    "negative_count",
+    "boolean_error_count",
+    "partial_crate",
+    "compiler_error",
+    "diagnostic_path",
+    "diagnostic_byte_offset",
+    "timeout_exit",
+    "cleanup_failure",
+    "reversed_timestamps",
+    "command_change",
+    "restored_mutation",
+    "include_change",
+    "derived_body_change",
+    "overclaim",
+    "after_identity_change",
+    "preliminary_checker_change",
+    "preliminary_fabricated_completion",
+    "closure_output",
+    "environment_change",
+    "source_snapshot_change",
+    "current_source_drift",
+    "manifest_hash",
+    "manifest_extra",
+    "manifest_missing",
+    "manifest_duplicate",
+    "manifest_symlink"
+  ],
+  "count": 27
+}

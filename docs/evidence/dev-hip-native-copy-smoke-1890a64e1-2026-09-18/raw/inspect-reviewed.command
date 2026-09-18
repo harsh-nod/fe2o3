@@ -1,0 +1,1 @@
+ssh -o BatchMode=yes -o ConnectTimeout=10 mi300x /usr/bin/sha256sum -c /tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS/scripts.sha256 /tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS/results/binary.sha256 /tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS/results/platform.sha256 

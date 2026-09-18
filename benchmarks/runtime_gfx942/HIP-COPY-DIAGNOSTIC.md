@@ -48,7 +48,8 @@ explicitly freed, and the stream is destroyed does the executable emit:
 - One completion row with exact validated/measured counts and release counts.
 
 Acceptance requires the complete row roster, zero executable status, and the
-protocol's successful post-observations. An output flush failure is nonzero even
+protocol's predeclared host-observation requirements. The payload validator
+does not define or relax those requirements. An output flush failure is nonzero even
 after successful resource release. A failed copy or synchronization exits
 without reusing or explicitly freeing possibly live storage; external isolated
 process teardown and guards remain required. No successful row is emitted for
@@ -69,3 +70,26 @@ output failures. They also check the maximum round count, the exact output
 roster, and preservation of the legacy allocator exercise. The mock must never
 be linked into hardware runs. Missing headers cause an explicit test skip;
 CPU success does not establish native HIP behavior or performance.
+
+## Payload Validation
+
+`hip_copy_diagnostic.py` validates the complete copy-only output against an
+independently supplied workload, device ID and target. It rejects nonzero native
+status, any native stderr, missing/reordered/extra rows, duplicate fields,
+noncanonical or nonpositive intervals, wrong patterns/checked lengths, and
+incomplete release counts. Input reads and round storage are bounded.
+
+```sh
+python3 -B benchmarks/runtime_gfx942/hip_copy_diagnostic.py \
+  --stdout "$owned/native.stdout" --stderr "$owned/native.stderr" \
+  --exit-code 0 --device-index 0 --unique-id "$unique_id" \
+  --target gfx942:sramecc+:xnack- --bytes 268435456 --warmups 3 --samples 10
+```
+
+Supply the actual recorded native exit status, not a substituted zero. A passing
+payload result always has `performance_accepted=false`: binary/source identity,
+host observations, timing protocol and comparison acceptance are independent.
+Raw warmup/sample intervals are retained without calculating a speedup.
+`test_hip_copy_payload.py` calibrates malformed/synthetic payloads; the existing
+CPU mock test also checks real comparator stdout through this parser. Mock call
+traces are not native stderr and are checked separately by that test.

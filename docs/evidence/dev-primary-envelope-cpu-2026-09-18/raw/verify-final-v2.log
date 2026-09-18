@@ -1,0 +1,23 @@
+{
+  "audit": "PASS",
+  "scope": "CPU only; native primary-release probes remain ignored",
+  "initial_source_files": 5553,
+  "final_source_files": 5553,
+  "source_changes_between_campaigns": 2,
+  "initial_test_binaries": 2,
+  "final_test_binaries": 2,
+  "runtime_each": {
+    "passed": 1102,
+    "ignored": 20
+  },
+  "new_ignored_tests": 2,
+  "doctests_each": 46,
+  "initial_doctests": 46,
+  "unsafe_policy_each": {
+    "passed": 5,
+    "ignored": 1
+  },
+  "closed_receipts": 38,
+  "successful_receipts": 36,
+  "preserved_preliminary_failures": 2
+}

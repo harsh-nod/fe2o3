@@ -1,0 +1,28 @@
+{
+  "commit": "1890a64e1911a2a346c5a9e70a8ff5ad45b19231",
+  "files": [
+    {
+      "bytes": 9146,
+      "git_blob": "ca8e0bb0f956fb44e005800fc80c9ab72bcf3b21",
+      "path": "benchmarks/runtime_gfx942/async_copy_hip.cpp",
+      "sha256": "44bc280135e75931c5654a1d4786bfa0f0cd7f429e2438be6329abf71fb36912"
+    },
+    {
+      "bytes": 9939,
+      "git_blob": "f9b83790276ba64b8e18ede8e0139b79b10230e4",
+      "path": "benchmarks/runtime_gfx942/copy-host-observe.py",
+      "sha256": "5d37b09bf0823854c6a45b914d866c042c1e65486cd96c6301285a0147ae6c51"
+    },
+    {
+      "bytes": 4176,
+      "git_blob": "93b609ba954ee4f6706ae1b7acae46d16681f72b",
+      "path": "benchmarks/runtime_gfx942/native_benchmark_args.hpp",
+      "sha256": "768106b4942e67fec45d7b2b4179b7886e8b8cad5a3c3f4abc97eaee59604937"
+    }
+  ],
+  "manifest_sha256": "d796342d5c9e8b28ea759e65acc5de878a270db0268ea1239659384f3deeafcf",
+  "schema": "fe2o3.hip-smoke-source-export.v1",
+  "scope": "three exact committed Git blobs; no working-tree source; no mock",
+  "source_tar_sha256": "09f7fa62a1a9145c3806788538c4174d7068a8d0bbcbc018b33d7f1e79d84c6a",
+  "tree": "195abb14241e90195a6ab71d9818e8ce50d91dd9"
+}

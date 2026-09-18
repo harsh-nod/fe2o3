@@ -1,0 +1,18 @@
+test_actual_observer_start_controls_both_windows (test_check.Tests.test_actual_observer_start_controls_both_windows) ... ok
+test_busy_preserves_original_failure_only_immediate_allows (test_check.Tests.test_busy_preserves_original_failure_only_immediate_allows) ... ok
+test_busy_telemetry_success_is_not_observer_admission (test_check.Tests.test_busy_telemetry_success_is_not_observer_admission) ... ok
+test_complete_audit_accepts_busy_telemetry_without_reclassifying_it (test_check.Tests.test_complete_audit_accepts_busy_telemetry_without_reclassifying_it) ... ok
+test_complete_audit_rejects_boundaries_and_forged_receipts (test_check.Tests.test_complete_audit_rejects_boundaries_and_forged_receipts) ... ok
+test_complete_envelope_and_unique_json (test_check.Tests.test_complete_envelope_and_unique_json) ... ok
+test_complete_strict_endpoint (test_check.Tests.test_complete_strict_endpoint) ... ok
+test_forged_admission_footer_exit_or_identity_rejected (test_check.Tests.test_forged_admission_footer_exit_or_identity_rejected) ... ok
+test_immediate_and_delayed_faults_never_rehabilitated (test_check.Tests.test_immediate_and_delayed_faults_never_rehabilitated) ... ok
+test_native_failure_still_collects_both_endpoints_no_retry (test_check.Tests.test_native_failure_still_collects_both_endpoints_no_retry) ... ok
+test_native_payload_uses_pinned_independent_validator (test_check.Tests.test_native_payload_uses_pinned_independent_validator) ... ok
+test_no_native_on_preflight_refusal (test_check.Tests.test_no_native_on_preflight_refusal) ... ok
+test_nonbusy_faults_remain_sticky (test_check.Tests.test_nonbusy_faults_remain_sticky) ... ok
+
+----------------------------------------------------------------------
+Ran 13 tests in 0.259s
+
+OK

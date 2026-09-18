@@ -4335,46 +4335,16 @@ impl KfdRuntimeBackendV1 {
                 )
             })?;
             let queue = self.queue.take().expect("preflight primary queue");
-            self.primary_teardown = Some(fill_restore_shell_v1(
-                shell,
-                PrimaryQueueReleaseCustodyV1::new(queue),
-            ));
-            #[cfg(test)]
-            super::retained_release_tests::observe_primary_host_usage(
-                self.primary_teardown
-                    .as_ref()
-                    .expect("installed primary teardown"),
-                false,
-            );
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.primary_teardown
-                    .as_mut()
-                    .expect("installed primary teardown")
-                    .release_in_place()
-            }));
-            match result {
-                Ok(Ok(_)) => {
-                    #[cfg(test)]
-                    super::retained_release_tests::observe_primary_host_usage(
-                        self.primary_teardown
-                            .as_ref()
-                            .expect("completed primary teardown"),
-                        true,
-                    );
-                    self.primary_teardown.take();
+            self.install_and_release_primary_for_shutdown_v1(shell, queue, |owner| {
+                #[cfg(all(test, feature = "hardware-qualification"))]
+                {
+                    super::retained_release_tests::primary_envelope::release_or_fault(owner)
                 }
-                Ok(Err(error)) => {
-                    return Err(
-                        self.terminal_error(format!("retained primary KFD teardown: {error}"))
-                    );
+                #[cfg(not(all(test, feature = "hardware-qualification")))]
+                {
+                    owner.release_in_place()
                 }
-                Err(payload) => {
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        self.terminal_error("retained primary KFD teardown panicked")
-                    }));
-                    std::panic::resume_unwind(payload);
-                }
-            }
+            })?;
             self.observe_destroyed_compute_lane_v1(primary_logical_lane);
         } else if let Some(queue) = self.queue.take() {
             queue.destroy().map_err(|error| {
@@ -4386,6 +4356,59 @@ impl KfdRuntimeBackendV1 {
         self.native_compute_lanes.fill(None);
         self.queue_retired = true;
         Ok(())
+    }
+
+    fn install_and_release_primary_for_shutdown_v1(
+        &mut self,
+        shell: Box<MaybeUninit<PrimaryQueueReleaseCustodyV1>>,
+        queue: ComputeAqlQueueSessionV1,
+        release: impl FnOnce(
+            &mut PrimaryQueueReleaseCustodyV1,
+        ) -> Result<
+            fe2o3_kfd::ComputeAqlQueueDestroyedV1,
+            fe2o3_kfd::ComputeAqlQueueSessionErrorV1,
+        >,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.primary_teardown = Some(fill_restore_shell_v1(
+            shell,
+            PrimaryQueueReleaseCustodyV1::new(queue),
+        ));
+        #[cfg(test)]
+        super::retained_release_tests::observe_primary_host_usage(
+            self.primary_teardown
+                .as_ref()
+                .expect("installed primary teardown"),
+            false,
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            release(
+                self.primary_teardown
+                    .as_mut()
+                    .expect("installed primary teardown"),
+            )
+        }));
+        match result {
+            Ok(Ok(_)) => {
+                #[cfg(test)]
+                super::retained_release_tests::observe_primary_host_usage(
+                    self.primary_teardown
+                        .as_ref()
+                        .expect("completed primary teardown"),
+                    true,
+                );
+                self.primary_teardown.take();
+                Ok(())
+            }
+            Ok(Err(error)) => {
+                Err(self.terminal_error(format!("retained primary KFD teardown: {error}")))
+            }
+            Err(payload) => {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.terminal_error("retained primary KFD teardown panicked")
+                }));
+                std::panic::resume_unwind(payload);
+            }
+        }
     }
 
     pub(super) fn release_auxiliary_for_shutdown_v1(

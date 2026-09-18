@@ -1,0 +1,33 @@
+{
+  "records": 10,
+  "native_launched": false,
+  "smoke_accepted": false,
+  "observations": {
+    "pre": {
+      "started": {
+        "monotonic_ns": 7224338202946304,
+        "utc": "2026-09-18T09:57:20.781264557Z"
+      },
+      "finished": {
+        "monotonic_ns": 7224340279579992,
+        "utc": "2026-09-18T09:57:22.857900509Z"
+      },
+      "reasons": [
+        "sysfs-before-busy",
+        "sysfs-before-vram",
+        "sysfs-between-busy",
+        "sysfs-between-vram",
+        "sysfs-after-vram",
+        "smi-busy",
+        "smi-vram",
+        "selected-gpu-attachments"
+      ],
+      "selected_pids": [
+        1661511
+      ],
+      "original_admitted": false
+    }
+  },
+  "performance_accepted": false,
+  "scope": "one-process prospective fixed-deadline protocol; not reservation or causal attribution"
+}

@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-primary-envelope-cpu-2026-09-18/verify.py", line 242, in <module>
+    verify()
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-primary-envelope-cpu-2026-09-18/verify.py", line 181, in verify
+    assert live == before
+           ^^^^^^^^^^^^^^
+AssertionError
