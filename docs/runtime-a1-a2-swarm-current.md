@@ -10,7 +10,20 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest development (2026-09-17): [reader commit contents](runtime-context-read-commit-v1.md)
+Latest development (2026-09-17): [reader arena invariants](runtime-context-read-invariant-v1.md)
+derives free-slot uniqueness and proves constructor/acquire/release preservation,
+exact count/lookup/exclusion consequences, and register/abort reader framing.
+Exact modeled operation traces preserve the invariant and never reissue reader
+incarnations. The 155 whole-crate obligations include 127 inherited and 28 new;
+a separate sixteen-case invariant-sensitivity campaign adds one test obligation.
+The nonempty formal witness and Rust whole-state lifecycle/4,000-step traces
+exercise overlap, last-reader exclusion, unrelated writer outcomes and slot reuse.
+The [qualification archive](evidence/dev-v4j4-reader-invariant-2026-09-17/README.md)
+records actual results and limits. General base enrollment/membership/settlement
+composition, production Rust/native refinement and physical storage remain open.
+Accepted checkpoints are unchanged; A1/A2 and #182 remain incomplete.
+
+Earlier development (2026-09-17): [reader commit contents](runtime-context-read-commit-v1.md)
 composes the unchanged ordered preflight with executable acquisition/release
 loops. It specifies exact lease/output contents, reader multiplicities, free-list
 order and incarnation updates, with rejection framing and a scan-to-commit safety

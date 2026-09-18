@@ -69,6 +69,194 @@ fn storage_identity(journal: &Journal) -> [(usize, usize); 3] {
     ]
 }
 
+fn assert_reader_invariant(journal: &Journal) {
+    assert!(!journal.leases.is_empty());
+    assert!(journal.leases.len() <= CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1);
+    assert_eq!(journal.readers.len(), journal.allocation_capacity());
+    assert_ne!(journal.next_incarnation, 0);
+    let mut free = alloc::vec![false; journal.leases.len()];
+    for &slot in &journal.free_reads {
+        assert!(slot < free.len());
+        assert!(!free[slot], "duplicate free slot");
+        free[slot] = true;
+    }
+    let mut counts = alloc::vec![0; journal.readers.len()];
+    let mut incarnations = alloc::collections::BTreeSet::new();
+    for (slot, lease) in journal.leases.iter().enumerate() {
+        assert_eq!(lease.is_none(), free[slot]);
+        if let Some(lease) = lease {
+            assert_eq!(lease.reference.slot, slot);
+            assert_eq!(
+                lease.reference.consumer.context_generation,
+                journal.context_generation()
+            );
+            assert!((1..u64::MAX).contains(&lease.reference.consumer.local));
+            assert!((1..journal.next_incarnation).contains(&lease.reference.incarnation));
+            assert!(incarnations.insert(lease.reference.incarnation));
+            assert_eq!(journal.lookup_read(lease.reference), Ok(lease.request));
+            counts[lease.request.allocation.slot] += 1;
+        }
+    }
+    assert_eq!(journal.readers, counts);
+    assert_eq!(journal.retained_read_count(), incarnations.len());
+    assert_eq!(
+        journal.remaining_read_slots() + incarnations.len(),
+        journal.leases.len()
+    );
+}
+
+#[test]
+fn whole_reader_state_survives_base_lifecycle_and_slot_reuse() {
+    let mut journal = Journal::new(7, 4, 8, 8).unwrap();
+    let storage = storage_identity(&journal);
+    let check = |journal: &Journal| {
+        assert_reader_invariant(journal);
+        assert_eq!(storage_identity(journal), storage);
+    };
+    check(&journal);
+    let device = ContextJournalDeviceKeyV1 {
+        context_generation: 7,
+        local: 1,
+    };
+    let entries = [2, 3, 4].map(|local| ContextAllocationEnrollmentV1 {
+        key: ContextAllocationKeyV1 {
+            context_generation: 7,
+            local,
+        },
+        device,
+        byte_extent: 64,
+    });
+    let mut output = [None; 3];
+    journal.enroll_allocations(&entries, &mut output).unwrap();
+    check(&journal);
+    let [a, b, c] = output.map(Option::unwrap);
+    let read = |allocation, offset| ContextAllocationReadV1 {
+        allocation,
+        device,
+        byte_extent: 64,
+        byte_offset: offset,
+        byte_len: 8,
+        attempt_epoch: 0,
+        content_lineage: 0,
+    };
+    let requests = [read(a, 0), read(a, 8), read(c, 0)];
+    let mut leases = [None; 3];
+    journal
+        .acquire_reads(consumer(10), &requests, &mut leases)
+        .unwrap();
+    let leases = leases.map(Option::unwrap);
+    check(&journal);
+    let unused = journal.register_writer(consumer(20)).unwrap();
+    check(&journal);
+    journal.abort_reserved(unused).unwrap();
+    check(&journal);
+    for local in 21..24 {
+        let writer = journal.register_writer(consumer(local)).unwrap();
+        check(&journal);
+        let before = snapshot(&journal);
+        assert_eq!(
+            journal.begin_write(writer, &[member(requests[0])]),
+            Err(Error::AllocationBusy)
+        );
+        assert_eq!(journal.retire_allocations(&[a]), Err(Error::AllocationBusy));
+        assert_eq!(snapshot(&journal), before);
+        check(&journal);
+        let target = ContextAllocationWriteV1 {
+            allocation: b,
+            device,
+            byte_extent: 64,
+        };
+        journal.begin_write(writer, &[target]).unwrap();
+        check(&journal);
+        match local {
+            21 => journal
+                .settle_success(writer, &ContextWriterSuccessEvidenceV1 { writer })
+                .unwrap(),
+            22 => journal
+                .settle_no_effect(writer, &ContextWriterNoEffectEvidenceV1 { writer })
+                .unwrap(),
+            _ => {
+                journal.mark_unknown(writer).unwrap();
+                check(&journal);
+                journal
+                    .dispose_unknown(
+                        writer,
+                        &ContextWriterDisposalEvidenceV1 {
+                            writer,
+                            allocations: &[target],
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+        check(&journal);
+        for (reference, request) in leases.iter().zip(requests) {
+            assert_eq!(journal.lookup_read(*reference), Ok(request));
+        }
+    }
+    let fresh_b = journal
+        .enroll_allocation(
+            ContextAllocationKeyV1 {
+                context_generation: 7,
+                local: 40,
+            },
+            device,
+            64,
+        )
+        .unwrap();
+    assert_eq!(fresh_b.slot, b.slot);
+    assert_eq!(journal.reader_count(fresh_b), Ok(0));
+    check(&journal);
+    release(&mut journal, leases[0]);
+    check(&journal);
+    assert_eq!(journal.reader_count(a), Ok(1));
+    release(&mut journal, leases[1]);
+    check(&journal);
+    let writer = journal.register_writer(consumer(24)).unwrap();
+    check(&journal);
+    journal.begin_write(writer, &[member(requests[0])]).unwrap();
+    check(&journal);
+    journal
+        .settle_success(writer, &ContextWriterSuccessEvidenceV1 { writer })
+        .unwrap();
+    check(&journal);
+    let state = journal.lookup_allocation(a).unwrap();
+    let reference = acquire(
+        &mut journal,
+        consumer(25),
+        ContextAllocationReadV1 {
+            attempt_epoch: state.attempt_epoch,
+            content_lineage: state.content_lineage,
+            ..requests[0]
+        },
+    );
+    check(&journal);
+    assert_eq!(reference.slot, leases[1].slot);
+    assert_ne!(reference.incarnation, leases[1].incarnation);
+    assert_eq!(journal.lookup_read(leases[1]), Err(Error::InvalidReference));
+    release(&mut journal, reference);
+    check(&journal);
+    journal.retire_allocations(&[a]).unwrap();
+    check(&journal);
+    let fresh_a = journal
+        .enroll_allocation(
+            ContextAllocationKeyV1 {
+                context_generation: 7,
+                local: 41,
+            },
+            device,
+            64,
+        )
+        .unwrap();
+    assert_eq!(fresh_a.slot, a.slot);
+    assert_eq!(journal.reader_count(fresh_a), Ok(0));
+    check(&journal);
+    release(&mut journal, leases[2]);
+    check(&journal);
+    journal.retire_allocations(&[c]).unwrap();
+    check(&journal);
+}
+
 fn acquire(
     journal: &mut Journal,
     key: ContextWriterKeyV1,
@@ -519,6 +707,7 @@ fn repeated_multireader_trace_matches_independent_counts_without_storage_growth(
             assert_eq!(free + occupied, 1);
             assert_eq!(journal.leases[slot].is_some(), occupied == 1);
         }
+        assert_reader_invariant(&journal);
         assert_eq!(storage_identity(&journal), storage);
     }
 }

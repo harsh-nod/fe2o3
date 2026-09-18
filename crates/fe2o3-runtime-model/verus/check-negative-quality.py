@@ -19,17 +19,17 @@ EXPECTED_CHECK_NEGATIVE_FUNCTION_SHA256 = (
 EXPECTED_RUNNER_FUNCTION_SHA256 = {
     "read_pin": "dd0f063d2e13126778cfec4fc6bd9a89af38a0b55ed45491e59eff830a3448aa",
     "check_digest": "1b1af7d88401a6baa244c63b3edd41fd15b07814e02f3d1bfb4b1841c33819e0",
-    "check_sources": "ff5b809d6bc58c65ef30cc6d8df6d6690c843039cfb6dd35749692817a6df56c",
+    "check_sources": "1be2fb174248e023967c80abe9e3443615b9722749c154f6056e16b736a0dc13",
     "run_verus": "a22ae6cb1d34ec0ea6b402ecf96008773cefcc620e511aae7bc3d6e495b5cf66",
     "check_positive": "2f353f8881c8def07ede3a251bb64de9148b92c802eda65b768a64172cd65d92",
     "seal_authority": "3e49725d7555f6816455cac2080aae192a8ad6210f62f5be5d8f19ac395d227a",
 }
-EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1517
+EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1520
 EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENTS_SHA256 = (
-    "e52e723c248708483fcfa2004e1caf3cec035214e2f7cea8aacedfa4b3937220"
+    "0f24c0304397345a0f8a144569c4fac97e0b882b29c8e7a386924745a1440aed"
 )
 EXPECTED_RUNNER_SHA256 = (
-    "02a90595970ccf697a81c8dc2e9033cfb5c07aef571f8919d85e323f2dfebda9"
+    "946d1b44f3c9190732875dc511351b82ab489acf34385f7643393c2ea3300b60"
 )
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
 IDENTIFIER = r"(?:r#)?[A-Za-z_][A-Za-z0-9_]*"
@@ -84,7 +84,8 @@ RUNNER_TOOL_BINDING_BLOCK = (
     'journal_issuance_checker="$script_dir/check-journal-issuance.py"',
     'read_preflight_checker="$script_dir/check-read-preflight.py"',
     'read_commit_checker="$script_dir/check-read-commit.py"',
-    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker read_commit_checker",
+    'read_invariant_checker="$script_dir/check-read-invariant.py"',
+    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker read_commit_checker read_invariant_checker",
 )
 RUNNER_JOURNAL_CAMPAIGN_BLOCK = (
     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$journal_issuance_checker" --self-test "$journal_issuance_proof"',
@@ -107,6 +108,13 @@ RUNNER_READ_COMMIT_CAMPAIGN_BLOCK = (
     '    /usr/bin/python3 -I "$read_commit_checker" \\',
     '    "$read_commit_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/read-commit"',
 )
+RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK = (
+    '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$read_invariant_checker" --self-test "$read_invariant_proof"',
+    '/usr/bin/env -i "HOME=$runner_home" "PATH=$runner_path" \\',
+    '    "RUSTUP_HOME=$runner_rustup_home" "CARGO_HOME=$runner_cargo_home" \\',
+    '    /usr/bin/python3 -I "$read_invariant_checker" \\',
+    '    "$read_invariant_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/read-invariant"',
+)
 RUNNER_NEGATIVE_QUALITY_INVOCATION_BLOCK = (
     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$negative_quality_checker" --self-test \\',
     '    "$negative_quality_reject_fixture" \\',
@@ -118,6 +126,7 @@ RUNNER_SOURCE_CHECKER_INVOCATION = (
     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$source_checker" \\'
 )
 RUNNER_TOOL_DIGEST_LINES = (
+    '    check_digest "$expected_read_invariant_checker" "$read_invariant_checker"',
     '    check_digest "$expected_read_commit_checker" "$read_commit_checker"',
     '    check_digest "$expected_read_preflight_checker" "$read_preflight_checker"',
     '    check_digest "$expected_journal_issuance_checker" "$journal_issuance_checker"',
@@ -129,6 +138,7 @@ RUNNER_TOOL_DIGEST_LINES = (
     '    check_digest "$expected_negative_quality_accept_fixture" "$negative_quality_accept_fixture"',
 )
 RUNNER_TOOL_NAMES = (
+    "read_invariant_checker",
     "read_commit_checker",
     "read_preflight_checker",
     "journal_issuance_checker",
@@ -961,6 +971,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
     journal_start = exact_block_start(lines, RUNNER_JOURNAL_CAMPAIGN_BLOCK, "journal campaign")
     reader_start = exact_block_start(lines, RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK, "reader preflight campaign")
     commit_start = exact_block_start(lines, RUNNER_READ_COMMIT_CAMPAIGN_BLOCK, "reader commit campaign")
+    invariant_start = exact_block_start(lines, RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK, "reader invariant campaign")
     if not environment_start < root_start < tool_start < invocation_start:
         raise QualityError(
             "runner environment, root, tool, and invocation blocks are out of order",
@@ -990,6 +1001,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
     allowed_tool_lines.update(range(journal_start, journal_start + len(RUNNER_JOURNAL_CAMPAIGN_BLOCK)))
     allowed_tool_lines.update(range(reader_start, reader_start + len(RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK)))
     allowed_tool_lines.update(range(commit_start, commit_start + len(RUNNER_READ_COMMIT_CAMPAIGN_BLOCK)))
+    allowed_tool_lines.update(range(invariant_start, invariant_start + len(RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK)))
     for digest_line in RUNNER_TOOL_DIGEST_LINES:
         matches = [index for index, line in enumerate(lines) if line == digest_line]
         if len(matches) != 1:
@@ -1091,6 +1103,10 @@ def audit_runner_root_bindings(runner_source: str) -> None:
             and quality_audits[0] < commit_start < quality_audits[-1] < closure_invocations[-1]):
         raise QualityError("commit campaign must run after reader preflight and before final source/tool checks",
                            code="runner.reader_commit_campaign.order")
+    if not (commit_start < invariant_start < source_checks[-2]
+            and quality_audits[0] < invariant_start < quality_audits[-1] < closure_invocations[-1]):
+        raise QualityError("invariant campaign must run after reader commit and before final source/tool checks",
+                           code="runner.reader_invariant_campaign.order")
     if late_block_starts != sorted(late_block_starts):
         raise QualityError(
             "runner late-authority binding blocks are out of order",
@@ -1523,6 +1539,7 @@ def build_inventory_fixture(root: Path) -> tuple[Path, Path]:
                 *RUNNER_JOURNAL_CAMPAIGN_BLOCK,
                 *RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK,
                 *RUNNER_READ_COMMIT_CAMPAIGN_BLOCK,
+                *RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK,
                 "check_sources",
                 RUNNER_NEGATIVE_QUALITY_AUDIT,
                 "check_sources",
@@ -1597,6 +1614,34 @@ def inventory_self_test() -> None:
         )
 
     cases = [
+        (
+            "missing invariant campaign",
+            lambda _d, r: replace_runner(r, "\n".join(RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK) + "\n", ""),
+        ),
+        (
+            "duplicate invariant campaign",
+            lambda _d, r: r.write_text(r.read_text() + "\n".join(RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK) + "\n"),
+        ),
+        (
+            "changed invariant arguments",
+            lambda _d, r: replace_runner(r, RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK[-1],
+                                        RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK[-1].replace('"$timeout_seconds"', '"300"')),
+        ),
+        (
+            "masked invariant failure",
+            lambda _d, r: replace_runner(r, RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK[-1],
+                                        RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK[-1] + " || true"),
+        ),
+        (
+            "invariant tool rebound",
+            lambda _d, r: r.write_text(r.read_text() + 'read_invariant_checker=/tmp/untrusted\n'),
+        ),
+        (
+            "relocated invariant campaign",
+            lambda _d, r: r.write_text(r.read_text().replace(
+                "\n".join(RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK) + "\n", "")
+                + "\n".join(RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK) + "\n"),
+        ),
         (
             "missing commit campaign",
             lambda _d, r: replace_runner(r, "\n".join(RUNNER_READ_COMMIT_CAMPAIGN_BLOCK) + "\n", ""),
@@ -2222,6 +2267,10 @@ def inventory_self_test() -> None:
             expected_errors[case_label] = code
 
     expect("runner.raw_digest", "complete runner raw-byte substitution")
+    expect("runner.block.reader_invariant_campaign.count", "missing invariant campaign", "duplicate invariant campaign",
+           "changed invariant arguments", "masked invariant failure")
+    expect("runner.tool_wiring.unparsed", "invariant tool rebound")
+    expect("runner.reader_invariant_campaign.order", "relocated invariant campaign")
     expect("runner.block.reader_preflight_campaign.count", "missing reader campaign", "duplicate reader campaign",
            "changed reader arguments", "masked reader failure")
     expect("runner.tool_wiring.unparsed", "reader tool rebound")

@@ -1,0 +1,11 @@
+crates/fe2o3-runtime-model/src/context_read_leases/tests.rs: OK
+crates/fe2o3-runtime-model/verus/context_read_invariant_v1.rs: OK
+crates/fe2o3-runtime-model/verus/check-read-invariant.py: OK
+crates/fe2o3-runtime-model/verus/check-negative-quality.py: OK
+crates/fe2o3-runtime-model/verus/verify-verus.sh: OK
+crates/fe2o3-runtime-model/verus/pins/CONTEXT_READ_INVARIANT_SHA256: OK
+crates/fe2o3-runtime-model/verus/pins/READ_INVARIANT_CHECKER_SHA256: OK
+crates/fe2o3-runtime-model/verus/pins/NEGATIVE_QUALITY_CHECKER_SHA256: OK
+crates/fe2o3-runtime-model/verus/pins/TRANSCRIPT_SHA256: OK
+docs/runtime-context-read-invariant-v1.md: OK
+docs/runtime-a1-a2-swarm-current.md: OK

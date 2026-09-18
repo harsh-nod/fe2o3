@@ -1,0 +1,25 @@
+{
+  "command": [
+    "/usr/bin/timeout",
+    "--foreground",
+    "--signal=TERM",
+    "--kill-after=5",
+    "180",
+    "/home/harsh/.local/opt/verus-0.2026.08.09.92f466f/verus",
+    "--crate-type",
+    "lib",
+    "--triggers-mode",
+    "silent",
+    "--no-cheating",
+    "--output-json",
+    "--error-format=json",
+    "--num-threads",
+    "4",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-v4j4-reader-invariant-2026-09-17/invariant-campaign/watermark_zero/invariant.rs"
+  ],
+  "started_ns": 1789680468365754031,
+  "process_group": 802069,
+  "group_absent": true,
+  "finished_ns": 1789680523207904490,
+  "status": 1
+}

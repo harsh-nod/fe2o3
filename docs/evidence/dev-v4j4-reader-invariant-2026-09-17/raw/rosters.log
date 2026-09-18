@@ -1,0 +1,8 @@
+fe2o3_runtime_model test context_read_leases::tests::whole_reader_state_survives_base_lifecycle_and_slot_reuse ... ok
+  2147 /home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-v4j4-reader-invariant-2026-09-17/gnu.complete-roster
+  2147 /home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-v4j4-reader-invariant-2026-09-17/musl.complete-roster
+     1 /home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-v4j4-reader-invariant-2026-09-17/added-tests.list
+  4295 total
+ecf19209145c725482448968700e47b7078d252d110936a4ba24a31753ec1b11  /home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-v4j4-reader-invariant-2026-09-17/gnu.complete-roster
+ecf19209145c725482448968700e47b7078d252d110936a4ba24a31753ec1b11  /home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-v4j4-reader-invariant-2026-09-17/musl.complete-roster
+60cc13e73c2d4d084ead9c93c5801d4b038929792aefc5021c56f03f65239e3b  /home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-v4j4-reader-invariant-2026-09-17/../dev-v6-generated-read-leases-2026-09-17/roster.awk

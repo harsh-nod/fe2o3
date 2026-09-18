@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+archive=$(cd -- "$(dirname -- "$0")" && pwd)
+root=$(cd -- "$archive/../../.." && pwd)
+verus=${1:?absolute pinned Verus path}
+[[ "$verus" == /* && -x "$verus" ]]
+cd -- "$root"
+record() { bash "$archive/record.sh" "$@"; }
+profile=(env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_TERM_COLOR=never)
+packages=(-p fe2o3-runtime-model -p fe2o3-runtime -p fe2o3-host)
+proof=crates/fe2o3-runtime-model/verus
+record source-base git rev-parse HEAD
+record rustc-version rustc --version --verbose
+record cargo-version cargo --version --verbose
+record source-before sha256sum --check "$archive/source-files.sha256"
+record runner-policy python3 -I "$proof/check-negative-quality.py" --self-test "$proof/tests/fixtures/negative-quality-direct-literal.rs" "$proof/tests/fixtures/negative-quality-adverse-input.rs"
+record runner-inventory python3 -I "$proof/check-negative-quality.py" "$proof/negative" "$proof/verify-verus.sh"
+record invariant-self-test python3 -I "$proof/check-read-invariant.py" --self-test "$proof/context_read_invariant_v1.rs"
+record invariant-campaign prlimit --core=0:0 -- python3 -I "$proof/check-read-invariant.py" "$proof/context_read_invariant_v1.rs" "$verus" 180 "$archive/invariant-campaign"
+record gnu "${profile[@]}" cargo test --locked --offline "${packages[@]}" --all-features --lib -- --test-threads=1
+record musl "${profile[@]}" FE2O3_HIP_SYS_DISABLE=1 cargo test --locked --offline "${packages[@]}" --all-features --lib --target x86_64-unknown-linux-musl -- --test-threads=1
+record rosters bash "$archive/compare-rosters.sh"
+mapfile -t binaries < <(awk '/Running unittests/ { path=$NF; gsub(/[()]/, "", path); print path }' "$archive/raw/gnu.log" "$archive/raw/musl.log")
+[[ ${#binaries[@]} == 6 ]]
+record binaries sha256sum -- "${binaries[@]}"
+record clippy "${profile[@]}" cargo clippy --locked --offline "${packages[@]}" --all-features --all-targets -- -D warnings
+record fmt cargo fmt -p fe2o3-runtime-model -p fe2o3-runtime -p fe2o3-host -- --check
+record python-lint ruff check "$proof/check-read-invariant.py"
+record python-format ruff format --check "$proof/check-read-invariant.py"
+record no-default "${profile[@]}" cargo check --locked --offline "${packages[@]}" --no-default-features
+record unsafe-policy "${profile[@]}" cargo test --locked --offline -p cargo-fe2o3 --test unsafe_source_policy
+record doctests "${profile[@]}" cargo test --locked --offline "${packages[@]}" --all-features --doc
+record global-verus env VERUS="$verus" VERUS_TIMEOUT_SECONDS=180 bash "$proof/verify-verus.sh"
+record source-after sha256sum --check "$archive/source-files.sha256"
+record binaries-after sha256sum --check "$archive/raw/binaries.log"

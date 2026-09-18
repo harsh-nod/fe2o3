@@ -1,0 +1,13 @@
+PASS: reader invariant positive_before
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime-model/verus/check-read-invariant.py", line 365, in <module>
+    main()
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime-model/verus/check-read-invariant.py", line 361, in main
+    campaign(args.source, args.verus, args.timeout, args.output)
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime-model/verus/check-read-invariant.py", line 274, in campaign
+    PREFLIGHT.check_result(
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime-model/verus/check-read-preflight.py", line 172, in check_result
+    require(body <= exit_span["byte_start"] < exit_span["byte_end"] <= end, "exit inside target body")
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime-model/verus/check-read-preflight.py", line 32, in require
+    raise ValueError(message)
+ValueError: exit inside target body

@@ -1,0 +1,9 @@
+{
+  "/tmp/fe2o3-runtime-model-verus.fu4Lve/read-invariant/allocation_identity/invariant.rs": "1a41aabeddf17a84ab74cfac4f5ab95d0dfc3f9d195c9a4283e1acde32131294",
+  "/tmp/fe2o3-runtime-model-verus.fu4Lve/read-invariant/allocation_identity/context_read_commit_v1.rs": "0a8f4fbde07ad650a9b6facbd4d5910fbf6f5058eedf9ff4b4875867db67e2f2",
+  "/tmp/fe2o3-runtime-model-verus.fu4Lve/read-invariant/allocation_identity/context_read_preflight_v1.rs": "acb26a009d0946e22d8fb6027b99a47b922ada6a8200992d8b38699a108f1f15",
+  "/tmp/fe2o3-runtime-model-verus.fu4Lve/read-invariant/allocation_identity/context_version_journal_issuance_v1.rs": "018a295aa951568aa93f2f32318106af341c79e4568dda649ad803c6f4b95792",
+  "/tmp/fe2o3-runtime-model-verus.fu4Lve/read-invariant/allocation_identity/audited-invariant-body.rs": "24a5d51f5686dde73c58fa3c88211479c5c371689229c1f9cbedf58b4294906c",
+  "/tmp/fe2o3-runtime-model-verus.fu4Lve/read-invariant/allocation_identity/audited-commit-body.rs": "98545d8400d4d0debf4f3711e5c381e89faa09690ae1c44c4a07f522ce4201f1",
+  "/tmp/fe2o3-runtime-model-verus.fu4Lve/read-invariant/allocation_identity/audited-preflight-body.rs": "046afc9fb9eaa3268424bfe87717b4e5007e8f63488e86965009269e7f62f493"
+}

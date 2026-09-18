@@ -1,0 +1,1655 @@
+diff --git a/crates/fe2o3-runtime-model/src/context_read_leases/tests.rs b/crates/fe2o3-runtime-model/src/context_read_leases/tests.rs
+index 3e15987b3..8b3572c15 100644
+--- a/crates/fe2o3-runtime-model/src/context_read_leases/tests.rs
++++ b/crates/fe2o3-runtime-model/src/context_read_leases/tests.rs
+@@ -69,6 +69,194 @@ fn storage_identity(journal: &Journal) -> [(usize, usize); 3] {
+     ]
+ }
+ 
++fn assert_reader_invariant(journal: &Journal) {
++    assert!(!journal.leases.is_empty());
++    assert!(journal.leases.len() <= CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1);
++    assert_eq!(journal.readers.len(), journal.allocation_capacity());
++    assert_ne!(journal.next_incarnation, 0);
++    let mut free = alloc::vec![false; journal.leases.len()];
++    for &slot in &journal.free_reads {
++        assert!(slot < free.len());
++        assert!(!free[slot], "duplicate free slot");
++        free[slot] = true;
++    }
++    let mut counts = alloc::vec![0; journal.readers.len()];
++    let mut incarnations = alloc::collections::BTreeSet::new();
++    for (slot, lease) in journal.leases.iter().enumerate() {
++        assert_eq!(lease.is_none(), free[slot]);
++        if let Some(lease) = lease {
++            assert_eq!(lease.reference.slot, slot);
++            assert_eq!(
++                lease.reference.consumer.context_generation,
++                journal.context_generation()
++            );
++            assert!((1..u64::MAX).contains(&lease.reference.consumer.local));
++            assert!((1..journal.next_incarnation).contains(&lease.reference.incarnation));
++            assert!(incarnations.insert(lease.reference.incarnation));
++            assert_eq!(journal.lookup_read(lease.reference), Ok(lease.request));
++            counts[lease.request.allocation.slot] += 1;
++        }
++    }
++    assert_eq!(journal.readers, counts);
++    assert_eq!(journal.retained_read_count(), incarnations.len());
++    assert_eq!(
++        journal.remaining_read_slots() + incarnations.len(),
++        journal.leases.len()
++    );
++}
++
++#[test]
++fn whole_reader_state_survives_base_lifecycle_and_slot_reuse() {
++    let mut journal = Journal::new(7, 4, 8, 8).unwrap();
++    let storage = storage_identity(&journal);
++    let check = |journal: &Journal| {
++        assert_reader_invariant(journal);
++        assert_eq!(storage_identity(journal), storage);
++    };
++    check(&journal);
++    let device = ContextJournalDeviceKeyV1 {
++        context_generation: 7,
++        local: 1,
++    };
++    let entries = [2, 3, 4].map(|local| ContextAllocationEnrollmentV1 {
++        key: ContextAllocationKeyV1 {
++            context_generation: 7,
++            local,
++        },
++        device,
++        byte_extent: 64,
++    });
++    let mut output = [None; 3];
++    journal.enroll_allocations(&entries, &mut output).unwrap();
++    check(&journal);
++    let [a, b, c] = output.map(Option::unwrap);
++    let read = |allocation, offset| ContextAllocationReadV1 {
++        allocation,
++        device,
++        byte_extent: 64,
++        byte_offset: offset,
++        byte_len: 8,
++        attempt_epoch: 0,
++        content_lineage: 0,
++    };
++    let requests = [read(a, 0), read(a, 8), read(c, 0)];
++    let mut leases = [None; 3];
++    journal
++        .acquire_reads(consumer(10), &requests, &mut leases)
++        .unwrap();
++    let leases = leases.map(Option::unwrap);
++    check(&journal);
++    let unused = journal.register_writer(consumer(20)).unwrap();
++    check(&journal);
++    journal.abort_reserved(unused).unwrap();
++    check(&journal);
++    for local in 21..24 {
++        let writer = journal.register_writer(consumer(local)).unwrap();
++        check(&journal);
++        let before = snapshot(&journal);
++        assert_eq!(
++            journal.begin_write(writer, &[member(requests[0])]),
++            Err(Error::AllocationBusy)
++        );
++        assert_eq!(journal.retire_allocations(&[a]), Err(Error::AllocationBusy));
++        assert_eq!(snapshot(&journal), before);
++        check(&journal);
++        let target = ContextAllocationWriteV1 {
++            allocation: b,
++            device,
++            byte_extent: 64,
++        };
++        journal.begin_write(writer, &[target]).unwrap();
++        check(&journal);
++        match local {
++            21 => journal
++                .settle_success(writer, &ContextWriterSuccessEvidenceV1 { writer })
++                .unwrap(),
++            22 => journal
++                .settle_no_effect(writer, &ContextWriterNoEffectEvidenceV1 { writer })
++                .unwrap(),
++            _ => {
++                journal.mark_unknown(writer).unwrap();
++                check(&journal);
++                journal
++                    .dispose_unknown(
++                        writer,
++                        &ContextWriterDisposalEvidenceV1 {
++                            writer,
++                            allocations: &[target],
++                        },
++                    )
++                    .unwrap();
++            }
++        }
++        check(&journal);
++        for (reference, request) in leases.iter().zip(requests) {
++            assert_eq!(journal.lookup_read(*reference), Ok(request));
++        }
++    }
++    let fresh_b = journal
++        .enroll_allocation(
++            ContextAllocationKeyV1 {
++                context_generation: 7,
++                local: 40,
++            },
++            device,
++            64,
++        )
++        .unwrap();
++    assert_eq!(fresh_b.slot, b.slot);
++    assert_eq!(journal.reader_count(fresh_b), Ok(0));
++    check(&journal);
++    release(&mut journal, leases[0]);
++    check(&journal);
++    assert_eq!(journal.reader_count(a), Ok(1));
++    release(&mut journal, leases[1]);
++    check(&journal);
++    let writer = journal.register_writer(consumer(24)).unwrap();
++    check(&journal);
++    journal.begin_write(writer, &[member(requests[0])]).unwrap();
++    check(&journal);
++    journal
++        .settle_success(writer, &ContextWriterSuccessEvidenceV1 { writer })
++        .unwrap();
++    check(&journal);
++    let state = journal.lookup_allocation(a).unwrap();
++    let reference = acquire(
++        &mut journal,
++        consumer(25),
++        ContextAllocationReadV1 {
++            attempt_epoch: state.attempt_epoch,
++            content_lineage: state.content_lineage,
++            ..requests[0]
++        },
++    );
++    check(&journal);
++    assert_eq!(reference.slot, leases[1].slot);
++    assert_ne!(reference.incarnation, leases[1].incarnation);
++    assert_eq!(journal.lookup_read(leases[1]), Err(Error::InvalidReference));
++    release(&mut journal, reference);
++    check(&journal);
++    journal.retire_allocations(&[a]).unwrap();
++    check(&journal);
++    let fresh_a = journal
++        .enroll_allocation(
++            ContextAllocationKeyV1 {
++                context_generation: 7,
++                local: 41,
++            },
++            device,
++            64,
++        )
++        .unwrap();
++    assert_eq!(fresh_a.slot, a.slot);
++    assert_eq!(journal.reader_count(fresh_a), Ok(0));
++    check(&journal);
++    release(&mut journal, leases[2]);
++    check(&journal);
++    journal.retire_allocations(&[c]).unwrap();
++    check(&journal);
++}
++
+ fn acquire(
+     journal: &mut Journal,
+     key: ContextWriterKeyV1,
+@@ -519,6 +707,7 @@ fn repeated_multireader_trace_matches_independent_counts_without_storage_growth(
+             assert_eq!(free + occupied, 1);
+             assert_eq!(journal.leases[slot].is_some(), occupied == 1);
+         }
++        assert_reader_invariant(&journal);
+         assert_eq!(storage_identity(&journal), storage);
+     }
+ }
+diff --git a/crates/fe2o3-runtime-model/verus/check-negative-quality.py b/crates/fe2o3-runtime-model/verus/check-negative-quality.py
+index ac8335f17..f3b9d9110 100755
+--- a/crates/fe2o3-runtime-model/verus/check-negative-quality.py
++++ b/crates/fe2o3-runtime-model/verus/check-negative-quality.py
+@@ -19,17 +19,17 @@ EXPECTED_CHECK_NEGATIVE_FUNCTION_SHA256 = (
+ EXPECTED_RUNNER_FUNCTION_SHA256 = {
+     "read_pin": "dd0f063d2e13126778cfec4fc6bd9a89af38a0b55ed45491e59eff830a3448aa",
+     "check_digest": "1b1af7d88401a6baa244c63b3edd41fd15b07814e02f3d1bfb4b1841c33819e0",
+-    "check_sources": "ff5b809d6bc58c65ef30cc6d8df6d6690c843039cfb6dd35749692817a6df56c",
++    "check_sources": "1be2fb174248e023967c80abe9e3443615b9722749c154f6056e16b736a0dc13",
+     "run_verus": "a22ae6cb1d34ec0ea6b402ecf96008773cefcc620e511aae7bc3d6e495b5cf66",
+     "check_positive": "2f353f8881c8def07ede3a251bb64de9148b92c802eda65b768a64172cd65d92",
+     "seal_authority": "3e49725d7555f6816455cac2080aae192a8ad6210f62f5be5d8f19ac395d227a",
+ }
+-EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1517
++EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENT_COUNT = 1520
+ EXPECTED_PRESEAL_AUTHORITY_ASSIGNMENTS_SHA256 = (
+-    "e52e723c248708483fcfa2004e1caf3cec035214e2f7cea8aacedfa4b3937220"
++    "0f24c0304397345a0f8a144569c4fac97e0b882b29c8e7a386924745a1440aed"
+ )
+ EXPECTED_RUNNER_SHA256 = (
+-    "02a90595970ccf697a81c8dc2e9033cfb5c07aef571f8919d85e323f2dfebda9"
++    "946d1b44f3c9190732875dc511351b82ab489acf34385f7643393c2ea3300b60"
+ )
+ HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
+ IDENTIFIER = r"(?:r#)?[A-Za-z_][A-Za-z0-9_]*"
+@@ -84,7 +84,8 @@ RUNNER_TOOL_BINDING_BLOCK = (
+     'journal_issuance_checker="$script_dir/check-journal-issuance.py"',
+     'read_preflight_checker="$script_dir/check-read-preflight.py"',
+     'read_commit_checker="$script_dir/check-read-commit.py"',
+-    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker read_commit_checker",
++    'read_invariant_checker="$script_dir/check-read-invariant.py"',
++    "\\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker read_commit_checker read_invariant_checker",
+ )
+ RUNNER_JOURNAL_CAMPAIGN_BLOCK = (
+     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$journal_issuance_checker" --self-test "$journal_issuance_proof"',
+@@ -107,6 +108,13 @@ RUNNER_READ_COMMIT_CAMPAIGN_BLOCK = (
+     '    /usr/bin/python3 -I "$read_commit_checker" \\',
+     '    "$read_commit_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/read-commit"',
+ )
++RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK = (
++    '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$read_invariant_checker" --self-test "$read_invariant_proof"',
++    '/usr/bin/env -i "HOME=$runner_home" "PATH=$runner_path" \\',
++    '    "RUSTUP_HOME=$runner_rustup_home" "CARGO_HOME=$runner_cargo_home" \\',
++    '    /usr/bin/python3 -I "$read_invariant_checker" \\',
++    '    "$read_invariant_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/read-invariant"',
++)
+ RUNNER_NEGATIVE_QUALITY_INVOCATION_BLOCK = (
+     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$negative_quality_checker" --self-test \\',
+     '    "$negative_quality_reject_fixture" \\',
+@@ -118,6 +126,7 @@ RUNNER_SOURCE_CHECKER_INVOCATION = (
+     '/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$source_checker" \\'
+ )
+ RUNNER_TOOL_DIGEST_LINES = (
++    '    check_digest "$expected_read_invariant_checker" "$read_invariant_checker"',
+     '    check_digest "$expected_read_commit_checker" "$read_commit_checker"',
+     '    check_digest "$expected_read_preflight_checker" "$read_preflight_checker"',
+     '    check_digest "$expected_journal_issuance_checker" "$journal_issuance_checker"',
+@@ -129,6 +138,7 @@ RUNNER_TOOL_DIGEST_LINES = (
+     '    check_digest "$expected_negative_quality_accept_fixture" "$negative_quality_accept_fixture"',
+ )
+ RUNNER_TOOL_NAMES = (
++    "read_invariant_checker",
+     "read_commit_checker",
+     "read_preflight_checker",
+     "journal_issuance_checker",
+@@ -961,6 +971,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
+     journal_start = exact_block_start(lines, RUNNER_JOURNAL_CAMPAIGN_BLOCK, "journal campaign")
+     reader_start = exact_block_start(lines, RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK, "reader preflight campaign")
+     commit_start = exact_block_start(lines, RUNNER_READ_COMMIT_CAMPAIGN_BLOCK, "reader commit campaign")
++    invariant_start = exact_block_start(lines, RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK, "reader invariant campaign")
+     if not environment_start < root_start < tool_start < invocation_start:
+         raise QualityError(
+             "runner environment, root, tool, and invocation blocks are out of order",
+@@ -990,6 +1001,7 @@ def audit_runner_root_bindings(runner_source: str) -> None:
+     allowed_tool_lines.update(range(journal_start, journal_start + len(RUNNER_JOURNAL_CAMPAIGN_BLOCK)))
+     allowed_tool_lines.update(range(reader_start, reader_start + len(RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK)))
+     allowed_tool_lines.update(range(commit_start, commit_start + len(RUNNER_READ_COMMIT_CAMPAIGN_BLOCK)))
++    allowed_tool_lines.update(range(invariant_start, invariant_start + len(RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK)))
+     for digest_line in RUNNER_TOOL_DIGEST_LINES:
+         matches = [index for index, line in enumerate(lines) if line == digest_line]
+         if len(matches) != 1:
+@@ -1091,6 +1103,10 @@ def audit_runner_root_bindings(runner_source: str) -> None:
+             and quality_audits[0] < commit_start < quality_audits[-1] < closure_invocations[-1]):
+         raise QualityError("commit campaign must run after reader preflight and before final source/tool checks",
+                            code="runner.reader_commit_campaign.order")
++    if not (commit_start < invariant_start < source_checks[-2]
++            and quality_audits[0] < invariant_start < quality_audits[-1] < closure_invocations[-1]):
++        raise QualityError("invariant campaign must run after reader commit and before final source/tool checks",
++                           code="runner.reader_invariant_campaign.order")
+     if late_block_starts != sorted(late_block_starts):
+         raise QualityError(
+             "runner late-authority binding blocks are out of order",
+@@ -1523,6 +1539,7 @@ def build_inventory_fixture(root: Path) -> tuple[Path, Path]:
+                 *RUNNER_JOURNAL_CAMPAIGN_BLOCK,
+                 *RUNNER_READ_PREFLIGHT_CAMPAIGN_BLOCK,
+                 *RUNNER_READ_COMMIT_CAMPAIGN_BLOCK,
++                *RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK,
+                 "check_sources",
+                 RUNNER_NEGATIVE_QUALITY_AUDIT,
+                 "check_sources",
+@@ -1597,6 +1614,34 @@ def inventory_self_test() -> None:
+         )
+ 
+     cases = [
++        (
++            "missing invariant campaign",
++            lambda _d, r: replace_runner(r, "\n".join(RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK) + "\n", ""),
++        ),
++        (
++            "duplicate invariant campaign",
++            lambda _d, r: r.write_text(r.read_text() + "\n".join(RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK) + "\n"),
++        ),
++        (
++            "changed invariant arguments",
++            lambda _d, r: replace_runner(r, RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK[-1],
++                                        RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK[-1].replace('"$timeout_seconds"', '"300"')),
++        ),
++        (
++            "masked invariant failure",
++            lambda _d, r: replace_runner(r, RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK[-1],
++                                        RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK[-1] + " || true"),
++        ),
++        (
++            "invariant tool rebound",
++            lambda _d, r: r.write_text(r.read_text() + 'read_invariant_checker=/tmp/untrusted\n'),
++        ),
++        (
++            "relocated invariant campaign",
++            lambda _d, r: r.write_text(r.read_text().replace(
++                "\n".join(RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK) + "\n", "")
++                + "\n".join(RUNNER_READ_INVARIANT_CAMPAIGN_BLOCK) + "\n"),
++        ),
+         (
+             "missing commit campaign",
+             lambda _d, r: replace_runner(r, "\n".join(RUNNER_READ_COMMIT_CAMPAIGN_BLOCK) + "\n", ""),
+@@ -2222,6 +2267,10 @@ def inventory_self_test() -> None:
+             expected_errors[case_label] = code
+ 
+     expect("runner.raw_digest", "complete runner raw-byte substitution")
++    expect("runner.block.reader_invariant_campaign.count", "missing invariant campaign", "duplicate invariant campaign",
++           "changed invariant arguments", "masked invariant failure")
++    expect("runner.tool_wiring.unparsed", "invariant tool rebound")
++    expect("runner.reader_invariant_campaign.order", "relocated invariant campaign")
+     expect("runner.block.reader_preflight_campaign.count", "missing reader campaign", "duplicate reader campaign",
+            "changed reader arguments", "masked reader failure")
+     expect("runner.tool_wiring.unparsed", "reader tool rebound")
+diff --git a/crates/fe2o3-runtime-model/verus/check-read-invariant.py b/crates/fe2o3-runtime-model/verus/check-read-invariant.py
+new file mode 100644
+index 000000000..9e71e8cb8
+--- /dev/null
++++ b/crates/fe2o3-runtime-model/verus/check-read-invariant.py
+@@ -0,0 +1,365 @@
++#!/usr/bin/env python3
++"""Authenticate V4-J4 proofs and invariant-sensitivity mutations; no native claim."""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import importlib.util
++import json
++import os
++from pathlib import Path
++import signal
++import sys
++import tempfile
++
++sys.dont_write_bytecode = True
++HERE = Path(__file__).resolve().parent
++ROOT = HERE.parents[2]
++PINS = HERE / "pins"
++BASE_OBLIGATIONS = 155
++INHERITED_COUNT = 127
++POSITIVE_COUNT = BASE_OBLIGATIONS + 1
++DEPENDENCIES = {
++    "context_read_commit_v1.rs": "CONTEXT_READ_COMMIT_SHA256",
++    "context_read_preflight_v1.rs": "CONTEXT_READ_PREFLIGHT_SHA256",
++    "context_version_journal_issuance_v1.rs": "CONTEXT_VERSION_JOURNAL_ISSUANCE_SHA256",
++}
++PREFIX = "// V4-J4 development: reader arena preservation; native refinement remains separate.\n"
++INCLUDE = 'include!("context_read_commit_v1.rs");\n'
++SUBJECT = """
++verus! {
++pub open spec fn reader_mutation_prestate_v1(contents: ReadContentsV1) -> bool { reader_invariant_v1(contents) }
++pub fn reader_invariant_subject_v1(contents: &mut ReadContentsV1)
++    requires reader_mutation_prestate_v1(*old(contents)),
++    ensures reader_invariant_v1(*final(contents)),
++{
++    let _watermark = contents.next_incarnation;
++}
++}
++"""
++
++
++def require(condition, message):
++    if not condition:
++        raise ValueError(message)
++
++
++def digest(data: bytes) -> str:
++    return hashlib.sha256(data).hexdigest()
++
++
++def check_pin(path: Path, pin: Path) -> None:
++    expected = pin.read_text().strip()
++    require(
++        len(expected) == 64 and digest(path.read_bytes()) == expected,
++        f"source pin: {path.name}",
++    )
++
++
++def pinned_module(name: str, path: Path, pin: Path):
++    verified = path.read_bytes()
++    require(
++        digest(verified) == pin.read_text().strip(), f"module source pin: {path.name}"
++    )
++    spec = importlib.util.spec_from_file_location(name, path)
++    require(spec is not None and spec.loader is not None, "module loader")
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[name] = module
++    exec(compile(verified, str(path), "exec"), module.__dict__)
++    check_pin(path, pin)
++    return module
++
++
++COMMIT = pinned_module(
++    "invariant_commit_utilities",
++    HERE / "check-read-commit.py",
++    PINS / "READ_COMMIT_CHECKER_SHA256",
++)
++PREFLIGHT, BASE, POLICY = COMMIT.PREFLIGHT, COMMIT.BASE, COMMIT.POLICY
++PREFLIGHT.POSITIVE_COUNT = POSITIVE_COUNT
++
++
++def mutations():
++    anchor = "    let _watermark = contents.next_incarnation;"
++    changes = [
++        ("lost_free_slot", "contents.free_reads.clear();"),
++        (
++            "duplicate_free_slot",
++            "if contents.free_reads.len() > 0 { let slot = contents.free_reads[0]; contents.free_reads.push(slot); }",
++        ),
++        ("reader_count", "contents.readers.set(0, 0);"),
++        ("watermark_zero", "contents.next_incarnation = 0;"),
++        ("watermark_rollback", "contents.next_incarnation = 1;"),
++    ]
++    for name, assignment in [
++        ("physical_slot", "entry.reference.slot = contents.leases.len();"),
++        ("consumer_context", "entry.reference.consumer.context_generation = 0;"),
++        ("consumer_identity", "entry.reference.consumer.local = 0;"),
++        ("zero_incarnation", "entry.reference.incarnation = 0;"),
++        ("allocation_identity", "entry.request.allocation.key.context_generation = 0;"),
++        ("device_identity", "entry.request.device.local = 0;"),
++        ("empty_range", "entry.request.byte_len = 0;"),
++        ("range_overflow", "entry.request.byte_offset = u64::MAX;"),
++        ("request_version", "entry.request.attempt_epoch = u64::MAX;"),
++    ]:
++        changes.append(
++            (
++                name,
++                "if let Some(mut entry) = contents.leases[0] { "
++                + assignment
++                + " contents.leases.set(0, Some(entry)); }",
++            )
++        )
++    changes.extend(
++        [
++            (
++                "duplicate_incarnation",
++                "if contents.leases.len() > 1 { if let (Some(first), Some(mut second)) = (contents.leases[0], contents.leases[1]) { second.reference.incarnation = first.reference.incarnation; contents.leases.set(1, Some(second)); } }",
++            ),
++            ("live_allocation_removed", "contents.journal.allocations.set(0, None);"),
++        ]
++    )
++    return [
++        BASE.Mutation(
++            name,
++            "reader_invariant_subject_v1",
++            anchor,
++            "    " + body,
++            "reader_invariant_v1",
++            POSITIVE_COUNT - 1,
++        )
++        for name, body in changes
++    ]
++
++
++def audit_source(source: str, output: Path) -> None:
++    require(source.isascii(), "ASCII proof source")
++    require(
++        source.startswith(PREFIX + INCLUDE) and source.count(INCLUDE) == 1,
++        "exact initial pinned include",
++    )
++    for name, pin in DEPENDENCIES.items():
++        check_pin(output / name, PINS / pin)
++    stripped = output / "audited-invariant-body.rs"
++    stripped.write_text(
++        PREFIX + "\n" + source[len(PREFIX + INCLUDE) :], encoding="ascii"
++    )
++    POLICY.scan(stripped)
++    COMMIT.audit_source(
++        (output / "context_read_commit_v1.rs").read_text(),
++        output / "context_read_preflight_v1.rs",
++        output / "context_version_journal_issuance_v1.rs",
++        output,
++    )
++    for name, pin in DEPENDENCIES.items():
++        check_pin(output / name, PINS / pin)
++
++
++def campaign(source: Path, verus: Path, timeout: int, output: Path):
++    source, verus = source.resolve(strict=True), verus.resolve(strict=True)
++    require(1 <= timeout <= 300, "timeout must be 1 through 300")
++    require(verus.name == "verus", "named Verus executable required")
++    pin_names = {
++        source: "CONTEXT_READ_INVARIANT_SHA256",
++        Path(__file__): "READ_INVARIANT_CHECKER_SHA256",
++        **{HERE / name: pin for name, pin in DEPENDENCIES.items()},
++        Path(COMMIT.__file__): "READ_COMMIT_CHECKER_SHA256",
++        Path(PREFLIGHT.__file__): "READ_PREFLIGHT_CHECKER_SHA256",
++        Path(BASE.__file__): "JOURNAL_ISSUANCE_CHECKER_SHA256",
++        Path(POLICY.__file__): "PROOF_SOURCE_CHECKER_SHA256",
++        verus: "VERUS_SHA256",
++        PINS / "VERUS_CLOSURE_MANIFEST": "VERUS_CLOSURE_MANIFEST_SHA256",
++    }
++    for path, name in pin_names.items():
++        check_pin(path, PINS / name)
++    closure = ROOT / "examples/row_softmax_v1/verify-verus-closure.sh"
++    require(
++        digest(closure.read_bytes())
++        == "c0f5f201dca9ea6b3fa953884cdfaca8ca38413ad2a9de7700b3aaeb3a610d0c",
++        "closure checker pin",
++    )
++    inputs = [
++        *pin_names,
++        *[PINS / name for name in pin_names.values()],
++        closure,
++        verus.parent / "rust_verify",
++        verus.parent / "z3",
++    ]
++    identities = {str(path): digest(path.read_bytes()) for path in inputs}
++    output.mkdir()
++    (output / "inputs.json").write_text(json.dumps(identities, indent=2) + "\n")
++    environment = {"HOME": os.environ.get("HOME", "/nonexistent")}
++    for name, default in [("RUSTUP_HOME", ".rustup"), ("CARGO_HOME", ".cargo")]:
++        environment[name] = os.environ.get(
++            name, str(Path(environment["HOME"]) / default)
++        )
++    environment["PATH"] = environment["CARGO_HOME"] + "/bin:/usr/bin:/bin"
++    environment["VERUS_Z3_PATH"] = str(verus.parent / "z3")
++    original = source.read_text() + SUBJECT
++    dependencies = {name: (HERE / name).read_bytes() for name in DEPENDENCIES}
++    cases = [
++        ("positive_before", None),
++        *[(item.name, item) for item in mutations()],
++        ("positive_after", None),
++    ]
++    for phase in ["before", "after"]:
++        status, _, _ = BASE.run_owned(
++            [
++                "/bin/sh",
++                str(closure),
++                str(verus.parent),
++                str(PINS / "VERUS_CLOSURE_MANIFEST"),
++            ],
++            120,
++            output / f"closure-{phase}",
++            environment,
++        )
++        require(status == 0, "authenticated Verus distribution")
++        if phase == "after":
++            break
++        for name, mutation in cases:
++            out = output / name
++            out.mkdir()
++            candidate = out / "invariant.rs"
++            expected = (
++                BASE.mutate(original, mutation) if mutation else original
++            ).encode("ascii")
++            candidate.write_bytes(expected)
++            for dependency, data in dependencies.items():
++                (out / dependency).write_bytes(data)
++            audit_source(expected.decode("ascii"), out)
++            generated = {
++                str(path): digest(path.read_bytes())
++                for path in [
++                    candidate,
++                    *[out / dependency for dependency in dependencies],
++                    out / "audited-invariant-body.rs",
++                    out / "audited-commit-body.rs",
++                    out / "audited-preflight-body.rs",
++                ]
++            }
++            (out / "sources.json").write_text(json.dumps(generated, indent=2) + "\n")
++            command = [
++                "/usr/bin/timeout",
++                "--foreground",
++                "--signal=TERM",
++                "--kill-after=5",
++                str(timeout),
++                str(verus),
++                "--crate-type",
++                "lib",
++                "--triggers-mode",
++                "silent",
++                "--no-cheating",
++                "--output-json",
++                "--error-format=json",
++                "--num-threads",
++                "4",
++                str(candidate),
++            ]
++            require(
++                {path: digest(Path(path).read_bytes()) for path in generated}
++                == generated,
++                "exact solver inputs before",
++            )
++            status, stdout, stderr = BASE.run_owned(
++                command, timeout + 10, out / "solver", environment
++            )
++            require(
++                {path: digest(Path(path).read_bytes()) for path in generated}
++                == generated,
++                "generated source replacement",
++            )
++            PREFLIGHT.check_result(
++                status, stdout, stderr, expected.decode("ascii"), candidate, mutation
++            )
++            require(
++                {str(path): digest(path.read_bytes()) for path in inputs} == identities,
++                "source/tool replacement",
++            )
++            print(f"PASS: reader invariant {name}", flush=True)
++    require(
++        {str(path): digest(path.read_bytes()) for path in inputs} == identities,
++        "final source/tool identities",
++    )
++    print(
++        f"READ_INVARIANT_OK obligations={BASE_OBLIGATIONS} inherited={INHERITED_COUNT} new={BASE_OBLIGATIONS - INHERITED_COUNT} test_obligations=1 invariant_mutations={len(mutations())}",
++        flush=True,
++    )
++
++
++def self_test(source: str):
++    original = source + SUBJECT
++    for case in mutations():
++        BASE.postcondition_bounds(BASE.mutate(original, case), case)
++    COMMIT.self_test((HERE / "context_read_commit_v1.rs").read_text())
++    rejected = 0
++    with tempfile.TemporaryDirectory(prefix="fe2o3-invariant-audit-") as temporary:
++        output = Path(temporary)
++        for name in DEPENDENCIES:
++            (output / name).write_bytes((HERE / name).read_bytes())
++        audit_source(original, output)
++        for invalid in [
++            original.replace(INCLUDE, 'include!("foreign.rs");\n'),
++            "\n" + original,
++            original + INCLUDE,
++            "/*\n" + original + "\n*/",
++            original + '\ninclude!("foreign.rs");\n',
++            original + "\nmod foreign;\n",
++            original + "\n#[cfg(false)] fn hidden() {}\n",
++            original + "\nverus! { proof fn bypass() { assume(false); } }\n",
++        ]:
++            try:
++                audit_source(invalid, output)
++            except (ValueError, POLICY.ScanError):
++                rejected += 1
++            else:
++                raise ValueError("invariant auditor accepted adverse source")
++        for name in DEPENDENCIES:
++            path = output / name
++            data = path.read_bytes()
++            path.write_bytes(data + b"\n")
++            try:
++                audit_source(original, output)
++            except (ValueError, POLICY.ScanError):
++                rejected += 1
++            else:
++                raise ValueError("recursive dependency substitution accepted")
++            finally:
++                path.write_bytes(data)
++        audit_source(original, output)
++    print(
++        f"PASS: invariant self-test ({len(mutations())} reversible invariant mutations, {rejected} additional adverse sources rejected)"
++    )
++
++
++def main():
++    for signum in BASE.SIGNALS:
++        signal.signal(signum, BASE.interrupted)
++    signal.pthread_sigmask(signal.SIG_UNBLOCK, BASE.SIGNALS)
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--self-test", action="store_true")
++    parser.add_argument("source", type=Path)
++    parser.add_argument("verus", type=Path, nargs="?")
++    parser.add_argument("timeout", type=int, nargs="?")
++    parser.add_argument("output", type=Path, nargs="?")
++    args = parser.parse_args()
++    if args.self_test:
++        require(
++            args.verus is None and args.timeout is None and args.output is None,
++            "self-test arguments",
++        )
++        self_test(args.source.read_text())
++    else:
++        require(
++            args.verus is not None
++            and args.timeout is not None
++            and args.output is not None,
++            "campaign arguments",
++        )
++        campaign(args.source, args.verus, args.timeout, args.output)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/crates/fe2o3-runtime-model/verus/context_read_invariant_v1.rs b/crates/fe2o3-runtime-model/verus/context_read_invariant_v1.rs
+new file mode 100644
+index 000000000..09ee8a3ee
+--- /dev/null
++++ b/crates/fe2o3-runtime-model/verus/context_read_invariant_v1.rs
+@@ -0,0 +1,701 @@
++// V4-J4 development: reader arena preservation; native refinement remains separate.
++include!("context_read_commit_v1.rs");
++
++verus! {
++
++pub open spec fn lease_weight_v1(entry: Option<ReadLeaseV1>, allocation: usize) -> nat {
++    if entry.is_some() && entry.unwrap().request.allocation.slot == allocation { 1 } else { 0 }
++}
++
++pub open spec fn lease_count_v1(leases: Seq<Option<ReadLeaseV1>>, allocation: usize) -> nat
++    decreases leases.len(),
++{
++    if leases.len() == 0 { 0 }
++    else { lease_count_v1(leases.drop_last(), allocation) + lease_weight_v1(leases.last(), allocation) }
++}
++
++pub proof fn lease_count_bound_v1(leases: Seq<Option<ReadLeaseV1>>, allocation: usize)
++    ensures lease_count_v1(leases, allocation) <= leases.len(),
++    decreases leases.len(),
++{
++    if leases.len() > 0 { lease_count_bound_v1(leases.drop_last(), allocation); }
++}
++
++pub proof fn lease_count_update_v1(
++    leases: Seq<Option<ReadLeaseV1>>, slot: int, entry: Option<ReadLeaseV1>, allocation: usize,
++)
++    requires 0 <= slot < leases.len(),
++    ensures lease_count_v1(leases.update(slot, entry), allocation) + lease_weight_v1(leases[slot], allocation)
++        == lease_count_v1(leases, allocation) + lease_weight_v1(entry, allocation),
++    decreases leases.len(),
++{
++    if slot < leases.len() - 1 {
++        assert(leases.update(slot, entry).drop_last() =~= leases.drop_last().update(slot, entry));
++        lease_count_update_v1(leases.drop_last(), slot, entry, allocation);
++    } else {
++        assert(leases.update(slot, entry).drop_last() =~= leases.drop_last());
++    }
++}
++
++pub proof fn lease_count_zero_v1(leases: Seq<Option<ReadLeaseV1>>, allocation: usize)
++    ensures (lease_count_v1(leases, allocation) == 0) <==>
++        (forall|s: int| 0 <= s < leases.len() ==> lease_weight_v1(#[trigger] leases[s], allocation) == 0),
++    decreases leases.len(),
++{
++    if leases.len() > 0 {
++        lease_count_zero_v1(leases.drop_last(), allocation);
++        if lease_count_v1(leases, allocation) == 0 {
++            assert forall|s: int| 0 <= s < leases.len() implies lease_weight_v1(#[trigger] leases[s], allocation) == 0 by {
++                if s < leases.len() - 1 { assert(leases.drop_last()[s] == leases[s]); }
++            }
++        } else if forall|s: int| 0 <= s < leases.len() ==> lease_weight_v1(#[trigger] leases[s], allocation) == 0 {
++            assert forall|s: int| 0 <= s < leases.drop_last().len() implies
++                lease_weight_v1(#[trigger] leases.drop_last()[s], allocation) == 0 by {
++                assert(leases[s] == leases.drop_last()[s]);
++            }
++            assert(lease_weight_v1(leases[leases.len() - 1], allocation) == 0);
++        }
++    }
++}
++
++pub open spec fn reader_arena_v1(
++    journal: JournalContentsV1, leases: Seq<Option<ReadLeaseV1>>, free: Seq<usize>, readers: Seq<usize>, next: u64,
++) -> bool {
++    &&& 0 < leases.len() <= 1_048_576
++    &&& readers.len() == journal.allocations@.len()
++    &&& 0 < readers.len() <= 1_048_576
++    &&& 0 < next
++    &&& free.len() <= leases.len()
++    &&& free.no_duplicates()
++    &&& forall|i: int| 0 <= i < free.len() ==> free[i] < leases.len() && leases[free[i] as int].is_none()
++    &&& forall|s: int| 0 <= s < leases.len() ==> leases[s].is_none() == free.contains(s as usize)
++    &&& forall|a: int| 0 <= a < readers.len() ==> readers[a] == lease_count_v1(leases, a as usize)
++    &&& forall|s: int| 0 <= s < leases.len() && (#[trigger] leases[s]).is_some() ==> {
++        let entry = leases[s].unwrap();
++        &&& entry.reference.slot == s
++        &&& entry.reference.consumer.context_generation == journal.context_generation
++        &&& issuable_id_v1(entry.reference.consumer.local)
++        &&& 0 < entry.reference.incarnation < next
++        &&& entry.request.allocation.slot < readers.len()
++        &&& read_decision_v1(journal, entry.request) == Ok(())
++    }
++    &&& forall|s: int, t: int| 0 <= s < t < leases.len()
++        && (#[trigger] leases[s]).is_some() && (#[trigger] leases[t]).is_some()
++        ==> leases[s].unwrap().reference.incarnation != leases[t].unwrap().reference.incarnation
++}
++
++pub open spec fn reader_invariant_v1(contents: ReadContentsV1) -> bool {
++    reader_arena_v1(contents.journal, contents.leases@, contents.free_reads@, contents.readers@, contents.next_incarnation)
++}
++
++pub proof fn reader_constructor_invariant_v1(
++    context: u64, allocations: usize, writers: usize, reads: usize, contents: ReadContentsV1,
++)
++    requires reader_constructor_relation_v1(context, allocations, writers, reads, Ok(contents)),
++    ensures reader_invariant_v1(contents),
++{
++    let free = contents.free_reads@;
++    assert forall|s: int| 0 <= s < contents.leases@.len() implies #[trigger] free.contains(s as usize) by {
++        assert(free[reads - 1 - s] == s);
++    }
++    assert forall|a: int| 0 <= a < contents.readers@.len() implies
++        contents.readers@[a] == lease_count_v1(contents.leases@, a as usize) by {
++        lease_count_zero_v1(contents.leases@, a as usize);
++    }
++}
++
++pub proof fn reader_selected_unique_v1(contents: ReadContentsV1, count: nat)
++    requires reader_invariant_v1(contents), count <= contents.free_reads@.len(),
++    ensures selected_free_unique_v1(contents, count),
++{}
++
++// Sequence algebra uses a prefix watermark; the executable loop advances its
++// actual watermark once, after installing the complete batch.
++pub proof fn arena_insert_v1(
++    journal: JournalContentsV1, leases: Seq<Option<ReadLeaseV1>>, free: Seq<usize>, readers: Seq<usize>, next: u64,
++    entry: ReadLeaseV1,
++)
++    requires reader_arena_v1(journal, leases, free, readers, next), free.len() > 0,
++        entry.reference.slot == free.last(), entry.reference.incarnation == next, next < u64::MAX,
++        entry.reference.consumer.context_generation == journal.context_generation,
++        issuable_id_v1(entry.reference.consumer.local),
++        entry.request.allocation.slot < readers.len(), read_decision_v1(journal, entry.request) == Ok(()),
++        readers[entry.request.allocation.slot as int] < usize::MAX,
++    ensures reader_arena_v1(journal, leases.update(entry.reference.slot as int, Some(entry)), free.drop_last(),
++        readers.update(entry.request.allocation.slot as int, (readers[entry.request.allocation.slot as int] + 1) as usize),
++        (next + 1) as u64),
++{
++    let slot = entry.reference.slot as int;
++    let after = leases.update(slot, Some(entry));
++    assert(!free.drop_last().contains(slot as usize)) by {
++        if free.drop_last().contains(slot as usize) {
++            let i = choose|i: int| 0 <= i < free.drop_last().len() && free.drop_last()[i] == slot;
++            assert(free[i] == free[free.len() - 1]);
++        }
++    }
++    assert forall|s: int| 0 <= s < after.len() implies after[s].is_none() == free.drop_last().contains(s as usize) by {
++        if s != slot && free.contains(s as usize) {
++            let i = choose|i: int| 0 <= i < free.len() && free[i] == s;
++            assert(i < free.len() - 1);
++            assert(free.drop_last()[i] == s);
++        }
++    }
++    assert forall|a: int| 0 <= a < readers.len() implies
++        readers.update(entry.request.allocation.slot as int, (readers[entry.request.allocation.slot as int] + 1) as usize)[a]
++            == #[trigger] lease_count_v1(after, a as usize) by {
++        lease_count_update_v1(leases, slot, Some(entry), a as usize);
++        assert(readers[a] == lease_count_v1(leases, a as usize));
++    }
++}
++
++pub proof fn arena_remove_v1(
++    journal: JournalContentsV1, leases: Seq<Option<ReadLeaseV1>>, free: Seq<usize>, readers: Seq<usize>, next: u64, slot: usize,
++)
++    requires reader_arena_v1(journal, leases, free, readers, next), slot < leases.len(), leases[slot as int].is_some(),
++        free.len() < leases.len(), readers[leases[slot as int].unwrap().request.allocation.slot as int] > 0,
++    ensures reader_arena_v1(journal, leases.update(slot as int, None), free.push(slot),
++        readers.update(leases[slot as int].unwrap().request.allocation.slot as int,
++            (readers[leases[slot as int].unwrap().request.allocation.slot as int] - 1) as usize), next),
++{
++    let entry = leases[slot as int].unwrap();
++    let after = leases.update(slot as int, None);
++    assert(!free.contains(slot));
++    assert forall|s: int| 0 <= s < after.len() implies after[s].is_none() == free.push(slot).contains(s as usize) by {
++        if s == slot { assert(free.push(slot)[free.len() as int] == s); }
++        else if leases[s].is_none() {
++            assert(free.contains(s as usize));
++            let i = choose|i: int| 0 <= i < free.len() && free[i] == s;
++            assert(free.push(slot)[i] == s);
++        }
++        if free.push(slot).contains(s as usize) && s != slot {
++            let i = choose|i: int| 0 <= i < free.push(slot).len() && free.push(slot)[i] == s;
++            assert(i < free.len());
++            assert(free[i] == s);
++        }
++    }
++    assert forall|a: int| 0 <= a < readers.len() implies
++        readers.update(entry.request.allocation.slot as int, (readers[entry.request.allocation.slot as int] - 1) as usize)[a]
++            == #[trigger] lease_count_v1(after, a as usize) by {
++        lease_count_update_v1(leases, slot as int, None, a as usize);
++        assert(readers[a] == lease_count_v1(leases, a as usize));
++    }
++}
++
++pub open spec fn acquired_readers_v1(before: ReadContentsV1, requests: Seq<AllocationReadV1>, count: nat) -> Seq<usize> {
++    Seq::new(before.readers@.len(), |a: int|
++        (before.readers@[a] + read_slot_count_v1(requests.take(count as int), a as usize)) as usize)
++}
++
++pub proof fn acquire_arena_prefix_v1(before: ReadContentsV1, consumer: WriterKeyV1, requests: Seq<AllocationReadV1>, count: nat)
++    requires reader_invariant_v1(before), acquire_commit_ready_v1(before, requests), count <= requests.len(),
++        consumer.context_generation == before.journal.context_generation, issuable_id_v1(consumer.local),
++        forall|i: int| 0 <= i < requests.len() ==> read_decision_v1(before.journal, #[trigger] requests[i]) == Ok(()),
++    ensures reader_arena_v1(before.journal, acquired_leases_v1(before, consumer, requests, count),
++        before.free_reads@.take(before.free_reads@.len() - count), acquired_readers_v1(before, requests, count),
++        (before.next_incarnation + count) as u64),
++    decreases count,
++{
++    if count == 0 {
++        assert(requests.take(0) =~= Seq::<AllocationReadV1>::empty());
++        assert(acquired_readers_v1(before, requests, 0) =~= before.readers@);
++        assert(before.free_reads@.take(before.free_reads@.len() as int) =~= before.free_reads@);
++    } else {
++        let n = (count - 1) as nat;
++        acquire_arena_prefix_v1(before, consumer, requests, n);
++        let reference = acquired_reference_v1(before, consumer, n as int);
++        let entry = ReadLeaseV1 { reference, request: requests[n as int] };
++        let leases = acquired_leases_v1(before, consumer, requests, n);
++        let free = before.free_reads@.take(before.free_reads@.len() - n);
++        let readers = acquired_readers_v1(before, requests, n);
++        assert(requests.take(count as int) =~= requests.take(n as int).push(requests[n as int]));
++        read_slot_count_push_v1(requests.take(n as int), entry.request, entry.request.allocation.slot);
++        arena_insert_v1(before.journal, leases, free, readers, (before.next_incarnation + n) as u64, entry);
++        assert(free.drop_last() =~= before.free_reads@.take(before.free_reads@.len() - count));
++        assert(acquired_readers_v1(before, requests, count) =~=
++            readers.update(entry.request.allocation.slot as int, (readers[entry.request.allocation.slot as int] + 1) as usize)) by {
++            assert forall|a: int| 0 <= a < readers.len() implies #[trigger] acquired_readers_v1(before, requests, count)[a]
++                == readers.update(entry.request.allocation.slot as int, (readers[entry.request.allocation.slot as int] + 1) as usize)[a] by {
++                read_slot_count_push_v1(requests.take(n as int), entry.request, a as usize);
++            }
++        }
++    }
++}
++
++pub open spec fn released_readers_v1(before: ReadContentsV1, references: Seq<ReadReferenceV1>, count: nat) -> Seq<usize> {
++    Seq::new(before.readers@.len(), |a: int|
++        (before.readers@[a] - read_slot_count_v1(released_requests_v1(before, references).take(count as int), a as usize)) as usize)
++}
++
++pub proof fn release_arena_prefix_v1(before: ReadContentsV1, references: Seq<ReadReferenceV1>, count: nat)
++    requires reader_invariant_v1(before), release_commit_ready_v1(before, references), count <= references.len(),
++    ensures reader_arena_v1(before.journal, released_leases_v1(before, references, count),
++        before.free_reads@ + Seq::new(count, |i: int| references[i].slot), released_readers_v1(before, references, count),
++        before.next_incarnation),
++    decreases count,
++{
++    if count == 0 {
++        assert(released_requests_v1(before, references).take(0) =~= Seq::<AllocationReadV1>::empty());
++        assert(released_readers_v1(before, references, 0) =~= before.readers@);
++        assert(before.free_reads@ + Seq::new(0, |i: int| references[i].slot) =~= before.free_reads@);
++    } else {
++        let n = (count - 1) as nat;
++        release_arena_prefix_v1(before, references, n);
++        let slot = references[n as int].slot;
++        released_leases_unselected_v1(before, references, n, slot as int);
++        let entry = before.leases@[slot as int].unwrap();
++        let leases = released_leases_v1(before, references, n);
++        let free = before.free_reads@ + Seq::new(n, |i: int| references[i].slot);
++        let readers = released_readers_v1(before, references, n);
++        let requests = released_requests_v1(before, references);
++        assert(requests.take(count as int) =~= requests.take(n as int).push(requests[n as int]));
++        read_slot_count_push_v1(requests.take(n as int), entry.request, entry.request.allocation.slot);
++        arena_remove_v1(before.journal, leases, free, readers, before.next_incarnation, slot);
++        assert(free.push(slot) =~= before.free_reads@ + Seq::new(count, |i: int| references[i].slot));
++        assert(released_readers_v1(before, references, count) =~=
++            readers.update(entry.request.allocation.slot as int, (readers[entry.request.allocation.slot as int] - 1) as usize)) by {
++            assert forall|a: int| 0 <= a < readers.len() implies #[trigger] released_readers_v1(before, references, count)[a]
++                == readers.update(entry.request.allocation.slot as int, (readers[entry.request.allocation.slot as int] - 1) as usize)[a] by {
++                read_slot_count_push_v1(requests.take(n as int), entry.request, a as usize);
++            }
++        }
++    }
++}
++
++pub proof fn acquire_preserves_reader_invariant_v1(
++    before: ReadContentsV1, after: ReadContentsV1, consumer: WriterKeyV1, requests: Seq<AllocationReadV1>,
++    output_before: Seq<Option<ReadReferenceV1>>, output_after: Seq<Option<ReadReferenceV1>>, result: Result<(), ReadErrorV1>,
++)
++    requires reader_invariant_v1(before), requests.len() <= usize::MAX, requests.len() <= u64::MAX,
++        acquire_execution_relation_v1(before, after, consumer, requests, output_before, output_after, result),
++    ensures reader_invariant_v1(after), before.next_incarnation <= after.next_incarnation,
++{
++    if result.is_ok() {
++        if let Ok(value) = result { assert(value =~= ()); }
++        reader_selected_unique_v1(before, requests.len());
++        acquire_preflight_implies_commit_ready_v1(before, consumer, requests, output_before);
++        acquire_arena_prefix_v1(before, consumer, requests, requests.len());
++        assert(requests.take(requests.len() as int) =~= requests);
++        assert(after.readers@ =~= acquired_readers_v1(before, requests, requests.len()));
++    }
++}
++
++pub proof fn release_preserves_reader_invariant_v1(
++    before: ReadContentsV1, after: ReadContentsV1, consumer: WriterKeyV1, references: Seq<ReadReferenceV1>,
++    evidence_consumer: WriterKeyV1, observed_free_capacity: usize, result: Result<(), ReadErrorV1>,
++)
++    requires reader_invariant_v1(before), references.len() <= usize::MAX,
++        release_execution_relation_v1(before, after, consumer, references, evidence_consumer, observed_free_capacity, result),
++    ensures reader_invariant_v1(after), after.next_incarnation == before.next_incarnation,
++{
++    if result.is_ok() {
++        if let Ok(value) = result { assert(value =~= ()); }
++        release_preflight_implies_commit_ready_v1(before, consumer, references, evidence_consumer, observed_free_capacity);
++        release_arena_prefix_v1(before, references, references.len());
++        assert(released_requests_v1(before, references).take(references.len() as int) =~= released_requests_v1(before, references));
++        assert(after.readers@ =~= released_readers_v1(before, references, references.len()));
++    }
++}
++
++pub fn reader_constructor_verified_v1(context: u64, allocations: usize, writers: usize, reads: usize)
++    -> (result: Result<ReadContentsV1, ReadErrorV1>)
++    ensures reader_constructor_relation_v1(context, allocations, writers, reads, result),
++        match result { Ok(contents) => reader_invariant_v1(contents), Err(_) => true },
++{
++    let result = reader_constructor_exec_v1(context, allocations, writers, reads);
++    proof { if let Ok(contents) = &result { reader_constructor_invariant_v1(context, allocations, writers, reads, *contents); } }
++    result
++}
++
++pub fn acquire_verified_v1(contents: &mut ReadContentsV1, consumer: WriterKeyV1,
++    requests: &[AllocationReadV1], output: &mut Vec<Option<ReadReferenceV1>>,
++) -> (result: Result<(), ReadErrorV1>)
++    requires reader_invariant_v1(*old(contents)), requests@.len() <= u64::MAX,
++    ensures reader_invariant_v1(*final(contents)), old(contents).next_incarnation <= final(contents).next_incarnation,
++        acquire_execution_relation_v1(*old(contents), *final(contents), consumer, requests@, old(output)@, final(output)@, result),
++{
++    let ghost before = *contents;
++    let ghost output_before = output@;
++    let _count = requests.len();
++    proof {
++        if acquire_decision_v1(*contents, consumer, requests@, output@) == Ok(()) {
++            reader_selected_unique_v1(*contents, requests@.len());
++        }
++    }
++    let result = acquire_contents_exec_v1(contents, consumer, requests, output);
++    proof { acquire_preserves_reader_invariant_v1(before, *contents, consumer, requests@, output_before, output@, result); }
++    result
++}
++
++pub fn release_verified_v1(contents: &mut ReadContentsV1, consumer: WriterKeyV1,
++    references: &[ReadReferenceV1], evidence_consumer: WriterKeyV1, observed_free_capacity: usize,
++) -> (result: Result<(), ReadErrorV1>)
++    requires reader_invariant_v1(*old(contents)),
++    ensures reader_invariant_v1(*final(contents)), final(contents).next_incarnation == old(contents).next_incarnation,
++        release_execution_relation_v1(*old(contents), *final(contents), consumer, references@, evidence_consumer, observed_free_capacity, result),
++{
++    let ghost before = *contents;
++    let _count = references.len();
++    let result = release_contents_exec_v1(contents, consumer, references, evidence_consumer, observed_free_capacity);
++    proof { release_preserves_reader_invariant_v1(before, *contents, consumer, references@, evidence_consumer, observed_free_capacity, result); }
++    result
++}
++
++pub proof fn reader_count_consequences_v1(contents: ReadContentsV1, allocation: usize)
++    requires reader_invariant_v1(contents), allocation < contents.readers@.len(),
++    ensures contents.readers@[allocation as int] <= contents.leases@.len(),
++        (contents.readers@[allocation as int] == 0) <==>
++            (forall|s: int| 0 <= s < contents.leases@.len() ==> lease_weight_v1(#[trigger] contents.leases@[s], allocation) == 0),
++        contents.readers@[allocation as int] > 0 ==> {
++            &&& contents.journal.allocations@[allocation as int].is_some()
++            &&& contents.journal.allocations@[allocation as int].unwrap().pending_member.is_none()
++        },
++{
++    lease_count_bound_v1(contents.leases@, allocation);
++    lease_count_zero_v1(contents.leases@, allocation);
++    if contents.readers@[allocation as int] > 0 {
++        let s = choose|s: int| 0 <= s < contents.leases@.len()
++            && lease_weight_v1(contents.leases@[s], allocation) != 0;
++        assert(read_decision_v1(contents.journal, contents.leases@[s].unwrap().request) == Ok(()));
++    }
++}
++
++pub proof fn retained_reader_consequences_v1(contents: ReadContentsV1, slot: usize)
++    requires reader_invariant_v1(contents), slot < contents.leases@.len(), contents.leases@[slot as int].is_some(),
++    ensures lease_decision_v1(contents, contents.leases@[slot as int].unwrap().reference)
++            == Ok(contents.leases@[slot as int].unwrap().request),
++        unread_scan_v1(contents, seq![contents.leases@[slot as int].unwrap().request.allocation], 0)
++            == Err(ReadErrorV1::AllocationBusy),
++{
++    let entry = contents.leases@[slot as int].unwrap();
++    reader_count_consequences_v1(contents, entry.request.allocation.slot);
++    assert(lease_weight_v1(contents.leases@[slot as int], entry.request.allocation.slot) == 1);
++}
++
++// A field-level premise for future base transitions, not their refinement proof.
++pub proof fn reader_allocation_frame_preserves_v1(before: ReadContentsV1, after: ReadContentsV1)
++    requires reader_invariant_v1(before),
++        after.journal.context_generation == before.journal.context_generation,
++        after.journal.allocations@.len() == before.journal.allocations@.len(),
++        after.leases@ == before.leases@, after.free_reads@ == before.free_reads@,
++        after.readers@ == before.readers@, after.next_incarnation == before.next_incarnation,
++        forall|a: int| 0 <= a < before.readers@.len() && before.readers@[a] > 0
++            ==> after.journal.allocations@[a] == before.journal.allocations@[a],
++    ensures reader_invariant_v1(after),
++{
++    assert forall|s: int| 0 <= s < after.leases@.len() && (#[trigger] after.leases@[s]).is_some() implies {
++        let entry = after.leases@[s].unwrap();
++        &&& entry.reference.slot == s
++        &&& entry.reference.consumer.context_generation == after.journal.context_generation
++        &&& issuable_id_v1(entry.reference.consumer.local)
++        &&& 0 < entry.reference.incarnation < after.next_incarnation
++        &&& entry.request.allocation.slot < after.readers@.len()
++        &&& read_decision_v1(after.journal, entry.request) == Ok(())
++    } by {
++        let entry = before.leases@[s].unwrap();
++        let a = entry.request.allocation.slot;
++        reader_count_consequences_v1(before, a);
++        assert(lease_weight_v1(before.leases@[s], a) == 1);
++        assert(before.readers@[a as int] > 0);
++        assert(before.journal.allocations@[a as int].unwrap().pending_member.is_none());
++    }
++}
++
++pub open spec fn reader_storage_frame_v1(before: ReadContentsV1, after: ReadContentsV1) -> bool {
++    &&& after.leases@ == before.leases@
++    &&& after.free_reads@ == before.free_reads@
++    &&& after.readers@ == before.readers@
++    &&& after.next_incarnation == before.next_incarnation
++}
++
++pub fn register_reader_journal_v1(contents: &mut ReadContentsV1, key: WriterKeyV1)
++    -> (result: Result<WriterReferenceV1, JournalErrorV1>)
++    requires reader_invariant_v1(*old(contents)),
++    ensures reader_invariant_v1(*final(contents)), reader_storage_frame_v1(*old(contents), *final(contents)),
++        issuance_contents_frame_v1(old(contents).journal, final(contents).journal),
++        register_execution_relation_v1(old(contents).journal.context_generation, old(contents).journal.writer_capacity, key,
++            old(contents).journal.writers@, old(contents).journal.free@, old(contents).journal.registration_watermark,
++            old(contents).journal.reserved_count, final(contents).journal.writers@, final(contents).journal.free@,
++            final(contents).journal.registration_watermark, final(contents).journal.reserved_count, result),
++{
++    let ghost before = *contents;
++    let result = register_contents_exec_v1(&mut contents.journal, key);
++    proof { reader_allocation_frame_preserves_v1(before, *contents); }
++    result
++}
++
++pub fn abort_reader_journal_v1(contents: &mut ReadContentsV1, observed_free_capacity: usize, reference: WriterReferenceV1)
++    -> (result: Result<(), JournalErrorV1>)
++    requires reader_invariant_v1(*old(contents)),
++    ensures reader_invariant_v1(*final(contents)), reader_storage_frame_v1(*old(contents), *final(contents)),
++        issuance_contents_frame_v1(old(contents).journal, final(contents).journal),
++        abort_execution_relation_v1(old(contents).journal.context_generation, old(contents).journal.writer_capacity,
++            observed_free_capacity, reference, old(contents).journal.writers@, old(contents).journal.free@,
++            old(contents).journal.registration_watermark, old(contents).journal.reserved_count,
++            final(contents).journal.writers@, final(contents).journal.free@, final(contents).journal.registration_watermark,
++            final(contents).journal.reserved_count, result),
++{
++    let ghost before = *contents;
++    let result = abort_contents_exec_v1(&mut contents.journal, observed_free_capacity, reference);
++    proof { reader_allocation_frame_preserves_v1(before, *contents); }
++    result
++}
++
++pub open spec fn reader_epoch_step_v1(before: u64, after: u64, minted: Seq<ReadReferenceV1>) -> bool {
++    &&& 0 < before
++    &&& after == before + minted.len()
++    &&& forall|i: int| 0 <= i < minted.len() ==> (#[trigger] minted[i]).incarnation == before + i
++}
++
++pub proof fn acquire_epoch_projection_v1(before: ReadContentsV1, after: ReadContentsV1, consumer: WriterKeyV1,
++    requests: Seq<AllocationReadV1>, output_before: Seq<Option<ReadReferenceV1>>, output_after: Seq<Option<ReadReferenceV1>>,
++    result: Result<(), ReadErrorV1>,
++)
++    requires reader_invariant_v1(before), requests.len() <= usize::MAX, requests.len() <= u64::MAX,
++        acquire_execution_relation_v1(before, after, consumer, requests, output_before, output_after, result),
++    ensures reader_epoch_step_v1(before.next_incarnation, after.next_incarnation,
++        if result.is_ok() { Seq::new(output_after.len(), |i: int| output_after[i].unwrap()) } else { Seq::empty() }),
++{
++    if result.is_ok() {
++        if let Ok(value) = result { assert(value =~= ()); }
++        reader_selected_unique_v1(before, requests.len());
++        acquire_preflight_implies_commit_ready_v1(before, consumer, requests, output_before);
++    }
++}
++
++pub open spec fn reader_epoch_trace_v1(frontiers: Seq<u64>, minted: Seq<Seq<ReadReferenceV1>>) -> bool {
++    &&& frontiers.len() == minted.len() + 1
++    &&& frontiers[0] == 1
++    &&& forall|i: int| 0 <= i < minted.len() ==> reader_epoch_step_v1(frontiers[i], frontiers[i + 1], #[trigger] minted[i])
++}
++
++pub proof fn reader_epoch_monotone_v1(frontiers: Seq<u64>, minted: Seq<Seq<ReadReferenceV1>>, first: nat, last: nat)
++    requires reader_epoch_trace_v1(frontiers, minted), first <= last <= minted.len(),
++    ensures frontiers[first as int] <= frontiers[last as int],
++    decreases last - first,
++{
++    if first < last {
++        reader_epoch_monotone_v1(frontiers, minted, first, (last - 1) as nat);
++        assert(reader_epoch_step_v1(frontiers[last - 1], frontiers[last as int], minted[last - 1]));
++    }
++}
++
++// This is a trace theorem: releases and journal-only steps append empty mint
++// rosters; acquisition appends exactly its successful output roster.
++pub proof fn reader_history_never_reissues_v1(frontiers: Seq<u64>, minted: Seq<Seq<ReadReferenceV1>>,
++    first: nat, first_index: nat, last: nat, last_index: nat,
++)
++    requires reader_epoch_trace_v1(frontiers, minted), first < last < minted.len(),
++        first_index < minted[first as int].len(), last_index < minted[last as int].len(),
++    ensures 0 < minted[first as int][first_index as int].incarnation
++        < minted[last as int][last_index as int].incarnation,
++{
++    reader_epoch_monotone_v1(frontiers, minted, first + 1, last);
++}
++
++pub enum ReaderStepV1 {
++    Acquire { consumer: WriterKeyV1, requests: Seq<AllocationReadV1>, output_before: Seq<Option<ReadReferenceV1>>,
++        output_after: Seq<Option<ReadReferenceV1>>, result: Result<(), ReadErrorV1> },
++    Release { consumer: WriterKeyV1, references: Seq<ReadReferenceV1>, evidence_consumer: WriterKeyV1,
++        observed_free_capacity: usize, result: Result<(), ReadErrorV1> },
++    Register { key: WriterKeyV1, register_result: Result<WriterReferenceV1, JournalErrorV1> },
++    Abort { reference: WriterReferenceV1, observed_free_capacity: usize, abort_result: Result<(), JournalErrorV1> },
++}
++
++pub open spec fn reader_step_relation_v1(before: ReadContentsV1, after: ReadContentsV1, step: ReaderStepV1) -> bool {
++    match step {
++        ReaderStepV1::Acquire { consumer, requests, output_before, output_after, result } => {
++            &&& requests.len() <= usize::MAX
++            &&& requests.len() <= u64::MAX
++            &&& acquire_execution_relation_v1(before, after, consumer, requests, output_before, output_after, result)
++        },
++        ReaderStepV1::Release { consumer, references, evidence_consumer, observed_free_capacity, result } => {
++            &&& references.len() <= usize::MAX
++            &&& release_execution_relation_v1(before, after, consumer, references, evidence_consumer, observed_free_capacity, result)
++        },
++        ReaderStepV1::Register { key, register_result } => {
++            &&& reader_storage_frame_v1(before, after)
++            &&& issuance_contents_frame_v1(before.journal, after.journal)
++            &&& register_execution_relation_v1(before.journal.context_generation, before.journal.writer_capacity, key,
++                before.journal.writers@, before.journal.free@, before.journal.registration_watermark, before.journal.reserved_count,
++                after.journal.writers@, after.journal.free@, after.journal.registration_watermark, after.journal.reserved_count, register_result)
++        },
++        ReaderStepV1::Abort { reference, observed_free_capacity, abort_result } => {
++            &&& reader_storage_frame_v1(before, after)
++            &&& issuance_contents_frame_v1(before.journal, after.journal)
++            &&& abort_execution_relation_v1(before.journal.context_generation, before.journal.writer_capacity,
++                observed_free_capacity, reference, before.journal.writers@, before.journal.free@,
++                before.journal.registration_watermark, before.journal.reserved_count, after.journal.writers@,
++                after.journal.free@, after.journal.registration_watermark, after.journal.reserved_count, abort_result)
++        },
++    }
++}
++
++pub open spec fn reader_step_minted_v1(step: ReaderStepV1) -> Seq<ReadReferenceV1> {
++    match step {
++        ReaderStepV1::Acquire { output_after, result, .. } =>
++            if result.is_ok() { Seq::new(output_after.len(), |i: int| output_after[i].unwrap()) } else { Seq::empty() },
++        _ => Seq::empty(),
++    }
++}
++
++pub proof fn reader_step_preserves_v1(before: ReadContentsV1, after: ReadContentsV1, step: ReaderStepV1)
++    requires reader_invariant_v1(before), reader_step_relation_v1(before, after, step),
++    ensures reader_invariant_v1(after), reader_epoch_step_v1(before.next_incarnation, after.next_incarnation, reader_step_minted_v1(step)),
++{
++    match step {
++        ReaderStepV1::Acquire { consumer, requests, output_before, output_after, result } => {
++            acquire_preserves_reader_invariant_v1(before, after, consumer, requests, output_before, output_after, result);
++            acquire_epoch_projection_v1(before, after, consumer, requests, output_before, output_after, result);
++        },
++        ReaderStepV1::Release { consumer, references, evidence_consumer, observed_free_capacity, result } => {
++            release_preserves_reader_invariant_v1(before, after, consumer, references, evidence_consumer, observed_free_capacity, result);
++        },
++        _ => { reader_allocation_frame_preserves_v1(before, after); },
++    }
++}
++
++pub open spec fn reader_trace_relation_v1(states: Seq<ReadContentsV1>, steps: Seq<ReaderStepV1>) -> bool {
++    &&& states.len() == steps.len() + 1
++    &&& reader_invariant_v1(states[0])
++    &&& states[0].next_incarnation == 1
++    &&& forall|i: int| 0 <= i < steps.len() ==> reader_step_relation_v1(states[i], states[i + 1], #[trigger] steps[i])
++}
++
++pub proof fn reader_trace_prefix_preserves_v1(states: Seq<ReadContentsV1>, steps: Seq<ReaderStepV1>, end: nat)
++    requires reader_trace_relation_v1(states, steps), end <= steps.len(),
++    ensures reader_invariant_v1(states[end as int]),
++    decreases end,
++{
++    if end > 0 {
++        reader_trace_prefix_preserves_v1(states, steps, (end - 1) as nat);
++        reader_step_preserves_v1(states[end - 1], states[end as int], steps[end - 1]);
++    }
++}
++
++pub proof fn reader_trace_projects_epochs_v1(states: Seq<ReadContentsV1>, steps: Seq<ReaderStepV1>)
++    requires reader_trace_relation_v1(states, steps),
++    ensures reader_epoch_trace_v1(Seq::new(states.len(), |i: int| states[i].next_incarnation),
++        Seq::new(steps.len(), |i: int| reader_step_minted_v1(steps[i]))),
++{
++    assert forall|i: int| 0 <= i < steps.len() implies
++        reader_epoch_step_v1(states[i].next_incarnation, states[i + 1].next_incarnation, #[trigger] reader_step_minted_v1(steps[i])) by {
++        reader_trace_prefix_preserves_v1(states, steps, i as nat);
++        reader_step_preserves_v1(states[i], states[i + 1], steps[i]);
++    }
++}
++
++pub proof fn reader_trace_never_reissues_v1(states: Seq<ReadContentsV1>, steps: Seq<ReaderStepV1>,
++    first: nat, first_index: nat, last: nat, last_index: nat,
++)
++    requires reader_trace_relation_v1(states, steps), first <= last < steps.len(),
++        first_index < reader_step_minted_v1(steps[first as int]).len(), last_index < reader_step_minted_v1(steps[last as int]).len(),
++        first == last ==> first_index < last_index,
++    ensures 0 < reader_step_minted_v1(steps[first as int])[first_index as int].incarnation
++        < reader_step_minted_v1(steps[last as int])[last_index as int].incarnation,
++{
++    reader_trace_projects_epochs_v1(states, steps);
++    let frontiers = Seq::new(states.len(), |i: int| states[i].next_incarnation);
++    let minted = Seq::new(steps.len(), |i: int| reader_step_minted_v1(steps[i]));
++    if first < last { reader_history_never_reissues_v1(frontiers, minted, first, first_index, last, last_index); }
++    else { assert(reader_epoch_step_v1(frontiers[first as int], frontiers[(first + 1) as int], minted[first as int])); }
++}
++
++// Fixture enrollment is explicit and is not a production enrollment refinement.
++pub fn reader_nonempty_witness_v1() -> (result: Option<ReadContentsV1>)
++    ensures result.is_some(), reader_invariant_v1(result.unwrap()),
++        result.unwrap().next_incarnation == 4,
++        result.unwrap().readers@ == seq![1usize],
++        result.unwrap().free_reads@ == seq![1usize],
++        result.unwrap().leases@[0].is_some(), result.unwrap().leases@[0].unwrap().reference.incarnation == 3,
++        result.unwrap().leases@[1].is_none(),
++{
++    let mut contents = match reader_constructor_verified_v1(7, 1, 1, 2) { Ok(value) => value, Err(_) => return None };
++    let ghost empty = contents;
++    let key = AllocationKeyV1 { context_generation: 7, local: 1 };
++    let device = DeviceKeyV1 { context_generation: 7, local: 2 };
++    let allocation = AllocationReferenceV1 { slot: 0, key };
++    let _slot = contents.journal.allocation_free.pop();
++    assert(_slot == Some(0));
++    assert(contents.journal.allocation_free@ =~= Seq::<usize>::empty());
++    contents.journal.allocations.set(0, Some(AllocationEntryV1 {
++        key, device, byte_extent: 16, attempt_epoch: 0, content_lineage: 0, pending_member: None,
++    }));
++    proof { reader_allocation_frame_preserves_v1(empty, contents); }
++    let first = WriterKeyV1 { context_generation: 7, local: 11, kind: WriterKindV1::Submission };
++    let second = WriterKeyV1 { context_generation: 7, local: 12, kind: WriterKindV1::Submission };
++    let request = AllocationReadV1 { allocation, device, byte_extent: 16, byte_offset: 0,
++        byte_len: 8, attempt_epoch: 0, content_lineage: 0 };
++    let mut requests = Vec::new();
++    requests.push(request);
++    proof {
++        assert(requests@ =~= Seq::empty().push(request));
++        read_slot_count_push_v1(Seq::empty(), request, 0);
++        assert(read_slot_count_v1(requests@, 0) == 1);
++    }
++    let mut output_a = Vec::new();
++    output_a.push(None);
++    proof {
++        assert(contents.free_reads@ =~= seq![1usize, 0usize]);
++        assert(contents.leases@ =~= seq![None, None]);
++        assert(contents.readers@ =~= seq![0usize]);
++        assert(read_decision_v1(contents.journal, request) == Ok(()));
++        reveal_with_fuel(acquire_scan_v1, 2);
++        assert(acquire_decision_v1(contents, first, requests@, output_a@) == Ok(()));
++    }
++    if acquire_verified_v1(&mut contents, first, requests.as_slice(), &mut output_a).is_err() { return None; }
++    let reference_a = output_a[0].unwrap();
++    assert(reference_a.slot == 0 && reference_a.incarnation == 1);
++    let mut output_b = Vec::new();
++    output_b.push(None);
++    proof {
++        reveal_with_fuel(acquire_scan_v1, 2);
++        assert(contents.readers@[0] == 1);
++        assert(contents.free_reads@ =~= seq![1usize]);
++        assert(acquire_decision_v1(contents, second, requests@, output_b@) == Ok(()));
++    }
++    if acquire_verified_v1(&mut contents, second, requests.as_slice(), &mut output_b).is_err() { return None; }
++    let reference_b = output_b[0].unwrap();
++    assert(reference_b.slot == 1 && reference_b.incarnation == 2);
++    assert(contents.readers@[0] == 2);
++    let mut release = Vec::new();
++    release.push(reference_b);
++    proof {
++        reveal_with_fuel(release_scan_v1, 2);
++        assert(released_requests_v1(contents, release@) =~= requests@);
++        assert(released_requests_v1(contents, release@).take(1) =~= requests@);
++        assert(release_decision_v1(contents, second, release@, second, 2) == Ok(()));
++    }
++    if release_verified_v1(&mut contents, second, release.as_slice(), second, 2).is_err() { return None; }
++    assert(contents.readers@[0] == 1);
++    proof {
++        reveal_with_fuel(acquired_leases_v1, 3);
++        reveal_with_fuel(released_leases_v1, 3);
++        assert(contents.leases@[0] == Some(ReadLeaseV1 { reference: reference_a, request }));
++    }
++    let mut allocations = Vec::new();
++    allocations.push(allocation);
++    let busy = require_unread_exec_v1(&contents, allocations.as_slice());
++    assert(busy == Err(ReadErrorV1::AllocationBusy));
++    release.set(0, reference_a);
++    proof {
++        reveal_with_fuel(release_scan_v1, 2);
++        assert(released_requests_v1(contents, release@) =~= requests@);
++        assert(released_requests_v1(contents, release@).take(1) =~= requests@);
++        assert(release_decision_v1(contents, first, release@, first, 2) == Ok(()));
++    }
++    if release_verified_v1(&mut contents, first, release.as_slice(), first, 2).is_err() { return None; }
++    assert(contents.readers@[0] == 0);
++    assert(contents.free_reads@ == seq![1usize, 0usize]);
++    output_a.set(0, None);
++    proof {
++        reveal_with_fuel(acquire_scan_v1, 2);
++        assert(acquire_decision_v1(contents, first, requests@, output_a@) == Ok(()));
++    }
++    if acquire_verified_v1(&mut contents, first, requests.as_slice(), &mut output_a).is_err() { return None; }
++    assert(output_a@[0].unwrap().slot == reference_a.slot);
++    let stale = lease_lookup_exec_v1(&contents, reference_a);
++    assert(stale == Err(ReadErrorV1::InvalidReference));
++    Some(contents)
++}
++
++}
+diff --git a/crates/fe2o3-runtime-model/verus/pins/CONTEXT_READ_INVARIANT_SHA256 b/crates/fe2o3-runtime-model/verus/pins/CONTEXT_READ_INVARIANT_SHA256
+new file mode 100644
+index 000000000..2dc434461
+--- /dev/null
++++ b/crates/fe2o3-runtime-model/verus/pins/CONTEXT_READ_INVARIANT_SHA256
+@@ -0,0 +1 @@
++e008c765882b7f38d4a7763e58d64674af4ff6d15d41562c2b186f64d300e4a5
+diff --git a/crates/fe2o3-runtime-model/verus/pins/NEGATIVE_QUALITY_CHECKER_SHA256 b/crates/fe2o3-runtime-model/verus/pins/NEGATIVE_QUALITY_CHECKER_SHA256
+index ab159d765..43963221c 100644
+--- a/crates/fe2o3-runtime-model/verus/pins/NEGATIVE_QUALITY_CHECKER_SHA256
++++ b/crates/fe2o3-runtime-model/verus/pins/NEGATIVE_QUALITY_CHECKER_SHA256
+@@ -1 +1 @@
+-6db5d8c929605e05f280ef79ba076833d7c3a7bcd14bc4ed9e2802295c609d3f
++ff5a8ad6d8f3058e00e3f5d118df50f9e8334d1dd0866eb3e69a2ae052fabae3
+diff --git a/crates/fe2o3-runtime-model/verus/pins/READ_INVARIANT_CHECKER_SHA256 b/crates/fe2o3-runtime-model/verus/pins/READ_INVARIANT_CHECKER_SHA256
+new file mode 100644
+index 000000000..909f01b06
+--- /dev/null
++++ b/crates/fe2o3-runtime-model/verus/pins/READ_INVARIANT_CHECKER_SHA256
+@@ -0,0 +1 @@
++530b80e77fda79331cee0e0316ec2c1714f888cb76dd9d8c61711ce2490bbbbb
+diff --git a/crates/fe2o3-runtime-model/verus/pins/TRANSCRIPT_SHA256 b/crates/fe2o3-runtime-model/verus/pins/TRANSCRIPT_SHA256
+index 49ca4a5ab..4c7694d2e 100644
+--- a/crates/fe2o3-runtime-model/verus/pins/TRANSCRIPT_SHA256
++++ b/crates/fe2o3-runtime-model/verus/pins/TRANSCRIPT_SHA256
+@@ -1 +1 @@
+-174ca8101754f58d4a51a9f1b7fabb120fc7d42d2dec616c2e9cfed09baa8826
++0de077445b5d4f7377251ced55b8143e3367372edf2635883a7f9543ec98d3e8
+diff --git a/crates/fe2o3-runtime-model/verus/verify-verus.sh b/crates/fe2o3-runtime-model/verus/verify-verus.sh
+index ae6784527..69e85e4fb 100755
+--- a/crates/fe2o3-runtime-model/verus/verify-verus.sh
++++ b/crates/fe2o3-runtime-model/verus/verify-verus.sh
+@@ -10,6 +10,7 @@ repo_root=$(CDPATH='' cd -- "$script_dir/../../.." && pwd)
+ journal_issuance_proof="$script_dir/context_version_journal_issuance_v1.rs"
+ read_preflight_proof="$script_dir/context_read_preflight_v1.rs"
+ read_commit_proof="$script_dir/context_read_commit_v1.rs"
++read_invariant_proof="$script_dir/context_read_invariant_v1.rs"
+ lifecycle_proof="$script_dir/runtime_lifecycle_v1.rs"
+ identity_proof="$script_dir/device_identity_generation_v1.rs"
+ projection_proof="$script_dir/device_projection_refinement_v1.rs"
+@@ -768,7 +769,8 @@ negative_quality_accept_fixture="$script_dir/tests/fixtures/negative-quality-adv
+ journal_issuance_checker="$script_dir/check-journal-issuance.py"
+ read_preflight_checker="$script_dir/check-read-preflight.py"
+ read_commit_checker="$script_dir/check-read-commit.py"
+-\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker read_commit_checker
++read_invariant_checker="$script_dir/check-read-invariant.py"
++\readonly closure_manifest closure_checker source_checker negative_quality_checker negative_quality_reject_fixture negative_quality_accept_fixture journal_issuance_checker read_preflight_checker read_commit_checker read_invariant_checker
+ verus_bin=${VERUS:-verus}
+ 
+ if [ "$#" -ne 0 ]; then
+@@ -795,6 +797,8 @@ expected_read_preflight=$(read_pin "$pin_dir/CONTEXT_READ_PREFLIGHT_SHA256")
+ expected_read_preflight_checker=$(read_pin "$pin_dir/READ_PREFLIGHT_CHECKER_SHA256")
+ expected_read_commit=$(read_pin "$pin_dir/CONTEXT_READ_COMMIT_SHA256")
+ expected_read_commit_checker=$(read_pin "$pin_dir/READ_COMMIT_CHECKER_SHA256")
++expected_read_invariant=$(read_pin "$pin_dir/CONTEXT_READ_INVARIANT_SHA256")
++expected_read_invariant_checker=$(read_pin "$pin_dir/READ_INVARIANT_CHECKER_SHA256")
+ expected_identity=$(read_pin "$pin_dir/DEVICE_IDENTITY_MODEL_SHA256")
+ expected_projection=$(read_pin "$pin_dir/DEVICE_PROJECTION_REFINEMENT_SHA256")
+ expected_memory=$(read_pin "$pin_dir/MEMORY_LIFECYCLE_SHA256")
+@@ -1581,6 +1585,8 @@ check_digest() {
+ }
+ 
+ check_sources() {
++    check_digest "$expected_read_invariant" "$read_invariant_proof"
++    check_digest "$expected_read_invariant_checker" "$read_invariant_checker"
+     check_digest "$expected_read_commit" "$read_commit_proof"
+     check_digest "$expected_read_commit_checker" "$read_commit_checker"
+     check_digest "$expected_read_preflight" "$read_preflight_proof"
+@@ -3222,6 +3228,13 @@ check_positive "$journal_issuance_proof" 'verification results:: 69 verified, 0
+     /usr/bin/python3 -I "$read_commit_checker" \
+     "$read_commit_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/read-commit"
+ 
++# The invariant checker authenticates the complete unchanged J3/J2/J1 closure.
++/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I "$read_invariant_checker" --self-test "$read_invariant_proof"
++/usr/bin/env -i "HOME=$runner_home" "PATH=$runner_path" \
++    "RUSTUP_HOME=$runner_rustup_home" "CARGO_HOME=$runner_cargo_home" \
++    /usr/bin/python3 -I "$read_invariant_checker" \
++    "$read_invariant_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/read-invariant"
++
+ check_positive "$lifecycle_proof" 'verification results:: 2 verified, 0 errors' lifecycle
+ check_positive "$identity_proof" 'verification results:: 4 verified, 0 errors' identity-generation
+ check_positive "$projection_proof" 'verification results:: 4 verified, 0 errors' device-projection-refinement
+@@ -3981,6 +3994,7 @@ check_digest "$expected_verus" "$verus_path"
+ transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r57_three_binding_compute_obligations=35 r57_three_binding_compute_mutations=23 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 r61_owner_async_custody_obligations=8 r61_owner_async_custody_mutations=8 r62_operation_control_obligations=8 r62_operation_control_mutations=8 r63_graph_reservation_obligations=8 r63_graph_reservation_mutations=8 r64_payload_budget_obligations=8 r64_payload_budget_mutations=8 r65_graph_versions_obligations=8 r65_graph_versions_mutations=8 r66_compute_sdma_coexistence_obligations=16 r66_compute_sdma_coexistence_mutations=8 r67_resource_credits_obligations=14 r67_resource_credits_mutations=8 r68_device_backing_credits_obligations=4 r68_device_backing_credits_mutations=5 r69_host_capture_obligations=4 r69_host_capture_mutations=5 r70_resource_batch_obligations=9 r70_resource_batch_mutations=9 r71_device_pool_obligations=15 r71_device_pool_mutations=10 r72_host_visible_backing_credits_obligations=5 r72_host_visible_backing_credits_mutations=9 r73_generated_result_storage_obligations=7 r73_generated_result_storage_mutations=8 journal_issuance_obligations=69 journal_issuance_executable_mutations=21 expected_negative_files=686'
+ transcript="$transcript reader_preflight_obligations=103 reader_preflight_inherited=69 reader_preflight_new=34 reader_preflight_executable_mutations=21"
+ transcript="$transcript reader_commit_obligations=127 reader_commit_inherited=103 reader_commit_new=24 reader_commit_executable_mutations=15"
++transcript="$transcript reader_invariant_obligations=155 reader_invariant_inherited=127 reader_invariant_new=28 reader_invariant_test_obligations=1 reader_invariant_mutations=16"
+ actual_transcript=$(printf '%s\n' "$transcript" | /usr/bin/sha256sum | /usr/bin/awk '{ print $1 }')
+ if [ "$actual_transcript" != "$expected_transcript" ]; then
+     printf 'FAIL: verification transcript does not match the pin\n' >&2
+diff --git a/docs/runtime-a1-a2-swarm-current.md b/docs/runtime-a1-a2-swarm-current.md
+index 6a0117a42..254ec40de 100644
+--- a/docs/runtime-a1-a2-swarm-current.md
++++ b/docs/runtime-a1-a2-swarm-current.md
+@@ -10,7 +10,20 @@ Resources' V4-J1 proof handoff above the locally accepted
+ Its immediate assignments supersede the older checkpoint tables below, whose
+ detailed contracts and historical observations are retained.
+ 
+-Latest development (2026-09-17): [reader commit contents](runtime-context-read-commit-v1.md)
++Latest development (2026-09-17): [reader arena invariants](runtime-context-read-invariant-v1.md)
++derives free-slot uniqueness and proves constructor/acquire/release preservation,
++exact count/lookup/exclusion consequences, and register/abort reader framing.
++Exact modeled operation traces preserve the invariant and never reissue reader
++incarnations. The 155 whole-crate obligations include 127 inherited and 28 new;
++a separate sixteen-case invariant-sensitivity campaign adds one test obligation.
++The nonempty formal witness and Rust whole-state lifecycle/4,000-step traces
++exercise overlap, last-reader exclusion, unrelated writer outcomes and slot reuse.
++The [qualification archive](evidence/dev-v4j4-reader-invariant-2026-09-17/README.md)
++records actual results and limits. General base enrollment/membership/settlement
++composition, production Rust/native refinement and physical storage remain open.
++Accepted checkpoints are unchanged; A1/A2 and #182 remain incomplete.
++
++Earlier development (2026-09-17): [reader commit contents](runtime-context-read-commit-v1.md)
+ composes the unchanged ordered preflight with executable acquisition/release
+ loops. It specifies exact lease/output contents, reader multiplicities, free-list
+ order and incarnation updates, with rejection framing and a scan-to-commit safety
+diff --git a/docs/runtime-context-read-invariant-v1.md b/docs/runtime-context-read-invariant-v1.md
+new file mode 100644
+index 000000000..b212884b5
+--- /dev/null
++++ b/docs/runtime-context-read-invariant-v1.md
+@@ -0,0 +1,101 @@
++# Context Reader Arena Invariant V1
++
++V4-J4 development composes the exact pinned J3 contents transitions with a
++reader-arena invariant. The separate [qualification archive](evidence/dev-v4j4-reader-invariant-2026-09-17/README.md)
++records executed checks; this contract is not itself acceptance evidence.
++Native R125 CPU/test, Admission R118B C1-C3 and Resources R116/V3 remain
++the accepted checkpoints. A1/A2, #182 and HIP/HSA parity remain open.
++
++## Invariant
++
++The predicate inspects the actual journal and reader sequences, independently
++of any transition relation. Free slots are distinct, in range, and exactly the
++complement of occupied leases. Every allocation's reader count equals the
++number of occupied leases targeting that allocation. Each occupied lease names
++its physical slot, a valid same-context consumer, a nonzero incarnation below
++the next watermark, and an exact currently valid allocation/range/version.
++Live incarnations are distinct, including across different consumers.
++
++The predicate permits overlapping readers, repeated consumers, arbitrary free
++stack order and `next_incarnation == u64::MAX`. The latter is a valid exhausted
++state, not permission to wrap or reuse an incarnation.
++
++Acquisition derives J3's selected-free uniqueness premise from this invariant.
++The proof uses prefix sequence algebra with a ghost prefix watermark: the actual
++commit loop installs all leases before advancing its watermark. It does not
++incorrectly claim the full invariant holds between those individual stores.
++Release clears exactly the selected leases, subtracts their multiplicities and
++pushes those slots, preserving every retained neighbor. Rejections are unchanged
++states. These are contents properties, not statements about physical vector
++capacity, allocation failure, unwind or authenticated quiescence.
++
++The count consequences prove zero readers exactly when no retained lease targets
++the allocation, and prove a positive count has a present, non-pending allocation.
++Every live reference resolves to its exact request and blocks unread admission.
++
++## Composition And History
++
++The field-based journal frame permits changes only outside allocations with
++positive reader counts, preserving reader storage, context and allocation-table
++extent. It derives preservation without assuming that post-state read validation
++succeeds. Existing executable register/abort wrappers discharge that frame and
++retain their exact J1 issuance results. This proves their reader effects, not the
++full writer/member invariant from an arbitrary reader-valid state.
++
++`ReaderStepV1` binds acquisition, release, registration and abort to those exact
++executable relations, including failures. A finite sequence of actual modeled
++contents satisfying these relations preserves the invariant at every boundary.
++Successful acquisition outputs are projected into consecutive incarnation
++intervals; all other steps emit no incarnations. The trace theorem proves strict
++ordering between all distinct minted references, including within one batch.
++It cannot be instantiated with an unrelated numeric watermark trace alone.
++
++The initial trace state is reader-valid with watermark 1 and may already contain
++enrolled allocations. General enrollment, writer membership, settlement,
++retirement and Unknown disposal are not variants of this proved trace yet.
++Neither the trace theorem nor a frame premise proves those missing transitions.
++Production Rust/native refinement and historical correspondence remain separate.
++
++The concrete executable formal witness constructs an empty journal, explicitly
++pops and installs one fixture allocation, acquires the same range for two
++consumers, releases them in reverse order, and reuses the first slot with a new
++incarnation. It checks last-reader exclusion and rejects the old reference.
++Fixture enrollment is not a production enrollment proof; the witness is a
++verified call chain, not a separately assembled ghost trace.
++
++## Qualification Contract
++
++The whole proof has 155 obligations: 127 inherited through the unchanged pinned
++J3/J2/J1 sources and 28 new. The checker recursively authenticates and audits
++that exact include closure. It adds one test-only executable invariant-preserving
++subject, so its two campaign positives must report exactly 156 verified and zero
++errors. Each of sixteen reversible invariant-sensitivity mutations must report
++155 verified and one exact, source-located postcondition error.
++
++These mutations corrupt free indices, counts, physical slot, consumer/allocation/
++device identity, range, version, incarnation uniqueness, watermark or retained
++allocation presence. The subject has only the invariant as its postcondition:
++J3's stronger exact relation cannot mask a missing invariant check. These are
++invariant-sensitivity tests, not mutations of production reader bodies; the
++existing J3 executable-body campaign remains an independent integrated gate.
++Compiler, timeout, unexpected or additional errors do not qualify as negatives.
++
++## Executable Witnesses
++
++The Rust whole-state inspector independently checks the complete partition,
++counts, lease identities, live versions and incarnation uniqueness. A lifecycle
++test retains readers on two allocations while a third passes through successful
++settlement, no-effect settlement, Unknown disposal and slot reuse. It checks
++reader exclusion, partial release, retirement and re-enrollment, and unchanged
++reader-storage addresses/capacities after every transition. The existing
++4,000-step multi-consumer trace also checks this whole-state invariant.
++
++These Rust tests do not mechanically refine the Verus program. In particular,
++concrete enrollment, writer membership, settlement, retirement and Unknown
++disposal still need executable Verus correspondence. A field-level preservation
++lemma cannot discharge those transition obligations merely by assuming its
++frame premise.
++
++Constructor-only traces contain no readable allocations. The explicit fixture
++and real Rust enrollment tests keep nonempty behavior separate from the still
++missing mechanical correspondence for production enrollment.
