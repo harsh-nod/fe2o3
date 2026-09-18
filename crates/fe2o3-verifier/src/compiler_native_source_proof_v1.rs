@@ -13,8 +13,8 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
 };
 use fe2o3_lower_mir_kernel::{
-    ProductionSourceLaunchRootInputV1, ReplayedNativeSourceV1,
-    replay_native_source_correspondence_v1,
+    ProductionSourceLaunchRootInputV1, ReplayedNativeSourceV1, ReplayedUnitLocalNativeSourceV1,
+    replay_native_source_correspondence_v1, replay_native_unit_local_source_correspondence_v1,
 };
 use fe2o3_mir_model::{
     InertCanonicalSemanticU32InductionEvidenceV1 as Induction,
@@ -275,6 +275,67 @@ pub fn validate_native_compiler_source_proof_v1(
     ),
     E,
 > {
+    let (checked, storage) =
+        validate_native_compiler_source_packet_v1(inputs, SourceReplayRoute::RawEmpty, budget)?;
+    let ReconstructedNativeSource::RawEmpty(source) = checked.source else {
+        return Err(E::Mismatch("legacy RawEmpty reconstruction route"));
+    };
+    Ok((
+        ValidatedNativeCompilerSourceProofV1 {
+            source,
+            middle: checked.middle,
+            correspondence: checked.correspondence,
+            verus: checked.verus,
+            roots: checked.roots,
+        },
+        storage,
+    ))
+}
+
+#[derive(Clone, Copy)]
+enum SourceReplayRoute {
+    RawEmpty,
+    UnitLocal,
+}
+
+enum ReconstructedNativeSource {
+    RawEmpty(ReplayedNativeSourceV1),
+    UnitLocal(ReplayedUnitLocalNativeSourceV1),
+}
+impl ReconstructedNativeSource {
+    fn source(&self) -> &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1 {
+        match self {
+            Self::RawEmpty(source) => source.source(),
+            Self::UnitLocal(source) => source.source(),
+        }
+    }
+    fn catalog(&self) -> &fe2o3_kernel_ir::InertCanonicalKernelIrContractCatalogV1 {
+        match self {
+            Self::RawEmpty(source) => source.catalog(),
+            Self::UnitLocal(source) => source.catalog(),
+        }
+    }
+}
+
+struct CheckedNativeCompilerSourcePacketV1 {
+    source: ReconstructedNativeSource,
+    middle: Roster,
+    correspondence: Roster,
+    verus: Roster,
+    roots: Vec<CheckedRoot>,
+}
+
+fn validate_native_compiler_source_packet_v1(
+    inputs: NativeCompilerSourceProofInputsV1<'_>,
+    route: SourceReplayRoute,
+    budget: &mut Budget<'_>,
+) -> Result<
+    (
+        CheckedNativeCompilerSourcePacketV1,
+        NativeCompilerSourceProofStorageV1,
+    ),
+    E,
+> {
     budget.charge_work(8)?;
     let floor = budget.storage();
     let token = budget.work_ledger_identity_v1();
@@ -328,14 +389,30 @@ pub fn validate_native_compiler_source_proof_v1(
                 return Err(E::Mismatch("complete native roster subjects/order"));
             }
         }
-        let (source, source_storage) = replay_native_source_correspondence_v1(
-            inputs.semantic_mir,
-            native.graph_bytes(),
-            native.catalog_bytes(),
-            inputs.launch_inputs,
-            budget,
-        )
-        .map_err(E::Source)?;
+        let (source, source_storage) = match route {
+            SourceReplayRoute::RawEmpty => {
+                let (source, storage) = replay_native_source_correspondence_v1(
+                    inputs.semantic_mir,
+                    native.graph_bytes(),
+                    native.catalog_bytes(),
+                    inputs.launch_inputs,
+                    budget,
+                )
+                .map_err(E::Source)?;
+                (ReconstructedNativeSource::RawEmpty(source), storage)
+            }
+            SourceReplayRoute::UnitLocal => {
+                let (source, storage) = replay_native_unit_local_source_correspondence_v1(
+                    inputs.semantic_mir,
+                    native.graph_bytes(),
+                    native.catalog_bytes(),
+                    inputs.launch_inputs,
+                    budget,
+                )
+                .map_err(E::Source)?;
+                (ReconstructedNativeSource::UnitLocal(source), storage)
+            }
+        };
         budget.reserve_storage(source_storage.retained_storage())?;
         let semantic = source.source().semantic_ssa().source_semantic();
         let graph = source.source().executable();
@@ -539,7 +616,7 @@ pub fn validate_native_compiler_source_proof_v1(
             .and_then(|n| n.checked_add(staging_storage))
             .ok_or(Resource::Arithmetic)?;
         Ok((
-            ValidatedNativeCompilerSourceProofV1 {
+            CheckedNativeCompilerSourcePacketV1 {
                 source,
                 middle,
                 correspondence,
@@ -574,3 +651,7 @@ mod tests;
 #[path = "compiler_native_ranked_source_proof_v1.rs"]
 mod ranked_source;
 pub use ranked_source::*;
+
+#[path = "compiler_native_unit_local_erased_source_proof_v1.rs"]
+mod unit_local_erased;
+pub use unit_local_erased::*;

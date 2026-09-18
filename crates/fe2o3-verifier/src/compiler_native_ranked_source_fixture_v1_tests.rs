@@ -467,10 +467,13 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let source = source();
+    fixture_from_source(&source())
+}
+
+fn fixture_from_source(source: &ProductionPreRankedKirOwnerV1) -> Fixture {
     let semantic = source.semantic_ssa().source_semantic();
     let toolchain = VerusToolchainIdentityV2::new(d(72), d(73), d(74), d(75), d(76)).unwrap();
-    let (ranked, signature, staging) = ranked(&source, toolchain);
+    let (ranked, signature, staging) = ranked(source, toolchain);
     let evidence =
         ProductionMiddleEndEvidenceV5::try_new(source.semantic_ssa().source_owner(), &ranked, TEXT)
             .unwrap();
@@ -895,3 +898,6 @@ fn original_full_signature_rejects_changed_typed_graph_and_source_maps() {
     assert!(fixture.validate(&changed, &correct, &mut budget).is_err());
     assert_eq!(budget.storage(), 37);
 }
+
+#[path = "compiler_native_unit_local_erased_source_proof_v1_tests.rs"]
+mod unit_local_erased_fixture;
