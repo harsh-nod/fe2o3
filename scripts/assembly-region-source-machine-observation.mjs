@@ -7,7 +7,8 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { LLVM_BUILD_ID, TEST_TARGET, MIN_FREE_BYTES, readRegular, requireDiskReserve,
-  runBoundedCommand, parseObservation } from './assembly-region-worker-prototype.mjs';
+  runBoundedCommand, parseObservation, validateNativeBuildReceipt, measureNativeBuildInput,
+  requireNativeBuildInputsUnchanged } from './assembly-region-worker-prototype.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MAX_REPORT = 64 * 1024;
@@ -228,26 +229,24 @@ export async function main(argv) {
     capture(fileURLToPath(import.meta.url), 256 * 1024);
     capture(path.join(HERE, 'assembly-region-worker-prototype.mjs'), 256 * 1024);
     const build = json(read(path.join(native, 'receipt.json'), 256 * 1024));
-    demand(build.schema === 'fe2o3-ordered-inline-unit-engineering-receipt-v1' && build.status === 'passed' && build.source_produced === false &&
-      build.production_exact_region_admission === false && build.protected_finalizer_admission === false && build.hardware_executed === false &&
-      build.environment?.compiler_repo === repo && build.environment?.output === native, 'native build receipt scope/path');
-    demand(Array.isArray(build.inputs) && build.inputs.length > 0 && build.inputs.length <= 64 &&
-      Array.isArray(build.artifacts) && build.artifacts.length === 2, 'native build measured closure');
-    for (const item of [...build.inputs, ...build.artifacts]) {
-      exact(item, ['requested', 'resolved', 'bytes', 'sha256'], 'native input measurement');
-      digest(item.sha256, 'native input'); integer(item.bytes, 1, 512 * 1024 * 1024, 'native input size');
-      // Build measurements explicitly resolve package/tool symlinks; source
-      // observations below retain the stricter final-component nofollow rule.
-      const measured = capture(fs.realpathSync(item.requested), item.bytes);
-      demand(measured.resolved === item.resolved && measured.bytes === item.bytes && measured.sha256 === item.sha256, 'stale native build input');
+    // Validate the COMPLETE fixed roster before opening any claimed build-input
+    // path. A nonempty caller-selected subset is not a measured experiment.
+    const roster = validateNativeBuildReceipt(build, { repo, output: native });
+    const nativeMeasurements = [];
+    for (const kind of ['inputs', 'artifacts']) for (const [index, expected] of roster[kind].entries()) {
+      const measured = measureNativeBuildInput(expected.requested, expected.cap);
+      same(measured, build[kind][index], 'stale native build input');
+      nativeMeasurements.push(measured);
+      // Keep the existing regular-file-only source-input fence, while separately
+      // checking the original package/tool requested->resolved binding below.
+      inputs.push({ ...measured, requested: measured.resolved });
     }
     const claim = read(path.join(native, 'build/fe2o3-worker-build-id.txt'), 256).toString('utf8').trim();
     const nativeBaseline = read(path.join(native, 'observation.json'), MAX_REPORT);
     parseObservation(nativeBaseline, claim);
-    demand(build.observation?.sha256 === sha(nativeBaseline) && build.observation?.bytes === nativeBaseline.length &&
-      build.observation?.positive_cases === 4, 'native baseline receipt join');
+    demand(build.observation.sha256 === sha(nativeBaseline) && build.observation.bytes === nativeBaseline.length &&
+      build.observation.worker_build_claim === claim, 'native baseline receipt join');
     const executable = path.join(native, 'build', TEST_TARGET);
-    demand(build.artifacts.some(item => item.resolved === executable), 'native test artifact absent');
     const ladder = validateSourceLadder(json(read(path.join(source, 'observation.json'), 256 * 1024)));
     const fixture = path.join(repo, 'crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device');
     const bound = {
@@ -284,6 +283,7 @@ export async function main(argv) {
         llvm_sha256: llvm.sha256, report_sha256: sha(result.stdout), kernel_symbol: report.kernel_symbol, cases: report.cases.length });
     }
     demand(reports.length === 2 && reports.reduce((sum, report) => sum + report.cases, 0) === 4, 'missing source machine cases');
+    requireNativeBuildInputsUnchanged(nativeMeasurements);
     requireUnchanged(inputs); requireDiskReserve(output);
     receipt.source_callback_cases = 6; receipt.machine_cases = 4; receipt.status = 'passed';
   } catch (error) { receipt.failure = String(error.message).slice(0, 4096); throw error; }

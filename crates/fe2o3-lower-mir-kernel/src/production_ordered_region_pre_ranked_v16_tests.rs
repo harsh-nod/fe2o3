@@ -858,3 +858,6 @@ fn ordered_region_budget_failures_restore_floor_without_forgiving_work() {
         assert!(work.work() > 0);
     }
 }
+
+#[path = "production_ordered_region_inspection_v1_tests.rs"]
+mod inspection_tests;

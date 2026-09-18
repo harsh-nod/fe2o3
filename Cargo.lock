@@ -3090,6 +3090,7 @@ dependencies = [
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
  "fe2o3-kernel-opt",
+ "fe2o3-kir-debugger",
  "fe2o3-kir-sim",
  "fe2o3-kir-sim-cli",
  "fe2o3-kir-sim-trace",

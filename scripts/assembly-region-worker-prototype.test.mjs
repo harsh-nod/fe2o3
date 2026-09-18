@@ -7,7 +7,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { LLVM_BUILD_ID, parseArguments, parseObservation, readRegular,
-  runBoundedCommand, validateObservation } from './assembly-region-worker-prototype.mjs';
+  runBoundedCommand, validateObservation, WORKER_FILES, nativeBuildMeasurementRoster,
+  validateNativeBuildReceipt, measureNativeBuildInput, requireNativeBuildInputsUnchanged } from './assembly-region-worker-prototype.mjs';
+import { syntheticNativeBuildReceipt } from './assembly-region-worker-prototype.test-fixtures.mjs';
 
 const CLAIM = `fe2o3-worker-v1-sha256-${'a'.repeat(64)}`;
 const DIAGNOSTICS = [
@@ -177,4 +179,90 @@ test('mocked nonexistent command returns a bounded spawn failure', async () => {
   const result = await mockedChild('', { executable: '/this-command-does-not-exist/ordered-unit-test' });
   assert.match(result.reason, /^spawn:/);
   assert.equal(result.stdout.length, 0);
+});
+
+function validateBuild(receipt) {
+  return validateNativeBuildReceipt(receipt, { repo: receipt.environment.compiler_repo, output: receipt.environment.output });
+}
+test('native measured roster is immutable, complete and shared across builder and consumer', () => {
+  const receipt = syntheticNativeBuildReceipt(), roster = validateBuild(receipt);
+  assert.equal(WORKER_FILES.length, 14); assert.equal(roster.inputs.length, 22); assert.equal(roster.artifacts.length, 2);
+  assert.ok(WORKER_FILES.includes('tests/OrderedInlineRegionSourceObservation.inc'));
+  for (const value of [WORKER_FILES, roster, roster.inputs, roster.artifacts, ...roster.inputs, ...roster.artifacts]) assert.ok(Object.isFrozen(value));
+  assert.throws(() => WORKER_FILES.push('unmeasured.cpp'));
+  assert.throws(() => { roster.inputs[0].requested = '/rewritten'; });
+  assert.deepEqual(roster.inputs.map(item => item.requested), receipt.inputs.map(item => item.requested));
+});
+
+test('native roster rejects omission of every required source, script, tool, config and zstd input', () => {
+  const original = syntheticNativeBuildReceipt();
+  for (let index = 0; index < original.inputs.length; index++) {
+    const receipt = structuredClone(original); receipt.inputs.splice(index, 1);
+    assert.throws(() => validateBuild(receipt), /native inputs roster: exact count required/);
+  }
+});
+
+test('native roster rejects duplicate, extra, reordered, rewritten and unbounded input measurements', () => {
+  for (const change of [
+    receipt => { receipt.inputs[1] = receipt.inputs[0]; },
+    receipt => { receipt.inputs.push(receipt.inputs[0]); },
+    receipt => { receipt.inputs.reverse(); },
+    receipt => { receipt.inputs[0].requested = '/different-checkout/CMakeLists.txt'; },
+    receipt => { receipt.inputs[0].requested = `${receipt.inputs[0].requested}/../CMakeLists.txt`; },
+    receipt => { receipt.inputs[0].resolved = 'relative'; },
+    receipt => { receipt.inputs[0].requested = `/${'x'.repeat(4096)}`; },
+    receipt => { receipt.inputs[0].bytes = 2 * 1024 * 1024 + 1; },
+    receipt => { receipt.inputs[0].sha256 = '0'.repeat(64); },
+    receipt => { receipt.inputs[0].extra = true; },
+  ]) { const receipt = syntheticNativeBuildReceipt(); change(receipt); assert.throws(() => validateBuild(receipt)); }
+});
+
+test('native artifact roster requires both exact regular output paths once each', () => {
+  for (const change of [
+    receipt => { receipt.artifacts.pop(); }, receipt => { receipt.artifacts.push(receipt.artifacts[0]); },
+    receipt => { receipt.artifacts[1] = receipt.artifacts[0]; }, receipt => { receipt.artifacts.reverse(); },
+    receipt => { receipt.artifacts[1].requested = '/other/fe2o3-llvm-link-worker'; },
+    receipt => { receipt.artifacts[0].resolved = '/other/test-binary'; },
+  ]) { const receipt = syntheticNativeBuildReceipt(); change(receipt); assert.throws(() => validateBuild(receipt), /native artifacts/); }
+});
+
+test('native roster derives variable paths only from the fixed bounded configure/build stages', () => {
+  for (const change of [
+    receipt => { receipt.stages.pop(); }, receipt => { receipt.stages.reverse(); },
+    receipt => { receipt.stages[2].args.push('-DUNMEASURED=ON'); },
+    receipt => { receipt.stages[2].args[1] = '/different/source'; },
+    receipt => { receipt.stages[2].args[3] = '/different/output'; },
+    receipt => { receipt.stages[2].args[6] = '-DLLVM_DIR=relative'; },
+    receipt => { receipt.stages[2].args[7] = '-DLLD_DIR=/other/lib/cmake/lld'; },
+    receipt => { receipt.stages[2].args[8] = '-DFE2O3_PINNED_LLVM_VERSION=23'; },
+    receipt => { receipt.stages[2].args[10] = '-DFE2O3_LLVM_BUILD_ID_FILE=/changed/id'; },
+    receipt => { receipt.stages[2].args[11] = '-DFE2O3_GFX942_DEVICE_LIB_DIR=/enabled'; },
+    receipt => { receipt.stages[2].args[13] = '-Dzstd_INCLUDE_DIR=/changed/include'; },
+    receipt => { receipt.stages[2].args[14] = '-Dzstd_LIBRARY=/changed/libzstd.so'; },
+    receipt => { receipt.stages[2].args[16] = '-DCMAKE_CXX_COMPILER=/changed/cxx'; },
+    receipt => { receipt.stages[3].executable = '/different/cmake'; },
+    receipt => { receipt.stages[3].args[6] = '16'; },
+    receipt => { receipt.stages[4].args = ['--unexpected']; },
+    receipt => { receipt.stages[2].reason = 'timeout'; },
+    receipt => { receipt.stages[2].free_bytes_before = '9'.repeat(21); },
+    receipt => { receipt.runtime_closure_attestation = 'verified'; },
+    receipt => { receipt.observation.native_test_control_counts = [0, 0, 0]; },
+  ]) { const receipt = syntheticNativeBuildReceipt(); change(receipt); assert.throws(() => validateBuild(receipt)); }
+  const receipt = syntheticNativeBuildReceipt(), configure = receipt.stages[2];
+  configure.args[16] = `-DCMAKE_CXX_COMPILER=${configure.executable}`;
+  assert.throws(() => nativeBuildMeasurementRoster({ repo: receipt.environment.compiler_repo,
+    output: receipt.environment.output, configure: { executable: configure.executable, args: configure.args } }), /duplicate configured paths/);
+});
+
+test('native file measurements recheck requested-to-resolved tool bindings and byte bounds', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'native-roster-measurement-'));
+  try {
+    const first = path.join(directory, 'first'), second = path.join(directory, 'second'), link = path.join(directory, 'tool');
+    fs.writeFileSync(first, 'same'); fs.writeFileSync(second, 'same'); fs.symlinkSync(first, link);
+    const measured = measureNativeBuildInput(link, 4); requireNativeBuildInputsUnchanged([measured]);
+    assert.equal(measured.requested, link); assert.equal(measured.resolved, first);
+    fs.unlinkSync(link); fs.symlinkSync(second, link);
+    assert.throws(() => requireNativeBuildInputsUnchanged([measured]), /input changed/);
+    assert.throws(() => measureNativeBuildInput(first, 3), /byte cap/);
+  } finally { fs.rmSync(directory, { recursive: true }); }
 });

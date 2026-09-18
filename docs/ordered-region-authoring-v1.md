@@ -97,6 +97,11 @@ native observer assembles/links and inspects returned machine bytes through an
 explicitly unauthenticated test transport. Hash joins establish consistency of
 retained observations, not source authentication or protected artifact authority.
 
+The additive [logical debugger exercise](ordered-region-debugger-v1.md) uses the
+same live source owner and immutable requests. It distinguishes the authored
+register plan from actual logical before/after values, with explicit truncated
+and unavailable controls. It does not expose physical scratch or EXEC contents.
+
 ## Reproduce the six actual source callbacks
 
 Run from the compiler implementation checkout on Linux with the already installed

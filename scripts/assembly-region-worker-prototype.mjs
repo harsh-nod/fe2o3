@@ -43,12 +43,12 @@ const DIAGNOSTICS = [
   'post_link.check=metadata status=ok kernels=1 target=amdgcn-amd-amdhsa--gfx942%3Axnack-',
   'post_link.kernel name=ordered_region_fixture symbol=ordered_region_fixture.kd kernarg_size=280 group_size=0 private_size=0 kernarg_align=8 wavefront_size=64 max_workgroup_size=64 reqd_workgroup_size=[64,1,1]',
 ];
-const WORKER_FILES = ['CMakeLists.txt', 'include/WorkerProtocol.h', 'include/WorkerPipeline.h',
+export const WORKER_FILES = Object.freeze(['CMakeLists.txt', 'include/WorkerProtocol.h', 'include/WorkerPipeline.h',
   'include/WorkerDeviceLibraryPolicy.h', 'include/WorkerBuildConfig.h.in',
   'include/WorkerLldPolicy.h', 'include/WorkerMachineEffect.h', 'src/WorkerProtocol.cpp',
   'src/WorkerPipeline.cpp', 'src/WorkerDeviceLibraryPolicy.cpp', 'src/WorkerMachineEffect.cpp',
   'src/main.cpp', 'tests/OrderedInlineRegionPrototypeTests.cpp',
-  'tests/OrderedInlineRegionSourceObservation.inc'];
+  'tests/OrderedInlineRegionSourceObservation.inc']);
 
 function demand(value, reason) { if (!value) throw new Error(reason); }
 function exactObject(value, keys, label) {
@@ -157,6 +157,116 @@ function absolute(value, label) {
   return path.resolve(value);
 }
 
+function exactPath(value, label) {
+  const normalized = absolute(value, label);
+  demand(value === normalized, `${label}: noncanonical/rewritten path`);
+  return normalized;
+}
+
+// One immutable measured-file roster for the builder and its retained-receipt
+// consumer. This is the declared experiment input set, NOT runtime closure or
+// build authentication. Variable paths come only from the fixed configure stage.
+export function nativeBuildMeasurementRoster({ repo, output, configure }) {
+  exactPath(repo, 'compiler repo'); exactPath(output, 'native output');
+  exactObject(configure, ['executable', 'args'], 'native configure');
+  const cmake = exactPath(configure.executable, 'CMake tool'), args = configure.args;
+  demand(Array.isArray(args) && args.length === 18 && args.every(arg => typeof arg === 'string' &&
+    arg.length > 0 && arg.length <= 4096 && !/[\x00-\x1f\x7f]/.test(arg)), 'native configure: bounded fixed arguments');
+  const source = path.join(repo, 'tools/fe2o3-llvm-link-worker'), build = path.join(output, 'build');
+  demand(sameArray(args.slice(0, 6), ['-S', source, '-B', build, '-G', 'Unix Makefiles']), 'native configure: source/build/generator mismatch');
+  function setting(index, prefix) {
+    demand(args[index].startsWith(prefix), `native configure: expected ${prefix}`);
+    return exactPath(args[index].slice(prefix.length), `native configure ${prefix}`);
+  }
+  const llvmDir = setting(6, '-DLLVM_DIR='), lldDir = setting(7, '-DLLD_DIR=');
+  demand(path.basename(llvmDir) === 'llvm' && path.basename(path.dirname(llvmDir)) === 'cmake' &&
+    lldDir === path.join(path.dirname(llvmDir), 'lld'), 'native configure: LLVM/LLD package directories');
+  demand(args[8] === `-DFE2O3_PINNED_LLVM_VERSION=${LLVM_VERSION}` &&
+    args[9] === `-DFE2O3_EXPECTED_LLVM_BUILD_ID=${LLVM_BUILD_ID}`, 'native configure: reviewed package claims');
+  const buildId = setting(10, '-DFE2O3_LLVM_BUILD_ID_FILE=');
+  demand(args[11] === `-DFE2O3_GFX942_DEVICE_LIB_DIR=${path.join(output, 'no-device-libraries')}` &&
+    args[12] === `-DFE2O3_GFX950_DEVICE_LIB_DIR=${path.join(output, 'no-device-libraries')}` &&
+    args[15] === '-DCMAKE_BUILD_TYPE=Release' && args[17] === '-DBUILD_TESTING=ON', 'native configure: fixed test-only policy');
+  const zstdInclude = setting(13, '-Dzstd_INCLUDE_DIR='), zstdLibrary = setting(14, '-Dzstd_LIBRARY=');
+  const cxx = setting(16, '-DCMAKE_CXX_COMPILER=');
+  const spec = (requested, cap) => Object.freeze({ requested: exactPath(requested, 'roster file'), cap });
+  const inputs = Object.freeze([
+    ...WORKER_FILES.map(file => spec(path.join(source, file), 2 * 1024 * 1024)),
+    spec(fileURLToPath(import.meta.url), 256 * 1024), spec(cmake, 512 * 1024 * 1024), spec(cxx, 512 * 1024 * 1024),
+    spec(buildId, 256), spec(path.join(llvmDir, 'LLVMConfig.cmake'), 1024 * 1024),
+    spec(path.join(lldDir, 'LLDConfig.cmake'), 1024 * 1024), spec(path.join(zstdInclude, 'zstd.h'), 1024 * 1024),
+    spec(zstdLibrary, 4 * 1024 * 1024),
+  ]);
+  const artifacts = Object.freeze([TEST_TARGET, 'fe2o3-llvm-link-worker'].map(file => spec(path.join(build, file), 512 * 1024 * 1024)));
+  demand(new Set(inputs.map(item => item.requested)).size === inputs.length, 'native input roster: duplicate configured paths');
+  return Object.freeze({ inputs, artifacts });
+}
+
+// Structural/roster consistency only. The consumer must also remeasure EVERY
+// required path and compare requested/resolved paths, byte counts and hashes.
+export function validateNativeBuildReceipt(receipt, { repo, output }) {
+  exactObject(receipt, ['schema', 'status', 'scope', 'source_produced', 'production_exact_region_admission',
+    'protected_finalizer_admission', 'hardware_executed', 'runtime_closure_attestation', 'package_identity_kind',
+    'policy_or_source_gate_changes', 'environment', 'limits', 'stages', 'inputs', 'artifacts', 'observation'], 'native build receipt');
+  demand(receipt.schema === 'fe2o3-ordered-inline-unit-engineering-receipt-v1' && receipt.status === 'passed' &&
+    receipt.scope === 'native-test-fixture transport/encoding observation only' && receipt.source_produced === false &&
+    receipt.production_exact_region_admission === false && receipt.protected_finalizer_admission === false &&
+    receipt.hardware_executed === false && receipt.policy_or_source_gate_changes === false &&
+    receipt.runtime_closure_attestation === 'unavailable' &&
+    receipt.package_identity_kind === 'existing asserted package build-ID, not runtime closure', 'native build receipt scope');
+  const env = receipt.environment;
+  exactObject(env, ['platform', 'arch', 'node', 'os_release', 'compiler_repo', 'output', 'compiler_head', 'compiler_worktree_dirty'], 'native build environment');
+  demand(env.compiler_repo === repo && env.output === output && typeof env.compiler_head === 'string' &&
+    /^[0-9a-f]{40}$/.test(env.compiler_head) && typeof env.compiler_worktree_dirty === 'boolean', 'native build receipt scope/path');
+  for (const field of ['platform', 'arch', 'node', 'os_release']) demand(typeof env[field] === 'string' &&
+    env[field].length > 0 && env[field].length <= 128 && !/[\x00-\x1f\x7f]/.test(env[field]), 'native environment bound');
+  exactObject(receipt.limits, ['jobs', 'minimum_free_bytes', 'configure_ms', 'build_ms', 'test_ms', 'test_stdout_bytes'], 'native build limits');
+  demand(receipt.limits.jobs === 2 && receipt.limits.minimum_free_bytes === MIN_FREE_BYTES.toString() &&
+    receipt.limits.configure_ms === 120000 && receipt.limits.build_ms === 900000 && receipt.limits.test_ms === 120000 &&
+    receipt.limits.test_stdout_bytes === MAX_REPORT, 'native build fixed limits');
+  demand(Array.isArray(receipt.stages) && receipt.stages.length === 5, 'native build: exact five stages required');
+  const names = ['git-head', 'git-status', 'configure', 'build', 'native-test'];
+  for (const [index, stage] of receipt.stages.entries()) {
+    exactObject(stage, ['stage', 'executable', 'args', 'code', 'signal', 'reason', 'elapsed_ms', 'free_bytes_before',
+      'stdout_sha256', 'stdout_bytes', 'stderr_sha256', 'stderr_bytes'], 'native build stage');
+    demand(stage.stage === names[index] && stage.code === 0 && stage.signal === null && stage.reason === null, 'native build stage order/success');
+    exactPath(stage.executable, 'native stage executable');
+    demand(Array.isArray(stage.args) && stage.args.length <= 18 && stage.args.every(arg => typeof arg === 'string' &&
+      arg.length > 0 && arg.length <= 4096 && !/[\x00-\x1f\x7f]/.test(arg)), 'native stage arguments bound');
+    natural(stage.elapsed_ms, 1_000_000, 'native stage duration');
+    demand(typeof stage.free_bytes_before === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(stage.free_bytes_before) &&
+      BigInt(stage.free_bytes_before) >= MIN_FREE_BYTES, 'native stage disk reserve');
+    for (const stream of ['stdout', 'stderr']) { digest(stage[`${stream}_sha256`], 'native stage output'); natural(stage[`${stream}_bytes`], 1024 * 1024, 'native stage output cap'); }
+  }
+  const configure = { executable: receipt.stages[2].executable, args: receipt.stages[2].args };
+  const roster = nativeBuildMeasurementRoster({ repo, output, configure });
+  const commands = [
+    ['/usr/bin/git', ['rev-parse', 'HEAD']],
+    ['/usr/bin/git', ['status', '--porcelain=v1', '--untracked-files=normal']],
+    [configure.executable, configure.args],
+    [configure.executable, ['--build', path.join(output, 'build'), '--target', TEST_TARGET, 'fe2o3-llvm-link-worker', '--parallel', '2']],
+    [path.join(output, 'build', TEST_TARGET), []],
+  ];
+  for (const [index, [executable, args]] of commands.entries()) demand(receipt.stages[index].executable === executable &&
+    sameArray(receipt.stages[index].args, args), 'native stage command mismatch');
+  for (const kind of ['inputs', 'artifacts']) {
+    const entries = receipt[kind], expected = roster[kind];
+    demand(Array.isArray(entries) && entries.length === expected.length, `native ${kind} roster: exact count required`);
+    for (const [index, item] of entries.entries()) {
+      exactObject(item, ['requested', 'resolved', 'bytes', 'sha256'], `native ${kind} measurement`);
+      exactPath(item.requested, `native ${kind} requested`); exactPath(item.resolved, `native ${kind} resolved`);
+      demand(item.requested === expected[index].requested, `native ${kind} roster: missing/duplicate/extra/rewritten path`);
+      if (kind === 'artifacts') demand(item.resolved === item.requested, 'native artifacts roster: redirected path');
+      natural(item.bytes, expected[index].cap, `native ${kind} measurement byte cap`, 1); digest(item.sha256, `native ${kind} measurement`);
+    }
+  }
+  exactObject(receipt.observation, ['sha256', 'bytes', 'worker_build_claim', 'positive_cases', 'native_test_control_counts'], 'native baseline measurement');
+  digest(receipt.observation.sha256, 'native baseline'); natural(receipt.observation.bytes, MAX_REPORT, 'native baseline size', 1);
+  demand(typeof receipt.observation.worker_build_claim === 'string' && WORKER_CLAIM.test(receipt.observation.worker_build_claim) &&
+    receipt.observation.positive_cases === 4 && sameArray(receipt.observation.native_test_control_counts, [12, 8, 2]), 'native baseline coverage');
+  return roster;
+}
+
 // NOFOLLOW/NONBLOCK applies to the final canonical path. Callers explicitly
 // record both the requested path and its resolved tool/package dependency.
 export function readRegular(file, cap) {
@@ -200,6 +310,7 @@ function measure(file, cap = 512 * 1024 * 1024) {
     return { requested, resolved, bytes: before.size, sha256: hash.digest('hex') };
   } finally { fs.closeSync(fd); }
 }
+export { measure as measureNativeBuildInput };
 
 export function requireDiskReserve(directory) {
   const stat = fs.statfsSync(directory, { bigint: true });
@@ -287,11 +398,12 @@ function freshOutput(options) {
 function writeNew(file, bytes) { fs.writeFileSync(file, bytes, { flag: 'wx', mode: 0o600 }); }
 function unchanged(before) {
   for (const item of before) {
-    const after = measure(item.requested);
+    const after = measure(item.requested, item.bytes);
     demand(item.sha256 === after.sha256 && item.bytes === after.bytes && item.resolved === after.resolved,
       `input changed during experiment: ${item.requested}`);
   }
 }
+export { unchanged as requireNativeBuildInputsUnchanged };
 
 async function main(argv) {
   if (argv.length === 1 && argv[0] === '--help') {
@@ -323,10 +435,15 @@ async function main(argv) {
     limits: { jobs: 2, minimum_free_bytes: MIN_FREE_BYTES.toString(), configure_ms: 120000,
       build_ms: 900000, test_ms: 120000, test_stdout_bytes: MAX_REPORT }, stages: records };
   try {
-    const inputs = [...WORKER_FILES.map(file => measure(path.join(source, file), 2 * 1024 * 1024)),
-      measure(fileURLToPath(import.meta.url), 256 * 1024), measure(options.cmake), measure(options.cxx),
-      measure(options.buildIdFile, 256), measure(llvmConfig, 1024 * 1024), measure(lldConfig, 1024 * 1024),
-      measure(path.join(options.zstdInclude, 'zstd.h'), 1024 * 1024), measure(options.zstdLibrary, 4 * 1024 * 1024)];
+    const configure = { executable: options.cmake, args: ['-S', source, '-B', build, '-G', 'Unix Makefiles',
+      `-DLLVM_DIR=${path.dirname(llvmConfig)}`, `-DLLD_DIR=${path.dirname(lldConfig)}`,
+      `-DFE2O3_PINNED_LLVM_VERSION=${LLVM_VERSION}`, `-DFE2O3_EXPECTED_LLVM_BUILD_ID=${LLVM_BUILD_ID}`,
+      `-DFE2O3_LLVM_BUILD_ID_FILE=${fs.realpathSync(options.buildIdFile)}`,
+      `-DFE2O3_GFX942_DEVICE_LIB_DIR=${disabled}`, `-DFE2O3_GFX950_DEVICE_LIB_DIR=${disabled}`,
+      `-Dzstd_INCLUDE_DIR=${fs.realpathSync(options.zstdInclude)}`, `-Dzstd_LIBRARY=${fs.realpathSync(options.zstdLibrary)}`,
+      '-DCMAKE_BUILD_TYPE=Release', `-DCMAKE_CXX_COMPILER=${options.cxx}`, '-DBUILD_TESTING=ON'] };
+    const roster = nativeBuildMeasurementRoster({ repo, output, configure });
+    const inputs = roster.inputs.map(item => measure(item.requested, item.cap));
     receipt.inputs = inputs;
     const run = async (stage, executable, args, timeoutMs, stdoutCap, stderrCap) => {
       const disk = requireDiskReserve(output).toString();
@@ -345,20 +462,14 @@ async function main(argv) {
     demand(/^[0-9a-f]{40}$/.test(receipt.environment.compiler_head), 'git HEAD is malformed');
     const dirty = await run('git-status', '/usr/bin/git', ['status', '--porcelain=v1', '--untracked-files=normal'], 10000, 64 * 1024, 4096);
     receipt.environment.compiler_worktree_dirty = dirty.stdout.length !== 0;
-    await run('configure', options.cmake, ['-S', source, '-B', build, '-G', 'Unix Makefiles',
-      `-DLLVM_DIR=${path.dirname(llvmConfig)}`, `-DLLD_DIR=${path.dirname(lldConfig)}`,
-      `-DFE2O3_PINNED_LLVM_VERSION=${LLVM_VERSION}`, `-DFE2O3_EXPECTED_LLVM_BUILD_ID=${LLVM_BUILD_ID}`,
-      `-DFE2O3_LLVM_BUILD_ID_FILE=${fs.realpathSync(options.buildIdFile)}`,
-      `-DFE2O3_GFX942_DEVICE_LIB_DIR=${disabled}`, `-DFE2O3_GFX950_DEVICE_LIB_DIR=${disabled}`,
-      `-Dzstd_INCLUDE_DIR=${fs.realpathSync(options.zstdInclude)}`, `-Dzstd_LIBRARY=${fs.realpathSync(options.zstdLibrary)}`,
-      '-DCMAKE_BUILD_TYPE=Release', `-DCMAKE_CXX_COMPILER=${options.cxx}`, '-DBUILD_TESTING=ON'], 120000, 256 * 1024, 256 * 1024);
+    await run('configure', configure.executable, configure.args, 120000, 256 * 1024, 256 * 1024);
     await run('build', options.cmake, ['--build', build, '--target', TEST_TARGET,
       'fe2o3-llvm-link-worker', '--parallel', '2'], 900000, 1024 * 1024, 1024 * 1024);
     const claim = readRegular(path.join(build, 'fe2o3-worker-build-id.txt'), 256).toString('utf8').trim();
     demand(WORKER_CLAIM.test(claim), 'generated worker claim is malformed');
     demand(readRegular(path.join(build, 'fe2o3-llvm-build-id.txt'), 256).toString('utf8').trim() === LLVM_BUILD_ID,
       'configured LLVM build-ID drifted');
-    const artifacts = [measure(path.join(build, TEST_TARGET)), measure(path.join(build, 'fe2o3-llvm-link-worker'))];
+    const artifacts = roster.artifacts.map(item => measure(item.requested, item.cap));
     receipt.artifacts = artifacts;
     const tested = await run('native-test', path.join(build, TEST_TARGET), [], 120000, MAX_REPORT, 128 * 1024);
     const observation = parseObservation(tested.stdout, claim);
@@ -370,7 +481,9 @@ async function main(argv) {
       native_test_control_counts: [observation.closed_contract_negatives, observation.decoded_observation_negatives,
         observation.actual_payload_mutation_negatives] };
     receipt.status = 'passed';
+    validateNativeBuildReceipt(receipt, { repo, output });
   } catch (error) {
+    receipt.status = 'failed';
     receipt.failure = String(error.message).slice(0, 4096);
     throw error;
   } finally {

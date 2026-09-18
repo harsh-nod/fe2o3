@@ -6,9 +6,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { LLVM_BUILD_ID } from './assembly-region-worker-prototype.mjs';
+import { LLVM_BUILD_ID, MIN_FREE_BYTES, measureNativeBuildInput, validateNativeBuildReceipt } from './assembly-region-worker-prototype.mjs';
+import { syntheticNativeBuildReceipt } from './assembly-region-worker-prototype.test-fixtures.mjs';
 import { measureInput, requireUnchanged, parseArguments, parseMachineObservation,
-  validateMachineObservation, validateSourceLadder } from './assembly-region-source-machine-observation.mjs';
+  validateMachineObservation, validateSourceLadder, main } from './assembly-region-source-machine-observation.mjs';
 
 const CLAIM = `fe2o3-worker-v1-sha256-${'a'.repeat(64)}`;
 const expected = { workerClaim: CLAIM, llvmSha256: 'b'.repeat(64), llvmBytes: 512, used: true };
@@ -144,6 +145,65 @@ test('input measurement rejects changed same-size bytes, symlinks, deleted files
 test('CLI rejects relative, duplicate, unknown and incomplete paths', () => {
   for (const args of [[], ['--source-run', 'relative'], ['--shell', '/bin/sh'], ['--output'],
     ['--output', '/tmp/a', '--output', '/tmp/b'], ['--output', '/tmp/a\ninvalid']]) assert.throws(() => parseArguments(args));
+});
+
+test('runner main rejects every omitted native input and corrupt roster before executing any native child', async context => {
+  // Only the reserve reading is mocked: tiny synthetic rejection fixtures do not
+  // require a 40GiB developer disk. No build, successful join or native report is
+  // synthesized; every runner call must fail the named roster/measurement check.
+  context.mock.method(fs, 'statfsSync', () => ({ bavail: MIN_FREE_BYTES * 2n, bsize: 1n }));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'source-machine-roster-controls-'));
+  try {
+    const repo = path.join(directory, 'repo'), source = path.join(directory, 'source'), nativeRun = path.join(directory, 'native');
+    for (const item of [repo, source, nativeRun]) fs.mkdirSync(item);
+    const receipt = syntheticNativeBuildReceipt(repo, nativeRun);
+    const roster = validateNativeBuildReceipt(receipt, { repo, output: nativeRun });
+    for (const item of [...roster.inputs, ...roster.artifacts]) {
+      // The one current builder-script path is an actual read-only dependency;
+      // all other fixture paths must stay inside our private temporary directory.
+      if (!item.requested.startsWith(`${directory}/`)) {
+        assert.match(item.requested, /\/scripts\/assembly-region-worker-prototype\.mjs$/); continue;
+      }
+      fs.mkdirSync(path.dirname(item.requested), { recursive: true });
+      fs.writeFileSync(item.requested, 'synthetic-roster-control-only');
+    }
+    const marker = path.join(directory, 'native-was-executed');
+    fs.writeFileSync(receipt.artifacts[0].requested,
+      `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'unexpected execution');\n`, { mode: 0o700 });
+    fs.chmodSync(receipt.artifacts[0].requested, 0o700);
+    receipt.inputs = roster.inputs.map(item => measureNativeBuildInput(item.requested, item.cap));
+    receipt.artifacts = roster.artifacts.map(item => measureNativeBuildInput(item.requested, item.cap));
+    validateNativeBuildReceipt(receipt, { repo, output: nativeRun });
+    const cases = receipt.inputs.map((_, index) => ({ name: `missing-input-${index}`,
+      mutate: value => { value.inputs.splice(index, 1); }, reason: /native inputs roster: exact count required/ }));
+    cases.push(
+      { name: 'duplicate-input', mutate: value => { value.inputs[1] = value.inputs[0]; }, reason: /native inputs roster/ },
+      { name: 'extra-input', mutate: value => { value.inputs.push(value.inputs[0]); }, reason: /native inputs roster/ },
+      { name: 'rewritten-input', mutate: value => { value.inputs[0].requested = value.artifacts[0].requested; }, reason: /native inputs roster/ },
+      { name: 'rewritten-resolved-input', mutate: value => { value.inputs[0].resolved = value.artifacts[0].requested; }, reason: /stale native build input/ },
+      { name: 'changed-input-hash', mutate: value => { value.inputs[0].sha256 = 'f'.repeat(64); }, reason: /stale native build input/ },
+      { name: 'changed-input-size', mutate: value => { value.inputs[0].bytes++; }, reason: /stale native build input/ },
+      { name: 'missing-artifact', mutate: value => { value.artifacts.pop(); }, reason: /native artifacts roster/ },
+      { name: 'duplicate-artifact', mutate: value => { value.artifacts[1] = value.artifacts[0]; }, reason: /native artifacts roster/ },
+      { name: 'extra-artifact', mutate: value => { value.artifacts.push(value.artifacts[0]); }, reason: /native artifacts roster/ },
+      { name: 'rewritten-artifact', mutate: value => { value.artifacts[1].requested = value.inputs[0].requested; }, reason: /native artifacts roster/ },
+      { name: 'redirected-artifact', mutate: value => { value.artifacts[0].resolved = value.inputs[0].requested; }, reason: /native artifacts roster/ },
+      { name: 'rewritten-source-stage', mutate: value => { value.stages[2].args[1] = '/different/source'; }, reason: /native configure: source\/build\/generator/ },
+      { name: 'native-args', mutate: value => { value.stages[4].args = ['--different']; }, reason: /native stage command mismatch/ },
+    );
+    for (const entry of cases) {
+      const changed = structuredClone(receipt); entry.mutate(changed);
+      fs.writeFileSync(path.join(nativeRun, 'receipt.json'), JSON.stringify(changed));
+      const output = path.join(directory, entry.name);
+      await assert.rejects(main(['--source-run', source, '--native-build-run', nativeRun, '--output', output, '--compiler-repo', repo]), entry.reason, entry.name);
+      const failed = JSON.parse(fs.readFileSync(path.join(output, 'receipt.json'), 'utf8'));
+      assert.equal(failed.status, 'failed'); assert.match(failed.failure, entry.reason);
+      assert.deepEqual(failed.stages, []); assert.deepEqual(failed.machine_reports, []);
+      assert.equal(failed.source_authentication, false); assert.equal(failed.grants_artifact_or_launch_authority, false);
+      assert.equal(fs.existsSync(marker), false, entry.name);
+    }
+    assert.equal(cases.length, 35);
+  } finally { fs.rmSync(directory, { recursive: true }); }
 });
 
 const native = process.env.FE2O3_ORDERED_REGION_NATIVE_TEST_EXE;

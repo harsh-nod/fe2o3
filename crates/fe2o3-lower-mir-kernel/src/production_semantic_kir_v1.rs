@@ -77,6 +77,7 @@ use sha2::{Digest as _, Sha256};
 
 include!("production_pre_ranked_v1.rs");
 include!("production_ordered_region_pre_ranked_v16.rs");
+include!("production_ordered_region_inspection_v1.rs");
 #[path = "native_source_correspondence_replay_v1.rs"]
 mod native_source_correspondence_replay_v1;
 pub use native_source_correspondence_replay_v1::*;

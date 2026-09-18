@@ -30,6 +30,9 @@ use super::gfx942_inline_value_qualification_v30_tests::{
 };
 use super::{Callbacks, Compilation, Compiler, TyCtxt};
 
+#[path = "gfx942_ordered_region_debugger_v31_tests.rs"]
+mod debugger;
+
 const OUTPUT_ENV: &str = "FE2O3_TEST_ORDERED_REGION_OUTPUT_V31";
 const CHILD_ENV: &str = "FE2O3_TEST_ORDERED_REGION_INPUTS_V31";
 const FEATURE_ENV: &str = "FE2O3_TEST_ORDERED_REGION_FEATURE_V31";
@@ -263,6 +266,7 @@ fn observe_materialized(
     assert!(line.find("v_xor_b32_e32").unwrap() < line.find("v_add_u32_e32").unwrap());
     fs::write(output.join("observation.ll"), &llvm).unwrap();
     let cases = observe_cpu(executable, feature == FEATURES[1]);
+    debugger::observe(retained, feature, output);
     json!({
         "stage": "actual_source_v31_exact_v16_cpu_and_llvm_observed",
         "semantic_sha256": super::lower_hex_v1(semantic.semantic_sha256().as_bytes()),
