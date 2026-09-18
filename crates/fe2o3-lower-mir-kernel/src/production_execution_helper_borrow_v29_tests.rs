@@ -16,6 +16,9 @@ enum Case {
 }
 
 fn helper_source(case: Case, ignored_prefix: usize) -> AdmittedInertSemanticMirV1 {
+    let with_provider = matches!(case, Case::Forward | Case::Reborrow | Case::CopiedReference);
+    let relay_id = if with_provider { 3 } else { 2 };
+    let issuer_id = if with_provider { 5 } else { 3 };
     let base = lifecycle_owner(false);
     let semantic = base.source_semantic();
     let original = &semantic.functions()[1];
@@ -97,7 +100,7 @@ fn helper_source(case: Case, ignored_prefix: usize) -> AdmittedInertSemanticMirV
                     },
                 )],
                 invoke(
-                    5,
+                    relay_id,
                     arguments(3),
                     if case == Case::ReturnedReference {
                         place(6, reference_type)
@@ -170,7 +173,7 @@ fn helper_source(case: Case, ignored_prefix: usize) -> AdmittedInertSemanticMirV
         }
         _ => 1,
     };
-    let relay_blocks = if case == Case::ReturnedReference {
+    let relay_blocks = if matches!(case, Case::ReturnedReference | Case::Unused) {
         vec![block(165, statements, SemanticTerminatorKindV1::Return)]
     } else {
         vec![
@@ -178,7 +181,7 @@ fn helper_source(case: Case, ignored_prefix: usize) -> AdmittedInertSemanticMirV
                 165,
                 statements,
                 invoke(
-                    if case == Case::Cycle { 5 } else { 6 },
+                    if case == Case::Cycle { relay_id } else { 4 },
                     arguments(forwarded),
                     place(0, UNIT),
                     1,
@@ -225,7 +228,7 @@ fn helper_source(case: Case, ignored_prefix: usize) -> AdmittedInertSemanticMirV
                 177,
                 vec![],
                 invoke(
-                    DERIVE.index(),
+                    6,
                     vec![SemanticOperandV1::Move(place(1, reference_type))],
                     place(4, workgroup),
                     1,
@@ -242,26 +245,44 @@ fn helper_source(case: Case, ignored_prefix: usize) -> AdmittedInertSemanticMirV
         provider_locals,
         provider_blocks,
     );
-    let mut callables = semantic.callables().to_vec();
-    callables.push(SemanticCallableDeclV1::defined(
-        SemanticFunctionIdV1::from_index(3),
-    ));
-    callables.push(SemanticCallableDeclV1::defined(
-        SemanticFunctionIdV1::from_index(4),
-    ));
+    let original_root = &semantic.functions()[0];
+    let mut root_blocks = original_root.blocks().to_vec();
+    root_blocks[0] = block(85, vec![], invoke(issuer_id, vec![], place(2, CONTEXT), 1));
+    let root = function(
+        80,
+        SemanticFunctionRoleV1::KernelRoot,
+        original_root.abi().clone(),
+        original_root.locals().to_vec(),
+        root_blocks,
+    )
+    .with_kernel_entry(original_root.kernel_entry().unwrap().clone());
+    let functions = if with_provider {
+        vec![
+            root,
+            holder,
+            semantic.functions()[2].clone(),
+            relay,
+            provider,
+        ]
+    } else {
+        vec![root, holder, relay]
+    };
+    let mut callables = (0..functions.len())
+        .map(|index| {
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(index as u32))
+        })
+        .collect::<Vec<_>>();
+    callables.push(semantic.callables()[ISSUER.index() as usize].clone());
+    if with_provider {
+        callables.push(semantic.callables()[DERIVE.index() as usize].clone());
+    }
     InertSemanticMirRequestV1::new_with_callables(
         semantic.target(),
         semantic.types().to_vec(),
         vec![],
         vec![],
         vec![],
-        vec![
-            semantic.functions()[0].clone(),
-            holder,
-            semantic.functions()[2].clone(),
-            relay,
-            provider,
-        ],
+        functions,
         callables,
         vec![ROOT],
     )
@@ -370,7 +391,11 @@ fn nominal_helper_bodies_close_transitive_borrows_without_fabricating_occurrence
                     matches!(kill.resolved(), Some(SsaResolvedEventV1::Kill { previous: Some(actual), .. }) if actual == value)
                 );
                 let relay = occurrences
-                    .function(SemanticFunctionIdV1::from_index(3))
+                    .function(SemanticFunctionIdV1::from_index(if case == Case::Unused {
+                        2
+                    } else {
+                        3
+                    }))
                     .unwrap();
                 assert!(
                     relay
