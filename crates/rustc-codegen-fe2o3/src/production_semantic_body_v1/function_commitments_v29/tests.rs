@@ -228,6 +228,13 @@ fn roster_comes_from_complete_preflight_not_successfully_captured_bodies() {
 
 #[test]
 fn preflight_rejects_order_and_instance_rebinding() {
+    let mut shortened = owner(2);
+    assert!(
+        shortened
+            .enable_function_commitments_v29(1, std::iter::once(expected(0, &function(0, 7))),)
+            .is_err()
+    );
+    assert!(shortened.function_commitments.is_none());
     for change in 0..3 {
         let mut owner = owner(2);
         let mut rows = vec![expected(0, &function(0, 7)), expected(1, &function(1, 7))];
@@ -281,13 +288,12 @@ fn dropped_capture_or_preparation_does_not_publish_or_refund_work() {
     let after_capture = owner.totals.validation_work;
     assert!(after_capture > before);
     {
-        let prepared = owner
+        let _prepared = owner
             .function_commitments
             .as_mut()
             .unwrap()
             .prepare(commitment)
             .unwrap();
-        drop(prepared);
     }
     let pending = owner.function_commitments.as_ref().unwrap();
     assert_eq!(pending.completed, 0);
@@ -387,4 +393,66 @@ fn seal_exact_and_one_short_work_preserve_capture_debits() {
         assert_eq!(result.is_ok(), maximum == exact);
         assert_eq!(owner.totals.validation_work, exact);
     }
+}
+
+#[test]
+fn initialization_exact_and_one_short_work_are_charged_before_publication() {
+    for maximum in [3, 2] {
+        let mut owner = owner(1);
+        owner.limits = owner
+            .limits
+            .with_limit(SemanticMirResourceV1::ValidationWork, maximum)
+            .unwrap();
+        let result =
+            owner.enable_function_commitments_v29(1, std::iter::once(expected(0, &function(0, 7))));
+        assert_eq!(result.is_ok(), maximum == 3);
+        assert_eq!(owner.totals.validation_work, 3);
+        assert_eq!(owner.function_commitments.is_some(), maximum == 3);
+    }
+}
+
+#[test]
+fn terminal_rows_cannot_supply_defined_function_roster() {
+    let entry = ProductionSemanticCallableOwnerEntryV1::terminal(
+        instance(0),
+        ProductionTerminalExpansionV1::ContextIssue,
+        SemanticCallableIdV1::from_index(0),
+    );
+    let mut owner =
+        ProductionSemanticBodyRequestOwnerV1::new(SemanticMirLimitsV1::default(), 1, &[entry])
+            .unwrap();
+    assert_eq!(owner.defined_functions, 0);
+    assert!(
+        owner
+            .enable_function_commitments_v29(1, std::iter::once(expected(0, &function(0, 7))),)
+            .is_err()
+    );
+}
+
+#[test]
+fn capture_byte_limit_preserves_error_details_and_unpublished_state() {
+    let f = function(0, 7);
+    let expected = canonical_function_commitment_v1(
+        &f,
+        SemanticMirWireVersionV1::V29,
+        SemanticMirLimitsV1::default(),
+        &mut |_| Ok(()),
+    )
+    .unwrap()
+    .canonical_bytes();
+    let mut owner = enabled(1);
+    owner.limits = owner
+        .limits
+        .with_limit(SemanticMirResourceV1::CanonicalBytes, expected - 1)
+        .unwrap();
+    let before = owner.totals.validation_work;
+    assert!(matches!(owner.capture_function_commitment_v29(
+        SemanticFunctionIdV1::from_index(0), &f,
+    ), Err(ProductionSemanticBodyErrorV1::LimitExceeded {
+        resource: SemanticMirResourceV1::CanonicalBytes, actual, maximum,
+    }) if actual == expected && maximum == expected - 1));
+    assert!(owner.totals.validation_work > before);
+    let pending = owner.function_commitments.as_ref().unwrap();
+    assert_eq!(pending.completed, 0);
+    assert!(pending.rows[0].captured.is_none());
 }

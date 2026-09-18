@@ -296,6 +296,7 @@ pub(crate) struct ProductionSemanticBodyRequestOwnerV1<'tcx> {
     limits: SemanticMirLimitsV1,
     totals: ConstructionTotalsV1,
     callables: HashMap<Instance<'tcx>, ProductionSemanticCallableOwnerRecordV1>,
+    defined_functions: usize,
     context_entries: Vec<crate::collector::RetainedContextEntryV29>,
     function_commitments: Option<PendingFunctionCommitmentsV29<'tcx>>,
 }
@@ -337,6 +338,7 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
         callables
             .try_reserve(callable_entries.len())
             .map_err(|_| allocation(SemanticMirResourceV1::Callables))?;
+        let mut defined_functions = 0;
         for (index, entry) in callable_entries.iter().copied().enumerate() {
             totals.charge(SemanticMirResourceV1::ValidationWork, 1, limits)?;
             let (rustc_instance, record) = match entry {
@@ -363,6 +365,9 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
                 ),
             };
             require_canonical_callable_id_v1(index, record.semantic_callable)?;
+            if record.kind == ProductionSemanticCallableOwnerKindV1::Defined {
+                defined_functions += 1;
+            }
             if callables.insert(rustc_instance, record).is_some() {
                 return Err(table("callable owner table"));
             }
@@ -371,6 +376,7 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
             limits,
             totals,
             callables,
+            defined_functions,
             context_entries: Vec::new(),
             function_commitments: None,
         })
@@ -2916,6 +2922,7 @@ mod tests {
             limits,
             totals: ConstructionTotalsV1::default(),
             callables: HashMap::new(),
+            defined_functions: 0,
             context_entries: Vec::new(),
             function_commitments: None,
         };

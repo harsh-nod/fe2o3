@@ -83,6 +83,7 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
             || self.totals.functions != 0
             || !self.context_entries.is_empty()
             || expected_count == 0
+            || expected_count != self.defined_functions
         {
             return Err(table("function commitment initialization"));
         }
