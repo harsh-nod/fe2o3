@@ -37,13 +37,13 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0xe0, 0xc7, 0xd0, 0xa9, 0xa9, 0x95, 0xfc, 0x33, 0x6a, 0x5a, 0x75, 0xe1, 0x43, 0xd7, 0x48, 0xeb,
-    0x51, 0x19, 0x46, 0x46, 0xcb, 0xe5, 0x4f, 0xa3, 0x59, 0xa2, 0x58, 0x48, 0x93, 0x01, 0x85, 0x16,
+    0x46, 0xf1, 0x56, 0x15, 0xe7, 0xf9, 0x01, 0x2f, 0x31, 0x44, 0x99, 0x76, 0xf9, 0x74, 0x52, 0x60,
+    0x45, 0xd7, 0x72, 0x73, 0xc9, 0x3b, 0x2e, 0xa7, 0x41, 0x6a, 0xe1, 0x5a, 0x5d, 0xf3, 0x73, 0xc2,
 ];
 // The pinned Cargo-produced manifest fixture is checked with the complete source tree.
 const REVIEWED_SAFE_EXECUTION_CARGO_VENDOR_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x6e, 0xf4, 0x61, 0xd2, 0x97, 0x68, 0x2f, 0xfb, 0xa7, 0xff, 0x21, 0x83, 0x3b, 0x7a, 0x4e, 0x37,
-    0x3c, 0x8a, 0xf1, 0xbd, 0x4c, 0x01, 0x0d, 0x51, 0xee, 0xe9, 0xf6, 0x90, 0x44, 0x35, 0x23, 0xc2,
+    0xa8, 0xfa, 0x40, 0x2e, 0x84, 0xd7, 0x74, 0x81, 0x9e, 0xa2, 0x8c, 0x81, 0x53, 0xe8, 0x45, 0xf2,
+    0x7e, 0x0e, 0xed, 0xdb, 0xf3, 0x32, 0x19, 0x85, 0x0b, 0x2e, 0xb1, 0x11, 0xec, 0x67, 0x05, 0x65,
 ];
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1: [[u8; 32]; 2] = [
     REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
@@ -374,6 +374,7 @@ pub(crate) enum TrustedDeviceItem {
     KernelContextIssue,
     ExecutionWorkgroupCapability,
     ExecutionWorkgroupCurrent,
+    ExecutionWithWorkgroup,
     MaskedTile1D,
     LaneFragment1D,
     MaskedTile1DLoadMasked,
@@ -401,6 +402,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::ExecutionWorkgroupCurrent,
         "fe2o3_device_workgroup_capability_current_v1",
         "fe2o3_device::KernelContext::__compiler_workgroup_capability_current",
+    ),
+    (
+        TrustedDeviceItem::ExecutionWithWorkgroup,
+        "fe2o3_device_with_workgroup_v1",
+        "fe2o3_device::KernelContext::with_workgroup",
     ),
     (
         TrustedDeviceItem::MaskedTile1D,
@@ -1714,6 +1720,9 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::ExecutionWorkgroupCurrent => {
             "fe2o3_device::execution::{impl#2}::__compiler_workgroup_capability_current"
         }
+        TrustedDeviceItem::ExecutionWithWorkgroup => {
+            "fe2o3_device::execution::{impl#2}::with_workgroup"
+        }
         TrustedDeviceItem::MaskedTile1D => "fe2o3_device::tile::MaskedTile1D",
         TrustedDeviceItem::LaneFragment1D => "fe2o3_device::tile::LaneFragment",
         TrustedDeviceItem::MaskedTile1DLoadMasked => "fe2o3_device::tile::{impl#0}::load_masked",
@@ -1948,6 +1957,7 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::KernelContextIssue
             | TrustedDeviceItem::ExecutionWorkgroupCapability
             | TrustedDeviceItem::ExecutionWorkgroupCurrent
+            | TrustedDeviceItem::ExecutionWithWorkgroup
             | TrustedDeviceItem::MaskedTile1D
             | TrustedDeviceItem::LaneFragment1D
             | TrustedDeviceItem::MaskedTile1DLoadMasked
@@ -3467,7 +3477,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("e0c7d0a9a995fc336a5a75e143d748eb51194646cbe54fa359a2584893018516")
+            digest("46f15615e7f9012f31449976f974526045d77273c93b2ea7416ae15a5df373c2")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
@@ -3877,6 +3887,7 @@ mod tests {
             TrustedDeviceItem::KernelContextIssue,
             TrustedDeviceItem::ExecutionWorkgroupCapability,
             TrustedDeviceItem::ExecutionWorkgroupCurrent,
+            TrustedDeviceItem::ExecutionWithWorkgroup,
             TrustedDeviceItem::MaskedTile1D,
             TrustedDeviceItem::LaneFragment1D,
             TrustedDeviceItem::MaskedTile1DLoadMasked,
@@ -4134,6 +4145,7 @@ mod tests {
     #[test]
     fn safe_execution_items_have_exact_structural_provider_paths() {
         let items = [
+            TrustedDeviceItem::ExecutionWithWorkgroup,
             TrustedDeviceItem::WorkgroupLdsScope,
             TrustedDeviceItem::WorkgroupLdsScopeCurrent,
             TrustedDeviceItem::DynamicLdsExactCurrent,
@@ -4223,6 +4235,7 @@ mod tests {
             assert!(path.starts_with("fe2o3_device::"));
             assert!(
                 path.contains("::collective::")
+                    || path.contains("::execution::")
                     || path.contains("::group::")
                     || path.contains("::lds::")
                     || path.contains("::gfx950::")

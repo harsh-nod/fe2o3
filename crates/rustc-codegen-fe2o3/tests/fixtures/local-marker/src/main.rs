@@ -53,6 +53,24 @@ pub fn fe2o3_kernel_local_marker(mut output: RootArgument) {
         feature = "reserved-capability-control"
     ))]
     let _ = output;
+    #[cfg(any(
+        feature = "workgroup-provider-spoof",
+        feature = "workgroup-provider-control"
+    ))]
+    let _ = with_workgroup(7);
+}
+
+#[cfg(any(
+    feature = "workgroup-provider-spoof",
+    feature = "workgroup-provider-control"
+))]
+#[inline(never)]
+#[cfg_attr(
+    feature = "workgroup-provider-spoof",
+    rustc_diagnostic_item = "fe2o3_device_with_workgroup_v1"
+)]
+fn with_workgroup(value: u32) -> u32 {
+    value
 }
 
 #[cfg(not(any(

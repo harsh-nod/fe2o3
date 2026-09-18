@@ -79,6 +79,9 @@ impl<'kernel, Kernel, Target: KernelTarget, Launch: KernelLaunch>
     /// may be returned; borrowed inputs and outputs keep their Rust lifetimes.
     /// This provider stage always traps before invoking the callback and is
     /// explicitly rejected by production, not an executable host fallback.
+    // Preserve the provider exit until checked compiler scope materialization.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_with_workgroup_v1"]
     pub fn with_workgroup<Result>(
         &mut self,
         operation: impl for<'workgroup> FnOnce(

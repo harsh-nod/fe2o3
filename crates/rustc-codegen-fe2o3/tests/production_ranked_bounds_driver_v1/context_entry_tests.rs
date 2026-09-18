@@ -49,10 +49,14 @@ fn check_kernel_context_source_protocol() {
         let mut marker_type = marker;
         let mut root = "fe2o3_kernel_context_probe";
         let expected = match case {
-            "valid_zst" => "without production expansion: KernelContextIssue",
+            // These handwritten registrations omit the typed kernel binding. Valid
+            // context flow reaches binding validation but cannot authorize export.
+            "valid_zst" => {
+                "semantic body construction rejected inconsistent kernel binding identity"
+            }
             "valid_transport" => {
                 body = "let issued = KernelContext::<'_, Marker>::__compiler_issue(); let forwarded = issued; let first = a; let second = b; let marker = tag; context_probe_body(forwarded, first, second, marker);";
-                "without production expansion: KernelContextIssue"
+                "semantic body construction rejected inconsistent kernel binding identity"
             }
             "transport_reordered" => {
                 body = "let issued = KernelContext::<'_, Marker>::__compiler_issue(); let forwarded = issued; let first = a; let second = b; let marker = tag; context_probe_body(forwarded, second, first, marker);";

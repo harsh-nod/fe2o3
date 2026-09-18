@@ -4,6 +4,8 @@ fn forged_capability_markers_cannot_gain_nominal_authority() {
     const PACKAGE: &str = "fe2o3-trusted-item-local-marker";
     const SPOOF: &str = "reserved-capability-spoof";
     const CONTROL: &str = "reserved-capability-control";
+    const PROVIDER: &str = "workgroup-provider-spoof";
+    const PROVIDER_CONTROL: &str = "workgroup-provider-control";
     const REFUSAL: &str = "unauthenticated reserved device type provider";
     // The legacy control reaches body export only after type and FnAbi import.
     // Its V1 registration intentionally supplies no V3 kernel binding.
@@ -11,7 +13,7 @@ fn forged_capability_markers_cannot_gain_nominal_authority() {
         "semantic body construction rejected inconsistent kernel binding identity";
 
     let target = ScratchTarget::new();
-    for feature in [CONTROL, SPOOF] {
+    for feature in [CONTROL, SPOOF, PROVIDER, PROVIDER_CONTROL] {
         let result = Command::new(env!("CARGO"))
             .current_dir(workspace())
             .env_remove("RUSTC_WRAPPER")
@@ -60,16 +62,19 @@ fn forged_capability_markers_cannot_gain_nominal_authority() {
             !result.status.success(),
             "{feature} unexpectedly acquired production authority"
         );
-        let expected = if feature == CONTROL {
-            CONTROL_BOUNDARY
-        } else {
-            REFUSAL
+        let expected = match feature {
+            CONTROL | PROVIDER_CONTROL => CONTROL_BOUNDARY,
+            PROVIDER => "trusted-provider rejection",
+            _ => REFUSAL,
         };
         assert!(
             stderr.contains(expected),
             "{feature} omitted {expected:?}:\n{stderr}"
         );
-        if feature == SPOOF {
+        if !matches!(feature, CONTROL | PROVIDER_CONTROL) {
+            if feature == PROVIDER {
+                assert!(stderr.contains("fe2o3_device_with_workgroup_v1"), "{stderr}");
+            }
             for forbidden in [
                 CONTROL_BOUNDARY,
                 "target-neutral lowering remains pending",
@@ -84,6 +89,7 @@ fn forged_capability_markers_cannot_gain_nominal_authority() {
                 );
             }
         } else {
+            assert!(!stderr.contains("trusted-provider rejection"), "{stderr}");
             assert!(
                 !stderr.contains(REFUSAL),
                 "ordinary local ZST was treated as authority:\n{stderr}"
