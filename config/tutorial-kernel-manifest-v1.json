@@ -13937,10 +13937,12 @@
         "functionUtf8Offset": 1375,
         "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-gpt-oss-serial-router:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical GPT implementation needs its exact file, feature selection, and helper closure bound independently of same-named production and ablation entries."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Expected fixture/source contract: exact current whole-file bytes and attributed occurrence under the retained Cargo feature selection; not rustc acceptance, execution, or variant qualification."
       },
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
@@ -13948,10 +13950,12 @@
         "functionUtf8Offset": 1439,
         "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-gpt-oss-held-fragments:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical GPT implementation needs its exact file, feature selection, and helper closure bound independently of same-named production and ablation entries."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Expected fixture/source contract: exact current whole-file bytes and attributed occurrence under the retained Cargo feature selection; not rustc acceptance, execution, or variant qualification."
       },
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
@@ -13959,10 +13963,12 @@
         "functionUtf8Offset": 1440,
         "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-gpt-oss-interleaved-stores:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical GPT implementation needs its exact file, feature selection, and helper closure bound independently of same-named production and ablation entries."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Expected fixture/source contract: exact current whole-file bytes and attributed occurrence under the retained Cargo feature selection; not rustc acceptance, execution, or variant qualification."
       },
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
@@ -13970,10 +13976,12 @@
         "functionUtf8Offset": 1395,
         "kernelSymbol": "gfx950_gpt_oss_120b_router_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-gpt-oss-materialized-router:gfx950_gpt_oss_120b_router_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical GPT implementation needs its exact file, feature selection, and helper closure bound independently of same-named production and ablation entries."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Expected fixture/source contract: exact current whole-file bytes and attributed occurrence under the retained Cargo feature selection; not rustc acceptance, execution, or variant qualification."
       },
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
@@ -13981,10 +13989,12 @@
         "functionUtf8Offset": 9610,
         "kernelSymbol": "gfx950_gpt_oss_120b_attention_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-gpt-oss-materialized-attention:gfx950_gpt_oss_120b_attention_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical GPT implementation needs its exact file, feature selection, and helper closure bound independently of same-named production and ablation entries."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Expected fixture/source contract: exact current whole-file bytes and attributed occurrence under the retained Cargo feature selection; not rustc acceptance, execution, or variant qualification."
       },
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
@@ -13992,10 +14002,12 @@
         "functionUtf8Offset": 16455,
         "kernelSymbol": "gfx950_gpt_oss_120b_expert_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-gpt-oss-materialized-expert:gfx950_gpt_oss_120b_expert_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "This historical GPT implementation needs its exact file, feature selection, and helper closure bound independently of same-named production and ablation entries."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Expected fixture/source contract: exact current whole-file bytes and attributed occurrence under the retained Cargo feature selection; not rustc acceptance, execution, or variant qualification."
       },
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",

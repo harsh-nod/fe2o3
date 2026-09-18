@@ -81,8 +81,28 @@ the fixture inputs, source-driver contracts or curriculum source metadata.
   and required negatives have explicit separate classifications. Bare-function
   intent is reviewed inventory data, not inferred from lexical syntax.
 - A `source-driver-contract` binding must match an existing exact source case
-  and its displayed fragment. Other source/display joins remain `pending`;
-  a fixture's lesson scope is not an exact displayed-source binding.
+  and its displayed fragment.
+- A `fixture-source-contract` is an expected fixture/source contract, not
+  rustc-selected execution or semantic admission. It joins an existing
+  feature-specific fixture identity to one attributed function occurrence in an
+  exact whole-file kernel display. The validator rechecks the physical package
+  closure, Cargo manifest/lock, selected source member, file/display digests and
+  UTF-8 name offset. Package membership alone is insufficient.
+  Selection uses the existing lexer/scanner with a restricted check of ordinary
+  sibling modules and literal `feature`/`target_arch` cfg expressions (`all`,
+  `any`, `not`) for AMDGPU. Unknown cfg, item macros, transforming attributes,
+  build-script cfg, dependency features, nested/inline/path-selected modules,
+  duplicate modules or selected symbols reject a claimed binding. Such sources
+  retain `pending` until an exact selection can be established. This bounded
+  check does not replace rustc or qualify kernel implementations.
+
+Six GPT-OSS occurrences in tabs 1-4 now retain these expected fixture/source
+contracts: serial-router, held-fragments, interleaved-stores, and the three
+materialized components. Their existing source/feature identities remain
+distinct, including the repeated megakernel symbol. This leaves 58 pending
+display bindings; the two named lesson-level source gaps remain unresolved.
+Other source/display joins remain `pending`; a fixture's lesson scope is not
+an exact displayed-source binding.
 
 The V2 report's `kernelInventory` projects these records and reports known
 identity, display, negative-case and pending-join counts separately.
@@ -98,10 +118,13 @@ qualifies implementations: pending variants still require their own sources,
 oracles and every production/target gate. The current known source selections
 must not be presented as the final number of tutorial pairs.
 
-This is a bounded lexical inventory, not a Rust parser or feature evaluator.
-Comments, literals and `macro_rules!` template bodies are excluded; conditional
-kernel attributes are conservatively retained. Rust compilation remains the
-authority for feature reachability and executable semantics.
+This is a bounded lexical inventory, not a general Rust parser or compiler
+feature-reachability proof. The runtime census excludes comments, literals and
+`macro_rules!` template bodies and conservatively retains conditional kernel
+attributes. Direct fixture selection additionally evaluates only the restricted
+literal cfg and module forms described above against the retained Cargo feature
+contract. Rust compilation remains the authority for feature reachability and
+executable semantics.
 
 ## Remaining Integration
 
