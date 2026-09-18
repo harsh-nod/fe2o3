@@ -426,6 +426,20 @@ query checks direct shared-slice helper parameters against the actual root input
 and successful bounds-assertion edge; it does not establish an environment
 field's origin or discharge the helper's other effects.
 
+The producer can also allocate borrowed storage for an internal helper's owned
+argument zero. This requires an exact by-value aggregate parameter binding,
+scalar/shared-slice fields, and a whole-local borrow as the first meaningful
+entry statement. Each scalar cell is initialized once from its exact incoming
+parameter component; subsequent borrows reuse it. Shared-slice descriptors are
+retained unchanged. Entry ownership has its own source anchor, and a view cannot
+outlive that owned parameter. Missing/duplicate parameter bindings, assignment
+reinitialization, unsupported first uses, and exhausted budgets reject.
+
+This entry-storage extension is not an extension of the independent replay
+grammar. The production pre-ranked owner still refuses it until replay checks
+the owned caller-to-helper value transfer, initialization and complete effects.
+An emitted candidate or a storage unit test cannot supply that missing relation.
+
 The registered natural-source tests require successful production export and
 CPU/simulator comparisons for owned closures, repeated `FnMut` mutation, and
 ordinary shared/mutable environments. They are acceptance tests, not passing

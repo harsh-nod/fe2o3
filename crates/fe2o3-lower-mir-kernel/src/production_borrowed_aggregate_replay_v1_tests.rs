@@ -1,4 +1,5 @@
 include!("production_borrowed_aggregate_replay_v1_fixtures.rs");
+include!("production_borrowed_entry_owner_v1_tests.rs");
 
 #[test]
 fn actual_source_repeated_mutation_shared_borrow_and_caller_reload() {

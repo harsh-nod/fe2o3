@@ -220,7 +220,9 @@ fn selection_function(
         argument
             .into_iter()
             .map(|ty| {
-                if ty == UNIQUE {
+                if ty == ENV {
+                    SemanticSourceArgumentOwnershipV1::ByValue
+                } else if ty == UNIQUE {
                     SemanticSourceArgumentOwnershipV1::UniqueBorrow
                 } else {
                     SemanticSourceArgumentOwnershipV1::SharedBorrow
@@ -685,6 +687,49 @@ fn selection_closure_exhaustion_restores_the_shared_storage_floor() {
         .is_err()
     );
     assert_eq!(budget.storage(), 11);
+}
+
+#[test]
+fn owned_entry_selection_requires_one_exact_helper_parameter_binding() {
+    let types = selection_types();
+    let function = selection_function(Some(ENV), &[UNIT, ENV, SHARED, UNIT, SHARED], vec![
+        selection_block(80, vec![selection_assign(4, SHARED, SemanticRvalueKindV1::Borrow {
+            kind: SemanticBorrowKindV1::Shared, place: selection_place(1, ENV),
+        })], selection_call()),
+        selection_block(81, vec![], SemanticTerminatorKindV1::Return),
+    ]);
+    for mutation in 0..5 {
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100_000);
+        let mut budget = ArgumentBudgetV1::new(&mut work, 100_000);
+        budget.reserve_storage(7).unwrap();
+        let mut plan = selection_plan();
+        plan.role = SemanticKirFunctionRoleV1::InternalHelper;
+        if mutation != 1 {
+            plan.parameter_local_bindings.push(PlannedParameterLocalBindingV1::Flattened {
+                local: 1, semantic_type: if mutation == 2 { U32 } else { ENV },
+                values: vec![ValueDef::new(ValueId(17), Type::Scalar(ScalarType::U32))],
+            });
+        }
+        if mutation == 3 { plan.role = SemanticKirFunctionRoleV1::KernelEntry; }
+        if mutation == 4 {
+            plan.parameter_local_bindings.push(PlannedParameterLocalBindingV1::Direct {
+                local: 1, value: ValueId(18), ty: Type::Scalar(ScalarType::U32),
+            });
+        }
+        let result = prepare_borrowed_aggregates_v1(&types, &function,
+            &[SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(1))],
+            &plan, &selection_signature(), &mut budget);
+        if mutation == 0 {
+            let result = result.unwrap();
+            assert_eq!(result.owners.len(), 1);
+            assert_eq!(result.owners[&1].aggregate_type, ENV);
+        } else {
+            assert!(matches!(result, Err(ProductionSemanticKirErrorV1::Unsupported {
+                detail: "borrowed aggregate reference originates at an unselected entry binding", ..
+            })), "mutation {mutation}");
+            assert_eq!(budget.storage(), 7);
+        }
+    }
 }
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::ProductionSemanticMirLimitsV1;

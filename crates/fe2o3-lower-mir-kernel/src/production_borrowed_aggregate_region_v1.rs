@@ -167,12 +167,14 @@ fn expand_borrowed_aggregate_locals_v1(
                                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
                             if shape.aggregate_type != place.ty()
                                 || declaration.ty() != place.ty()
-                                || declaration.role().is_entry_argument()
                                 || declaration.role() == SemanticLocalRoleV1::Return
                             {
                                 return Err(borrowed_aggregate_error_v1(
                                     "borrowed aggregate owner is not an exact local aggregate",
                                 ));
+                            }
+                            if declaration.role().is_entry_argument() {
+                                check_borrowed_entry_owner_v1(function, place.local(), &shape, budget)?;
                             }
                             budget.reserve_storage(
                                 std::mem::size_of::<BorrowedAggregateShapeV1>()
@@ -205,6 +207,50 @@ fn expand_borrowed_aggregate_locals_v1(
             return Ok(());
         }
     }
+}
+
+// This is only storage selection. The independent call/source replay still has
+// to join the caller's value to these exact helper parameters.
+fn check_borrowed_entry_owner_v1(
+    function: &SemanticFunctionDeclV1,
+    local: SemanticLocalIdV1,
+    shape: &BorrowedAggregateShapeV1,
+    budget: &mut dyn BorrowedAggregateBudgetV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    budget.charge_work(argument_sum_v1(&[shape.leaves.len(), 8])?)?;
+    if function.role() != SemanticFunctionRoleV1::InternalHelper
+        || function.locals()[local.index() as usize].role() != SemanticLocalRoleV1::Argument(0)
+        || function.abi().source_argument_ownership().first()
+            != Some(&SemanticSourceArgumentOwnershipV1::ByValue)
+        || shape.leaves.iter().any(|leaf| {
+            !matches!(leaf.transport,
+                BorrowedAggregateLeafTransportV1::ScalarSlot { .. }
+                    | BorrowedAggregateLeafTransportV1::InvariantSlice { .. })
+        })
+    {
+        return Err(borrowed_aggregate_error_v1(
+            "borrowed entry owner requires a by-value helper argument with scalar or shared-slice fields",
+        ));
+    }
+    for statement in function.blocks()[function.entry().index() as usize].statements() {
+        budget.charge_work(4)?;
+        match statement.kind() {
+            SemanticStatementKindV1::Nop => continue,
+            SemanticStatementKindV1::StorageLive(other)
+            | SemanticStatementKindV1::StorageDead(other) if *other != local => continue,
+            SemanticStatementKindV1::Assign(assignment)
+                if assignment.destination().local() != local
+                    && assignment.destination().projections().is_empty()
+                    && matches!(assignment.value().kind(),
+                        SemanticRvalueKindV1::Borrow { place, .. }
+                            if place.local() == local && place.projections().is_empty()
+                                && place.ty() == shape.aggregate_type) => return Ok(()),
+            _ => break,
+        }
+    }
+    Err(borrowed_aggregate_error_v1(
+        "borrowed entry owner must first be borrowed in the helper entry block",
+    ))
 }
 
 fn borrowed_aggregate_place_uses_v1(

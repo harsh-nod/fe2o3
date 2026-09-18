@@ -169,6 +169,21 @@ fn source_abi(tag: u8, reference: Option<SemanticTypeIdV1>) -> SemanticFunctionA
         reference
             .into_iter()
             .map(|ty| {
+                if ty == ENV {
+                    return SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+                        ty,
+                        SemanticAbiPassModeV1::Cast {
+                            pad_i32: false,
+                            cast: SemanticAbiCastV1::new(
+                                [None; 8], None,
+                                SemanticAbiUniformV1::new(
+                                    SemanticAbiRegisterV1::new(SemanticAbiRegisterKindV1::Integer, 8).unwrap(), 8,
+                                ).unwrap(),
+                                SemanticAbiValueAttributesV1::plain(),
+                            ),
+                        },
+                    ));
+                }
                 let shared = ty == SHARED;
                 let attributes = SemanticAbiValueAttributesV1::new(
                     SemanticAbiRegularAttributesV1::new(
@@ -197,7 +212,9 @@ fn source_abi(tag: u8, reference: Option<SemanticTypeIdV1>) -> SemanticFunctionA
         reference
             .into_iter()
             .map(|ty| {
-                if ty == MUT {
+                if ty == ENV {
+                    SemanticSourceArgumentOwnershipV1::ByValue
+                } else if ty == MUT {
                     SemanticSourceArgumentOwnershipV1::UniqueBorrow
                 } else {
                     SemanticSourceArgumentOwnershipV1::SharedBorrow

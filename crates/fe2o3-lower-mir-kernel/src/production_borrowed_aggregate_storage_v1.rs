@@ -61,14 +61,26 @@ fn prepare_borrowed_aggregates_v1(
         }
         expand_borrowed_aggregate_locals_v1(types, function, &mut result, budget)?;
         for &local in &result.locals {
-            budget.charge_work(argument_sum_v1(&[plan.parameter_local_bindings.len(), 4])?)?;
-            let selected_formal = plan.parameter_local_bindings.iter().any(|binding| {
-                matches!(binding,
-                    PlannedParameterLocalBindingV1::BorrowedAggregate { local: formal, .. }
-                        if *formal == local as usize
-                )
+            budget.charge_work(argument_sum_v1(&[
+                argument_product_v1(plan.parameter_local_bindings.len(), 3)?, result.owners.len(), 8,
+            ])?)?;
+            if !function.locals()[local as usize].role().is_entry_argument() {
+                continue;
+            }
+            let mut bindings = plan.parameter_local_bindings.iter().filter(|binding| {
+                let (PlannedParameterLocalBindingV1::BorrowedAggregate { local: formal, .. }
+                    | PlannedParameterLocalBindingV1::Flattened { local: formal, .. }
+                    | PlannedParameterLocalBindingV1::Direct { local: formal, .. }) = binding;
+                *formal == local as usize
             });
-            if function.locals()[local as usize].role().is_entry_argument() && !selected_formal {
+            let selected_formal = match (bindings.next(), result.owners.get(&local)) {
+                (Some(PlannedParameterLocalBindingV1::BorrowedAggregate { .. }), None) => true,
+                (Some(PlannedParameterLocalBindingV1::Flattened { semantic_type, .. }), Some(shape)) => {
+                    plan.role == SemanticKirFunctionRoleV1::InternalHelper && shape.aggregate_type == *semantic_type
+                }
+                _ => false,
+            };
+            if !selected_formal || bindings.next().is_some() {
                 return Err(borrowed_aggregate_error_v1(
                     "borrowed aggregate reference originates at an unselected entry binding",
                 ));
@@ -163,6 +175,28 @@ impl SemanticFunctionLoweringV1<'_> {
         value: &SemanticValueBindingV1,
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.function.locals()[local.index() as usize].role().is_entry_argument() {
+            return Err(borrowed_aggregate_error_v1(
+                "borrowed entry owner cannot be reinitialized by an assignment",
+            ));
+        }
+        let site = BorrowedAggregateSourceAnchorV1::Occurrence(
+            fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1::Statement {
+                block: SsaBlockIdV1::new(block.index()),
+                statement: statement.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+            },
+        );
+        self.borrowed_aggregate_initialize_at_v1(block, site, local, value, operations)
+    }
+
+    fn borrowed_aggregate_initialize_at_v1(
+        &mut self,
+        block: SemanticBlockIdV1,
+        site: BorrowedAggregateSourceAnchorV1,
+        local: SemanticLocalIdV1,
+        value: &SemanticValueBindingV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
         self.with_borrowed_aggregate_budget_v1(|this, budget| {
             budget.charge_work(8)?;
             if this.borrowed_aggregate_storage.contains_key(&local.index()) { return Err(borrowed_aggregate_error_v1("borrowed aggregate owner reinitialization is unsupported")); }
@@ -170,7 +204,6 @@ impl SemanticFunctionLoweringV1<'_> {
             let function = this.borrowed_aggregate_function.as_ref().ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
             budget.reserve_storage(function.as_str().len())?;
             let function = function.clone();
-            let site = BorrowedAggregateSourceAnchorV1::Occurrence(fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1::Statement { block: SsaBlockIdV1::new(block.index()), statement: statement.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)? });
             let owner = BorrowedAggregateSourceOwnerV1 { root: this.correspondence_owner, function: this.semantic_function, local, lifetime_start: site };
             let mut values = borrowed_aggregate_vec_v1(shape.leaves.len(), budget)?;
             for leaf in &shape.leaves {
@@ -225,6 +258,24 @@ impl SemanticFunctionLoweringV1<'_> {
         reference_type: SemanticTypeIdV1,
         operations: &mut Vec<Operation>,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        if self.function.locals()[local.index() as usize].role().is_entry_argument()
+            && !self.borrowed_aggregate_storage.contains_key(&local.index())
+        {
+            // Selection requires this first use in the entry block, so these
+            // operations belong to its existing statement correspondence span.
+            let value = self.locals[local.index() as usize]
+                .take()
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            let result = self.borrowed_aggregate_initialize_at_v1(
+                self.function.entry(),
+                BorrowedAggregateSourceAnchorV1::Entry { local },
+                local,
+                &value,
+                operations,
+            );
+            self.locals[local.index() as usize] = Some(value);
+            result?;
+        }
         self.with_borrowed_aggregate_budget_v1(|this, budget| {
             let shape = borrowed_aggregate_shape_v1(this.types, reference_type, budget)?;
             let storage = this
@@ -334,10 +385,9 @@ impl SemanticFunctionLoweringV1<'_> {
             .borrowed_aggregate_views
             .get(index)
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        if matches!(
-            view.owner.lifetime_start,
-            BorrowedAggregateSourceAnchorV1::Occurrence(_)
-        ) {
+        if matches!(view.owner.lifetime_start, BorrowedAggregateSourceAnchorV1::Occurrence(_))
+            || self.borrowed_aggregate_preparation.owners.contains_key(&view.owner.local.index())
+        {
             let storage = self
                 .borrowed_aggregate_storage
                 .get(&view.owner.local.index())
