@@ -22,6 +22,8 @@ mod generic_sdma_cases;
 mod initial_bind_cases;
 #[path = "integration_release_late_tests.rs"]
 mod late_cases;
+#[path = "integration_release_logical_mux_sdma_tests.rs"]
+mod logical_mux_sdma_cases;
 #[path = "integration_pool_trim_tests.rs"]
 mod pool_trim_cases;
 #[path = "integration_sdma_allocation_tests.rs"]

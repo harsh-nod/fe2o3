@@ -263,6 +263,40 @@ mod tests {
     }
 
     #[test]
+    fn primary_release_invalid_logical_mux_is_error_even_when_busy() {
+        let mut parent = missing_native_parent();
+        parent.sdma_outstanding_buffers = 1;
+        parent.sdma = Some(Gfx942SdmaQueueSetV1::LogicalMuxV2 {
+            owners: Vec::new(),
+            logical_lane_count: 4,
+            next_logical_lane: 0,
+        });
+        for result in [
+            parent.supports_retained_primary_release_v1().map(|_| ()),
+            parent.preflight_primary_release_v1(),
+        ] {
+            assert!(matches!(
+                result,
+                Err(ComputeAqlQueueSessionErrorV1::Sdma(
+                    Gfx942SdmaErrorV1::Contract("logical mux SDMA owner roster")
+                ))
+            ));
+        }
+        assert!(!parent.terminal_poisoned);
+        assert!(parent.striped_sdma.is_none());
+        assert!(parent.engine.is_none() && parent.exception.is_none());
+        assert_eq!(parent.sdma_outstanding_buffers, 1);
+        assert!(matches!(
+            parent.sdma.as_ref().unwrap(),
+            Gfx942SdmaQueueSetV1::LogicalMuxV2 {
+                owners,
+                logical_lane_count: 4,
+                next_logical_lane: 0,
+            } if owners.is_empty()
+        ));
+    }
+
+    #[test]
     fn primary_release_unfinished_drop_aborts_and_failed_preflight_keeps_parent() {
         use std::os::unix::process::ExitStatusExt;
         const CHILD: &str = "FE2O3_TEST_PRIMARY_RELEASE_DROP";

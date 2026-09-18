@@ -5,7 +5,8 @@ use super::*;
 fn owners(set: &mut Gfx942SdmaQueueSetV1) -> &mut Vec<Gfx942SdmaQueueOwnerV1> {
     let (Gfx942SdmaQueueSetV1::Generic(owners)
     | Gfx942SdmaQueueSetV1::Directional(owners)
-    | Gfx942SdmaQueueSetV1::Striped { owners, .. }) = set
+    | Gfx942SdmaQueueSetV1::Striped { owners, .. }
+    | Gfx942SdmaQueueSetV1::LogicalMuxV2 { owners, .. }) = set
     else {
         panic!("owner fixture profile")
     };
@@ -17,7 +18,8 @@ pub(crate) fn generic_pending_observation(
 ) -> impl std::fmt::Debug + PartialEq + use<> {
     let (Gfx942SdmaQueueSetV1::Generic(owners)
     | Gfx942SdmaQueueSetV1::Directional(owners)
-    | Gfx942SdmaQueueSetV1::Striped { owners, .. }) = set
+    | Gfx942SdmaQueueSetV1::Striped { owners, .. }
+    | Gfx942SdmaQueueSetV1::LogicalMuxV2 { owners, .. }) = set
     else {
         panic!("owner fixture profile")
     };
@@ -228,7 +230,9 @@ pub(crate) fn with_owner_corruption(
             assert!(owners(&mut set)[index].xgmi_records[0].take().is_some());
         }
         19 => {
-            let duplicate = owners(&mut set)[0].queue_id;
+            let roster = owners(&mut set);
+            assert!(roster.len() > 1);
+            let duplicate = roster[(index + 1) % roster.len()].queue_id;
             scoped!(queue_id, duplicate);
         }
         20 => scoped!(engine_index, take),

@@ -1048,9 +1048,9 @@ after permanent restoration), inert retries, native completed Drop, and actual
 public runtime allocate/release/shutdown selection with accounting
 and profiler events. ID-only fixtures cannot establish successful cleanup.
 The initial directional handoff did not implement Generic, Striped, LogicalMux
-or terminal-creation profiles. Generic, standalone Striped and combined sets are
-now implemented at the boundaries below; LogicalMux and terminal-creation
-profiles remain explicit later requirements.
+or terminal-creation profiles. Generic, standalone Striped, combined sets and
+standalone LogicalMux are now implemented at the boundaries below;
+terminal-creation profiles remain an explicit later requirement.
 
 ## Single SDMA Release Development
 
@@ -1148,7 +1148,7 @@ preflight, including pending work, and every queue ID must be distinct across
 both sets and from the primary. A standalone-valid 16-owner secondary set,
 orphan secondary set or incompatible profile pair is an invalid composition
 and a hard error, not authorization for consuming fallback. Standalone
-LogicalMux remains an unsupported profile.
+LogicalMux is admitted separately below, never as part of a combined set.
 
 Both original sets move into separate inline custody fields before the first
 teardown callback. Destruction and resource disposal preserve the existing
@@ -1169,7 +1169,49 @@ listed SDMA callbacks, representative primary/platform callbacks, and real
 fixture-native late cleanup failures at the set boundary, with both errors and
 panics and inert retries. The production composition helper and release driver
 are shared with these fixtures; Linux ioctls and the actual public combined
-constructor/selector are not exercised by these CPU tests. Native combined
-qualification, submitted work, formal implementation correspondence and matched
-HIP/HSA performance remain separate requirements. LogicalMux and
-terminal-creation retained release remain excluded.
+constructor/selector are not exercised by these CPU tests. Separate packetless
+native success for all seven combined counts is recorded in
+[`dev-combined-sdma-release-native-gpu2-2026-09-18`](evidence/dev-combined-sdma-release-native-gpu2-2026-09-18/README.md).
+That historical packet does not qualify subsequent source changes. Submitted
+work, native failures, formal implementation correspondence and matched HIP/HSA
+performance remain separate requirements. Terminal-creation retained release
+remains excluded.
+
+## LogicalMux Release Development
+
+The retained driver admits standalone `LogicalMuxV2` in the primary `sdma`
+slot, with exactly two original physical owners on engines 0 and 1. Logical
+lane counts are 2, 4, 8, 14 or 16, with `next_logical_lane < logical_lane_count`.
+Physical roster and logical metadata validation precede ordinary busy-profile
+fallback. Full borrowed preflight checks distinct non-primary queue IDs, live
+owner keys, record-vector shapes, empty ordinary/XGMI/persistent/uncertain
+pending state, and complete resources and doorbells. Valid but busy profiles
+retain the existing deferral semantics. Any secondary set alongside LogicalMux
+is an invalid composition, not permission for consuming cleanup.
+
+Destruction visits physical slots 0 then 1; resource release visits 1 then 0.
+Logical lane count and cursor do not change this order or resource accounting:
+the primary plus both physical queues always release eleven resources.
+Opening/closing topology checks and per-owner currentness checks remain in
+place. The original vector, logical metadata, native owners, destroy arguments,
+outcomes and completed prefixes remain rooted across errors and panics; retry
+is inert. Outer failure poisons both owners even after their cleanup completes.
+There is no new teardown-time allocation or unsafe code.
+
+Constructed-parent CPU tests cover all five lane counts with first/last cursors,
+with/without dispatch, exact physical destroy/resource order and host-account
+refunds; every structural and pending field on both owners; malformed physical
+rosters and logical metadata; every SDMA callback error/panic prefix; modified
+destroy arguments and real fixture-native late cleanup failure on both owners;
+and representative primary/platform failures. A public negative selector test
+ensures malformed LogicalMux cannot be hidden by an outstanding-buffer state.
+The ordinary busy-selector test and valid LogicalMux fixture are separate tests,
+not a successful real public-session busy LogicalMux execution.
+
+CPU receipts are archived in
+[`dev-logical-mux-sdma-release-cpu-2026-09-18`](evidence/dev-logical-mux-sdma-release-cpu-2026-09-18/README.md).
+Pending payloads are metadata fixtures, not submitted work. These checks do not
+qualify native ioctls, the public native LogicalMux constructor/selector,
+runtime-facade exposure, native failures, formal implementation correspondence,
+aggregate process residency or matched HIP/HSA performance. R126, A1/A2 and
+issue #182 remain incomplete.

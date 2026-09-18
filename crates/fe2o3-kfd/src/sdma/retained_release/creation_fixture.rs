@@ -98,6 +98,18 @@ pub(crate) struct CreationObservation {
     pub(crate) primary: CreationRosterObservation,
     pub(crate) secondary: Option<CreationRosterObservation>,
     pub(crate) attempted: Option<CreationAttemptObservation>,
+    logical_mux: Option<(u8, u8)>,
+}
+
+pub(super) fn logical_mux_metadata(set: &Gfx942SdmaQueueSetV1) -> Option<(u8, u8)> {
+    match set {
+        Gfx942SdmaQueueSetV1::LogicalMuxV2 {
+            logical_lane_count,
+            next_logical_lane,
+            ..
+        } => Some((*logical_lane_count, *next_logical_lane)),
+        _ => None,
+    }
 }
 
 pub(crate) fn creation_observation(set: &Gfx942SdmaQueueSetV1) -> CreationObservation {
@@ -113,6 +125,7 @@ pub(crate) fn creation_observation(set: &Gfx942SdmaQueueSetV1) -> CreationObserv
         } => (primary, Some(secondary), attempted.as_ref()),
     };
     CreationObservation {
+        logical_mux: logical_mux_metadata(set),
         primary: roster(primary),
         secondary: secondary.map(roster),
         attempted: attempted.map(|attempt| match attempt {

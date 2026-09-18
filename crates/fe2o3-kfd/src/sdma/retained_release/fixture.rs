@@ -47,6 +47,19 @@ pub(crate) fn directional_with_ids(
     Gfx942SdmaQueueSetV1::Directional(creation_owners(memory, key, first_id, 2))
 }
 
+pub(crate) fn logical_mux(
+    memory: &mut PreparationMemoryFixtureV1,
+    key: QueueKeyV1,
+    logical_lane_count: u8,
+    next_logical_lane: u8,
+) -> Gfx942SdmaQueueSetV1 {
+    Gfx942SdmaQueueSetV1::LogicalMuxV2 {
+        owners: creation_owners(memory, key, 100, 2),
+        logical_lane_count,
+        next_logical_lane,
+    }
+}
+
 fn creation_owners(
     memory: &mut PreparationMemoryFixtureV1,
     key: QueueKeyV1,
@@ -117,6 +130,7 @@ pub(crate) struct Observation {
     roster_address: usize,
     profile: Option<RetainedSdmaReleaseProfileV1>,
     cursor: Option<usize>,
+    logical_mux: Option<(u8, u8)>,
     pub(crate) state: (bool, bool, bool, usize, usize),
 }
 
@@ -124,6 +138,7 @@ impl Observation {
     pub(crate) fn assert_original_owners(&self, before: &Self) {
         assert_eq!(self.roster_address, before.roster_address);
         assert_eq!(self.cursor, before.cursor);
+        assert_eq!(self.logical_mux, before.logical_mux);
         assert_eq!(self.owners.len(), before.owners.len());
         for (owner, original) in self.owners.iter().zip(&before.owners) {
             assert_eq!(
@@ -211,7 +226,8 @@ fn observe(
 ) -> Observation {
     let (Gfx942SdmaQueueSetV1::Generic(owners)
     | Gfx942SdmaQueueSetV1::Directional(owners)
-    | Gfx942SdmaQueueSetV1::Striped { owners, .. }) = set
+    | Gfx942SdmaQueueSetV1::Striped { owners, .. }
+    | Gfx942SdmaQueueSetV1::LogicalMuxV2 { owners, .. }) = set
     else {
         panic!("fixture profile")
     };
@@ -222,6 +238,7 @@ fn observe(
             Gfx942SdmaQueueSetV1::Striped { next_owner, .. } => Some(*next_owner),
             _ => None,
         },
+        logical_mux: logical_mux_metadata(set),
         owners: owners
             .iter()
             .enumerate()
@@ -260,7 +277,8 @@ fn observe(
 pub(crate) fn cleanup_set(set: &mut Gfx942SdmaQueueSetV1) {
     let (Gfx942SdmaQueueSetV1::Generic(owners)
     | Gfx942SdmaQueueSetV1::Directional(owners)
-    | Gfx942SdmaQueueSetV1::Striped { owners, .. }) = set
+    | Gfx942SdmaQueueSetV1::Striped { owners, .. }
+    | Gfx942SdmaQueueSetV1::LogicalMuxV2 { owners, .. }) = set
     else {
         panic!("fixture profile")
     };

@@ -70,6 +70,7 @@ enum RetainedSdmaReleaseProfileV1 {
     Generic { targeted: bool },
     Directional,
     Striped { owner_count: usize },
+    LogicalMuxV2,
 }
 
 impl RetainedSdmaReleaseProfileV1 {
@@ -78,6 +79,7 @@ impl RetainedSdmaReleaseProfileV1 {
             Self::Generic { .. } => 1,
             Self::Directional => 2,
             Self::Striped { owner_count } => owner_count,
+            Self::LogicalMuxV2 => GFX942_SDMA_LOGICAL_MUX_NATIVE_QUEUE_COUNT_V2,
         }
     }
 
@@ -191,10 +193,24 @@ impl Gfx942SdmaQueueSetV1 {
                 }))
             }
             Self::Striped { .. } => Err(Gfx942SdmaErrorV1::Contract("striped SDMA owner roster")),
+            Self::LogicalMuxV2 {
+                owners,
+                logical_lane_count,
+                next_logical_lane,
+            } if owners.len() == GFX942_SDMA_LOGICAL_MUX_NATIVE_QUEUE_COUNT_V2
+                && gfx942_sdma_logical_mux_lane_count_is_admitted_v2(u32::from(
+                    *logical_lane_count,
+                ))
+                && *next_logical_lane < *logical_lane_count =>
+            {
+                Ok(Some(RetainedSdmaReleaseProfileV1::LogicalMuxV2))
+            }
+            Self::LogicalMuxV2 { .. } => {
+                Err(Gfx942SdmaErrorV1::Contract("logical mux SDMA owner roster"))
+            }
             Self::TerminalRetained { .. } => Err(Gfx942SdmaErrorV1::Contract(
                 "terminal retained SDMA queues require process teardown",
             )),
-            _ => Ok(None),
         }
     }
 
@@ -210,8 +226,10 @@ impl Gfx942SdmaQueueSetV1 {
         let Some(profile) = self.retained_release_profile_v1()? else {
             return Err(Gfx942SdmaErrorV1::Contract("retained SDMA release profile"));
         };
-        let (Self::Generic(owners) | Self::Directional(owners) | Self::Striped { owners, .. }) =
-            self
+        let (Self::Generic(owners)
+        | Self::Directional(owners)
+        | Self::Striped { owners, .. }
+        | Self::LogicalMuxV2 { owners, .. }) = self
         else {
             unreachable!()
         };
@@ -219,6 +237,11 @@ impl Gfx942SdmaQueueSetV1 {
             && owners[0].queue_id == owners[1].queue_id
         {
             return Err(Gfx942SdmaErrorV1::Contract("directional SDMA owner roster"));
+        }
+        if profile == RetainedSdmaReleaseProfileV1::LogicalMuxV2
+            && owners[0].queue_id == owners[1].queue_id
+        {
+            return Err(Gfx942SdmaErrorV1::Contract("logical mux SDMA owner roster"));
         }
         for (index, owner) in owners.iter().enumerate() {
             if matches!(profile, RetainedSdmaReleaseProfileV1::Striped { .. })
@@ -233,8 +256,11 @@ impl Gfx942SdmaQueueSetV1 {
                 || owner.queue_id == primary_id
                 || (profile == RetainedSdmaReleaseProfileV1::Directional
                     && owner.engine_index != Some(index as u32))
-                || (matches!(profile, RetainedSdmaReleaseProfileV1::Striped { .. })
-                    && owner.engine_index != Some(index as u32 % 2))
+                || (matches!(
+                    profile,
+                    RetainedSdmaReleaseProfileV1::Striped { .. }
+                        | RetainedSdmaReleaseProfileV1::LogicalMuxV2
+                ) && owner.engine_index != Some(index as u32 % 2))
                 || owner.records.len() != GFX942_SDMA_RING_SLOT_COUNT_V1
                 || owner.xgmi_records.len() != GFX942_SDMA_RING_SLOT_COUNT_V1
                 || owner.persistent_window_slots.len() != GFX942_SDMA_RING_SLOT_COUNT_V1
@@ -284,7 +310,8 @@ impl RetainedSdmaReleaseCustodyV1 {
         self.failed = true;
         if let Gfx942SdmaQueueSetV1::Generic(owners)
         | Gfx942SdmaQueueSetV1::Directional(owners)
-        | Gfx942SdmaQueueSetV1::Striped { owners, .. } = &mut self.set
+        | Gfx942SdmaQueueSetV1::Striped { owners, .. }
+        | Gfx942SdmaQueueSetV1::LogicalMuxV2 { owners, .. } = &mut self.set
         {
             for owner in owners {
                 owner.poisoned = true;
@@ -332,7 +359,8 @@ impl RetainedSdmaReleaseCustodyV1 {
             }
             let (Gfx942SdmaQueueSetV1::Generic(owners)
             | Gfx942SdmaQueueSetV1::Directional(owners)
-            | Gfx942SdmaQueueSetV1::Striped { owners, .. }) = &mut self.set
+            | Gfx942SdmaQueueSetV1::Striped { owners, .. }
+            | Gfx942SdmaQueueSetV1::LogicalMuxV2 { owners, .. }) = &mut self.set
             else {
                 unreachable!()
             };
@@ -395,7 +423,8 @@ impl RetainedSdmaReleaseCustodyV1 {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let (Gfx942SdmaQueueSetV1::Generic(owners)
             | Gfx942SdmaQueueSetV1::Directional(owners)
-            | Gfx942SdmaQueueSetV1::Striped { owners, .. }) = &mut self.set
+            | Gfx942SdmaQueueSetV1::Striped { owners, .. }
+            | Gfx942SdmaQueueSetV1::LogicalMuxV2 { owners, .. }) = &mut self.set
             else {
                 unreachable!()
             };

@@ -14,14 +14,20 @@ fn with_striped(count: u32, dispatch: bool) -> (Parent, Rc<RefCell<Trace>>, Loca
     })
 }
 
-fn assert_preflight_rejected(parent: &Parent, t: &Rc<RefCell<Trace>>, gate: &LocalGateV1) {
+pub(super) fn assert_preflight_rejected(
+    parent: &Parent,
+    t: &Rc<RefCell<Trace>>,
+    gate: &LocalGateV1,
+) {
     let set = parent.sdma.as_ref().unwrap();
     let owners = sdma_fixture::creation_observation(set);
     let pending = sdma_fixture::generic_pending_observation(set);
-    let Gfx942SdmaQueueSetV1::Striped { next_owner, .. } = set else {
-        panic!("striped fixture")
+    let cursor = || match set {
+        Gfx942SdmaQueueSetV1::Striped { next_owner, .. } => Some(*next_owner),
+        Gfx942SdmaQueueSetV1::LogicalMuxV2 { .. } => None,
+        _ => panic!("striped or logical mux fixture"),
     };
-    let cursor = *next_owner;
+    let before_cursor = cursor();
     let before = parent
         .engine
         .backend
@@ -34,7 +40,7 @@ fn assert_preflight_rejected(parent: &Parent, t: &Rc<RefCell<Trace>>, gate: &Loc
     assert!(!parent.poisoned);
     assert_eq!(sdma_fixture::creation_observation(set), owners);
     assert_eq!(sdma_fixture::generic_pending_observation(set), pending);
-    assert_eq!(*next_owner, cursor);
+    assert_eq!(cursor(), before_cursor);
     assert_eq!(
         parent
             .engine
@@ -177,17 +183,23 @@ fn constructed_striped_release_orders_all_balanced_counts_and_refunds_backing() 
 
 #[test]
 fn constructed_striped_release_retains_every_callback_failure_prefix() {
-    const COUNT: usize = 16;
+    check_callback_failure_prefixes(16, || with_striped(16, false));
+}
+
+pub(super) fn check_callback_failure_prefixes(
+    count: usize,
+    with_profile: impl Fn() -> (Parent, Rc<RefCell<Trace>>, LocalGateV1),
+) {
     for (name, occurrences) in [
         ("sdma-topology", 2),
-        ("sdma-currentness", 2 * COUNT),
-        ("sdma-destroy", COUNT),
-        ("sdma-doorbell", COUNT),
-        ("sdma-release-resources", COUNT),
+        ("sdma-currentness", 2 * count),
+        ("sdma-destroy", count),
+        ("sdma-doorbell", count),
+        ("sdma-release-resources", count),
     ] {
         for occurrence in 1..=occurrences {
             for panic in [false, true] {
-                let (mut parent, t, gate) = with_striped(COUNT as u32, false);
+                let (mut parent, t, gate) = with_profile();
                 let before = sdma_fixture::unreleased_observation(parent.sdma.as_ref().unwrap());
                 t.borrow_mut().fault = Some((name, occurrence, panic));
                 let mut state = PrimaryReleaseStateV1::<Fixture>::new();
@@ -220,7 +232,7 @@ fn constructed_striped_release_retains_every_callback_failure_prefix() {
                 let resources_started = name == "sdma-release-resources";
                 let (completed, attempted, destroyed) = match name {
                     "sdma-topology" if occurrence == 1 => (0, 0, 0),
-                    "sdma-topology" | "sdma-release-resources" => (COUNT, COUNT, COUNT),
+                    "sdma-topology" | "sdma-release-resources" => (count, count, count),
                     "sdma-currentness" => ((occurrence - 1) / 2, occurrence / 2, occurrence / 2),
                     _ => (occurrence - 1, occurrence, occurrence - 1),
                 };
@@ -276,7 +288,7 @@ fn constructed_striped_release_retains_every_callback_failure_prefix() {
                     );
                     assert_eq!(
                         owner.resources.is_some(),
-                        resources_started && index >= COUNT - occurrence
+                        resources_started && index >= count - occurrence
                     );
                 }
                 if resources_started {
@@ -304,9 +316,16 @@ fn constructed_striped_release_retains_every_callback_failure_prefix() {
 
 #[test]
 fn constructed_striped_release_retains_mutated_destroy_inputs() {
-    for index in [0, 7, 15] {
+    check_mutated_destroy_inputs(&[0, 7, 15], || with_striped(16, false));
+}
+
+pub(super) fn check_mutated_destroy_inputs(
+    indices: &[usize],
+    with_profile: impl Fn() -> (Parent, Rc<RefCell<Trace>>, LocalGateV1),
+) {
+    for &index in indices {
         for panic in [false, true] {
-            let (mut parent, t, gate) = with_striped(16, false);
+            let (mut parent, t, gate) = with_profile();
             let before = sdma_fixture::unreleased_observation(parent.sdma.as_ref().unwrap());
             let id = 100 + index as u32;
             t.borrow_mut().sdma_destroy_mutation = Some((id, panic));
@@ -352,9 +371,16 @@ fn constructed_striped_release_retains_mutated_destroy_inputs() {
 
 #[test]
 fn constructed_striped_release_keeps_real_late_cleanup_prefix_for_every_owner() {
-    for occurrence in 1..=16 {
+    check_late_cleanup_prefixes(16, || with_striped(16, false));
+}
+
+pub(super) fn check_late_cleanup_prefixes(
+    count: usize,
+    with_profile: impl Fn() -> (Parent, Rc<RefCell<Trace>>, LocalGateV1),
+) {
+    for occurrence in 1..=count {
         for panic in [false, true] {
-            let (mut parent, t, gate) = with_striped(16, false);
+            let (mut parent, t, gate) = with_profile();
             let before = sdma_fixture::unreleased_observation(parent.sdma.as_ref().unwrap());
             t.borrow_mut().sdma_resource_native_fault = Some((occurrence, panic));
             let mut state = PrimaryReleaseStateV1::<Fixture>::new();

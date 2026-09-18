@@ -189,12 +189,54 @@ fn constructed_combined_release_rejects_wrong_profiles_and_cross_set_ids() {
     assert_rejected(&parent, &t, &gate);
     cleanup_parent(&mut parent);
 
+    for count in [2, 14] {
+        let mut secondary = None;
+        let (mut parent, t, gate) =
+            sdma_cases::with_unchecked_sdma_profile(false, |memory, key| {
+                secondary = Some(sdma_fixture::striped(memory, key, count, 0));
+                sdma_fixture::creation_profile(memory, key, 3)
+            });
+        assert!(supports_retained_sdma_composition_v1(parent.sdma.as_ref(), None).unwrap());
+        parent.striped_sdma = secondary;
+        for malformed in [false, true] {
+            if malformed {
+                let Gfx942SdmaQueueSetV1::LogicalMuxV2 {
+                    logical_lane_count, ..
+                } = parent.sdma.as_mut().unwrap()
+                else {
+                    unreachable!()
+                };
+                *logical_lane_count = 3;
+            }
+            let expected = if malformed {
+                "logical mux SDMA owner roster"
+            } else {
+                "combined SDMA owner roster"
+            };
+            assert!(matches!(
+                supports_retained_sdma_composition_v1(parent.sdma.as_ref(), parent.striped_sdma.as_ref()),
+                Err(Gfx942SdmaErrorV1::Contract(got)) if got == expected
+            ));
+            assert_rejected(&parent, &t, &gate);
+            assert!(matches!(
+                parent.preflight_release(),
+                Err(ComputeAqlQueueSessionErrorV1::Sdma(Gfx942SdmaErrorV1::Contract(got))) if got == expected
+            ));
+        }
+        cleanup_parent(&mut parent);
+    }
+    let mut secondary = None;
     let (mut parent, t, gate) = sdma_cases::with_unchecked_sdma_profile(false, |memory, key| {
-        sdma_fixture::creation_profile(memory, key, 3)
+        secondary = Some(sdma_fixture::logical_mux(memory, key, 16, 15));
+        sdma_fixture::directional_with_ids(memory, key, 200)
     });
-    assert!(!supports_retained_sdma_composition_v1(parent.sdma.as_ref(), None).unwrap());
+    parent.striped_sdma = secondary;
+    assert!(matches!(
+        supports_retained_sdma_composition_v1(parent.sdma.as_ref(), parent.striped_sdma.as_ref()),
+        Err(Gfx942SdmaErrorV1::Contract("combined SDMA owner roster"))
+    ));
     assert_rejected(&parent, &t, &gate);
-    sdma_fixture::cleanup_creation_set(parent.sdma.as_mut().unwrap());
+    cleanup_parent(&mut parent);
 }
 
 #[test]
