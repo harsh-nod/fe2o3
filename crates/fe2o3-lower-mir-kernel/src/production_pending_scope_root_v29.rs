@@ -130,6 +130,16 @@ fn pending_scope_preflight_v29(
         if row.source_call_instance != instances.id_at(index) {
             return Err(execution_call_error_v29());
         }
+        if let Some(events) = &row.lifecycle_events {
+            events.check_identity(
+                instances,
+                instances
+                    .id_at(index)
+                    .ok_or_else(execution_call_error_v29)?,
+                budget,
+            )?;
+            operations = argument_sum_v1(&[operations, events.rows.len()])?;
+        }
         row.instance_assert_origins
             .as_ref()
             .ok_or_else(execution_call_error_v29)?
@@ -228,7 +238,10 @@ fn merge_pending_scope_capabilities_v29(
 /// live. The receipt covers only new retained storage. After roster preflight,
 /// failure can consume slots: the enclosing emitter must discard that attempt,
 /// drop remaining payloads, and release its own original reservation once.
-/// Instance assertion captures move with their prepaid sidecars. Coordinate
+/// Assertion captures and lifecycle events move with their prepaid sidecars.
+/// Their inherited reservations remain part of the enclosing emission floor,
+/// including failures after a lifecycle producer has transferred its buffer.
+/// Coordinate
 /// replay checks attachment, not source equivalence or scope/lifecycle admission.
 #[cfg_attr(
     not(test),

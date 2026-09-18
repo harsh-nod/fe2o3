@@ -85,6 +85,28 @@ struct PendingLifecycleEventsV29 {
     retained_storage: usize,
 }
 
+impl PendingLifecycleEventsV29 {
+    fn check_identity(
+        &self,
+        instances: &ExecutionInstancesV29<'_>,
+        instance: ProductionCallInstanceIdV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.ledger != budget.work_ledger_identity_v1() {
+            return Err(ArgumentResourceV1::Accounting.into());
+        }
+        if self.instance != instance
+            || self.source != ExecutionCallSourceV29::from_instances(instances, budget)?
+            || !instances
+                .instance(instance)
+                .is_some_and(|row| row.function() == self.function)
+        {
+            return Err(execution_lifecycle_error_v29());
+        }
+        Ok(())
+    }
+}
+
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "Scoped root orchestration is pending")
@@ -610,6 +632,11 @@ impl ExecutionLifecycleConsumerV29 for ExecutionLifecycleProducerV29<'_> {
         {
             return Err(execution_lifecycle_error_v29());
         }
+        enforce_limit(
+            ProductionSemanticKirResourceV1::Operations,
+            argument_sum_v1(&[lowering.emitted_operations, self.pending.rows.len()])?,
+            lowering.max_operations,
+        )?;
         for row in &self.pending.rows {
             let value = match row.kind {
                 DeferredLifecycleKindV29::Issue { result }
