@@ -1,9 +1,16 @@
-//! Inert descriptor construction from admitted, exact Policy3 output.
+//! Inert descriptor construction from admitted, exact Policy3 or Policy4 output.
 
 use super::*;
 use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1;
 use fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy3V1;
+
+struct CheckedDescriptorViewV1<'a> {
+    source: &'a fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    bound: &'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    output: &'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    kernels: &'a [fe2o3_kernel_ir::FormalMemoryObligations],
+}
 
 /// A consumer for the owner's closed checked-output admission subset. The executable and
 /// fresh obligations come only from `admitted`; there is no free Module input.
@@ -21,29 +28,77 @@ pub(crate) fn construct_checked_output_policy3_descriptor_source_v1(
     admitted
         .verify_equivalence(budget)
         .map_err(CompilerDescriptorError::CheckedOutputPolicy3)?;
+    construct_checked_descriptor_v1(
+        envelope,
+        compiler_module,
+        typed_roots,
+        CheckedDescriptorViewV1 {
+            source: admitted.source_semantic_kir(),
+            bound: admitted.bound(),
+            output: admitted.output(),
+            kernels: admitted.kernels(),
+        },
+        3,
+        budget,
+    )
+}
+
+pub(crate) fn construct_checked_output_policy4_descriptor_source_v1(
+    envelope: &CompilerFfiEnvelopeV1,
+    compiler_module: &InertCompilerModuleTextV1,
+    typed_roots: &[TypedDescriptorRootV1],
+    admitted: &fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<CompilerDescriptorSourceV1, CompilerDescriptorError> {
+    admitted
+        .verify_equivalence(budget)
+        .map_err(|error| CompilerDescriptorError::CheckedOutputPolicy4(Box::new(error)))?;
+    construct_checked_descriptor_v1(
+        envelope,
+        compiler_module,
+        typed_roots,
+        CheckedDescriptorViewV1 {
+            source: admitted.source_semantic_kir(),
+            bound: admitted.bound(),
+            output: admitted.output(),
+            kernels: admitted.kernels(),
+        },
+        4,
+        budget,
+    )
+}
+
+fn construct_checked_descriptor_v1(
+    envelope: &CompilerFfiEnvelopeV1,
+    compiler_module: &InertCompilerModuleTextV1,
+    typed_roots: &[TypedDescriptorRootV1],
+    admitted: CheckedDescriptorViewV1<'_>,
+    policy: u16,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<CompilerDescriptorSourceV1, CompilerDescriptorError> {
     let target = envelope.target().to_string();
     let profile = ProductionAmdTargetProfileV1::from_device_target(&target)
         .ok_or_else(|| CompilerDescriptorError::UnsupportedTarget(target.clone()))?;
-    let neutral = admitted
-        .source_semantic_kir()
-        .pre_ranked_executable()
-        .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
-            "connected historical source",
-        ))?;
+    let neutral = admitted.source.pre_ranked_executable().ok_or(
+        CompilerDescriptorError::ProductionDescriptorMismatch("connected historical source"),
+    )?;
     // The admission's generic coordinate check permits capability extensions.
     // Descriptor target selection additionally requires the exact binder delta.
     let _ = dialect_amdgcn::check_production_target_coordinate_preservation_v1(
         neutral,
-        admitted.bound(),
+        admitted.bound,
         profile,
         budget,
     )
     .map_err(CompilerDescriptorError::CheckedOutputTarget)?;
     let geometries =
-        validate_checked_output_policy3_descriptor_evidence_v1(typed_roots, admitted, &target)?;
-    let producer_version = match profile {
-        ProductionAmdTargetProfileV1::Gfx942 => "production-policy3-checked-gfx942-cov6-v1",
-        ProductionAmdTargetProfileV1::Gfx950 => "production-policy3-checked-gfx950-cov6-v1",
+        validate_checked_output_descriptor_evidence_v1(typed_roots, &admitted, &target)?;
+    let producer_version = match (profile, policy) {
+        (ProductionAmdTargetProfileV1::Gfx942, 3) => "production-policy3-checked-gfx942-cov6-v1",
+        (ProductionAmdTargetProfileV1::Gfx950, 3) => "production-policy3-checked-gfx950-cov6-v1",
+        (ProductionAmdTargetProfileV1::Gfx942, 4) => "production-policy4-checked-gfx942-cov6-v1",
+        (ProductionAmdTargetProfileV1::Gfx950, 4) => "production-policy4-checked-gfx950-cov6-v1",
+        _ => unreachable!("only the two consuming checked-owner constructors call this helper"),
     };
     let profiles = geometries
         .into_iter()
@@ -60,7 +115,7 @@ pub(crate) fn construct_checked_output_policy3_descriptor_source_v1(
         .collect::<Vec<_>>();
     construct_compiler_descriptor_source_with_profiles_v1(
         envelope,
-        admitted.output().module(),
+        admitted.output.module(),
         compiler_module,
         typed_roots,
         &profiles,
@@ -70,23 +125,20 @@ pub(crate) fn construct_checked_output_policy3_descriptor_source_v1(
     ))
 }
 
-fn validate_checked_output_policy3_descriptor_evidence_v1(
+fn validate_checked_output_descriptor_evidence_v1(
     typed_roots: &[TypedDescriptorRootV1],
-    admitted: &ProductionCheckedOutputOwnerPolicy3V1,
+    admitted: &CheckedDescriptorViewV1<'_>,
     target: &str,
 ) -> Result<Vec<crate::production_geometry_v1::ProductionGeometryV1>, CompilerDescriptorError> {
-    let module = admitted.output().module();
-    let semantic = admitted.source_semantic_kir().semantic().semantic();
-    let source_launch = admitted
-        .source_semantic_kir()
-        .source_launch_roster()
-        .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
-            "retained source launch roster",
-        ))?;
+    let module = admitted.output.module();
+    let semantic = admitted.source.semantic().semantic();
+    let source_launch = admitted.source.source_launch_roster().ok_or(
+        CompilerDescriptorError::ProductionDescriptorMismatch("retained source launch roster"),
+    )?;
     if typed_roots.is_empty()
         || typed_roots.len() != semantic.roots().len()
         || typed_roots.len() != module.kernels.len()
-        || typed_roots.len() != admitted.kernels().len()
+        || typed_roots.len() != admitted.kernels.len()
         || typed_roots.len() != source_launch.roots().len()
     {
         return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
@@ -98,7 +150,7 @@ fn validate_checked_output_policy3_descriptor_evidence_v1(
         .iter()
         .zip(semantic.roots())
         .zip(&module.kernels)
-        .zip(admitted.kernels())
+        .zip(admitted.kernels)
         .zip(source_launch.roots())
     {
         let function = semantic

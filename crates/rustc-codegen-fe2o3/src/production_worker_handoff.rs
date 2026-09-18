@@ -108,15 +108,15 @@ pub(crate) fn prepare_production_worker_handoff(
     assemble_production_worker_handoff(target, envelope, compiler_module, descriptor_source)
 }
 
-/// Prepares and replays final LLVM from the exact admitted Policy3 O.
+/// Prepares and replays final LLVM from the exact admitted Policy4 O.
 ///
-/// Caller retains and reserves N/B/O, the catalog and logical LLVM/descriptor
+/// Caller retains and reserves N/B/C/O, the catalog and logical LLVM/descriptor
 /// payloads through this call. The inherited descriptor, FFI and handoff engines
 /// retain their separate bounded allocation domains; this is not whole-compiler
 /// heap accounting. Only typed owner/target checks and native replay use `budget`.
 /// This produces inert handoff bytes, never legacy lineage or publication rights.
-pub(crate) fn prepare_checked_output_policy3_worker_handoff(
-    admitted: &fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy3V1,
+pub(crate) fn prepare_checked_output_policy4_worker_handoff(
+    admitted: &fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1,
     catalog: &fe2o3_kernel_ir::InertCanonicalKernelIrContractCatalogV1,
     target: fe2o3_compiler_ffi::DeviceTargetV1,
     llvm_ir: String,
@@ -143,7 +143,7 @@ pub(crate) fn prepare_checked_output_policy3_worker_handoff(
     )?;
     validate_envelope_module_roles(&envelope, &compiler_module)?;
     let descriptor_source =
-        crate::compiler_descriptor::checked_output_policy3_v1::construct_checked_output_policy3_descriptor_source_v1(
+        crate::compiler_descriptor::checked_output_policy3_v1::construct_checked_output_policy4_descriptor_source_v1(
             &envelope, &compiler_module, typed_roots, admitted, budget,
         )
         .map_err(ProductionWorkerHandoffError::CompilerDescriptor)?;

@@ -18,6 +18,7 @@ mod authenticated_proof_binding;
 mod authenticated_verus_execution_v2;
 mod compiler_multi_root_proof_v1;
 mod compiler_multi_root_target_lineage_v1;
+mod compiler_native_source_proof_v1;
 mod compiler_proof_binding_v3;
 mod compiler_target_lineage_v1;
 mod control_flow_binding;
@@ -64,6 +65,7 @@ pub use compiler_multi_root_proof_v1::{
 pub use compiler_multi_root_target_lineage_v1::{
     ValidatedCompilerMultiRootTargetLineageV1, validate_compiler_multi_root_target_lineage_v1,
 };
+pub use compiler_native_source_proof_v1::*;
 pub use compiler_proof_binding_v3::{
     CompilerProofInputValidationErrorV3, CompilerProofInputValidationErrorV4,
     ValidatedCompilerProofInputsV3, ValidatedCompilerProofInputsV4,

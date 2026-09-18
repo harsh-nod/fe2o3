@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_checked_output_private_memory_policy3_v1_tests.rs"]
+mod private_memory_tests;
+
 fn general_control_source(looping: bool) -> ProductionPreRankedKirOwnerV1 {
     general_control_and_read_source(looping, false)
 }
@@ -379,7 +382,7 @@ fn general_policy3_rejects_changed_assertion_branches_and_removed_trap_at_exact_
 }
 
 #[test]
-fn general_policy3_retains_private_address_refusal() {
+fn general_policy3_admits_completely_initialized_exact_private_addresses() {
     let input = prepare(
         array_output_ranked_receipt_v1(array_owner(ArrayCase::Initializer {
             values: [11; 8],
@@ -390,10 +393,11 @@ fn general_policy3_retains_private_address_refusal() {
         None,
     );
     with_prepared(input, |input, budget| {
-        assert!(matches!(
-            AdmittedOutput::try_admit_general_v1(input.receipt, input.bound, input.output, budget),
-            Err(AdmissionError::PrivateAddressR2)
-        ));
+        let owner =
+            AdmittedOutput::try_admit_general_v1(input.receipt, input.bound, input.output, budget)
+                .unwrap();
+        assert!(owner.kernels()[0].accesses().is_empty());
+        owner.verify_equivalence(budget).unwrap();
     });
 }
 

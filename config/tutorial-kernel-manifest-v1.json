@@ -8483,8 +8483,8 @@
           "flash_attention_general_v1"
         ],
         "cargoLockPath": "examples/flash_attention_general_v1/Cargo.lock",
-        "cargoLockSha256": "9dc734ecfefa37735c1b2d08899772f1c61b7dd194d00a31c24170d5b5a9a1d2",
-        "contractSha256": "23a11c695e7be678b12206dc95399cb64ebd0ce32feda6afec1f9dc5498fbc0a"
+        "cargoLockSha256": "8098120bff43943ccf823afc55b5b910ad458ed04af7821d9a883bbcf9f292e3",
+        "contractSha256": "e70fc85f2cde3f405e5cdcc742b8556b8905dabe74085116149624629aed6c2e"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-flash-attention.request.json",
@@ -8528,8 +8528,8 @@
           "gemm_autoresearch_v1"
         ],
         "cargoLockPath": "examples/gemm_autoresearch_v1/Cargo.lock",
-        "cargoLockSha256": "5515ec1c6bfddcd10fb511f8e0f37aa01b833d4a03cac8c05ff970294e32c2a0",
-        "contractSha256": "c3056a788d13625227ed02713b3ffc758d3e5b25e78af5ce6db821c0b4ce9a50"
+        "cargoLockSha256": "ed4a15913b1db7374542a7cb757979dc23ab9103ca4980aee768b7eed5c7c00c",
+        "contractSha256": "1b100c26326d3a46bbe1c7944871b3b72d7eeb0c9b2da4b6c0972a171e1c0bbc"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-gemm-autoresearch.request.json",
@@ -8573,8 +8573,8 @@
           "moe_grouped_expert_general_v1"
         ],
         "cargoLockPath": "examples/moe_grouped_expert_general_v1/Cargo.lock",
-        "cargoLockSha256": "251e9717742930ce861b24a392defbbe4824daf4c7eda27f206262d084fd109a",
-        "contractSha256": "f1ae0543fa1ffd94dac05c98b05a25765d30bf58906faf8d743bee143d688439"
+        "cargoLockSha256": "41f34c75574a2d63129d7268bbcb27b31e5886c9e97159774760c9cae7a699ae",
+        "contractSha256": "549f8e49d9ec6877b73f0938687999b394093a0adeb5292bff86d624fa445740"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-grouped-expert-moe.request.json",
@@ -8618,8 +8618,8 @@
           "moe_top2_route_f32_t8_e4_k2_c4_v1"
         ],
         "cargoLockPath": "examples/moe_top2_v1/Cargo.lock",
-        "cargoLockSha256": "b919a5b5dbcb5e871bb97e18ee641f26210954fce0f73a0daf67b0b2a3055319",
-        "contractSha256": "113e1a37b2a00d6623b9ac1d3359bd1b60cf7484a86efd0dca998f62bc0520c6"
+        "cargoLockSha256": "cec388b879742e296c76eeb4b067b3d1dbcae92c275c1705dffcd340e545db10",
+        "contractSha256": "0775026d8fe3e729aba6d0ac15406f8e631d6381f992ef425f36d694d05833cd"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-moe-top2.request.json",
@@ -8663,8 +8663,8 @@
           "row_softmax_general_v1"
         ],
         "cargoLockPath": "examples/row_softmax_general_v1/Cargo.lock",
-        "cargoLockSha256": "00ca90d1c814ff587ea72bfb2abdfdecf0a8b0010a261c00e40a59e505aeae42",
-        "contractSha256": "b02ec994e7cdd8df7f04655d93137585aecaa91614a15a1ce913787a42ec2757"
+        "cargoLockSha256": "710052a5bff0382e5ee996dc25887dcfbd9a510a7af14610d0c9fbbfae9c4515",
+        "contractSha256": "2f3a1fd2443219ace501eb44cb6d02763be586a974eff895da06c3c2317743fa"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-row-softmax.request.json",
@@ -8753,8 +8753,8 @@
           "tiled_gemm_general_v1"
         ],
         "cargoLockPath": "examples/tiled_gemm_general_v1/Cargo.lock",
-        "cargoLockSha256": "5b3ae70289c1879350ca5c04793dfadd948588d5e854c8b5ad25c0d4b5324c5d",
-        "contractSha256": "4ea560925e390dd6e4f95b62156ae872406420adfc319d83c2977e402b3c6162"
+        "cargoLockSha256": "43c9dbbd01ecce412bc9f1e9e67d04f5d857b0399725d2d4f7c0fcbe731aa141",
+        "contractSha256": "0a4723f83ea24d0bffcc16fdc0bcb974a0ce4d3d7492e02913768a467bd95168"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-tiled-gemm.request.json",
@@ -8843,8 +8843,8 @@
           "wave64_collectives_v1"
         ],
         "cargoLockPath": "examples/wave64_collectives_v1/Cargo.lock",
-        "cargoLockSha256": "fda4f62970ee1e61405e4d05a66faf24adb1f41a2754665d03f2304327806013",
-        "contractSha256": "45fe0ca8fbaa78dded4c1ff8598c5de50e58d1293b749255ed1c9f348e87650a"
+        "cargoLockSha256": "2261d50595ccbe031910370f55d8a452b2a2077771442200eab75fdc0431f063",
+        "contractSha256": "1873e297ae658678af9640be124ebcccae000d912f2769939d488713f21c5297"
       },
       "simulation": {
         "requestPath": "examples/wave64_collectives_v1/full-mask-request.json",
@@ -8890,8 +8890,8 @@
           "lds_publish_read_reduce_i32_v1"
         ],
         "cargoLockPath": "examples/workgroup_sync_v1/Cargo.lock",
-        "cargoLockSha256": "8603d88df6030962a0b9c96ed0a3edbf29c89bd77a8d85006bb7446e1dcb908d",
-        "contractSha256": "58708ca6ca3f0e62e3774ecb234c4b7ad284aa80be72ff0e2b6976a300ce7357"
+        "cargoLockSha256": "20145d9498fb33e45154550f7577a544fedf42514769127c5a0f0c724de563a1",
+        "contractSha256": "2a1e1500b737f93bf1c77bf54beb016c3a811d3f413e3becba28c1a2041985b7"
       },
       "simulation": {
         "requestPath": "examples/workgroup_sync_v1/reduce-i32-request.json",
@@ -8937,8 +8937,8 @@
           "gfx950_attnres_aggregate"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "6e9bd6ee0e159c6519f8b1376e84c146efb24f008c74bf89cd49d237d6c577d5",
-        "contractSha256": "ff8a9313d12e249e7ffb88147f704bf1a51a3a736b2d9b397b334503882921bd"
+        "cargoLockSha256": "5c8bed4ddd668f5f6745bbe72c9d48c516a6c7e5f67a11b77d3dc643e34888ef",
+        "contractSha256": "50fd13e8049f2bf72addefa1ac3f3cfb877fa0e59272712433843e9b1398c320"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-attnres-aggregate.request.json",
@@ -8986,8 +8986,8 @@
           "gfx950_attnres_aggregate"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "6e9bd6ee0e159c6519f8b1376e84c146efb24f008c74bf89cd49d237d6c577d5",
-        "contractSha256": "7ebd1203cc45ebcdeace56d43abcbf1afb30674f64d88bd034d02eec912e2514"
+        "cargoLockSha256": "5c8bed4ddd668f5f6745bbe72c9d48c516a6c7e5f67a11b77d3dc643e34888ef",
+        "contractSha256": "b3a0a78e2b5ef77111b1d1ee09ad997318c89d6242795c967f036d5709f5a235"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-attnres-aggregate.request.json",
@@ -9033,8 +9033,8 @@
           "gfx950_combine_expert_ranks_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "9c52c956517541416fe66fb158ba27a98635222069ce163e5807cb5cf250a6db",
-        "contractSha256": "1c971126b3a6bd8cbe45571a75d8c642ceee3c53d17685675f2d27956da66264"
+        "cargoLockSha256": "a0e979c8a8ef4426b5977f4a7e01497496d50778eee99680b46e640950902e88",
+        "contractSha256": "60cb8a28b65209f4fbe66dbd6bbada3c99922f82a6bf854d7f5432f74266a95d"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-combine-expert-ranks.request.json",
@@ -9080,8 +9080,8 @@
           "gfx950_compressed_hybrid_attention"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "6e9bd6ee0e159c6519f8b1376e84c146efb24f008c74bf89cd49d237d6c577d5",
-        "contractSha256": "c34cbe448aed44ab092b1dde06c3db6e69d2a0c6663dfc8a16c1560c01f8b80c"
+        "cargoLockSha256": "5c8bed4ddd668f5f6745bbe72c9d48c516a6c7e5f67a11b77d3dc643e34888ef",
+        "contractSha256": "9e8ffa93a570cb59410d48b4b88a98717cb5d4d291ef42db0308b428d19a004a"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-compressed-hybrid-attention.request.json",
@@ -9129,8 +9129,8 @@
           "gfx950_compressed_hybrid_attention"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "6e9bd6ee0e159c6519f8b1376e84c146efb24f008c74bf89cd49d237d6c577d5",
-        "contractSha256": "70e7c18091c6c2ef848c23f26ea575ee4ceacad706a6f4f4fd0515d1b5aee622"
+        "cargoLockSha256": "5c8bed4ddd668f5f6745bbe72c9d48c516a6c7e5f67a11b77d3dc643e34888ef",
+        "contractSha256": "07307615333d755eb41e5de531c37dd8ed357c98fc7ac579b22cc1d6475e2792"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-compressed-hybrid-attention.request.json",
@@ -9176,8 +9176,8 @@
           "gfx950_content_sparse_attention"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "6e9bd6ee0e159c6519f8b1376e84c146efb24f008c74bf89cd49d237d6c577d5",
-        "contractSha256": "0ace3cc99748a5da1a7a87085ee4aba874b235d789ad5e7a6e9ead939749ca22"
+        "cargoLockSha256": "5c8bed4ddd668f5f6745bbe72c9d48c516a6c7e5f67a11b77d3dc643e34888ef",
+        "contractSha256": "3aa9ce2a0a265a83b3ad851854ee5ad908da851ac4f45322af24db761c347f91"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-content-sparse-attention.request.json",
@@ -9225,8 +9225,8 @@
           "gfx950_content_sparse_attention"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "6e9bd6ee0e159c6519f8b1376e84c146efb24f008c74bf89cd49d237d6c577d5",
-        "contractSha256": "57d36462630b5cdf404f0adaa6056fcc81246d3e56f9fee5d3d2703e1da9f307"
+        "cargoLockSha256": "5c8bed4ddd668f5f6745bbe72c9d48c516a6c7e5f67a11b77d3dc643e34888ef",
+        "contractSha256": "ff04efc468506e82df9bddc1a4d849d67894b15f5c0835ef4775acd061a76148"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-content-sparse-attention.request.json",
@@ -9272,8 +9272,8 @@
           "gfx950_deepseek_sparse_attention"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "6e9bd6ee0e159c6519f8b1376e84c146efb24f008c74bf89cd49d237d6c577d5",
-        "contractSha256": "b723a0b8668e1171d91bb68b706524e41edad6f5ec631708b3080681f194fa4c"
+        "cargoLockSha256": "5c8bed4ddd668f5f6745bbe72c9d48c516a6c7e5f67a11b77d3dc643e34888ef",
+        "contractSha256": "23e59225c114db05c1769eebb44742db9ef9ada2e797e8b0d22f108e3fd4a5de"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-deepseek-sparse-attention.request.json",
@@ -9319,8 +9319,8 @@
           "gfx950_four_branch_residual"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "6e9bd6ee0e159c6519f8b1376e84c146efb24f008c74bf89cd49d237d6c577d5",
-        "contractSha256": "3a144782b3298771c9b2ddd562015195776f9690032aa3e4df845e09e24cc3b0"
+        "cargoLockSha256": "5c8bed4ddd668f5f6745bbe72c9d48c516a6c7e5f67a11b77d3dc643e34888ef",
+        "contractSha256": "00dec447fcc83d6ca016bed29b2c3f47881be79fedafb6d7e218b35486eec4ed"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-four-branch-residual.request.json",
@@ -9368,8 +9368,8 @@
           "gfx950_four_branch_residual"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "6e9bd6ee0e159c6519f8b1376e84c146efb24f008c74bf89cd49d237d6c577d5",
-        "contractSha256": "8b2706f55aab80129d4b8e2b555537a5b5b9cf6598e9d1508d6dbb07219366dc"
+        "cargoLockSha256": "5c8bed4ddd668f5f6745bbe72c9d48c516a6c7e5f67a11b77d3dc643e34888ef",
+        "contractSha256": "3e93c4891a6168b7d6048bd56670a2f6a8f534ceee81195846383b9edafe8ba3"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-four-branch-residual.request.json",
@@ -9415,8 +9415,8 @@
           "gfx950_fp4_attention_rust"
         ],
         "cargoLockPath": "examples/gfx950_low_precision/Cargo.lock",
-        "cargoLockSha256": "0a84f421ea5ce545fa8648f438e2aa0e8e5454fcc4300bf6278e96a596013ef0",
-        "contractSha256": "11a841482431122ddc381dd90a1bcb925f35b4e7653b7f47a363102ad7248d44"
+        "cargoLockSha256": "b79c9c180a05ed74d7021d3dd0aecaaecc6796668f466d1f1f337759e78d8769",
+        "contractSha256": "7ea38fde6a32925bedb8492da8a6767c1bfc57493f89f9b74a31ba9ae0cb3bef"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-fp4-attention.request.json",
@@ -9462,8 +9462,8 @@
           "gfx950_fp4_gemm_rust"
         ],
         "cargoLockPath": "examples/gfx950_low_precision/Cargo.lock",
-        "cargoLockSha256": "0a84f421ea5ce545fa8648f438e2aa0e8e5454fcc4300bf6278e96a596013ef0",
-        "contractSha256": "d45cfde8a9ea67e7eb53aaa73b6c1e4a3105422efbc8ca50599de03826d2ad39"
+        "cargoLockSha256": "b79c9c180a05ed74d7021d3dd0aecaaecc6796668f466d1f1f337759e78d8769",
+        "contractSha256": "4f72471718f629c9ff888c28a5255883a47644cb459c50cf3bf6bcf7cd6d81a1"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-fp4-gemm.request.json",
@@ -9509,8 +9509,8 @@
           "gfx950_fp8_attention_rust"
         ],
         "cargoLockPath": "examples/gfx950_low_precision/Cargo.lock",
-        "cargoLockSha256": "0a84f421ea5ce545fa8648f438e2aa0e8e5454fcc4300bf6278e96a596013ef0",
-        "contractSha256": "fa5d68f878c9115fdc9155270987de1edb9796fe9effea3cb2621c01885aaae3"
+        "cargoLockSha256": "b79c9c180a05ed74d7021d3dd0aecaaecc6796668f466d1f1f337759e78d8769",
+        "contractSha256": "27b9dacc47b78f3bd9d2c2fd235485ae90b4c5e5ef1fb2a03ea5a89f81c4aba8"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-fp8-attention.request.json",
@@ -9556,8 +9556,8 @@
           "gfx950_fp8_gemm_rust"
         ],
         "cargoLockPath": "examples/gfx950_low_precision/Cargo.lock",
-        "cargoLockSha256": "0a84f421ea5ce545fa8648f438e2aa0e8e5454fcc4300bf6278e96a596013ef0",
-        "contractSha256": "39b5a60a3196d2293ec1c2b63a8032b48005e9866e02d5f50305e8674650b093"
+        "cargoLockSha256": "b79c9c180a05ed74d7021d3dd0aecaaecc6796668f466d1f1f337759e78d8769",
+        "contractSha256": "ce949164dcfca040ee3c0bc9eebddd39d46f304a9d8d6ab23b8d6816fe2db3ef"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-fp8-gemm.request.json",
@@ -9603,8 +9603,8 @@
           "gfx950_gpt_oss_120b_decode_megakernel_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "5cbef3fe82726f480e8fbb6dd2d30ad4509953a65d7c67764b8911df216eb485",
-        "contractSha256": "a20f6ddf6fc0719ccf30a869b55e2c24865a34e087e160d9e10e49dda3db50bb"
+        "cargoLockSha256": "684b0b019edd50ae11784c9c5ddf4cbe97df9999a0279bc438d163aab89e6520",
+        "contractSha256": "768aa571f760319ec8e0747b967a9d7d3337c05e05e64aef49968496ad5c4ad1"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -9652,8 +9652,8 @@
           "gfx950_gpt_oss_120b_decode_megakernel_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "5cbef3fe82726f480e8fbb6dd2d30ad4509953a65d7c67764b8911df216eb485",
-        "contractSha256": "fcae6d7de6a141c76e9c804f630bca694ec47748d93cec7bdb9bfa10ff4ad2d5"
+        "cargoLockSha256": "684b0b019edd50ae11784c9c5ddf4cbe97df9999a0279bc438d163aab89e6520",
+        "contractSha256": "80ae110a11c3cb11e9a2dbc131dc32fe216a84b5b703402aec41c232488bfa1d"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -9701,8 +9701,8 @@
           "gfx950_gpt_oss_120b_decode_megakernel_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "5cbef3fe82726f480e8fbb6dd2d30ad4509953a65d7c67764b8911df216eb485",
-        "contractSha256": "2361783c70bbd32d1abcf4554ccf2d212d72d74041a6d34ccc2470d8bf81cc3e"
+        "cargoLockSha256": "684b0b019edd50ae11784c9c5ddf4cbe97df9999a0279bc438d163aab89e6520",
+        "contractSha256": "c5f5ac401b344e0aa901f81fd9ff39f0f552bc184f1ba853bccea1ae04c124b8"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -9750,8 +9750,8 @@
           "gfx950_gpt_oss_120b_attention_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "5cbef3fe82726f480e8fbb6dd2d30ad4509953a65d7c67764b8911df216eb485",
-        "contractSha256": "f56dc1cd6d054ab59dd0b3595171a73eb6dc2b63bcd25559e53e677858984250"
+        "cargoLockSha256": "684b0b019edd50ae11784c9c5ddf4cbe97df9999a0279bc438d163aab89e6520",
+        "contractSha256": "7977e158c5431e43558a05d4eb86d25d7a8846f73d865db2fb6e6dd908edb02f"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-attention.request.json",
@@ -9799,8 +9799,8 @@
           "gfx950_gpt_oss_120b_expert_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "5cbef3fe82726f480e8fbb6dd2d30ad4509953a65d7c67764b8911df216eb485",
-        "contractSha256": "f0bf9e79bb04c7baf92be047a0c302fd45ff588ed202ec7c3a69ec9f54d2f8f6"
+        "cargoLockSha256": "684b0b019edd50ae11784c9c5ddf4cbe97df9999a0279bc438d163aab89e6520",
+        "contractSha256": "be88b86740b16c43cffe3ddf64578ac6aee63135d6e2a0b34cdd506b618c3430"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-expert.request.json",
@@ -9848,8 +9848,8 @@
           "gfx950_gpt_oss_120b_router_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "5cbef3fe82726f480e8fbb6dd2d30ad4509953a65d7c67764b8911df216eb485",
-        "contractSha256": "4fbdc33cb3e3bfbda189dc7def8e44b2761e3dd2d64cf7d313f5cf78c4bcb0a0"
+        "cargoLockSha256": "684b0b019edd50ae11784c9c5ddf4cbe97df9999a0279bc438d163aab89e6520",
+        "contractSha256": "0e08c6220b014e426cde01c350291f172b4aec0121f3d65f498b9523b198ffce"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-router.request.json",
@@ -9897,8 +9897,8 @@
           "gfx950_gpt_oss_120b_decode_megakernel_v1"
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
-        "cargoLockSha256": "5cbef3fe82726f480e8fbb6dd2d30ad4509953a65d7c67764b8911df216eb485",
-        "contractSha256": "3635574999d41b866ea539ccb7bf2088b4bb36ac792adeaaeef686b153aadba4"
+        "cargoLockSha256": "684b0b019edd50ae11784c9c5ddf4cbe97df9999a0279bc438d163aab89e6520",
+        "contractSha256": "2ead53ea15a9584ee57acbb5dc8abaf298a70cb9f021f878156cc1429ef31422"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -9944,8 +9944,8 @@
           "gfx950_kda_decode"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "6e9bd6ee0e159c6519f8b1376e84c146efb24f008c74bf89cd49d237d6c577d5",
-        "contractSha256": "3d4c6c4226c97949e47a0974ecba9d7991b366c20a5e7a3affefa92a515fe589"
+        "cargoLockSha256": "5c8bed4ddd668f5f6745bbe72c9d48c516a6c7e5f67a11b77d3dc643e34888ef",
+        "contractSha256": "f3b88c7ea1b8385f522114dbb12f3a67fd3e98493624d887c584032f6c170204"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-kda-decode.request.json",
@@ -9993,8 +9993,8 @@
           "gfx950_kda_decode"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "6e9bd6ee0e159c6519f8b1376e84c146efb24f008c74bf89cd49d237d6c577d5",
-        "contractSha256": "8f9b6273969ac6c3a19db65203640e10ce7565f4a5889e4e7b8c37b4a2e51659"
+        "cargoLockSha256": "5c8bed4ddd668f5f6745bbe72c9d48c516a6c7e5f67a11b77d3dc643e34888ef",
+        "contractSha256": "adf6f56f6cf0cfcb0af664f6f240028fe2c3928191e488fef9b99a169d9fd7d2"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-kda-decode.request.json",
@@ -10040,8 +10040,8 @@
           "gfx950_kda_chunkwise_prefill"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "6e9bd6ee0e159c6519f8b1376e84c146efb24f008c74bf89cd49d237d6c577d5",
-        "contractSha256": "5b551fab6a98ed24daa9d09b0a69e1fa439526be6e652c3bd477a2135aa76980"
+        "cargoLockSha256": "5c8bed4ddd668f5f6745bbe72c9d48c516a6c7e5f67a11b77d3dc643e34888ef",
+        "contractSha256": "9bb009719d9744c1c0468816b9ab39a896a1b6b966f9eabd532e450313894c77"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-kda-chunkwise-prefill.request.json",
@@ -10089,8 +10089,8 @@
           "gfx950_kda_chunkwise_prefill"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "6e9bd6ee0e159c6519f8b1376e84c146efb24f008c74bf89cd49d237d6c577d5",
-        "contractSha256": "f855a34f2fb95a940b70455becf2922446ace5133ab48073cbe7cbe7addbc4cf"
+        "cargoLockSha256": "5c8bed4ddd668f5f6745bbe72c9d48c516a6c7e5f67a11b77d3dc643e34888ef",
+        "contractSha256": "78e76fb0296812ab6637d45a0382cf59d94a151d4f1c87c6411ca33a41cad967"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-kda-chunkwise-prefill.request.json",
@@ -10136,8 +10136,8 @@
           "gfx950_mhc_sinkhorn_mix"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "6e9bd6ee0e159c6519f8b1376e84c146efb24f008c74bf89cd49d237d6c577d5",
-        "contractSha256": "77ed43ee5936bc8157d2d701bd78808840295767080221afd75f27fa12a86f03"
+        "cargoLockSha256": "5c8bed4ddd668f5f6745bbe72c9d48c516a6c7e5f67a11b77d3dc643e34888ef",
+        "contractSha256": "86ec350142970ab6f914702ceec6c6e758317aadf5f118786e4b81050e9a75c1"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-mhc-sinkhorn-mix.request.json",
@@ -10185,8 +10185,8 @@
           "gfx950_mhc_sinkhorn_mix"
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
-        "cargoLockSha256": "6e9bd6ee0e159c6519f8b1376e84c146efb24f008c74bf89cd49d237d6c577d5",
-        "contractSha256": "e4fd1d17c7e0c4ec6b4391d64ab33bc092a975dfc1e4f3c21cd31078bd1a630b"
+        "cargoLockSha256": "5c8bed4ddd668f5f6745bbe72c9d48c516a6c7e5f67a11b77d3dc643e34888ef",
+        "contractSha256": "18313053ebbcf5640a55a734c4105cec098a50299e56cd7e89747e528974e945"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-mhc-sinkhorn-mix.request.json",
@@ -10232,8 +10232,8 @@
           "gfx950_moe_expert_rank_fp4_fp8_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "9c52c956517541416fe66fb158ba27a98635222069ce163e5807cb5cf250a6db",
-        "contractSha256": "c8d06f353bf4522965f5318bd8eca27c3c054e9a2355a8d742378d82edbf72eb"
+        "cargoLockSha256": "a0e979c8a8ef4426b5977f4a7e01497496d50778eee99680b46e640950902e88",
+        "contractSha256": "77c96d2a0ef87c932f07b606dc2fb9353792b7410a33c0465dd5fcd0bfd8c289"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-moe-expert-rank-fp4-fp8.request.json",
@@ -10282,8 +10282,8 @@
           "gfx950_moe_expert_rank_fp4_fp8_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "9c52c956517541416fe66fb158ba27a98635222069ce163e5807cb5cf250a6db",
-        "contractSha256": "354e43a009c64774992662b2b3a68281050e711d811daa9eadfccb05dee9e4c4"
+        "cargoLockSha256": "a0e979c8a8ef4426b5977f4a7e01497496d50778eee99680b46e640950902e88",
+        "contractSha256": "e3dd3a6b3aebb76e19190e471b63eee7292f94cc93ac13a91660d5f6ac77ed0d"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-moe-expert-rank-fp4-fp8.request.json",
@@ -10329,8 +10329,8 @@
           "gfx950_moe_route_fp4_t16_e4_k2_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "9c52c956517541416fe66fb158ba27a98635222069ce163e5807cb5cf250a6db",
-        "contractSha256": "fa6478ca2041764cc49e0d7b129074924766b39609af299c9562f7dcf44c6e3d"
+        "cargoLockSha256": "a0e979c8a8ef4426b5977f4a7e01497496d50778eee99680b46e640950902e88",
+        "contractSha256": "2e57e942ee10d02eca682f4e371992de2a7cb3e9f5fe8494cd1f8f13e9061e5c"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-moe-route-fp4-t16-e4-k2.request.json",
@@ -10376,8 +10376,8 @@
           "gfx950_muon_update_4x4_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "9c52c956517541416fe66fb158ba27a98635222069ce163e5807cb5cf250a6db",
-        "contractSha256": "ebd9aab4d9bf2e4ac79b70e75ce34883b2e84fb4b5cfe359b7f06a3d7b30610f"
+        "cargoLockSha256": "a0e979c8a8ef4426b5977f4a7e01497496d50778eee99680b46e640950902e88",
+        "contractSha256": "2fc4489cd406a2a9f62a0bea2e9178871e938f30d76af7a13e34375682960158"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-muon-update-4x4.request.json",
@@ -10426,8 +10426,8 @@
           "gfx950_muon_update_4x4_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "9c52c956517541416fe66fb158ba27a98635222069ce163e5807cb5cf250a6db",
-        "contractSha256": "9d24bc6c535ff161040070324f32bc00c38089ede54377c2c4daffd53bf5a427"
+        "cargoLockSha256": "a0e979c8a8ef4426b5977f4a7e01497496d50778eee99680b46e640950902e88",
+        "contractSha256": "9515dd82a1bd0868304d5899b6f516df408f324b0f6f5eaf047208a89a0b47d9"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-muon-update-4x4.request.json",
@@ -10473,8 +10473,8 @@
           "gfx950_qwen_ngram_gather_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "9c52c956517541416fe66fb158ba27a98635222069ce163e5807cb5cf250a6db",
-        "contractSha256": "20ee9ea7c3c46f5960024f30bfde850df743e3bf25276b67a4f04f8774f8980b"
+        "cargoLockSha256": "a0e979c8a8ef4426b5977f4a7e01497496d50778eee99680b46e640950902e88",
+        "contractSha256": "fd3be703521978f75d1b9a4172c8b8fb88d05d9655e5075811b3cfd6b7f06344"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-qwen-ngram-gather.request.json",
@@ -10523,8 +10523,8 @@
           "gfx950_qwen_ngram_gather_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "9c52c956517541416fe66fb158ba27a98635222069ce163e5807cb5cf250a6db",
-        "contractSha256": "686726f327caff70a1d2d938c2fc5eaa9092f84d0a0e44f881b1ddc46d09fa26"
+        "cargoLockSha256": "a0e979c8a8ef4426b5977f4a7e01497496d50778eee99680b46e640950902e88",
+        "contractSha256": "031ddb009838f6c4ae8f32d76de95a5685bf4eac46b631b8af504097f45354aa"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-qwen-ngram-gather.request.json",
@@ -10570,8 +10570,8 @@
           "gfx950_speculative_transaction_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "9c52c956517541416fe66fb158ba27a98635222069ce163e5807cb5cf250a6db",
-        "contractSha256": "b9799d7e2dd17bc0c92fd2e14aedc8040229028ec6fb925d7c751d5475f36f45"
+        "cargoLockSha256": "a0e979c8a8ef4426b5977f4a7e01497496d50778eee99680b46e640950902e88",
+        "contractSha256": "7d0a9118ef04fd2fe34388ae10ecd7e8ac96067f22632f9b4ee5a6d04a2a311c"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-speculative-transaction.request.json",
@@ -10620,8 +10620,8 @@
           "gfx950_speculative_transaction_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "9c52c956517541416fe66fb158ba27a98635222069ce163e5807cb5cf250a6db",
-        "contractSha256": "a25c09d26d0c31f0244d8ba5185e31ab08503d232b389e65b890190f6467dcb3"
+        "cargoLockSha256": "a0e979c8a8ef4426b5977f4a7e01497496d50778eee99680b46e640950902e88",
+        "contractSha256": "60004d1618862cb3dea7adfa32387fd433d6e7d0d1bdcbfc9464df3258c1f803"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-speculative-transaction.request.json",
@@ -10667,8 +10667,8 @@
           "gfx950_stage_gradient_shard_v1"
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
-        "cargoLockSha256": "9c52c956517541416fe66fb158ba27a98635222069ce163e5807cb5cf250a6db",
-        "contractSha256": "2f1ed2de853866572046400d40261fb1ba79fcc940b0618bc0db3a13be313742"
+        "cargoLockSha256": "a0e979c8a8ef4426b5977f4a7e01497496d50778eee99680b46e640950902e88",
+        "contractSha256": "164104cfe0068671d6544f6ed2e30b7a77d8253ed45846d38ade84fd8a65b183"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-stage-gradient-shard.request.json",
@@ -11151,5 +11151,3270 @@
     "donorManifestSha256": "8b004fb4c8a5a997a5b35004c507c7633909c3414975cb3f76bb679fb63fe1d6",
     "sourceBaseCommit": "f6b0ea04bf8f2062df6509fc6f8f1965387e6f04",
     "sourceState": "dirty-proposal-not-qualified"
+  },
+  "kernelInventory": {
+    "schema": "fe2o3-tutorial-kernel-identities-v1",
+    "kernels": [
+      {
+        "kernelId": "fixture:gfx942-fill-simulation:fill",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx942-fill-simulation",
+            "kernelSymbol": "fill"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx942-flash-attention:flash_attention_general_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx942-flash-attention",
+            "kernelSymbol": "flash_attention_general_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx942-gemm-autoresearch:gemm_autoresearch_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx942-gemm-autoresearch",
+            "kernelSymbol": "gemm_autoresearch_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx942-grouped-expert-moe:moe_grouped_expert_general_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx942-grouped-expert-moe",
+            "kernelSymbol": "moe_grouped_expert_general_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx942-moe-top2:moe_top2_route_f32_t8_e4_k2_c4_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx942-moe-top2",
+            "kernelSymbol": "moe_top2_route_f32_t8_e4_k2_c4_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx942-row-softmax:row_softmax_general_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx942-row-softmax",
+            "kernelSymbol": "row_softmax_general_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx942-scalar-gemm:scalar_gemm_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx942-scalar-gemm",
+            "kernelSymbol": "scalar_gemm_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx942-tiled-gemm:tiled_gemm_general_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx942-tiled-gemm",
+            "kernelSymbol": "tiled_gemm_general_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx942-typed-vecadd-source:vecadd",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx942-typed-vecadd-source",
+            "kernelSymbol": "vecadd"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx942-wave64-collectives:wave64_collectives_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx942-wave64-collectives",
+            "kernelSymbol": "wave64_collectives_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx942-workgroup-collectives:lds_publish_read_reduce_i32_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx942-workgroup-collectives",
+            "kernelSymbol": "lds_publish_read_reduce_i32_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-attnres-aggregate-explicit-reuse:gfx950_attnres_aggregate",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-attnres-aggregate-explicit-reuse",
+            "kernelSymbol": "gfx950_attnres_aggregate"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-attnres-aggregate:gfx950_attnres_aggregate",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-attnres-aggregate",
+            "kernelSymbol": "gfx950_attnres_aggregate"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-combine-expert-ranks:gfx950_combine_expert_ranks_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-combine-expert-ranks",
+            "kernelSymbol": "gfx950_combine_expert_ranks_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-compressed-hybrid-attention-division-baseline:gfx950_compressed_hybrid_attention",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-compressed-hybrid-attention-division-baseline",
+            "kernelSymbol": "gfx950_compressed_hybrid_attention"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-compressed-hybrid-attention:gfx950_compressed_hybrid_attention",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-compressed-hybrid-attention",
+            "kernelSymbol": "gfx950_compressed_hybrid_attention"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-content-sparse-attention-reciprocal-reuse:gfx950_content_sparse_attention",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-content-sparse-attention-reciprocal-reuse",
+            "kernelSymbol": "gfx950_content_sparse_attention"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-content-sparse-attention:gfx950_content_sparse_attention",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-content-sparse-attention",
+            "kernelSymbol": "gfx950_content_sparse_attention"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-deepseek-sparse-attention:gfx950_deepseek_sparse_attention",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-deepseek-sparse-attention",
+            "kernelSymbol": "gfx950_deepseek_sparse_attention"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-four-branch-residual-explicit:gfx950_four_branch_residual",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-four-branch-residual-explicit",
+            "kernelSymbol": "gfx950_four_branch_residual"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-four-branch-residual:gfx950_four_branch_residual",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-four-branch-residual",
+            "kernelSymbol": "gfx950_four_branch_residual"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-fp4-attention:gfx950_fp4_attention_rust",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-fp4-attention",
+            "kernelSymbol": "gfx950_fp4_attention_rust"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-fp4-gemm:gfx950_fp4_gemm_rust",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-fp4-gemm",
+            "kernelSymbol": "gfx950_fp4_gemm_rust"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-fp8-attention:gfx950_fp8_attention_rust",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-fp8-attention",
+            "kernelSymbol": "gfx950_fp8_attention_rust"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-fp8-gemm:gfx950_fp8_gemm_rust",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-fp8-gemm",
+            "kernelSymbol": "gfx950_fp8_gemm_rust"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-decode:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-decode",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-held-fragments:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-held-fragments",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-interleaved-stores:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-interleaved-stores",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-materialized-attention:gfx950_gpt_oss_120b_attention_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-materialized-attention",
+            "kernelSymbol": "gfx950_gpt_oss_120b_attention_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-materialized-expert:gfx950_gpt_oss_120b_expert_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-materialized-expert",
+            "kernelSymbol": "gfx950_gpt_oss_120b_expert_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-materialized-router:gfx950_gpt_oss_120b_router_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-materialized-router",
+            "kernelSymbol": "gfx950_gpt_oss_120b_router_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-serial-router:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-serial-router",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-kda-decode-baseline:gfx950_kda_decode",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-kda-decode-baseline",
+            "kernelSymbol": "gfx950_kda_decode"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-kda-decode:gfx950_kda_decode",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-kda-decode",
+            "kernelSymbol": "gfx950_kda_decode"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-kda-prefill-baseline:gfx950_kda_chunkwise_prefill",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-kda-prefill-baseline",
+            "kernelSymbol": "gfx950_kda_chunkwise_prefill"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-kda-prefill:gfx950_kda_chunkwise_prefill",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-kda-prefill",
+            "kernelSymbol": "gfx950_kda_chunkwise_prefill"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-mhc-sinkhorn-mix-scalar:gfx950_mhc_sinkhorn_mix",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-mhc-sinkhorn-mix-scalar",
+            "kernelSymbol": "gfx950_mhc_sinkhorn_mix"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-mhc-sinkhorn-mix:gfx950_mhc_sinkhorn_mix",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-mhc-sinkhorn-mix",
+            "kernelSymbol": "gfx950_mhc_sinkhorn_mix"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-moe-expert-rank-expert-serial:gfx950_moe_expert_rank_fp4_fp8_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-moe-expert-rank-expert-serial",
+            "kernelSymbol": "gfx950_moe_expert_rank_fp4_fp8_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-moe-expert-rank:gfx950_moe_expert_rank_fp4_fp8_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-moe-expert-rank",
+            "kernelSymbol": "gfx950_moe_expert_rank_fp4_fp8_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-moe-route:gfx950_moe_route_fp4_t16_e4_k2_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-moe-route",
+            "kernelSymbol": "gfx950_moe_route_fp4_t16_e4_k2_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-muon-update-broadcast16:gfx950_muon_update_4x4_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-muon-update-broadcast16",
+            "kernelSymbol": "gfx950_muon_update_4x4_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-muon-update:gfx950_muon_update_4x4_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-muon-update",
+            "kernelSymbol": "gfx950_muon_update_4x4_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-qwen-ngram-gather-reverse-probe:gfx950_qwen_ngram_gather_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-qwen-ngram-gather-reverse-probe",
+            "kernelSymbol": "gfx950_qwen_ngram_gather_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-qwen-ngram-gather:gfx950_qwen_ngram_gather_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-qwen-ngram-gather",
+            "kernelSymbol": "gfx950_qwen_ngram_gather_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-speculative-transaction-recompute-prefix:gfx950_speculative_transaction_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-speculative-transaction-recompute-prefix",
+            "kernelSymbol": "gfx950_speculative_transaction_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-speculative-transaction:gfx950_speculative_transaction_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-speculative-transaction",
+            "kernelSymbol": "gfx950_speculative_transaction_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-stage-gradient-shard:gfx950_stage_gradient_shard_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-stage-gradient-shard",
+            "kernelSymbol": "gfx950_stage_gradient_shard_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "source-driver:cpu-semantic-simulation:0:aggregate_nested",
+        "selections": [
+          {
+            "kind": "source-driver-case",
+            "lessonId": "cpu-semantic-simulation",
+            "tabOrdinal": 0,
+            "caseOrdinal": 5
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "source-driver:cpu-semantic-simulation:0:aggregate_pair_array",
+        "selections": [
+          {
+            "kind": "source-driver-case",
+            "lessonId": "cpu-semantic-simulation",
+            "tabOrdinal": 0,
+            "caseOrdinal": 3
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "source-driver:cpu-semantic-simulation:0:aggregate_pair_struct",
+        "selections": [
+          {
+            "kind": "source-driver-case",
+            "lessonId": "cpu-semantic-simulation",
+            "tabOrdinal": 0,
+            "caseOrdinal": 1
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "source-driver:cpu-semantic-simulation:0:aggregate_pair_tuple",
+        "selections": [
+          {
+            "kind": "source-driver-case",
+            "lessonId": "cpu-semantic-simulation",
+            "tabOrdinal": 0,
+            "caseOrdinal": 2
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "source-driver:cpu-semantic-simulation:0:aggregate_zst",
+        "selections": [
+          {
+            "kind": "source-driver-case",
+            "lessonId": "cpu-semantic-simulation",
+            "tabOrdinal": 0,
+            "caseOrdinal": 4
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "source-driver:cpu-semantic-simulation:0:barrier_before_access",
+        "selections": [
+          {
+            "kind": "source-driver-case",
+            "lessonId": "cpu-semantic-simulation",
+            "tabOrdinal": 0,
+            "caseOrdinal": 0
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "source-driver:cpu-semantic-simulation:0:wave_reduce_f32",
+        "selections": [
+          {
+            "kind": "source-driver-case",
+            "lessonId": "cpu-semantic-simulation",
+            "tabOrdinal": 0,
+            "caseOrdinal": 9
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "source-driver:cpu-semantic-simulation:0:workgroup_reduce_f32",
+        "selections": [
+          {
+            "kind": "source-driver-case",
+            "lessonId": "cpu-semantic-simulation",
+            "tabOrdinal": 0,
+            "caseOrdinal": 12
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "source-driver:cpu-semantic-simulation:0:workgroup_reduce_i32",
+        "selections": [
+          {
+            "kind": "source-driver-case",
+            "lessonId": "cpu-semantic-simulation",
+            "tabOrdinal": 0,
+            "caseOrdinal": 11
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "source-driver:cpu-semantic-simulation:0:workgroup_reduce_u32",
+        "selections": [
+          {
+            "kind": "source-driver-case",
+            "lessonId": "cpu-semantic-simulation",
+            "tabOrdinal": 0,
+            "caseOrdinal": 10
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      }
+    ],
+    "negativeCases": [
+      {
+        "kind": "source-driver-case",
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "caseOrdinal": 6
+      },
+      {
+        "kind": "source-driver-case",
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "caseOrdinal": 7
+      },
+      {
+        "kind": "source-driver-case",
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "caseOrdinal": 8
+      }
+    ],
+    "displayItems": [
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 2442,
+        "kernelSymbol": "copy_static",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 2782,
+        "kernelSymbol": "device_math_sqrt",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 3135,
+        "kernelSymbol": "debug_scalar",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 3465,
+        "kernelSymbol": "debug_long_name",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 4378,
+        "kernelSymbol": "debug_mutated_argument",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 4705,
+        "kernelSymbol": "copy_static",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 5036,
+        "kernelSymbol": "checked_shifted",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 5404,
+        "kernelSymbol": "grid_exclusive",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 5780,
+        "kernelSymbol": "blocked_multi_lane",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 6187,
+        "kernelSymbol": "blocked_multi_block",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 6585,
+        "kernelSymbol": "blocked_multi_lane_dynamic_grid",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 6971,
+        "kernelSymbol": "blocked",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 7349,
+        "kernelSymbol": "write_only_grid_exclusive",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 7694,
+        "kernelSymbol": "write_only_blocked",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 8049,
+        "kernelSymbol": "write_only_blocked_dynamic_grid",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 8431,
+        "kernelSymbol": "write_only_tiled",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 8829,
+        "kernelSymbol": "write_only_row_striped",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 9220,
+        "kernelSymbol": "barrier_after_access",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 9626,
+        "kernelSymbol": "barrier_before_access",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 10029,
+        "kernelSymbol": "barrier_divergent",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 10411,
+        "kernelSymbol": "barrier_early_return",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 10825,
+        "kernelSymbol": "barrier_loop",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 11216,
+        "kernelSymbol": "helper_barrier",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary barrier helper displayed with source regression entries, not an independently attributed kernel."
+      },
+      {
+        "lessonId": "compiler-checks",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 11376,
+        "kernelSymbol": "barrier_helper",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 148,
+        "kernelSymbol": "barrier_before_access",
+        "classification": "kernel",
+        "kernelIds": [
+          "source-driver:cpu-semantic-simulation:0:barrier_before_access"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "source-driver-contract",
+        "reason": "The existing source-driver case and exact displayed fragment bind this source selection only; SIMT/tile variants and required stage evidence remain pending."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 685,
+        "kernelSymbol": "aggregate_pair_struct",
+        "classification": "kernel",
+        "kernelIds": [
+          "source-driver:cpu-semantic-simulation:0:aggregate_pair_struct"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "source-driver-contract",
+        "reason": "The existing source-driver case and exact displayed fragment bind this source selection only; SIMT/tile variants and required stage evidence remain pending."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1045,
+        "kernelSymbol": "aggregate_pair_tuple",
+        "classification": "kernel",
+        "kernelIds": [
+          "source-driver:cpu-semantic-simulation:0:aggregate_pair_tuple"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "source-driver-contract",
+        "reason": "The existing source-driver case and exact displayed fragment bind this source selection only; SIMT/tile variants and required stage evidence remain pending."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1375,
+        "kernelSymbol": "aggregate_pair_array",
+        "classification": "kernel",
+        "kernelIds": [
+          "source-driver:cpu-semantic-simulation:0:aggregate_pair_array"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "source-driver-contract",
+        "reason": "The existing source-driver case and exact displayed fragment bind this source selection only; SIMT/tile variants and required stage evidence remain pending."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1757,
+        "kernelSymbol": "aggregate_zst",
+        "classification": "kernel",
+        "kernelIds": [
+          "source-driver:cpu-semantic-simulation:0:aggregate_zst"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "source-driver-contract",
+        "reason": "The existing source-driver case and exact displayed fragment bind this source selection only; SIMT/tile variants and required stage evidence remain pending."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 2186,
+        "kernelSymbol": "aggregate_nested",
+        "classification": "kernel",
+        "kernelIds": [
+          "source-driver:cpu-semantic-simulation:0:aggregate_nested"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "source-driver-contract",
+        "reason": "The existing source-driver case and exact displayed fragment bind this source selection only; SIMT/tile variants and required stage evidence remain pending."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 2612,
+        "kernelSymbol": "aggregate_enum",
+        "classification": "required-negative",
+        "kernelIds": [],
+        "negativeCases": [
+          {
+            "kind": "source-driver-case",
+            "lessonId": "cpu-semantic-simulation",
+            "tabOrdinal": 0,
+            "caseOrdinal": 6
+          }
+        ],
+        "bindingStatus": "source-driver-contract",
+        "reason": "The existing exact source-driver contract requires typed refusal and no output artifact for this declared negative case; it does not create or satisfy a runnable SIMT/tile pair."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 3022,
+        "kernelSymbol": "aggregate_pointer",
+        "classification": "required-negative",
+        "kernelIds": [],
+        "negativeCases": [
+          {
+            "kind": "source-driver-case",
+            "lessonId": "cpu-semantic-simulation",
+            "tabOrdinal": 0,
+            "caseOrdinal": 7
+          }
+        ],
+        "bindingStatus": "source-driver-contract",
+        "reason": "The existing exact source-driver contract requires typed refusal and no output artifact for this declared negative case; it does not create or satisfy a runnable SIMT/tile pair."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 3362,
+        "kernelSymbol": "drop",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Drop implementation method in an intentional aggregate refusal example, not a GPU entry."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 3503,
+        "kernelSymbol": "aggregate_drop",
+        "classification": "required-negative",
+        "kernelIds": [],
+        "negativeCases": [
+          {
+            "kind": "source-driver-case",
+            "lessonId": "cpu-semantic-simulation",
+            "tabOrdinal": 0,
+            "caseOrdinal": 8
+          }
+        ],
+        "bindingStatus": "source-driver-contract",
+        "reason": "The existing exact source-driver contract requires typed refusal and no output artifact for this declared negative case; it does not create or satisfy a runnable SIMT/tile pair."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 3800,
+        "kernelSymbol": "wave_reduce_f32",
+        "classification": "kernel",
+        "kernelIds": [
+          "source-driver:cpu-semantic-simulation:0:wave_reduce_f32"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "source-driver-contract",
+        "reason": "The existing source-driver case and exact displayed fragment bind this source selection only; SIMT/tile variants and required stage evidence remain pending."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 4275,
+        "kernelSymbol": "workgroup_reduce_u32",
+        "classification": "kernel",
+        "kernelIds": [
+          "source-driver:cpu-semantic-simulation:0:workgroup_reduce_u32"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "source-driver-contract",
+        "reason": "The existing source-driver case and exact displayed fragment bind this source selection only; SIMT/tile variants and required stage evidence remain pending."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 4874,
+        "kernelSymbol": "workgroup_reduce_i32",
+        "classification": "kernel",
+        "kernelIds": [
+          "source-driver:cpu-semantic-simulation:0:workgroup_reduce_i32"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "source-driver-contract",
+        "reason": "The existing source-driver case and exact displayed fragment bind this source selection only; SIMT/tile variants and required stage evidence remain pending."
+      },
+      {
+        "lessonId": "cpu-semantic-simulation",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 5473,
+        "kernelSymbol": "workgroup_reduce_f32",
+        "classification": "kernel",
+        "kernelIds": [
+          "source-driver:cpu-semantic-simulation:0:workgroup_reduce_f32"
+        ],
+        "negativeCases": [],
+        "bindingStatus": "source-driver-contract",
+        "reason": "The existing source-driver case and exact displayed fragment bind this source selection only; SIMT/tile variants and required stage evidence remain pending."
+      },
+      {
+        "lessonId": "first-fill",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 148,
+        "kernelSymbol": "fill",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 885,
+        "kernelSymbol": "matrix_extent",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary extent helper retained with its kernel source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1688,
+        "kernelSymbol": "flash_attention_general_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 15154,
+        "kernelSymbol": "matrix_extent_excludes_trailing_padding",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Host unit-test function retained in the displayed whole source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 15319,
+        "kernelSymbol": "score_mfma_uses_workgroup_double_buffering",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Host unit-test function retained in the displayed whole source, not a GPU entry."
+      },
+      {
+        "lessonId": "gemm-autoresearch",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 712,
+        "kernelSymbol": "accessed_extent",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary extent helper retained with its kernel source, not a GPU entry."
+      },
+      {
+        "lessonId": "gemm-autoresearch",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1380,
+        "kernelSymbol": "gemm_autoresearch_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gemm-autoresearch",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 4491,
+        "kernelSymbol": "strided_extents_include_only_accessed_elements",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Host unit-test function retained in the displayed whole source, not a GPU entry."
+      },
+      {
+        "lessonId": "gemm-autoresearch",
+        "tabOrdinal": 2,
+        "functionUtf8Offset": 1299,
+        "kernelSymbol": "gemm_autoresearch_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The historical rejected two-slot LDS experiment is a separate displayed kernel candidate, not the winning same-named source; its source and pair binding remain pending."
+      },
+      {
+        "lessonId": "gemm-proof-plan",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 3101,
+        "kernelSymbol": "tiled_gemm_lds_slice1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed historical tiled_gemm_v1 source is retired; no replacement fixture or semantic migration correspondence is asserted."
+      },
+      {
+        "lessonId": "gemm-tiling",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 797,
+        "kernelSymbol": "accessed_extent",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary extent helper retained with its kernel source, not a GPU entry."
+      },
+      {
+        "lessonId": "gemm-tiling",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1530,
+        "kernelSymbol": "tiled_gemm_general_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gemm-tiling",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 6352,
+        "kernelSymbol": "strided_extents_include_only_accessed_elements",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Host unit-test function retained in the displayed whole source, not a GPU entry."
+      },
+      {
+        "lessonId": "gfx950-advanced-moe",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 212,
+        "kernelSymbol": "gfx950_moe_route_fp4_t16_e4_k2_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-advanced-moe",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 13227,
+        "kernelSymbol": "gfx950_moe_expert_rank_fp4_fp8_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-advanced-moe",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 26722,
+        "kernelSymbol": "gfx950_combine_expert_ranks_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-attnres-gr-mhc",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 144,
+        "kernelSymbol": "gfx950_attnres_aggregate",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-attnres-gr-mhc",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 2141,
+        "kernelSymbol": "gfx950_four_branch_residual",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-attnres-gr-mhc",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 3652,
+        "kernelSymbol": "gfx950_mhc_sinkhorn_mix",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-attnres-gr-mhc",
+        "tabOrdinal": 1,
+        "functionUtf8Offset": 1111,
+        "kernelSymbol": "gfx950_attnres_aggregate",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The historical ablation declaration requires its exact feature-selected source binding, separate from same-named production implementations."
+      },
+      {
+        "lessonId": "gfx950-attnres-gr-mhc",
+        "tabOrdinal": 1,
+        "functionUtf8Offset": 3730,
+        "kernelSymbol": "gfx950_four_branch_residual",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The historical ablation declaration requires its exact feature-selected source binding, separate from same-named production implementations."
+      },
+      {
+        "lessonId": "gfx950-attnres-gr-mhc",
+        "tabOrdinal": 1,
+        "functionUtf8Offset": 5895,
+        "kernelSymbol": "gfx950_mhc_sinkhorn_mix",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The historical ablation declaration requires its exact feature-selected source binding, separate from same-named production implementations."
+      },
+      {
+        "lessonId": "gfx950-attnres-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 144,
+        "kernelSymbol": "gfx950_attnres_aggregate",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "gfx950-compressed-hybrid-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 582,
+        "kernelSymbol": "gfx950_compressed_hybrid_attention",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-compressed-hybrid-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 582,
+        "kernelSymbol": "gfx950_compressed_hybrid_attention",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "gfx950-content-sparse-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 575,
+        "kernelSymbol": "gfx950_content_sparse_attention",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "gfx950-deepseek-sparse-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 107,
+        "kernelSymbol": "gfx950_deepseek_sparse_attention",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-deepseek-sparse-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 107,
+        "kernelSymbol": "gfx950_deepseek_sparse_attention",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "gfx950-expert-combine-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 495,
+        "kernelSymbol": "gfx950_combine_expert_ranks_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "gfx950-four-branch-residual-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 141,
+        "kernelSymbol": "gfx950_four_branch_residual",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "gfx950-fp4-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 180,
+        "kernelSymbol": "gfx950_fp4_attention_rust",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-fp4-attention-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 80,
+        "kernelSymbol": "gfx950_fp4_attention_rust",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This source-backed performance excerpt displays the entry function without its kernel attributes; exact source declaration, feature selection, and helper-closure binding remain pending."
+      },
+      {
+        "lessonId": "gfx950-fp4-gemm",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 169,
+        "kernelSymbol": "gfx950_fp4_gemm_rust",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-fp4-gemm-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 69,
+        "kernelSymbol": "gfx950_fp4_gemm_rust",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This source-backed performance excerpt displays the entry function without its kernel attributes; exact source declaration, feature selection, and helper-closure binding remain pending."
+      },
+      {
+        "lessonId": "gfx950-fp8-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 180,
+        "kernelSymbol": "gfx950_fp8_attention_rust",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-fp8-attention-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 80,
+        "kernelSymbol": "gfx950_fp8_attention_rust",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This source-backed performance excerpt displays the entry function without its kernel attributes; exact source declaration, feature selection, and helper-closure binding remain pending."
+      },
+      {
+        "lessonId": "gfx950-fp8-gemm",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 162,
+        "kernelSymbol": "gfx950_fp8_gemm_rust",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-fp8-gemm-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 62,
+        "kernelSymbol": "gfx950_fp8_gemm_rust",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This source-backed performance excerpt displays the entry function without its kernel attributes; exact source declaration, feature selection, and helper-closure binding remain pending."
+      },
+      {
+        "lessonId": "gfx950-gpt-oss-120b-megakernel",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 221,
+        "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-gpt-oss-120b-megakernel",
+        "tabOrdinal": 1,
+        "functionUtf8Offset": 1375,
+        "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical GPT implementation needs its exact file, feature selection, and helper closure bound independently of same-named production and ablation entries."
+      },
+      {
+        "lessonId": "gfx950-gpt-oss-120b-megakernel",
+        "tabOrdinal": 2,
+        "functionUtf8Offset": 1439,
+        "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical GPT implementation needs its exact file, feature selection, and helper closure bound independently of same-named production and ablation entries."
+      },
+      {
+        "lessonId": "gfx950-gpt-oss-120b-megakernel",
+        "tabOrdinal": 3,
+        "functionUtf8Offset": 1440,
+        "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical GPT implementation needs its exact file, feature selection, and helper closure bound independently of same-named production and ablation entries."
+      },
+      {
+        "lessonId": "gfx950-gpt-oss-120b-megakernel",
+        "tabOrdinal": 4,
+        "functionUtf8Offset": 1395,
+        "kernelSymbol": "gfx950_gpt_oss_120b_router_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical GPT implementation needs its exact file, feature selection, and helper closure bound independently of same-named production and ablation entries."
+      },
+      {
+        "lessonId": "gfx950-gpt-oss-120b-megakernel",
+        "tabOrdinal": 4,
+        "functionUtf8Offset": 9610,
+        "kernelSymbol": "gfx950_gpt_oss_120b_attention_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical GPT implementation needs its exact file, feature selection, and helper closure bound independently of same-named production and ablation entries."
+      },
+      {
+        "lessonId": "gfx950-gpt-oss-120b-megakernel",
+        "tabOrdinal": 4,
+        "functionUtf8Offset": 16455,
+        "kernelSymbol": "gfx950_gpt_oss_120b_expert_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical GPT implementation needs its exact file, feature selection, and helper closure bound independently of same-named production and ablation entries."
+      },
+      {
+        "lessonId": "gfx950-gpt-oss-120b-megakernel",
+        "tabOrdinal": 5,
+        "functionUtf8Offset": 1508,
+        "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed whole-file attention variant has no selected fixture association; package membership and a shared symbol do not establish feature, source, or execution coverage."
+      },
+      {
+        "lessonId": "gfx950-gpt-oss-120b-megakernel",
+        "tabOrdinal": 6,
+        "functionUtf8Offset": 1057,
+        "kernelSymbol": "widen_bf16",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary BF16 conversion helper retained in the whole-file scalar-attention source, not a GPU entry."
+      },
+      {
+        "lessonId": "gfx950-gpt-oss-120b-megakernel",
+        "tabOrdinal": 6,
+        "functionUtf8Offset": 3041,
+        "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed whole-file attention variant has no selected fixture association; package membership and a shared symbol do not establish feature, source, or execution coverage."
+      },
+      {
+        "lessonId": "gfx950-gpt-oss-megakernel-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 221,
+        "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "gfx950-gradient-stage-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 494,
+        "kernelSymbol": "gfx950_stage_gradient_shard_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "gfx950-indexed-sparse-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 575,
+        "kernelSymbol": "gfx950_content_sparse_attention",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-kda-decode-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 107,
+        "kernelSymbol": "gfx950_kda_decode",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "gfx950-kda-gdn-linear-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 4072,
+        "kernelSymbol": "gfx950_kda_decode",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-kda-gdn-linear-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 7530,
+        "kernelSymbol": "gfx950_kda_chunkwise_prefill",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-kda-prefill-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 107,
+        "kernelSymbol": "gfx950_kda_chunkwise_prefill",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "gfx950-mhc-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 141,
+        "kernelSymbol": "gfx950_mhc_sinkhorn_mix",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "gfx950-moe-expert-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 542,
+        "kernelSymbol": "gfx950_moe_expert_rank_fp4_fp8_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "gfx950-moe-route-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 212,
+        "kernelSymbol": "gfx950_moe_route_fp4_t16_e4_k2_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "gfx950-muon-optimizer",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 494,
+        "kernelSymbol": "gfx950_stage_gradient_shard_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-muon-optimizer",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 3305,
+        "kernelSymbol": "gfx950_muon_update_4x4_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-muon-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 499,
+        "kernelSymbol": "gfx950_muon_update_4x4_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "gfx950-ngram-embedding-gather",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 517,
+        "kernelSymbol": "gfx950_qwen_ngram_gather_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-ngram-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 517,
+        "kernelSymbol": "gfx950_qwen_ngram_gather_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "gfx950-speculative-mtp-verification",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 585,
+        "kernelSymbol": "gfx950_speculative_transaction_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "gfx950-speculative-performance-lab",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 585,
+        "kernelSymbol": "gfx950_speculative_transaction_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "This historical performance excerpt has no exact current source-selection binding; a matching name or displayed body does not establish feature or helper-closure equivalence."
+      },
+      {
+        "lessonId": "lds-barriers-atomics",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1262,
+        "kernelSymbol": "lds_publish_read_reduce_i32_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "memory-race-proof",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 668,
+        "kernelSymbol": "vecadd",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "memory-race-proof",
+        "tabOrdinal": 2,
+        "functionUtf8Offset": 191,
+        "kernelSymbol": "vecadd",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      },
+      {
+        "lessonId": "moe-expert-compute",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 548,
+        "kernelSymbol": "matrix_extent",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary extent helper retained with its kernel source, not a GPU entry."
+      },
+      {
+        "lessonId": "moe-expert-compute",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1209,
+        "kernelSymbol": "moe_grouped_expert_general_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "moe-expert-compute",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 6431,
+        "kernelSymbol": "matrix_extent_excludes_trailing_padding",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Host unit-test function retained in the displayed whole source, not a GPU entry."
+      },
+      {
+        "lessonId": "moe-routing",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1217,
+        "kernelSymbol": "candidate_precedes_v1",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary ranking helper retained with its kernel source, not a GPU entry."
+      },
+      {
+        "lessonId": "moe-routing",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1493,
+        "kernelSymbol": "select_top2_v1",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary routing helper retained with its kernel source, not a GPU entry."
+      },
+      {
+        "lessonId": "moe-routing",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 2262,
+        "kernelSymbol": "logits_are_finite_v1",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary input-validation helper retained with its kernel source, not a GPU entry."
+      },
+      {
+        "lessonId": "moe-routing",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 2491,
+        "kernelSymbol": "write_value_v1",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary output helper retained with its kernel source, not a GPU entry."
+      },
+      {
+        "lessonId": "moe-routing",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 3621,
+        "kernelSymbol": "moe_top2_route_f32_t8_e4_k2_c4_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "reductions-scans",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 842,
+        "kernelSymbol": "wave64_collectives_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "softmax-invariant",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 508,
+        "kernelSymbol": "accessed_extent",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary extent helper retained with its kernel source, not a GPU entry."
+      },
+      {
+        "lessonId": "softmax-invariant",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1121,
+        "kernelSymbol": "row_softmax_general_v1",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The displayed declaration has no exact current source-selection binding; lesson-level source paths and matching names do not establish a per-kernel identity."
+      },
+      {
+        "lessonId": "softmax-invariant",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 3810,
+        "kernelSymbol": "accessed_extent_excludes_trailing_padding",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Host unit-test function retained in the displayed whole source, not a GPU entry."
+      },
+      {
+        "lessonId": "typed-vecadd",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 668,
+        "kernelSymbol": "vecadd",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "Displayed code combines a shared macro and entry wrapper, but sourcePath names only macro-only vecadd_body.rs and has no commit or digest; exact declaration and helper provenance remain unbound."
+      },
+      {
+        "lessonId": "typed-vecadd",
+        "tabOrdinal": 3,
+        "functionUtf8Offset": 191,
+        "kernelSymbol": "vecadd",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "Historical main.rs includes vecadd_body.rs; the rendered entry does not establish the current helper closure or a SIMT/tile source binding."
+      },
+      {
+        "lessonId": "verus-contracts",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 148,
+        "kernelSymbol": "fill",
+        "classification": "conceptual",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "The existing conceptual lesson displays this declaration for explanation or regression coverage; no runnable pair or current source selection is inferred."
+      }
+    ]
   }
 }

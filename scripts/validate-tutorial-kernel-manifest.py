@@ -13,8 +13,8 @@ the current runtime projection without requiring an unchanged site Git HEAD.
 Neither option upgrades a pending obligation to execution or launch evidence.
 
 --emit-kernel-pairs reports existing input selections and exact source cases,
-not completed pairs. Optional runtime display observations remain lexical;
-V2 has no per-kernel mode bindings or exhaustive runnable-kernel identity.
+not completed pairs. The optional kernelInventory extension reconciles physical
+display occurrences and exact source selections without inferring implementations.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -182,6 +183,25 @@ def fail(message: str) -> None:
     raise SystemExit(f"tutorial kernel manifest: {message}")
 
 
+def validate_kernel_inventory(
+    manifest: dict[str, Any], inventory: dict[str, Any] | None,
+    *, max_records: int = MAX_KERNEL_PAIR_RECORDS,
+) -> dict[str, Any] | None:
+    if "kernelInventory" not in manifest:
+        return None
+    path = Path(__file__).with_name("tutorial_kernel_identities.py")
+    specification = importlib.util.spec_from_file_location("tutorial_kernel_identities", path)
+    assert specification is not None and specification.loader is not None
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    try:
+        return module.validate_kernel_inventory(
+            manifest, inventory, ordinary_rust_function_items, max_records=max_records,
+        )
+    except module.KernelInventoryError as error:
+        fail(str(error))
+
+
 def require_object(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         fail(f"{label} must be an object")
@@ -267,6 +287,8 @@ def _rust_code_without_comments_and_literals(source: str) -> str:
     output = list(source)
     index = 0
     block_depth = 0
+    character_literal = re.compile(r"'(?:\\.|[^'\\\n])'")
+    raw_literal = re.compile(r"(?:br|cr|r)(?P<hashes>#{0,255})\"")
     while index < len(source):
         if block_depth:
             if source.startswith("/*", index):
@@ -294,17 +316,17 @@ def _rust_code_without_comments_and_literals(source: str) -> str:
             index += 2
             continue
 
-        character = re.match(r"'(?:\\.|[^'\\\n])'", source[index:])
+        character = character_literal.match(source, index)
         if character is not None:
-            end = index + character.end()
+            end = character.end()
             output[index:end] = " " * (end - index)
             index = end
             continue
 
-        raw = re.match(r"(?:br|cr|r)(?P<hashes>#{0,255})\"", source[index:])
+        raw = raw_literal.match(source, index)
         if raw is not None:
             delimiter = '"' + raw.group("hashes")
-            end = source.find(delimiter, index + raw.end())
+            end = source.find(delimiter, raw.end())
             if end < 0:
                 fail("Rust source contains an unterminated raw string literal")
             end += len(delimiter)
@@ -389,15 +411,130 @@ def _macro_rule_bodies(code: str, pairs: dict[int, int]) -> list[tuple[int, int]
         while cursor < len(code) and code[cursor].isspace():
             cursor += 1
         # macro_rules! name { ... }; has one identifier before its body.
-        identifier = re.match(r"[A-Za-z_][A-Za-z0-9_]*", code[cursor:])
+        identifier = RUST_IDENTIFIER.match(code, cursor)
         if identifier is not None:
-            cursor += identifier.end()
+            cursor = identifier.end()
         while cursor < len(code) and code[cursor].isspace():
             cursor += 1
         if cursor >= len(code) or code[cursor] not in "([{" or cursor not in pairs:
             fail("Rust source contains an unterminated macro_rules body")
         bodies.append((cursor, pairs[cursor]))
     return bodies
+
+
+def _attribute_has_qualified_kernel_name(body: str) -> bool:
+    cursor = 0
+    while cursor < len(body) and body[cursor].isspace():
+        cursor += 1
+    if body.startswith("::", cursor):
+        cursor += 2
+    while True:
+        while cursor < len(body) and body[cursor].isspace():
+            cursor += 1
+        identifier = _rust_function_identifier(body, cursor)
+        if identifier is None:
+            return False
+        cursor, name = identifier
+        while cursor < len(body) and body[cursor].isspace():
+            cursor += 1
+        if not body.startswith("::", cursor):
+            break
+        cursor += 2
+    return name == "kernel" or (
+        name == "cfg_attr" and re.search(r"\bkernel\b", body[cursor:]) is not None
+    )
+
+
+def _rust_function_identifier(code: str, start: int) -> tuple[int, str] | None:
+    """Read a Rust identifier using Python's Unicode XID character predicates."""
+    cursor = start + 2 if code.startswith("r#", start) else start
+    first = cursor
+    if cursor >= len(code) or not code[cursor].isidentifier():
+        return None
+    cursor += 1
+    while cursor < len(code) and ("a" + code[cursor]).isidentifier():
+        cursor += 1
+    return cursor, code[first:cursor]
+
+
+def ordinary_rust_function_items(source: str) -> list[dict[str, Any]]:
+    """Return physical fn-name occurrences, not expanded or executable kernels.
+
+    Offsets refer to the original UTF-8 function-name token, including r# for
+    raw identifiers; kernelSymbol omits that lexical prefix. Attributes are
+    classified conservatively without evaluating cfg. Historical name-list
+    helpers intentionally retain their existing behavior.
+    """
+    if not isinstance(source, str) or len(source) > MAX_ATTRIBUTED_SOURCE_BYTES:
+        fail("Rust source exceeds the function occurrence source bound")
+    utf8_bytes = 0
+    for character in source:
+        value = ord(character)
+        if 0xD800 <= value <= 0xDFFF:
+            fail("Rust source contains invalid Unicode")
+        utf8_bytes += 1 if value < 0x80 else 2 if value < 0x800 else 3 if value < 0x10000 else 4
+        if utf8_bytes > MAX_ATTRIBUTED_SOURCE_BYTES:
+            fail("Rust source exceeds the function occurrence source bound")
+    code = _rust_code_without_comments_and_literals(source)
+    pairs = _rust_delimiters(code)
+    macros = _macro_rule_bodies(code, pairs)
+    events = re.compile(r"(?P<attribute>#\s*!?\s*\[)|(?<![\w#])fn(?=\s)")
+    following_attribute = re.compile(r"\s*#\s*\[")
+    declaration = re.compile(
+        r"\s*(?:pub(?:\s*\([^)]*\))?\s+)?"
+        r"(?:(?:const|async|unsafe|safe|default)\s+)*(?:extern\s+)?fn\s+"
+    )
+    records: list[dict[str, Any]] = []
+    cursor = macro_index = previous_character = previous_byte = 0
+
+    def append(name_start: int, name: str, attributed: bool) -> None:
+        nonlocal previous_character, previous_byte
+        if len(records) >= MAX_KERNEL_PAIR_RECORDS:
+            fail("Rust source exceeds the function occurrence count bound")
+        # These disjoint slices encode each prefix byte at most once.
+        previous_byte += len(source[previous_character:name_start].encode("utf-8"))
+        previous_character = name_start
+        records.append({
+            "kernelSymbol": name,
+            "functionUtf8Offset": previous_byte,
+            "attributedKernel": attributed,
+        })
+
+    while match := events.search(code, cursor):
+        start = match.start()
+        if match.group("attribute") is None and start > 0 and ("a" + code[start - 1]).isidentifier():
+            cursor = match.end()
+            continue
+        while macro_index < len(macros) and macros[macro_index][1] <= start:
+            macro_index += 1
+        if macro_index < len(macros) and macros[macro_index][0] <= start < macros[macro_index][1]:
+            cursor = macros[macro_index][1]
+            continue
+        attributed = False
+        if match.group("attribute") is not None:
+            cursor, body = _rust_attribute(code, start, pairs)
+            # Inner attributes attach to the enclosing module/crate, not a fn.
+            if "!" in match.group("attribute"):
+                continue
+            attributed = _attribute_has_qualified_kernel_name(body)
+            while following := following_attribute.match(code, cursor):
+                cursor, body = _rust_attribute(code, following.start(), pairs)
+                attributed |= _attribute_has_qualified_kernel_name(body)
+            function = declaration.match(code, cursor)
+            if function is None:
+                continue
+            name_start = function.end()
+        else:
+            name_start = match.end()
+            while name_start < len(code) and code[name_start].isspace():
+                name_start += 1
+        identifier = _rust_function_identifier(code, name_start)
+        if identifier is None:
+            cursor = name_start
+            continue
+        cursor, name = identifier
+        append(name_start, name, attributed)
+    return records
 
 
 def source_contains_ordinary_attributed_kernel(source: str) -> bool:
@@ -1573,7 +1710,7 @@ def validate_manifest(
     repo_root: Path, manifest: Any, *, curriculum_gaps: dict[str, list[str]] | None = None
 ) -> dict[str, Any]:
     require_object(manifest, "manifest")
-    keys = TOP_LEVEL_KEYS | ({"curriculum"} if "curriculum" in manifest else set())
+    keys = TOP_LEVEL_KEYS | ({"curriculum", "kernelInventory"} & manifest.keys())
     require_exact_keys(manifest, keys, "manifest")
     if manifest["schema"] != "fe2o3-tutorial-kernel-source-contract-v1":
         fail("expected a source-contract schema, not a release or evidence manifest")
@@ -1677,6 +1814,7 @@ def validate_manifest(
         gaps = validate_curriculum(manifest["curriculum"], entries, fixtures, repo_root, cache)
         if curriculum_gaps is not None:
             curriculum_gaps.update(gaps)
+    validate_kernel_inventory(manifest, None)
     return fixtures
 
 
@@ -1832,7 +1970,7 @@ def _kernel_pair_report(
                     "expectation": case["expectation"],
                 })
     payload = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
-    return {
+    report = {
         "schema": "fe2o3-tutorial-kernel-pair-obligations-v1",
         "sourceContractSha256": hashlib.sha256(payload.encode("ascii")).hexdigest(),
         "qualified": False, "inventoryComplete": False,
@@ -1851,6 +1989,19 @@ def _kernel_pair_report(
         "displayObservations": displays,
         "sourceBindingGaps": gaps,
     }
+    identities = validate_kernel_inventory(
+        manifest, inventory, max_records=MAX_KERNEL_PAIR_RECORDS - records,
+    )
+    if identities is not None:
+        report.update(
+            schema="fe2o3-tutorial-kernel-pair-obligations-v2",
+            inventoryComplete=identities["inventoryComplete"],
+            requiredPairCount=identities["requiredPairCount"],
+            kernelInventory=identities,
+        )
+        if identities["inventoryComplete"]:
+            report["missingBindings"].remove("exhaustive-kernel-identity")
+    return report
 
 
 def _encode_kernel_pair_report(report: dict[str, Any]) -> str:
@@ -1886,6 +2037,8 @@ def main() -> None:
     if arguments.site_inventory:
         inventory = load_manifest(arguments.site_inventory, MAX_SITE_INVENTORY_BYTES)
         validate_site_inventory(manifest["curriculum"], inventory)
+        if not arguments.emit_kernel_pairs:
+            validate_kernel_inventory(manifest, inventory)
     if arguments.require_qualified:
         fail("qualification receipts and policy/final-graph evidence are not implemented by source contracts")
     if arguments.emit_kernel_pairs:

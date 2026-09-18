@@ -8,15 +8,16 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrWorkBudgetV1 as Work, InertCanonicalKernelIrContractCatalogV1 as Catalog,
     VerifiedCanonicalKernelIrModuleV12 as Owner,
 };
-use fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy3V1 as Admitted;
+use fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1 as Admitted;
 
 #[derive(Debug)]
 pub(crate) enum CheckedOutputStageErrorV1 {
     Resource(Resource),
     Canonical(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV12),
-    Optimization(fe2o3_kernel_opt::KernelIrCheckedOptimizationErrorV1),
-    Admission(fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy3V1),
+    Optimization(Box<fe2o3_kernel_opt::CanonicalPolicy4OptimizationErrorV1>),
+    Admission(Box<fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy4V1>),
     Catalog(fe2o3_kernel_ir::KernelIrContractCatalogErrorV1),
+    NativeSource(Box<crate::production_native_source_lineage_v1::NativeSourceLineageErrorV1>),
     NativePublicationUnavailable,
 }
 
@@ -28,6 +29,7 @@ impl fmt::Display for CheckedOutputStageErrorV1 {
             Self::Optimization(e) => e.fmt(f),
             Self::Admission(e) => e.fmt(f),
             Self::Catalog(e) => e.fmt(f),
+            Self::NativeSource(e) => e.fmt(f),
             Self::NativePublicationUnavailable => f.write_str(
                 "native checked-output protected lineage is not implemented; no legacy relabeling or unoptimized fallback was attempted",
             ),
@@ -40,9 +42,10 @@ impl std::error::Error for CheckedOutputStageErrorV1 {
         match self {
             Self::Resource(e) => Some(e),
             Self::Canonical(e) => Some(e),
-            Self::Optimization(e) => Some(e),
-            Self::Admission(e) => Some(e),
+            Self::Optimization(e) => Some(e.as_ref()),
+            Self::Admission(e) => Some(e.as_ref()),
             Self::Catalog(e) => Some(e),
+            Self::NativeSource(e) => Some(e.as_ref()),
             Self::NativePublicationUnavailable => None,
         }
     }
@@ -53,9 +56,11 @@ fn resource(error: Resource) -> ProductionPipelineError {
 }
 
 fn admission(
-    error: fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy3V1,
+    error: fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy4V1,
 ) -> ProductionPipelineError {
-    ProductionPipelineError::CheckedOutputStage(CheckedOutputStageErrorV1::Admission(error))
+    ProductionPipelineError::CheckedOutputStage(CheckedOutputStageErrorV1::Admission(Box::new(
+        error,
+    )))
 }
 
 /// All fields move together; the final text was replayed against this exact O.
@@ -91,7 +96,7 @@ impl PreparedCheckedOutputArtifactsV1 {
     }
 }
 
-/// Additional retained logical payload receipt, not the input N/B/O receipt.
+/// Additional retained logical payload receipt, not the input N/B/C/O receipt.
 /// Catalog storage is actual-capacity accounted by its constructor. Text and
 /// descriptor encoded payloads use existing engine maxima; internal descriptor,
 /// FFI, symbol and workgroup allocations remain their inherited bounded domain.
@@ -165,7 +170,7 @@ pub(crate) fn prepare_checked_output_artifacts_v1(
         let target = fe2o3_compiler_ffi::DeviceTargetV1::parse(profile.device_target())
             .expect("closed production profile");
         let prepared =
-            crate::production_worker_handoff::prepare_checked_output_policy3_worker_handoff(
+            crate::production_worker_handoff::prepare_checked_output_policy4_worker_handoff(
                 &admitted,
                 &catalog,
                 target,
@@ -211,19 +216,31 @@ pub(crate) fn prepare_checked_output_artifacts_v1(
 }
 
 /// Private pipeline stage retaining the authenticated roster and collector
-/// bindings alongside N/B/O and the actually replayed native handoff.
+/// bindings alongside N/B/C/O and the actually replayed native handoff.
 pub(crate) struct CheckedOutputTargetProductionCompilation {
     artifacts: PreparedCheckedOutputArtifactsV1,
     ranked_verification:
         crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1,
     bindings: AuthenticatedProductionBindings,
+    retained_storage_floor: usize,
+}
+
+/// Native source proof and final checked output retain their original custody.
+/// This is not a protected artifact stage: the final native proof-format and
+/// protected compiler-origin join still have to consume this complete state.
+#[allow(dead_code)]
+pub(crate) struct NativeSourceCheckedOutputProductionCompilationV1 {
+    artifacts: PreparedCheckedOutputArtifactsV1,
+    source_lineage: crate::production_native_source_lineage_v1::PreparedNativeSourceLineageV1,
+    bindings: AuthenticatedProductionBindings,
+    retained_storage_floor: usize,
 }
 
 impl RankedVerifiedProductionCompilation {
     /// Not selected by the legacy default until corpus admission and the native
     /// protected-lineage contract are complete. No caller policy parameter.
     #[allow(dead_code)]
-    pub(crate) fn lower_checked_output_policy3_v1(
+    pub(crate) fn lower_checked_output_policy4_v1(
         self,
     ) -> Result<CheckedOutputTargetProductionCompilation, ProductionPipelineError> {
         let Self { ranked, bindings } = self;
@@ -258,22 +275,22 @@ impl RankedVerifiedProductionCompilation {
             .map_err(resource)?;
         drop(binding);
         let checked =
-            fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy3_v1(&bound, &mut budget)
+            fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy4_v1(&bound, &mut budget)
                 .map_err(|e| {
                     ProductionPipelineError::CheckedOutputStage(
-                        CheckedOutputStageErrorV1::Optimization(e),
+                        CheckedOutputStageErrorV1::Optimization(Box::new(e)),
                     )
                 })?;
         budget
-            .reserve_storage(checked.storage().retained_storage())
+            .reserve_storage(checked.retained_storage())
             .map_err(resource)?;
         let (receipt, ranked_verification) = ranked
             .into_verified_roster_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?
             .into_module_verified_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?;
-        let admitted = Admitted::try_admit_general_v1(receipt, bound, checked, &mut budget)
-            .map_err(admission)?;
+        let admitted =
+            Admitted::try_admit_v1(receipt, bound, checked, &mut budget).map_err(admission)?;
         let (artifacts, storage) = prepare_checked_output_artifacts_v1(
             admitted,
             profile,
@@ -288,11 +305,63 @@ impl RankedVerifiedProductionCompilation {
             artifacts,
             ranked_verification,
             bindings,
+            retained_storage_floor: budget.storage(),
         })
     }
 }
 
 impl CheckedOutputTargetProductionCompilation {
+    /// Complete transferred canonical source/B/C/O and native-artifact receipts.
+    #[allow(dead_code)]
+    pub(crate) const fn retained_storage_floor_v1(&self) -> usize {
+        self.retained_storage_floor
+    }
+
+    /// Consumes the original ranked roster, never an independently supplied
+    /// packet. The complete transferred logical floor must be caller-reserved;
+    /// inherited descriptor internals and collector custody keep their bounded
+    /// accounting domains, not an assertion of heap/RSS coverage.
+    /// Missing authenticated proof execution is an error, not an unsigned path.
+    #[allow(dead_code)]
+    pub(crate) fn prepare_native_source_lineage_v1(
+        self,
+        budget: &mut Budget<'_>,
+    ) -> Result<
+        (
+            NativeSourceCheckedOutputProductionCompilationV1,
+            crate::production_native_source_lineage_v1::NativeSourceLineageStorageV1,
+        ),
+        ProductionPipelineError,
+    > {
+        budget.charge_work(2).map_err(resource)?;
+        if budget.storage() < self.retained_storage_floor {
+            return Err(resource(Resource::Accounting));
+        }
+        let (source_lineage, storage) =
+            crate::production_native_source_lineage_v1::try_prepare_native_source_lineage_v1(
+                self.artifacts.admitted().source_semantic_kir(),
+                self.ranked_verification,
+                budget,
+            )
+            .map_err(|error| {
+                ProductionPipelineError::CheckedOutputStage(
+                    CheckedOutputStageErrorV1::NativeSource(Box::new(error)),
+                )
+            })?;
+        Ok((
+            NativeSourceCheckedOutputProductionCompilationV1 {
+                artifacts: self.artifacts,
+                source_lineage,
+                bindings: self.bindings,
+                retained_storage_floor: self
+                    .retained_storage_floor
+                    .checked_add(storage.retained_storage())
+                    .ok_or_else(|| resource(Resource::Arithmetic))?,
+            },
+            storage,
+        ))
+    }
+
     #[allow(dead_code)]
     pub(crate) fn output(&self) -> &Admitted {
         self.artifacts.admitted()
