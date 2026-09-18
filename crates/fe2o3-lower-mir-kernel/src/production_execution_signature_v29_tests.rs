@@ -180,7 +180,7 @@ fn signatures_preserve_reversed_same_typed_rust_call_fields() {
                 assert_eq!(signature.parameter_semantic_types, [UNIT, PAIR]);
                 assert_eq!(
                     signature.parameter_types,
-                    [Type::Scalar(ScalarType::U32); 2]
+                    vec![Type::Scalar(ScalarType::U32); 2]
                 );
                 assert_eq!(
                     selectors(&signature),

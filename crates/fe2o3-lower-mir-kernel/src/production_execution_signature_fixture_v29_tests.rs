@@ -27,7 +27,7 @@ pub(super) fn owner() -> ProductionSemanticSsaOwnerV1 {
         SemanticExternAbiV1::GpuKernel,
         false,
         false,
-        1,
+        2,
         vec![SemanticAbiArgumentV1::source(value_abi(&types, PAIR)); 2],
         ignored(UNIT),
     )
