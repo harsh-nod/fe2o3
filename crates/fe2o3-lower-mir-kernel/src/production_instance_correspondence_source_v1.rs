@@ -23,6 +23,7 @@ fn instance_check_source_rows_v1(
     }
     budget.charge_work(order.len())?;
     let mut statements = 0_usize;
+    let mut synthetic = 0_usize;
     for (index, block) in order.iter().enumerate() {
         let semantic_block = SemanticBlockIdV1::from_index(block.get());
         let source_block = source
@@ -46,6 +47,36 @@ fn instance_check_source_rows_v1(
         {
             return Err(InstanceCorrespondenceErrorV1::Source);
         }
+        // lower_one emits retained slots, then enum slots, then each source
+        // statement and the terminator. Sorting later must not hide a swap.
+        let mut cursor = 0_u32;
+        let mut retained = false;
+        let mut enums = false;
+        while let Some(span) = lowered.synthetic_operation_spans.get(synthetic) {
+            budget.charge_work(1)?;
+            if span.kernel_ir_block != row.kernel_ir_block {
+                break;
+            }
+            if span.correspondence_owner != owner || span.semantic_function != function {
+                return Err(InstanceCorrespondenceErrorV1::Source);
+            }
+            match span.rule {
+                SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage
+                    if !retained && !enums =>
+                {
+                    retained = true
+                }
+                SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage if !enums => enums = true,
+                _ => return Err(InstanceCorrespondenceErrorV1::Source),
+            }
+            if span.first_operation_ordinal != cursor || span.operation_count == 0 {
+                return Err(InstanceCorrespondenceErrorV1::Source);
+            }
+            cursor = cursor
+                .checked_add(span.operation_count)
+                .ok_or(ArgumentResourceV1::Arithmetic)?;
+            synthetic += 1;
+        }
         let end = statements
             .checked_add(source_block.statements().len())
             .ok_or(ArgumentResourceV1::Arithmetic)?;
@@ -60,61 +91,59 @@ fn instance_check_source_rows_v1(
                 || statement.semantic_block != semantic_block
                 || statement.statement_ordinal as usize != ordinal
                 || statement.kernel_ir_block != row.kernel_ir_block
+                || statement.first_operation_ordinal != cursor
             {
                 return Err(InstanceCorrespondenceErrorV1::Source);
             }
+            cursor = cursor
+                .checked_add(statement.operation_count)
+                .ok_or(ArgumentResourceV1::Arithmetic)?;
+        }
+        if terminator.first_operation_ordinal != cursor {
+            return Err(InstanceCorrespondenceErrorV1::Source);
+        }
+        cursor = cursor
+            .checked_add(terminator.operation_count)
+            .ok_or(ArgumentResourceV1::Arithmetic)?;
+        if cursor as usize != body.blocks[index].operations.len() {
+            return Err(InstanceCorrespondenceErrorV1::Source);
         }
         statements = end;
     }
     if statements != lowered.statement_operation_spans.len() {
         return Err(InstanceCorrespondenceErrorV1::Source);
     }
-    let mut failures = 0_usize;
-    budget.charge_work(lowered.synthetic_operation_spans.len())?;
-    for span in &lowered.synthetic_operation_spans {
+    let failures = if let Some(span) = lowered.synthetic_operation_spans.get(synthetic) {
+        budget.charge_work(1)?;
         if span.correspondence_owner != owner
             || span.semantic_function != function
-            || span.operation_count == 0
+            || span.rule != SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap
         {
             return Err(InstanceCorrespondenceErrorV1::Source);
         }
-        match span.rule {
-            SemanticKirSyntheticOperationRuleV1::RetainedLocalStorage
-            | SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage => {
-                budget.charge_work(lowered.blocks.len())?;
-                if !lowered
-                    .blocks
-                    .iter()
-                    .any(|row| row.kernel_ir_block == span.kernel_ir_block)
-                {
-                    return Err(InstanceCorrespondenceErrorV1::Source);
-                }
-            }
-            SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap => {
-                failures = failures
-                    .checked_add(1)
-                    .ok_or(ArgumentResourceV1::Arithmetic)?;
-                let block = body
-                    .blocks
-                    .get(order.len())
-                    .ok_or(InstanceCorrespondenceErrorV1::Source)?;
-                if failures != 1
-                    || span.kernel_ir_block != block.id
-                    || span.first_operation_ordinal != 0
-                    || span.operation_count != 1
-                    || block.operations.len() != 1
-                    || !matches!(block.terminator, Some(Terminator::Unreachable))
-                {
-                    return Err(InstanceCorrespondenceErrorV1::Source);
-                }
-            }
+        let block = body
+            .blocks
+            .get(order.len())
+            .ok_or(InstanceCorrespondenceErrorV1::Source)?;
+        if span.kernel_ir_block != block.id
+            || span.first_operation_ordinal != 0
+            || span.operation_count != 1
+            || block.operations.len() != 1
+            || !matches!(block.terminator, Some(Terminator::Unreachable))
+        {
+            return Err(InstanceCorrespondenceErrorV1::Source);
         }
-    }
-    if body.blocks.len()
-        != order
-            .len()
-            .checked_add(failures)
-            .ok_or(ArgumentResourceV1::Arithmetic)?
+        synthetic += 1;
+        1
+    } else {
+        0
+    };
+    if synthetic != lowered.synthetic_operation_spans.len()
+        || body.blocks.len()
+            != order
+                .len()
+                .checked_add(failures)
+                .ok_or(ArgumentResourceV1::Arithmetic)?
     {
         return Err(InstanceCorrespondenceErrorV1::Source);
     }

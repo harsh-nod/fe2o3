@@ -4,11 +4,16 @@ use production_call_instances_v1::{
 };
 
 fn with_plan(test: impl FnOnce(&ProductionCallInstancePlanV1<'_>, &mut ArgumentBudgetV1<'_>)) {
-    let mut ssa = ProductionSemanticSsaOwnerV1::try_new(
-        resource_tests::helper_closure_semantic_owner(),
-        ProductionSemanticSsaLimitsV1::default(),
-    )
-    .unwrap();
+    with_plan_owner(resource_tests::helper_closure_semantic_owner(), test);
+}
+
+fn with_plan_owner(
+    owner: ProductionSemanticMirOwnerV1,
+    test: impl FnOnce(&ProductionCallInstancePlanV1<'_>, &mut ArgumentBudgetV1<'_>),
+) {
+    let mut ssa =
+        ProductionSemanticSsaOwnerV1::try_new(owner, ProductionSemanticSsaLimitsV1::default())
+            .unwrap();
     let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
     let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000);
     let capture = ssa
@@ -22,6 +27,154 @@ fn with_plan(test: impl FnOnce(&ProductionCallInstancePlanV1<'_>, &mut ArgumentB
     })
     .unwrap();
     assert_eq!(budget.storage(), capture.retained_storage());
+}
+
+fn statement_order_owner() -> ProductionSemanticMirOwnerV1 {
+    use fe2o3_mir_model::semantic_mir_v1::*;
+    let original = resource_tests::helper_closure_semantic_owner();
+    let semantic = original.semantic();
+    let root = &semantic.functions()[0];
+    let source = root.source();
+    let scalar = SemanticTypeIdV1::from_index(1);
+    let mut types = semantic.types().to_vec();
+    types.push(SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256([150; 32]),
+        SemanticLayoutIdentityV1::from_sha256([151; 32]),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(4),
+            4,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::integer(false, 32, 4),
+                SemanticScalarValidityRangeV1::new(0, u32::MAX as u128),
+            )),
+            false,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits: 32,
+        }),
+    ));
+    let mut locals = root.locals().to_vec();
+    for tag in [152, 153] {
+        locals.push(SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256([tag; 32]),
+            scalar,
+            SemanticLocalRoleV1::Temporary,
+            source,
+        ));
+    }
+    let assignment = |local, bits| {
+        SemanticStatementV1::new(
+            source,
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], scalar).unwrap(),
+                SemanticRvalueV1::new(
+                    scalar,
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Constant(
+                        SemanticConstantV1::new(
+                            scalar,
+                            SemanticConstantValueV1::Scalar(
+                                SemanticScalarValueV1::new(bits, 4).unwrap(),
+                            ),
+                        ),
+                    )),
+                ),
+            )),
+        )
+    };
+    let nop = || SemanticStatementV1::new(source, SemanticStatementKindV1::Nop);
+    let mut blocks = root.blocks().to_vec();
+    blocks[0] = SemanticBasicBlockV1::new(
+        blocks[0].identity(),
+        source,
+        vec![nop(), assignment(1, 3), nop(), assignment(2, 7), nop()],
+        blocks[0].terminator().clone(),
+    )
+    .unwrap();
+    let root = SemanticFunctionDeclV1::new(
+        root.identity(),
+        root.role(),
+        root.item_definition_identity(),
+        root.monomorphization_identity(),
+        root.generic_type_arguments_identity(),
+        root.const_generic_arguments_identity(),
+        source,
+        root.abi().clone(),
+        locals,
+        root.entry(),
+        blocks,
+    )
+    .unwrap()
+    .with_kernel_entry(root.kernel_entry().unwrap().clone());
+    let mut functions = semantic.functions().to_vec();
+    functions[0] = root;
+    let admitted = InertSemanticMirRequestV1::new(
+        semantic.target(),
+        types,
+        vec![],
+        vec![],
+        vec![],
+        functions,
+        semantic.roots().to_vec(),
+    )
+    .unwrap()
+    .admit(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+        .unwrap()
+}
+
+#[test]
+fn instance_wrapper_preserves_statement_order_and_zero_operation_boundaries() {
+    with_plan_owner(statement_order_owner(), |plan, budget| {
+        for mutation in 0..5 {
+            let floor = budget.storage();
+            let (mut caller, callee, storage) = lower_pair(plan, budget);
+            let rows = &mut caller.statement_operation_spans;
+            assert_eq!(rows.len(), 5);
+            assert_eq!(
+                [
+                    rows[0].operation_count,
+                    rows[2].operation_count,
+                    rows[4].operation_count
+                ],
+                [0; 3]
+            );
+            assert!(rows[1].operation_count > 0 && rows[3].operation_count > 0);
+            match mutation {
+                0 => {}
+                1 => {
+                    let first = rows[1].first_operation_ordinal;
+                    rows[1].first_operation_ordinal = rows[3].first_operation_ordinal;
+                    rows[3].first_operation_ordinal = first;
+                }
+                2 => rows[2].first_operation_ordinal = rows[1].first_operation_ordinal,
+                3 => rows[4].first_operation_ordinal = rows[1].first_operation_ordinal,
+                4 => {
+                    caller.terminator_operation_spans[0].first_operation_ordinal =
+                        rows[1].first_operation_ordinal
+                }
+                _ => unreachable!(),
+            }
+            let result = with_production_instance_correspondence_v1(plan, budget, |map, budget| {
+                map.append_lowered(plan.root(), &caller, budget)
+            });
+            if mutation == 0 {
+                result.unwrap();
+            } else {
+                assert_eq!(
+                    result,
+                    Err(InstanceCorrespondenceErrorV1::Source),
+                    "mutation {mutation}"
+                );
+            }
+            drop(caller);
+            drop(callee);
+            budget.release_storage(storage).unwrap();
+            assert_eq!(budget.storage(), floor);
+        }
+    });
 }
 
 fn lower_pair(
