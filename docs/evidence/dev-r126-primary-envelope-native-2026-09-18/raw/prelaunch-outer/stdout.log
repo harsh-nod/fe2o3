@@ -1,0 +1,54 @@
+{"name": "local-protocol-tests", "status": 0, "error": null, "group_absent": true}
+{"name": "local-payload-verify", "status": 0, "error": null, "group_absent": true}
+{"name": "local-controller-wiring-tests", "status": 0, "error": null, "group_absent": true}
+{"name": "remote-empty", "status": 0, "error": null, "group_absent": true}
+{"name": "upload", "status": 0, "error": null, "group_absent": true}
+{"name": "remote-approve", "status": 1, "error": null, "group_absent": true}
+{
+  "owned": "/tmp/fe2o3-r126-primary-8b0021ba-20260918.oVqzCv3c",
+  "payload_sha256": "b69190c2182feb82476d6be2ecd6e30e11d58c3b804e686d7ec338814d1ac4f6",
+  "native_attempted": false,
+  "collected_verified": false,
+  "cleanup_closed": false,
+  "independent_absence_closed": false,
+  "failure": "RuntimeError: exact remote payload approval",
+  "local_only": false,
+  "records": [
+    {
+      "name": "local-protocol-tests",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "local-payload-verify",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "local-controller-wiring-tests",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "remote-empty",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "upload",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "remote-approve",
+      "status": 1,
+      "error": null,
+      "group_absent": true
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r126-native-archive-relocation-pzuufvap/packet/verify.py",
+    "--allow-unsealed"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r126-native-archive-relocation-pzuufvap",
+  "started_ns": 1789729522962275659,
+  "bound_seconds": 30,
+  "owned_directory": "/home/harsh/.codex-tmp/fe2o3-r126-native-archive-relocation-pzuufvap",
+  "verify_sha256": "b71a7ec1040faf2122548017c101f0a251493587a462e840144ec13ba9362dbf",
+  "process_group": 1439546,
+  "status": 0,
+  "group_absent": true,
+  "error": null,
+  "owned_directory_absent": true,
+  "finished_ns": 1789729523187826754,
+  "stdout_sha256": "7a5762ba9c772d23040f0439b3af3ca719f9fb598912e1afc054abb308e8c5fd",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

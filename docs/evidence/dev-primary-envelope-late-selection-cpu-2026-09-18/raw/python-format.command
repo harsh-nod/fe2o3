@@ -1,0 +1,1 @@
+ruff format --check --no-cache docs/evidence/dev-primary-envelope-late-selection-cpu-2026-09-18/source.py docs/evidence/dev-primary-envelope-late-selection-cpu-2026-09-18/binaries.py docs/evidence/dev-primary-envelope-late-selection-cpu-2026-09-18/verify.py 

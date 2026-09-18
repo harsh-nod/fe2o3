@@ -1,0 +1,22 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "verify.py",
+    "--allow-unsealed",
+    "--binary",
+    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-8b0021ba-20260918/runtime-tests"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-r126-primary-envelope-native-2026-09-18",
+  "started_ns": 1789729381813836111,
+  "bound_seconds": 30,
+  "verify_sha256": "a2ce0d710fa53af60a257cfbec45bbddacc61346e4e7c1c5783681e8044a24bd",
+  "test_verify_sha256": "eb49ebfd568fd89eacb136411b51fc90aea05c0a6bba8d8ff95ff0a21b9f3395",
+  "process_group": 1430567,
+  "status": 0,
+  "group_absent": true,
+  "error": null,
+  "finished_ns": 1789729382079995991,
+  "stdout_sha256": "bf562850c299f0618cc3ece2f3e8ee82c9658a7d7ae1d45b59deaff33e947617",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

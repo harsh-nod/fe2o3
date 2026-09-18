@@ -1,0 +1,42 @@
+{
+  "commit": "8b0021ba740c337b2641ecd26ed6c9375613ed32",
+  "started": {
+    "realtime_ns": 1789728794263096563,
+    "monotonic_ns": 7227691684769006
+  },
+  "cases": [
+    {
+      "case": "positive",
+      "test_record": "positive-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "positive",
+        "harness_passes": 1,
+        "marker_count": 1
+      }
+    },
+    {
+      "case": "error",
+      "test_record": "error-test/record.json",
+      "failures": [
+        "test: ValueError: native test command passed"
+      ],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      }
+    }
+  ],
+  "failure": "ValueError: case rejected; no later case may run",
+  "native_ioctl_failure_claim": false,
+  "performance_claim": false,
+  "payload_after": "matched",
+  "finished": {
+    "realtime_ns": 1789728851617881770,
+    "monotonic_ns": 7227749039554322
+  }
+}

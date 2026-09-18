@@ -1,0 +1,27 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -B - cleanup /tmp/fe2o3-r126-primary-8b0021ba-20260918.z3L69nX6 '{\"pids\":[2111215,2111218,2111220,2111222,2111438,2111725,2113628,2113820,2114149,2114496,2115364],\"inventory_sha256\":\"3a6d05532bbf50eb2b279cfdeda9feabd8b53d0caf79c8a5127445092ab318ab\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-8b0021ba-20260918",
+  "started_ns": 1789728862143885516,
+  "bound_seconds": 120,
+  "process_group": 1394522,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": "4a0f43ddd8d7074a504d2b3c45db0175fc979fd0db6c6a999985a1a9bde0162d",
+  "finished_ns": 1789728863216262002,
+  "stdout_sha256": "597533c265217d90f989820d1d8dd4ef5ad0b6f5bdecbd32ef124f0b2e85a681",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

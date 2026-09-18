@@ -1,0 +1,18 @@
+{
+  "command": [
+    "/usr/bin/timeout",
+    "--signal=TERM",
+    "--kill-after=15s",
+    "1200s",
+    "/usr/bin/python3",
+    "-B",
+    "/tmp/fe2o3-r126-primary-8b0021ba-20260918.z3L69nX6/run.py",
+    "--parent-ready-approved"
+  ],
+  "process_group": 2111215,
+  "started_ns": 1789728794178341359,
+  "status": 1,
+  "group_absent": true,
+  "error": null,
+  "finished_ns": 1789728851634113237
+}

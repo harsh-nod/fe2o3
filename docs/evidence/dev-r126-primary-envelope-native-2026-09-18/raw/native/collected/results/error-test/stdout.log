@@ -1,0 +1,13 @@
+
+running 1 test
+test kfd_backend::retained_release_tests::primary_envelope::native_runtime_primary_release_error_retains_installed_root ... 
+running 1 test
+test kfd_backend::retained_release_tests::primary_envelope::native_runtime_primary_release_error_retains_installed_root ... FAILED
+
+failures:
+
+failures:
+    kfd_backend::retained_release_tests::primary_envelope::native_runtime_primary_release_error_retains_installed_root
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1121 filtered out; finished in 3.68s
+

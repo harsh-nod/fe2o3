@@ -1,0 +1,18 @@
+
+thread 'kfd_backend::retained_release_tests::primary_envelope::native_runtime_primary_release_error_retains_installed_root' (2114153) panicked at crates/fe2o3-runtime/src/kfd_backend/retained_release_tests/primary_envelope.rs:165:5:
+assertion failed: backend.queue.as_ref().unwrap().supports_retained_primary_release_v1().unwrap()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'kfd_backend::retained_release_tests::primary_envelope::native_runtime_primary_release_error_retains_installed_root' (2114151) panicked at crates/fe2o3-runtime/src/kfd_backend/retained_release_tests/primary_envelope.rs:322:13:
+isolated primary-envelope child failed
+stdout:
+
+running 1 test
+test kfd_backend::retained_release_tests::primary_envelope::native_runtime_primary_release_error_retains_installed_root ... 
+stderr:
+
+thread 'kfd_backend::retained_release_tests::primary_envelope::native_runtime_primary_release_error_retains_installed_root' (2114153) panicked at crates/fe2o3-runtime/src/kfd_backend/retained_release_tests/primary_envelope.rs:165:5:
+assertion failed: backend.queue.as_ref().unwrap().supports_retained_primary_release_v1().unwrap()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

@@ -1,0 +1,25 @@
+{
+  "audit": "PASS",
+  "scope": "CPU only; native primary-release probes remain ignored",
+  "selected_source_files": 5553,
+  "signed_source_deltas": [
+    "crates/fe2o3-runtime/src/kfd_backend/retained_release_tests/primary_envelope.rs"
+  ],
+  "preliminary_source_deltas": 1,
+  "preliminary_fmt_exit": 1,
+  "runtime_each": {
+    "passed": 1102,
+    "ignored": 20
+  },
+  "doctests_each": 46,
+  "preliminary_doctests": 46,
+  "unsafe_policy_final": {
+    "passed": 5,
+    "ignored": 1
+  },
+  "preliminary_test_binaries": 2,
+  "final_test_binaries": 2,
+  "receipt_roster": 38,
+  "successful_receipts": 36,
+  "preserved_preliminary_failures": 2
+}

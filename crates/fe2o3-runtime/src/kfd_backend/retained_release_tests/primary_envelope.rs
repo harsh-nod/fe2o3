@@ -75,6 +75,11 @@ fn arm_fault(fault: PrimaryEnvelopeFaultV1, payload: Option<Box<PrimaryEnvelopeP
     assert_eq!(FAULT_CALLS.with(Cell::get), 0);
     assert!(TOTAL_CALLS.with(|calls| calls.replace(Some(0))).is_none());
     assert!(OWNER_POINTER.with(Cell::get).is_none());
+    assert!(
+        super::SELECTION
+            .with(|slot| slot.replace(Some(false)))
+            .is_none()
+    );
     PANIC_PAYLOAD.with(|slot| {
         assert!(std::mem::replace(&mut *slot.borrow_mut(), payload).is_none());
     });
@@ -162,14 +167,8 @@ fn native_primary_backend() -> KfdRuntimeBackendV1 {
             .collect::<Vec<_>>(),
         [0]
     );
-    assert!(
-        backend
-            .queue
-            .as_ref()
-            .unwrap()
-            .supports_retained_primary_release_v1()
-            .unwrap()
-    );
+    // Public shutdown settles dispatch and pool custody before selecting primary release.
+    assert!(backend.queue.is_some());
     let events = backend
         .profiler
         .as_ref()
@@ -194,6 +193,7 @@ fn native_primary_backend() -> KfdRuntimeBackendV1 {
 
 #[cfg(feature = "hardware-qualification")]
 fn assert_retained_terminal_primary(backend: &mut KfdRuntimeBackendV1, expected_pointer: usize) {
+    assert_eq!(super::SELECTION.with(Cell::get), Some(true));
     assert!(backend.terminal && !backend.queue_retired && backend.queue.is_none());
     let retained = backend
         .primary_teardown
@@ -266,10 +266,12 @@ fn assert_retained_terminal_primary(backend: &mut KfdRuntimeBackendV1, expected_
     let host_before_retry = backend.host_visible_backing_usage_v1();
     let device_before_retry = backend.device_backing_usage_v1();
 
+    super::SELECTION.with(|slot| slot.set(Some(false)));
     assert!(matches!(
         backend.shutdown_owned_v1(),
         Err(RuntimeBackendFailureV1::Terminal(_))
     ));
+    assert_eq!(super::SELECTION.with(Cell::take), Some(false));
     assert_eq!(FAULT_CALLS.with(Cell::get), 1);
     assert_eq!(TOTAL_CALLS.with(Cell::get), Some(1));
     assert_eq!(backend.host_visible_backing_usage_v1(), host_before_retry);

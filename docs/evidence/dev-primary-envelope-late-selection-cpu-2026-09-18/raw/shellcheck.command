@@ -1,0 +1,1 @@
+shellcheck docs/evidence/dev-primary-envelope-late-selection-cpu-2026-09-18/record.sh docs/evidence/dev-primary-envelope-late-selection-cpu-2026-09-18/qualify.sh docs/evidence/dev-primary-envelope-late-selection-cpu-2026-09-18/qualify-final.sh docs/evidence/dev-primary-envelope-late-selection-cpu-2026-09-18/seal.sh 

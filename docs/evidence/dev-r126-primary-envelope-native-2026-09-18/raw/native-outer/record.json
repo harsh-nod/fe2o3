@@ -1,0 +1,17 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-control-fresh-20260918/controller.py",
+    "--root-ready-approved",
+    "--remote-directory",
+    "/tmp/fe2o3-r126-primary-8b0021ba-20260918.z3L69nX6",
+    "--output",
+    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-fresh-run-20260918"
+  ],
+  "started_ns": 1789728784753268996,
+  "status": 1,
+  "finished_ns": 1789728864204701797,
+  "stdout_sha256": "043f324faf890aaf6bca9db84cd9da4aa6a1f90e9ee0b2658705ad493b966e13",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

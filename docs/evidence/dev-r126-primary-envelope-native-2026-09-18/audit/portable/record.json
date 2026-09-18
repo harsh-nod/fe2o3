@@ -1,0 +1,20 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "verify.py",
+    "--allow-unsealed"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-r126-primary-envelope-native-2026-09-18",
+  "started_ns": 1789729380824634117,
+  "bound_seconds": 30,
+  "verify_sha256": "a2ce0d710fa53af60a257cfbec45bbddacc61346e4e7c1c5783681e8044a24bd",
+  "test_verify_sha256": "eb49ebfd568fd89eacb136411b51fc90aea05c0a6bba8d8ff95ff0a21b9f3395",
+  "process_group": 1430410,
+  "status": 0,
+  "group_absent": true,
+  "error": null,
+  "finished_ns": 1789729381041761056,
+  "stdout_sha256": "7a5762ba9c772d23040f0439b3af3ca719f9fb598912e1afc054abb308e8c5fd",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

@@ -1,0 +1,27 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -B - absence"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-8b0021ba-20260918",
+  "started_ns": 1789728545976058547,
+  "bound_seconds": 120,
+  "process_group": 1367262,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": "a0620477faa6a19387e673e9e4610e97dff3f1da0a4722e38bd6ce31794f0b2a",
+  "finished_ns": 1789728546950494874,
+  "stdout_sha256": "6d03421e93d2b5641f950d95872340d509d37a8c9e1824c5289bebc183791a7d",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

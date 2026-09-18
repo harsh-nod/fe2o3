@@ -1,0 +1,47 @@
+{
+  "name": "error-preflight",
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/tmp/fe2o3-r126-primary-8b0021ba-20260918.z3L69nX6/source/copy-host-observe.py",
+    "--gpu-index",
+    "4",
+    "--pci-bdf",
+    "0000:85:00.0",
+    "--unique-id",
+    "0x54f88318ca05093d",
+    "--samples",
+    "1"
+  ],
+  "cwd": "/tmp/fe2o3-r126-primary-8b0021ba-20260918.z3L69nX6",
+  "environment": {
+    "HOME": "/home/harsh",
+    "PATH": "/usr/bin:/bin:/opt/rocm/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "HSA_XNACK": "0",
+    "FE2O3_TEST_NATIVE_UNIQUE_ID": "0x54f88318ca05093d"
+  },
+  "started": {
+    "realtime_ns": 1789728823453485017,
+    "monotonic_ns": 7227720875157600
+  },
+  "spawned": {
+    "realtime_ns": 1789728823456986027,
+    "monotonic_ns": 7227720878657909
+  },
+  "status": 0,
+  "error": null,
+  "process_group": 2113820,
+  "group_absent": true,
+  "t0": {
+    "realtime_ns": 1789728825626385472,
+    "monotonic_ns": 7227723048058716
+  },
+  "outer_bound_seconds": 75,
+  "finished": {
+    "realtime_ns": 1789728825626450519,
+    "monotonic_ns": 7227723048122221
+  },
+  "stdout_sha256": "83e9a7afc1b1d50a7ed3cd8102c781aa9220317a0b105ee854dff618d37489f7",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

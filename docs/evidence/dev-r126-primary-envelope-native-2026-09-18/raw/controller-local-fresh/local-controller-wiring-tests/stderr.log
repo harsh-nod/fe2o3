@@ -1,0 +1,9 @@
+test_actual_cleanup_absence_calls_match_remote_parsers (__main__.ControllerTests.test_actual_cleanup_absence_calls_match_remote_parsers) ... ok
+test_cleanup_failure_never_runs_absence (__main__.ControllerTests.test_cleanup_failure_never_runs_absence) ... ok
+test_invalid_rosters_and_inventory_are_rejected (__main__.ControllerTests.test_invalid_rosters_and_inventory_are_rejected) ... ok
+test_swapped_wire_types_are_rejected (__main__.ControllerTests.test_swapped_wire_types_are_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.001s
+
+OK

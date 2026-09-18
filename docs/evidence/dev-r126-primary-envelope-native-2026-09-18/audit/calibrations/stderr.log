@@ -1,0 +1,14 @@
+test_absence_requires_exact_roster_and_scope (__main__.ArchiveTests.test_absence_requires_exact_roster_and_scope) ... ok
+test_complete_historical_audit (__main__.ArchiveTests.test_complete_historical_audit) ... ok
+test_controller_cannot_upgrade_or_erase_failure (__main__.ArchiveTests.test_controller_cannot_upgrade_or_erase_failure) ... ok
+test_delayed_endpoint_cannot_move_to_a_later_window (__main__.ArchiveTests.test_delayed_endpoint_cannot_move_to_a_later_window) ... ok
+test_endpoint_rederives_raw_values (__main__.ArchiveTests.test_endpoint_rederives_raw_values) ... ok
+test_error_cannot_be_reported_as_injection_success (__main__.ArchiveTests.test_error_cannot_be_reported_as_injection_success) ... ok
+test_inventory_cannot_omit_or_replace_retained_files (__main__.ArchiveTests.test_inventory_cannot_omit_or_replace_retained_files) ... ok
+test_missing_seal_requires_explicit_review_mode (__main__.ArchiveTests.test_missing_seal_requires_explicit_review_mode) ... ok
+test_positive_requires_exact_marker_and_profiler (__main__.ArchiveTests.test_positive_requires_exact_marker_and_profiler) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.170s
+
+OK

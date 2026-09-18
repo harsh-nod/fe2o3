@@ -1,0 +1,13 @@
+Diff in /home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime/src/kfd_backend/retained_release_tests/primary_envelope.rs:75:
+     assert_eq!(FAULT_CALLS.with(Cell::get), 0);
+     assert!(TOTAL_CALLS.with(|calls| calls.replace(Some(0))).is_none());
+     assert!(OWNER_POINTER.with(Cell::get).is_none());
+-    assert!(super::SELECTION.with(|slot| slot.replace(Some(false))).is_none());
++    assert!(
++        super::SELECTION
++            .with(|slot| slot.replace(Some(false)))
++            .is_none()
++    );
+     PANIC_PAYLOAD.with(|slot| {
+         assert!(std::mem::replace(&mut *slot.borrow_mut(), payload).is_none());
+     });

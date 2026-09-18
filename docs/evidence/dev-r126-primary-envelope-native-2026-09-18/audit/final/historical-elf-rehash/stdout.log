@@ -1,0 +1,37 @@
+{
+  "archive_integrity_sealed": false,
+  "historical_audit": "passed",
+  "native_campaign": "rejected",
+  "positive": "passed",
+  "error": "failed-before-injection",
+  "panic": "not-run",
+  "strict_endpoints": 6,
+  "post_observation_offsets": [
+    {
+      "case": "positive",
+      "endpoint": "immediate",
+      "start_offset_ns": 32366431
+    },
+    {
+      "case": "positive",
+      "endpoint": "delayed",
+      "start_offset_ns": 20031529134
+    },
+    {
+      "case": "error",
+      "endpoint": "immediate",
+      "start_offset_ns": 32346231
+    },
+    {
+      "case": "error",
+      "endpoint": "delayed",
+      "start_offset_ns": 20030919822
+    }
+  ],
+  "recorded_native_pids_groups_absent": 11,
+  "cleanup": "closed",
+  "current_source_files_revalidated": null,
+  "current_binary_revalidated": true,
+  "performance_claim": false,
+  "real_ioctl_failure_claim": false
+}

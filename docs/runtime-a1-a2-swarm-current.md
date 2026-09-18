@@ -21,12 +21,29 @@ directory was removed and recorded-process/path absence independently checked.
 This is one-process copy correctness and protocol qualification, not a matched
 HIP/HSA ratio, physical-engine equivalence or performance-parity claim.
 
-The latest [primary teardown CPU campaign](evidence/dev-primary-envelope-cpu-2026-09-18/README.md)
+The subsequent [primary teardown native campaign](evidence/dev-r126-primary-envelope-native-2026-09-18/README.md)
+passes the normal-shutdown regression on GPU 4, including complete readback,
+backing refund and queue-profile checks. Its error fixture then fails before
+fault injection because it checks retained-primary eligibility before public
+shutdown has settled dispatch and pool custody. Both cases' fresh admission and
+strict immediate/fixed-delayed observations pass; the campaign stops without
+running the panic case. The owned remote directory is collected, removed and
+independently checked absent. This is not error/panic-envelope qualification.
+The fixture correction places its assertions at the actual production selection
+after shutdown preparation and requires terminal retry to leave that observer
+untouched. Its [fresh CPU campaign](evidence/dev-primary-envelope-late-selection-cpu-2026-09-18/README.md)
+passes 1,102 runtime tests with twenty ignored on both GNU and scoped musl; all
+46 doctests and static checks pass on the final source. Production shutdown code
+is unchanged. Corrected native error/panic qualification remains pending; the
+old failed run is not upgraded.
+
+The preceding [primary teardown CPU campaign](evidence/dev-primary-envelope-cpu-2026-09-18/README.md)
 passes 1,102 runtime tests on both GNU and scoped musl, with twenty ignored,
 plus 46 runtime doctests and the static checks. Two newly compiled hardware-only
 error/panic probes enter the production-shared installed-primary helper and
-check original custody and terminal-state preservation. Neither has run on
-hardware; deterministic post-install faults are not native ioctl failures.
+check original custody and terminal-state preservation. That CPU packet does
+not execute either probe; deterministic post-install faults are not native ioctl
+failures.
 R125 remains the accepted Native checkpoint, with R126 under development.
 
 Latest development (2026-09-18): the

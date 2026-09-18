@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "<stdin>", line 359, in <module>
+  File "<stdin>", line 284, in main
+  File "<stdin>", line 72, in validate
+  File "<stdin>", line 21, in need
+RuntimeError: private owned directory
