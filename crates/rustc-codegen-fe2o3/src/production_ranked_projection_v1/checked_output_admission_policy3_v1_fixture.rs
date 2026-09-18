@@ -16,6 +16,79 @@ pub(crate) fn with_backend_checked_output_policy3_owned_v1(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ),
 ) {
+    with_backend_checked_output_policy3_roster_v1(profile, |owner, _, budget| next(owner, budget));
+}
+
+pub(crate) fn with_backend_checked_output_policy3_roster_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy3V1,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
+    with_backend_checked_ranked_bound_v1(profile, |receipt, bound, verification, budget| {
+        let checked =
+            fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy3_v1(&bound, budget)
+                .unwrap();
+        assert_eq!(checked.report().passes().len(), 8);
+        let storage = checked.storage().retained_storage();
+        budget.reserve_storage(storage).unwrap();
+        let floor = budget.storage();
+        let admitted =
+            fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy3V1::try_admit_general_v1(
+                receipt, bound, checked, budget,
+            )
+            .unwrap();
+        next(admitted, verification, budget);
+        assert_eq!(budget.storage(), floor);
+        budget.release_storage(storage).unwrap();
+    });
+}
+
+pub(crate) fn with_backend_checked_output_policy4_owned_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
+    with_backend_checked_ranked_bound_v1(profile, |receipt, bound, _, budget| {
+        let checked =
+            fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy4_v1(&bound, budget)
+                .unwrap();
+        let storage = checked.retained_storage();
+        budget.reserve_storage(storage).unwrap();
+        let floor = budget.storage();
+        let admitted = fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1::try_admit_v1(
+            receipt, bound, checked, budget,
+        )
+        .unwrap();
+        next(admitted, budget);
+        assert_eq!(budget.storage(), floor);
+        budget.release_storage(storage).unwrap();
+    });
+}
+
+pub(crate) fn with_backend_checked_output_policy4_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    next: impl FnOnce(
+        &fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
+    with_backend_checked_output_policy4_owned_v1(profile, |owner, budget| next(&owner, budget));
+}
+
+fn with_backend_checked_ranked_bound_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionMaterializedRankedModuleReceiptV1,
+        fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
     use fe2o3_kernel_ir::{
         CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
         CanonicalKernelIrWorkBudgetV1 as Work, VerifiedCanonicalKernelIrModuleV12,
@@ -134,27 +207,13 @@ pub(crate) fn with_backend_checked_output_policy3_owned_v1(
         .reserve_storage(bound_storage.retained_storage())
         .unwrap();
     drop(binding);
-    let checked =
-        fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy3_v1(&bound, &mut budget)
-            .unwrap();
-    assert_eq!(checked.report().passes().len(), 8);
-    let checked_storage = checked.storage().retained_storage();
-    budget.reserve_storage(checked_storage).unwrap();
     let verified = program.into_verified_roster_receipt().unwrap();
-    let (receipt, _verification) = verified.into_module_verified_receipt().unwrap();
+    let (receipt, verification) = verified.into_module_verified_receipt().unwrap();
     let floor = budget.storage();
-    let admitted =
-        fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy3V1::try_admit_general_v1(
-            receipt,
-            bound,
-            checked,
-            &mut budget,
-        )
-        .unwrap();
-    next(admitted, &mut budget);
+    next(receipt, bound, verification, &mut budget);
     assert_eq!(budget.storage(), floor);
     budget
-        .release_storage(checked_storage + bound_storage.retained_storage() + retained)
+        .release_storage(bound_storage.retained_storage() + retained)
         .unwrap();
     assert_eq!(budget.storage(), PREFIX);
 }

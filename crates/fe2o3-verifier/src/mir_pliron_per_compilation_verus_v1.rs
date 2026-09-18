@@ -789,44 +789,60 @@ struct AggregateObligationInputV1 {
 }
 
 fn aggregate_obligation_from_input(input: &AggregateObligationInputV1) -> DigestV1 {
+    aggregate_obligation_from_commitments_v1(
+        [
+            input.contract,
+            input.parallel_contract,
+            input.pliron_evidence,
+            input.template,
+            input.source,
+            input.subjects.safe_reference_identity(),
+            input.subjects.safe_reference_source_hash(),
+            input.subjects.safe_reference_mir_hash(),
+            input.subjects.kernel_subject_identity(),
+            input.subjects.kernel_mir_hash(),
+        ],
+        input.receipts.iter().map(|receipt| {
+            let toolchain = receipt.toolchain;
+            [
+                receipt.receipt,
+                receipt.effect,
+                receipt.signer,
+                receipt.execution,
+                toolchain.verus_executable(),
+                toolchain.verus_configuration(),
+                toolchain.solver_executable(),
+                toolchain.solver_configuration(),
+                toolchain.runtime_closure(),
+            ]
+        }),
+    )
+}
+
+// Both live generation and native replay use the identical domain, framing and
+// ordered commitments. This helper does not authenticate its inert inputs.
+pub(crate) fn aggregate_obligation_from_commitments_v1(
+    identities: [DigestV1; 10],
+    receipts: impl ExactSizeIterator<Item = [DigestV1; 9]>,
+) -> DigestV1 {
     let mut digest = Sha256::new();
     put_blob(&mut digest, AGGREGATE_OBLIGATION_DOMAIN_V1);
-    for identity in [
-        input.contract,
-        input.parallel_contract,
-        input.pliron_evidence,
-        input.template,
-        input.source,
-        input.subjects.safe_reference_identity(),
-        input.subjects.safe_reference_source_hash(),
-        input.subjects.safe_reference_mir_hash(),
-        input.subjects.kernel_subject_identity(),
-        input.subjects.kernel_mir_hash(),
-    ] {
+    for identity in identities {
         put_blob(&mut digest, identity.as_bytes());
     }
-    digest.update((input.receipts.len() as u64).to_le_bytes());
-    for receipt in &input.receipts {
-        for identity in [
-            receipt.receipt,
-            receipt.effect,
-            receipt.signer,
-            receipt.execution,
-        ] {
-            put_blob(&mut digest, identity.as_bytes());
-        }
-        let toolchain = receipt.toolchain;
-        for identity in [
-            toolchain.verus_executable(),
-            toolchain.verus_configuration(),
-            toolchain.solver_executable(),
-            toolchain.solver_configuration(),
-            toolchain.runtime_closure(),
-        ] {
+    digest.update((receipts.len() as u64).to_le_bytes());
+    for receipt in receipts {
+        for identity in receipt {
             put_blob(&mut digest, identity.as_bytes());
         }
     }
     DigestV1::from_untrusted_bytes(digest.finalize().into())
+}
+
+pub(crate) fn aggregate_obligation_commitment_work_v1(receipts: usize) -> Option<usize> {
+    receipts
+        .checked_mul(9 * (8 + 32))?
+        .checked_add(8 + AGGREGATE_OBLIGATION_DOMAIN_V1.len() + 10 * (8 + 32) + 8)
 }
 
 fn put_blob(digest: &mut Sha256, bytes: &[u8]) {

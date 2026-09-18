@@ -1538,22 +1538,43 @@ fn domain_hash(domain: &[u8], frames: &[&[u8]]) -> [u8; 32] {
 #[derive(Debug)]
 pub(crate) enum CompilerDescriptorError {
     TypedProfileOnNonKernel(String),
-    MissingTypedField { kernel: String, field: &'static str },
-    InvalidArgumentCollection { kernel: String, reason: String },
+    MissingTypedField {
+        kernel: String,
+        field: &'static str,
+    },
+    InvalidArgumentCollection {
+        kernel: String,
+        reason: String,
+    },
     GeneralRustLayout(GeneralTypedExtractError),
     GeneratedHostContractMismatch(String),
-    ArgumentOffsetOverflow { kernel: String, index: usize },
-    ArgumentIndexOverflow { kernel: String, index: usize },
+    ArgumentOffsetOverflow {
+        kernel: String,
+        index: usize,
+    },
+    ArgumentIndexOverflow {
+        kernel: String,
+        index: usize,
+    },
     ExplicitArgumentSizeOverflow(String),
     KernargSizeOverflow(String),
-    IncompleteTypedKernelClosure { typed: usize, total: usize },
+    IncompleteTypedKernelClosure {
+        typed: usize,
+        total: usize,
+    },
     UnsupportedTarget(String),
     UnsupportedCodeObjectVersion(CodeObjectVersion),
     DuplicateTypedKernel(String),
     MissingTypedKernel(String),
-    UnexpectedWorkgroupSize { kernel: String, expected: [u32; 3] },
+    UnexpectedWorkgroupSize {
+        kernel: String,
+        expected: [u32; 3],
+    },
     ProductionFormalMemory(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     CheckedOutputPolicy3(fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy3V1),
+    CheckedOutputPolicy4(
+        Box<fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy4V1>,
+    ),
     CheckedOutputTarget(dialect_amdgcn::ProductionTargetCoordinateErrorV1),
     ProductionGeometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
     ProductionDescriptorMismatch(&'static str),
@@ -1649,6 +1670,12 @@ impl fmt::Display for CompilerDescriptorError {
                 write!(
                     formatter,
                     "checked Policy3 output admission failed: {error}"
+                )
+            }
+            Self::CheckedOutputPolicy4(error) => {
+                write!(
+                    formatter,
+                    "checked Policy4 output admission failed: {error}"
                 )
             }
             Self::CheckedOutputTarget(error) => {

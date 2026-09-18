@@ -77,6 +77,9 @@ use sha2::{Digest as _, Sha256};
 
 include!("production_pre_ranked_v1.rs");
 include!("production_ordered_region_pre_ranked_v16.rs");
+#[path = "native_source_correspondence_replay_v1.rs"]
+mod native_source_correspondence_replay_v1;
+pub use native_source_correspondence_replay_v1::*;
 #[path = "production_checked_output_admission_policy3_v1.rs"]
 mod checked_output_admission_policy3_v1;
 pub use checked_output_admission_policy3_v1::*;

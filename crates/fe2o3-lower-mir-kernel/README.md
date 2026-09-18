@@ -394,16 +394,62 @@ reasons fail closed. A full physical-access census matches each output access
 to its fresh formal location, kind, address space and alignment. Runtime bounds
 and alias requirements remain obligations, not authenticated launch values.
 
-Private addresses, helper interfaces, collectives, atomics, volatile or ordered
-effects, unsupported address provenance and unsupported arithmetic remain
-outside this contract. The source/ranked and formal engines retain their
+Fixed-cell private scalar storage has a separate complete allocation, address,
+use, initialization and source-lifetime census. Each retained read requires a
+same-block latest store to its exact cell. Allocation alignment and constant
+byte offsets must justify access alignment. Pointer escape, transported private
+pointers, dynamic cells, unknown element widths and unsupported projected source
+destinations are refused. The global formal-memory report omits private accesses
+and is never used as their safety proof. The lifetime census builds one sparse
+source invalidation index and uses logarithmic interval queries. Private-array
+correspondence still uses bounded per-read source effect/statement scans; this
+is not general cross-block memory dataflow.
+
+Helper interfaces, collectives, atomics, volatile or ordered effects, unsupported
+address provenance and unsupported arithmetic remain outside this contract.
+The source/ranked and formal engines retain their
 existing bounded accounting domains; new inventory, transport and census
 scratch uses the shared ledger and restores its incoming floor.
 
-The backend's move-only checked-output stage consumes this owner, lowers actual
-O through native V12 LLVM lowering, constructs its descriptor/handoff and
+## Checked Policy4 Composition
+
+`ProductionCheckedOutputOwnerPolicy4V1` consumes the real ranked/source receipt,
+target-bound B and the optimizer's sealed Policy4 owner. Policy4 runs the unchanged
+eight-pass Policy3 B/C sequence, then checked private store-to-load forwarding
+C/O. It retains both intermediate C and final O. The Policy3 occurrence map
+describes B/C only; the independent forwarding relation describes C/O. No map or
+proof is relabeled as a different endpoint.
+
+Admission qualifies source/B/C, independently replays the fixed composition,
+then derives fresh private and global-memory facts from actual O. Forwarding is
+limited to ordinary same-block integer memory with exact pointer SSA identity
+and access attributes. It retains the store and replaces the load with an
+equivalent value expression; unsupported effects stop forwarding. Separate GEP
+values are not assumed to be the same pointer. A genuine semantic-source fixture
+requires one real forwarding row, but does not claim that ordinary Rust retained
+arrays necessarily trigger that exact-pointer rule.
+
+The backend's move-only checked-output stage consumes the Policy4 owner, lowers
+actual O through native V12 LLVM lowering, constructs its descriptor/handoff and
 independently replays the final LLVM and descriptor relation. It retains the
-authenticated source bindings and ranked roster. Protected native lineage and
+authenticated source bindings, ranked roster and complete transferred logical
+storage floor. Its test-only rustc callback compiles ordinary `fill` and `vecadd`
+source through this stage without adding a shipping policy selector.
+
+Native source replay reconstructs semantic MIR, SSA and N through normal
+constructors, compares the complete N bytes and checks the exact source catalog.
+It does not infer launch origin from equality. The consuming backend additionally
+joins the complete ordered retained ranked texts and requires real aggregate
+proof execution; missing signatures do not become unsigned success. The verifier
+rehashes the aggregate obligation from its claims and complete ordered staging
+commitments and compares it with the imported signature's binding. This binds
+the exact Middle identity, contracts, generated source and staging order; merely
+comparing enclosing claims would not. Embedded keys establish signature
+consistency, not trusted signer origin. Serialized source replay is not, by
+itself, independent ranked/source equivalence, final output proof provenance,
+or protected compiler-origin authentication.
+
+The default backend still uses its existing policy. Protected native lineage and
 full corpus admission are still required before default activation; this stage
 does not relabel old proof receipts or publish an artifact.
 

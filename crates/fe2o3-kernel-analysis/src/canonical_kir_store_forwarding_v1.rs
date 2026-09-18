@@ -103,6 +103,13 @@ impl<'g> CanonicalKirAppliedStoreForwardingV1<'g> {
     pub fn rows(&self) -> &[Row] {
         &self.rows
     }
+    /// Consumes the borrowed execution state into inert coordinate claims.
+    /// The rows retain no input borrow, checked relation, or rewrite authority;
+    /// a new owner composition must independently check its actual endpoints.
+    /// Their existing allocation transfers without growing or cloning it.
+    pub fn into_inert_rows(self) -> Vec<Row> {
+        self.rows
+    }
     pub const fn retained_storage(&self) -> usize {
         self.retained
     }

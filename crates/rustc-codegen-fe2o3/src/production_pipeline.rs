@@ -21,8 +21,8 @@ use crate::protected_rustc_invocation::{
     AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1,
 };
 
-#[path = "production_pipeline_checked_output_policy3_v1.rs"]
-pub(crate) mod checked_output_policy3_v1;
+#[path = "production_pipeline_checked_output_policy4_v1.rs"]
+pub(crate) mod checked_output_policy4_v1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProductionDisposition {
@@ -71,7 +71,7 @@ pub(crate) enum ProductionPipelineError {
     TargetBinding(dialect_amdgcn::ProductionTargetBindingErrorV1),
     TargetOptimization(fe2o3_kernel_opt::KernelIrPlironOptimizationErrorV2),
     TargetOptimizationV3(fe2o3_kernel_opt::KernelIrPlironOptimizationErrorV3),
-    CheckedOutputStage(checked_output_policy3_v1::CheckedOutputStageErrorV1),
+    CheckedOutputStage(checked_output_policy4_v1::CheckedOutputStageErrorV1),
     TargetKernelIrV8(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV8),
     TargetKernelIrV9(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV9),
     TargetKernelIrV11(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV11),

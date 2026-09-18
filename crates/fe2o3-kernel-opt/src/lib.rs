@@ -13,6 +13,8 @@
 
 mod checked_optimization_policy3_receipt_v1;
 mod checked_optimization_policy3_v1;
+mod checked_optimization_policy4_receipt_v1;
+mod checked_optimization_policy4_v1;
 mod checked_optimization_receipt_v1;
 mod checked_optimization_v1;
 mod checked_store_forwarding_v1;
@@ -24,6 +26,8 @@ mod structural_replay_admission_v3;
 
 pub use checked_optimization_policy3_receipt_v1::*;
 pub use checked_optimization_policy3_v1::*;
+pub use checked_optimization_policy4_receipt_v1::*;
+pub use checked_optimization_policy4_v1::*;
 pub use checked_optimization_receipt_v1::*;
 pub use checked_optimization_v1::*;
 pub use checked_store_forwarding_v1::*;

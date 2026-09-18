@@ -13,11 +13,17 @@ use reserved_fe2o3_symbols::{
     DeviceFfiContractFieldsV1, DeviceFfiDirectionV1, derive_device_ffi_contract_id_v1,
 };
 
-#[path = "production_pipeline_checked_output_policy3_v1_tests.rs"]
+#[path = "production_pipeline_checked_output_policy4_v1_tests.rs"]
 mod native_handoff_tests;
 
 fn typed_roots(owner: &ProductionCheckedOutputOwnerPolicy3V1) -> Vec<TypedDescriptorRootV1> {
-    let semantic = owner.source_semantic_kir().semantic().semantic();
+    typed_roots_for_source(owner.source_semantic_kir())
+}
+
+fn typed_roots_for_source(
+    source: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+) -> Vec<TypedDescriptorRootV1> {
+    let semantic = source.semantic().semantic();
     semantic
         .roots()
         .iter()

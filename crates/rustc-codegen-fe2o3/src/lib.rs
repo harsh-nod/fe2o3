@@ -29,6 +29,7 @@ mod production_geometry_v1;
 mod production_inline_assembly_v30;
 mod production_inline_source_occurrences_v30;
 mod production_mir_pliron_verus_join_v1;
+mod production_native_source_lineage_v1;
 mod production_ordered_region_v31;
 mod production_ordered_source_occurrences_v31;
 mod production_pipeline;

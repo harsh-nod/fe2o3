@@ -1,12 +1,29 @@
 //! Constructed semantic fixtures, genuine backend-ranked admission and actual
 //! native replay. These tests do not authenticate rustc or protected publication.
 use super::*;
+
+#[test]
+fn policy4_diagnostics_keep_shared_pipeline_results_compact() {
+    assert!(std::mem::size_of::<CheckedOutputStageErrorV1>() < 128);
+    assert!(std::mem::size_of::<crate::compiler_descriptor::CompilerDescriptorError>() < 128);
+    assert!(
+        std::mem::size_of::<crate::production_worker_handoff::ProductionWorkerHandoffError>() < 128
+    );
+    // The enclosing enum also stores its discriminant, not just the payload.
+    let pipeline_bytes = std::mem::size_of::<ProductionPipelineError>();
+    assert!(
+        pipeline_bytes <= 128,
+        "pipeline error uses {pipeline_bytes} bytes"
+    );
+}
 use crate::production_pipeline::ProductionPipelineError;
-use crate::production_pipeline::checked_output_policy3_v1::{
+use crate::production_pipeline::checked_output_policy4_v1::{
     CheckedOutputStageErrorV1, PreparedCheckedOutputArtifactsV1,
     prepare_checked_output_artifacts_v1,
 };
-use crate::production_ranked_projection_v1::with_backend_checked_output_policy3_owned_v1;
+use crate::production_ranked_projection_v1::{
+    with_backend_checked_output_policy4_owned_v1, with_backend_checked_output_policy4_v1,
+};
 use dialect_amdgcn::{
     NativeV12TextDescriptorReplayErrorV1 as ReplayError,
     check_native_v12_text_descriptor_relation_v1 as replay,
@@ -17,13 +34,19 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrWorkBudgetV1 as Work,
 };
 
+fn typed_roots(
+    owner: &fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1,
+) -> Vec<TypedDescriptorRootV1> {
+    typed_roots_for_source(owner.source_semantic_kir())
+}
+
 #[test]
 fn checked_native_handoff_owns_real_two_root_output_and_replays_both_targets() {
     for profile in [
         ProductionAmdTargetProfileV1::Gfx942,
         ProductionAmdTargetProfileV1::Gfx950,
     ] {
-        with_backend_checked_output_policy3_owned_v1(profile, |owner, budget| {
+        with_backend_checked_output_policy4_owned_v1(profile, |owner, budget| {
             let roots = typed_roots(&owner);
             let identity = *owner.output().canonical().identity().digest();
             let floor = budget.storage();
@@ -44,6 +67,24 @@ fn checked_native_handoff_owns_real_two_root_output_and_replays_both_targets() {
                 artifacts.admitted().output(),
                 artifacts.admitted().checked_output().owner()
             ));
+            assert_eq!(
+                artifacts
+                    .admitted()
+                    .checked_output()
+                    .execution()
+                    .policy_version(),
+                4
+            );
+            assert_eq!(
+                artifacts
+                    .admitted()
+                    .checked_output()
+                    .intermediate_policy3()
+                    .report()
+                    .passes()
+                    .len(),
+                8
+            );
             assert_eq!(artifacts.descriptor_source().table().kernels().len(), 2);
             assert_eq!(artifacts.workgroup_sizes().len(), 2);
             for ((name, size), kernel) in artifacts
@@ -96,7 +137,7 @@ fn checked_native_handoff_owns_real_two_root_output_and_replays_both_targets() {
 #[test]
 fn checked_native_handoff_replay_refuses_changed_llvm_descriptor_profile_and_bytes() {
     let profile = ProductionAmdTargetProfileV1::Gfx942;
-    with_backend_checked_output_policy3_owned_v1(profile, |owner, budget| {
+    with_backend_checked_output_policy4_owned_v1(profile, |owner, budget| {
         let roots = typed_roots(&owner);
         let floor = budget.storage();
         let (artifacts, receipt) =
@@ -200,7 +241,7 @@ fn checked_native_handoff_replay_refuses_changed_llvm_descriptor_profile_and_byt
 #[test]
 fn checked_native_handoff_refuses_actual_target_owner_and_root_substitution() {
     let profile = ProductionAmdTargetProfileV1::Gfx942;
-    with_backend_checked_output_policy3_v1(profile, |owner, budget| {
+    with_backend_checked_output_policy4_v1(profile, |owner, budget| {
         let roots = typed_roots(owner);
         let floor = budget.storage();
         let (catalog, storage) =
@@ -219,14 +260,14 @@ fn checked_native_handoff_refuses_actual_target_owner_and_root_substitution() {
         budget.reserve_storage(storage.retained_storage()).unwrap();
         // The wrong target is checked against the actual owner's module before
         // LLVM or descriptor inspection; no foreign target metadata is injected.
-        assert!(matches!(crate::production_worker_handoff::prepare_checked_output_policy3_worker_handoff(
+        assert!(matches!(crate::production_worker_handoff::prepare_checked_output_policy4_worker_handoff(
             owner, &catalog, DeviceTargetV1::parse("gfx950:xnack-").unwrap(), String::new(), &roots, None, budget),
             Err(crate::production_worker_handoff::ProductionWorkerHandoffError::TargetBindingMismatch { .. })));
         drop(catalog);
         budget.release_storage(storage.retained_storage()).unwrap();
         assert_eq!(budget.storage(), floor);
     });
-    with_backend_checked_output_policy3_owned_v1(profile, |owner, budget| {
+    with_backend_checked_output_policy4_owned_v1(profile, |owner, budget| {
         let mut roots = typed_roots(&owner);
         roots[1].kernel_binding = roots[0].kernel_binding;
         let floor = budget.storage();
@@ -247,7 +288,7 @@ fn checked_native_handoff_refuses_actual_target_owner_and_root_substitution() {
 #[test]
 fn checked_native_handoff_entry_work_and_input_floor_are_exact() {
     let profile = ProductionAmdTargetProfileV1::Gfx942;
-    with_backend_checked_output_policy3_owned_v1(profile, |owner, original| {
+    with_backend_checked_output_policy4_owned_v1(profile, |owner, original| {
         let roots = typed_roots(&owner);
         let floor = original.storage();
         let mut work = Work::new(3);
@@ -268,7 +309,7 @@ fn checked_native_handoff_entry_work_and_input_floor_are_exact() {
         assert_eq!(budget.storage(), floor);
         assert_eq!(budget.peak_storage(), floor);
     });
-    with_backend_checked_output_policy3_owned_v1(profile, |owner, _| {
+    with_backend_checked_output_policy4_owned_v1(profile, |owner, _| {
         let roots = typed_roots(&owner);
         let floor = owner.retained_input_storage_floor_v1().unwrap() - 1;
         let mut work = Work::new(4);
@@ -288,7 +329,7 @@ fn checked_native_handoff_entry_work_and_input_floor_are_exact() {
 
 #[test]
 fn checked_native_handoff_engine_prepayment_one_short_restores_input_floor() {
-    with_backend_checked_output_policy3_owned_v1(
+    with_backend_checked_output_policy4_owned_v1(
         ProductionAmdTargetProfileV1::Gfx942,
         |owner, original| {
             let roots = typed_roots(&owner);
