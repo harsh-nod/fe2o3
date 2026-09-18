@@ -707,6 +707,9 @@ enum SemanticCapabilityAvailabilityV1 {
 enum SemanticValueBindingV1 {
     Unit,
     Unmaterialized,
+    Execution(SemanticExecutionBindingV29),
+    ExecutionBorrow(SemanticExecutionBorrowBindingV29),
+    MovedExecution,
     Aggregate(Vec<SemanticValueBindingV1>),
     Enum {
         discriminant: ValueId,
@@ -812,6 +815,13 @@ fn project_enum_payload_field(
     payloads: &BTreeMap<u32, Vec<SemanticValueBindingV1>>,
     field: u32,
 ) -> Result<SemanticValueBindingV1, &'static str> {
+    if payloads
+        .values()
+        .flatten()
+        .any(semantic_binding_contains_execution_v29)
+    {
+        return Err("execution bindings cannot be restored from enum payloads");
+    }
     let Some(fields) = payloads.get(&selected_variant) else {
         return Ok(SemanticValueBindingV1::Unmaterialized);
     };
@@ -825,6 +835,9 @@ fn semantic_binding_kind_v1(binding: &SemanticValueBindingV1) -> &'static str {
     match binding {
         SemanticValueBindingV1::Unit => "unit",
         SemanticValueBindingV1::Unmaterialized => "unmaterialized enum payload",
+        SemanticValueBindingV1::Execution(_) => "nominal execution role",
+        SemanticValueBindingV1::ExecutionBorrow(_) => "nominal execution borrow",
+        SemanticValueBindingV1::MovedExecution => "moved execution value",
         SemanticValueBindingV1::Aggregate(_) => "aggregate",
         SemanticValueBindingV1::Enum {
             variant: Some(_), ..
@@ -868,8 +881,11 @@ fn semantic_binding_can_restore_from_unique_source_v1(binding: &SemanticValueBin
         SemanticValueBindingV1::Aggregate(fields) => fields
             .iter()
             .all(semantic_binding_can_restore_from_unique_source_v1),
-        SemanticValueBindingV1::Value { .. } => true,
-        SemanticValueBindingV1::Unmaterialized
+        SemanticValueBindingV1::Value { ty, .. } => !matches!(ty, Type::Execution(_)),
+        SemanticValueBindingV1::Execution(_)
+        | SemanticValueBindingV1::ExecutionBorrow(_)
+        | SemanticValueBindingV1::MovedExecution
+        | SemanticValueBindingV1::Unmaterialized
         | SemanticValueBindingV1::Enum { .. }
         | SemanticValueBindingV1::OptionPointer { .. }
         | SemanticValueBindingV1::OptionIndexWitness { .. }
@@ -884,12 +900,23 @@ fn reauthenticate_capabilities_from_enum_payload_v1(
     binding: &mut SemanticValueBindingV1,
     local: SemanticLocalIdV1,
     variant: u32,
-) {
+) -> Result<(), &'static str> {
+    if semantic_binding_contains_execution_v29(binding) {
+        return Err("execution bindings cannot be restored from enum payloads");
+    }
+    reauthenticate_ordinary_capabilities_from_enum_payload_v1(binding, local, variant)
+}
+
+fn reauthenticate_ordinary_capabilities_from_enum_payload_v1(
+    binding: &mut SemanticValueBindingV1,
+    local: SemanticLocalIdV1,
+    variant: u32,
+) -> Result<(), &'static str> {
     let availability = SemanticCapabilityAvailabilityV1::EnumPayload { local, variant };
     match binding {
         SemanticValueBindingV1::Aggregate(fields) => {
             for field in fields {
-                reauthenticate_capabilities_from_enum_payload_v1(field, local, variant);
+                reauthenticate_ordinary_capabilities_from_enum_payload_v1(field, local, variant)?;
             }
         }
         SemanticValueBindingV1::Enum {
@@ -899,7 +926,9 @@ fn reauthenticate_capabilities_from_enum_payload_v1(
         } => {
             if let Some(fields) = payloads.get_mut(selected) {
                 for field in fields {
-                    reauthenticate_capabilities_from_enum_payload_v1(field, local, variant);
+                    reauthenticate_ordinary_capabilities_from_enum_payload_v1(
+                        field, local, variant,
+                    )?;
                 }
             }
         }
@@ -911,6 +940,11 @@ fn reauthenticate_capabilities_from_enum_payload_v1(
         | SemanticValueBindingV1::ComponentWitness {
             availability: slot, ..
         } => *slot = availability,
+        SemanticValueBindingV1::Execution(_)
+        | SemanticValueBindingV1::ExecutionBorrow(_)
+        | SemanticValueBindingV1::MovedExecution => {
+            return Err("execution bindings cannot be restored from enum payloads");
+        }
         SemanticValueBindingV1::Unit
         | SemanticValueBindingV1::Unmaterialized
         | SemanticValueBindingV1::Enum { .. }
@@ -933,16 +967,45 @@ fn reauthenticate_capabilities_from_enum_payload_v1(
         | SemanticValueBindingV1::OptionComponentWitness { .. }
         | SemanticValueBindingV1::OptionGridLeader { .. } => {}
     }
+    Ok(())
+}
+
+fn semantic_binding_contains_execution_v29(binding: &SemanticValueBindingV1) -> bool {
+    match binding {
+        SemanticValueBindingV1::Execution(_)
+        | SemanticValueBindingV1::ExecutionBorrow(_)
+        | SemanticValueBindingV1::MovedExecution => true,
+        SemanticValueBindingV1::Value {
+            ty: Type::Execution(_),
+            ..
+        } => true,
+        SemanticValueBindingV1::Aggregate(fields) => {
+            fields.iter().any(semantic_binding_contains_execution_v29)
+        }
+        SemanticValueBindingV1::Enum { payloads, .. } => payloads
+            .values()
+            .flatten()
+            .any(semantic_binding_contains_execution_v29),
+        _ => false,
+    }
 }
 
 impl SemanticValueBindingV1 {
     fn value(&self) -> Result<(ValueId, Type), &'static str> {
         match self {
+            Self::Value {
+                ty: Type::Execution(_),
+                ..
+            } => Err("execution role requires a nominal producer binding"),
             Self::Value { id, ty } => Ok((*id, ty.clone())),
             Self::IndexWitness { id, .. } => Ok((*id, Type::INDEX)),
             Self::WaveLane { value, .. } => Ok((*value, Type::Scalar(ScalarType::U32))),
             Self::Unmaterialized => {
                 Err("unmaterialized enum payload has no ordinary SSA representation")
+            }
+            Self::MovedExecution => Err("moved execution value cannot be observed"),
+            Self::Execution(_) | Self::ExecutionBorrow(_) => {
+                Err("execution binding has no ordinary scalar representation")
             }
             Self::Unit
             | Self::Aggregate(_)
@@ -975,6 +1038,12 @@ impl SemanticValueBindingV1 {
 
     fn append_values(&self, values: &mut Vec<(ValueId, Type)>) -> Result<(), &'static str> {
         match self {
+            Self::Value {
+                ty: Type::Execution(_),
+                ..
+            } => {
+                return Err("execution role requires a nominal producer binding");
+            }
             Self::Value { id, ty } => values.push((*id, ty.clone())),
             Self::IndexWitness { id, .. } => values.push((*id, Type::INDEX)),
             Self::WaveLane { value, .. } => {
@@ -999,11 +1068,27 @@ impl SemanticValueBindingV1 {
             Self::Enum {
                 discriminant,
                 discriminant_ty,
+                payloads,
                 ..
-            } => values.push((*discriminant, discriminant_ty.clone())),
+            } => {
+                if payloads
+                    .values()
+                    .flatten()
+                    .any(semantic_binding_contains_execution_v29)
+                {
+                    return Err("execution bindings cannot be flattened through enum payloads");
+                }
+                values.push((*discriminant, discriminant_ty.clone()));
+            }
             Self::Unit => {}
             Self::Unmaterialized => {
                 return Err("unmaterialized enum payload has no ordinary SSA representation");
+            }
+            Self::MovedExecution => {
+                return Err("moved execution value cannot be observed");
+            }
+            Self::Execution(_) | Self::ExecutionBorrow(_) => {
+                return Err("execution binding has no ordinary SSA representation");
             }
             Self::MathContext
             | Self::CollectiveContext

@@ -113,6 +113,9 @@ include!("production_call_assembly_v1.rs");
 include!("production_canonical_calls_v1.rs");
 include!("production_emission_placement_v1.rs");
 
+#[path = "production_call_instance_ids_v1.rs"]
+mod production_call_instance_ids_v1;
+
 // Expanded graphs stay diagnostic-only until instance-qualified source replay
 // and capability scope discharge are integrated with the production owner.
 #[cfg(test)]
@@ -120,6 +123,8 @@ include!("production_emission_placement_v1.rs");
 mod production_call_instances_v1;
 #[cfg(test)]
 include!("production_call_instance_emission_v1.rs");
+#[cfg(test)]
+include!("production_instance_correspondence_v1.rs");
 
 const DEFAULT_MAX_FUNCTIONS_V1: usize = 1_024;
 const DEFAULT_MAX_BLOCKS_V1: usize = 16_384;
@@ -12368,6 +12373,8 @@ include!("production_semantic_kir_v1/semantic_ssa_transport_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_intrinsics_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_plan_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
+include!("production_execution_bindings_v1.rs");
+include!("production_execution_transport_v1.rs");
 include!("production_call_destination_v1.rs");
 include!("production_semantic_kir_v1/dynamic_local_array_v1.rs");
 
@@ -12402,6 +12409,7 @@ struct SemanticFunctionLoweringV1<'a> {
     pending_semantic_ssa_definitions: BTreeMap<(u32, u32), VecDeque<SsaValueV1>>,
     next_value: u32,
     emission_placement: SemanticEmissionPlacementV1,
+    execution_instance: Option<ProductionCallInstanceIdV1>,
     assert_failure_block: Option<BlockId>,
     required_workgroup: Option<[u32; 3]>,
     infallible_asserts: BTreeSet<u32>,
@@ -12697,6 +12705,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             pending_semantic_ssa_definitions,
             next_value,
             emission_placement,
+            execution_instance: None,
             assert_failure_block,
             required_workgroup,
             infallible_asserts,
@@ -13171,7 +13180,15 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 field,
                 SemanticLocalIdV1::from_index(local),
                 variant,
-            );
+            )
+            .map_err(|detail| {
+                unsupported(
+                    self.semantic_function.index(),
+                    Some(block.index()),
+                    None,
+                    detail,
+                )
+            })?;
         }
         self.locals[local as usize] = Some(SemanticValueBindingV1::Enum {
             discriminant,
@@ -13659,6 +13676,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticRvalueKindV1::Borrow { place, .. }
             | SemanticRvalueKindV1::AddressOf { place, .. } => {
+                if let Some(binding) =
+                    self.try_lower_execution_borrow_v29(block, statement, result_type, value)?
+                {
+                    return Ok(binding);
+                }
                 if let SemanticRvalueKindV1::Borrow { kind, .. } = value
                     && (matches!(
                         self.types
@@ -13849,6 +13871,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     }
                     SemanticValueBindingV1::Unit
                     | SemanticValueBindingV1::Unmaterialized
+                    | SemanticValueBindingV1::Execution(_)
+                    | SemanticValueBindingV1::ExecutionBorrow(_)
+                    | SemanticValueBindingV1::MovedExecution
                     | SemanticValueBindingV1::Aggregate(_)
                     | SemanticValueBindingV1::MathContext
                     | SemanticValueBindingV1::CollectiveContext
@@ -14427,6 +14452,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         operand: &SemanticOperandV1,
         operations: &mut Vec<Operation>,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        if let Some(binding) = self.try_lower_execution_operand_v29(block, statement, operand)? {
+            return Ok(binding);
+        }
         if let SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) = operand
             && self.retained_array_slot_v1(place.local()).is_some()
         {
@@ -14807,6 +14835,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         structural_nodes: &mut usize,
         operations: &mut Vec<Operation>,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        if *structural_nodes == 0 {
+            require_ordinary_execution_type_tree_v29(self.types, ty)?;
+        }
         *structural_nodes = structural_nodes.checked_add(1).ok_or_else(|| {
             unsupported(
                 0,
@@ -14836,6 +14867,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 )
             })?
             .clone();
+        require_ordinary_execution_representation_v29(&declaration)?;
         let layout = declaration.layout();
         let size = layout.size_bytes().ok_or_else(|| {
             unsupported(
@@ -21881,6 +21913,29 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             let projection = &place.projections()[projection_index];
             binding = match (binding, projection.kind()) {
+                (
+                    SemanticValueBindingV1::ExecutionBorrow(borrow),
+                    SemanticProjectionKindV1::Dereference,
+                ) => {
+                    let reference_type = place.projections()[..projection_index]
+                        .last()
+                        .map_or(self.function.locals()[index].ty(), |previous| {
+                            previous.result_type()
+                        });
+                    SemanticValueBindingV1::Execution(
+                        borrow
+                            .dereference(self.types, reference_type, projection)
+                            .map_err(|detail| {
+                                unsupported(
+                                    self.semantic_function.index(),
+                                    Some(block.index()),
+                                    statement,
+                                    detail,
+                                )
+                            })?
+                            .clone(),
+                    )
+                }
                 (SemanticValueBindingV1::Unit, _) => {
                     return Err(unsupported(
                         0,
@@ -22131,6 +22186,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             SemanticValueBindingV1::ComponentWitness { availability, .. } => Some(*availability),
             SemanticValueBindingV1::Unit
             | SemanticValueBindingV1::Unmaterialized
+            | SemanticValueBindingV1::Execution(_)
+            | SemanticValueBindingV1::ExecutionBorrow(_)
+            | SemanticValueBindingV1::MovedExecution
             | SemanticValueBindingV1::Aggregate(_)
             | SemanticValueBindingV1::Enum { .. }
             | SemanticValueBindingV1::MathContext
@@ -23446,10 +23504,11 @@ fn lower_parameter_type(
     callables: &[SemanticCallableDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Result<Type, ProductionSemanticKirErrorV1> {
-    let shape = types
+    let declaration = types
         .get(usize::try_from(ty.index()).unwrap_or(usize::MAX))
-        .ok_or_else(|| unsupported(0, None, None, "kernel argument type is missing"))?
-        .shape();
+        .ok_or_else(|| unsupported(0, None, None, "kernel argument type is missing"))?;
+    require_ordinary_execution_representation_v29(declaration)?;
+    let shape = declaration.shape();
     if let Some((element, _, access)) = disjoint_slice_descriptor(callables, ty) {
         return Ok(Type::slice(
             lower_scalar_type(types, element)?,
@@ -24197,10 +24256,28 @@ fn scalar_backend_pointer(declaration: &SemanticTypeDeclV1) -> Option<SemanticBa
 const MAX_SSA_VALUE_COMPONENTS_V1: usize = 256;
 const MAX_ENUM_PAYLOAD_STORAGE_COMPONENTS_V1: usize = 4_096;
 
+fn require_ordinary_execution_representation_v29(
+    declaration: &SemanticTypeDeclV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    if matches!(
+        declaration.rust_type_kind(),
+        fe2o3_mir_model::semantic_mir_v1::SemanticRustTypeKindV1::Execution(_)
+    ) {
+        return Err(unsupported(
+            0,
+            None,
+            None,
+            "execution roles require occurrence-bound transport, not an ordinary Rust representation",
+        ));
+    }
+    Ok(())
+}
+
 fn lower_ssa_value_components_v1(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Result<Vec<(SemanticTypeIdV1, Type)>, ProductionSemanticKirErrorV1> {
+    require_ordinary_execution_type_tree_v29(types, ty)?;
     fn append(
         types: &[SemanticTypeDeclV1],
         ty: SemanticTypeIdV1,
@@ -24225,10 +24302,11 @@ fn lower_ssa_value_components_v1(
                 "aggregate SSA value exceeds the structural or component limit",
             ));
         }
-        let shape = types
+        let declaration = types
             .get(ty.index() as usize)
-            .ok_or_else(|| unsupported(0, None, None, "aggregate SSA type is missing"))?
-            .shape();
+            .ok_or_else(|| unsupported(0, None, None, "aggregate SSA type is missing"))?;
+        require_ordinary_execution_representation_v29(declaration)?;
+        let shape = declaration.shape();
         match shape {
             SemanticTypeShapeV1::Unit => Ok(()),
             SemanticTypeShapeV1::Enum { discriminant, .. } => {
@@ -24802,6 +24880,7 @@ fn binding_from_value_defs_with_validation(
     values: &[ValueDef],
     validate_scalar_types: bool,
 ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+    require_ordinary_execution_type_tree_v29(types, ty)?;
     fn build(
         types: &[SemanticTypeDeclV1],
         ty: SemanticTypeIdV1,
@@ -24826,10 +24905,11 @@ fn binding_from_value_defs_with_validation(
                 "aggregate SSA binding exceeds the structural limit",
             ));
         }
-        let shape = types
+        let declaration = types
             .get(ty.index() as usize)
-            .ok_or_else(|| unsupported(0, None, None, "aggregate SSA type is missing"))?
-            .shape();
+            .ok_or_else(|| unsupported(0, None, None, "aggregate SSA type is missing"))?;
+        require_ordinary_execution_representation_v29(declaration)?;
+        let shape = declaration.shape();
         match shape {
             SemanticTypeShapeV1::Unit => Ok(SemanticValueBindingV1::Unit),
             SemanticTypeShapeV1::Enum { discriminant, .. } => {
@@ -26116,6 +26196,9 @@ mod resource_tests {
     include!("production_semantic_kir_v1/tests/production_enum_downcast_v1_tests.rs");
     mod emission_placement_lowering_tests {
         include!("production_semantic_kir_v1/emission_placement_lowering_tests.rs");
+    }
+    mod execution_representation_v29_tests {
+        include!("production_semantic_kir_v1/execution_representation_v29_tests.rs");
     }
 
     #[test]
@@ -33761,7 +33844,7 @@ mod resource_tests {
         noop_semantic_owner_candidate_with_workgroup(exports, false, workgroup).unwrap()
     }
 
-    fn helper_closure_semantic_owner() -> ProductionSemanticMirOwnerV1 {
+    pub(super) fn helper_closure_semantic_owner() -> ProductionSemanticMirOwnerV1 {
         let unit = SemanticTypeIdV1::from_index(0);
         let source = SemanticSourceProvenanceV1::unavailable();
         let abi = |tag, canon_abi, extern_abi| {
