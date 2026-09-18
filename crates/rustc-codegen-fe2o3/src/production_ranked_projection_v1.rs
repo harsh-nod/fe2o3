@@ -18,6 +18,8 @@ mod helper_source_fixture_v1 {
 }
 mod analysis_multi_split_v1;
 mod canonical_assertion_facts_v1;
+#[cfg(test)]
+pub(crate) mod conditional_output_observation_v1_tests;
 mod materialized_callable_effect_v1;
 mod ranked_projection_source_v1;
 mod saturating_integer_expression_v2;
@@ -3684,6 +3686,8 @@ fn project_and_verify_ranked_root_with_singletons_v1(
         return Err(error);
     }
     let (lowering, effect_receipts) = if reference_bindings.as_slice().is_empty() {
+        #[cfg(test)]
+        conditional_output_observation_v1_tests::reject_unannotated()?;
         let ranked_ir = format_ranked_cfg(function_name(root_function)?, kernel.blocks())?;
         let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, kernel)
             .map_err(ProductionRankedProjectionErrorV1::Construction)?;
@@ -3703,14 +3707,34 @@ fn project_and_verify_ranked_root_with_singletons_v1(
             reserved_reference_values.ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "reference-effect scalar reservations were not retained",
             ))?;
-        crate::production_reference_effect_join_v2::prepare_reference_effect_request_v2(
-            kernel,
-            reference_bindings,
-            &reference_writes,
-            reserved_reference_values,
-        )
-        .and_then(|request| request.prove_and_compile())
-        .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?
+        let request =
+            crate::production_reference_effect_join_v2::prepare_reference_effect_request_v2(
+                kernel,
+                reference_bindings,
+                &reference_writes,
+                reserved_reference_values,
+            )
+            .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?;
+        #[cfg(test)]
+        if conditional_output_observation_v1_tests::is_active() {
+            let ranked_ir = format_ranked_cfg(
+                function_name(root_function)?,
+                request.kernel_for_test_v1().blocks(),
+            )?;
+            assertion_facts.observe_conditional_prepared_for_test_v1(
+                fe2o3_lower_mir_kernel::NativeRankedSourceCandidateV1::from_untrusted_parts(
+                    selection.root().index(),
+                    source_root.source_rank(),
+                    request.kernel_for_test_v1(),
+                    &access_sources,
+                    &executable_effect_sources,
+                    &ranked_ir,
+                ),
+            )?;
+        }
+        request
+            .prove_and_compile()
+            .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?
     };
     let ranked_ir = format_ranked_cfg(function_name(root_function)?, lowering.kernel().blocks())?;
     drop(reference_writes);

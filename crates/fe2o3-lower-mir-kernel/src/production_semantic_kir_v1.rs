@@ -8530,6 +8530,13 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
 
 include!("production_argument_correspondence_v1.rs");
 include!("production_argument_view_v1.rs");
+include!("production_conditional_output_binding_v1.rs");
+#[path = "production_conditional_ranked_output_v1.rs"]
+mod production_conditional_ranked_output_v1;
+pub use production_conditional_ranked_output_v1::{
+    ProductionConditionalRankedExtentV1, ProductionConditionalRankedOutputErrorV1,
+    ProductionConditionalRankedOutputV1,
+};
 
 fn validate_operation_correspondence_layout(
     expected: &[ExpectedSemanticKirBlockCoverageV1],

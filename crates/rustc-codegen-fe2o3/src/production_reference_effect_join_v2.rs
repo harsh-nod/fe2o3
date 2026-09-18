@@ -133,6 +133,11 @@ struct PreparedReferenceOutputV2 {
 }
 
 impl CompilerOwnedReferenceEffectRequestV2 {
+    #[cfg(test)]
+    pub(crate) fn kernel_for_test_v1(&self) -> &ProductionRankedKernelV1 {
+        &self.kernel
+    }
+
     pub(crate) fn prove_and_compile(
         self,
     ) -> Result<

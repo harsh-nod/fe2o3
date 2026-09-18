@@ -18,6 +18,8 @@ mod context_source_v29_tests;
 
 #[path = "production_rustc_driver_conditional_coverage_v1_tests.rs"]
 mod conditional_coverage;
+#[path = "production_rustc_driver_conditional_ranked_output_v1_tests.rs"]
+mod conditional_ranked_output;
 #[path = "production_rustc_driver_helper_reference_source_v1_tests.rs"]
 mod helper_reference_source;
 #[path = "production_rustc_driver_wave64_capture_source_v1_tests.rs"]
@@ -443,6 +445,7 @@ fn ordinary_rust_private_unit_helper_reaches_checked_native_output() {
 }
 
 enum OrdinarySourceCase {
+    ReferenceFill,
     ConstantShift(shift_source::Config),
     ScalarBorrowPolicy5,
     RetainedScalarBorrowPolicy5,
@@ -619,6 +622,15 @@ fn ordinary_rust_source_cases(
                 usize::from(config.retained),
             ),
             OrdinarySourceCase::Fill => ("fill", "examples/fill", None, &["fill"][..], 0, 1, 0),
+            OrdinarySourceCase::ReferenceFill => (
+                "reference-fill",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("reference-positive"),
+                &["fill"][..],
+                0,
+                1,
+                0,
+            ),
             OrdinarySourceCase::Vecadd => {
                 ("vecadd", "examples/vecadd", None, &["vecadd"][..], 2, 1, 0)
             }
@@ -860,7 +872,7 @@ fn ordinary_rust_source_cases(
             | OrdinarySourceCase::PrivateUnitHelper
             | OrdinarySourceCase::RetainedPrivateUnitHelper => Some(simulation::Case::Fill),
             OrdinarySourceCase::Vecadd => Some(simulation::Case::Vecadd),
-            OrdinarySourceCase::SharedUnitHelper => None,
+            OrdinarySourceCase::SharedUnitHelper | OrdinarySourceCase::ReferenceFill => None,
             OrdinarySourceCase::F32Negate | OrdinarySourceCase::RetainedF32Negate => {
                 Some(simulation::Case::F32Negate)
             }

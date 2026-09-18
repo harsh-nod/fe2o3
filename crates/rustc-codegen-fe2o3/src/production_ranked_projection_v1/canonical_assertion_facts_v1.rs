@@ -102,6 +102,16 @@ pub(super) enum ProjectedAssertionConditionV1 {
 /// origin view and exact borrowed graph report below. Tests must identify any
 /// isolated synthetic decision inputs explicitly.
 pub(super) trait ProjectedAssertionFactsV1 {
+    #[cfg(test)]
+    fn observe_conditional_prepared_for_test_v1(
+        &mut self,
+        _candidate: fe2o3_lower_mir_kernel::NativeRankedSourceCandidateV1<'_>,
+    ) -> Result<(), ProjectionError> {
+        Err(ProjectionError::Incomplete(
+            "conditional observation requires a canonical owner",
+        ))
+    }
+
     fn require_unit_local_call(
         &mut self,
         block: usize,
@@ -268,6 +278,18 @@ struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
     semantic_function: SemanticFunctionIdV1,
 }
 impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
+    #[cfg(test)]
+    fn observe_conditional_prepared_for_test_v1(
+        &mut self,
+        candidate: fe2o3_lower_mir_kernel::NativeRankedSourceCandidateV1<'_>,
+    ) -> Result<(), ProjectionError> {
+        super::conditional_output_observation_v1_tests::observe_candidate(
+            self.owner,
+            candidate,
+            self.budget,
+        )
+    }
+
     fn require_unit_local_call(
         &mut self,
         block: usize,

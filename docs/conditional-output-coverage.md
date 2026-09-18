@@ -72,16 +72,45 @@ the exact module and contain output, predicate, address and store coordinates.
 They are structural analysis results, not authenticated production custody,
 functional-value proofs, runtime checks, or permission to launch.
 
+## Source and Ranked Correspondence
+
+`ProductionPreRankedKirOwnerV1::bind_conditional_output_v1` binds derived facts
+to the exact retained canonical graph, kernel entry, source root and whole
+source argument. Equal bytes in a different graph owner do not qualify. It uses
+the existing checked argument view, including original source ordinals,
+adjusted FnAbi ordinals and physical KIR slots. Those three coordinates need
+not be equal: arguments may be erased or expanded into physical components.
+Transparent Result wrappers must preserve argument order and types.
+
+The borrowed binding can inspect a ranked candidate through
+`inspect_ranked_output_v1`. This joins the exact store's owner-qualified source
+span and access ordinal to a unique ranked write, matching effect contract and
+global view. It rejects missing or ambiguous correspondence rather than falling
+back to allocation identity. Sparse block IDs are resolved by identity, not
+vector position. These bounded queries share the caller's work/storage ledger
+and retain the canonical address-formation premise.
+
+The ranked candidate is still inert input. This inspection does not authenticate
+the translation or prove index, value, predicate or extent equivalence. In
+particular, its dynamic extent is returned as `Unbound(operand)`: a ranked
+`Argument(0)` does not by itself identify the original Rust output argument or
+its length. The reference contract's output ordinal is normalized into logical
+kernel-argument coordinates, excluding the CPU point-coordinate prefix; it is
+not a raw CPU parameter number. The inspection retains this field but does not
+validate the reference's logical ABI relation. No proof counter is incremented.
+
 ## Existing Host Binding
 
 The descriptor already identifies each slice-length ABI component. The
-generated packing plan can resolve an output length from the exact packed
-argument owner, checking plan identity, source argument, component location,
-width, memory role, and buffer bounds. It does not infer a coverage requirement
+generated packing plan can resolve the base address and length together from
+the exact packed argument owner, checking plan/kernel identity, generated ABI
+field ordinal, unique pointer/length component locations, widths, memory role,
+and packing-buffer bounds. That field ordinal is not automatically the Rust
+source argument number or physical KIR slot. It does not infer a coverage requirement
 from a kernel name or assume that every slice is an output.
 
-The packed-length resolver is a prerequisite for admission, not admission
-itself. A host-side `N <= G` comparison without a bound conditional theorem
+The resolver returns inert borrowed data, not pointer validity, allocation
+admission or a discharged coverage condition. A host-side `N <= G` comparison without a bound conditional theorem
 would not repair an unconditional compiler proof claim.
 
 ## Remaining Integration
@@ -115,7 +144,11 @@ bindings, cross-kernel and stale-graph substitution, unsupported dimensions,
 and bypassed host checks. `G=64, N=64` and guarded tails with `N < G` must pass
 only after every other applicable requirement is satisfied.
 
-Compiler source-observation tests stop at the real pre-ranked canonical owner.
+Compiler source-observation tests stop at the real pre-ranked canonical owner
+or at reference-proof request preparation. The latter borrows the actual owner
+and prepared ranked request in the same phase ledger, then returns an explicit
+test-only `Incomplete` error before opening a proof runtime. It cannot yield a
+clean ranked program, signed receipt, handoff or artifact.
 Finite simulator checks consume its exact bytes, compare output and canary
 bytes, and repeat each execution. The fill probe includes lengths 0, 1, 63, 64
 and 65 at a 64-invocation launch; the last case must leave one element unwritten.

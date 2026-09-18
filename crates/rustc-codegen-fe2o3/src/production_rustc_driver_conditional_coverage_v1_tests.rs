@@ -14,6 +14,15 @@ struct RootObservation {
     conditional: bool,
     unsupported: Option<String>,
     address_domain: Option<String>,
+    source: Option<OutputSourceBinding>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OutputSourceBinding {
+    root: u32,
+    function: u32,
+    argument: u32,
+    physical_parameter: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,6 +55,10 @@ impl Callbacks for CoverageCallbacks {
                     // the work used by the preceding production materializer.
                     let mut work = Work::new(1_000_000);
                     let mut budget = Budget::new(&mut work, 4 * 1024 * 1024);
+                    let owner_storage = materialized.retained_analysis_storage_v1();
+                    budget
+                        .reserve_storage(owner_storage)
+                        .map_err(|e| e.to_string())?;
                     let mut roots = Vec::new();
                     for kernel in &owner.module().kernels {
                         let analysis = derive_conditional_total_view_from_verified_v1(
@@ -54,12 +67,33 @@ impl Callbacks for CoverageCallbacks {
                             &mut budget,
                         )
                         .map_err(|error| error.to_string())?;
-                        let (conditional, unsupported, address_domain) = match analysis {
+                        let (conditional, unsupported, address_domain, source) = match analysis {
                             ConditionalTotalViewAnalysisV1::Established(facts) => {
-                                (true, None, Some(format!("{:?}", facts.address_domain())))
+                                let binding = materialized
+                                    .bind_conditional_output_v1(facts, &mut budget)
+                                    .map_err(|error| error.to_string())?;
+                                assert!(std::ptr::eq(binding.owner(), materialized));
+                                assert!(std::ptr::eq(binding.coverage().module(), owner.module()));
+                                let source = OutputSourceBinding {
+                                    root: binding.association().correspondence_owner().index(),
+                                    function: binding.association().semantic_function().index(),
+                                    argument: binding.source_argument(),
+                                    physical_parameter: binding.coverage().output_parameter_index(),
+                                };
+                                assert_eq!(
+                                    binding.source_launch().selected_root().index(),
+                                    source.root
+                                );
+                                check_binding_rejections(materialized, &kernel.id);
+                                (
+                                    true,
+                                    None,
+                                    Some(format!("{:?}", binding.coverage().address_domain())),
+                                    Some(source),
+                                )
                             }
                             ConditionalTotalViewAnalysisV1::Unsupported(reason) => {
-                                (false, Some(format!("{reason:?}")), None)
+                                (false, Some(format!("{reason:?}")), None, None)
                             }
                         };
                         roots.push(RootObservation {
@@ -67,8 +101,13 @@ impl Callbacks for CoverageCallbacks {
                             conditional,
                             unsupported,
                             address_domain,
+                            source,
                         });
                     }
+                    assert_eq!(budget.storage(), owner_storage);
+                    budget
+                        .release_storage(owner_storage)
+                        .map_err(|e| e.to_string())?;
                     assert_eq!(budget.storage(), 0);
                     let simulation = match simulation::requested().map_err(|e| format!("{e:?}"))? {
                         Some(simulation::Case::Fill) => Some(
@@ -90,6 +129,113 @@ impl Callbacks for CoverageCallbacks {
         })());
         Compilation::Stop
     }
+}
+
+fn check_binding_rejections(
+    owner: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    kernel: &fe2o3_kernel_ir::KernelId,
+) {
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationResourceErrorV1 as Resource, verify_module_ref,
+    };
+    use fe2o3_lower_mir_kernel::{
+        ProductionConditionalOutputBindingErrorV1 as Error, ProductionSemanticKirErrorV1,
+    };
+
+    // Independent hostile observations, not fresh ledgers in production admission.
+    let mut work = Work::new(1_000_000);
+    let mut budget = Budget::new(&mut work, 4 * 1024 * 1024);
+    let foreign = owner.executable().module().clone();
+    let foreign_facts = derive_conditional_total_view_from_verified_v1(
+        verify_module_ref(&foreign).unwrap(),
+        kernel,
+        &mut budget,
+    )
+    .unwrap();
+    let ConditionalTotalViewAnalysisV1::Established(foreign_facts) = foreign_facts else {
+        panic!("the identical foreign graph must retain its structural coverage");
+    };
+    assert!(matches!(
+        owner.bind_conditional_output_v1(foreign_facts, &mut budget),
+        Err(Error::ForeignSubject)
+    ));
+    assert_eq!(budget.storage(), 0);
+
+    for exhausted_work in [false, true] {
+        let facts = derive_conditional_total_view_from_verified_v1(
+            owner.executable().verified_module_ref_v1(),
+            kernel,
+            &mut budget,
+        )
+        .unwrap();
+        let ConditionalTotalViewAnalysisV1::Established(facts) = facts else {
+            panic!("the exact source graph must retain its coverage");
+        };
+        let mut limited_work = Work::new(if exhausted_work { 0 } else { 1_000_000 });
+        let mut limited = Budget::new(&mut limited_work, 4 * 1024 * 1024);
+        let floor = if exhausted_work {
+            owner.retained_analysis_storage_v1()
+        } else {
+            0
+        };
+        limited.reserve_storage(floor).unwrap();
+        let result = owner.bind_conditional_output_v1(facts, &mut limited);
+        let Err(Error::Correspondence(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error),
+        )) = result
+        else {
+            panic!("missing owner reservation or work must reject: {result:?}");
+        };
+        assert!(if exhausted_work {
+            matches!(error, Resource::Work(_))
+        } else {
+            error == Resource::Accounting
+        });
+        assert_eq!(limited.storage(), floor);
+    }
+
+    // Measure the complete public binder, including source/root preflight,
+    // rather than only its inner argument-view traversal.
+    let mut run = |work_limit, storage_limit| {
+        let ConditionalTotalViewAnalysisV1::Established(facts) =
+            derive_conditional_total_view_from_verified_v1(
+                owner.executable().verified_module_ref_v1(),
+                kernel,
+                &mut budget,
+            )
+            .unwrap()
+        else {
+            panic!("exact source coverage is required");
+        };
+        let mut work = Work::new(work_limit);
+        let mut limited = Budget::new(&mut work, storage_limit);
+        let floor = owner.retained_analysis_storage_v1();
+        limited.reserve_storage(floor).unwrap();
+        limited.charge_work(17).unwrap();
+        let ledger = limited.work_ledger_identity_v1();
+        let outcome = match owner.bind_conditional_output_v1(facts, &mut limited) {
+            Ok(_) => Ok(()),
+            Err(Error::Correspondence(
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error),
+            )) => Err(error),
+            Err(error) => panic!("unexpected public binder error: {error:?}"),
+        };
+        assert_eq!(limited.storage(), floor);
+        assert!(limited.work_ledger_identity_v1() == ledger);
+        (outcome, limited.work(), limited.peak_storage())
+    };
+    let (baseline, exact_work, exact_storage) = run(1_000_000, 4 * 1024 * 1024);
+    baseline.unwrap();
+    assert!(exact_storage > owner.retained_analysis_storage_v1());
+    run(exact_work, exact_storage).0.unwrap();
+    assert!(matches!(
+        run(exact_work - 1, exact_storage).0,
+        Err(Resource::Work(_))
+    ));
+    assert!(matches!(
+        run(exact_work, exact_storage - 1).0,
+        Err(Resource::Storage(_))
+    ));
 }
 
 #[test]
@@ -134,6 +280,13 @@ fn check(response: &Path, expected_roots: &[&str], conditional: bool) {
     for root in &result.roots {
         assert_eq!(root.conditional, conditional, "{result:?}");
         assert_eq!(root.unsupported.is_none(), conditional, "{result:?}");
+        if conditional {
+            let source = root.source.as_ref().expect("exact source binding");
+            assert_eq!(source.argument, 0);
+            assert_eq!(source.physical_parameter, 0);
+        } else {
+            assert!(root.source.is_none());
+        }
         assert_eq!(
             root.address_domain.as_deref(),
             conditional.then_some("GlobalLaunch"),
@@ -177,6 +330,36 @@ fn ordinary_fill_has_conditional_total_output_coverage() {
             Some(SourceObserver {
                 child_test: CHILD,
                 check: |path, roots| check(path, roots, true),
+            }),
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires pinned nightly rust-src and retained Result wrapper source compilation; no GPU or Verus"]
+fn transparent_result_wrapper_retains_the_original_output_argument() {
+    for profile in [
+        fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
+        fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950,
+    ] {
+        ordinary_rust_source_cases(
+            &[OrdinarySourceCase::RetainedWrappedFill],
+            profile,
+            false,
+            Some(SourceObserver {
+                child_test: CHILD,
+                check: |path, roots| {
+                    check(path, roots, true);
+                    let result: Result<CoverageObservation, String> =
+                        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+                    for root in result.unwrap().roots {
+                        let binding = root.source.unwrap();
+                        assert_ne!(
+                            binding.root, binding.function,
+                            "retained transparent wrapper"
+                        );
+                    }
+                },
             }),
         );
     }
