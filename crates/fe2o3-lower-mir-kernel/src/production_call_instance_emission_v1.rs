@@ -911,6 +911,47 @@ mod call_instance_emission_tests {
     }
 
     #[test]
+    fn splice_preserves_workgroup_allocation_declaration_origins() {
+        for in_callee in [true, false] {
+            let (mut caller, mut callee, site, continuation) = fixture();
+            let scalar = Type::Scalar(ScalarType::U32);
+            let allocation = Operation::effect_free(
+                ValueDef::new(
+                    ValueId(if in_callee { 103 } else { 4 }),
+                    Type::pointer(
+                        scalar.clone(),
+                        AddressSpace::Workgroup,
+                        AccessMode::ReadWrite,
+                    ),
+                ),
+                OperationKind::WorkgroupMemory(fe2o3_kernel_ir::WorkgroupMemory {
+                    element: scalar,
+                    extent: fe2o3_kernel_ir::WorkgroupMemoryExtent::Static(1),
+                    alignment: 4,
+                }),
+            );
+            let function = if in_callee { &mut callee } else { &mut caller };
+            function.body.as_mut().unwrap().blocks[0]
+                .operations
+                .push(allocation);
+            let mut source = Module::new("workgroup_allocation");
+            source.functions = vec![caller.clone(), callee.clone()];
+            verify_module(&source).unwrap();
+            let result = run(caller, callee, site, continuation);
+            if in_callee {
+                assert!(
+                    result.is_err(),
+                    "callee workgroup allocation requires its original declaration identity"
+                );
+            } else {
+                let mut module = Module::new("caller_workgroup_allocation");
+                module.functions.push(result.unwrap().caller);
+                verify_module(&module).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn splice_budget_is_cumulative_and_preserves_the_owner_floor() {
         let measure = |work_limit, storage_limit| {
             let (caller, callee, site, continuation) = fixture();
