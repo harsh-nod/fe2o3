@@ -209,6 +209,7 @@ mod tests {
             other_writes: 0,
             formal_accesses: 1,
             runtime_domains: None,
+            simulation: None,
             policy: 4,
             output_digest: [1; 32],
             llvm_bytes: 1,

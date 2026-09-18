@@ -35,6 +35,8 @@ struct Observation {
     formal_accesses: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     runtime_domains: Option<runtime_domains::RuntimeDomainObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    simulation: Option<simulation::SimulationObservation>,
     policy: u16,
     output_digest: [u8; 32],
     llvm_bytes: usize,
@@ -55,6 +57,7 @@ enum SourceStage {
     Policy4,
     NativeSourceProof,
     NativeHandoff,
+    Simulation,
     Observation,
 }
 
@@ -141,6 +144,7 @@ impl Callbacks for CheckedOutputCallbacks {
                 other_writes: 0,
                 formal_accesses: admitted.kernels().iter().map(|k| k.accesses().len()).sum(),
                 runtime_domains: Some(runtime_domains::observe(admitted.kernels())?),
+                simulation: None,
                 policy: admitted.checked_output().execution().policy_version(),
                 output_digest: *admitted.output().canonical().identity().digest(),
                 llvm_bytes: 0,
@@ -179,6 +183,12 @@ impl Callbacks for CheckedOutputCallbacks {
                 } else {
                     observation.reads += 1;
                 }
+            }
+            if let Some(case) = simulation::requested()? {
+                observation.simulation =
+                    Some(self.progress.run(SourceStage::Simulation, || {
+                        simulation::observe(admitted.output().canonical(), case)
+                    })?);
             }
             if self.probe_missing_proof {
                 use crate::production_native_source_lineage_v1::NativeSourceLineageErrorV1;
@@ -520,6 +530,12 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
                 observation.to_hex(),
             );
         progress::clear_inherited_jobserver(&mut command);
+        let simulation_case = match case {
+            OrdinarySourceCase::Fill => Some(simulation::Case::Fill),
+            OrdinarySourceCase::Vecadd => Some(simulation::Case::Vecadd),
+            OrdinarySourceCase::SharedUnitHelper => None,
+        };
+        simulation::configure_child(&mut command, simulation_case);
         snapshots::configure_child(&mut command, name);
         let child = output(&mut command);
         let result: Result<Observation, SourceFailure> =
@@ -539,6 +555,11 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         assert_ne!(result.output_digest, [0; 32]);
         assert!(result.llvm_bytes > 0);
         assert!(!result.missing_proof_refused);
+        if let Some(case) = simulation_case {
+            simulation::check_observation(&result, case).unwrap();
+        } else {
+            assert!(result.simulation.is_none());
+        }
         eprintln!(
             "actual-source checked native output {name}: {result:?}\n{}",
             String::from_utf8_lossy(&child.stdout)
@@ -546,6 +567,7 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         if name == "fill" {
             let expected_output = result.output_digest;
             let proof_response = scratch.path().join("fill-proof-refusal.json");
+            simulation::configure_child(&mut command, None);
             snapshots::configure_child(&mut command, &format!("{name}-missing-proof"));
             let probe = output(
                 command
@@ -556,6 +578,7 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
                 serde_json::from_slice(&std::fs::read(proof_response).unwrap()).unwrap();
             let result = result.unwrap();
             assert!(result.missing_proof_refused);
+            assert!(result.simulation.is_none());
             assert_eq!(
                 result.runtime_domains,
                 Some(runtime_domains::RuntimeDomainObservation::default())
@@ -579,3 +602,5 @@ mod corpus_cargo;
 mod progress;
 #[path = "production_rustc_driver_checked_output_runtime_domains_v1_tests.rs"]
 mod runtime_domains;
+#[path = "production_rustc_driver_checked_output_simulation_v1_tests.rs"]
+mod simulation;

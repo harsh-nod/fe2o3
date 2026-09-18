@@ -378,6 +378,26 @@ join. Without that runtime, the test fails before Policy4; semantic-MIR helper
 and ABI component tests do not substitute for this source qualification. No
 runtime bypass is provided, and this is not whole-corpus qualification.
 
+The focused ordinary-source fill/vecadd and scalar-GEMM parents also simulate
+the exact admitted optimized O. They re-verify its unchanged V12 canonical bytes
+and identity, then use the existing bounded CPU simulator with explicit test
+requests, actual entry ABI and workgroup metadata. They do not substitute a
+handwritten KIR graph or select compiler behavior by workload name.
+
+Each finite F32 scenario compares every backing byte and initialization bit with
+an independent CPU reference, including readonly inputs, unused output elements
+and canaries outside the slice views. Empty and workgroup-boundary lengths,
+short/long GEMM outputs and a separate-versus-fused multiply/add discriminator
+run twice. Numerical comparison is bit-exact for these inputs; it is not general
+IEEE, FTZ, LLVM or GPU equivalence. Observed races/conflicts refuse; incomplete
+bounded race assessments remain explicitly incomplete, never race-free.
+
+Simulation observations are optional in the test JSON. Historical reports
+without them stay unobserved; focused tests require them. The all48 corpus and
+missing-proof probe do not request simulation and keep their existing gates.
+These model runs grant no artifact or launch authority and do not qualify other
+tutorial kernels or hardware.
+
 The production admission is maintained by the following regression gates:
 
 1. `KIR -> Pliron -> KIR` at `-O0` is byte-identical across the verified KIR V9
