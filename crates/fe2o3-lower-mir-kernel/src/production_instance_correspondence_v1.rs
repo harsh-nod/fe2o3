@@ -340,9 +340,11 @@ where
 }
 
 impl ProductionInstanceCorrespondenceV1<'_, '_> {
+    #[cfg(test)]
     fn spans(&self) -> &[InstanceMappedSpanV1] {
         &self.spans.rows
     }
+    #[cfg(test)]
     fn controls(&self) -> &[InstanceControlV1] {
         &self.controls.rows
     }
@@ -1124,3 +1126,4 @@ fn instance_check_parameters_v1(
 mod instance_correspondence_tests;
 
 include!("production_instance_coordinates_owner_v1.rs");
+include!("production_pending_scope_root_v29.rs");

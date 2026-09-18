@@ -128,9 +128,7 @@ mod production_call_instance_ids_v1;
 )]
 #[path = "production_call_instances_v1.rs"]
 mod production_call_instances_v1;
-#[cfg(test)]
 include!("production_call_instance_emission_v1.rs");
-#[cfg(test)]
 include!("production_instance_correspondence_v1.rs");
 
 const DEFAULT_MAX_FUNCTIONS_V1: usize = 1_024;
@@ -10245,13 +10243,6 @@ struct LoweredFunctionResultV1 {
     next_value: u32,
     #[cfg(test)]
     execution_observation: Option<ExecutionTestObservationV29>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Expanded instance correspondence remains diagnostic-only"
-        )
-    )]
     source_call_instance: Option<ProductionCallInstanceIdV1>,
     private_arrays: PrivateArrayFunctionRowsV1,
     function: Function,

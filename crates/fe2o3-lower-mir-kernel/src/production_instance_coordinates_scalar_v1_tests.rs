@@ -1,4 +1,7 @@
 use super::*;
+
+#[path = "production_pending_scope_root_v29_tests.rs"]
+mod pending_tests;
 use fe2o3_mir_model::semantic_mir_v1::*;
 
 fn scalar_calls_owner(nested: bool) -> ProductionSemanticMirOwnerV1 {
