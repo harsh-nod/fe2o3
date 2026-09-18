@@ -249,13 +249,15 @@ fn reference(
 ) -> SemanticTypeIdV1 {
     let layout = types[pointee.index() as usize].layout();
     let info = SemanticAbiPointeeInfoV1::new(
-        if mutability == SemanticMutabilityV1::Mutable {
+        if raw {
+            SemanticAbiPointeeKindV1::Raw
+        } else if mutability == SemanticMutabilityV1::Mutable {
             SemanticAbiPointeeKindV1::MutableReference { unpin: true }
         } else {
             SemanticAbiPointeeKindV1::SharedReference { frozen: true }
         },
-        layout.size_bytes().unwrap(),
-        layout.alignment_bytes(),
+        if raw { 0 } else { layout.size_bytes().unwrap() },
+        if raw { 1 } else { layout.alignment_bytes() },
     )
     .unwrap();
     let id = declaration(
@@ -287,14 +289,12 @@ fn reference(
         ),
         None,
     );
-    if !raw {
-        types[id.index() as usize] = types[id.index() as usize]
-            .clone()
-            .with_rustc_abi_properties(
-                SemanticTypeAbiPropertiesV1::new(false, false)
-                    .with_scalar_pointee_info(Some(info), None),
-            );
-    }
+    types[id.index() as usize] = types[id.index() as usize]
+        .clone()
+        .with_rustc_abi_properties(
+            SemanticTypeAbiPropertiesV1::new(false, false)
+                .with_scalar_pointee_info(Some(info), None),
+        );
     id
 }
 
@@ -313,6 +313,7 @@ fn value_abi(types: &[SemanticTypeDeclV1], id: SemanticTypeIdV1) -> SemanticAbiV
         match ty.layout().backend_repr() {
             SemanticBackendReprV1::Scalar(_) => {
                 let attributes = match ty.abi_properties().first_pointee() {
+                    Some(info) if info.kind() == SemanticAbiPointeeKindV1::Raw => scalar,
                     Some(info) => {
                         let shared = matches!(
                             info.kind(),
@@ -578,6 +579,7 @@ fn nominal_rust_carriers_do_not_become_physical_arguments() {
             if scalar { vec![ValueId(300)] } else { vec![] }
         );
         assert!(plan.result_types.is_empty());
+        assert_eq!(plan.call_arguments.len(), plan.parameter_types.len());
         assert!(plan.parameter_local_bindings.is_empty());
         assert!(plan.ignored_parameter_bindings.is_empty());
         if scalar {
