@@ -1351,11 +1351,32 @@ fn validate_proved_output(
         || !observed.stderr.is_empty()
         || !valid_count
     {
-        return Err(FunctionalRefinementVerusExecutionErrorV2::new(
-            FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult,
-        ));
+        return Err(FunctionalRefinementVerusExecutionErrorV2 {
+            kind: FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult,
+            detail: Some(format!(
+                "exit={:?} signal={:?}; stdout={}; stderr={}",
+                observed.exit_code,
+                observed.signal,
+                proof_output_excerpt(&observed.stdout),
+                proof_output_excerpt(&observed.stderr),
+            )),
+        });
     }
     Ok(())
+}
+
+fn proof_output_excerpt(bytes: &[u8]) -> String {
+    const LIMIT: usize = 1024;
+    format!(
+        "\"{}\" ({} bytes{})",
+        bytes[..bytes.len().min(LIMIT)].escape_ascii(),
+        bytes.len(),
+        if bytes.len() > LIMIT {
+            ", truncated"
+        } else {
+            ""
+        },
+    )
 }
 
 fn execution_identity(
@@ -1769,6 +1790,45 @@ mod tests {
                 FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult
             );
         }
+    }
+
+    #[test]
+    fn refused_proof_preserves_bounded_process_diagnostics() {
+        let observed = output(1, b"verification failed\n", b"error: assertion failed\n");
+        let error = validate_proved_output(&observed).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult,
+        );
+        let detail = error.to_string();
+        assert!(detail.contains("exit=Some(1) signal=None"));
+        assert!(detail.contains("verification failed\\n"));
+        assert!(detail.contains("error: assertion failed\\n"));
+        assert!(!detail.contains('\n'));
+
+        let mut observed = output(0, b"verification results:: 1 verified, 0 errors\n", b"");
+        observed.signal = Some(9);
+        assert!(
+            validate_proved_output(&observed)
+                .unwrap_err()
+                .to_string()
+                .contains("signal=Some(9)"),
+        );
+    }
+
+    #[test]
+    fn proof_output_diagnostics_escape_bytes_and_report_truncation() {
+        assert_eq!(proof_output_excerpt(b""), "\"\" (0 bytes)");
+        assert_eq!(
+            proof_output_excerpt(b"\x1b\x00\xff\n\"\\"),
+            "\"\\x1b\\x00\\xff\\n\\\"\\\\\" (6 bytes)",
+        );
+        let exact = proof_output_excerpt(&[b'x'; 1024]);
+        assert!(!exact.contains("truncated"));
+        let oversized = proof_output_excerpt(&[0xff; 2048]);
+        assert!(oversized.ends_with("(2048 bytes, truncated)"));
+        assert_eq!(oversized.matches("\\xff").count(), 1024);
+        assert!(oversized.len() < 4200);
     }
 
     #[test]
