@@ -89,6 +89,7 @@ fn closure_owner(packed: bool) -> ProductionSemanticSsaOwnerV1 {
             local(211, capture, SemanticLocalRoleV1::Argument(0)),
             local(212, tuple, SemanticLocalRoleV1::Argument(1)),
             local(213, U32, SemanticLocalRoleV1::Temporary),
+            local(214, CONTEXT, SemanticLocalRoleV1::Temporary),
         ],
         vec![
             block(
