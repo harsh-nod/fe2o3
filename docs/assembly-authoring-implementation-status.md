@@ -61,6 +61,39 @@ ranked graph amended, or shipping inspection selector exposed. This still does
 not replace an actual reference-bound checked-owner/proof test.
 E7's positive checked-owner tests must not be conflated with E8's source capture.
 
+### Clean merged-code validation
+
+The implementation was then merged with published main `1ca7e129` and tested
+from clean compiler commit `2a68d1957f454b7c46ea91ddabbe0939953d7388`:
+
+- Seven affected compiler packages ran 112 test targets: 2,641 passes, eight
+  environment failures and 23 ignored cases. All eight failures were the two
+  AMDGCN integration targets unable to find `llvm-as`. With the installed pinned
+  AMD LLVM `22.0.0git` added to PATH, the complete AMDGCN package rerun passed
+  266 tests with 21 ignored cases. No assertion was changed or test disabled.
+- The merged backend library passed 740 tests, with three explicitly ignored
+  isolated/opt-in harness entries. The real-source expression parent was also
+  run explicitly and passed as `assembly-source-value-r3`.
+- Rebuilt extractor, exporter, simulator and debugger binaries passed.
+  `assembly-source-ranked-r4` again passed both actual callbacks and reproduced
+  the same 4,550-byte LLVM text. Its input record reports the clean commit above.
+- The portable exporter now observes the selected rustc's exact pinned commit,
+  rather than merely labelling the requested nightly. `lds-source-export-r3`
+  and `resource-query-lds-v5-r5` passed with the pipe-drain fix. The source/bundle
+  hashes and all 219 request/response records reproduce the earlier LDS capture
+  byte for byte; the later export receipt is separately retained, not substituted
+  into the site's historical r3 receipt.
+- All 25 script-control tests passed. Site validation passed 330 tests, lint,
+  type checking and production build; all 52 desktop/mobile cases passed. The
+  standalone LDS validator passed seven positive/negative tests and the existing
+  evidence command now also checks the 19 selected whole pairs.
+
+Strict backend/lowerer Clippy is not a clean gate: existing unrelated findings
+remain. Newly reviewed leaves have no attributed findings; an unnecessary cast
+in the earlier marker test was removed. Ignored tests and runtime/hardware gates
+are not converted into passes. These results do not attest a compiler closure,
+admit a protected artifact, or close the original milestone matrix below.
+
 ## #280: direct assembly
 
 | Milestone | Delivered portion | Required remaining work |
