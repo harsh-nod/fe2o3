@@ -18,12 +18,16 @@ use sha2::{Digest, Sha256};
 
 mod canonical_decode;
 mod capability_v29;
+mod declaration_commitment_v1;
 mod function_commitment_v1;
 mod saturating_integer_v30;
 mod target_properties;
 
 pub use canonical_decode::SemanticMirDecodeErrorV1;
 pub use capability_v29::{SemanticExecutionOperationV29, SemanticExecutionRoleV29};
+pub use declaration_commitment_v1::{
+    SemanticDeclarationTablesCommitmentV1, canonical_declaration_tables_commitment_v1,
+};
 use function_commitment_v1::CanonicalCommitmentSinkV1;
 pub use function_commitment_v1::{
     SemanticFunctionCanonicalCommitmentV1, canonical_function_commitment_v1,

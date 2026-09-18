@@ -171,6 +171,20 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
 }
 
 impl PendingFunctionCommitmentsV29<'_> {
+    pub(super) fn source_identity(
+        &self,
+        callable: SemanticCallableIdV1,
+    ) -> Result<SemanticFunctionIdentityV1, ProductionSemanticBodyErrorV1> {
+        let row = self
+            .rows
+            .get(callable.index() as usize)
+            .ok_or_else(|| table("scope provider source identity"))?;
+        if row.source.function.index() != callable.index() {
+            return Err(table("scope provider source function"));
+        }
+        Ok(row.source.identities.identity)
+    }
+
     pub(super) fn prepare(
         &mut self,
         commitment: SemanticFunctionCanonicalCommitmentV1,
@@ -218,6 +232,32 @@ impl PendingFunctionCommitmentsV29<'_> {
 }
 
 impl ConstructionTotalsV1 {
+    pub(super) fn declaration_tables_commitment_v29(
+        &mut self,
+        types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+        callables: &[fe2o3_mir_model::semantic_mir_v1::SemanticCallableDeclV1],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<
+        fe2o3_mir_model::semantic_mir_v1::SemanticDeclarationTablesCommitmentV1,
+        ProductionSemanticBodyErrorV1,
+    > {
+        fe2o3_mir_model::semantic_mir_v1::canonical_declaration_tables_commitment_v1(
+            types,
+            callables,
+            SemanticMirWireVersionV1::V29,
+            limits,
+            &mut |amount| {
+                charge_construction_total_v1(
+                    &mut self.validation_work,
+                    SemanticMirResourceV1::ValidationWork,
+                    amount,
+                    limits.limit(SemanticMirResourceV1::ValidationWork),
+                )
+            },
+        )
+        .map_err(construction_resource_error_v1)
+    }
+
     fn function_commitment_v29(
         &mut self,
         function: &SemanticFunctionDeclV1,

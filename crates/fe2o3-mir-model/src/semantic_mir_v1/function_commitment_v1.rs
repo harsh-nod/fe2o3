@@ -61,11 +61,29 @@ pub fn canonical_function_commitment_v1(
     limits: SemanticMirLimitsV1,
     charge_work: &mut dyn FnMut(usize) -> Result<(), SemanticMirErrorV1>,
 ) -> Result<SemanticFunctionCanonicalCommitmentV1, SemanticMirErrorV1> {
+    let (canonical_bytes, sha256) =
+        canonical_encoded_commitment_v1(DOMAIN, wire_version, limits, charge_work, |writer| {
+            encode_function(writer, function, wire_version)
+        })?;
+    Ok(SemanticFunctionCanonicalCommitmentV1 {
+        wire_version,
+        canonical_bytes,
+        sha256,
+    })
+}
+
+pub(super) fn canonical_encoded_commitment_v1(
+    domain: &[u8],
+    wire_version: SemanticMirWireVersionV1,
+    limits: SemanticMirLimitsV1,
+    charge_work: &mut dyn FnMut(usize) -> Result<(), SemanticMirErrorV1>,
+    encode: impl FnOnce(&mut CanonicalWriterV1<'_>) -> Result<(), SemanticMirErrorV1>,
+) -> Result<(u64, [u8; 32]), SemanticMirErrorV1> {
     // Initialization, fixed domain and version are prepaid separately from
     // the function's canonical byte limit.
-    charge_work(1 + DOMAIN.len() + size_of::<u16>())?;
+    charge_work(1 + domain.len() + size_of::<u16>())?;
     let mut sha256 = Sha256::new();
-    sha256.update(DOMAIN);
+    sha256.update(domain);
     sha256.update(wire_version.as_u16().to_le_bytes());
     let canonical_bytes = {
         let mut writer =
@@ -74,13 +92,9 @@ pub fn canonical_function_commitment_v1(
             sha256: &mut sha256,
             charge_work,
         });
-        encode_function(&mut writer, function, wire_version)?;
+        encode(&mut writer)?;
         writer.written
     };
     charge_work(1)?;
-    Ok(SemanticFunctionCanonicalCommitmentV1 {
-        wire_version,
-        canonical_bytes,
-        sha256: sha256.finalize().into(),
-    })
+    Ok((canonical_bytes, sha256.finalize().into()))
 }

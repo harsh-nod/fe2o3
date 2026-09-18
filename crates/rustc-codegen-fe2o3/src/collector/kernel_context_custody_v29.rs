@@ -1,6 +1,9 @@
 //! Same-session source custody, not callback, scope, graph or execution authority.
 
 use super::{BoundCallV29, BoundContextEntryV29};
+use crate::collector::workgroup_scope_custody_v29::{
+    PendingWorkgroupScopesV29, RetainedWorkgroupScopesV29,
+};
 use crate::production_semantic_body_v1::ProductionSemanticBodyErrorV1 as Error;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as VisitBudget,
@@ -348,6 +351,7 @@ impl RetainedContextEntryV29 {
 pub(crate) struct RetainedContextEntriesV29 {
     entries: Vec<RetainedContextEntryV29>,
     semantic_sha256: [u8; 32],
+    scopes: Option<RetainedWorkgroupScopesV29>,
 }
 
 #[derive(Debug)]
@@ -381,11 +385,27 @@ impl RetainedContextEntriesV29 {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn seal(
         entries: Vec<RetainedContextEntryV29>,
         semantic: &AdmittedInertSemanticMirV1,
+        charge: impl FnMut(usize) -> Result<(), Error>,
+    ) -> Result<Self, Error> {
+        Self::seal_with_scopes(entries, None, semantic, charge)
+    }
+
+    pub(crate) fn seal_with_scopes(
+        entries: Vec<RetainedContextEntryV29>,
+        scopes: Option<(
+            PendingWorkgroupScopesV29,
+            SemanticDeclarationTablesCommitmentV1,
+        )>,
+        semantic: &AdmittedInertSemanticMirV1,
         mut charge: impl FnMut(usize) -> Result<(), Error>,
     ) -> Result<Self, Error> {
+        let mut scope_census = scopes
+            .map(|(scopes, declarations)| scopes.begin_census(semantic, declarations, &mut charge))
+            .transpose()?;
         let mut previous = None;
         for entry in &entries {
             charge(1)?;
@@ -413,6 +433,18 @@ impl RetainedContextEntriesV29 {
             }
             for (block, data) in body.blocks().iter().enumerate() {
                 charge(1)?;
+                if let Some(census) = &mut scope_census {
+                    census.observe(
+                        SemanticFunctionIdV1::from_index(
+                            u32::try_from(function).map_err(|_| mismatch())?,
+                        ),
+                        SemanticBlockIdV1::from_index(
+                            u32::try_from(block).map_err(|_| mismatch())?,
+                        ),
+                        data,
+                        &mut charge,
+                    )?;
+                }
                 let (callee, tail) = match data.terminator().kind() {
                     SemanticTerminatorKindV1::Call(call) => (call.callee(), false),
                     SemanticTerminatorKindV1::TailCall(call) => (call.callee(), true),
@@ -444,6 +476,7 @@ impl RetainedContextEntriesV29 {
         Ok(Self {
             entries,
             semantic_sha256: *semantic.semantic_sha256().as_bytes(),
+            scopes: scope_census.map(|census| census.finish()).transpose()?,
         })
     }
 

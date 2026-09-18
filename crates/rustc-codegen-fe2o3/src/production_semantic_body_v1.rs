@@ -38,6 +38,9 @@ use rustc_middle::mir::{
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{EarlyBinder, Instance, Ty, TyCtxt, TyKind, TypingEnv};
 
+use crate::collector::workgroup_scope_custody_v29::{
+    PendingWorkgroupScopesV29, ScopeCallableV29, ScopeEventV29,
+};
 use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc_drop_v1};
 use crate::production_rustc_intrinsic_v1::ProductionRustcIntrinsicOperationV1;
 use crate::production_rustc_slice_metadata_v1::{
@@ -299,6 +302,7 @@ pub(crate) struct ProductionSemanticBodyRequestOwnerV1<'tcx> {
     defined_functions: usize,
     context_entries: Vec<crate::collector::RetainedContextEntryV29>,
     function_commitments: Option<PendingFunctionCommitmentsV29<'tcx>>,
+    workgroup_scopes: Option<PendingWorkgroupScopesV29>,
 }
 
 impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
@@ -379,6 +383,7 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
             defined_functions,
             context_entries: Vec::new(),
             function_commitments: None,
+            workgroup_scopes: None,
         })
     }
 
@@ -386,16 +391,101 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
         mut self,
         semantic: &AdmittedInertSemanticMirV1,
     ) -> Result<crate::collector::RetainedContextEntriesV29, ProductionSemanticBodyErrorV1> {
-        if self.function_commitments.is_some() == self.context_entries.is_empty() {
+        if self.function_commitments.is_some() == self.context_entries.is_empty()
+            || self.function_commitments.is_some() != self.workgroup_scopes.is_some()
+        {
             return Err(table("function commitment context transaction"));
         }
         if let Some(pending) = self.function_commitments.take() {
             pending.verify(semantic, &mut self.totals, self.limits)?;
         }
         let entries = std::mem::take(&mut self.context_entries);
-        crate::collector::RetainedContextEntriesV29::seal(entries, semantic, |amount| {
-            self.charge(SemanticMirResourceV1::ValidationWork, amount)
-        })
+        let scopes = self
+            .workgroup_scopes
+            .take()
+            .map(|scopes| {
+                self.totals
+                    .declaration_tables_commitment_v29(
+                        semantic.types(),
+                        semantic.callables(),
+                        self.limits,
+                    )
+                    .map(|declarations| (scopes, declarations))
+            })
+            .transpose()?;
+        crate::collector::RetainedContextEntriesV29::seal_with_scopes(
+            entries,
+            scopes,
+            semantic,
+            |amount| self.charge(SemanticMirResourceV1::ValidationWork, amount),
+        )
+    }
+
+    pub(crate) fn enable_workgroup_scope_custody_v29(
+        &mut self,
+        tcx: TyCtxt<'tcx>,
+        target: fe2o3_mir_model::semantic_mir_v1::SemanticTargetDataLayoutV1,
+        semantic_types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+        semantic_callables: &[fe2o3_mir_model::semantic_mir_v1::SemanticCallableDeclV1],
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        if self.workgroup_scopes.is_some()
+            || self.totals.functions != 0
+            || self.function_commitments.is_none()
+            || semantic_callables.len() != self.callables.len()
+        {
+            return Err(table("scope custody initialization"));
+        }
+        // Authenticate once in the rustc importer domain, not at every event.
+        let provider = crate::trusted_device_items::definition(
+            tcx,
+            crate::trusted_device_items::TrustedDeviceItem::ExecutionWithWorkgroup,
+        );
+        self.charge(SemanticMirResourceV1::ValidationWork, self.callables.len())?;
+        let mut classes = try_vec_v1(self.callables.len(), SemanticMirResourceV1::Callables)?;
+        classes.resize(self.callables.len(), ScopeCallableV29::Ordinary);
+        for (instance, record) in &self.callables {
+            self.totals
+                .charge(SemanticMirResourceV1::ValidationWork, 1, self.limits)?;
+            let slot = classes
+                .get_mut(record.semantic_callable.index() as usize)
+                .ok_or_else(|| table("scope callable owner index"))?;
+            if matches!(instance.def, rustc_middle::ty::InstanceKind::Item(definition)
+                if Some(definition) == provider)
+            {
+                if record.kind != ProductionSemanticCallableOwnerKindV1::Defined {
+                    return Err(table("scope provider callable owner"));
+                }
+                let identity = self
+                    .function_commitments
+                    .as_ref()
+                    .ok_or_else(|| table("scope function source roster"))?
+                    .source_identity(record.semantic_callable)?;
+                *slot = ScopeCallableV29::Provider {
+                    function: SemanticFunctionIdV1::from_index(record.semantic_callable.index()),
+                    identity,
+                };
+            } else if record.kind
+                == ProductionSemanticCallableOwnerKindV1::Terminal(
+                    ProductionTerminalExpansionV1::WorkgroupDerive,
+                )
+            {
+                *slot = ScopeCallableV29::derive_from_constructed(
+                    &semantic_callables[record.semantic_callable.index() as usize],
+                )?;
+            }
+        }
+        let declarations = self.totals.declaration_tables_commitment_v29(
+            semantic_types,
+            semantic_callables,
+            self.limits,
+        )?;
+        self.workgroup_scopes = Some(PendingWorkgroupScopesV29::new(
+            classes,
+            declarations,
+            target,
+            self.defined_functions,
+        )?);
+        Ok(())
     }
 
     #[cfg(test)]
@@ -626,6 +716,7 @@ impl ConstructionTotalsV1 {
 }
 
 struct BodyProducerV1<'a, 'owner, 'tcx> {
+    scope_events: Vec<ScopeEventV29>,
     context_entry: Option<crate::collector::BoundContextEntryV29<'tcx>>,
     receiver_reborrow: Option<ReceiverMaterializationV1<'tcx>>,
     tcx: TyCtxt<'tcx>,
@@ -710,6 +801,7 @@ pub(crate) fn construct_production_semantic_body_v1<'a, 'owner, 'tcx>(
             )
         })
         .transpose()?;
+    let scope_events = std::mem::take(&mut producer.scope_events);
     drop(producer);
 
     let ProductionSemanticFunctionIdentitiesV1 {
@@ -765,6 +857,15 @@ pub(crate) fn construct_production_semantic_body_v1<'a, 'owner, 'tcx>(
     } else {
         None
     };
+    let prepared_scope = match &mut owner.workgroup_scopes {
+        Some(scopes) => Some(scopes.prepare(input.function, scope_events, |amount| {
+            owner
+                .totals
+                .charge(SemanticMirResourceV1::ValidationWork, amount, owner.limits)
+        })?),
+        None if scope_events.is_empty() => None,
+        None => return Err(table("scope capture without source owner")),
+    };
     let prepared = match (&mut owner.function_commitments, commitment) {
         (Some(pending), Some(commitment)) => Some(pending.prepare(commitment)?),
         (None, None) => None,
@@ -775,6 +876,9 @@ pub(crate) fn construct_production_semantic_body_v1<'a, 'owner, 'tcx>(
         owner.context_entries.push(retained);
     }
     if let Some(prepared) = prepared {
+        prepared.publish();
+    }
+    if let Some(prepared) = prepared_scope {
         prepared.publish();
     }
     Ok(function)
@@ -890,6 +994,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 ),
             })?;
         let mut producer = Self {
+            scope_events: Vec::new(),
             context_entry,
             receiver_reborrow,
             tcx: input.tcx,
@@ -1107,6 +1212,22 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             } else {
                 self.construct_terminator(raw_block, &terminator.kind, &mut statements)?
             };
+            if let Some(scopes) = &self.owner.workgroup_scopes {
+                scopes.capture(
+                    self.function,
+                    binding.semantic_block,
+                    statements.len(),
+                    &kind,
+                    &mut self.scope_events,
+                    |amount| {
+                        self.owner.totals.charge(
+                            SemanticMirResourceV1::ValidationWork,
+                            amount,
+                            self.owner.limits,
+                        )
+                    },
+                )?;
+            }
             blocks.push(SemanticBasicBlockV1::new(
                 binding.identity,
                 binding.source,
@@ -2931,6 +3052,7 @@ mod tests {
             defined_functions: 0,
             context_entries: Vec::new(),
             function_commitments: None,
+            workgroup_scopes: None,
         };
 
         owner.charge(SemanticMirResourceV1::Functions, 1).unwrap();

@@ -37,6 +37,7 @@ use std::fmt;
 use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc_drop_v1};
 
 mod kernel_context_auth_v1;
+pub(crate) mod workgroup_scope_custody_v29;
 pub(crate) use kernel_context_auth_v1::{
     AuthenticatedContextEntriesV1, BoundContextEntryV29, CallBoundaryV29,
     CapturedContextProducersV1, ContextRootVisitErrorV29, RetainedContextEntriesV29,

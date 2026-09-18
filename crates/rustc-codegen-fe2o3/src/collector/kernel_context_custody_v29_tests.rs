@@ -1,6 +1,8 @@
 //! Private custody fixtures, not authenticated Rust providers or executable proofs.
 use super::*;
 
+mod scope_tests;
+
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const U32: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
 const MARKER: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);

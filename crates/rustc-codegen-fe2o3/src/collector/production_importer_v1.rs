@@ -529,6 +529,11 @@ fn construct_complete_request_v1<'tcx>(
         });
     }
 
+    if !context_entries.is_empty() {
+        body_owner
+            .enable_workgroup_scope_custody_v29(tcx, target, &types, &callables)
+            .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
+    }
     let mut functions = Vec::new();
     functions
         .try_reserve_exact(plan.function_producers().len())
