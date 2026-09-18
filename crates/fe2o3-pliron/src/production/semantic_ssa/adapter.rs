@@ -499,6 +499,12 @@ fn compiler_intrinsic_accepts_transparent_borrow_v1(
     source_type: SemanticTypeIdV1,
 ) -> bool {
     match operation {
+        SemanticCompilerIntrinsicOperationV1::Execution(
+            fe2o3_mir_model::semantic_mir_v1::SemanticExecutionOperationV29::WorkgroupDerive {
+                context,
+                ..
+            },
+        ) => argument == 0 && source_type == *context,
         SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent { scope, .. }
         | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { scope, .. } => {
             argument == 0 && source_type == *scope
