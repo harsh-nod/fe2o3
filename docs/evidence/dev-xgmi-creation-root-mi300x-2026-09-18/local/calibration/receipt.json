@@ -1,0 +1,19 @@
+{
+  "command": [
+    "python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-creation-root-mi300x-2026-09-18/test_native.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789772590252238536,
+  "group_absent": true,
+  "pid": 1722790,
+  "started_ns": 1789772589681363554,
+  "stderr_sha256": "ff6ea8c51aefb3ef389e434a21a791d6b607abb131514adb09ae54b0b77a5deb",
+  "stdin_sha256": null,
+  "stdout_sha256": "4bea7376f593608ae48d39a21d66ea49ab0f14373e845da7ecb56077f0299a0e",
+  "timeout_seconds": 60
+}

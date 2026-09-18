@@ -1,0 +1,4 @@
+{"phase": "good", "exit": 0, "error": null, "group_absent": true}
+{"phase": "good", "exit": 0, "error": null, "group_absent": true}
+{"phase": "bad", "exit": 7, "error": null, "group_absent": true}
+{"phase": "timeout", "exit": -15, "error": "TimeoutExpired: Command '['/usr/bin/python3', '-c', 'import time; time.sleep(60)']' timed out after 0.04997263899713289 seconds", "group_absent": true}

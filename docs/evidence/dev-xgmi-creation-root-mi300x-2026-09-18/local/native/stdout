@@ -1,0 +1,15 @@
+{"phase": "rustc", "exit": 0, "error": null, "group_absent": true}
+{"phase": "cargo", "exit": 0, "error": null, "group_absent": true}
+{"phase": "hipcc", "exit": 0, "error": null, "group_absent": true}
+{"phase": "g++", "exit": 0, "error": null, "group_absent": true}
+{"phase": "rocm", "exit": 0, "error": null, "group_absent": true}
+{"phase": "build-kfd", "exit": 0, "error": null, "group_absent": true}
+{"phase": "build-hip", "exit": 0, "error": null, "group_absent": true}
+{"phase": "build-hsa", "exit": 0, "error": null, "group_absent": true}
+{"phase": "kfd-d1-before-gpu1", "exit": 0, "error": null, "group_absent": true}
+{"phase": "kfd-d1-before-gpu2", "exit": 0, "error": null, "group_absent": true}
+{"phase": "kfd-d1", "exit": 0, "error": null, "group_absent": true}
+{"phase": "kfd-d1-after-gpu1", "exit": 1, "error": null, "group_absent": true}
+{"phase": "kfd-d1-after-gpu2", "exit": 0, "error": null, "group_absent": true}
+{"phase": "kfd-d1-delayed-gpu1", "exit": 0, "error": null, "group_absent": true}
+{"phase": "kfd-d1-delayed-gpu2", "exit": 0, "error": null, "group_absent": true}

@@ -1,0 +1,18 @@
+Traceback (most recent call last):
+  File "/home/harsh/fe2o3-xgmi-creation-20260918.3776a0461eb35e4c/native.py", line 600, in <module>
+    main()
+  File "/home/harsh/fe2o3-xgmi-creation-20260918.3776a0461eb35e4c/native.py", line 572, in main
+    run_native(marker)
+  File "/home/harsh/fe2o3-xgmi-creation-20260918.3776a0461eb35e4c/native.py", line 521, in run_native
+    raise failure
+  File "/home/harsh/fe2o3-xgmi-creation-20260918.3776a0461eb35e4c/native.py", line 516, in run_native
+    observe(name + suffix)
+  File "/home/harsh/fe2o3-xgmi-creation-20260918.3776a0461eb35e4c/native.py", line 473, in observe
+    raise failures[0]
+  File "/home/harsh/fe2o3-xgmi-creation-20260918.3776a0461eb35e4c/native.py", line 454, in observe
+    rec.run(
+  File "/home/harsh/fe2o3-xgmi-creation-20260918.3776a0461eb35e4c/native.py", line 145, in run
+    need(
+  File "/home/harsh/fe2o3-xgmi-creation-20260918.3776a0461eb35e4c/native.py", line 28, in need
+    raise RuntimeError(message)
+RuntimeError: kfd-d1-after-gpu1 failed

@@ -1,0 +1,11 @@
+{
+  "absence": true,
+  "cleaned": true,
+  "collected": true,
+  "created": true,
+  "failure": "RuntimeError: native failed",
+  "local_payload": "/home/harsh/.codex-tmp/fe2o3-xgmi-native-20260918.1tb0jdzw",
+  "local_payload_absent": true,
+  "native_failure": "RuntimeError: native failed",
+  "native_success": false
+}
