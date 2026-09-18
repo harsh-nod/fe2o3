@@ -1,0 +1,37 @@
+{
+  "source": "fcd5a89a113c6538338598bfcdb6769fb5c06042",
+  "accepted_campaign": false,
+  "completed_processes": [
+    "A/1"
+  ],
+  "completed_legacy_rounds": 13,
+  "performance_qualified_processes": 0,
+  "native_profiled_processes": 0,
+  "hsa_processes": 0,
+  "comparisons": null,
+  "stop_reason": "A/1 postflight and final occupancy checks failed",
+  "gpu4_snapshots": [
+    {
+      "Unique ID": "0x54f88318ca05093d",
+      "GPU use (%)": "0",
+      "PCI Bus": "0000:85:00.0",
+      "VRAM Total Memory (B)": "206141652992",
+      "VRAM Total Used Memory (B)": "298647552"
+    },
+    {
+      "Unique ID": "0x54f88318ca05093d",
+      "GPU use (%)": "2",
+      "PCI Bus": "0000:85:00.0",
+      "VRAM Total Memory (B)": "206141652992",
+      "VRAM Total Used Memory (B)": "633720832"
+    },
+    {
+      "Unique ID": "0x54f88318ca05093d",
+      "GPU use (%)": "1",
+      "PCI Bus": "0000:85:00.0",
+      "VRAM Total Memory (B)": "206141652992",
+      "VRAM Total Used Memory (B)": "652746752"
+    }
+  ],
+  "scope": "Legacy buffer validation and explicit teardown completed; no qualified timings, native-wait hardware coverage, performance attribution, parity, or formal-proof claim. Occupancy cause is not established."
+}

@@ -1,0 +1,13 @@
+test_interruption_mutations_rejected (__main__.InterruptionTests.test_interruption_mutations_rejected) ... ok
+test_real_interruption_has_no_performance_result (__main__.InterruptionTests.test_real_interruption_has_no_performance_result) ... ok
+test_available_cpu_metrics (__main__.NativeParserTests.test_available_cpu_metrics) ... ok
+test_closed_policy_and_window_fixtures (__main__.NativeParserTests.test_closed_policy_and_window_fixtures) ... ok
+test_incomplete_and_malformed_campaign_rejected (__main__.NativeParserTests.test_incomplete_and_malformed_campaign_rejected) ... ok
+test_malformed_native_rows_rejected (__main__.NativeParserTests.test_malformed_native_rows_rejected) ... ok
+test_missing_reordered_and_duplicate_rows_rejected (__main__.NativeParserTests.test_missing_reordered_and_duplicate_rows_rejected) ... ok
+test_synthetic_full_campaign (__main__.NativeParserTests.test_synthetic_full_campaign) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.114s
+
+OK
