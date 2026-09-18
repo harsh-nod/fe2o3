@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized] target(s) in 0.21s
+     Running unittests examples/kfd-compute-aql-queue.rs (target/debug/examples/kfd_compute_aql_queue-ef89939edd70a521)
+
+running 15 tests
+test tests::all_is_an_explicit_selection ... ok
+test tests::combined_oracle_accepts_sparse_disjoint_ids_and_exact_capacity ... ok
+test tests::combined_oracle_rejects_every_owner_field_and_capacity_mutation ... ok
+test tests::combined_sdma_accepts_every_admitted_count_and_explicit_device ... ok
+test tests::combined_sdma_rejects_unsupported_or_ambiguous_arguments ... ok
+test tests::explicit_unique_ids_accept_decimal_and_hex ... ok
+test tests::host_usage_oracle_counts_live_retained_records_and_empty_refund ... ok
+test tests::malformed_or_ambiguous_arguments_are_rejected ... ok
+test tests::observation_oracle_accepts_sparse_ids_and_all_admitted_profiles ... ok
+test tests::observation_oracle_rejects_each_malformed_field_and_roster ... ok
+test tests::resource_oracle_counts_primary_and_all_sdma_owners ... ok
+test tests::retained_release_requires_explicit_mode_and_device_selection ... ok
+test tests::single_sdma_requires_a_known_profile_and_one_explicit_device ... ok
+test tests::striped_sdma_accepts_every_balanced_count_and_one_explicit_device ... ok
+test tests::striped_sdma_rejects_unsupported_or_ambiguous_arguments ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

@@ -7,13 +7,14 @@ use fe2o3_kfd::topology::discover_default_topology;
 use fe2o3_kfd::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1,
     DeviceSelector, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1, GFX942_SDMA_MAX_IN_FLIGHT_V1,
-    Gfx942DeviceBackingBudgetV1, Gfx942DeviceBackingUsageV1, Gfx942HostVisibleBackingBudgetV1,
+    Gfx942DeviceBackingBudgetV1, Gfx942DeviceBackingUsageV1,
+    Gfx942DirectionalSdmaQueueObservationV1, Gfx942HostVisibleBackingBudgetV1,
     Gfx942HostVisibleBackingUsageV1, Gfx942SdmaMemoryPoolObservationV1,
     Gfx942SdmaQueueObservationV1, OpenedKfd, PrimaryQueueReleaseCustodyV1,
 };
 
 const CHILD_ENV: &str = "FE2O3_KFD_COMPUTE_AQL_QUEUE_CHILD";
-const USAGE: &str = "usage: kfd-compute-aql-queue [--retained-release] (--all|<selected-unique-id>) | --retained-release-sdma (generic|0|1) <selected-unique-id> | --retained-release-striped-sdma (2|4|6|8|10|12|14|16) <selected-unique-id>";
+const USAGE: &str = "usage: kfd-compute-aql-queue [--retained-release] (--all|<selected-unique-id>) | --retained-release-sdma (generic|0|1) <selected-unique-id> | --retained-release-striped-sdma (2|4|6|8|10|12|14|16) <selected-unique-id> | --retained-release-combined-sdma (2|4|6|8|10|12|14) <selected-unique-id>";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Options {
@@ -27,6 +28,7 @@ enum ReleaseMode {
     Primary,
     SingleSdma(Option<u32>),
     StripedSdma(u32),
+    CombinedSdma(u32),
 }
 
 impl ReleaseMode {
@@ -35,6 +37,7 @@ impl ReleaseMode {
             Self::Legacy | Self::Primary => 0,
             Self::SingleSdma(_) => 1,
             Self::StripedSdma(count) => count as usize,
+            Self::CombinedSdma(count) => count as usize + 2,
         }
     }
 
@@ -92,6 +95,18 @@ fn parse_selection(args: impl IntoIterator<Item = String>) -> Result<Options, St
                 args.next().ok_or_else(|| USAGE.to_owned())?,
             )
         }
+        "--retained-release-combined-sdma" => {
+            let count = match args.next().as_deref() {
+                Some(count @ ("2" | "4" | "6" | "8" | "10" | "12" | "14")) => {
+                    count.parse().expect("closed combined queue-count roster")
+                }
+                _ => return Err(USAGE.to_owned()),
+            };
+            (
+                ReleaseMode::CombinedSdma(count),
+                args.next().ok_or_else(|| USAGE.to_owned())?,
+            )
+        }
         _ => (ReleaseMode::Legacy, selected),
     };
     let selection = if selected == "--all" {
@@ -134,6 +149,11 @@ fn validate_sdma_observations(
         let expected_engine = match release {
             ReleaseMode::SingleSdma(engine) => engine,
             ReleaseMode::StripedSdma(_) => Some((index % 2) as u32),
+            ReleaseMode::CombinedSdma(_) => Some(match index {
+                0 => 1,
+                1 => 0,
+                _ => ((index - 2) % 2) as u32,
+            }),
             _ => unreachable!("SDMA observations require an SDMA release mode"),
         };
         assert_eq!(observation.engine_index, expected_engine);
@@ -149,6 +169,24 @@ fn validate_sdma_observations(
                 .all(|previous| previous.queue_id != observation.queue_id)
         );
     }
+}
+
+fn combined_observations(
+    directional: Gfx942DirectionalSdmaQueueObservationV1,
+    striped: &[Gfx942SdmaQueueObservationV1],
+    maximum_striped_count: u32,
+    count: u32,
+    primary_id: u32,
+) -> Vec<Gfx942SdmaQueueObservationV1> {
+    assert!(matches!(count, 2 | 4 | 6 | 8 | 10 | 12 | 14));
+    assert_eq!(maximum_striped_count, 14);
+    assert_eq!(directional.admitted_engine_count, 2);
+    assert_eq!(directional.admitted_queues_per_engine, 8);
+    assert_eq!(striped.len(), count as usize);
+    let mut observations = vec![directional.host_to_device, directional.device_to_host];
+    observations.extend_from_slice(striped);
+    validate_sdma_observations(&observations, primary_id, ReleaseMode::CombinedSdma(count));
+    observations
 }
 
 fn release_sdma(
@@ -187,12 +225,27 @@ fn release_sdma(
             usize::try_from(host_before.used_allocation_records).unwrap(),
         )
     );
-    let sdma = match release {
-        ReleaseMode::SingleSdma(Some(index)) => {
-            vec![queue.enable_gfx942_sdma_copy_engine_on_engine_index(index)?]
+    let (sdma, combined) = match release {
+        ReleaseMode::SingleSdma(Some(index)) => (
+            vec![queue.enable_gfx942_sdma_copy_engine_on_engine_index(index)?],
+            None,
+        ),
+        ReleaseMode::SingleSdma(None) => (vec![queue.enable_sdma_copy_engine()?], None),
+        ReleaseMode::StripedSdma(count) => {
+            (queue.enable_gfx942_striped_sdma_copy_engines(count)?, None)
         }
-        ReleaseMode::SingleSdma(None) => vec![queue.enable_sdma_copy_engine()?],
-        ReleaseMode::StripedSdma(count) => queue.enable_gfx942_striped_sdma_copy_engines(count)?,
+        ReleaseMode::CombinedSdma(count) => {
+            let capacity =
+                queue.enable_gfx942_directional_and_striped_sdma_copy_engines_v1(count)?;
+            let observations = combined_observations(
+                capacity.directional(),
+                capacity.striped(),
+                capacity.maximum_striped_queue_count(),
+                count,
+                primary_id,
+            );
+            (observations, Some(capacity))
+        }
         _ => unreachable!("SDMA release requires an SDMA release mode"),
     };
     validate_sdma_observations(&sdma, primary_id, release);
@@ -259,6 +312,34 @@ fn release_sdma(
             println!(
                 "retained_striped_sdma_release=complete queue_count={count} cursor=initial-0-no-advance primary_queue_id={primary_id} sdma_queue_ids={ids} engine_placement={engines} host_delta_bytes={} host_delta_records={count} resources_returned={} device_backing=refunded host_backing=refunded retry=rejected public_root_drop=completed packets=0 mmio_stores=0",
                 4096 * u64::from(count),
+                destroyed.released_resources()
+            );
+        }
+        ReleaseMode::CombinedSdma(count) => {
+            let capacity = combined.as_ref().expect("combined creation observation");
+            let ids = capacity
+                .striped()
+                .iter()
+                .map(|queue| queue.queue_id.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let engines = capacity
+                .striped()
+                .iter()
+                .map(|queue| queue.engine_index.unwrap().to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let directional = capacity.directional();
+            println!(
+                "retained_combined_sdma_release=complete striped_queue_count={count} total_sdma_queue_count={} cursor=striped-initial-0-no-advance-source-qualified primary_queue_id={primary_id} directional_h2d_queue_id={} directional_d2h_queue_id={} striped_queue_ids={ids} directional_engine_placement=1,0 striped_engine_placement={engines} admitted_engine_count={} admitted_queues_per_engine={} maximum_striped_queue_count={} host_delta_bytes={} host_delta_records={} resources_returned={} device_backing=refunded host_backing=refunded retry=rejected public_root_drop=completed packets=0 mmio_stores=0",
+                sdma.len(),
+                directional.host_to_device.queue_id,
+                directional.device_to_host.queue_id,
+                capacity.admitted_engine_count(),
+                capacity.admitted_queues_per_engine(),
+                capacity.maximum_striped_queue_count(),
+                4096 * sdma.len() as u64,
+                sdma.len(),
                 destroyed.released_resources()
             );
         }
@@ -351,6 +432,11 @@ fn run_isolated_child(
                 .arg("--retained-release-striped-sdma")
                 .arg(count.to_string());
         }
+        ReleaseMode::CombinedSdma(count) => {
+            command
+                .arg("--retained-release-combined-sdma")
+                .arg(count.to_string());
+        }
     }
     let status = command
         .arg(unique_id.to_string())
@@ -399,9 +485,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        GFX942_SDMA_MAX_IN_FLIGHT_V1, Gfx942HostVisibleBackingBudgetV1,
-        Gfx942HostVisibleBackingUsageV1, Gfx942SdmaQueueObservationV1, GpuSelection, Options,
-        ReleaseMode, parse_selection, retained_host_usage, validate_sdma_observations,
+        GFX942_SDMA_MAX_IN_FLIGHT_V1, Gfx942DirectionalSdmaQueueObservationV1,
+        Gfx942HostVisibleBackingBudgetV1, Gfx942HostVisibleBackingUsageV1,
+        Gfx942SdmaQueueObservationV1, GpuSelection, Options, ReleaseMode, combined_observations,
+        parse_selection, retained_host_usage, validate_sdma_observations,
     };
 
     fn args(values: &[&str]) -> Vec<String> {
@@ -571,6 +658,56 @@ mod tests {
         assert!(parse_selection(args(&["--retained-release-striped-sdma"])).is_err());
     }
 
+    #[test]
+    fn combined_sdma_accepts_every_admitted_count_and_explicit_device() {
+        for count in [2, 4, 6, 8, 10, 12, 14] {
+            for id in ["42", "0x2a"] {
+                assert_eq!(
+                    parse_selection(args(&[
+                        "--retained-release-combined-sdma",
+                        &count.to_string(),
+                        id
+                    ]))
+                    .unwrap(),
+                    Options {
+                        selection: GpuSelection::UniqueId(42),
+                        release: ReleaseMode::CombinedSdma(count)
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn combined_sdma_rejects_unsupported_or_ambiguous_arguments() {
+        for count in [
+            "0",
+            "1",
+            "3",
+            "15",
+            "16",
+            "18",
+            "-2",
+            "+2",
+            "02",
+            "0x2",
+            "generic",
+            "4294967296",
+        ] {
+            assert!(
+                parse_selection(args(&["--retained-release-combined-sdma", count, "42"])).is_err()
+            );
+        }
+        for count in ["2", "4", "6", "8", "10", "12", "14"] {
+            for suffix in [vec![], vec!["--all"], vec!["42", "extra"]] {
+                let mut values = vec!["--retained-release-combined-sdma", count];
+                values.extend(suffix);
+                assert!(parse_selection(args(&values)).is_err());
+            }
+        }
+        assert!(parse_selection(args(&["--retained-release-combined-sdma"])).is_err());
+    }
+
     fn striped_observations(count: u32) -> Vec<Gfx942SdmaQueueObservationV1> {
         (0..count)
             .map(|index| Gfx942SdmaQueueObservationV1 {
@@ -580,6 +717,122 @@ mod tests {
                 engine_index: Some(index % 2),
             })
             .collect()
+    }
+
+    fn directional_observation() -> Gfx942DirectionalSdmaQueueObservationV1 {
+        let mut host_to_device = striped_observations(1)[0];
+        host_to_device.queue_id = 1003;
+        host_to_device.engine_index = Some(1);
+        let mut device_to_host = host_to_device;
+        device_to_host.queue_id = 2009;
+        device_to_host.engine_index = Some(0);
+        Gfx942DirectionalSdmaQueueObservationV1 {
+            host_to_device,
+            device_to_host,
+            admitted_engine_count: 2,
+            admitted_queues_per_engine: 8,
+        }
+    }
+
+    #[test]
+    fn combined_oracle_accepts_sparse_disjoint_ids_and_exact_capacity() {
+        for count in [2, 4, 6, 8, 10, 12, 14] {
+            let directional = directional_observation();
+            let striped = striped_observations(count);
+            let observations = combined_observations(directional, &striped, 14, count, 0);
+            assert_eq!(observations.len(), count as usize + 2);
+            assert_eq!(observations[0], directional.host_to_device);
+            assert_eq!(observations[1], directional.device_to_host);
+            assert_eq!(&observations[2..], striped);
+        }
+    }
+
+    #[test]
+    fn combined_oracle_rejects_every_owner_field_and_capacity_mutation() {
+        for count in [2, 4, 6, 8, 10, 12, 14] {
+            for index in 0..count as usize + 2 {
+                for fault in 0..6 {
+                    let mut directional = directional_observation();
+                    let mut striped = striped_observations(count);
+                    let duplicate = if index == 0 {
+                        directional.device_to_host.queue_id
+                    } else {
+                        directional.host_to_device.queue_id
+                    };
+                    let owner = match index {
+                        0 => &mut directional.host_to_device,
+                        1 => &mut directional.device_to_host,
+                        _ => &mut striped[index - 2],
+                    };
+                    match fault {
+                        0 => owner.queue_id = 0,
+                        1 => owner.queue_id = duplicate,
+                        2 => owner.ring_bytes = 8192,
+                        3 => owner.maximum_in_flight -= 1,
+                        4 => owner.engine_index = None,
+                        5 => owner.engine_index = Some(1 - owner.engine_index.unwrap()),
+                        _ => unreachable!(),
+                    }
+                    assert!(
+                        std::panic::catch_unwind(|| combined_observations(
+                            directional,
+                            &striped,
+                            14,
+                            count,
+                            0
+                        ))
+                        .is_err()
+                    );
+                }
+            }
+            for fault in 0..10 {
+                let mut directional = directional_observation();
+                let mut striped = striped_observations(count);
+                let mut maximum = 14;
+                match fault {
+                    0 => directional.admitted_engine_count = 1,
+                    1 => directional.admitted_queues_per_engine = 7,
+                    2 => maximum = 16,
+                    3 => {
+                        striped.pop();
+                    }
+                    4 => striped.clear(),
+                    5 => {
+                        striped.push(striped[0]);
+                    }
+                    6 => striped[1].queue_id = striped[0].queue_id,
+                    7 => directional.host_to_device.queue_id = striped.last().unwrap().queue_id,
+                    8 => directional.device_to_host.queue_id = striped[0].queue_id,
+                    9 => std::mem::swap(
+                        &mut directional.host_to_device,
+                        &mut directional.device_to_host,
+                    ),
+                    _ => unreachable!(),
+                }
+                assert!(
+                    std::panic::catch_unwind(|| combined_observations(
+                        directional,
+                        &striped,
+                        maximum,
+                        count,
+                        0
+                    ))
+                    .is_err()
+                );
+            }
+        }
+        for count in [0, 1, 3, 15, 16, 18] {
+            assert!(
+                std::panic::catch_unwind(|| combined_observations(
+                    directional_observation(),
+                    &striped_observations(count),
+                    14,
+                    count,
+                    0
+                ))
+                .is_err()
+            );
+        }
     }
 
     #[test]
@@ -652,6 +905,19 @@ mod tests {
         ] {
             let release = ReleaseMode::StripedSdma(count);
             assert_eq!(release.sdma_queue_count(), count as usize);
+            assert_eq!(release.released_resources(), resources);
+        }
+        for (count, resources) in [
+            (2, 17),
+            (4, 23),
+            (6, 29),
+            (8, 35),
+            (10, 41),
+            (12, 47),
+            (14, 53),
+        ] {
+            let release = ReleaseMode::CombinedSdma(count);
+            assert_eq!(release.sdma_queue_count(), count as usize + 2);
             assert_eq!(release.released_resources(), resources);
         }
     }
