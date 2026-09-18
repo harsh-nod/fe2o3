@@ -15,6 +15,7 @@ struct Report {
     before_private_reads: usize,
     after_private_reads: usize,
     llvm_private_reads: usize,
+    llvm_digest: [u8; 32],
 }
 
 fn private_reads(module: &Module) -> usize {
@@ -111,36 +112,29 @@ impl Callbacks for CallbacksV1 {
                 })?;
             assert!(ranked.all_kernel_checks_are_clean());
             assert!(!ranked.grants_artifact_or_launch_authority());
-            assert_eq!(
-                ranked.checked_output_source_policy_v1(),
-                fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1::RawEmpty
-            );
             let stage = snapshots::with_directory(self.endpoint_directory.as_deref(), || {
                 self.progress.run(SourceStage::Policy5, || {
-                    ranked.lower_checked_output_policy5_v1()
+                    ranked.lower_fixed_checked_output_v1()
                 })
             })
             .map_err(|error| SourceFailure::new(SourceStage::Policy5, format!("{error:?}")))?;
-            let admitted = stage.output();
-            assert!(!admitted.grants_artifact_or_launch_authority());
-            let checked = admitted.checked_output();
-            assert!(std::ptr::eq(admitted.output(), checked.owner()));
+            let checked = stage.checked_output();
+            assert!(std::ptr::eq(stage.output(), checked.owner()));
+            assert!(!stage.original_canonical_bytes().is_empty());
             let intermediate = checked.intermediate_policy4().owner();
             let mut report = Report {
-                source: *admitted
-                    .source_semantic_kir()
-                    .canonical_kernel_ir_identity()
-                    .digest(),
+                source: stage.original_digest(),
                 intermediate: *intermediate.canonical().identity().digest(),
-                output: *admitted.output().canonical().identity().digest(),
+                output: *stage.output().canonical().identity().digest(),
                 store_rows: checked.intermediate_policy4().forwarding_rows().len(),
                 load_rows: checked.load_forwarding_rows().len(),
                 before_private_reads: private_reads(intermediate.module()),
-                after_private_reads: private_reads(admitted.output().module()),
+                after_private_reads: private_reads(stage.output().module()),
                 llvm_private_reads: 0,
+                llvm_digest: [0; 32],
             };
-            let module = admitted.output().module();
-            let semantic = admitted.source_semantic_kir().semantic().semantic();
+            let module = stage.output().module();
+            let semantic = stage.semantic();
             let wrappers = semantic
                 .roots()
                 .iter()
@@ -162,7 +156,7 @@ impl Callbacks for CallbacksV1 {
                     .iter()
                     .map(|root| root.id.as_str().to_owned())
                     .collect(),
-                source_route: None,
+                source_route: Some(dispatch::observe_fixed(&stage)),
                 transparent_result_wrappers: Some(wrappers),
                 internal_helpers: helpers.len(),
                 helper_calls: 0,
@@ -174,12 +168,12 @@ impl Callbacks for CallbacksV1 {
                 private_writes: 0,
                 other_reads: 0,
                 other_writes: 0,
-                formal_accesses: admitted
+                formal_accesses: stage
                     .kernels()
                     .iter()
                     .map(|kernel| kernel.accesses().len())
                     .sum(),
-                runtime_domains: Some(runtime_domains::observe(admitted.kernels())?),
+                runtime_domains: Some(runtime_domains::observe(stage.kernels())?),
                 simulation: None,
                 constant_shift: None,
                 policy: checked.execution().policy_version(),
@@ -220,12 +214,62 @@ impl Callbacks for CallbacksV1 {
                     observation.reads += 1;
                 }
             }
-            observation.simulation = Some(self.progress.run(SourceStage::Simulation, || {
-                simulation::observe(
-                    admitted.output().canonical(),
-                    simulation::Case::ScalarBorrow,
-                )
-            })?);
+            if let Some(case) = simulation::requested()? {
+                observation.simulation =
+                    Some(self.progress.run(SourceStage::Simulation, || {
+                        simulation::observe(stage.output().canonical(), case)
+                    })?);
+            }
+            if env::var_os(super::CHILD_PROOF_PROBE).is_some() {
+                use crate::production_native_source_lineage_v1::NativeSourceLineageErrorV1;
+                use crate::production_pipeline::{
+                    ProductionPipelineError,
+                    checked_output_policy5_v1::CheckedOutputPolicy5StageErrorV1,
+                };
+                let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+                    usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT)
+                        .map_err(|error| {
+                            SourceFailure::new(SourceStage::NativeSourceProof, error)
+                        })?,
+                );
+                let mut budget =
+                    fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+                        &mut work,
+                        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+                    );
+                let floor = stage.retained_storage_floor_v1();
+                budget
+                    .reserve_storage(floor)
+                    .map_err(|error| SourceFailure::new(SourceStage::NativeSourceProof, error))?;
+                let result = self.progress.run(SourceStage::NativeSourceProof, || {
+                    stage.probe_native_source_lineage_v1(&mut budget)
+                });
+                assert_eq!(budget.storage(), floor);
+                match result {
+                    Err(ProductionPipelineError::CheckedOutputPolicy5Stage(
+                        CheckedOutputPolicy5StageErrorV1::NativeSource(error),
+                    )) if matches!(
+                        *error,
+                        NativeSourceLineageErrorV1::MissingSignedRankedReceipt { .. }
+                    ) =>
+                    {
+                        observation.missing_proof_refused = true
+                    }
+                    Err(error) => {
+                        return Err(SourceFailure::new(
+                            SourceStage::NativeSourceProof,
+                            format!("unexpected fixed-output native proof refusal: {error:?}"),
+                        ));
+                    }
+                    Ok(()) => {
+                        return Err(SourceFailure::new(
+                            SourceStage::NativeSourceProof,
+                            "unsigned fixed-output source acquired native proof custody",
+                        ));
+                    }
+                }
+                return Ok(observation);
+            }
             let (handoff, descriptor) = self
                 .progress
                 .run(SourceStage::NativeHandoff, || {
@@ -243,6 +287,7 @@ impl Callbacks for CallbacksV1 {
                 .filter(|line| line.contains(" = load i32, ptr addrspace(5) "))
                 .count();
             observation.llvm_bytes = llvm.len();
+            report.llvm_digest = Sha256::digest(handoff.module_bytes()).into();
             observation.descriptor_roots = descriptor.table().kernels().len();
             std::fs::write(
                 env::var_os(CHILD_REPORT).expect("explicit Policy5 report path"),
@@ -262,6 +307,9 @@ fn checked_output_policy5_source_child() {
         return;
     };
     let args: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    if run_real_extractor_child_if_requested(&args) {
+        return;
+    }
     let mut callbacks = CallbacksV1 {
         progress: progress::CallbackProgress::from_environment(),
         endpoint_directory: snapshots::child_directory(),
@@ -316,6 +364,63 @@ fn ordinary_rust_scalar_borrow_policy5_normal_and_opt0_both_profiles() {
                 OrdinarySourceCase::ScalarBorrowPolicy5Barrier,
             ],
             profile,
+        );
+    }
+}
+
+const CHILD_FIXED_EXTRACTOR_OUTPUT: &str = "FE2O3_TEST_FIXED_CHECKED_EXTRACTOR_OUTPUT";
+
+pub(super) fn configure_real_extractor_child(command: &mut Command, output: Option<&Path>) {
+    command.env_remove(CHILD_FIXED_EXTRACTOR_OUTPUT);
+    if let Some(output) = output {
+        command.env(CHILD_FIXED_EXTRACTOR_OUTPUT, output);
+    }
+}
+
+pub(super) fn check_real_extraction(report: &Path, result: &Path, output: &Path) {
+    let result: Result<(), String> =
+        serde_json::from_slice(&std::fs::read(result).unwrap()).unwrap();
+    result.unwrap();
+    let report: Report = serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+    let bytes = std::fs::read(output).unwrap();
+    assert!(!bytes.is_empty());
+    assert_eq!(<[u8; 32]>::from(Sha256::digest(&bytes)), report.llvm_digest);
+    assert!(
+        std::str::from_utf8(&bytes)
+            .unwrap()
+            .contains("amdgpu_kernel")
+    );
+}
+
+fn run_real_extractor_child_if_requested(args: &[String]) -> bool {
+    let Some(output) = env::var_os(CHILD_FIXED_EXTRACTOR_OUTPUT) else {
+        return false;
+    };
+    let result =
+        crate::run_production_fixed_checked_output_extraction_driver_v1(args, Path::new(&output));
+    std::fs::write(
+        env::var_os(super::CHILD_RESULT).expect("explicit real-extractor result path"),
+        serde_json::to_vec(&result).unwrap(),
+    )
+    .unwrap();
+    true
+}
+
+#[test]
+#[ignore = "requires pinned nightly rust-src, AMD dependencies, and ordinary-source compilation"]
+fn ordinary_fixed_dispatcher_preserves_source_routes_and_unsigned_proof_refusals() {
+    for profile in [
+        fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
+        fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950,
+    ] {
+        ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
+            &[
+                OrdinarySourceCase::Fill,
+                OrdinarySourceCase::PrivateUnitHelper,
+                OrdinarySourceCase::RetainedPrivateUnitHelper,
+            ],
+            profile,
+            true,
         );
     }
 }

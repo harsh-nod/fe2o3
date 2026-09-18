@@ -16018,6 +16018,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             self.prepare_call_destination_v1(block, destination.place(), operations)?;
         let mut runtime_guard = None;
         let binding = match operation {
+            SemanticCompilerIntrinsicOperationV1::Gfx942Wave64ShuffleIndex { .. } => {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "gfx942 Wave64 shuffle requires checked participation, lane and convergence materialization",
+                ));
+            }
             SemanticCompilerIntrinsicOperationV1::Execution(_) => {
                 return Err(unsupported(
                     0,

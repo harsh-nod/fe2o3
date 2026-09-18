@@ -34,6 +34,8 @@ pub(crate) mod checked_output_progress_v1;
 pub(crate) mod erased_checked_output_policy4_v1;
 #[path = "production_pipeline_erased_checked_output_policy5_v1.rs"]
 pub(crate) mod erased_checked_output_policy5_v1;
+#[path = "production_pipeline_fixed_checked_output_v1.rs"]
+pub(crate) mod fixed_checked_output_v1;
 #[path = "production_native_checked_output_handoff_v1.rs"]
 pub(crate) mod native_checked_output_handoff_v1;
 

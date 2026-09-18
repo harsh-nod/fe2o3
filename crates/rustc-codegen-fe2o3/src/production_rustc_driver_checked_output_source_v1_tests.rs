@@ -18,6 +18,8 @@ mod context_source_v29_tests;
 
 #[path = "production_rustc_driver_helper_reference_source_v1_tests.rs"]
 mod helper_reference_source;
+#[path = "production_rustc_driver_wave64_capture_source_v1_tests.rs"]
+mod wave64_capture_source;
 
 const CHILD_ARGS: &str = "FE2O3_TEST_CHECKED_OUTPUT_ARGS_V1";
 const CHILD_RESULT: &str = "FE2O3_TEST_CHECKED_OUTPUT_RESULT_V1";
@@ -471,6 +473,14 @@ fn ordinary_rust_checked_output_cases_for_profile(
     cases: &[OrdinarySourceCase],
     profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
 ) {
+    ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(cases, profile, false);
+}
+
+fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
+    cases: &[OrdinarySourceCase],
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    fixed_facade: bool,
+) {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -511,6 +521,7 @@ fn ordinary_rust_checked_output_cases_for_profile(
     let sysroot = output(clean_command(&rustc).args(["--print", "sysroot"]));
     let sysroot = String::from_utf8(sysroot.stdout).unwrap();
     let mut private_helper_needs_retained_mir = true;
+    let mut fixed_erased_observed = false;
     for case in cases {
         if matches!(case, OrdinarySourceCase::RetainedPrivateUnitHelper)
             && !private_helper_needs_retained_mir
@@ -783,13 +794,14 @@ fn ordinary_rust_checked_output_cases_for_profile(
                 | OrdinarySourceCase::RetainedScalarBorrowPolicy5
                 | OrdinarySourceCase::ScalarBorrowPolicy5Barrier
         );
-        let child_test = if policy5_case {
+        let checked_policy5 = policy5_case || fixed_facade;
+        let child_test = if checked_policy5 {
             policy5_source::CHILD_TEST
         } else {
             CHILD_TEST
         };
         let policy5_report = scratch.path().join(format!("{name}-policy5.json"));
-        if policy5_case {
+        if checked_policy5 {
             policy5_source::configure_child(&mut command, &policy5_report);
         }
         command
@@ -890,6 +902,7 @@ fn ordinary_rust_checked_output_cases_for_profile(
             if matches!(case, OrdinarySourceCase::PrivateUnitHelper) {
                 private_helper_needs_retained_mir = route != dispatch::Route::SilentUnitLocal;
             }
+            fixed_erased_observed |= fixed_facade && route == dispatch::Route::SilentUnitLocal;
             eprintln!(
                 "ordinary private helper observed route: {route:?}; retained-MIR test configuration: {}",
                 matches!(case, OrdinarySourceCase::RetainedPrivateUnitHelper)
@@ -956,7 +969,7 @@ fn ordinary_rust_checked_output_cases_for_profile(
             result.runtime_domains,
             Some(runtime_domains::RuntimeDomainObservation::default())
         );
-        assert_eq!(result.policy, if policy5_case { 5 } else { 4 });
+        assert_eq!(result.policy, if checked_policy5 { 5 } else { 4 });
         assert_eq!(result.descriptor_roots, roots.len());
         assert_ne!(result.output_digest, [0; 32]);
         assert!(result.llvm_bytes > 0);
@@ -970,11 +983,39 @@ fn ordinary_rust_checked_output_cases_for_profile(
             "actual-source checked native output {diagnostic_name}: {result:?}\n{}",
             String::from_utf8_lossy(&child.stdout)
         );
-        if matches!(
-            case,
-            OrdinarySourceCase::Fill | OrdinarySourceCase::PrivateUnitHelper
-        ) {
-            let erased_probe = matches!(case, OrdinarySourceCase::PrivateUnitHelper);
+        if fixed_facade {
+            let extracted = scratch.path().join(format!("{name}-fixed-extractor.ll"));
+            let extractor_response = scratch.path().join(format!("{name}-fixed-extractor.json"));
+            policy5_source::configure_real_extractor_child(&mut command, Some(&extracted));
+            let extracted_child = output(command.env(CHILD_RESULT, &extractor_response));
+            policy5_source::check_real_extraction(&policy5_report, &extractor_response, &extracted);
+            assert_eq!(
+                std::fs::metadata(&extracted).unwrap().len(),
+                result.llvm_bytes as u64
+            );
+            eprintln!(
+                "real fixed checked-output extractor matched actual O for {diagnostic_name}:\n{}",
+                String::from_utf8_lossy(&extracted_child.stderr),
+            );
+            policy5_source::configure_real_extractor_child(&mut command, None);
+            command.env(CHILD_RESULT, &response);
+        }
+        let probe_private = if fixed_facade {
+            matches!(
+                case,
+                OrdinarySourceCase::PrivateUnitHelper
+                    | OrdinarySourceCase::RetainedPrivateUnitHelper
+            ) && dispatch::check_private_helper_route(&result, false)
+                == Ok(dispatch::Route::SilentUnitLocal)
+        } else {
+            matches!(case, OrdinarySourceCase::PrivateUnitHelper)
+        };
+        if matches!(case, OrdinarySourceCase::Fill) || probe_private {
+            let erased_probe = matches!(
+                case,
+                OrdinarySourceCase::PrivateUnitHelper
+                    | OrdinarySourceCase::RetainedPrivateUnitHelper
+            );
             if erased_probe {
                 assert_eq!(
                     dispatch::check_private_helper_route(&result, true).unwrap(),
@@ -1009,7 +1050,7 @@ fn ordinary_rust_checked_output_cases_for_profile(
                 result.runtime_domains,
                 Some(runtime_domains::RuntimeDomainObservation::default())
             );
-            assert_eq!(result.policy, 4);
+            assert_eq!(result.policy, if checked_policy5 { 5 } else { 4 });
             assert_eq!(result.output_digest, expected_output);
             assert_eq!((result.llvm_bytes, result.descriptor_roots), (0, 0));
             eprintln!(
@@ -1017,6 +1058,20 @@ fn ordinary_rust_checked_output_cases_for_profile(
                 String::from_utf8_lossy(&probe.stdout)
             );
         }
+    }
+    if fixed_facade
+        && cases.iter().any(|case| {
+            matches!(
+                case,
+                OrdinarySourceCase::PrivateUnitHelper
+                    | OrdinarySourceCase::RetainedPrivateUnitHelper
+            )
+        })
+    {
+        assert!(
+            fixed_erased_observed,
+            "fixed dispatcher never consumed a genuine UnitLocal source owner"
+        );
     }
 }
 
