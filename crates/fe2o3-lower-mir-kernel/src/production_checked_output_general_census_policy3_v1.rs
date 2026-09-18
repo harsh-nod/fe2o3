@@ -17,14 +17,13 @@ pub(super) fn source(
             "nonempty roots without source statics or allocations",
         ));
     }
-    scalar_helpers::check_source(owner, budget)?;
-    for function in source.functions() {
+    let roles = source_roles::check_source(owner, budget)?;
+    for (ordinal, function) in source.functions().iter().enumerate() {
         charge(budget, 7)?;
-        let helper = function.role() == SemanticFunctionRoleV1::InternalHelper;
+        let helper = roles.retained_helper(ordinal)?;
         let abi = function.abi();
-        if !helper
-            && (function.role() != SemanticFunctionRoleV1::KernelRoot
-                || abi.can_unwind()
+        if function.role() == SemanticFunctionRoleV1::KernelRoot
+            && (abi.can_unwind()
                 || abi.c_variadic()
                 || !abi.hidden_arguments().is_empty()
                 || !matches!(abi.return_value().mode(), SemanticAbiPassModeV1::Ignore)
