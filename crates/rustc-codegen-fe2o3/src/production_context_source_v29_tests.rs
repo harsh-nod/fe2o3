@@ -276,7 +276,7 @@ const CALLBACK_CASES: &[(&str, &str)] = &[
 ];
 
 #[test]
-#[ignore = "acceptance frontier: scalar callbacks still fail MIR0 layout or O0/MIR2 provenance"]
+#[ignore = "requires pinned nightly rust-src, authentic AMD SDK dependencies and source compilation"]
 fn actual_workgroup_callbacks_reach_the_checked_root_consumer() {
     check_actual_sources(CALLBACK_CASES, 1, &[(0, 0), (0, 2), (3, 0), (3, 2)]);
 }

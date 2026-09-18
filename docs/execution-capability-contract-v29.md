@@ -160,6 +160,20 @@ cannot inherit another caller's local origin. Device-local aggregates seed local
 provenance; external parameters seed host provenance; helper parameters inherit
 all incoming origins. A mixed origin keeps the host capture restrictions.
 
+Capture-free closure constants can also seed local provenance. The scanner
+observes constant operands even when rustc has removed every closure local.
+Only a live evaluated zero-sized value with a concrete, inhabited, capture-free,
+drop-free closure type and empty layout qualifies. Each private observation
+binds its monomorphized caller, block, source argument and normalized type;
+the flow resolver checks the exact live callee and formal before seeding that
+formal's origin. Arbitrary ZSTs, captured ZST closures and constant references
+do not gain this origin. No synthetic local or skipped argument is introduced.
+Constants use the existing environment/static-use limits and shared work ledger.
+Duplicate, missing or substituted argument records reject. Unsupported operand
+positions still reject through the same scanner. This establishes source
+provenance, not callback, scope-exit or executable capability authority; see the
+[source234 validation record](evidence/issue272-source234-20260918.md).
+
 Alias discovery uses an order-independent worklist. Collection, origin
 propagation, import reobservation and preflight share the existing request work
 budget. Import consumes a move-only roster/graph/body record, fingerprints every
