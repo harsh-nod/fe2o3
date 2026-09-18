@@ -730,7 +730,7 @@ impl Context {
     fn prepare_dispatch_with_peer_bindings(
         &mut self,
         id: u64,
-        mut bytes: Vec<u8>,
+        bytes: Vec<u8>,
         workgroup: [u16; 3],
         grid: [u32; 3],
         pointers: &[PointerFixupV1],
@@ -738,6 +738,24 @@ impl Context {
     ) -> Result<PreparedDispatch> {
         let prepare_started = self.profile_started();
         self.check_idle()?;
+        let prepared =
+            self.prepare_dispatch_arguments(id, bytes, workgroup, grid, pointers, peer_bindings)?;
+        record_elapsed(&mut self.counters.dispatch_prepare_ns, prepare_started)?;
+        Ok(prepared)
+    }
+
+    // Callers must retain exclusive context access and establish an idle fence.
+    // Full-forward preparation reuses that fence until its pre-publication check;
+    // every mutable argument, allocation binding and geometry is still checked.
+    fn prepare_dispatch_arguments(
+        &mut self,
+        id: u64,
+        mut bytes: Vec<u8>,
+        workgroup: [u16; 3],
+        grid: [u32; 3],
+        pointers: &[PointerFixupV1],
+        peer_bindings: Option<&BTreeMap<u64, (u64, u64)>>,
+    ) -> Result<PreparedDispatch> {
         let geometry =
             AqlDispatchGeometryV1::new(grid, workgroup.map(u32::from)).map_err(explain)?;
         let admission_started = self.profile_started();
@@ -805,7 +823,6 @@ impl Context {
         let alignment = u64::from(kernel.metadata.kernarg_alignment);
         let group_bytes = kernel.metadata.group_segment_bytes;
         drop(closure);
-        record_elapsed(&mut self.counters.dispatch_prepare_ns, prepare_started)?;
         Ok(PreparedDispatch {
             bytes,
             geometry,

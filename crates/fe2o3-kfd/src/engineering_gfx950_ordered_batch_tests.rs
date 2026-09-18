@@ -1,5 +1,68 @@
 use super::*;
 
+#[test]
+fn full_forward_preparation_requires_a_completed_frontier() {
+    let now = Instant::now();
+    assert!(FullForwardPreparation::new([1, 2, 3, 2], now).is_err());
+    assert!(FullForwardPreparation::new([1, 2, 3, 3], now).is_ok());
+}
+
+#[test]
+fn full_forward_preparation_rejects_identity_and_command_substitution() {
+    let now = Instant::now();
+    let identity = [7, 4, 1232, 1232];
+    let mut preparation = FullForwardPreparation::new(identity, now).unwrap();
+    for field in 0..identity.len() {
+        let mut changed = identity;
+        changed[field] += 1;
+        assert!(preparation.check(changed, 0, now).is_err());
+    }
+    assert!(preparation.check(identity, 1, now).is_err());
+    assert!(preparation.check(identity, usize::MAX, now).is_err());
+    assert!(!preparation.check(identity, 0, now).unwrap());
+    preparation.advance(None).unwrap();
+    assert!(preparation.check(identity, 0, now).is_err());
+    assert!(!preparation.check(identity, 1, now).unwrap());
+}
+
+#[test]
+fn full_forward_preparation_refresh_is_periodic_not_per_packet() {
+    let start = Instant::now();
+    let identity = [7, 4, 1232, 1232];
+    let mut preparation = FullForwardPreparation::new(identity, start).unwrap();
+    let at = |millis| start + Duration::from_millis(millis);
+    assert!(!preparation.check(identity, 0, at(99)).unwrap());
+    preparation.advance(None).unwrap();
+    assert!(preparation.check(identity, 1, at(100)).unwrap());
+    // No successful refresh was recorded, so the next command still requires it.
+    preparation.advance(None).unwrap();
+    assert!(preparation.check(identity, 2, at(100)).unwrap());
+    preparation.advance(Some(at(101))).unwrap();
+    assert!(!preparation.check(identity, 3, at(200)).unwrap());
+    assert!(preparation.check(identity, 3, at(201)).unwrap());
+}
+
+#[test]
+fn full_forward_preparation_cannot_stage_early_or_be_reused() {
+    let now = Instant::now();
+    let identity = [7, 4, 1232, 1232];
+    let mut preparation = FullForwardPreparation::new(identity, now).unwrap();
+    for index in 0..FULL_FORWARD_DISPATCHES_V1 {
+        assert!(preparation.require_complete(identity).is_err());
+        assert!(!preparation.check(identity, index, now).unwrap());
+        preparation.advance(None).unwrap();
+    }
+    preparation.require_complete(identity).unwrap();
+    assert!(preparation.check(identity, FULL_FORWARD_DISPATCHES_V1, now).is_err());
+    assert!(preparation.advance(None).is_err());
+    assert!(preparation.check(identity, 0, now).is_err());
+    for field in 0..identity.len() {
+        let mut changed = identity;
+        changed[field] += 1;
+        assert!(preparation.require_complete(changed).is_err());
+    }
+}
+
 #[derive(Default)]
 struct Fake {
     events: Vec<String>,

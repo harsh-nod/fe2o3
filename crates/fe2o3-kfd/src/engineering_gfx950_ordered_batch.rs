@@ -105,6 +105,60 @@ struct NativeOrdered<'a> {
     offset: usize,
     count: u32,
     full_forward: bool,
+    preparation: Option<FullForwardPreparation>,
+}
+
+// This state is local to one exclusively borrowed, exact-616 transaction. It
+// cannot authorize publication or survive queue mutation, completion or reuse.
+struct FullForwardPreparation {
+    identity: [u64; 4],
+    next_command: usize,
+    next_currentness: Instant,
+}
+
+impl FullForwardPreparation {
+    fn new(identity: [u64; 4], now: Instant) -> Result<Self> {
+        if identity[2] != identity[3] {
+            return Err("full-forward preparation requires completed frontier".into());
+        }
+        Ok(Self {
+            identity,
+            next_command: 0,
+            next_currentness: now
+                .checked_add(Duration::from_millis(100))
+                .ok_or("full-forward preparation clock overflow")?,
+        })
+    }
+
+    fn check(&self, identity: [u64; 4], index: usize, now: Instant) -> Result<bool> {
+        if self.identity != identity
+            || index != self.next_command
+            || index >= FULL_FORWARD_DISPATCHES_V1
+        {
+            return Err("full-forward preparation identity or command order".into());
+        }
+        Ok(now >= self.next_currentness)
+    }
+
+    fn advance(&mut self, refreshed_at: Option<Instant>) -> Result<()> {
+        if self.next_command >= FULL_FORWARD_DISPATCHES_V1 {
+            return Err("full-forward preparation exhausted".into());
+        }
+        if let Some(now) = refreshed_at {
+            self.next_currentness = now
+                .checked_add(Duration::from_millis(100))
+                .ok_or("full-forward preparation clock overflow")?;
+        }
+        self.next_command += 1;
+        Ok(())
+    }
+
+    fn require_complete(&self, identity: [u64; 4]) -> Result<()> {
+        if self.identity != identity || self.next_command != FULL_FORWARD_DISPATCHES_V1 {
+            return Err("full-forward preparation incomplete or changed".into());
+        }
+        Ok(())
+    }
 }
 
 struct OrderedPending {
@@ -129,6 +183,15 @@ fn require_signals_complete(
 }
 
 impl NativeOrdered<'_> {
+    fn preparation_identity(&self) -> [u64; 4] {
+        [
+            self.context.unique_id,
+            self.context.queue_epoch,
+            self.context.ring.write(),
+            self.context.completed_write,
+        ]
+    }
+
     fn retain_storage(&mut self) -> Result<()> {
         self.context.check_idle()?;
         if self.full_forward {
@@ -341,7 +404,14 @@ impl OrderedBackend for NativeOrdered<'_> {
         // Reuse the explicit dispatch policy; allocation and lifecycle fences
         // remain full checks, including first-use ordered arena allocation.
         self.context.check_currentness(false)?;
-        self.context.check_idle()
+        self.context.check_idle()?;
+        if self.full_forward && self.preparation.is_none() {
+            self.preparation = Some(FullForwardPreparation::new(
+                self.preparation_identity(),
+                Instant::now(),
+            )?);
+        }
+        Ok(())
     }
 
     fn prepare(&mut self, index: usize) -> Result<PreparedDispatch> {
@@ -359,13 +429,45 @@ impl OrderedBackend for NativeOrdered<'_> {
             .get(self.offset..end)
             .ok_or("ordered batch payload bounds")?
             .to_vec();
-        let prepared = self.context.prepare_dispatch(
-            command.kernel,
-            bytes,
-            command.workgroup,
-            command.grid,
-            &command.pointers,
-        )?;
+        let prepared = if self.full_forward {
+            let prepare_started = self.context.profile_started();
+            let refresh = self
+                .preparation
+                .as_ref()
+                .ok_or("full-forward preparation fence absent")?
+                .check(self.preparation_identity(), index, Instant::now())?;
+            let refreshed_at = if refresh {
+                self.context.check_idle()?;
+                Some(Instant::now())
+            } else {
+                None
+            };
+            let prepared = self.context.prepare_dispatch_arguments(
+                command.kernel,
+                bytes,
+                command.workgroup,
+                command.grid,
+                &command.pointers,
+                None,
+            )?;
+            self.preparation
+                .as_mut()
+                .ok_or("full-forward preparation fence absent")?
+                .advance(refreshed_at)?;
+            record_elapsed(
+                &mut self.context.counters.dispatch_prepare_ns,
+                prepare_started,
+            )?;
+            prepared
+        } else {
+            self.context.prepare_dispatch(
+                command.kernel,
+                bytes,
+                command.workgroup,
+                command.grid,
+                &command.pointers,
+            )?
+        };
         self.offset = end;
         Ok(prepared)
     }
@@ -373,6 +475,12 @@ impl OrderedBackend for NativeOrdered<'_> {
     fn stage(&mut self, prepared: Vec<PreparedDispatch>) -> Result<Self::Staged> {
         if self.offset != self.payload.len() || prepared.len() != self.count as usize {
             return Err("ordered batch staged payload or count".into());
+        }
+        if self.full_forward {
+            self.preparation
+                .as_ref()
+                .ok_or("full-forward preparation fence absent")?
+                .require_complete(self.preparation_identity())?;
         }
         self.retain_storage()?;
         let mut packets = Vec::with_capacity(prepared.len());
@@ -682,6 +790,7 @@ impl Context {
                 offset: 0,
                 count: u32::try_from(count).map_err(explain)?,
                 full_forward: false,
+                preparation: None,
             };
             let elapsed_ns = run_ordered_batch(&mut native, count, timeout_ms)?;
             Ok(ResponseV1::DispatchOrderedBatchCompleted {
@@ -716,6 +825,7 @@ impl Context {
                 offset: 0,
                 count: FULL_FORWARD_DISPATCHES_V1 as u32,
                 full_forward: true,
+                preparation: None,
             };
             let elapsed_ns = run_full_forward(&mut native, FULL_FORWARD_DISPATCHES_V1, timeout_ms)?;
             Ok(ResponseV1::DispatchFullForwardCompleted {
