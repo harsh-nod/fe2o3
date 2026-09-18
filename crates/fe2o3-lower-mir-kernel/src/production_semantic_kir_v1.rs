@@ -10771,7 +10771,10 @@ fn lower_one_semantic_function_with_calls_v29(
         Some(call_budget),
         placement,
         execution,
-        lifecycle,
+        match lifecycle {
+            Some(consumer) => Some(&mut *consumer as &mut (dyn ExecutionLifecycleConsumerV29 + '_)),
+            None => None,
+        },
     )?;
     lowering.execution_calls = match execution_calls {
         Some(consumer) => Some(&mut *consumer as &mut (dyn ExecutionDefinedCallConsumerV29 + '_)),

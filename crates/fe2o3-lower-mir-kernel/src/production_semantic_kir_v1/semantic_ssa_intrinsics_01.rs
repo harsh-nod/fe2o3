@@ -1,10 +1,10 @@
-fn compiler_issued_ssa_bindings_v1(
+fn compiler_issued_ssa_bindings_v1<'work>(
     types: &[SemanticTypeDeclV1],
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     semantic_function: SemanticFunctionIdV1,
     lifecycle: Option<&dyn ExecutionLifecycleConsumerV29>,
-    mut emission_work: Option<&mut dyn SemanticEmissionBudgetV1>,
+    mut emission_work: Option<&mut (dyn SemanticEmissionBudgetV1 + 'work)>,
 ) -> Result<BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1> {
     let mut bindings = BTreeMap::new();
     for (index, callable) in callables.iter().enumerate() {

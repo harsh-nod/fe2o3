@@ -57,8 +57,11 @@ impl SemanticFunctionLoweringV1<'_> {
                 .as_deref_mut()
                 .ok_or(ArgumentResourceV1::Accounting)?;
             cursor.check_ledger(budget)?;
-            consumer.check_instance(cursor, budget)?;
+            let checked = consumer.check_instance(cursor, budget);
             cursor.check_ledger(budget)?;
+            checked?;
+            let (source, instance, function, ssa) =
+                (cursor.source, cursor.instance, cursor.function, cursor.ssa);
             let result = consume(consumer, self);
             let cursor = self
                 .execution
@@ -69,6 +72,10 @@ impl SemanticFunctionLoweringV1<'_> {
                 .as_deref_mut()
                 .ok_or(ArgumentResourceV1::Accounting)?;
             cursor.check_ledger(budget)?;
+            cursor.check_source(function, ssa)?;
+            if cursor.source != source || cursor.instance != instance {
+                return Err(execution_availability_error_v29());
+            }
             result
         }));
         self.lifecycle = Some(consumer);

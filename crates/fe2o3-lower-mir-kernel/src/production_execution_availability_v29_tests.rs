@@ -708,6 +708,53 @@ fn cursor_unwind_preserves_escaped_storage_and_spent_work() {
 }
 
 #[test]
+fn cursor_never_refunds_scratch_to_a_replaced_ledger() {
+    for mode in 0..3 {
+        captured(Case::Ordinary, |plan, budget| {
+            let floor = budget.storage();
+            let ledger = budget.work_ledger_identity_v1();
+            let mut foreign = Some(Budget::new(
+                Box::leak(Box::new(CanonicalKernelIrWorkBudgetV1::new(1_000_000))),
+                1_000_000,
+            ));
+            foreign.as_mut().unwrap().charge_work(5).unwrap();
+            foreign.as_mut().unwrap().reserve_storage(900_000).unwrap();
+            let mut original = None;
+            let mut scratch = 0;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                with_execution_availability_v29(plan, plan.root(), budget, |_, budget| {
+                    scratch = budget.storage() - floor;
+                    original = Some(std::mem::replace(budget, foreign.take().unwrap()));
+                    match mode {
+                        0 => Ok(()),
+                        1 => Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch),
+                        _ => panic!("consumer replaced ledger"),
+                    }
+                })
+            }));
+            if mode == 2 {
+                assert!(result.is_err());
+            } else {
+                assert!(matches!(result, Ok(Err(
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting
+                    )
+                ))));
+            }
+            assert_eq!(budget.work(), 5);
+            assert_eq!(budget.storage(), 900_000);
+            assert_eq!(budget.peak_storage(), 900_000);
+            assert!(budget.failed_storage().is_none());
+            let _ = std::mem::replace(budget, original.take().unwrap());
+            assert_eq!(budget.work_ledger_identity_v1(), ledger);
+            assert!(scratch > 0);
+            assert_eq!(budget.storage(), floor + scratch);
+            budget.release_storage(scratch).unwrap();
+        });
+    }
+}
+
+#[test]
 fn cursor_construction_and_query_have_paid_exact_limits() {
     captured(Case::RustCall, |plan, _| {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000);

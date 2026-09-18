@@ -60,6 +60,7 @@ fn with_execution_availability_v29<R>(
 ) -> Result<R, ProductionSemanticKirErrorV1> {
     use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
     let floor = budget.storage();
+    let ledger = budget.work_ledger_identity_v1();
     let construction = catch_unwind(AssertUnwindSafe(|| {
         ExecutionAvailabilityV29::new(instances, instance, budget)
     }));
@@ -72,7 +73,11 @@ fn with_execution_availability_v29<R>(
         Ok(Err(error)) => Ok(Err(error)),
         Err(payload) => Err(payload),
     };
-    let release = budget.release_storage(storage);
+    let release = if budget.work_ledger_identity_v1() == ledger {
+        budget.release_storage(storage)
+    } else {
+        Err(ArgumentResourceV1::Accounting)
+    };
     match result {
         Ok(result) => {
             release?;
