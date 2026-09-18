@@ -21,8 +21,11 @@ struct ExecutionAvailabilityV29<'a> {
     visited: Vec<bool>,
     block: Option<SsaBlockIdV1>,
     cfg: ExecutionCfgV29<'a>,
+    events: ExecutionEventsV29,
     #[cfg(test)]
     entry_seeds: Vec<(u32, SemanticValueBindingV1)>,
+    #[cfg(test)]
+    skipped_event: Option<usize>,
 }
 
 fn execution_availability_error_v29() -> ProductionSemanticKirErrorV1 {
@@ -119,6 +122,8 @@ impl<'a> ExecutionAvailabilityV29<'a> {
             &occurrences,
             budget,
         )?;
+        let events =
+            ExecutionEventsV29::new(&occurrences, row.declaration(), &cfg.nominal_locals, budget)?;
         Ok(Self {
             ledger: budget.work_ledger_identity_v1(),
             instance,
@@ -132,8 +137,11 @@ impl<'a> ExecutionAvailabilityV29<'a> {
             visited,
             block: None,
             cfg,
+            events,
             #[cfg(test)]
             entry_seeds: Vec::new(),
+            #[cfg(test)]
+            skipped_event: None,
         })
     }
 
@@ -167,8 +175,10 @@ impl<'a> ExecutionAvailabilityV29<'a> {
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         self.check_ledger(budget)?;
         let block = SsaBlockIdV1::new(block.index());
+        self.events.complete(budget)?;
         budget.charge_work(argument_product_v1(self.current.len(), 2)?)?;
-        if !self.ssa.plan().is_reachable(block)
+        if self.block.is_some()
+            || !self.ssa.plan().is_reachable(block)
             || *self
                 .visited
                 .get(block.get() as usize)
@@ -206,6 +216,7 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         }
         self.visited[block.get() as usize] = true;
         self.block = Some(block);
+        self.events.pending = self.events.blocks[block.get() as usize].clone();
         Ok(())
     }
 
@@ -296,10 +307,11 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         } else {
             None
         };
-        self.claimed[index] = true;
         if let Some(kill) = kill {
-            self.claimed[kill] = true;
+            self.claim_events(&[index, kill], budget)?;
             self.current[local] = None;
+        } else {
+            self.claim_events(&[index], budget)?;
         }
         Ok(value)
     }
@@ -333,8 +345,8 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         {
             return Err(execution_availability_error_v29());
         }
+        self.claim_events(&[index], budget)?;
         self.current[local.index() as usize] = Some(value);
-        self.claimed[index] = true;
         Ok(())
     }
 
@@ -354,8 +366,8 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         if variable.get() != local.index() || self.current[local.index() as usize] != previous {
             return Err(execution_availability_error_v29());
         }
+        self.claim_events(&[index], budget)?;
         self.current[local.index() as usize] = None;
-        self.claimed[index] = true;
         Ok(())
     }
 
@@ -448,7 +460,8 @@ impl SemanticFunctionLoweringV1<'_> {
         operations: &mut Vec<Operation>,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         if let SemanticOperandV1::Move(place) | SemanticOperandV1::Copy(place) = operand
-            && self.execution_local_v29(place.local())?
+            && (self.execution_cfg_local_v29(place.local().index() as usize)
+                || self.execution_local_v29(place.local())?)
         {
             let role = role.ok_or_else(execution_availability_error_v29)?;
             self.with_emission_budget_v1(|this, budget| {

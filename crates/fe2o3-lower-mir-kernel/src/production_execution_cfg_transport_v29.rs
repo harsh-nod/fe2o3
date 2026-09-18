@@ -202,6 +202,7 @@ impl ExecutionAvailabilityV29<'_> {
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         self.check_ledger(budget)?;
         let id = SsaEdgeIdV1::new(SsaBlockIdV1::new(block.index()), ordinal);
+        self.events.complete(budget)?;
         if self.block != Some(id.source()) {
             return Err(execution_cfg_error_v29());
         }
@@ -240,6 +241,7 @@ impl ExecutionAvailabilityV29<'_> {
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         self.check_ledger(budget)?;
+        self.events.complete(budget)?;
         if self.block != Some(SsaBlockIdV1::new(block.index())) {
             return Err(execution_cfg_error_v29());
         }

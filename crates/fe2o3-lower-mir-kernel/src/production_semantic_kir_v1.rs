@@ -10812,6 +10812,11 @@ fn lower_one_semantic_function_v1(
             source.terminator().kind(),
             &mut target.operations,
         )?);
+        if lowering.execution.is_some() {
+            lowering.with_emission_budget_v1(|this, budget| {
+                this.execution.as_mut().unwrap().finish_block(budget)
+            })?;
+        }
         let (first_operation_ordinal, operation_count) =
             measured_operation_span(terminator_first, target.operations.len(), target.id, None)?;
         terminator_operation_spans.push(SemanticKirTerminatorOperationSpanV1 {
@@ -10863,6 +10868,11 @@ fn lower_one_semantic_function_v1(
         lowering.semantic_function.index(),
         &lowering.pending_semantic_ssa_definitions,
     )?;
+    if lowering.execution.is_some() {
+        lowering.with_emission_budget_v1(|this, budget| {
+            this.execution.as_mut().unwrap().finish(budget)
+        })?;
+    }
     if let Some(failure_block) = lowering.assert_failure_block {
         let mut block = BasicBlock::new(failure_block);
         let first = block.operations.len();
@@ -12614,6 +12624,7 @@ include!("production_semantic_kir_v1/semantic_ssa_plan_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 include!("production_execution_bindings_v1.rs");
 include!("production_execution_availability_v29.rs");
+include!("production_execution_events_v29.rs");
 include!("production_execution_cfg_shape_v29.rs");
 include!("production_execution_cfg_transport_v29.rs");
 include!("production_execution_transport_v1.rs");
@@ -13613,7 +13624,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticStatementKindV1::StorageLive(local)
             | SemanticStatementKindV1::StorageDead(local) => {
-                if self.execution.is_some() && self.execution_local_v29(*local)? {
+                if self.execution_cfg_local_v29(local.index() as usize) {
                     self.with_emission_budget_v1(|this, budget| {
                         this.execution.as_mut().unwrap().storage_kill(
                             execution_site_v29(block, statement),

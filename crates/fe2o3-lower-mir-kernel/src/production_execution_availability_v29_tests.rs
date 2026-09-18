@@ -362,6 +362,7 @@ fn sibling_branches_consume_the_same_incoming_role_independently() {
                     definition,
                     budget,
                 )?;
+                cursor.finish_block(budget)?;
             }
             Ok(())
         })

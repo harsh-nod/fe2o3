@@ -3,19 +3,38 @@ use crate::production_semantic_kir_v1::*;
 
 const PAIR: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
 
+mod event_tests {
+    include!("production_execution_events_v29_tests.rs");
+}
+
 #[derive(Clone, Copy)]
 enum Shape {
     Diamond,
     Mixed,
     DifferentSources,
     MovedSibling,
+    Storage,
+    Independent,
+    ScalarBinary,
+    ScalarSwitch,
+    AssertMessage,
+    AssertConstant,
     Cycle,
 }
 
 fn cfg_owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
     let original = execution_owner(Flow::Linear).unwrap();
     let mut types = original.source_semantic().types().to_vec();
-    let mixed = matches!(shape, Shape::Mixed | Shape::MovedSibling);
+    let mixed = matches!(
+        shape,
+        Shape::Mixed
+            | Shape::MovedSibling
+            | Shape::Storage
+            | Shape::ScalarBinary
+            | Shape::ScalarSwitch
+            | Shape::AssertMessage
+            | Shape::AssertConstant
+    );
     if mixed {
         types.push(SemanticTypeDeclV1::new(
             SemanticTypeIdentityV1::from_sha256([201; 32]),
@@ -27,6 +46,24 @@ fn cfg_owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
             )
             .unwrap(),
             SemanticTypeShapeV1::Tuple(SemanticAggregateTypeV1::new(vec![CONTEXT, U32]).unwrap()),
+        ));
+    }
+    let bool_ty = SemanticTypeIdV1::from_index(types.len() as u32);
+    if matches!(shape, Shape::AssertMessage | Shape::AssertConstant) {
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([240; 32]),
+            SemanticLayoutIdentityV1::from_sha256([240; 32]),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(1),
+                1,
+                SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                    SemanticBackendPrimitiveV1::integer(false, 8, 1),
+                    SemanticScalarValidityRangeV1::new(0, 1),
+                )),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool),
         ));
     }
     let result = if mixed { PAIR } else { CONTEXT };
@@ -58,7 +95,96 @@ fn cfg_owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
         )
         .unwrap()
     };
-    let blocks = if matches!(shape, Shape::MovedSibling) {
+    let blocks = if matches!(
+        shape,
+        Shape::ScalarBinary | Shape::ScalarSwitch | Shape::AssertMessage | Shape::AssertConstant
+    ) {
+        let operand = SemanticOperandV1::Copy(field(1, U32));
+        let mut statements = vec![assign(place(4, PAIR), pair(42))];
+        let terminator = match shape {
+            Shape::ScalarBinary => {
+                statements.push(assign(
+                    place(3, U32),
+                    SemanticRvalueKindV1::Binary {
+                        operation: SemanticBinaryOpV1::Add,
+                        left: operand,
+                        right: scalar(1),
+                    },
+                ));
+                goto(1)
+            }
+            Shape::ScalarSwitch => SemanticTerminatorKindV1::SwitchInt {
+                discriminant: operand,
+                targets: SemanticSwitchTargetsV1::new(
+                    vec![],
+                    edge(SemanticEdgeRoleV1::SwitchOtherwise, 1),
+                )
+                .unwrap(),
+            },
+            Shape::AssertMessage | Shape::AssertConstant => SemanticTerminatorKindV1::Assert {
+                condition: SemanticOperandV1::Constant(SemanticConstantV1::new(
+                    bool_ty,
+                    SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(1, 1).unwrap()),
+                )),
+                expected: true,
+                message: SemanticAssertMessageV1::DivisionByZero(
+                    if matches!(shape, Shape::AssertConstant) {
+                        scalar(42)
+                    } else {
+                        operand
+                    },
+                ),
+                target: edge(SemanticEdgeRoleV1::AssertSuccess, 1),
+                unwind: SemanticUnwindActionV1::Unreachable,
+            },
+            _ => unreachable!(),
+        };
+        vec![
+            block(211, statements, terminator),
+            block(212, vec![], SemanticTerminatorKindV1::Return),
+        ]
+    } else if matches!(shape, Shape::Storage) {
+        let storage = |live, index| {
+            SemanticStatementV1::new(
+                source(),
+                if live {
+                    SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(index))
+                } else {
+                    SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(index))
+                },
+            )
+        };
+        vec![block(
+            211,
+            vec![
+                storage(true, 4),
+                assign(place(4, PAIR), pair(42)),
+                assign(
+                    place(6, CONTEXT),
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Move(field(0, CONTEXT))),
+                ),
+                assign(
+                    place(3, U32),
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(field(1, U32))),
+                ),
+                storage(false, 4),
+                storage(false, 1),
+            ],
+            SemanticTerminatorKindV1::Return,
+        )]
+    } else if matches!(shape, Shape::Independent) {
+        vec![block(
+            211,
+            vec![
+                arm(0, 1),
+                assign(
+                    place(6, CONTEXT),
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place(2, CONTEXT))),
+                ),
+            ],
+            SemanticTerminatorKindV1::Return,
+        )]
+    } else if matches!(shape, Shape::MovedSibling) {
         vec![
             block(
                 211,
@@ -213,6 +339,19 @@ fn lower_cfg_fixture(
         Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1>,
     ),
 ) {
+    lower_cfg_fixture_with_cursor(shape, change_seed, |_| {}, inspect);
+}
+
+fn lower_cfg_fixture_with_cursor(
+    shape: Shape,
+    change_seed: impl FnOnce(&mut SemanticExecutionBindingV29),
+    change_cursor: impl FnOnce(&mut ExecutionAvailabilityV29<'_>),
+    inspect: impl FnOnce(
+        &ProductionSemanticSsaOwnerV1,
+        &SemanticExecutionBindingV29,
+        Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1>,
+    ),
+) {
     let mut owner = cfg_owner(shape);
     let mut work = CanonicalKernelIrWorkBudgetV1::new(10_000_000);
     let mut budget = ArgumentBudgetV1::new(&mut work, 10_000_000);
@@ -242,6 +381,7 @@ fn lower_cfg_fixture(
                     (1, SemanticValueBindingV1::Execution(seed.clone())),
                     (2, SemanticValueBindingV1::Execution(other)),
                 ];
+                change_cursor(&mut cursor);
                 let plan = LoweredFunctionPlanV1 {
                     correspondence_owner: ROOT,
                     semantic_function: ROOT,
@@ -551,6 +691,7 @@ fn captured_call_result_edge_is_exact_and_claimed_once() {
                     .transport_edge(block, 0, target, &held, &archive, budget)
                     .is_err()
             );
+            cursor.finish_block(budget)?;
             cursor.begin_block(target, budget)?;
             cursor.enter_cfg(target, budget)?;
             assert_eq!(cursor.current[2], Some(definition));
@@ -608,6 +749,15 @@ fn nominal_cfg_construction_and_edge_queries_have_exact_resource_boundaries() {
                         BTreeMap::from([(definition, SemanticValueBindingV1::Execution(seed))]);
                     cursor.begin_block(block, budget)?;
                     cursor.transport_edge(block, 0, target, &held, &archive, budget)?;
+                    cursor.transport_edge(
+                        block,
+                        1,
+                        SemanticBlockIdV1::from_index(2),
+                        &held,
+                        &archive,
+                        budget,
+                    )?;
+                    cursor.finish_block(budget)?;
                     cursor.begin_block(target, budget)?;
                     cursor.enter_cfg(target, budget)?;
                     Ok((budget.work(), bytes))
@@ -978,6 +1128,13 @@ fn populated_diamond_join_still_requires_both_predecessors() {
             held[4] = Some(SemanticValueBindingV1::Execution(seed.clone()));
             let archive = BTreeMap::from([(value, SemanticValueBindingV1::Execution(seed))]);
             cursor.begin_block(block, budget)?;
+            cursor.use_place(
+                execution_site_v29(block, Some(0)),
+                ExecutionOperandV29::RvalueOperand(0),
+                &place(1, CONTEXT),
+                true,
+                budget,
+            )?;
             cursor.define(
                 execution_site_v29(block, Some(0)),
                 SemanticLocalIdV1::from_index(4),
@@ -992,6 +1149,7 @@ fn populated_diamond_join_still_requires_both_predecessors() {
                     .iter()
                     .all(|entry| entry.value.is_some())
             );
+            cursor.finish_block(budget)?;
             cursor.begin_block(target, budget)?;
             assert!(cursor.enter_cfg(target, budget).is_err());
             Ok(())
