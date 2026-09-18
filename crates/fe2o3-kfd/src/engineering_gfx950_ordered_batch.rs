@@ -500,12 +500,8 @@ impl Context {
         timeout_ms: u32,
     ) -> Result<ResponseV1> {
         let result = (|| {
-            let expected = CommandV1::DispatchOrderedBatch {
-                dispatches: dispatches.clone(),
-                timeout_ms,
-            }
-            .payload_bytes()
-            .map_err(explain)?;
+            let expected =
+                ordered_batch_payload_bytes(&dispatches, timeout_ms).map_err(explain)?;
             if expected != payload.len() {
                 return Err("ordered batch payload length".into());
             }

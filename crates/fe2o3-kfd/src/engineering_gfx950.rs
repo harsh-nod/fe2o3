@@ -935,11 +935,7 @@ impl Context {
         let mut elapsed_ns = Vec::with_capacity(dispatches.len());
         let mut attempted_dispatches = 0_u32;
         let result = (|| -> Result<()> {
-            let expected_payload = CommandV1::DispatchSequence {
-                dispatches: dispatches.clone(),
-            }
-            .payload_bytes()
-            .map_err(explain)?;
+            let expected_payload = sequence_payload_bytes(&dispatches).map_err(explain)?;
             if expected_payload != payload.len() {
                 return Err("sequence payload length".into());
             }
@@ -1565,6 +1561,34 @@ mod tests {
         assert!(body.contains("completed_dispatches: elapsed_ns.len() as u32"));
         assert!(!body.contains("self.free("));
         assert!(!body.contains("self.load("));
+    }
+
+    #[test]
+    fn batch_payload_validation_borrows_dispatches_before_preparation() {
+        for (source, entry, validator, preparation) in [
+            (
+                include_str!("engineering_gfx950.rs"),
+                "unsafe fn dispatch_sequence(",
+                "sequence_payload_bytes(&dispatches)",
+                "self.prepare_dispatch(",
+            ),
+            (
+                include_str!("engineering_gfx950_ordered_batch.rs"),
+                "pub(super) unsafe fn dispatch_ordered_batch(",
+                "ordered_batch_payload_bytes(&dispatches, timeout_ms)",
+                "let mut native = NativeOrdered",
+            ),
+        ] {
+            let body = source
+                .split(entry)
+                .nth(1)
+                .unwrap()
+                .split("#[cfg(test)]")
+                .next()
+                .unwrap();
+            assert!(body.find(validator).unwrap() < body.find(preparation).unwrap());
+            assert!(!body.contains("dispatches.clone()"));
+        }
     }
 
     #[test]
