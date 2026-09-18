@@ -111,6 +111,15 @@ include!("production_call_index_v1.rs");
 include!("production_call_view_v1.rs");
 include!("production_call_assembly_v1.rs");
 include!("production_canonical_calls_v1.rs");
+include!("production_emission_placement_v1.rs");
+
+// Expanded graphs stay diagnostic-only until instance-qualified source replay
+// and capability scope discharge are integrated with the production owner.
+#[cfg(test)]
+#[path = "production_call_instances_v1.rs"]
+mod production_call_instances_v1;
+#[cfg(test)]
+include!("production_call_instance_emission_v1.rs");
 
 const DEFAULT_MAX_FUNCTIONS_V1: usize = 1_024;
 const DEFAULT_MAX_BLOCKS_V1: usize = 16_384;
@@ -10555,6 +10564,7 @@ fn lower_one_semantic_function_v1(
     private_array_work: &mut PrivateArrayLazyBudgetV1,
     private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
     call_budget: &mut ArgumentBudgetV1<'_>,
+    placement: SemanticEmissionPlacementV1,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     let function = semantic
         .functions()
@@ -10602,7 +10612,9 @@ fn lower_one_semantic_function_v1(
             PlannedParameterLocalBindingV1::Flattened { .. } => None,
         }
     }));
-    let failure_block = has_runtime_assert.then(|| BlockId(function.blocks().len() as u32));
+    let failure_block = has_runtime_assert
+        .then(|| placement.block(function.blocks().len() as u32))
+        .transpose()?;
     let mut lowering = SemanticFunctionLoweringV1::new_interprocedural(
         semantic.types(),
         semantic.callables(),
@@ -10634,6 +10646,7 @@ fn lower_one_semantic_function_v1(
             plan.result_types.len(),
             call_budget,
         )?,
+        placement,
     )?;
 
     let order = semantic_ssa
@@ -10664,7 +10677,7 @@ fn lower_one_semantic_function_v1(
                 "block is missing",
             )
         })?;
-        let mut target = BasicBlock::new(BlockId(semantic_block.index()));
+        let mut target = BasicBlock::new(lowering.kernel_block_id_v1(semantic_block)?);
         let prologue = lowering.begin_block(semantic_block, &mut target)?;
         if prologue.retained_local_storage != 0 {
             synthetic_operation_spans.push(SemanticKirSyntheticOperationSpanV1 {
@@ -10760,7 +10773,7 @@ fn lower_one_semantic_function_v1(
             correspondence_owner: plan.correspondence_owner,
             semantic_function: plan.semantic_function,
             semantic_block,
-            kernel_ir_block: BlockId(semantic_block.index()),
+            kernel_ir_block: lowering.kernel_block_id_v1(semantic_block)?,
             source_statement_count: u32::try_from(source.statements().len()).map_err(|_| {
                 unsupported(
                     plan.semantic_function.index(),
@@ -12125,6 +12138,7 @@ fn lower_single_root_module(
             private_array_work,
             Some((&private_arrays, outer_private_arrays)),
             call_budget,
+            SemanticEmissionPlacementV1::default(),
         )?;
         remaining_operations = remaining_operations
             .checked_sub(lowered.emitted_operations)
@@ -12387,6 +12401,7 @@ struct SemanticFunctionLoweringV1<'a> {
     semantic_ssa_bindings: BTreeMap<SsaValueV1, SemanticValueBindingV1>,
     pending_semantic_ssa_definitions: BTreeMap<(u32, u32), VecDeque<SsaValueV1>>,
     next_value: u32,
+    emission_placement: SemanticEmissionPlacementV1,
     assert_failure_block: Option<BlockId>,
     required_workgroup: Option<[u32; 3]>,
     infallible_asserts: BTreeSet<u32>,
@@ -12465,6 +12480,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 0,
                 &mut budget,
             )?,
+            SemanticEmissionPlacementV1::default(),
         )
     }
 
@@ -12489,6 +12505,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         mut private_array_work: PrivateArrayRecorderWorkV1<'a>,
         private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
         call_returns: CallReturnBufferV1,
+        emission_placement: SemanticEmissionPlacementV1,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let mut locals = vec![None; function.locals().len()];
         let option_producers = semantic_option_producers_v1(function, callables)
@@ -12530,12 +12547,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 });
             }
         }
-        let parameter_floor = parameters
-            .values
-            .iter()
-            .filter_map(|value| value.0.checked_add(1))
-            .max()
-            .unwrap_or(0);
+        let parameter_floor = emission_placement.value_floor(parameters.values)?;
         let mut direct_parameters = BTreeMap::new();
         if let Some(parameter_local_bindings) = parameters.local_bindings {
             for binding in parameter_local_bindings {
@@ -12684,6 +12696,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             semantic_ssa_bindings: BTreeMap::new(),
             pending_semantic_ssa_definitions,
             next_value,
+            emission_placement,
             assert_failure_block,
             required_workgroup,
             infallible_asserts,
@@ -15243,7 +15256,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     ) -> Result<Terminator, ProductionSemanticKirErrorV1> {
         match terminator {
             SemanticTerminatorKindV1::Goto(edge) => Ok(Terminator::Branch {
-                target: BlockId(edge.target().index()),
+                target: self.kernel_block_id_v1(edge.target())?,
                 arguments: self.edge_arguments(block, 0, edge.target(), operations)?,
             }),
             SemanticTerminatorKindV1::SwitchInt {
@@ -15281,14 +15294,14 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         };
                     return Ok(Terminator::ConditionalBranch {
                         condition: selector,
-                        then_target: BlockId(then_target.index()),
+                        then_target: self.kernel_block_id_v1(then_target)?,
                         then_arguments: self.edge_arguments(
                             block,
                             then_ordinal,
                             then_target,
                             operations,
                         )?,
-                        else_target: BlockId(else_target.index()),
+                        else_target: self.kernel_block_id_v1(else_target)?,
                         else_arguments: self.edge_arguments(
                             block,
                             else_ordinal,
@@ -15311,7 +15324,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                                     "switch value exceeds Kernel IR V1",
                                 )
                             })?,
-                            target: BlockId(target.edge().target().index()),
+                            target: self.kernel_block_id_v1(target.edge().target())?,
                             arguments: self.edge_arguments(
                                 block,
                                 ordinal as u32,
@@ -15324,7 +15337,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 Ok(Terminator::Switch {
                     selector,
                     cases,
-                    default_target: BlockId(targets.otherwise().target().index()),
+                    default_target: self.kernel_block_id_v1(targets.otherwise().target())?,
                     default_arguments: self.edge_arguments(
                         block,
                         targets.values().len() as u32,
@@ -15351,7 +15364,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 }
                 if self.infallible_asserts.contains(&block.index()) {
                     return Ok(Terminator::Branch {
-                        target: BlockId(target.target().index()),
+                        target: self.kernel_block_id_v1(target.target())?,
                         arguments: self.edge_arguments(block, 0, target.target(), operations)?,
                     });
                 }
@@ -15375,7 +15388,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         "semantic assert condition is not boolean",
                     ));
                 }
-                let success = BlockId(target.target().index());
+                let success = self.kernel_block_id_v1(target.target())?;
                 let success_arguments =
                     self.edge_arguments(block, 0, target.target(), operations)?;
                 let (then_target, then_arguments, else_target, else_arguments) = if *expected {
@@ -18051,7 +18064,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             runtime_guard,
             operations,
         )?;
-        let target = BlockId(destination.edge().target().index());
+        let target = self.kernel_block_id_v1(destination.edge().target())?;
         let arguments = self.edge_arguments(block, 0, destination.edge().target(), operations)?;
         if let Some(condition) = runtime_guard {
             let failure = self.assert_failure_block.ok_or_else(|| {
@@ -26100,6 +26113,9 @@ mod resource_tests {
     include!("production_semantic_kir_v1/wrapping_arithmetic_v1_tests.rs");
     include!("production_semantic_kir_v1/wrapping_correspondence_v1_tests.rs");
     include!("production_semantic_kir_v1/tests/production_enum_downcast_v1_tests.rs");
+    mod emission_placement_lowering_tests {
+        include!("production_semantic_kir_v1/emission_placement_lowering_tests.rs");
+    }
 
     #[test]
     fn defined_call_type_diagnostic_retains_flattened_source_coordinates() {

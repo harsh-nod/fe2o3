@@ -1,9 +1,30 @@
+struct DefinedCallArgumentSignatureV1<'a> {
+    semantic_types: &'a [SemanticTypeIdV1],
+    projections: &'a [HelperCallArgumentV1],
+    parameter_types: Vec<Type>,
+}
+
+struct PreparedDefinedCallArgumentsV1 {
+    source_bindings: Vec<SemanticValueBindingV1>,
+    arguments: Vec<ValueId>,
+}
+
 impl SemanticFunctionLoweringV1<'_> {
     fn lower_return(
         &mut self,
         block: SemanticBlockIdV1,
         operations: &mut Vec<Operation>,
     ) -> Result<Terminator, ProductionSemanticKirErrorV1> {
+        let (values, components) = self.prepare_return_values_v1(block, operations)?;
+        self.record_call_return_v1(block, SemanticKirCallReturnKindV1::Return { components })?;
+        Ok(Terminator::Return { values })
+    }
+
+    fn prepare_return_values_v1(
+        &mut self,
+        block: SemanticBlockIdV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<(Vec<ValueId>, CallComponentSpanV1), ProductionSemanticKirErrorV1> {
         let return_local = self
             .function
             .locals()
@@ -101,8 +122,146 @@ impl SemanticFunctionLoweringV1<'_> {
             returned.push(value);
         }
         let components = self.call_returns.component_span(first)?;
-        self.record_call_return_v1(block, SemanticKirCallReturnKindV1::Return { components })?;
-        Ok(Terminator::Return { values: returned })
+        Ok((returned, components))
+    }
+
+    fn prepare_defined_call_arguments_v1(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        callee: SemanticFunctionIdV1,
+        signature: DefinedCallArgumentSignatureV1<'_>,
+        operations: &mut Vec<Operation>,
+    ) -> Result<PreparedDefinedCallArgumentsV1, ProductionSemanticKirErrorV1> {
+        if call.arguments().len() != signature.semantic_types.len()
+            || signature.projections.len() != signature.parameter_types.len()
+        {
+            return Err(unsupported(
+                self.semantic_function.index(),
+                Some(block.index()),
+                None,
+                "defined call argument or result arity changed",
+            ));
+        }
+        // Moving each source operand once precedes outer-tuple expansion.
+        let mut source_bindings = Vec::new();
+        source_bindings
+            .try_reserve_exact(call.arguments().len())
+            .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
+                resource: ProductionSemanticKirResourceV1::AnalysisStorage,
+            })?;
+        for (argument, expected) in call.arguments().iter().zip(signature.semantic_types) {
+            if semantic_operand_type(argument) != *expected {
+                return Err(unsupported(
+                    self.semantic_function.index(),
+                    Some(block.index()),
+                    None,
+                    "defined call source argument type changed",
+                ));
+            }
+            source_bindings.push(self.lower_operand(block, None, argument, operations)?);
+        }
+        let mut arguments = Vec::new();
+        arguments
+            .try_reserve_exact(signature.parameter_types.len())
+            .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
+                resource: ProductionSemanticKirResourceV1::AnalysisStorage,
+            })?;
+        let mut flattened = None;
+        for (parameter, (projection, expected)) in signature
+            .projections
+            .iter()
+            .zip(signature.parameter_types)
+            .enumerate()
+        {
+            let source = source_bindings
+                .get(projection.source_argument as usize)
+                .ok_or_else(|| {
+                    unsupported(
+                        self.semantic_function.index(),
+                        Some(block.index()),
+                        None,
+                        "defined call projection has no source argument",
+                    )
+                })?;
+            let binding = match (source, projection.tuple_field) {
+                (SemanticValueBindingV1::Aggregate(fields), Some(field)) => {
+                    fields.get(field as usize).ok_or_else(|| {
+                        unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            None,
+                            "defined call tuple field is missing",
+                        )
+                    })?
+                }
+                (_, None) => source,
+                (_, Some(_)) => {
+                    return Err(unsupported(
+                        self.semantic_function.index(),
+                        Some(block.index()),
+                        None,
+                        "defined call RustCall argument is not a tuple binding",
+                    ));
+                }
+            };
+            let function = self.semantic_function.index();
+            let failure = |detail| unsupported(function, Some(block.index()), None, detail);
+            let (value, actual) = match projection.component {
+                None => binding.value().map_err(failure)?,
+                Some(component) => {
+                    let key = (projection.source_argument, projection.tuple_field);
+                    if flattened
+                        .as_ref()
+                        .is_none_or(|(previous, _)| *previous != key)
+                    {
+                        flattened = Some((key, binding.values().map_err(failure)?));
+                    }
+                    flattened
+                        .as_ref()
+                        .unwrap()
+                        .1
+                        .get(component)
+                        .cloned()
+                        .ok_or_else(|| failure("defined call aggregate component is missing"))?
+                }
+            };
+            let value = if actual == Type::INDEX && expected == Type::Scalar(ScalarType::U64) {
+                self.emit(
+                    operations,
+                    expected.clone(),
+                    OperationKind::Cast {
+                        kind: CastKind::Bitcast,
+                        value,
+                        to: expected,
+                    },
+                )?
+                .value()
+                .map_err(failure)?
+                .0
+            } else if actual == expected {
+                value
+            } else {
+                return Err(
+                    ProductionSemanticKirErrorV1::DefinedCallArgumentTypeMismatch {
+                        function: self.semantic_function.index(),
+                        callee: callee.index(),
+                        block: block.index(),
+                        parameter,
+                        source_argument: projection.source_argument,
+                        tuple_field: projection.tuple_field,
+                        component: projection.component,
+                        expected,
+                        actual,
+                    },
+                );
+            };
+            arguments.push(value);
+        }
+        Ok(PreparedDefinedCallArgumentsV1 {
+            source_bindings,
+            arguments,
+        })
     }
 
     fn lower_defined_call(
@@ -209,130 +368,20 @@ impl SemanticFunctionLoweringV1<'_> {
             }
         };
         let arguments_first = call_operation_ordinal_v1(operations, block)?;
-        // Moving each source operand once precedes outer-tuple expansion.
-        let mut source_bindings = Vec::new();
-        source_bindings
-            .try_reserve_exact(call.arguments().len())
-            .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-                resource: ProductionSemanticKirResourceV1::AnalysisStorage,
-            })?;
-        for (argument, expected) in call
-            .arguments()
-            .iter()
-            .zip(&signature.parameter_semantic_types)
-        {
-            if semantic_operand_type(argument) != *expected {
-                return Err(unsupported(
-                    self.semantic_function.index(),
-                    Some(block.index()),
-                    None,
-                    "defined call source argument type changed",
-                ));
-            }
-            source_bindings.push(self.lower_operand(block, None, argument, operations)?);
-        }
-        let mut arguments = Vec::new();
-        arguments
-            .try_reserve_exact(signature.parameter_types.len())
-            .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-                resource: ProductionSemanticKirResourceV1::AnalysisStorage,
-            })?;
-        let mut flattened = None;
-        for (parameter, (projection, expected)) in signature
-            .call_arguments
-            .iter()
-            .zip(signature.parameter_types)
-            .enumerate()
-        {
-            let source = source_bindings
-                .get(projection.source_argument as usize)
-                .ok_or_else(|| {
-                    unsupported(
-                        self.semantic_function.index(),
-                        Some(block.index()),
-                        None,
-                        "defined call projection has no source argument",
-                    )
-                })?;
-            let binding = match (source, projection.tuple_field) {
-                (SemanticValueBindingV1::Aggregate(fields), Some(field)) => {
-                    fields.get(field as usize).ok_or_else(|| {
-                        unsupported(
-                            self.semantic_function.index(),
-                            Some(block.index()),
-                            None,
-                            "defined call tuple field is missing",
-                        )
-                    })?
-                }
-                (_, None) => source,
-                (_, Some(_)) => {
-                    return Err(unsupported(
-                        self.semantic_function.index(),
-                        Some(block.index()),
-                        None,
-                        "defined call RustCall argument is not a tuple binding",
-                    ));
-                }
-            };
-            let function = self.semantic_function.index();
-            let failure = |detail| {
-                unsupported(
-                    function,
-                    Some(block.index()),
-                    None,
-                    detail,
-                )
-            };
-            let (value, actual) = match projection.component {
-                None => binding.value().map_err(failure)?,
-                Some(component) => {
-                    let key = (projection.source_argument, projection.tuple_field);
-                    if flattened
-                        .as_ref()
-                        .is_none_or(|(previous, _)| *previous != key)
-                    {
-                        flattened = Some((key, binding.values().map_err(failure)?));
-                    }
-                    flattened
-                        .as_ref()
-                        .unwrap()
-                        .1
-                        .get(component)
-                        .cloned()
-                        .ok_or_else(|| failure("defined call aggregate component is missing"))?
-                }
-            };
-            let value = if actual == Type::INDEX && expected == Type::Scalar(ScalarType::U64) {
-                self.emit(
-                    operations,
-                    expected.clone(),
-                    OperationKind::Cast {
-                        kind: CastKind::Bitcast,
-                        value,
-                        to: expected,
-                    },
-                )?
-                .value()
-                .map_err(failure)?
-                .0
-            } else if actual == expected {
-                value
-            } else {
-                return Err(ProductionSemanticKirErrorV1::DefinedCallArgumentTypeMismatch {
-                    function: self.semantic_function.index(),
-                    callee: callee.index(),
-                    block: block.index(),
-                    parameter,
-                    source_argument: projection.source_argument,
-                    tuple_field: projection.tuple_field,
-                    component: projection.component,
-                    expected,
-                    actual,
-                });
-            };
-            arguments.push(value);
-        }
+        let PreparedDefinedCallArgumentsV1 {
+            source_bindings: _source_bindings,
+            arguments,
+        } = self.prepare_defined_call_arguments_v1(
+            block,
+            call,
+            callee,
+            DefinedCallArgumentSignatureV1 {
+                semantic_types: &signature.parameter_semantic_types,
+                projections: &signature.call_arguments,
+                parameter_types: signature.parameter_types,
+            },
+            operations,
+        )?;
         let call_operation = call_operation_ordinal_v1(operations, block)?;
         let results = self.emit_results(
             operations,
@@ -363,7 +412,7 @@ impl SemanticFunctionLoweringV1<'_> {
             watch,
         )?;
         let terminator = Terminator::Branch {
-            target: BlockId(destination.edge().target().index()),
+            target: self.kernel_block_id_v1(destination.edge().target())?,
             arguments,
         };
         self.record_call_return_v1(

@@ -158,6 +158,7 @@ impl Fixture {
             None,
             CallReturnBufferV1::for_function(&self.function, &[], &BTreeMap::new(), 0, &mut budget)
                 .unwrap(),
+            SemanticEmissionPlacementV1::default(),
         )
         .unwrap()
     }

@@ -1,6 +1,9 @@
 use super::*;
 use fe2o3_kernel_ir::Constant;
 
+#[path = "call_instance_preparation_v1.rs"]
+mod call_instance_preparation_v1;
+
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const U32: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
 const TUPLE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);
