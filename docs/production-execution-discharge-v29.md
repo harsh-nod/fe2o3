@@ -35,11 +35,11 @@ inverse with its source and hashes the canonical bytes under a V15-specific
 domain. It owns both representations immutably and cannot be cloned or split.
 It is not a certificate that those bytes came from Rust source.
 
-The current lifecycle verifier permits execution values only as operation
-results in an acyclic, same-function graph. It rejects execution parameters,
-invalid acquisitions, incompatible branch states, escaping/live scopes at
-exits and retained calls while a workgroup scope is open. Source callbacks must
-therefore be expanded and checked before such a scoped graph can be admitted.
+The lifecycle verifier permits execution values only as operation results in
+a same-function graph. It rejects execution parameters, invalid acquisitions,
+incompatible incoming states (including loop backedges), escaping/live scopes
+at exits and retained calls while a workgroup scope is open. Source callbacks
+must therefore be expanded and checked before such a graph can be admitted.
 
 `ProductionExecutionDischargeV29::try_discharge` then:
 
@@ -61,6 +61,43 @@ ordinary instructions. Changing an ordinary constant to a different valid
 constant must fail replay, even though the changed output independently passes
 the physical IR verifier.
 
+## Loop Invariant
+
+Each reachable block has one exact incoming ownership state: every nominal
+value is absent, an available context, a borrowed context, its live workgroup,
+or a descendant of that workgroup. The entry starts with all values absent.
+The first incoming edge establishes a block's state; deterministic operation
+transfer checks the block once. Every later incoming edge must reproduce that
+state exactly, including backedges and duplicate edges. States are never
+widened or replaced, so there is no iterative convergence heuristic.
+
+This is an inductive safety argument: the entry state is valid; each operation
+preserves its ownership obligations; and each edge establishes the successor's
+invariant. Consequently every finite execution prefix respects those
+obligations, however many loop iterations run. The ordinary verifier still
+checks SSA dominance, argument types and complete CFG structure. Execution
+values cannot be block parameters, escape in containers or flow through an
+ordinary operation, so no nominal phi transfer is omitted by the state check.
+
+For example, a context issued before a loop can acquire a workgroup, consume
+or explicitly discard its descendants, and end that scope on every iteration.
+The backedge then has the same available context and absent workgroup slots
+as the initial edge. A workgroup acquired before a loop can instead remain
+live throughout it and end after the loop, provided every edge preserves its
+exact state. Ordinary loop-carried scalars remain ordinary SSA arguments and
+are retained unchanged by erasure.
+
+A context issuer inside a cycle rejects: its backedge cannot restore the
+original absent context. An unclosed per-iteration acquisition, leftover
+descendant, stale use, live-scope call, or exit with a live workgroup also
+rejects. Exact equality is deliberately conservative; this rule does not
+prove path feasibility to reconcile different ownership states at a join.
+
+This check does **not** prove loop termination, eventual scope closure on an
+infinite execution, barrier convergence or CPU/GPU numerical equivalence.
+Erasing a nominal scope does not eliminate, unroll or otherwise rewrite the
+loop. Those properties retain their separate production proof obligations.
+
 ## Resource Contract
 
 Admission, copying, erasure and replay use one cumulative work/storage ledger.
@@ -69,6 +106,12 @@ encoding bounds complete structural comparison. Vector storage is admitted
 before allocation; candidate, output and erasure roster coexistence is counted.
 Erasure and replay are linear in graph/encoding size apart from the existing
 canonical admission and verification algorithms they invoke.
+
+The lifecycle pass queues each reachable block at most once and compares every
+edge. For `B` blocks, `E` edges and `R` execution-role definitions, its retained
+state uses `O(B * R + B + R)` logical storage and edge comparisons use `O(E * R)`
+work, in addition to metered operation and indexed lookup work. A cycle does
+not cause repeated state allocation or depend on a runtime iteration bound.
 
 The caller keeps its input reservation live. Each Result path restores the
 incoming storage floor without refunding accepted work, observed peak or first
@@ -91,10 +134,15 @@ checks. A simulator comparison is useful regression evidence, not a universal
 CPU/GPU equivalence proof.
 
 Tests cover context-only and sequential scopes, balanced branches, mixed roots,
-ordinary call/store preservation against a Rust CPU oracle in the simulator,
-malformed lifecycle rejection, unsupported tile/fragment refusal, independently
-valid altered outputs, malformed erasure rosters and exact/one-short resource
-budgets. Run the focused libraries and compile-fail documentation with:
+same-slot loop reacquisition, persistent outer scopes, nested and irreducible
+loops, switch backedges, and an independent bounded lifecycle trace oracle.
+Discharged loops with ordinary scalar block arguments and canary-protected
+stores are compared with a Rust CPU oracle in the simulator, including zero,
+one and multiple iterations. Negative tests retain malformed lifecycle and
+unsupported tile/fragment refusal, independently valid altered loop bounds,
+edges, arguments, operations and metadata, malformed erasure rosters and
+exact/one-short resource budgets. Run the focused libraries and compile-fail
+documentation with:
 
 ```sh
 cargo test --locked -p fe2o3-kernel-ir -p fe2o3-lower-mir-kernel

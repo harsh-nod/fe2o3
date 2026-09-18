@@ -433,3 +433,7 @@ fn replay_erasure(
 #[cfg(test)]
 #[path = "production_execution_discharge_v29_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "production_execution_discharge_v29_loop_tests.rs"]
+mod loop_tests;

@@ -241,7 +241,7 @@ fn exact_v15_owner_accepts_lifecycles_and_has_deterministic_domain_bound_bytes()
 }
 
 #[test]
-fn exact_v15_owner_rejects_missing_duplicate_foreign_closes_calls_and_cycles() {
+fn exact_v15_owner_rejects_invalid_closes_live_calls_and_context_reissuance() {
     let mut missing = scope_module();
     operations(&mut missing).pop();
     let mut duplicate = scope_module();

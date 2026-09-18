@@ -134,14 +134,6 @@ fn verify_inner(
     };
     let flow = control_flow.indexed_v15();
     let blocks = flow.block_count();
-    if !acyclic(flow, budget)? {
-        return fail(
-            diagnostics,
-            location,
-            "execution lifecycle requires an acyclic same-function CFG",
-            budget,
-        );
-    }
     let cells = blocks
         .checked_add(1)
         .and_then(|n| n.checked_mul(count))
@@ -245,6 +237,10 @@ fn verify_inner(
     budget.charge_work(count)?;
     initial.resize(count, Live::Absent);
     incoming[entry] = Some(initial);
+    // Each block receives one concrete ownership invariant. Deterministic transfer
+    // checks it once; every incoming edge, including a backedge, must reproduce it.
+    // Execution roles cannot be block parameters, so no nominal phi transfer is
+    // omitted. This proves finite-path ownership safety, not loop termination.
     let mut pending = reserve_vec(blocks)?;
     pending.push(entry);
     let mut state = reserve_vec(count)?;
@@ -347,65 +343,6 @@ fn verify_inner(
         }
     }
     Ok(())
-}
-
-fn acyclic(
-    flow: &crate::IndexedControlFlow,
-    budget: &mut Budget<'_>,
-) -> Result<bool, ResourceError> {
-    let floor = budget.storage_checkpoint();
-    let result = (|| {
-        let blocks = flow.block_count();
-        let bytes = blocks
-            .checked_mul(2 * std::mem::size_of::<usize>())
-            .ok_or(ResourceError::Arithmetic)?;
-        budget.reserve_storage(bytes)?;
-        budget.charge_work(blocks)?;
-        let mut degrees = reserve_vec(blocks)?;
-        let mut queue = reserve_vec(blocks)?;
-        let lookup_work = blocks.checked_ilog2().map_or(1, |log| log as usize + 2);
-        for position in 0..blocks {
-            let block = flow.block_id(position).ok_or(ResourceError::Accounting)?;
-            budget.charge_work(lookup_work)?;
-            let incoming = flow
-                .incoming_edges(block)
-                .ok_or(ResourceError::Accounting)?
-                .len();
-            degrees.push(incoming);
-            if incoming == 0 {
-                queue.push(position);
-            }
-        }
-        let mut cursor = 0;
-        while cursor < queue.len() {
-            budget.charge_work(1)?;
-            let block = flow
-                .block_id(queue[cursor])
-                .ok_or(ResourceError::Accounting)?;
-            cursor += 1;
-            budget.charge_work(lookup_work)?;
-            let outgoing = flow
-                .outgoing_edges(block)
-                .ok_or(ResourceError::Accounting)?;
-            budget.charge_work(outgoing.len())?;
-            for edge in outgoing {
-                let target = flow.edge_target(edge).ok_or(ResourceError::Accounting)?;
-                budget.charge_work(lookup_work)?;
-                let target = flow
-                    .block_position(target)
-                    .ok_or(ResourceError::Accounting)?;
-                degrees[target] = degrees[target]
-                    .checked_sub(1)
-                    .ok_or(ResourceError::Accounting)?;
-                if degrees[target] == 0 {
-                    queue.push(target);
-                }
-            }
-        }
-        Ok(cursor == blocks)
-    })();
-    let released = budget.rollback_storage(floor);
-    result.and_then(|value| released.map(|()| value))
 }
 
 fn ordinary_operation(
@@ -632,3 +569,7 @@ fn apply_execution(
 #[cfg(test)]
 #[path = "verification_execution_lifecycle_v15_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "verification_execution_lifecycle_v15_loop_tests.rs"]
+mod loop_tests;

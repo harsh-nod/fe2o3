@@ -334,7 +334,7 @@ fn diamond(close_both: bool) -> Module {
 }
 
 #[test]
-fn execution_v15_requires_exact_joins_and_acyclic_cfg_even_for_balanced_loops() {
+fn execution_v15_requires_exact_joins_and_forbids_context_reissuance() {
     verify_module(&diamond(true)).unwrap();
     rejects(&diamond(false), "one branch leaves the acquisition open");
     let mut self_loop = fixture(1);
@@ -342,7 +342,10 @@ fn execution_v15_requires_exact_joins_and_acyclic_cfg_even_for_balanced_loops() 
         target: BlockId(7),
         arguments: vec![],
     });
-    rejects(&self_loop, "balanced scope self-loop");
+    rejects(
+        &self_loop,
+        "context issuer cannot execute again on a backedge",
+    );
     let mut loop_with_exit = fixture(1);
     operations(&mut loop_with_exit).push(Operation::effect_free(
         ValueDef::new(ValueId(50), Type::BOOL),
@@ -371,10 +374,7 @@ fn execution_v15_requires_exact_joins_and_acyclic_cfg_even_for_balanced_loops() 
         operations: vec![],
         terminator: Some(Terminator::Return { values: vec![] }),
     });
-    rejects(
-        &loop_with_exit,
-        "reachable role-free cycle still violates the first lifecycle profile",
-    );
+    verify_module(&loop_with_exit).unwrap();
 }
 
 #[test]

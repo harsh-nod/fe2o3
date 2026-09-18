@@ -56,10 +56,15 @@ and releases the borrow, but is not a memory barrier. Ordinary returned values
 survive. Tiles/fragments are affine: unused values may be discarded. ScopeEnd
 explicitly lists exactly the remaining live descendants, without duplicates or
 foreign values, and consumes its workgroup. Reject overlapping scopes, escaping
-authority, stale epochs, capability phis and active-scope backedges. Acyclic joins
-require matching lifecycle states; exclusive branches may each consume an incoming
-value. Check trapping operations, not only terminators; unsupported unwind/drop/tail
-call and other exceptional exits reject. Shared tile receiver borrows remain short.
+authority, stale epochs and capability phis. Every incoming edge, including a
+backedge, must have the same exact lifecycle state. A scope acquired before a
+loop may remain live across it; a per-iteration acquisition must release its
+workgroup and descendants before repeating. Exclusive branches may each consume
+an incoming value. The [canonical lifecycle check](production-execution-discharge-v29.md#loop-invariant)
+proves finite-path ownership, not termination, eventual disposal or barrier
+convergence; it does not independently admit source callback expansion. Check
+trapping operations, not only terminators; unsupported unwind/drop/tail call and
+other exceptional exits reject. Shared tile receiver borrows remain short.
 
 Choose checked generic callback materialization into the sole graph, retaining
 caller/callee, argument/result and original call-path/access lineage. Account for
