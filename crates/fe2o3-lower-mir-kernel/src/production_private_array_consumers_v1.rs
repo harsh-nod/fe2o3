@@ -328,12 +328,22 @@ impl<'a> PrivateArrayFinalRelationV1<'a> {
             return Err(mismatch());
         };
         work.charge_private_array_work(4)?;
-        if effect.access != PrivateArrayAccessV1::Write
-            || *kind != dialect_kernel::AccessKindAttr::Write
-            || consumer.access != *kind
+        if !matches!(
+            (effect.access, *kind),
+            (
+                PrivateArrayAccessV1::Write,
+                dialect_kernel::AccessKindAttr::Write
+            ) | (
+                PrivateArrayAccessV1::Read,
+                dialect_kernel::AccessKindAttr::Read
+            )
+        ) || consumer.access != *kind
             || source.atomic.is_some()
         {
             return Err(mismatch());
+        }
+        if effect.access == PrivateArrayAccessV1::Read {
+            self.check_read_initialization(effect, slot, offset, &mut work)?;
         }
         private_array_ranked_address_v1(
             slot,
@@ -382,6 +392,9 @@ impl<'a> PrivateArrayFinalRelationV1<'a> {
         .is_ok())
     }
 }
+
+#[path = "production_private_array_read_relation_v1.rs"]
+mod private_array_read_relation_v1;
 
 // Shared ranked geometry only; callers must separately prove source and physical custody.
 fn private_array_ranked_address_v1<'a, W: PrivateArrayChargeV1>(

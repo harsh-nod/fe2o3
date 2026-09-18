@@ -4,6 +4,8 @@ use fe2o3_kernel_ir::{CanonicalKirOperationCoordinateV1, CanonicalKirOperationOr
 
 #[path = "production_checked_output_general_census_policy3_v1.rs"]
 mod census;
+#[path = "production_checked_output_private_memory_policy3_v1.rs"]
+mod private_memory;
 
 type E = ProductionCheckedOutputAdmissionErrorPolicy3V1;
 type R<T> = Result<T, E>;
@@ -183,9 +185,19 @@ fn check_inner(
         }
         traps[ordinal] = 1;
     }
-    census::native(&input, "B", |ordinal, _| Ok(traps[ordinal] == 1), budget)?;
+    let private_input = private_memory::check(&input, source.limits.max_operations, budget)?;
+    private_memory::source_lifetimes(source, &private_input, budget)?;
+    let private_output = private_memory::check(&output, source.limits.max_operations, budget)?;
+    census::native(
+        &input,
+        &private_input,
+        "B",
+        |ordinal, _| Ok(traps[ordinal] == 1),
+        budget,
+    )?;
     census::native(
         &output,
+        &private_output,
         "O",
         |ordinal, coordinate| {
             let row = candidate
@@ -207,7 +219,7 @@ fn check_inner(
     let kernels =
         derive_checked_output_guarded_obligations_v1(checked.owner(), source.limits.max_operations)
             .map_err(E::Formal)?;
-    census::formal(&output, &kernels, budget)?;
+    census::formal(&output, &private_output, &kernels, budget)?;
     Ok(kernels)
 }
 
@@ -237,6 +249,61 @@ fn operation_ordinal(
         return Err(refused("transition", "operation coordinate"));
     }
     Ok(operation)
+}
+
+/// The caller must first qualify source/B/C and independently replay C/O's
+/// coordinate-preserving forwarding relation. This rederives O's physical
+/// safety facts; it is not a substitute for either semantic prerequisite.
+pub(crate) fn check_forwarded_output_v1(
+    source: &ProductionSemanticKirOwnerV1,
+    qualified_intermediate: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    output: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<Box<[FormalMemoryObligations]>> {
+    charge(budget, 3)?;
+    let floor = budget.storage();
+    let ledger = budget.work_ledger_identity_v1();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let (input, storage) = CanonicalKirInventoryV1::derive(qualified_intermediate, budget)
+            .map_err(inventory_error)?;
+        budget
+            .reserve_storage(storage.retained_storage())
+            .map_err(E::Resource)?;
+        let (actual, storage) =
+            CanonicalKirInventoryV1::derive(output, budget).map_err(inventory_error)?;
+        budget
+            .reserve_storage(storage.retained_storage())
+            .map_err(E::Resource)?;
+        let private = private_memory::check(&actual, source.limits.max_operations, budget)?;
+        census::native(
+            &actual,
+            &private,
+            "forwarded O",
+            |_, coordinate| {
+                let old = &input.operations()[operation_ordinal(&input, coordinate)?];
+                let new = &actual.operations()[operation_ordinal(&actual, coordinate)?];
+                // Only the private consumer of an already-replayed C/O relation
+                // may use C's prior source-authorized trap at the same coordinate.
+                Ok(old.coordinate == coordinate && old.operation == new.operation)
+            },
+            budget,
+        )?;
+        let reports =
+            derive_checked_output_guarded_obligations_v1(output, source.limits.max_operations)
+                .map_err(E::Formal)?;
+        census::formal(&actual, &private, &reports, budget)?;
+        Ok(reports)
+    }));
+    if ledger != budget.work_ledger_identity_v1() || budget.storage() < floor {
+        return Err(E::Resource(AssertOriginResourceV1::Accounting));
+    }
+    budget
+        .release_storage(budget.storage() - floor)
+        .map_err(E::Resource)?;
+    match result {
+        Ok(result) => result,
+        Err(_) => Err(E::SourceOutput(ProductionSourceOutputErrorV1::Panicked)),
+    }
 }
 
 // Actual capacity is reconciled before any push. Headers are scratch too;

@@ -65,6 +65,9 @@ impl<'input> CheckedStoreForwardingOutputV1<'input> {
     pub const fn grants_authority(&self) -> bool {
         false
     }
+    pub(crate) fn into_owned_parts(self) -> (Owner, Vec<CanonicalKirStoreForwardingRowV1>, usize) {
+        (self.output, self.applied.into_inert_rows(), self.retained)
+    }
     /// Independently checks the actual pair again on the supplied same ledger.
     pub fn replay(
         &self,

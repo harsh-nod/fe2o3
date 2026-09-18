@@ -9,6 +9,8 @@ use fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1;
 
 #[path = "production_checked_output_general_policy3_v1_tests.rs"]
 mod general_tests;
+#[path = "native_source_correspondence_replay_v1_tests.rs"]
+mod native_source_replay_tests;
 
 fn scalar_source(extra_block: bool, borrowed: bool) -> ProductionPreRankedKirOwnerV1 {
     let (ssa, launch) = fixture_with_blocks_and_symbol(

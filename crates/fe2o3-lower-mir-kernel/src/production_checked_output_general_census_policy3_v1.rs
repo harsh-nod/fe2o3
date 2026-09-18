@@ -31,15 +31,9 @@ pub(super) fn source(
         {
             return Err(refused("source", "Unit root ABI"));
         }
-        for local in function.locals() {
-            charge(budget, 1)?;
-            if matches!(
-                source.types()[local.ty().index() as usize].shape(),
-                SemanticTypeShapeV1::Array { .. }
-            ) {
-                return Err(E::PrivateAddressR2);
-            }
-        }
+        // Retained fixed arrays require the exact source/N/ranked relation and
+        // the independent actual-B/O private-memory census below. A source
+        // array type alone is neither an admission nor a refusal certificate.
         for block in function.blocks() {
             charge(budget, 1)?;
             match block.terminator().kind() {
@@ -158,12 +152,11 @@ pub(super) fn ranked(
                 | ProductionRankedOperationV1::SemanticExpression { .. }
                 | ProductionRankedOperationV1::RequireEquivalent { .. } => {}
                 ProductionRankedOperationV1::ViewInSpace { memory_space, .. }
-                    if *memory_space == dialect_kernel::MemorySpaceAttr::Global => {}
-                ProductionRankedOperationV1::ViewInSpace { memory_space, .. }
-                    if *memory_space == dialect_kernel::MemorySpaceAttr::Private =>
-                {
-                    return Err(E::PrivateAddressR2);
-                }
+                    if matches!(
+                        *memory_space,
+                        dialect_kernel::MemorySpaceAttr::Global
+                            | dialect_kernel::MemorySpaceAttr::Private
+                    ) => {}
                 _ => {
                     return Err(refused(
                         "ranked",
@@ -193,11 +186,15 @@ fn ty(ty: &Type) -> bool {
 
 pub(super) fn native(
     inventory: &CanonicalKirInventoryV1<'_>,
+    private: &private_memory::PrivateMemory<'_, '_>,
     phase: &'static str,
     mut authorized_trap: impl FnMut(usize, CanonicalKirOperationCoordinateV1) -> R<bool>,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<()> {
     charge(budget, 2)?;
+    if !private.is_for(inventory) {
+        return Err(refused(phase, "same-inventory private-memory census"));
+    }
     if inventory.kernels().is_empty() {
         return Err(refused(phase, "complete root-only module"));
     }
@@ -244,9 +241,9 @@ pub(super) fn native(
     if roots != inventory.kernels().len() {
         return Err(refused(phase, "complete root-only module"));
     }
-    for definition in inventory.definitions() {
+    for (index, definition) in inventory.definitions().iter().enumerate() {
         charge(budget, 1)?;
-        if !ty(definition.ty) {
+        if !ty(definition.ty) && !private.definition(index) {
             if matches!(definition.ty, Type::Pointer(pointer) if pointer.address_space == AddressSpace::Private)
             {
                 return Err(E::PrivateAddressR2);
@@ -278,6 +275,10 @@ pub(super) fn native(
             OperationKind::Store { access, .. } | OperationKind::GuardedStore { access, .. } => {
                 Some((*access, true))
             }
+            OperationKind::Alloca {
+                address_space: AddressSpace::Private,
+                ..
+            } if private.operation(ordinal) => continue,
             OperationKind::Alloca { .. } => return Err(E::PrivateAddressR2),
             OperationKind::Constant(_)
             | OperationKind::Compare { .. }
@@ -319,12 +320,6 @@ pub(super) fn native(
                 None
             }
             OperationKind::Call { callee, arguments } => {
-                if !authorized_trap(ordinal, row.coordinate)?
-                    || !arguments.is_empty()
-                    || !row.operation.results.is_empty()
-                {
-                    return Err(refused(phase, "source-authorized trap only"));
-                }
                 charge(
                     budget,
                     callee
@@ -334,6 +329,12 @@ pub(super) fn native(
                         .and_then(|n| n.checked_mul(8))
                         .ok_or_else(arithmetic)?,
                 )?;
+                if !arguments.is_empty()
+                    || !row.operation.results.is_empty()
+                    || !authorized_trap(ordinal, row.coordinate)?
+                {
+                    return Err(refused(phase, "source-authorized trap only"));
+                }
                 if !matches!(
                     fe2o3_kernel_ir::AmdGpuDiagnosticOperation::from_intrinsic_call(
                         callee, arguments
@@ -357,6 +358,9 @@ pub(super) fn native(
         match memory {
             Some((access, write)) => {
                 if access.address_space == AddressSpace::Private {
+                    if private.operation(ordinal) {
+                        continue;
+                    }
                     return Err(E::PrivateAddressR2);
                 }
                 if access.address_space != AddressSpace::Global
@@ -386,10 +390,14 @@ pub(super) fn native(
 
 pub(super) fn formal(
     inventory: &CanonicalKirInventoryV1<'_>,
+    private: &private_memory::PrivateMemory<'_, '_>,
     reports: &[FormalMemoryObligations],
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<()> {
     charge(budget, 2)?;
+    if !private.is_for(inventory) {
+        return Err(refused("formal O", "same-inventory private-memory census"));
+    }
     if reports.len() != inventory.kernels().len() || reports.is_empty() {
         return Err(refused("formal O", "exact kernel report roster"));
     }
@@ -413,7 +421,8 @@ pub(super) fn formal(
         let mut next = 0usize;
         for block in &inventory.blocks()[function.blocks.clone()] {
             charge(budget, 1)?;
-            for operation in &inventory.operations()[block.operations.clone()] {
+            for ordinal in block.operations.clone() {
+                let operation = &inventory.operations()[ordinal];
                 charge(budget, 1)?;
                 let (kind, access) = match &operation.operation.kind {
                     OperationKind::Load { access, .. }
@@ -426,6 +435,12 @@ pub(super) fn formal(
                     }
                     _ => continue,
                 };
+                if access.address_space == AddressSpace::Private {
+                    if !private.operation(ordinal) {
+                        return Err(refused("formal O", "unproved private access"));
+                    }
+                    continue;
+                }
                 charge(budget, 6)?;
                 let fact = report.accesses().get(next).ok_or_else(|| {
                     refused("formal O", "every physical access has an actual-O fact")
