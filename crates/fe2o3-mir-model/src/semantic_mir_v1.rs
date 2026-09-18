@@ -18,10 +18,15 @@ use sha2::{Digest, Sha256};
 
 mod canonical_decode;
 mod capability_v29;
+mod function_commitment_v1;
 mod target_properties;
 
 pub use canonical_decode::SemanticMirDecodeErrorV1;
 pub use capability_v29::{SemanticExecutionOperationV29, SemanticExecutionRoleV29};
+use function_commitment_v1::CanonicalCommitmentSinkV1;
+pub use function_commitment_v1::{
+    SemanticFunctionCanonicalCommitmentV1, canonical_function_commitment_v1,
+};
 use target_properties::{
     target_object_size_bound_in, target_pointer_profile, target_vector_alignment,
     validate_target_primitive,
@@ -16929,16 +16934,20 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
     required
 }
 
-struct CanonicalWriterV1 {
+struct CanonicalWriterV1<'a> {
     bytes: Vec<u8>,
     max: u64,
+    written: u64,
+    commitment: Option<CanonicalCommitmentSinkV1<'a>>,
 }
 
-impl CanonicalWriterV1 {
+impl CanonicalWriterV1<'_> {
     fn new(max: u64) -> Self {
         Self {
             bytes: Vec::new(),
             max,
+            written: 0,
+            commitment: None,
         }
     }
 
@@ -16946,11 +16955,9 @@ impl CanonicalWriterV1 {
         self.bytes
     }
 
-    fn reserve(&mut self, additional: usize) -> Result<(), SemanticMirErrorV1> {
-        let next = u64::try_from(self.bytes.len())
-            .map_err(|_| SemanticMirErrorV1::ArithmeticOverflow {
-                resource: SemanticMirResourceV1::CanonicalBytes,
-            })?
+    fn reserve(&mut self, additional: usize) -> Result<u64, SemanticMirErrorV1> {
+        let next = self
+            .written
             .checked_add(u64::try_from(additional).map_err(|_| {
                 SemanticMirErrorV1::ArithmeticOverflow {
                     resource: SemanticMirResourceV1::CanonicalBytes,
@@ -16966,17 +16973,34 @@ impl CanonicalWriterV1 {
                 max: self.max,
             });
         }
-        self.bytes
-            .try_reserve(additional)
-            .map_err(|_| SemanticMirErrorV1::AllocationFailed {
-                resource: SemanticMirResourceV1::CanonicalBytes,
+        if self.commitment.is_none() {
+            self.bytes.try_reserve(additional).map_err(|_| {
+                SemanticMirErrorV1::AllocationFailed {
+                    resource: SemanticMirResourceV1::CanonicalBytes,
+                }
             })?;
-        Ok(())
+        }
+        Ok(next)
     }
 
     fn raw(&mut self, bytes: &[u8]) -> Result<(), SemanticMirErrorV1> {
-        self.reserve(bytes.len())?;
-        self.bytes.extend_from_slice(bytes);
+        if let Some(sink) = &mut self.commitment {
+            let work =
+                bytes
+                    .len()
+                    .checked_add(1)
+                    .ok_or(SemanticMirErrorV1::ArithmeticOverflow {
+                        resource: SemanticMirResourceV1::ValidationWork,
+                    })?;
+            (sink.charge_work)(work)?;
+        }
+        let next = self.reserve(bytes.len())?;
+        if let Some(sink) = &mut self.commitment {
+            sink.sha256.update(bytes);
+        } else {
+            self.bytes.extend_from_slice(bytes);
+        }
+        self.written = next;
         Ok(())
     }
 
@@ -16994,6 +17018,9 @@ impl CanonicalWriterV1 {
     }
 
     fn count(&mut self, count: usize) -> Result<(), SemanticMirErrorV1> {
+        if let Some(sink) = &mut self.commitment {
+            (sink.charge_work)(count)?;
+        }
         self.u32(
             u32::try_from(count).map_err(|_| SemanticMirErrorV1::ArithmeticOverflow {
                 resource: SemanticMirResourceV1::CanonicalBytes,
