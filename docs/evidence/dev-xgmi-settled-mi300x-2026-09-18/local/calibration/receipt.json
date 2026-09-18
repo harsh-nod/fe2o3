@@ -1,0 +1,19 @@
+{
+  "command": [
+    "python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/test_native.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789773799699715538,
+  "group_absent": true,
+  "pid": 1821938,
+  "started_ns": 1789773799079220870,
+  "stderr_sha256": "7ac80646b9ecad2596398cbdf257dc5a04bb766e73a0ae5e3a89d712c76b36f2",
+  "stdin_sha256": null,
+  "stdout_sha256": "a7f71c95e7d10f6118cadf12bd9d3cc320cfd0cd87503f39b8a6bf5a5aff469d",
+  "timeout_seconds": 60
+}

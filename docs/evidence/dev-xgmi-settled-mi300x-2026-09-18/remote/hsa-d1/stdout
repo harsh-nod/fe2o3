@@ -1,0 +1,1 @@
+backend=hsa schema=fe2o3.xgmi-peer-benchmark.v1 gpu_indices=0,1 unique_ids=ab83d2ffef0d3cdf,d2e26fef80cf5c33 targets=gfx942,gfx942 xnack=disabled bytes=1048576 depth=1 warmups=10 samples=30 forward_p50_ns=29995 forward_p95_ns=31547 forward_p50_GBps=34.958 reverse_p50_ns=29944 reverse_p95_ns=30406 reverse_p50_GBps=35.018

@@ -1,0 +1,19 @@
+{
+  "command": [
+    "python3",
+    "-B",
+    "benchmarks/runtime_gfx942/test_copy_host_observe.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789773799970783653,
+  "group_absent": true,
+  "pid": 1821947,
+  "started_ns": 1789773799701517676,
+  "stderr_sha256": "79f3b3df5c78c600b6acf3186df32e3aeab0e44e821711dbbf5d01fd34d53011",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 60
+}

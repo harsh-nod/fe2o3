@@ -1,0 +1,11 @@
+{
+  "absence": true,
+  "cleaned": true,
+  "collected": true,
+  "created": true,
+  "failure": null,
+  "local_payload": "/home/harsh/.codex-tmp/fe2o3-xgmi-settled-20260918.xmidl1oh",
+  "local_payload_absent": true,
+  "native_failure": null,
+  "native_success": true
+}

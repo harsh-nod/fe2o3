@@ -1,0 +1,1 @@
+backend=hip schema=fe2o3.xgmi-peer-benchmark.v1 devices=0,1 unique_ids=ab83d2ffef0d3cdf,d2e26fef80cf5c33 targets=gfx942:sramecc+:xnack-,gfx942:sramecc+:xnack- bytes=1048576 depth=1 warmups=10 samples=30 peer_access=enabled forward_p50_ns=42904 forward_p95_ns=43695 forward_p50_GBps=24.440 reverse_p50_ns=42794 reverse_p95_ns=43756 reverse_p50_GBps=24.503

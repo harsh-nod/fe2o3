@@ -1,0 +1,20 @@
+{
+  "command": [
+    "python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-creation-root-cpu-2026-09-18/verify.py",
+    "--live"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789773800594330471,
+  "group_absent": true,
+  "pid": 1821991,
+  "started_ns": 1789773799972709406,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "6f69f7222dec01a360950f69405dc321db62f860d3d5e818b168197558789dcf",
+  "timeout_seconds": 60
+}
