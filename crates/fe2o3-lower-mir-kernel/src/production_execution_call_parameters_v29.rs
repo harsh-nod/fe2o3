@@ -74,7 +74,10 @@ struct PreparedExecutionParametersV29<'scope> {
     nominal_floor: u32,
 }
 
+#[track_caller]
 fn execution_call_error_v29() -> ProductionSemanticKirErrorV1 {
+    #[cfg(test)]
+    eprintln!("execution call error at {}", std::panic::Location::caller());
     unsupported(
         0,
         None,

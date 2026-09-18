@@ -507,34 +507,38 @@ fn checked_root_orchestration_obeys_exact_ledger_boundaries() {
         };
         let branches = !matches!(fixture, ScopedFixture::Repeated);
         let (result, work, storage) = run_lifecycle(branches, mode, 10_000_000, 10_000_000);
-        result.unwrap();
+        result.unwrap_or_else(|error| panic!("{fixture:?}: {error:?}"));
         assert!(run_lifecycle(branches, mode, work, storage).0.is_ok());
         assert!(run_lifecycle(branches, mode, work - 1, storage).0.is_err());
         assert!(run_lifecycle(branches, mode, work, storage - 1).0.is_err());
     }
 }
 
+fn check_scoped_fixture(branches: bool, fixture: ScopedFixture) {
+    let result = run_lifecycle(
+        branches,
+        Fault::Orchestrated {
+            groups: 2,
+            limits: ProductionSemanticKirLimitsV1::default(),
+            fixture,
+        },
+        10_000_000,
+        10_000_000,
+    )
+    .0
+    .unwrap_or_else(|error| panic!("{fixture:?}: {error:?}"));
+    assert_eq!(result.len(), if branches { 4 } else { 3 });
+}
+
 #[test]
-fn checked_root_preserves_repeated_instances_and_scoped_arrays() {
-    for (branches, fixture) in [
-        (false, ScopedFixture::Repeated),
-        (false, ScopedFixture::Arrays),
-        (true, ScopedFixture::Arrays),
-    ] {
-        let result = run_lifecycle(
-            branches,
-            Fault::Orchestrated {
-                groups: 2,
-                limits: ProductionSemanticKirLimitsV1::default(),
-                fixture,
-            },
-            10_000_000,
-            10_000_000,
-        )
-        .0
-        .unwrap();
-        assert_eq!(result.len(), if branches { 4 } else { 3 });
-    }
+fn checked_root_preserves_repeated_instances() {
+    check_scoped_fixture(false, ScopedFixture::Repeated);
+}
+
+#[test]
+fn checked_root_preserves_scoped_arrays() {
+    check_scoped_fixture(false, ScopedFixture::Arrays);
+    check_scoped_fixture(true, ScopedFixture::Arrays);
 }
 
 #[test]
