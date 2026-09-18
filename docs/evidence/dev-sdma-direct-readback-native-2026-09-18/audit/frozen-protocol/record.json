@@ -1,0 +1,19 @@
+{
+  "command": [
+    "python3",
+    "-B",
+    "raw/native/collected/test_protocol.py",
+    "-v"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-sdma-direct-readback-native-2026-09-18",
+  "started_ns": 1789735725913046686,
+  "bound_seconds": 60,
+  "process_group": 1888449,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789735726080823883,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "51d6d4141264a6e003ce6fd08ff4c7e24f611c749abae69be2372b4bd964856a"
+}

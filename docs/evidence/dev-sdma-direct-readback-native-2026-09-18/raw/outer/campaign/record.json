@@ -1,0 +1,23 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-control-20260918/controller.py",
+    "--root-ready-approved",
+    "--remote-directory",
+    "/tmp/fe2o3-sdma-readback-fd1cf3dd-20260918.2gdfkcmf",
+    "--output",
+    "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-bundle-fd1cf3dd-20260918",
+  "started_ns": 1789735310739621398,
+  "bound_seconds": 1600,
+  "process_group": 1850006,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789735393609191712,
+  "stdout_sha256": "55a96fd761dec2822b7eff05f64faae6e03829ea94ca644660ec8d66c2e84e16",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

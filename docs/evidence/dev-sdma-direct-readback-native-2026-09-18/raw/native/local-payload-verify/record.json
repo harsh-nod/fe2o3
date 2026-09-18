@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "-c",
+    "import json,pathlib,protocol; root=pathlib.Path.cwd(); manifest=protocol.payload(root); print(json.dumps({'payload_sha256':protocol.sha(root/'payload.json'),'files':len(manifest),'verified':True},sort_keys=True))"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-bundle-fd1cf3dd-20260918",
+  "started_ns": 1789735310994717251,
+  "bound_seconds": 30,
+  "process_group": 1850035,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789735311163235358,
+  "stdout_sha256": "c5e585245a6928d92d3a87cfbe7bb6e7d75e3344d9a34b5a0ff43f8a3b8fe183",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

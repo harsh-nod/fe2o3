@@ -1,0 +1,9 @@
+test_both_native_case_fixtures (__main__.ProtocolTests.test_both_native_case_fixtures) ... ok
+test_cross_case_and_unknown_names_reject (__main__.ProtocolTests.test_cross_case_and_unknown_names_reject) ... ok
+test_fixed_windows_and_raw_endpoint (__main__.ProtocolTests.test_fixed_windows_and_raw_endpoint) ... ok
+test_harness_and_marker_negatives (__main__.ProtocolTests.test_harness_and_marker_negatives) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.027s
+
+OK

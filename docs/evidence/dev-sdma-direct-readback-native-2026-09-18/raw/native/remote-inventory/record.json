@@ -1,0 +1,27 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -B - inventory /tmp/fe2o3-sdma-readback-fd1cf3dd-20260918.2gdfkcmf"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-bundle-fd1cf3dd-20260918",
+  "started_ns": 1789735374856542593,
+  "bound_seconds": 120,
+  "process_group": 1855358,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": "5a1b24b83515f5f21181aa1df96bec23ab4b6319181768e0aa4d4b0fee224098",
+  "finished_ns": 1789735375928947665,
+  "stdout_sha256": "f191592cf18494dc26d1349d5efb16efbe80acc7fe4134f5e5b4c5c363430fdc",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

@@ -1,0 +1,48 @@
+{
+  "name": "host-delayed",
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/tmp/fe2o3-sdma-readback-fd1cf3dd-20260918.2gdfkcmf/source/copy-host-observe.py",
+    "--gpu-index",
+    "4",
+    "--pci-bdf",
+    "0000:85:00.0",
+    "--unique-id",
+    "0x54f88318ca05093d",
+    "--samples",
+    "1"
+  ],
+  "cwd": "/tmp/fe2o3-sdma-readback-fd1cf3dd-20260918.2gdfkcmf",
+  "environment": {
+    "HOME": "/home/harsh",
+    "PATH": "/usr/bin:/bin:/opt/rocm/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "HSA_XNACK": "0",
+    "FE2O3_TEST_NATIVE_UNIQUE_ID": "0x54f88318ca05093d",
+    "FE2O3_TEST_NATIVE_ISOLATED": "1"
+  },
+  "started": {
+    "realtime_ns": 1789735372432721288,
+    "monotonic_ns": 7234269854394241
+  },
+  "spawned": {
+    "realtime_ns": 1789735372435535312,
+    "monotonic_ns": 7234269857207705
+  },
+  "status": 0,
+  "error": null,
+  "process_group": 3275023,
+  "group_absent": true,
+  "t0": {
+    "realtime_ns": 1789735374554399204,
+    "monotonic_ns": 7234271976071766
+  },
+  "outer_bound_seconds": 75,
+  "finished": {
+    "realtime_ns": 1789735374554461937,
+    "monotonic_ns": 7234271976133639
+  },
+  "stdout_sha256": "c5869a0176a766450dd5d3934e9b945aff45033c4dfb7b3672b1ebbcbbd74545",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

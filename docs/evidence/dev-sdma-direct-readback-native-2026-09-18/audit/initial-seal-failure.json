@@ -1,0 +1,10 @@
+{
+  "candidate_sha256": "ff2b60bb568b27450e1505b2e832f77ecec82380e427cf978540deae741fd75e",
+  "missing": [
+    "raw/native/collected/cpu/SHA256SUMS"
+  ],
+  "extra": [],
+  "changed": [],
+  "accepted": false,
+  "cause": "basename exclusion omitted nested CPU SHA256SUMS; no native receipt changed"
+}

@@ -1,0 +1,475 @@
+{
+  "omitted": {
+    "raw/native/collected/runtime-tests": {
+      "bytes": 58532256,
+      "retained_elsewhere": null,
+      "sha256": "dbafaf826cc18b2d785015a3b4bb809c8f329f66b6f605a364a6a0e41148b145"
+    }
+  },
+  "retained": {
+    "control/CONTROL.md": {
+      "sha256": "9dd7df8483d97b511f747f68b6a21e7003a1b16ddab7dde45a6b601eb902d04d",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-control-20260918/CONTROL.md"
+    },
+    "control/controller.py": {
+      "sha256": "b4332a536e3cf36b9f79d56cc4b7d6b2290df7c199d7a52fe8683c80b4771aec",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-control-20260918/controller.py"
+    },
+    "control/create.py": {
+      "sha256": "b30813dd7b1bceb650da92b35bc42174c43de2a835917093b425c7ed97f69cf8",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-control-20260918/create.py"
+    },
+    "control/remote_control.py": {
+      "sha256": "5a1b24b83515f5f21181aa1df96bec23ab4b6319181768e0aa4d4b0fee224098",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-control-20260918/remote_control.py"
+    },
+    "control/test_controller.py": {
+      "sha256": "0cd5c384257bdc9cdf19e82417903ace703b27c2639204b23387520b86674c99",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-control-20260918/test_controller.py"
+    },
+    "raw/controller-local/controller.json": {
+      "sha256": "7da94694ae742f51750c168e617f71823f29778135edbb11e2f9e19bd4b53bd3",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-controller-local-20260918/controller.json"
+    },
+    "raw/controller-local/local-controller-wiring-tests/record.json": {
+      "sha256": "e160e6613c3758fc464cd8fdb4baae5cfee890ec0fb805c70ce23b64858b3019",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-controller-local-20260918/local-controller-wiring-tests/record.json"
+    },
+    "raw/controller-local/local-controller-wiring-tests/stderr.log": {
+      "sha256": "1efbc529b820ff21b82335c0d9eddfc6f5f601984bcbc58b07200f3f9c0fc9b0",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-controller-local-20260918/local-controller-wiring-tests/stderr.log"
+    },
+    "raw/controller-local/local-controller-wiring-tests/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-controller-local-20260918/local-controller-wiring-tests/stdout.log"
+    },
+    "raw/controller-local/local-payload-verify/record.json": {
+      "sha256": "5924088b1bb65bc6b97332499e1026fa54dd368c0b8e450034d6fd988866fb52",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-controller-local-20260918/local-payload-verify/record.json"
+    },
+    "raw/controller-local/local-payload-verify/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-controller-local-20260918/local-payload-verify/stderr.log"
+    },
+    "raw/controller-local/local-payload-verify/stdout.log": {
+      "sha256": "c5e585245a6928d92d3a87cfbe7bb6e7d75e3344d9a34b5a0ff43f8a3b8fe183",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-controller-local-20260918/local-payload-verify/stdout.log"
+    },
+    "raw/controller-local/local-protocol-tests/record.json": {
+      "sha256": "b9ebecb4dd74aa5138f475a1c321531ec036c17026f5d04481c0e6d8b3cdbd92",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-controller-local-20260918/local-protocol-tests/record.json"
+    },
+    "raw/controller-local/local-protocol-tests/stderr.log": {
+      "sha256": "51d6d4141264a6e003ce6fd08ff4c7e24f611c749abae69be2372b4bd964856a",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-controller-local-20260918/local-protocol-tests/stderr.log"
+    },
+    "raw/controller-local/local-protocol-tests/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-controller-local-20260918/local-protocol-tests/stdout.log"
+    },
+    "raw/create/create/record.json": {
+      "sha256": "e99ca3ab6a4874b4fa7b70f0329f81f3a817c783b5028e7d845961854e055dd0",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-create-20260918/create/record.json"
+    },
+    "raw/create/create/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-create-20260918/create/stderr.log"
+    },
+    "raw/create/create/stdout.log": {
+      "sha256": "7a4135639da88a9ed3a27e506528d5a9a16c1e8459dc17224e1540d3b54e59e6",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-create-20260918/create/stdout.log"
+    },
+    "raw/native/collect/record.json": {
+      "sha256": "224249e50bc2f7208017463cff25049ced060eb17ef1885acc92b1399a13a867",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collect/record.json"
+    },
+    "raw/native/collect/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collect/stderr.log"
+    },
+    "raw/native/collect/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collect/stdout.log"
+    },
+    "raw/native/collected/PLAN.md": {
+      "sha256": "9ee663925a4d28b93845f2bc16a0f0847222b2ecc4d519fa837edb5175e8f05a",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/PLAN.md"
+    },
+    "raw/native/collected/approval.json": {
+      "sha256": "0d8831e3b3f6b50d10ef072f0fcaee4dc33e397e5479f5464b56a0b9212431af",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/approval.json"
+    },
+    "raw/native/collected/binding.json": {
+      "sha256": "9e7fcef9d124df7ba2e3074f8a75c6cc5cb97c7050da4b9ac9f49e40403c47e0",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/binding.json"
+    },
+    "raw/native/collected/commit-signature.stderr": {
+      "sha256": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/commit-signature.stderr"
+    },
+    "raw/native/collected/commit-signature.stdout": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/commit-signature.stdout"
+    },
+    "raw/native/collected/cpu/SHA256SUMS": {
+      "sha256": "d35435e8d78df345f32697c8468a16b1aa28a7c008b845b9383a3d9c9bd2f686",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/cpu/SHA256SUMS"
+    },
+    "raw/native/collected/cpu/binaries-after-final.log": {
+      "sha256": "0281813399a6e1eac47ce34437e7542d715b813114a36e247721df0232dcf9d2",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/cpu/binaries-after-final.log"
+    },
+    "raw/native/collected/cpu/binaries-before-final.log": {
+      "sha256": "0281813399a6e1eac47ce34437e7542d715b813114a36e247721df0232dcf9d2",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/cpu/binaries-before-final.log"
+    },
+    "raw/native/collected/cpu/source-after-final.log": {
+      "sha256": "a4241421d6ce92b74849a0df45ea94d4fe7a2e2f13f7348b7ee7078b8c3d24f1",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/cpu/source-after-final.log"
+    },
+    "raw/native/collected/cpu/source-before-final.log": {
+      "sha256": "a4241421d6ce92b74849a0df45ea94d4fe7a2e2f13f7348b7ee7078b8c3d24f1",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/cpu/source-before-final.log"
+    },
+    "raw/native/collected/owner.json": {
+      "sha256": "3ed7d701467fd433a18ffeacb0c9fa469f719df037d65f4d3b080ba51f3ed4cd",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/owner.json"
+    },
+    "raw/native/collected/payload.json": {
+      "sha256": "395806274d56b787af9bdd43771ef6a0cf422e2afbf7be190ae7a68930f059b9",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/payload.json"
+    },
+    "raw/native/collected/prepare.py": {
+      "sha256": "96140eb8d6ae758a7494a32b96a8aee85ebc9069eabbe8dee95ed1e4eb7fcd57",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/prepare.py"
+    },
+    "raw/native/collected/protocol.py": {
+      "sha256": "01bac780536a9cf39c24bf3c97fddf7e592c7ed20568022570c7f0aa44315409",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/protocol.py"
+    },
+    "raw/native/collected/results/campaign.json": {
+      "sha256": "3e7201674d800124ffaca5174630fbea8111a28393c15e51e5abc298aef29d39",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/campaign.json"
+    },
+    "raw/native/collected/results/controller-launch.json": {
+      "sha256": "6971bdcd2fc5fd41fe4821c6d3dcc48135e034818e6087a5847d883a2bbdc1c3",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/controller-launch.json"
+    },
+    "raw/native/collected/results/device-delayed/record.json": {
+      "sha256": "bc153cb17862e35d797947f2a9be1ba20495eeeb6c33418a517be607b9136dd4",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/device-delayed/record.json"
+    },
+    "raw/native/collected/results/device-delayed/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/device-delayed/stderr.log"
+    },
+    "raw/native/collected/results/device-delayed/stdout.log": {
+      "sha256": "a249e7ad7dcabffec800f6a00b4b0245866793effb987295fded8b743001e7c2",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/device-delayed/stdout.log"
+    },
+    "raw/native/collected/results/device-immediate/record.json": {
+      "sha256": "b2cc70978257331f2142375a5a727c425646944005be1a5b9ae9c78af3622907",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/device-immediate/record.json"
+    },
+    "raw/native/collected/results/device-immediate/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/device-immediate/stderr.log"
+    },
+    "raw/native/collected/results/device-immediate/stdout.log": {
+      "sha256": "491adc18e6892edddd03774e5f0d1b080116dbeffdbf662366ae9dc348b05b66",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/device-immediate/stdout.log"
+    },
+    "raw/native/collected/results/device-preflight/record.json": {
+      "sha256": "15859f50ac940755e0e81ee792a47f36554e04bead781244276b0af05ef9f887",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/device-preflight/record.json"
+    },
+    "raw/native/collected/results/device-preflight/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/device-preflight/stderr.log"
+    },
+    "raw/native/collected/results/device-preflight/stdout.log": {
+      "sha256": "6c9a1ac4e4cddfeed9c898b6b3d5be456f7d9cdc7f06a3d495944420ba9b2baf",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/device-preflight/stdout.log"
+    },
+    "raw/native/collected/results/device-test/record.json": {
+      "sha256": "82c74cb870fa44122524a7c0a2855b6b1e4e9ae88bb48926ea02f2052e553bf2",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/device-test/record.json"
+    },
+    "raw/native/collected/results/device-test/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/device-test/stderr.log"
+    },
+    "raw/native/collected/results/device-test/stdout.log": {
+      "sha256": "aa12611561ba37f42d52697aed76f533d00dd95e31bbea43c62314649a7e20d0",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/device-test/stdout.log"
+    },
+    "raw/native/collected/results/host-delayed/record.json": {
+      "sha256": "2a5ec0b9f106a0b0efb7d710355c5907e07782aa17e97746c45b778c6780433a",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/host-delayed/record.json"
+    },
+    "raw/native/collected/results/host-delayed/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/host-delayed/stderr.log"
+    },
+    "raw/native/collected/results/host-delayed/stdout.log": {
+      "sha256": "c5869a0176a766450dd5d3934e9b945aff45033c4dfb7b3672b1ebbcbbd74545",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/host-delayed/stdout.log"
+    },
+    "raw/native/collected/results/host-immediate/record.json": {
+      "sha256": "4f1e1861f5af53cc2d7ef3833fbb55d54806da04507647ff98e8a76f63055ed5",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/host-immediate/record.json"
+    },
+    "raw/native/collected/results/host-immediate/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/host-immediate/stderr.log"
+    },
+    "raw/native/collected/results/host-immediate/stdout.log": {
+      "sha256": "066fc6c1ab57c95162f2f4320a9f2205ba0bb448179457e73c9a0a9fcecaf559",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/host-immediate/stdout.log"
+    },
+    "raw/native/collected/results/host-preflight/record.json": {
+      "sha256": "a2d3beebbf39651d4faa3acfb8d36a9db282faf31fb577ec0686862258e12c25",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/host-preflight/record.json"
+    },
+    "raw/native/collected/results/host-preflight/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/host-preflight/stderr.log"
+    },
+    "raw/native/collected/results/host-preflight/stdout.log": {
+      "sha256": "91fc115b82326d9a9b45de7bce31db13127f1d70a8febd6c6829166d7f6d510a",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/host-preflight/stdout.log"
+    },
+    "raw/native/collected/results/host-test/record.json": {
+      "sha256": "c7df25128b1c775a124106a03c557f272002ba2aa6b12777adb88d78ab60e614",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/host-test/record.json"
+    },
+    "raw/native/collected/results/host-test/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/host-test/stderr.log"
+    },
+    "raw/native/collected/results/host-test/stdout.log": {
+      "sha256": "9d1f01d7ba103236976c8e2d28e1f1a3f4e2133fc13438243da7fab191d6a01e",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/host-test/stdout.log"
+    },
+    "raw/native/collected/results/placement/record.json": {
+      "sha256": "a7beeb25d1d2e101925741dfe0d8e7555f4f6bb9f7e4fab09811e423b9875afa",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/placement/record.json"
+    },
+    "raw/native/collected/results/placement/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/placement/stderr.log"
+    },
+    "raw/native/collected/results/placement/stdout.log": {
+      "sha256": "23d6010acf0e31aa5be42d14c633c510d8202cf16d1025afe6cd7c8f32378d10",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/placement/stdout.log"
+    },
+    "raw/native/collected/results/topology/record.json": {
+      "sha256": "3e908ec990e341f00828cee9eef162726d3f6ee3558a0262bf6a1592128dc941",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/topology/record.json"
+    },
+    "raw/native/collected/results/topology/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/topology/stderr.log"
+    },
+    "raw/native/collected/results/topology/stdout.log": {
+      "sha256": "8329d765fd34397fbc7c2536a13d566e0e49471cea498af3f44d038e09de0e86",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/results/topology/stdout.log"
+    },
+    "raw/native/collected/run.py": {
+      "sha256": "490fcb35764cb197b091132a3baaa139bc995f9a5cd8567324b47b2608bd2fff",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/run.py"
+    },
+    "raw/native/collected/source/cold_allocation.rs": {
+      "sha256": "0eb76333ba6db6aa3cf19168c921ea6a7f81ed204230eaf99ebf3b64b0ef025e",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/source/cold_allocation.rs"
+    },
+    "raw/native/collected/source/compute_dispatch.rs": {
+      "sha256": "4966cd8b76cfbdb4edbd39a8c1117df44d3c3d70d2178b61799090b403758f26",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/source/compute_dispatch.rs"
+    },
+    "raw/native/collected/source/copy-host-observe.py": {
+      "sha256": "5d37b09bf0823854c6a45b914d866c042c1e65486cd96c6301285a0147ae6c51",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/source/copy-host-observe.py"
+    },
+    "raw/native/collected/source/kfd_backend_sdma_seam.rs": {
+      "sha256": "b855fd1e3f72f4d9017aa9157f3932c94f428ad41fe45ffbe9506eb75041174a",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/source/kfd_backend_sdma_seam.rs"
+    },
+    "raw/native/collected/source/queue_live.rs": {
+      "sha256": "86bd5e1ab89dd8bfcf029df9ea96e0a8327364a122b937088241e32ef52c4b46",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/source/queue_live.rs"
+    },
+    "raw/native/collected/source/r26-host-guard.py": {
+      "sha256": "669a25592e8ba72743bed9c0a3ced39ad392f104746c2ca04a7f2867ed8d7ca3",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/source/r26-host-guard.py"
+    },
+    "raw/native/collected/source/retained_release_tests.rs": {
+      "sha256": "7c0d7fceac0a66e57af238e6e1d19dc1ba94e8c9a7f1d58fb99b853c3b6f004d",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/source/retained_release_tests.rs"
+    },
+    "raw/native/collected/source/runtime-primary-queue-release-v1.md": {
+      "sha256": "0c3e5c1b802254ceec294da7d294d8f3235f53e7b261a378fb62c65a52e5a637",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/source/runtime-primary-queue-release-v1.md"
+    },
+    "raw/native/collected/source/sdma_host_read.rs": {
+      "sha256": "8eea9258bf0e84c609764afa48aa185f7afd21ceb4a02b3db54c769b7300c87f",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/source/sdma_host_read.rs"
+    },
+    "raw/native/collected/test_protocol.py": {
+      "sha256": "ba45a609876d7e7e2073ff2fcb304ccbdf6d1b7ae9578e018a423ce8bf506fbe",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collected/test_protocol.py"
+    },
+    "raw/native/collection-verified.json": {
+      "sha256": "feb43d77d097d68da05a6d55f41e87fcd57429f3f8d11ff66cba26c6c2f76d12",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/collection-verified.json"
+    },
+    "raw/native/controller.json": {
+      "sha256": "1d46ef776a2746bf25c9bfaa91cbcb6e3dac7a1aac09f691e62d294d38f414c5",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/controller.json"
+    },
+    "raw/native/local-controller-wiring-tests/record.json": {
+      "sha256": "82d8579955aca1b272d876bfb9ab36c0f095fdf409b5428e3881c92dce446663",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/local-controller-wiring-tests/record.json"
+    },
+    "raw/native/local-controller-wiring-tests/stderr.log": {
+      "sha256": "5648c25863e1afc140b1459692115719d3b1a81edd510eb4d2bc12d0ac8a8538",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/local-controller-wiring-tests/stderr.log"
+    },
+    "raw/native/local-controller-wiring-tests/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/local-controller-wiring-tests/stdout.log"
+    },
+    "raw/native/local-payload-verify/record.json": {
+      "sha256": "ff2f459ba90581c65c30776f9b5341f11442f19ae11e8afd1e04adea3ff6bf67",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/local-payload-verify/record.json"
+    },
+    "raw/native/local-payload-verify/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/local-payload-verify/stderr.log"
+    },
+    "raw/native/local-payload-verify/stdout.log": {
+      "sha256": "c5e585245a6928d92d3a87cfbe7bb6e7d75e3344d9a34b5a0ff43f8a3b8fe183",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/local-payload-verify/stdout.log"
+    },
+    "raw/native/local-protocol-tests/record.json": {
+      "sha256": "edf08639438d4b991cd82676359eaba4a5e0e1d6bacca44336de252e99928dc6",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/local-protocol-tests/record.json"
+    },
+    "raw/native/local-protocol-tests/stderr.log": {
+      "sha256": "c31608584165e613e52a1d4962ab81274de88d1cdb554b69bdde0160945c0332",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/local-protocol-tests/stderr.log"
+    },
+    "raw/native/local-protocol-tests/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/local-protocol-tests/stdout.log"
+    },
+    "raw/native/native-outer/record.json": {
+      "sha256": "8b4d1ee24c10da5259132527b797646391dd5b596418b77788aa38fba48ee9e4",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/native-outer/record.json"
+    },
+    "raw/native/native-outer/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/native-outer/stderr.log"
+    },
+    "raw/native/native-outer/stdout.log": {
+      "sha256": "d51c0df7cdf3b42326e9d1e7364182697d92c58735313879c376882d5603467c",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/native-outer/stdout.log"
+    },
+    "raw/native/remote-approve/record.json": {
+      "sha256": "1864aade16903ddd2fdcb6e3eeda27c97cd7c4a8a63a47aa3ec30825093ae9fc",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/remote-approve/record.json"
+    },
+    "raw/native/remote-approve/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/remote-approve/stderr.log"
+    },
+    "raw/native/remote-approve/stdout.log": {
+      "sha256": "bd76c0dc1ef7981870e0281f86512ee8312c0aab5d22bc4b98cf637f5533c11d",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/remote-approve/stdout.log"
+    },
+    "raw/native/remote-cleanup/record.json": {
+      "sha256": "9c7e7ef71bcac958885a65ea0844b7284638a7537b0d7c22400d816eed58ac75",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/remote-cleanup/record.json"
+    },
+    "raw/native/remote-cleanup/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/remote-cleanup/stderr.log"
+    },
+    "raw/native/remote-cleanup/stdout.log": {
+      "sha256": "746a01b85242da14dc43208b9270d2e9035fcd7d592ae0b0651a65588f72b947",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/remote-cleanup/stdout.log"
+    },
+    "raw/native/remote-empty/record.json": {
+      "sha256": "4d56dcb6ee64c8497f34d076f40672bec99d41201a61f368635fe93a3bdb7fec",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/remote-empty/record.json"
+    },
+    "raw/native/remote-empty/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/remote-empty/stderr.log"
+    },
+    "raw/native/remote-empty/stdout.log": {
+      "sha256": "d38bee5d990bff0c349fe6cf99198fe18892147fcb4195b651f2dab29651357f",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/remote-empty/stdout.log"
+    },
+    "raw/native/remote-independent-absence/record.json": {
+      "sha256": "a24ccee6c607f7c7631064dcf8ad71766845753f17685b15afe2a5a8c5599112",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/remote-independent-absence/record.json"
+    },
+    "raw/native/remote-independent-absence/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/remote-independent-absence/stderr.log"
+    },
+    "raw/native/remote-independent-absence/stdout.log": {
+      "sha256": "f6394ac7a855188050888e4c3d30033db0faf2c40a4ba71a1cf65e9736ea1d91",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/remote-independent-absence/stdout.log"
+    },
+    "raw/native/remote-inventory/record.json": {
+      "sha256": "7b9d403a49d462a5ce30ff6fb8e18b1e24b41e91db1e3f8ecb8a552652a50a38",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/remote-inventory/record.json"
+    },
+    "raw/native/remote-inventory/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/remote-inventory/stderr.log"
+    },
+    "raw/native/remote-inventory/stdout.log": {
+      "sha256": "f191592cf18494dc26d1349d5efb16efbe80acc7fe4134f5e5b4c5c363430fdc",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/remote-inventory/stdout.log"
+    },
+    "raw/native/upload/record.json": {
+      "sha256": "1bdab0fb8e2810e20c6202ceeb33f261782d2daa12f67d77edfff64f8908ca9b",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/upload/record.json"
+    },
+    "raw/native/upload/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/upload/stderr.log"
+    },
+    "raw/native/upload/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-run-20260918/upload/stdout.log"
+    },
+    "raw/outer/campaign/record.json": {
+      "sha256": "4edad9804368ebb81eba39763039ab5d8c2b7cb3622700616550447526e4d710",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-outer-20260918/campaign/record.json"
+    },
+    "raw/outer/campaign/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-outer-20260918/campaign/stderr.log"
+    },
+    "raw/outer/campaign/stdout.log": {
+      "sha256": "55a96fd761dec2822b7eff05f64faae6e03829ea94ca644660ec8d66c2e84e16",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-outer-20260918/campaign/stdout.log"
+    },
+    "raw/prepare/export/record.json": {
+      "sha256": "7795ddbb0232d8ff647e1e8442def1cbf8a752f07b956d57ee452e2a3fa40bf4",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-local-export-20260918/export/record.json"
+    },
+    "raw/prepare/export/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-local-export-20260918/export/stderr.log"
+    },
+    "raw/prepare/export/stdout.log": {
+      "sha256": "af76f58a8279768879221a1b773bcc1af11deda7d6bba8058a418f5ca32ff6ec",
+      "source": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-local-export-20260918/export/stdout.log"
+    }
+  }
+}

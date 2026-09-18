@@ -1,0 +1,42 @@
+{
+  "name": "placement",
+  "command": [
+    "/usr/bin/numactl",
+    "--physcpubind=48-95",
+    "--membind=1",
+    "/usr/bin/numactl",
+    "--show"
+  ],
+  "cwd": "/tmp/fe2o3-sdma-readback-fd1cf3dd-20260918.2gdfkcmf",
+  "environment": {
+    "HOME": "/home/harsh",
+    "PATH": "/usr/bin:/bin:/opt/rocm/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "HSA_XNACK": "0",
+    "FE2O3_TEST_NATIVE_UNIQUE_ID": "0x54f88318ca05093d",
+    "FE2O3_TEST_NATIVE_ISOLATED": "1"
+  },
+  "started": {
+    "realtime_ns": 1789735320774467249,
+    "monotonic_ns": 7234218196138961
+  },
+  "spawned": {
+    "realtime_ns": 1789735320776594788,
+    "monotonic_ns": 7234218198266420
+  },
+  "status": 0,
+  "error": null,
+  "process_group": 3269284,
+  "group_absent": true,
+  "t0": {
+    "realtime_ns": 1789735320779793046,
+    "monotonic_ns": 7234218201464537
+  },
+  "outer_bound_seconds": 15,
+  "finished": {
+    "realtime_ns": 1789735320779817753,
+    "monotonic_ns": 7234218201489194
+  },
+  "stdout_sha256": "23d6010acf0e31aa5be42d14c633c510d8202cf16d1025afe6cd7c8f32378d10",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

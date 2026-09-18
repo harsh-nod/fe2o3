@@ -759,21 +759,9 @@ readback/currentness/retake tests with 1,402 filtered out, not a full musl KFD r
 All 73 KFD/runtime doctests passed. Strict all-target Clippy, runtime
 no-default-feature compilation, workspace formatting and diff whitespace checks
 passed. The unsafe-source policy passed five tests with its one maintenance test
-ignored. No ignored native test was executed by that CPU qualification. Before
-the fix, the profiling-disabled indexed allocation regression observed one allocation;
+ignored. No ignored native test was executed for this change. Before the fix,
+the profiling-disabled indexed allocation regression observed one allocation;
 the same test now observes zero. These are CPU results, not GPU timings.
-
-The subsequent [native readback campaign](evidence/dev-sdma-direct-readback-native-2026-09-18/README.md)
-passes both existing 4-KiB cold-allocation probes from signed `fd1cf3dd` after
-fresh [CPU source/binary binding](evidence/dev-sdma-direct-readback-cpu-2026-09-18/README.md).
-DeviceLocal traverses transient staging readback and HostVisible traverses indexed
-readback. Both distinguish native XOR-mutated bytes from the unchanged CPU shadow
-and assert final accounting and shutdown. All six strict observations, complete
-collection and exact-owned cleanup pass; eleven recorded groups and the remote
-path are independently absent. Native subranges, multi-packet device reads,
-currentness/retake/recycle faults, allocation counts and compute-dirty paths are
-not qualified by these two tests. This is bounded native correctness evidence,
-not performance, formal correspondence or full R126 acceptance.
 
 ## Typed SDMA Allocation Disposition
 

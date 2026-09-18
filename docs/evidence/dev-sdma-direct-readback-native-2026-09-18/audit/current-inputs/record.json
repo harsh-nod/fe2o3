@@ -1,0 +1,23 @@
+{
+  "command": [
+    "python3",
+    "-B",
+    "verify.py",
+    "--allow-unsealed",
+    "--source-root",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+    "--binary",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-afaad0775e07e3e7"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-sdma-direct-readback-native-2026-09-18",
+  "started_ns": 1789735726252036122,
+  "bound_seconds": 60,
+  "process_group": 1888469,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789735726821329382,
+  "stdout_sha256": "2188942df247ce45640a4bf3c02b7add8e86ffa35cc72e22618fb0d7f1964648",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

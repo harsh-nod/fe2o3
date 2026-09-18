@@ -1,0 +1,22 @@
+{
+  "command": [
+    "python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-plan-20260918/prepare.py",
+    "--repository",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+    "--output",
+    "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-bundle-fd1cf3dd-20260918"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "started_ns": 1789735250794992577,
+  "bound_seconds": 120,
+  "process_group": 1841547,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789735254809365601,
+  "stdout_sha256": "af76f58a8279768879221a1b773bcc1af11deda7d6bba8058a418f5ca32ff6ec",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

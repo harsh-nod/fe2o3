@@ -1,0 +1,47 @@
+{
+  "commit": "fd1cf3dd05e691797533b1beab1f015c4b2d8fad",
+  "started": {
+    "realtime_ns": 1789735320707411567,
+    "monotonic_ns": 7234218129084020
+  },
+  "cases": [
+    {
+      "case": "device",
+      "test_record": "device-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "device",
+        "harness_passes": 1,
+        "marker_count": 1,
+        "readback_sha256": "2e7d5db52627eb273e9c3837f94bdc7bff796711c2e0960f3c0416d2cb9868d9"
+      }
+    },
+    {
+      "case": "host",
+      "test_record": "host-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "host",
+        "harness_passes": 1,
+        "marker_count": 1,
+        "readback_sha256": "2e7d5db52627eb273e9c3837f94bdc7bff796711c2e0960f3c0416d2cb9868d9"
+      }
+    }
+  ],
+  "failure": null,
+  "native_ioctl_failure_claim": false,
+  "performance_claim": false,
+  "payload_after": "matched",
+  "finished": {
+    "realtime_ns": 1789735374677890076,
+    "monotonic_ns": 7234272099562199
+  }
+}

@@ -17,8 +17,13 @@ admission, currentness, retake, custody and cleanup-error policies. CPU tests
 cover allocation counts and destination visibility on failure. The full GNU
 run passes 1,412 KFD and 1,105 runtime tests; full musl runtime also passes 1,105,
 with twenty runtime tests ignored on each target. Ten focused musl KFD tests,
-73 doctests and the static checks pass. There is no new native or formal
-qualification. The copy comparator's DMA timers exclude this
+73 doctests and the static checks pass. The subsequent
+[native readback campaign](evidence/dev-sdma-direct-readback-native-2026-09-18/README.md)
+passes the existing 4-KiB DeviceLocal and HostVisible cold-allocation probes,
+including native-versus-shadow read routing, accounting and shutdown assertions.
+All six strict endpoints admit; complete collection, exact-owned cleanup and
+eleven recorded process-group absence checks close. This does not qualify native
+faults or formal correspondence. The copy comparator's DMA timers exclude this
 readback, so no matched HIP/HSA throughput gain follows. Accepted milestones
 and A1/A2/#182 remain unchanged.
 

@@ -1,0 +1,8 @@
+{
+  "local_staging": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-bundle-fd1cf3dd-20260918",
+  "directory_mode": "0o700",
+  "source_files_matched": 5553,
+  "binary_sha256": "dbafaf826cc18b2d785015a3b4bb809c8f329f66b6f605a364a6a0e41148b145",
+  "payload_sha256": "395806274d56b787af9bdd43771ef6a0cf422e2afbf7be190ae7a68930f059b9",
+  "native_authorized": false
+}

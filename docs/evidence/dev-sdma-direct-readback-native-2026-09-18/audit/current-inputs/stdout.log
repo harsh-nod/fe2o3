@@ -1,0 +1,47 @@
+{
+  "archive_integrity_sealed": false,
+  "historical_audit": "passed",
+  "native_campaign": "passed",
+  "device": "passed",
+  "host": "passed",
+  "native_commands_passed": 2,
+  "harness_passes": [
+    1,
+    1
+  ],
+  "observations": 6,
+  "strict_endpoints": 6,
+  "refused_endpoints": 0,
+  "post_observation_offsets": [
+    {
+      "case": "device",
+      "endpoint": "immediate",
+      "start_offset_ns": 33115084,
+      "strict_admitted": true
+    },
+    {
+      "case": "device",
+      "endpoint": "delayed",
+      "start_offset_ns": 20031632106,
+      "strict_admitted": true
+    },
+    {
+      "case": "host",
+      "endpoint": "immediate",
+      "start_offset_ns": 32498764,
+      "strict_admitted": true
+    },
+    {
+      "case": "host",
+      "endpoint": "delayed",
+      "start_offset_ns": 20030197851,
+      "strict_admitted": true
+    }
+  ],
+  "recorded_native_pids_groups_absent": 11,
+  "cleanup": "closed",
+  "current_source_files_revalidated": 5553,
+  "current_binary_revalidated": true,
+  "performance_claim": false,
+  "real_ioctl_failure_claim": false
+}

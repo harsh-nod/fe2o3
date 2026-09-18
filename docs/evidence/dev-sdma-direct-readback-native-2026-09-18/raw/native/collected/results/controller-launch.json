@@ -1,0 +1,18 @@
+{
+  "command": [
+    "/usr/bin/timeout",
+    "--signal=TERM",
+    "--kill-after=15s",
+    "1200s",
+    "/usr/bin/python3",
+    "-B",
+    "/tmp/fe2o3-sdma-readback-fd1cf3dd-20260918.2gdfkcmf/run.py",
+    "--parent-ready-approved"
+  ],
+  "process_group": 3269281,
+  "started_ns": 1789735320625968299,
+  "status": 0,
+  "group_absent": true,
+  "error": null,
+  "finished_ns": 1789735374724142280
+}

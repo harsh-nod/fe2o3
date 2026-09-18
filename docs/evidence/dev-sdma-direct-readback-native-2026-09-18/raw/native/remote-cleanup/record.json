@@ -1,0 +1,27 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -B - cleanup /tmp/fe2o3-sdma-readback-fd1cf3dd-20260918.2gdfkcmf '{\"pids\":[3269281,3269283,3269284,3269286,3269363,3269728,3271939,3272149,3272299,3272351,3275023],\"inventory_sha256\":\"219b4d7d97beaf09c4e40ae973b39136a2965aaecf1b48885f44d5836400c8f4\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-sdma-readback-native-bundle-fd1cf3dd-20260918",
+  "started_ns": 1789735391463838198,
+  "bound_seconds": 120,
+  "process_group": 1857680,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": "5a1b24b83515f5f21181aa1df96bec23ab4b6319181768e0aa4d4b0fee224098",
+  "finished_ns": 1789735392586747630,
+  "stdout_sha256": "746a01b85242da14dc43208b9270d2e9035fcd7d592ae0b0651a65588f72b947",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

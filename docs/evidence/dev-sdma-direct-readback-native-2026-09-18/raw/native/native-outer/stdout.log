@@ -1,0 +1,49 @@
+{"owned": "/tmp/fe2o3-sdma-readback-fd1cf3dd-20260918.2gdfkcmf", "process_group": 3269281, "record": "outer-launch-started", "started_ns": 1789735320625968299}
+{
+  "commit": "fd1cf3dd05e691797533b1beab1f015c4b2d8fad",
+  "started": {
+    "realtime_ns": 1789735320707411567,
+    "monotonic_ns": 7234218129084020
+  },
+  "cases": [
+    {
+      "case": "device",
+      "test_record": "device-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "device",
+        "harness_passes": 1,
+        "marker_count": 1,
+        "readback_sha256": "2e7d5db52627eb273e9c3837f94bdc7bff796711c2e0960f3c0416d2cb9868d9"
+      }
+    },
+    {
+      "case": "host",
+      "test_record": "host-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "host",
+        "harness_passes": 1,
+        "marker_count": 1,
+        "readback_sha256": "2e7d5db52627eb273e9c3837f94bdc7bff796711c2e0960f3c0416d2cb9868d9"
+      }
+    }
+  ],
+  "failure": null,
+  "native_ioctl_failure_claim": false,
+  "performance_claim": false,
+  "payload_after": "matched",
+  "finished": {
+    "realtime_ns": 1789735374677890076,
+    "monotonic_ns": 7234272099562199
+  }
+}
+{"command": ["/usr/bin/timeout", "--signal=TERM", "--kill-after=15s", "1200s", "/usr/bin/python3", "-B", "/tmp/fe2o3-sdma-readback-fd1cf3dd-20260918.2gdfkcmf/run.py", "--parent-ready-approved"], "error": null, "finished_ns": 1789735374724142280, "group_absent": true, "process_group": 3269281, "record": "outer-launch-finished", "started_ns": 1789735320625968299, "status": 0}
