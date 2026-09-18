@@ -481,6 +481,7 @@ fn generate_ranked_functional_refinement_proof_v2(
 pub(crate) struct RankedEffectFormulaReplayV2 {
     lemma: String,
     symbols: Vec<u32>,
+    uses_ieee_congruence: bool,
 }
 
 impl RankedEffectFormulaReplayV2 {
@@ -490,6 +491,10 @@ impl RankedEffectFormulaReplayV2 {
 
     pub(crate) fn symbols(&self) -> &[u32] {
         &self.symbols
+    }
+
+    pub(crate) fn uses_ieee_congruence(&self) -> bool {
+        self.uses_ieee_congruence
     }
 }
 
@@ -539,6 +544,7 @@ pub(crate) fn generate_ranked_effect_formula_replay_v2(
     Ok(RankedEffectFormulaReplayV2 {
         lemma: program.render_lemma(&pairs, lemma_name)?,
         symbols: program.symbols.iter().copied().collect(),
+        uses_ieee_congruence: program.uses_ieee_congruence(),
     })
 }
 
@@ -752,14 +758,31 @@ impl SemanticFormulaProgramV2 {
         })
     }
 
+    fn uses_ieee_congruence(&self) -> bool {
+        self.order.iter().any(|identity| {
+            matches!(
+                self.definitions.get(identity),
+                Some(SemanticDefinitionV2::TypedExpression(
+                    _,
+                    fe2o3_pliron::ProductionNumericalContractV2::ExactIeee754OperatorCongruence { .. },
+                ))
+            )
+        })
+    }
+
     fn render(
         &self,
         pairs: &[(ProductionRankedValueV1, ProductionRankedValueV1)],
     ) -> Result<String, FunctionalRefinementVerusExecutionErrorV2> {
         let mut source = BoundedVerusSourceV2::default();
+        let ieee_declaration = if self.uses_ieee_congruence() {
+            IEEE_CONGRUENCE_DECLARATION_V2
+        } else {
+            ""
+        };
         write!(
             source,
-            "use vstd::prelude::*;\n\nverus! {{\n{BITVECTOR_SEMANTICS_V2}\n{IEEE_CONGRUENCE_DECLARATION_V2}\n"
+            "use vstd::prelude::*;\n\nverus! {{\n{BITVECTOR_SEMANTICS_V2}\n{ieee_declaration}\n"
         )
         .map_err(|_| generated_source_limit())?;
         self.write_lemma(&mut source, pairs, "fe2o3_functional_refinement_v2")?;
@@ -1874,7 +1897,7 @@ mod tests {
             generate_ranked_functional_refinement_proof_v2(&positive, 0, 2, subjects()).unwrap();
         let source = std::str::from_utf8(positive_source.source()).unwrap();
         assert!(source.contains("open spec fn fe2o3_bv_norm_v2"));
-        assert!(source.contains("uninterp spec fn fe2o3_ieee_operator_congruence_v2"));
+        assert!(!source.contains("uninterp spec fn fe2o3_ieee_operator_congruence_v2"));
         assert!(!source.contains("fe2o3_semantic_op_v2"));
         assert!(source.contains("s7: int"));
         assert!(source.contains("fe2o3_bv_norm_v2"));
@@ -1888,6 +1911,43 @@ mod tests {
             positive_binding.normalized_obligation_effect_ir_hash(),
             mutated_binding.normalized_obligation_effect_ir_hash(),
         );
+    }
+
+    #[test]
+    fn ieee_declaration_depends_only_on_reachable_formula_definitions() {
+        let integer = typed_expression_kernel(ProductionSemanticBinaryOpV2::Add);
+        let scalar = ProductionSemanticScalarTypeV2::Float { bits: 32 };
+        let ieee = |result| ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(result),
+            expression: ProductionSemanticExpressionV2::Symbol { symbol: 9, scalar },
+            numerical_contract: ProductionNumericalContractV2::exact_for(scalar),
+        };
+        let mut operations = integer.blocks()[0].operations().to_vec();
+        let request = operations.pop().unwrap();
+        operations.push(ieee(2));
+        operations.push(request);
+        for reachable in [false, true] {
+            if reachable {
+                operations[0] = ieee(0);
+                operations[1] = ieee(1);
+            }
+            let kernel = ProductionRankedKernelV1::new(
+                "reachable_ieee_declaration",
+                0,
+                vec![ProductionRankedBlockV1::new(
+                    operations.clone(),
+                    ProductionRankedTerminatorV1::Return,
+                )],
+            )
+            .unwrap();
+            let (_, generated) =
+                generate_ranked_functional_refinement_proof_v2(&kernel, 0, 3, subjects()).unwrap();
+            let source = std::str::from_utf8(generated.source()).unwrap();
+            assert_eq!(
+                source.contains("uninterp spec fn fe2o3_ieee_operator_congruence_v2"),
+                reachable,
+            );
+        }
     }
 
     #[test]
