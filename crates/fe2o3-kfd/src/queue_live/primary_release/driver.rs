@@ -66,6 +66,7 @@ pub(in crate::queue::live) struct PrimaryReleasePartsV1<'a, E: PrimaryEnvironmen
     pub(in crate::queue::live) dispatch: &'a mut Option<DispatchResourceOwnerV1>,
     pub(in crate::queue::live) signals: &'a mut Option<CompletionSignalAuthority>,
     pub(in crate::queue::live) sdma: &'a mut Option<Gfx942SdmaQueueSetV1>,
+    pub(in crate::queue::live) striped_sdma: &'a mut Option<Gfx942SdmaQueueSetV1>,
 }
 
 pub(in crate::queue::live) trait PrimaryReleaseParentV1<E: PrimaryEnvironmentV1> {
@@ -83,6 +84,7 @@ pub(in crate::queue::live) struct PrimaryReleaseStateV1<E: PrimaryReleaseEnviron
     pub(in crate::queue::live) dispatch: Option<ReturningControlCleanupCustodyV1>,
     pub(in crate::queue::live) signals: Option<ControlCleanupCustodyV1>,
     pub(in crate::queue::live) sdma: Option<RetainedSdmaReleaseCustodyV1>,
+    pub(in crate::queue::live) striped_sdma: Option<RetainedSdmaReleaseCustodyV1>,
     pub(in crate::queue::live) gate: Option<E::TeardownArm>,
     pub(in crate::queue::live) destroy: NativeQueueDestroyProgressV1,
     pub(in crate::queue::live) started: bool,
@@ -148,6 +150,7 @@ where
             dispatch: None,
             signals: None,
             sdma: None,
+            striped_sdma: None,
             gate: None,
             destroy: NativeQueueDestroyProgressV1::default(),
             started: false,
@@ -169,6 +172,12 @@ where
         match result {
             Ok(Ok(destroyed)) => Ok(destroyed),
             result => {
+                for sdma in [&mut self.striped_sdma, &mut self.sdma]
+                    .into_iter()
+                    .flatten()
+                {
+                    sdma.poison_retained_owners_v1();
+                }
                 parent.poison_release();
                 E::poison();
                 match result {
@@ -190,13 +199,20 @@ where
             .sdma
             .take()
             .map(|set| RetainedSdmaReleaseCustodyV1::new(set, parts.key, parts.queue_id));
+        self.striped_sdma = parts
+            .striped_sdma
+            .take()
+            .map(|set| RetainedSdmaReleaseCustodyV1::new(set, parts.key, parts.queue_id));
         self.gate = Some(E::arm_teardown());
         self.platform = Some(E::retain_platform(
             parts.exception.take().expect("preflight exception owner"),
             parts.doorbell.take().expect("preflight doorbell owner"),
         ));
         let engine = parts.engine;
-        if let Some(sdma) = &mut self.sdma {
+        for sdma in [&mut self.striped_sdma, &mut self.sdma]
+            .into_iter()
+            .flatten()
+        {
             sdma.destroy_in_place(&mut engine.backend.session)?;
         }
         engine
@@ -245,7 +261,10 @@ where
             ));
         }
         E::complete_shadows(platform)?;
-        if let Some(sdma) = &mut self.sdma {
+        for sdma in [&mut self.striped_sdma, &mut self.sdma]
+            .into_iter()
+            .flatten()
+        {
             sdma.release_resources_in_place(memory)?;
             if !sdma.is_complete() {
                 return Err(ComputeAqlQueueSessionErrorV1::Contract(
@@ -284,9 +303,11 @@ where
         self.complete = true;
         Ok(destroyed_queue_observation_with_additional_resources(
             parts.queue_id,
-            self.sdma
-                .as_ref()
-                .map_or(0, RetainedSdmaReleaseCustodyV1::additional_resource_count),
+            [&self.striped_sdma, &self.sdma]
+                .into_iter()
+                .flatten()
+                .map(RetainedSdmaReleaseCustodyV1::additional_resource_count)
+                .sum(),
         ))
     }
 }
@@ -313,6 +334,7 @@ impl PrimaryReleaseParentV1<LinuxPrimaryEnvironmentV1> for ComputeAqlQueueSessio
             dispatch: &mut self.dispatch,
             signals: &mut self.completion_signals,
             sdma: &mut self.sdma,
+            striped_sdma: &mut self.striped_sdma,
         })
     }
     fn poison_release(&mut self) {

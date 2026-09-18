@@ -1,0 +1,3 @@
+raw/*.log whitespace=-blank-at-eof
+interrupted/*.log whitespace=-blank-at-eof
+setup-rejected/*.log whitespace=-blank-at-eof

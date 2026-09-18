@@ -1,4 +1,4 @@
-//! Borrowed standalone SDMA teardown, rooted before any destructive operation.
+//! Borrowed SDMA teardown, rooted before any destructive operation.
 
 #![forbid(unsafe_code)]
 
@@ -108,6 +108,58 @@ pub(crate) struct RetainedSdmaReleaseCustodyV1 {
     failed: bool,
     destroyed: usize,
     released: usize,
+}
+
+pub(crate) fn supports_retained_sdma_composition_v1(
+    sdma: Option<&Gfx942SdmaQueueSetV1>,
+    striped: Option<&Gfx942SdmaQueueSetV1>,
+) -> Result<bool, Gfx942SdmaErrorV1> {
+    let Some(striped) = striped else {
+        return sdma.map_or(
+            Ok(true),
+            Gfx942SdmaQueueSetV1::supports_retained_sdma_release_v1,
+        );
+    };
+    let Some(sdma) = sdma else {
+        return Err(Gfx942SdmaErrorV1::Contract("orphan secondary SDMA set"));
+    };
+    match (
+        sdma.retained_release_profile_v1()?,
+        striped.retained_release_profile_v1()?,
+    ) {
+        (
+            Some(RetainedSdmaReleaseProfileV1::Directional),
+            Some(RetainedSdmaReleaseProfileV1::Striped { owner_count }),
+        ) if combined_striped_sdma_queue_count_is_admitted(owner_count as u32) => Ok(true),
+        _ => Err(Gfx942SdmaErrorV1::Contract("combined SDMA owner roster")),
+    }
+}
+
+pub(crate) fn preflight_retained_sdma_composition_v1(
+    sdma: Option<&Gfx942SdmaQueueSetV1>,
+    striped: Option<&Gfx942SdmaQueueSetV1>,
+    key: QueueKeyV1,
+    primary_id: u32,
+) -> Result<(), Gfx942SdmaErrorV1> {
+    if !supports_retained_sdma_composition_v1(sdma, striped)? {
+        return Err(Gfx942SdmaErrorV1::Contract("retained SDMA release profile"));
+    }
+    for set in [sdma, striped].into_iter().flatten() {
+        set.preflight_retained_sdma_release_v1(key, primary_id)?;
+    }
+    if let (
+        Some(Gfx942SdmaQueueSetV1::Directional(directional)),
+        Some(Gfx942SdmaQueueSetV1::Striped { owners, .. }),
+    ) = (sdma, striped)
+        && owners.iter().any(|owner| {
+            directional
+                .iter()
+                .any(|other| other.queue_id == owner.queue_id)
+        })
+    {
+        return Err(Gfx942SdmaErrorV1::Contract("combined SDMA queue identity"));
+    }
+    Ok(())
 }
 
 impl Gfx942SdmaQueueSetV1 {
@@ -228,6 +280,18 @@ impl RetainedSdmaReleaseCustodyV1 {
         }
     }
 
+    pub(crate) fn poison_retained_owners_v1(&mut self) {
+        self.failed = true;
+        if let Gfx942SdmaQueueSetV1::Generic(owners)
+        | Gfx942SdmaQueueSetV1::Directional(owners)
+        | Gfx942SdmaQueueSetV1::Striped { owners, .. } = &mut self.set
+        {
+            for owner in owners {
+                owner.poisoned = true;
+            }
+        }
+    }
+
     fn settle(
         &mut self,
         memory: &mut impl SdmaReleaseMemoryV1,
@@ -236,15 +300,7 @@ impl RetainedSdmaReleaseCustodyV1 {
         match result {
             Ok(Ok(())) => Ok(()),
             result => {
-                self.failed = true;
-                if let Gfx942SdmaQueueSetV1::Generic(owners)
-                | Gfx942SdmaQueueSetV1::Directional(owners)
-                | Gfx942SdmaQueueSetV1::Striped { owners, .. } = &mut self.set
-                {
-                    for owner in owners {
-                        owner.poisoned = true;
-                    }
-                }
+                self.poison_retained_owners_v1();
                 memory.sdma_release_poison();
                 match result {
                     Ok(Err(error)) => Err(error),

@@ -7,8 +7,11 @@ use crate::queue::live::primary_release::{
     preflight_primary_owners_v1, primary_dispatch_release_admitted_v1,
 };
 use crate::queue_linux::primary_fixture::LocalRuntimeObservationV1;
+use crate::sdma::retained_release::preflight_retained_sdma_composition_v1;
 use crate::shared_memory::{ControlCleanupCustodyV1, QueueResourceCleanupCustodyV1};
 
+#[path = "integration_release_combined_sdma_tests.rs"]
+mod combined_sdma_cases;
 #[path = "integration_release_detached_tests.rs"]
 mod detached_cases;
 #[path = "integration_release_fault_tests.rs"]
@@ -39,6 +42,7 @@ struct Parent {
     dispatch: Option<DispatchResourceOwnerV1>,
     signals: Option<CompletionSignalAuthority>,
     sdma: Option<Gfx942SdmaQueueSetV1>,
+    striped_sdma: Option<Gfx942SdmaQueueSetV1>,
     submission: NativeAqlSubmissionOwnerV1,
     completion: CompletionSignalArenaOwnerV1,
     dependency: ComputeDependencySessionOwnerV1,
@@ -76,9 +80,12 @@ impl PrimaryReleaseParentV1<Fixture> for Parent {
         if let Some(dispatch) = &self.dispatch {
             dispatch.ensure_releasable()?;
         }
-        if let Some(sdma) = &self.sdma {
-            sdma.preflight_retained_sdma_release_v1(self.key, self.queue_id)?;
-        }
+        preflight_retained_sdma_composition_v1(
+            self.sdma.as_ref(),
+            self.striped_sdma.as_ref(),
+            self.key,
+            self.queue_id,
+        )?;
         preflight_primary_owners_v1::<Fixture>(
             &self.engine,
             self.key,
@@ -99,6 +106,7 @@ impl PrimaryReleaseParentV1<Fixture> for Parent {
             dispatch: &mut self.dispatch,
             signals: &mut self.signals,
             sdma: &mut self.sdma,
+            striped_sdma: &mut self.striped_sdma,
         })
     }
     fn poison_release(&mut self) {
@@ -285,6 +293,7 @@ fn parent_from_completed(complete: CompletedPrimaryV1<Fixture>) -> Parent {
         dispatch: complete.dispatch,
         signals: Some(complete.completion_signals),
         sdma: None,
+        striped_sdma: None,
         submission: complete.submission,
         completion: complete.completion_owner,
         dependency: complete.dependency_owner,
@@ -403,6 +412,7 @@ fn assert_no_retry(
         .map(|p| (p.identities(), p.observation(), p.progress()));
     let destroy = state.destroy;
     let sdma = state.sdma.as_ref().map(|s| s.observation());
+    let striped_sdma = state.striped_sdma.as_ref().map(|s| s.observation());
     let phase = parent.engine.phase(parent.key);
     let model = parent.engine.model.clone();
     let authority_poisoned = parent.engine.authority_poisoned;
@@ -447,6 +457,10 @@ fn assert_no_retry(
     );
     assert_eq!(state.destroy, destroy);
     assert_eq!(state.sdma.as_ref().map(|s| s.observation()), sdma);
+    assert_eq!(
+        state.striped_sdma.as_ref().map(|s| s.observation()),
+        striped_sdma
+    );
     assert_eq!(parent.engine.phase(parent.key), phase);
     assert_eq!(parent.engine.model, model);
     assert_eq!(parent.engine.authority_poisoned, authority_poisoned);

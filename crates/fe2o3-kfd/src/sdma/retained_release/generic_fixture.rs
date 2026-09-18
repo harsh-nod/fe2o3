@@ -3,8 +3,9 @@
 use super::*;
 
 fn owners(set: &mut Gfx942SdmaQueueSetV1) -> &mut Vec<Gfx942SdmaQueueOwnerV1> {
-    let (Gfx942SdmaQueueSetV1::Generic(owners) | Gfx942SdmaQueueSetV1::Striped { owners, .. }) =
-        set
+    let (Gfx942SdmaQueueSetV1::Generic(owners)
+    | Gfx942SdmaQueueSetV1::Directional(owners)
+    | Gfx942SdmaQueueSetV1::Striped { owners, .. }) = set
     else {
         panic!("owner fixture profile")
     };
@@ -13,9 +14,10 @@ fn owners(set: &mut Gfx942SdmaQueueSetV1) -> &mut Vec<Gfx942SdmaQueueOwnerV1> {
 
 pub(crate) fn generic_pending_observation(
     set: &Gfx942SdmaQueueSetV1,
-) -> impl std::fmt::Debug + PartialEq {
-    let (Gfx942SdmaQueueSetV1::Generic(owners) | Gfx942SdmaQueueSetV1::Striped { owners, .. }) =
-        set
+) -> impl std::fmt::Debug + PartialEq + use<> {
+    let (Gfx942SdmaQueueSetV1::Generic(owners)
+    | Gfx942SdmaQueueSetV1::Directional(owners)
+    | Gfx942SdmaQueueSetV1::Striped { owners, .. }) = set
     else {
         panic!("owner fixture profile")
     };

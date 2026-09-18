@@ -1,0 +1,39 @@
+    Finished `test` profile [unoptimized] target(s) in 0.22s
+     Running unittests src/lib.rs (target/x86_64-unknown-linux-musl/debug/deps/fe2o3_kfd-651f18105a2bee25)
+
+running 32 tests
+test queue::live::construction_primary::integration_tests::release_cases::combined_sdma_cases::constructed_combined_release_orders_all_counts_and_refunds_both_sets ... ok
+test queue::live::construction_primary::integration_tests::release_cases::combined_sdma_cases::constructed_combined_release_preflights_every_field_in_both_sets ... ok
+test queue::live::construction_primary::integration_tests::release_cases::combined_sdma_cases::constructed_combined_release_rejects_wrong_profiles_and_cross_set_ids ... ok
+test queue::live::construction_primary::integration_tests::release_cases::combined_sdma_cases::constructed_combined_release_retains_both_sets_at_every_callback_failure ... ok
+test queue::live::construction_primary::integration_tests::release_cases::combined_sdma_cases::constructed_combined_release_retains_real_late_cleanup_at_set_boundary ... ok
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_failures_keep_original_owner_and_completed_prefix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_late_native_resource_failure_keeps_real_prefix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_orders_original_owner_and_refunds_all_backing ... ok
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_rejects_malformed_or_pending_owner_without_effects ... ok
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_retains_mutated_destroy_argument_and_raw_outcome ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_failures_keep_prefix_and_do_not_complete_primary ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_late_native_resource_failure_keeps_real_prefix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_orders_original_owners_and_refunds_all_backing ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_rejects_bad_second_owner_before_any_effect ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_retains_mutated_destroy_argument_and_raw_outcome ... ok
+test queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_checks_every_last_owner_field_before_effects ... ok
+test queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_keeps_real_late_cleanup_prefix_for_every_owner ... ok
+test queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_orders_all_balanced_counts_and_refunds_backing ... ok
+test queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_rejects_malformed_rosters_without_effects ... ok
+test queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_retains_every_callback_failure_prefix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_retains_mutated_destroy_inputs ... ok
+test queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::retained_striped_release_custody_has_bounded_inline_size ... ok
+test queue::live::primary_release::tests::primary_release_explicit_deferred_profile_is_not_admitted ... ok
+test queue::live::primary_release::tests::primary_release_invalid_secondary_is_error_even_when_busy ... ok
+test queue::live::primary_release::tests::primary_release_missing_owner_is_error_not_legacy_profile ... ok
+test queue::live::primary_release::tests::primary_release_unfinished_drop_aborts_and_failed_preflight_keeps_parent ... ok
+test sdma::tests::sdma_cleanup_preserves_original_certificate_box_through_native_disposal ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::sdma::sdma_cleanup_all_currentness_boundaries_retain_unsettled_disposal ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::sdma::sdma_cleanup_all_native_failures_retain_exact_prefix_and_panic ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::sdma::sdma_cleanup_exact_two_phase_order_and_account_refund ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::sdma::sdma_cleanup_projection_and_commit_boundaries_keep_native_receipts_separate ... ok
+test shared_memory::tests::pristine_abort::cleanup_tests::sdma::sdma_cleanup_requires_six_revision_headroom_before_native_effects ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 1398 filtered out; finished in 426.88s
+

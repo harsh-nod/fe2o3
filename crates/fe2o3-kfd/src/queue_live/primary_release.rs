@@ -10,6 +10,9 @@ use crate::queue_linux::{
     LinuxPrimaryTeardownCustodyV1, ProcessGlobalKfdRuntimeTeardownArmV1,
     arm_process_global_kfd_runtime_gate_for_teardown_v1,
 };
+use crate::sdma::retained_release::{
+    preflight_retained_sdma_composition_v1, supports_retained_sdma_composition_v1,
+};
 use crate::shared_memory::{ControlCleanupCustodyV1, QueueResourceCleanupCustodyV1};
 use construction_primary::{LinuxPrimaryEnvironmentV1, PrimaryEnvironmentV1};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -45,7 +48,7 @@ pub struct PrimaryQueueReleaseCustodyV1 {
 }
 
 impl ComputeAqlQueueSessionV1 {
-    /// Selects ordinary primary with optional standalone SDMA; errors never authorize fallback.
+    /// Selects ordinary primary with optional SDMA; errors never authorize fallback.
     pub fn supports_retained_primary_release_v1(
         &self,
     ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {
@@ -66,7 +69,9 @@ impl ComputeAqlQueueSessionV1 {
                 "unfinished SDMA pool trim",
             ));
         }
-        if self.striped_sdma.is_some()
+        let sdma_supported =
+            supports_retained_sdma_composition_v1(self.sdma.as_ref(), self.striped_sdma.as_ref())?;
+        if !sdma_supported
             || !self.sdma_pool_free.is_empty()
             || self.sdma_outstanding_buffers != 0
             || self.has_any_persistent_compute_attachment_v1()
@@ -74,11 +79,6 @@ impl ComputeAqlQueueSessionV1 {
                 .auxiliary_compute_lanes
                 .iter()
                 .any(|lane| lane.state.is_some())
-        {
-            return Ok(false);
-        }
-        if let Some(sdma) = &self.sdma
-            && !sdma.supports_retained_sdma_release_v1()?
         {
             return Ok(false);
         }
@@ -133,9 +133,12 @@ impl ComputeAqlQueueSessionV1 {
         if let Some(dispatch) = &self.dispatch {
             dispatch.ensure_releasable()?;
         }
-        if let Some(sdma) = &self.sdma {
-            sdma.preflight_retained_sdma_release_v1(self.key, self.observation.queue_id)?;
-        }
+        preflight_retained_sdma_composition_v1(
+            self.sdma.as_ref(),
+            self.striped_sdma.as_ref(),
+            self.key,
+            self.observation.queue_id,
+        )?;
         let engine = self
             .engine
             .as_ref()
@@ -234,6 +237,29 @@ mod tests {
             ))
         ));
         assert!(!parent.terminal_poisoned);
+    }
+
+    #[test]
+    fn primary_release_invalid_secondary_is_error_even_when_busy() {
+        let mut parent = missing_native_parent();
+        parent.sdma_outstanding_buffers = 1;
+        parent.striped_sdma = Some(Gfx942SdmaQueueSetV1::Striped {
+            owners: Vec::new(),
+            next_owner: 0,
+        });
+        for result in [
+            parent.supports_retained_primary_release_v1().map(|_| ()),
+            parent.preflight_primary_release_v1(),
+        ] {
+            assert!(matches!(
+                result,
+                Err(ComputeAqlQueueSessionErrorV1::Sdma(
+                    Gfx942SdmaErrorV1::Contract("orphan secondary SDMA set")
+                ))
+            ));
+        }
+        assert!(!parent.terminal_poisoned);
+        assert!(parent.striped_sdma.is_some() && parent.sdma.is_none());
     }
 
     #[test]

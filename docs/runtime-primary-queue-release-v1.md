@@ -1048,9 +1048,9 @@ after permanent restoration), inert retries, native completed Drop, and actual
 public runtime allocate/release/shutdown selection with accounting
 and profiler events. ID-only fixtures cannot establish successful cleanup.
 The initial directional handoff did not implement Generic, Striped, LogicalMux
-or terminal-creation profiles. Generic and standalone Striped are now implemented
-at the boundaries below; combined, LogicalMux and terminal-creation profiles
-remain explicit later requirements.
+or terminal-creation profiles. Generic, standalone Striped and combined sets are
+now implemented at the boundaries below; LogicalMux and terminal-creation
+profiles remain explicit later requirements.
 
 ## Single SDMA Release Development
 
@@ -1131,7 +1131,45 @@ zero-effect rejection. Pending payloads are metadata fixtures, not submitted
 work. A size regression bounds the inline SDMA custody at 32 KiB and the public
 primary release root at 128 KiB; it does not certify total call-stack consumption.
 
-This is CPU development qualification only. Native striped public-workflow
-success and failures, submitted work, formal implementation correspondence and
-matched performance are not established by these tests. Combined secondary
-`striped_sdma`, LogicalMux, and terminal-creation sets remain excluded.
+These constructed tests establish CPU development qualification only. Separate
+bounded packetless native success for all eight standalone striped counts is
+recorded in
+[`dev-striped-sdma-release-native-2026-09-18`](evidence/dev-striped-sdma-release-native-2026-09-18/README.md).
+That historical packet does not qualify subsequent source changes. Native
+failures, submitted work, formal implementation correspondence and matched
+performance remain unclaimed.
+
+## Combined SDMA Release Development
+
+Ordinary retained primary release also admits the public combined constructor's
+exact composition: a directional set in `sdma` and an even striped set of 2
+through 14 owners in `striped_sdma`. Both complete rosters must pass borrowed
+preflight, including pending work, and every queue ID must be distinct across
+both sets and from the primary. A standalone-valid 16-owner secondary set,
+orphan secondary set or incompatible profile pair is an invalid composition
+and a hard error, not authorization for consuming fallback. Standalone
+LogicalMux remains an unsupported profile.
+
+Both original sets move into separate inline custody fields before the first
+teardown callback. Destruction and resource disposal preserve the existing
+combined ordering: striped before directional; ascending striped destruction,
+reverse striped disposal, and directional slot 1 before slot 0. Each set keeps
+its topology and per-owner currentness checks. Any outer error or panic marks
+both retained sets terminal, including an untouched or already-cleaned sibling,
+without discarding owner identities, native arguments, outcomes or progress.
+The primary root remains one-shot. Resource accounting is exactly `11 + 3*N`,
+17 through 53 resources; cross-set uniqueness needs at most 28 comparisons.
+There is no additional teardown-time allocation or unsafe code.
+
+Constructed-parent tests exercise every admitted count with and without
+dispatch, both original vectors and nonzero striped cursors, exact destroy and
+resource ordering, complete backing refunds, malformed composition and every
+structural/pending field in both sets. Fault tests cover every occurrence of the
+listed SDMA callbacks, representative primary/platform callbacks, and real
+fixture-native late cleanup failures at the set boundary, with both errors and
+panics and inert retries. The production composition helper and release driver
+are shared with these fixtures; Linux ioctls and the actual public combined
+constructor/selector are not exercised by these CPU tests. Native combined
+qualification, submitted work, formal implementation correspondence and matched
+HIP/HSA performance remain separate requirements. LogicalMux and
+terminal-creation retained release remain excluded.
