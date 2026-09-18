@@ -825,6 +825,92 @@ mod call_instance_emission_tests {
     }
 
     #[test]
+    fn splice_rejects_callee_frame_allocations_including_repeated_calls() {
+        for repeated in [false, true] {
+            let (mut caller, mut callee, site, continuation) = fixture();
+            let scalar = Type::Scalar(ScalarType::U32);
+            let access = MemoryAccess::new(AddressSpace::Private, 4);
+            let body = callee.body.as_mut().unwrap();
+            body.blocks[0].operations = vec![
+                Operation::effect_free(
+                    ValueDef::new(
+                        ValueId(103),
+                        Type::pointer(scalar.clone(), AddressSpace::Private, AccessMode::ReadWrite),
+                    ),
+                    OperationKind::Alloca {
+                        element: scalar.clone(),
+                        count: None,
+                        address_space: AddressSpace::Private,
+                        alignment: 4,
+                    },
+                ),
+                Operation::new(
+                    vec![],
+                    OperationKind::Store {
+                        pointer: ValueId(103),
+                        value: ValueId(100),
+                        access,
+                    },
+                ),
+                Operation::effect_free(
+                    ValueDef::new(ValueId(104), scalar),
+                    OperationKind::Load {
+                        pointer: ValueId(103),
+                        access,
+                    },
+                ),
+            ];
+            body.blocks[1].terminator = Some(Terminator::Return {
+                values: vec![ValueId(104)],
+            });
+            if repeated {
+                let body = caller.body.as_mut().unwrap();
+                let mut returned = BasicBlock::new(BlockId(1));
+                returned.terminator = body.blocks[0].terminator.take();
+                body.blocks[0].terminator = Some(Terminator::ConditionalBranch {
+                    condition: ValueId(2),
+                    then_target: BlockId(0),
+                    then_arguments: vec![],
+                    else_target: BlockId(1),
+                    else_arguments: vec![],
+                });
+                body.blocks.push(returned);
+            }
+            let mut source = Module::new("frame_allocation");
+            source.functions = vec![caller.clone(), callee.clone()];
+            verify_module(&source).unwrap();
+            assert!(
+                run(caller, callee, site, continuation).is_err(),
+                "callee frame allocation cannot outlive its original call"
+            );
+        }
+    }
+
+    #[test]
+    fn splice_preserves_caller_frame_allocations() {
+        let (mut caller, callee, site, continuation) = fixture();
+        let scalar = Type::Scalar(ScalarType::U32);
+        caller.body.as_mut().unwrap().blocks[0]
+            .operations
+            .push(Operation::effect_free(
+                ValueDef::new(
+                    ValueId(4),
+                    Type::pointer(scalar.clone(), AddressSpace::Private, AccessMode::ReadWrite),
+                ),
+                OperationKind::Alloca {
+                    element: scalar,
+                    count: None,
+                    address_space: AddressSpace::Private,
+                    alignment: 4,
+                },
+            ));
+        let result = run(caller, callee, site, continuation).unwrap();
+        let mut module = Module::new("caller_frame");
+        module.functions.push(result.caller);
+        verify_module(&module).unwrap();
+    }
+
+    #[test]
     fn splice_budget_is_cumulative_and_preserves_the_owner_floor() {
         let measure = |work_limit, storage_limit| {
             let (caller, callee, site, continuation) = fixture();
