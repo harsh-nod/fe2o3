@@ -1,0 +1,15 @@
+test_duplicate_json_keys (__main__.SummaryTests.test_duplicate_json_keys) ... ok
+test_exact_pairing (__main__.SummaryTests.test_exact_pairing) ... ok
+test_exact_roster (__main__.SummaryTests.test_exact_roster) ... ok
+test_guard_negative_cases (__main__.SummaryTests.test_guard_negative_cases) ... ok
+test_nearest_rank (__main__.SummaryTests.test_nearest_rank) ... ok
+test_pool_eligibility (__main__.SummaryTests.test_pool_eligibility) ... ok
+test_reject_mutations (__main__.SummaryTests.test_reject_mutations) ... ok
+test_reject_truncation (__main__.SummaryTests.test_reject_truncation) ... ok
+test_terminal_order (__main__.SummaryTests.test_terminal_order) ... ok
+test_warmup_exclusion (__main__.SummaryTests.test_warmup_exclusion) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.275s
+
+OK

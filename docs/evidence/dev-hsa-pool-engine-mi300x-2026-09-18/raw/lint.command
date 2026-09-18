@@ -1,0 +1,1 @@
+ruff check docs/evidence/dev-hsa-pool-engine-mi300x-2026-09-18/summarize.py docs/evidence/dev-hsa-pool-engine-mi300x-2026-09-18/test-summary.py docs/evidence/dev-hsa-pool-engine-mi300x-2026-09-18/audit.py 

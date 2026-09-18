@@ -1,0 +1,17 @@
+2026-09-18T01:05:12.528278422Z
+3674c474ac81823104a3b386a6853a961726f978bb1a5265244b7565195f9dbf  prepare.sh
+7fc70667368f9aff6dddd615f127e3b55146c8c390693a7a81f56b019025cf77  guard.sh
+14e02ec937f10050edf59e9c203279f901812fc2babd3b9c1b6388c2edde50ae  run.sh
+e6b45f03efb36f8fade313a8a6f581248a5ec0646a02a0eca64fcedbf0412cab  cleanup.sh
+d908a9895034ef2e3b423ca44a7972202fc393840a2861070561c5f1bd4695d9  owner
+Filesystem         1B-blocks          Used   Available Use% Mounted on
+/dev/nvme2n1p2 3778190245888 3508325814272 77866340352  98% /
+407M	/tmp/fe2o3-hsa-pool-engine-20260918.wBkvxkrs
+inherited_environment HSA_XNACK=<unset>
+inherited_environment HSA_ENABLE_SDMA=<unset>
+inherited_environment HSA_ENABLE_PEER_SDMA=<unset>
+inherited_environment HSA_OVERRIDE_GFX_VERSION=<unset>
+inherited_environment HSA_TOOLS_LIB=<unset>
+inherited_environment LD_PRELOAD=<unset>
+inherited_environment LD_LIBRARY_PATH=<unset>
+2026-09-18T01:05:12.561860793Z

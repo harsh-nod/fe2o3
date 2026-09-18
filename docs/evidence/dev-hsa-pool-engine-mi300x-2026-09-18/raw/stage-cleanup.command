@@ -1,0 +1,1 @@
+scp -q -o BatchMode=yes docs/evidence/dev-hsa-pool-engine-mi300x-2026-09-18/cleanup.sh docs/evidence/dev-hsa-pool-engine-mi300x-2026-09-18/inspect.sh mi300x:/tmp/fe2o3-hsa-pool-engine-20260918.wBkvxkrs/ 

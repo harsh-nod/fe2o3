@@ -117,5 +117,9 @@ to select another header installation. Mocks verify control flow, not hardware
 coherence, memory attributes, DMA execution or performance.
 
 The [CPU qualification receipt](../../docs/evidence/dev-hsa-pool-engine-cpu-2026-09-17/README.md)
-records the actual source identity and check outcomes. Hardware execution remains
-a separate guarded measurement, not an implication of that receipt.
+records the actual source identity and check outcomes. The separate
+[MI300X development diagnostic](../../docs/evidence/dev-hsa-pool-engine-mi300x-2026-09-18/README.md)
+records the guarded four-block pool/engine matrix and unchanged KFD anchors.
+Its CPU agent 0 is not GPU 4's reported nearest CPU agent. It narrows the
+directional copy investigation, but does not establish physical memory/engine
+equivalence, native milestone acceptance or HIP/HSA parity.
