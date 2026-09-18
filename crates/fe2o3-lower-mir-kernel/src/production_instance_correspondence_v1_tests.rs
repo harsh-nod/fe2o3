@@ -212,6 +212,39 @@ fn lower_pair(
 }
 
 #[test]
+fn cursor_selected_instance_cannot_be_relabelled_on_append() {
+    use resource_tests::emission_placement_lowering_tests::lower_placed_function_with_availability_v29;
+    with_plan(|plan, budget| {
+        let floor = budget.storage();
+        let mut caller =
+            with_execution_availability_v29(plan, plan.root(), budget, |cursor, budget| {
+                lower_placed_function_with_availability_v29(
+                    plan.owner(),
+                    plan.instance(plan.root()).unwrap().function(),
+                    SemanticEmissionPlacementV1::default(),
+                    budget,
+                    Some(cursor),
+                )
+            })
+            .unwrap();
+        assert_eq!(caller.source_call_instance, Some(plan.root()));
+        let storage = CallReturnBufferV1::bytes(
+            caller.call_returns.sites.rows.len(),
+            caller.call_returns.components.rows.len(),
+        )
+        .unwrap();
+        caller.source_call_instance = plan.calls(plan.root()).unwrap()[0].child();
+        let rejected = with_production_instance_correspondence_v1(plan, budget, |map, budget| {
+            map.append_lowered(plan.root(), &caller, budget)
+        });
+        assert_eq!(rejected, Err(InstanceCorrespondenceErrorV1::Source));
+        drop(caller);
+        budget.release_storage(storage).unwrap();
+        assert_eq!(budget.storage(), floor);
+    });
+}
+
+#[test]
 fn instance_wrapper_rejects_owner_relabel_and_invalid_source_census() {
     with_plan(|plan, budget| {
         for mutation in 0..9 {

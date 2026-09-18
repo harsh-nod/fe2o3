@@ -390,6 +390,12 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> InstanceMapResultV1<()> {
         budget.charge_work(1)?;
+        if lowered
+            .source_call_instance
+            .is_some_and(|selected| selected != instance)
+        {
+            return Err(InstanceCorrespondenceErrorV1::Source);
+        }
         let plan = self.plan;
         let source = plan
             .instance(instance)

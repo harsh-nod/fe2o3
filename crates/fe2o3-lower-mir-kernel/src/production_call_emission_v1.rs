@@ -150,7 +150,12 @@ impl SemanticFunctionLoweringV1<'_> {
             .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
                 resource: ProductionSemanticKirResourceV1::AnalysisStorage,
             })?;
-        for (argument, expected) in call.arguments().iter().zip(signature.semantic_types) {
+        for (index, (argument, expected)) in call
+            .arguments()
+            .iter()
+            .zip(signature.semantic_types)
+            .enumerate()
+        {
             if semantic_operand_type(argument) != *expected {
                 return Err(unsupported(
                     self.semantic_function.index(),
@@ -159,7 +164,15 @@ impl SemanticFunctionLoweringV1<'_> {
                     "defined call source argument type changed",
                 ));
             }
-            source_bindings.push(self.lower_operand(block, None, argument, operations)?);
+            source_bindings.push(self.lower_source_operand_v29(
+                block,
+                None,
+                Some(ExecutionOperandV29::CallArgument(
+                    u32::try_from(index).map_err(|_| execution_availability_error_v29())?,
+                )),
+                argument,
+                operations,
+            )?);
         }
         let mut arguments = Vec::new();
         arguments

@@ -18,8 +18,8 @@ fn field(index: u32) -> SemanticPlaceV1 {
     .unwrap()
 }
 
-// These fixtures exercise emitter transport of already-held bindings. They are
-// not admitted source/SSA owners and do not establish issuance or scope custody.
+// These fixtures exercise the nominal binding layer below source-checked
+// emission. They are not admitted owners or evidence of execution availability.
 fn function(
     input: SemanticTypeIdV1,
     statements: Vec<SemanticStatementV1>,
@@ -92,7 +92,7 @@ fn lowering<'a>(
     types: &'a [SemanticTypeDeclV1],
     function: &'a SemanticFunctionDeclV1,
 ) -> SemanticFunctionLoweringV1<'a> {
-    let mut lowering = SemanticFunctionLoweringV1::new(
+    SemanticFunctionLoweringV1::new(
         types,
         &[],
         function,
@@ -109,9 +109,21 @@ fn lowering<'a>(
         false,
         128,
     )
-    .unwrap();
-    lowering.execution_instance = Some(INSTANCE);
-    lowering
+    .unwrap()
+}
+
+impl SemanticFunctionLoweringV1<'_> {
+    fn nominal_borrow_v29(
+        &self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        ty: SemanticTypeIdV1,
+        value: &SemanticRvalueKindV1,
+        _operations: &mut Vec<Operation>,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.try_lower_execution_borrow_binding_v29(block, statement, ty, value, INSTANCE)?
+            .ok_or_else(execution_availability_error_v29)
+    }
 }
 
 fn context(types: &[SemanticTypeDeclV1], value: u32) -> SemanticExecutionBindingV29 {
@@ -174,6 +186,108 @@ fn missing<T>(result: Result<T, ProductionSemanticKirErrorV1>) {
 }
 
 #[test]
+fn outer_emitter_refuses_nominal_execution_without_a_source_cursor() {
+    let types = types();
+    let function = function(CONTEXT, vec![]);
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(10_000);
+    let mut budget = ArgumentBudgetV1::new(&mut work, 0);
+    let mut lowering = lowering(&types, &function);
+    lowering.emission_work = Some(&mut budget);
+    lowering.locals[1] = Some(SemanticValueBindingV1::Execution(context(&types, 100)));
+    let mut operations = Vec::new();
+    refused(
+        lowering.lower_operand(
+            BLOCK,
+            Some(0),
+            &SemanticOperandV1::Move(place(1, CONTEXT)),
+            &mut operations,
+        ),
+        "execution availability differs from its source SSA instance",
+    );
+    refused(
+        lowering.lower_source_operand_v29(
+            BLOCK,
+            Some(0),
+            Some(ExecutionOperandV29::RvalueOperand(0)),
+            &SemanticOperandV1::Move(place(1, CONTEXT)),
+            &mut operations,
+        ),
+        "execution availability differs from its source SSA instance",
+    );
+    assert!(matches!(
+        lowering.locals[1],
+        Some(SemanticValueBindingV1::Execution(_))
+    ));
+    assert!(operations.is_empty());
+}
+
+#[test]
+fn archive_check_rejects_changed_producers_borrows_and_missing_phi_bindings() {
+    let types = types();
+    let expected = context(&types, 100);
+    let definition = SsaValueV1::BlockArgument {
+        block: SsaBlockIdV1::new(0),
+        variable: fe2o3_mir_model::SsaVariableIdV1::new(1),
+    };
+    let mut archive = BTreeMap::from([(
+        definition,
+        SemanticValueBindingV1::Execution(expected.clone()),
+    )]);
+    let mut held = vec![
+        None,
+        Some(SemanticValueBindingV1::Execution(expected.clone())),
+    ];
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(10_000);
+    let mut budget = ArgumentBudgetV1::new(&mut work, 0);
+    check_execution_archive_v29(&held, &archive, &place(1, CONTEXT), definition, &mut budget)
+        .unwrap();
+    let foreign = SemanticExecutionBindingV29::context(
+        &types,
+        CONTEXT,
+        ProductionCallOccurrenceV1 {
+            caller: ProductionCallInstanceIdV1(8),
+            block: BLOCK,
+        },
+        ValueId(100),
+    )
+    .unwrap();
+    held[1] = Some(SemanticValueBindingV1::Execution(foreign));
+    assert!(
+        check_execution_archive_v29(&held, &archive, &place(1, CONTEXT), definition, &mut budget)
+            .is_err()
+    );
+    held[1] = Some(SemanticValueBindingV1::Execution(context(&types, 101)));
+    assert!(
+        check_execution_archive_v29(&held, &archive, &place(1, CONTEXT), definition, &mut budget)
+            .is_err()
+    );
+    archive.clear();
+    held[1] = Some(SemanticValueBindingV1::Execution(expected));
+    assert!(
+        check_execution_archive_v29(&held, &archive, &place(1, CONTEXT), definition, &mut budget)
+            .is_err()
+    );
+    let borrowed = borrowed(&types, SHARED_CONTEXT, SemanticBorrowKindV1::Shared);
+    archive.insert(
+        definition,
+        SemanticValueBindingV1::ExecutionBorrow(borrowed.clone()),
+    );
+    let mut wrong_instance = borrowed;
+    wrong_instance.occurrence.instance = INSTANCE;
+    held[1] = Some(SemanticValueBindingV1::ExecutionBorrow(wrong_instance));
+    assert!(
+        check_execution_archive_v29(
+            &held,
+            &archive,
+            &place(1, SHARED_CONTEXT),
+            definition,
+            &mut budget
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn execution_whole_move_consumes_binding_and_copy_does_not() {
     let types = types();
     let function = function(CONTEXT, vec![]);
@@ -182,7 +296,7 @@ fn execution_whole_move_consumes_binding_and_copy_does_not() {
     lowering.locals[1] = Some(SemanticValueBindingV1::Execution(expected.clone()));
     let mut operations = Vec::new();
     refused(
-        lowering.lower_operand(
+        lowering.lower_operand_inner_v1(
             BLOCK,
             Some(0),
             &SemanticOperandV1::Copy(place(1, CONTEXT)),
@@ -194,7 +308,7 @@ fn execution_whole_move_consumes_binding_and_copy_does_not() {
         matches!(&lowering.locals[1], Some(SemanticValueBindingV1::Execution(actual)) if *actual == expected)
     );
     let moved = lowering
-        .lower_operand(
+        .lower_operand_inner_v1(
             BLOCK,
             Some(0),
             &SemanticOperandV1::Move(place(1, CONTEXT)),
@@ -203,7 +317,7 @@ fn execution_whole_move_consumes_binding_and_copy_does_not() {
         .unwrap();
     assert!(matches!(moved, SemanticValueBindingV1::Execution(actual) if actual == expected));
     assert!(lowering.locals[1].is_none());
-    missing(lowering.lower_operand(
+    missing(lowering.lower_operand_inner_v1(
         BLOCK,
         Some(1),
         &SemanticOperandV1::Move(place(1, CONTEXT)),
@@ -240,7 +354,7 @@ fn execution_projected_moves_preserve_tombstones_and_reject_partial_whole_moves(
     lowering.locals[1] = Some(aggregate());
     let mut operations = Vec::new();
     refused(
-        lowering.lower_operand(
+        lowering.lower_operand_inner_v1(
             BLOCK,
             Some(0),
             &SemanticOperandV1::Copy(place(1, tuple)),
@@ -249,7 +363,7 @@ fn execution_projected_moves_preserve_tombstones_and_reject_partial_whole_moves(
         "execution-bearing aggregates cannot be copied",
     );
     let whole = lowering
-        .lower_operand(
+        .lower_operand_inner_v1(
             BLOCK,
             Some(0),
             &SemanticOperandV1::Move(place(1, tuple)),
@@ -260,7 +374,7 @@ fn execution_projected_moves_preserve_tombstones_and_reject_partial_whole_moves(
     assert!(lowering.locals[1].is_none());
     lowering.locals[1] = Some(aggregate());
     let moved = lowering
-        .lower_operand(
+        .lower_operand_inner_v1(
             BLOCK,
             Some(1),
             &SemanticOperandV1::Move(field(0)),
@@ -269,7 +383,7 @@ fn execution_projected_moves_preserve_tombstones_and_reject_partial_whole_moves(
         .unwrap();
     assert!(matches!(moved, SemanticValueBindingV1::Execution(actual) if actual == first));
     refused(
-        lowering.lower_operand(
+        lowering.lower_operand_inner_v1(
             BLOCK,
             Some(2),
             &SemanticOperandV1::Move(place(1, tuple)),
@@ -278,7 +392,7 @@ fn execution_projected_moves_preserve_tombstones_and_reject_partial_whole_moves(
         "execution aggregate contains a moved value",
     );
     let moved = lowering
-        .lower_operand(
+        .lower_operand_inner_v1(
             BLOCK,
             Some(3),
             &SemanticOperandV1::Move(field(1)),
@@ -292,7 +406,7 @@ fn execution_projected_moves_preserve_tombstones_and_reject_partial_whole_moves(
     );
     for index in 0..2 {
         refused(
-            lowering.lower_operand(
+            lowering.lower_operand_inner_v1(
                 BLOCK,
                 Some(4),
                 &SemanticOperandV1::Move(field(index)),
@@ -302,7 +416,7 @@ fn execution_projected_moves_preserve_tombstones_and_reject_partial_whole_moves(
         );
     }
     refused(
-        lowering.lower_operand(
+        lowering.lower_operand_inner_v1(
             BLOCK,
             Some(5),
             &SemanticOperandV1::Move(place(1, tuple)),
@@ -347,11 +461,11 @@ fn execution_borrow_requires_the_retained_assignment_not_an_equal_clone() {
     let detached = (*original).clone();
     let mut operations = Vec::new();
     refused(
-        lowering.lower_rvalue(BLOCK, Some(0), MUT_CONTEXT, &detached, &mut operations),
+        lowering.nominal_borrow_v29(BLOCK, Some(0), MUT_CONTEXT, &detached, &mut operations),
         "execution borrow differs from its retained source assignment",
     );
     let borrowed = lowering
-        .lower_rvalue(BLOCK, Some(0), MUT_CONTEXT, original, &mut operations)
+        .nominal_borrow_v29(BLOCK, Some(0), MUT_CONTEXT, original, &mut operations)
         .unwrap();
     let SemanticValueBindingV1::ExecutionBorrow(binding) = &borrowed else {
         panic!("expected nominal borrow")
@@ -375,7 +489,7 @@ fn execution_borrow_requires_the_retained_assignment_not_an_equal_clone() {
     );
     lowering.locals[2] = Some(borrowed);
     refused(
-        lowering.lower_operand(
+        lowering.lower_operand_inner_v1(
             BLOCK,
             Some(1),
             &SemanticOperandV1::Copy(place(2, MUT_CONTEXT)),
@@ -385,7 +499,7 @@ fn execution_borrow_requires_the_retained_assignment_not_an_equal_clone() {
     );
     assert!(matches!(
         lowering
-            .lower_operand(
+            .lower_operand_inner_v1(
                 BLOCK,
                 Some(1),
                 &SemanticOperandV1::Move(place(2, MUT_CONTEXT)),
@@ -396,6 +510,44 @@ fn execution_borrow_requires_the_retained_assignment_not_an_equal_clone() {
     ));
     assert!(lowering.locals[2].is_none());
     assert!(operations.is_empty());
+}
+
+#[test]
+fn emission_ledger_is_restored_after_consumer_unwind() {
+    let types = types();
+    let function = function(CONTEXT, vec![]);
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100);
+    let mut budget = ArgumentBudgetV1::new(&mut work, 0);
+    let original_ledger = budget.work_ledger_identity_v1();
+    let original_work = budget.work();
+    let mut lowering = lowering(&types, &function);
+    lowering.emission_work = Some(&mut budget);
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = lowering.with_emission_budget_v1::<()>(|this, meter| {
+            assert!(this.emission_work.is_none());
+            meter.charge_work(7)?;
+            panic!("emission callback");
+        });
+    }));
+    assert!(panic.is_err());
+    assert!(
+        lowering
+            .emission_work
+            .as_deref()
+            .unwrap()
+            .work_ledger_identity_v1()
+            == original_ledger
+    );
+    lowering
+        .with_emission_budget_v1(|this, meter| {
+            assert!(this.emission_work.is_none());
+            meter.charge_work(3)
+        })
+        .unwrap();
+    assert!(lowering.emission_work.is_some());
+    drop(lowering);
+    assert_eq!(budget.work(), original_work + 10);
+    assert_eq!(budget.storage(), 0);
 }
 
 #[test]
@@ -418,7 +570,7 @@ fn execution_storage_dead_prevents_later_operand_use() {
         )
         .unwrap();
     assert!(lowering.locals[1].is_none());
-    missing(lowering.lower_operand(
+    missing(lowering.lower_operand_inner_v1(
         BLOCK,
         Some(1),
         &SemanticOperandV1::Move(place(1, CONTEXT)),
@@ -454,7 +606,7 @@ fn execution_dereference_retains_the_complete_borrow_and_cannot_move_out() {
             SemanticOperandV1::Move(dereferenced(1)),
         ] {
             refused(
-                lowering.lower_operand(BLOCK, Some(0), &operand, &mut operations),
+                lowering.lower_operand_inner_v1(BLOCK, Some(0), &operand, &mut operations),
                 "execution operand requires exact logical field transport",
             );
             assert!(
@@ -484,7 +636,7 @@ fn execution_referent_cannot_be_transported_as_an_owned_operand() {
         SemanticOperandV1::Move(place(1, CONTEXT)),
     ] {
         refused(
-            lowering.lower_operand(BLOCK, Some(0), &operand, &mut operations),
+            lowering.lower_operand_inner_v1(BLOCK, Some(0), &operand, &mut operations),
             "borrowed execution referents cannot become owned values",
         );
         assert!(
@@ -534,11 +686,11 @@ fn execution_reborrow_hook_requires_retained_source_and_preserves_parent() {
             let detached = original.clone();
             let mut operations = Vec::new();
             refused(
-                lowering.lower_rvalue(BLOCK, Some(0), reference, &detached, &mut operations),
+                lowering.nominal_borrow_v29(BLOCK, Some(0), reference, &detached, &mut operations),
                 "execution borrow differs from its retained source assignment",
             );
             let result =
-                lowering.lower_rvalue(BLOCK, Some(0), reference, original, &mut operations);
+                lowering.nominal_borrow_v29(BLOCK, Some(0), reference, original, &mut operations);
             if parent_kind == SemanticBorrowKindV1::Shared && kind == SemanticBorrowKindV1::Mutable
             {
                 refused(result, "execution reborrow cannot strengthen shared access");
@@ -598,7 +750,7 @@ fn execution_reborrow_uses_the_actual_root_reference_type() {
     };
     let mut operations = Vec::new();
     refused(
-        lowering.lower_rvalue(
+        lowering.nominal_borrow_v29(
             BLOCK,
             Some(0),
             SHARED_CONTEXT,

@@ -23,6 +23,16 @@ pub(in super::super) fn lower_placed_function(
     placement: SemanticEmissionPlacementV1,
     arguments: &mut ArgumentBudgetV1<'_>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
+    lower_placed_function_with_availability_v29(ssa, selected, placement, arguments, None)
+}
+
+pub(in super::super) fn lower_placed_function_with_availability_v29(
+    ssa: &ProductionSemanticSsaOwnerV1,
+    selected: SemanticFunctionIdV1,
+    placement: SemanticEmissionPlacementV1,
+    arguments: &mut ArgumentBudgetV1<'_>,
+    execution: Option<ExecutionAvailabilityV29<'_>>,
+) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     let semantic = ssa.source_semantic();
     let root = semantic.roots()[0];
     let mut ids = BTreeMap::new();
@@ -83,6 +93,7 @@ pub(in super::super) fn lower_placed_function(
         None,
         arguments,
         placement,
+        execution,
     )
 }
 
@@ -121,17 +132,28 @@ fn captured_source_instances_drive_existing_lowering_and_call_expansion() {
             if *function == child_row.function())
         );
         let caller =
-            lower_placed_function(&ssa, root, SemanticEmissionPlacementV1::default(), budget)
-                .unwrap();
-        let callee = lower_placed_function(
-            &ssa,
-            child_row.function(),
-            SemanticEmissionPlacementV1 {
-                first_block: 17,
-                first_value: 100,
-            },
-            budget,
-        )
+            with_execution_availability_v29(plan, plan.root(), budget, |cursor, budget| {
+                lower_placed_function_with_availability_v29(
+                    &ssa,
+                    root,
+                    SemanticEmissionPlacementV1::default(),
+                    budget,
+                    Some(cursor),
+                )
+            })
+            .unwrap();
+        let callee = with_execution_availability_v29(plan, child, budget, |cursor, budget| {
+            lower_placed_function_with_availability_v29(
+                &ssa,
+                child_row.function(),
+                SemanticEmissionPlacementV1 {
+                    first_block: 17,
+                    first_value: 100,
+                },
+                budget,
+                Some(cursor),
+            )
+        })
         .unwrap();
         with_production_instance_correspondence_v1(plan, budget, |mapping, budget| {
             mapping.append_lowered(plan.root(), &caller, budget)?;

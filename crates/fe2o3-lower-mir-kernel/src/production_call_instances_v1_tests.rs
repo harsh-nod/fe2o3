@@ -11,6 +11,10 @@ const REFERENCE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(3);
 const ROOT: SemanticFunctionIdV1 = SemanticFunctionIdV1::from_index(0);
 const FLOOR: usize = 37;
 
+mod availability_tests {
+    include!("production_execution_availability_v29_tests.rs");
+}
+
 #[derive(Clone, Copy)]
 enum Case {
     Ordinary,
