@@ -33,7 +33,7 @@ fn nested_not_wrapping_kernel(expected_bits: u64) -> ProductionRankedKernelV1 {
     let Expression::Binary { rhs, .. } = expression else {
         unreachable!()
     };
-    *rhs = Box::new(Expression::Constant { scalar, bits: 8 });
+    **rhs = Expression::Constant { scalar, bits: 8 };
     for _ in 0..2 {
         *expression = Expression::Unary {
             operation: ProductionSemanticUnaryOpV2::Not,
@@ -464,8 +464,7 @@ fn protected_ranked_effect_rejects_coordinate_mismatch() {
         subjects(),
         COMPILER_TIMEOUT_SECONDS,
     )
-    .err()
-    .expect("matching values cannot admit a mismatched effect coordinate");
+    .expect_err("matching values cannot admit a mismatched effect coordinate");
     assert_eq!(
         error.kind(),
         FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult
@@ -542,8 +541,7 @@ fn protected_ieee_operator_mutation_rejects_bound_receipt() {
         subjects(),
         COMPILER_TIMEOUT_SECONDS,
     )
-    .err()
-    .expect("distinct f32 operator trees must not produce an imported congruence receipt");
+    .expect_err("distinct f32 operator trees must not produce an imported congruence receipt");
     assert_eq!(
         error.kind(),
         FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult
