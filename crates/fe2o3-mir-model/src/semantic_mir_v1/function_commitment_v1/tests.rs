@@ -116,7 +116,7 @@ fn charge(used: &mut u64, amount: usize, max: u64) -> Result<(), SemanticMirErro
 
 #[test]
 fn function_commitment_matches_legacy_encoder_and_is_version_bound() {
-    let function = function();
+    let function = rich_function(64);
     let versions = [
         SemanticMirWireVersionV1::V2,
         SemanticMirWireVersionV1::V3,
@@ -463,7 +463,7 @@ fn function_commitment_caller_ledger_is_cumulative_and_not_refunded() {
 
 #[test]
 fn function_commitment_propagates_every_hook_failure_including_finalization() {
-    let f = adjusted_function();
+    let f = rich_function(64);
     let mut calls = 0;
     canonical_function_commitment_v1(
         &f,
@@ -548,4 +548,116 @@ fn function_commitment_writer_never_allocates_payload_and_prepays_walks() {
     drop(writer);
     assert_eq!(observed, vec![23, 6]);
     assert_eq!(sha.finalize(), Sha256::digest([]));
+}
+
+fn rich_function(blob_len: usize) -> SemanticFunctionDeclV1 {
+    let mut f = adjusted_function();
+    let origin =
+        SemanticSourceOriginV1::new(SemanticSourceFileIdentityV1([13; 32]), 2, 8, 1, 2, 1, 8)
+            .unwrap();
+    let source = SemanticSourceProvenanceV1::new(Some(origin), Some(origin));
+    f.blocks[0].source = source;
+    let projected = SemanticPlaceV1::new(
+        SemanticLocalIdV1(1),
+        vec![
+            SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), SemanticTypeIdV1(0))
+                .unwrap(),
+        ],
+        SemanticTypeIdV1(0),
+    )
+    .unwrap();
+    let bytes = SemanticOperandV1::Constant(SemanticConstantV1::new(
+        SemanticTypeIdV1(0),
+        SemanticConstantValueV1::Bytes(SemanticConstantBytesV1::new(vec![7; blob_len]).unwrap()),
+    ));
+    f.blocks[0].statements = vec![
+        SemanticStatementV1::new(
+            source,
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                place(0),
+                SemanticRvalueV1::new(SemanticTypeIdV1(0), SemanticRvalueKindV1::Use(bytes)),
+            )),
+        ),
+        SemanticStatementV1::new(
+            source,
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                place(0),
+                SemanticRvalueV1::new(
+                    SemanticTypeIdV1(0),
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(projected)),
+                ),
+            )),
+        ),
+        SemanticStatementV1::new(source, SemanticStatementKindV1::Nop),
+    ]
+    .into_boxed_slice();
+    f
+}
+
+#[test]
+fn function_commitment_binds_blobs_projections_source_and_statement_order() {
+    let f = rich_function(64);
+    mutation(&f, "same-length bytes", |f| {
+        let SemanticStatementKindV1::Assign(assignment) = &mut f.blocks[0].statements[0].kind
+        else {
+            panic!()
+        };
+        let SemanticRvalueKindV1::Use(SemanticOperandV1::Constant(constant)) =
+            &mut assignment.value.kind
+        else {
+            panic!()
+        };
+        let SemanticConstantValueV1::Bytes(bytes) = &mut constant.value else {
+            panic!()
+        };
+        bytes.0[17] ^= 1;
+    });
+    for change in 0..3 {
+        mutation(&f, "projected operand", |f| {
+            let SemanticStatementKindV1::Assign(assignment) = &mut f.blocks[0].statements[1].kind
+            else {
+                panic!()
+            };
+            let SemanticRvalueKindV1::Use(operand) = &mut assignment.value.kind else {
+                panic!()
+            };
+            let SemanticOperandV1::Copy(place) = operand else {
+                panic!()
+            };
+            match change {
+                0 => *operand = SemanticOperandV1::Move(place.clone()),
+                1 => place.projections[0].kind = SemanticProjectionKindV1::Field(1),
+                2 => place.projections[0].result_type = SemanticTypeIdV1(1),
+                _ => unreachable!(),
+            }
+        });
+    }
+    mutation(&f, "source byte coordinate", |f| {
+        f.blocks[0].source.expansion.as_mut().unwrap().byte_start += 1
+    });
+    mutation(&f, "source call site", |f| {
+        f.blocks[0].statements[0]
+            .source
+            .call_site
+            .as_mut()
+            .unwrap()
+            .column_start += 1
+    });
+    mutation(&f, "statement order", |f| f.blocks[0].statements.swap(0, 1));
+    mutation(&f, "Nop removal", |f| {
+        f.blocks[0].statements = f.blocks[0].statements[..2].into()
+    });
+
+    let cost = |len| {
+        let mut work = 0;
+        canonical_function_commitment_v1(
+            &rich_function(len),
+            SemanticMirWireVersionV1::V29,
+            SemanticMirLimitsV1::default(),
+            &mut |n| charge(&mut work, n, u64::MAX),
+        )
+        .unwrap();
+        work
+    };
+    assert_eq!(cost(128) - cost(64), 64);
 }

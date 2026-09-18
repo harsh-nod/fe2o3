@@ -45,8 +45,13 @@ use crate::production_rustc_slice_metadata_v1::{
 };
 use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
 
+mod function_commitments_v29;
 pub(crate) mod receiver_materialization_v1;
 pub(crate) mod receiver_reborrow_v1;
+pub(crate) use function_commitments_v29::ExpectedFunctionCommitmentV29;
+use function_commitments_v29::{
+    PendingFunctionCommitmentsV29, charge_construction_total_v1, construction_resource_error_v1,
+};
 use receiver_materialization_v1::{ReceiverLocalV1, ReceiverMaterializationV1};
 
 #[cfg(test)]
@@ -292,6 +297,7 @@ pub(crate) struct ProductionSemanticBodyRequestOwnerV1<'tcx> {
     totals: ConstructionTotalsV1,
     callables: HashMap<Instance<'tcx>, ProductionSemanticCallableOwnerRecordV1>,
     context_entries: Vec<crate::collector::RetainedContextEntryV29>,
+    function_commitments: Option<PendingFunctionCommitmentsV29<'tcx>>,
 }
 
 impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
@@ -366,6 +372,7 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
             totals,
             callables,
             context_entries: Vec::new(),
+            function_commitments: None,
         })
     }
 
@@ -373,6 +380,12 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
         mut self,
         semantic: &AdmittedInertSemanticMirV1,
     ) -> Result<crate::collector::RetainedContextEntriesV29, ProductionSemanticBodyErrorV1> {
+        if self.function_commitments.is_some() == self.context_entries.is_empty() {
+            return Err(table("function commitment context transaction"));
+        }
+        if let Some(pending) = self.function_commitments.take() {
+            pending.verify(semantic, &mut self.totals, self.limits)?;
+        }
         let entries = std::mem::take(&mut self.context_entries);
         crate::collector::RetainedContextEntriesV29::seal(entries, semantic, |amount| {
             self.charge(SemanticMirResourceV1::ValidationWork, amount)
@@ -596,27 +609,13 @@ impl ConstructionTotalsV1 {
         limits: SemanticMirLimitsV1,
     ) -> Result<(), ProductionSemanticBodyErrorV1> {
         let maximum = limits.limit(resource);
-        let amount = u64::try_from(amount).unwrap_or(u64::MAX);
         let slot = self.slot_mut(resource).ok_or(
             ProductionSemanticBodyErrorV1::IdentityTableMismatch {
                 table: "construction accounting domain",
             },
         )?;
-        *slot = slot
-            .checked_add(amount)
-            .ok_or(ProductionSemanticBodyErrorV1::LimitExceeded {
-                resource,
-                actual: u64::MAX,
-                maximum,
-            })?;
-        if *slot > maximum {
-            return Err(ProductionSemanticBodyErrorV1::LimitExceeded {
-                resource,
-                actual: *slot,
-                maximum,
-            });
-        }
-        Ok(())
+        charge_construction_total_v1(slot, resource, amount, maximum)
+            .map_err(construction_resource_error_v1)
     }
 }
 
@@ -664,6 +663,7 @@ pub(crate) fn construct_production_semantic_body_v1<'a, 'owner, 'tcx>(
     owner: &'owner mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
 ) -> Result<SemanticFunctionDeclV1, ProductionSemanticBodyErrorV1> {
     validate_export_role_v1(input.role, &input.export)?;
+    owner.begin_function_commitment_v29(&input)?;
     let abi = input.abi.clone();
     let export = input.export.clone();
     let entry = input.entry;
@@ -733,7 +733,8 @@ pub(crate) fn construct_production_semantic_body_v1<'a, 'owner, 'tcx>(
             function.with_device_ffi_export_symbol(symbol)
         }
     };
-    if let Some(context) = context {
+    let commitment = owner.capture_function_commitment_v29(input.function, &function)?;
+    let retained = if let Some(context) = context {
         let retained = context.bind_function(&function, |amount| {
             owner.charge(SemanticMirResourceV1::ValidationWork, amount)
         })?;
@@ -754,7 +755,21 @@ pub(crate) fn construct_production_semantic_body_v1<'a, 'owner, 'tcx>(
                 .try_reserve(1)
                 .map_err(|_| allocation(SemanticMirResourceV1::Functions))?;
         }
+        Some(retained)
+    } else {
+        None
+    };
+    let prepared = match (&mut owner.function_commitments, commitment) {
+        (Some(pending), Some(commitment)) => Some(pending.prepare(commitment)?),
+        (None, None) => None,
+        _ => return Err(table("function commitment capture state")),
+    };
+    // No fallible work after either record becomes visible.
+    if let Some(retained) = retained {
         owner.context_entries.push(retained);
+    }
+    if let Some(prepared) = prepared {
+        prepared.publish();
     }
     Ok(function)
 }
@@ -2902,6 +2917,7 @@ mod tests {
             totals: ConstructionTotalsV1::default(),
             callables: HashMap::new(),
             context_entries: Vec::new(),
+            function_commitments: None,
         };
 
         owner.charge(SemanticMirResourceV1::Functions, 1).unwrap();
