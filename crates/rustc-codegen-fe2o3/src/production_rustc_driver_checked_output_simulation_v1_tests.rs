@@ -19,6 +19,10 @@ const TARGET: SimulationTargetV1 = SimulationTargetV1::amdgpu_64();
 pub(super) mod constant_shift;
 #[path = "production_rustc_driver_checked_output_f32_simulation_v1_tests.rs"]
 mod f32_arithmetic;
+#[path = "production_rustc_driver_checked_output_integer_identity_simulation_v1_tests.rs"]
+pub(super) mod integer_identity;
+#[path = "production_rustc_driver_checked_output_masked_shift_simulation_v1_tests.rs"]
+pub(super) mod masked_shift;
 #[path = "production_rustc_driver_checked_output_numeric_cast_simulation_v1_tests.rs"]
 pub(super) mod numeric_cast;
 #[path = "production_rustc_driver_checked_output_saturating_simulation_v1_tests.rs"]
@@ -29,6 +33,8 @@ mod scalar_borrow;
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum Case {
+    IntegerIdentity(integer_identity::Batch),
+    MaskedShift(masked_shift::Batch),
     ConstantShift(constant_shift::Batch),
     ScalarBorrow,
     NumericCast(numeric_cast::OperationCase),
@@ -44,7 +50,9 @@ impl Case {
     fn name(self) -> &'static str {
         match self {
             Self::ScalarBorrow => "scalar-borrow-policy5",
+            Self::IntegerIdentity(case) => case.name(),
             Self::ConstantShift(case) => case.name(),
+            Self::MaskedShift(case) => case.name(),
             Self::NumericCast(case) => case.name(),
             Self::SaturatingInteger(case) => case.name(),
             Self::Fill => "fill",
@@ -58,7 +66,9 @@ impl Case {
     fn numerical_policy(self) -> &'static str {
         match self {
             Self::ScalarBorrow => scalar_borrow::NUMERICAL_POLICY,
+            Self::IntegerIdentity(_) => integer_identity::NUMERICAL_POLICY,
             Self::ConstantShift(_) => constant_shift::NUMERICAL_POLICY,
+            Self::MaskedShift(_) => masked_shift::NUMERICAL_POLICY,
             Self::NumericCast(_) => numeric_cast::NUMERICAL_POLICY,
             Self::SaturatingInteger(_) => saturating_integer::NUMERICAL_POLICY,
             Self::Fill | Self::Vecadd | Self::ScalarGemm => {
@@ -70,7 +80,12 @@ impl Case {
 }
 
 pub(super) fn check_native_arithmetic(case: Case, llvm: &str) -> Result<(), SourceFailure> {
-    if matches!(case, Case::ConstantShift(_)) {
+    if matches!(case, Case::IntegerIdentity(_)) {
+        return Err(failure(
+            "integer identities require actual per-root native owner observations",
+        ));
+    }
+    if matches!(case, Case::ConstantShift(_) | Case::MaskedShift(_)) {
         return Err(failure(
             "shifts require exact per-root native owner observations",
         ));
@@ -148,6 +163,8 @@ pub(super) fn requested() -> Result<Option<Case>, SourceFailure> {
             .map(Case::SaturatingInteger)
             .or_else(|| numeric_cast::OperationCase::parse(name).map(Case::NumericCast))
             .or_else(|| constant_shift::Batch::parse(name).map(Case::ConstantShift))
+            .or_else(|| masked_shift::Batch::parse(name).map(Case::MaskedShift))
+            .or_else(|| integer_identity::Batch::parse(name).map(Case::IntegerIdentity))
             .map(Some)
             .ok_or_else(|| failure("unknown explicit test simulation request")),
         _ => Err(failure("unknown explicit test simulation request")),
@@ -258,9 +275,11 @@ fn elementwise(case: Case, out_len: usize, extra_inputs: usize) -> Result<Scenar
         }
         Case::ScalarGemm => return Err(failure("GEMM requires its recurrence fixture")),
         Case::ScalarBorrow
+        | Case::IntegerIdentity(_)
         | Case::SaturatingInteger(_)
         | Case::NumericCast(_)
-        | Case::ConstantShift(_) => {
+        | Case::ConstantShift(_)
+        | Case::MaskedShift(_) => {
             return Err(failure("integer saturation requires its typed fixture"));
         }
         Case::F32Negate | Case::F32Divide => {
@@ -345,7 +364,9 @@ fn gemm_inputs(
 fn scenarios(case: Case) -> Result<Vec<Scenario>, SourceFailure> {
     match case {
         Case::ScalarBorrow => scalar_borrow::scenarios(),
+        Case::IntegerIdentity(case) => integer_identity::scenarios(case),
         Case::ConstantShift(case) => constant_shift::scenarios(case),
+        Case::MaskedShift(case) => masked_shift::scenarios(case),
         Case::NumericCast(case) => numeric_cast::scenarios(case),
         Case::SaturatingInteger(case) => saturating_integer::scenarios(case),
         Case::F32Negate | Case::F32Divide => f32_arithmetic::scenarios(case),
@@ -394,7 +415,12 @@ fn scenarios(case: Case) -> Result<Vec<Scenario>, SourceFailure> {
 }
 
 fn require_abi(module: &AdmittedSimulationModuleV1, case: Case) -> Result<&Kernel, SourceFailure> {
-    if matches!(case, Case::ConstantShift(_)) {
+    if matches!(case, Case::IntegerIdentity(_)) {
+        return Err(failure(
+            "integer identities require exact multi-root execution plans",
+        ));
+    }
+    if matches!(case, Case::ConstantShift(_) | Case::MaskedShift(_)) {
         return Err(failure("shifts require exact multi-root execution plans"));
     }
     if case == Case::ScalarBorrow {
@@ -523,9 +549,11 @@ fn check_execution(
         | Case::Vecadd
         | Case::ScalarGemm
         | Case::ScalarBorrow
+        | Case::IntegerIdentity(_)
         | Case::SaturatingInteger(_)
         | Case::NumericCast(_)
-        | Case::ConstantShift(_) => check_backings(execution.shared_buffers(), expected),
+        | Case::ConstantShift(_)
+        | Case::MaskedShift(_) => check_backings(execution.shared_buffers(), expected),
     }
 }
 
@@ -593,8 +621,12 @@ pub(super) fn observe(
             "simulator admission changed custody or granted authority",
         ));
     }
-    let runs = if let Case::ConstantShift(batch) = case {
+    let runs = if let Case::IntegerIdentity(batch) = case {
+        integer_identity::runs(&module, batch)?
+    } else if let Case::ConstantShift(batch) = case {
         constant_shift::runs(&module, batch)?
+    } else if let Case::MaskedShift(batch) = case {
+        masked_shift::runs(&module, batch)?
     } else {
         let kernel = require_abi(&module, case)?;
         scenarios(case)?
@@ -663,9 +695,17 @@ pub(super) fn check_observation(observed: &Observation, case: Case) -> Result<()
         .simulation
         .as_ref()
         .ok_or_else(|| failure("actual-O simulation was not observed"))?;
+    check_report(report, observed.output_digest, case)
+}
+
+pub(super) fn check_report(
+    report: &SimulationObservation,
+    output_digest: [u8; 32],
+    case: Case,
+) -> Result<(), SourceFailure> {
     let scenarios = scenarios(case)?;
     if report.case != case
-        || report.native_output_digest != observed.output_digest
+        || report.native_output_digest != output_digest
         || report.simulator_digest != report.native_output_digest
         || report.simulator_wire_version != 12
         || report.canonical_bytes == 0
@@ -690,6 +730,9 @@ pub(super) fn check_observation(observed: &Observation, case: Case) -> Result<()
             || actual.grid[1..] != [1, 1]
             || actual.workgroup.contains(&0)
             || actual.workgroup[1..] != [1, 1]
+            || (matches!(case, Case::IntegerIdentity(_))
+                && (actual.workgroup != [64, 1, 1]
+                    || actual.grid != integer_identity::expected_grid(expected.active)))
             || actual.invocations != actual.grid[0]
             || actual.steps == 0
             || actual.deterministic_replays != 2

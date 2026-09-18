@@ -30,8 +30,9 @@ use slice_projection_v1::ProjectedViewsV1;
 pub(crate) use tests::{
     with_backend_checked_output_policy3_roster_v1, with_backend_checked_output_policy3_v1,
     with_backend_checked_output_policy4_owned_v1, with_backend_checked_output_policy4_v1,
-    with_backend_checked_output_policy5_owned_v1, with_backend_erased_bound_v1,
-    with_backend_erased_output_policy5_owned_v1, with_backend_erased_roster_v1,
+    with_backend_checked_output_policy5_owned_v1, with_backend_checked_output_policy6_owned_v1,
+    with_backend_erased_bound_v1, with_backend_erased_output_policy5_owned_v1,
+    with_backend_erased_output_policy6_owned_v1, with_backend_erased_roster_v1,
 };
 
 use analysis_multi_split_v1::{
@@ -24631,6 +24632,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_01_tests.rs");
     include!("production_ranked_projection_v1/checked_output_admission_policy3_v1_fixture.rs");
     include!("production_ranked_projection_v1/production_ranked_policy5_fixture_v1_tests.rs");
+    include!("production_ranked_projection_v1/production_ranked_policy6_fixture_v1_tests.rs");
 
     #[test]
     fn pipeline_scalar_rejection_trace_has_exact_bounded_numeric_fields() {

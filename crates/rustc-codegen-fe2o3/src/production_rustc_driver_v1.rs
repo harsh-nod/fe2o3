@@ -7,6 +7,7 @@ use std::io::Write as _;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
 
+use crate::collector::source_census_v1::Recorder as SourceCensusRecorder;
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_interface::interface::Compiler;
@@ -22,6 +23,16 @@ mod checked_output_source_v1_tests;
 #[path = "production_rustc_driver_fixed_checked_output_v1.rs"]
 mod fixed_checked_output_v1;
 pub use fixed_checked_output_v1::run_production_fixed_checked_output_extraction_driver_v1;
+#[path = "production_rustc_driver_fixed_checked_output_policy6_v1.rs"]
+mod fixed_checked_output_policy6_v1;
+pub use fixed_checked_output_policy6_v1::run_production_fixed_checked_output_policy6_extraction_driver_v1;
+
+#[path = "production_source_census_driver_v1.rs"]
+mod source_census_driver;
+
+#[cfg(test)]
+#[path = "production_rustc_driver_fixed_census_invocation_observer_v1_tests.rs"]
+mod fixed_census_invocation_observer_v1_tests;
 
 #[derive(Default)]
 struct ProductionExtractionCallbacksV1 {
@@ -31,6 +42,7 @@ struct ProductionExtractionCallbacksV1 {
     compiler_handoff_output: Option<(PathBuf, Option<&'static str>)>,
     simulation_bundle_output: Option<PathBuf>,
     simulation_bundle_version: u16,
+    census: Option<SourceCensusRecorder>,
     result: Option<Result<(), String>>,
 }
 
@@ -39,21 +51,55 @@ impl Callbacks for ProductionExtractionCallbacksV1 {
         self.result = Some(
             if let Some(output) = self.simulation_bundle_output.as_deref() {
                 match self.simulation_bundle_version {
-                    6 => extract_simulation_bundle_in_active_session_v6(tcx, output),
-                    5 => extract_simulation_bundle_in_active_session_v5(tcx, output),
-                    4 => extract_simulation_bundle_in_active_session_v4(tcx, output),
-                    3 => extract_simulation_bundle_in_active_session_v3(tcx, output),
-                    2 => extract_simulation_bundle_in_active_session_v2(tcx, output),
-                    _ => extract_simulation_bundle_in_active_session_v1(tcx, output),
+                    6 => extract_simulation_bundle_in_active_session_v6(
+                        tcx,
+                        output,
+                        self.census.as_ref(),
+                    ),
+                    5 => extract_simulation_bundle_in_active_session_v5(
+                        tcx,
+                        output,
+                        self.census.as_ref(),
+                    ),
+                    4 => extract_simulation_bundle_in_active_session_v4(
+                        tcx,
+                        output,
+                        self.census.as_ref(),
+                    ),
+                    3 => extract_simulation_bundle_in_active_session_v3(
+                        tcx,
+                        output,
+                        self.census.as_ref(),
+                    ),
+                    2 => extract_simulation_bundle_in_active_session_v2(
+                        tcx,
+                        output,
+                        self.census.as_ref(),
+                    ),
+                    _ => extract_simulation_bundle_in_active_session_v1(
+                        tcx,
+                        output,
+                        self.census.as_ref(),
+                    ),
                 }
             } else if let Some((output, expected_target)) = self.compiler_handoff_output.as_ref() {
-                extract_amdgpu_compiler_handoff_in_active_session_v1(tcx, output, *expected_target)
+                extract_amdgpu_compiler_handoff_in_active_session_v1(
+                    tcx,
+                    output,
+                    *expected_target,
+                    self.census.as_ref(),
+                )
             } else if let Some(output) = self.amdgpu_llvm_output.as_deref() {
-                extract_amdgpu_llvm_in_active_session_v1(tcx, output, self.expected_llvm_target)
+                extract_amdgpu_llvm_in_active_session_v1(
+                    tcx,
+                    output,
+                    self.expected_llvm_target,
+                    self.census.as_ref(),
+                )
             } else if self.ranked_memory {
-                extract_ranked_memory_in_active_session_v1(tcx)
+                extract_ranked_memory_in_active_session_v1(tcx, self.census.as_ref())
             } else {
-                extract_in_active_session_v1(tcx)
+                extract_in_active_session_v1(tcx, self.census.as_ref())
             },
         );
         Compilation::Stop
@@ -63,6 +109,20 @@ impl Callbacks for ProductionExtractionCallbacksV1 {
 fn transaction_in_active_session_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     debug_source_capture: crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2,
+) -> Result<
+    crate::production_pipeline::ProductionCompilation<
+        'tcx,
+        crate::production_pipeline::CollectedRustStage<'tcx>,
+    >,
+    String,
+> {
+    transaction_with_census_in_active_session_v1(tcx, debug_source_capture, None)
+}
+
+fn transaction_with_census_in_active_session_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    debug_source_capture: crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2,
+    census: Option<&SourceCensusRecorder>,
 ) -> Result<
     crate::production_pipeline::ProductionCompilation<
         'tcx,
@@ -96,6 +156,9 @@ fn transaction_in_active_session_v1<'tcx>(
         context_producers,
     )
     .map_err(|error| format!("production extraction collection failed: {error}"))?;
+    if let Some(census) = census {
+        census.observe(tcx, &closure);
+    }
     let crate_name = tcx.crate_name(LOCAL_CRATE);
     let local_source = tcx
         .sess
@@ -123,19 +186,26 @@ fn transaction_in_active_session_v1<'tcx>(
     .map_err(|error| format!("production extraction transaction construction failed: {error}"))
 }
 
-fn extract_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), String> {
-    Err(transaction_in_active_session_v1(
-        tcx,
-        crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
-    )?
-    .require_semantic_mir_import()
-    .to_string())
+fn extract_in_active_session_v1(
+    tcx: TyCtxt<'_>,
+    census: Option<&SourceCensusRecorder>,
+) -> Result<(), String> {
+    let capture = crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled;
+    let transaction = match census {
+        Some(census) => transaction_with_census_in_active_session_v1(tcx, capture, Some(census)),
+        None => transaction_in_active_session_v1(tcx, capture),
+    }?;
+    Err(transaction.require_semantic_mir_import().to_string())
 }
 
-fn extract_ranked_memory_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), String> {
-    let ranked = transaction_in_active_session_v1(
+fn extract_ranked_memory_in_active_session_v1(
+    tcx: TyCtxt<'_>,
+    census: Option<&SourceCensusRecorder>,
+) -> Result<(), String> {
+    let ranked = transaction_with_census_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+        census,
     )?
     .verify_general_kernel_checks()
     .map_err(|error| error.to_string())?;
@@ -181,6 +251,7 @@ fn extract_amdgpu_llvm_in_active_session_v1(
     tcx: TyCtxt<'_>,
     output: &Path,
     expected_target: Option<&str>,
+    census: Option<&SourceCensusRecorder>,
 ) -> Result<(), String> {
     let neutral_provider_observation = match (
         crate::trusted_device_items::definition(
@@ -224,9 +295,10 @@ fn extract_amdgpu_llvm_in_active_session_v1(
             );
         }
     };
-    let lowered = transaction_in_active_session_v1(
+    let lowered = transaction_with_census_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+        census,
     )?
     .lower_production_target()
     .map_err(|error| error.to_string())?;
@@ -278,17 +350,20 @@ fn extract_amdgpu_compiler_handoff_in_active_session_v1(
     tcx: TyCtxt<'_>,
     output: &Path,
     expected_target: Option<&str>,
+    census: Option<&SourceCensusRecorder>,
 ) -> Result<(), String> {
     if env::var_os(EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1).is_some() {
         return extract_amdgpu_semantic_compiler_handoff_in_active_session_v3(
             tcx,
             output,
             expected_target,
+            census,
         );
     }
-    let lowered = transaction_in_active_session_v1(
+    let lowered = transaction_with_census_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+        census,
     )?
     .lower_production_target()
     .map_err(|error| error.to_string())?;
@@ -319,11 +394,13 @@ fn extract_amdgpu_semantic_compiler_handoff_in_active_session_v3(
     tcx: TyCtxt<'_>,
     output: &Path,
     expected_target: Option<&str>,
+    census: Option<&SourceCensusRecorder>,
 ) -> Result<(), String> {
     let invocation = inert_extraction_invocation_v3()?;
-    let lowered = transaction_in_active_session_v1(
+    let lowered = transaction_with_census_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+        census,
     )?
     .lower_production_target()
     .map_err(|error| error.to_string())?;
@@ -412,10 +489,12 @@ const fn canonical_hex_nibble(byte: u8) -> Option<u8> {
 fn extract_simulation_bundle_in_active_session_v1(
     tcx: TyCtxt<'_>,
     output: &Path,
+    census: Option<&SourceCensusRecorder>,
 ) -> Result<(), String> {
-    let bundle = transaction_in_active_session_v1(
+    let bundle = transaction_with_census_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+        census,
     )?
     .export_simulation_bundle_v1()
     .map_err(|error| error.to_string())?;
@@ -439,10 +518,12 @@ fn extract_simulation_bundle_in_active_session_v1(
 fn extract_simulation_bundle_in_active_session_v2(
     tcx: TyCtxt<'_>,
     output: &Path,
+    census: Option<&SourceCensusRecorder>,
 ) -> Result<(), String> {
-    let bundle = transaction_in_active_session_v1(
+    let bundle = transaction_with_census_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::SourceVariables,
+        census,
     )?
     .export_simulation_bundle_v2()
     .map_err(|error| error.to_string())?;
@@ -461,10 +542,12 @@ fn extract_simulation_bundle_in_active_session_v2(
 fn extract_simulation_bundle_in_active_session_v3(
     tcx: TyCtxt<'_>,
     output: &Path,
+    census: Option<&SourceCensusRecorder>,
 ) -> Result<(), String> {
-    let bundle = transaction_in_active_session_v1(
+    let bundle = transaction_with_census_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::SourceVariables,
+        census,
     )?
     .export_simulation_bundle_v3()
     .map_err(|error| error.to_string())?;
@@ -489,10 +572,12 @@ fn extract_simulation_bundle_in_active_session_v3(
 fn extract_simulation_bundle_in_active_session_v4(
     tcx: TyCtxt<'_>,
     output: &Path,
+    census: Option<&SourceCensusRecorder>,
 ) -> Result<(), String> {
-    let bundle = transaction_in_active_session_v1(
+    let bundle = transaction_with_census_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::SourceVariables,
+        census,
     )?
     .export_simulation_bundle_v4()
     .map_err(|error| error.to_string())?;
@@ -515,10 +600,12 @@ fn extract_simulation_bundle_in_active_session_v4(
 fn extract_simulation_bundle_in_active_session_v5(
     tcx: TyCtxt<'_>,
     output: &Path,
+    census: Option<&SourceCensusRecorder>,
 ) -> Result<(), String> {
-    let bundle = transaction_in_active_session_v1(
+    let bundle = transaction_with_census_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::SourceVariables,
+        census,
     )?
     .export_simulation_bundle_v5()
     .map_err(|error| error.to_string())?;
@@ -546,10 +633,12 @@ fn extract_simulation_bundle_in_active_session_v5(
 fn extract_simulation_bundle_in_active_session_v6(
     tcx: TyCtxt<'_>,
     output: &Path,
+    census: Option<&SourceCensusRecorder>,
 ) -> Result<(), String> {
-    let bundle = transaction_in_active_session_v1(
+    let bundle = transaction_with_census_in_active_session_v1(
         tcx,
         crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::SourceVariables,
+        census,
     )?
     .export_simulation_bundle_v6()
     .map_err(|error| error.to_string())?;
@@ -697,6 +786,7 @@ pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(),
         compiler_handoff_output: None,
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
+        census: None,
         result: None,
     };
     run_production_driver_v1(
@@ -719,6 +809,7 @@ pub fn run_production_amdgpu_llvm_extraction_driver_v1(
         compiler_handoff_output: None,
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
+        census: None,
         result: None,
     };
     run_production_driver_v1(
@@ -740,6 +831,7 @@ pub fn run_production_gfx942_llvm_extraction_driver_v1(
         compiler_handoff_output: None,
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
+        census: None,
         result: None,
     };
     run_production_driver_v1(
@@ -785,6 +877,7 @@ pub fn run_production_gfx942_compiler_handoff_extraction_driver_v1(
         )),
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
+        census: None,
         result: None,
     };
     run_production_driver_v1(
@@ -808,6 +901,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v1(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 1,
+        census: None,
         result: None,
     };
     run_production_driver_v1(
@@ -830,6 +924,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v2(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 2,
+        census: None,
         result: None,
     };
     run_production_driver_v1(
@@ -852,6 +947,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v3(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 3,
+        census: None,
         result: None,
     };
     run_production_driver_v1(
@@ -874,6 +970,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v4(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 4,
+        census: None,
         result: None,
     };
     run_production_driver_v1(
@@ -896,6 +993,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v5(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 5,
+        census: None,
         result: None,
     };
     run_production_driver_v1(
@@ -918,6 +1016,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v6(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 6,
+        census: None,
         result: None,
     };
     run_production_driver_v1(
@@ -933,10 +1032,41 @@ fn run_production_driver_v1(
     missing_callback: &'static str,
 ) -> Result<(), String> {
     require_canonical_overflow_checks_v1(args)?;
-    rustc_driver::run_compiler(args, &mut callbacks);
-    callbacks
+    let outputs = callbacks
+        .amdgpu_llvm_output
+        .as_deref()
+        .into_iter()
+        .chain(callbacks.simulation_bundle_output.as_deref())
+        .chain(
+            callbacks
+                .compiler_handoff_output
+                .as_ref()
+                .map(|(path, _)| path.as_path()),
+        )
+        .collect::<Vec<_>>();
+    let mode =
+        callbacks.census_mode(env::var_os(EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1).is_some());
+    callbacks.census = match SourceCensusRecorder::from_environment(args, &outputs, mode) {
+        Ok(recorder) => recorder,
+        Err(error) => {
+            eprintln!("fe2o3 diagnostic source census unavailable: {error}");
+            None
+        }
+    };
+    let fatal =
+        rustc_driver::catch_fatal_errors(|| rustc_driver::run_compiler(args, &mut callbacks)).err();
+    let result = callbacks
         .result
-        .unwrap_or_else(|| Err(missing_callback.to_owned()))
+        .unwrap_or_else(|| Err(missing_callback.to_owned()));
+    if let Some(recorder) = callbacks.census
+        && let Err(error) = recorder.finish(fatal.is_none() && result.is_ok())
+    {
+        eprintln!("fe2o3 diagnostic source census unavailable: {error}");
+    }
+    if let Some(fatal) = fatal {
+        fatal.raise();
+    }
+    result
 }
 
 fn require_canonical_overflow_checks_v1(args: &[String]) -> Result<(), String> {
@@ -974,106 +1104,5 @@ fn require_canonical_overflow_checks_v1(args: &[String]) -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn generic_handoff_accepts_exact_targets_and_legacy_remains_gfx942_only() {
-        use super::validate_compiler_handoff_target;
-        for target in ["gfx942:xnack-", "gfx950:xnack-"] {
-            assert!(validate_compiler_handoff_target(target, None).is_ok());
-            assert_eq!(
-                validate_compiler_handoff_target(target, Some("gfx942:xnack-")).is_ok(),
-                target == "gfx942:xnack-"
-            );
-        }
-        for target in [
-            "gfx942",
-            "gfx950",
-            "gfx950:xnack+",
-            "gfx950:sramecc+:xnack-",
-            "gfx951:xnack-",
-        ] {
-            assert!(validate_compiler_handoff_target(target, None).is_err());
-        }
-    }
-
-    use super::*;
-
-    #[test]
-    fn production_driver_requires_one_canonical_overflow_policy() {
-        require_canonical_overflow_checks_v1(&[
-            "rustc".to_owned(),
-            "--crate-name".to_owned(),
-            "kernel".to_owned(),
-            "-Coverflow-checks=on".to_owned(),
-        ])
-        .unwrap();
-
-        for rejected in [
-            vec!["rustc"],
-            vec!["rustc", "-Coverflow-checks=off"],
-            vec!["rustc", "-C", "overflow-checks=on"],
-            vec![
-                "rustc",
-                "-Coverflow-checks=on",
-                "--codegen=overflow-checks=on",
-            ],
-            vec!["rustc", "--", "-Coverflow-checks=on"],
-        ] {
-            let args = rejected.into_iter().map(str::to_owned).collect::<Vec<_>>();
-            assert!(
-                require_canonical_overflow_checks_v1(&args)
-                    .unwrap_err()
-                    .contains("requires exactly one canonical")
-            );
-        }
-    }
-
-    fn scratch() -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "fe2o3-simulation-bundle-output-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir(&path).unwrap();
-        path
-    }
-
-    #[test]
-    fn simulation_bundle_output_is_create_new_exact_and_private() {
-        let root = scratch();
-        let output = root.join("kernel.fe2sim");
-        publish_new_simulation_bundle_v1(&output, b"exact-bundle").unwrap();
-        assert_eq!(std::fs::read(&output).unwrap(), b"exact-bundle");
-        assert!(publish_new_simulation_bundle_v1(&output, b"replacement").is_err());
-        assert_eq!(std::fs::read(&output).unwrap(), b"exact-bundle");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{PermissionsExt as _, symlink};
-            assert_eq!(
-                std::fs::metadata(&output).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-            let link = root.join("link.fe2sim");
-            symlink(&output, &link).unwrap();
-            assert!(publish_new_simulation_bundle_v1(&link, b"replacement").is_err());
-        }
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn simulation_bundle_output_rejects_empty_and_oversized_payloads() {
-        let root = scratch();
-        assert!(publish_new_simulation_bundle_v1(&root.join("empty"), b"").is_err());
-        assert!(
-            publish_new_simulation_bundle_v1(
-                &root.join("oversized"),
-                &vec![0; fe2o3_kernel_ir::MAX_SIMULATION_BUNDLE_BYTES_V1 + 1],
-            )
-            .is_err()
-        );
-        std::fs::remove_dir_all(root).unwrap();
-    }
-}
+#[path = "production_rustc_driver_v1_tests.rs"]
+mod tests;

@@ -182,7 +182,7 @@ fn formal_mismatch() -> E {
         crate::ProductionFormalMemoryErrorV1::ObligationMismatch,
     ))
 }
-fn check(
+pub(super) fn check(
     source: &ProductionSemanticKirOwnerV1,
     bound: &Owner,
     checked: &Checked,

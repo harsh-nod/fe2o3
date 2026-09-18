@@ -15,6 +15,7 @@ struct Binding<'a> {
 }
 
 include!("native_helper_constant_shift_v1.rs");
+include!("native_helper_masked_shift_v1.rs");
 
 fn lookup_work(length: usize, meter: &mut dyn Meter) -> Result<(), Error> {
     let depth = usize::BITS as usize - length.leading_zeros() as usize;
@@ -152,9 +153,10 @@ fn operation<'a>(
                         | ScalarType::U64
                 )
             ) || rows[find(rows, *lhs, meter)?].ty != &result.ty
-                || !native_helper_constant_shift_v1(rows, *rhs, &result.ty, meter)?
+                || (!native_helper_constant_shift_v1(rows, *rhs, &result.ty, meter)?
+                    && !native_helper_masked_shift_v1(rows, *rhs, &result.ty, meter)?)
             {
-                return Err("native helper shift is not an exact in-range constant");
+                return Err("native helper shift is neither an in-range literal nor an exact mask");
             }
             let (op, overflow) = normalize_kir_binary_v1(*op, operation, result.id)
                 .ok_or("native helper shift value unsupported")?;

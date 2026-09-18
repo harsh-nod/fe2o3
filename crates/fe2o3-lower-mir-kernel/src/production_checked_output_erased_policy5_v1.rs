@@ -103,7 +103,7 @@ impl ProductionUnitLocalErasedCheckedOutputOwnerPolicy5V1 {
         Ok(())
     }
 }
-fn check_erased(
+pub(super) fn check_erased(
     source: &ProductionUnitLocalErasedSourceOwnerV1,
     bound: &Owner,
     checked: &Checked,

@@ -220,6 +220,10 @@ pub(super) fn check<'i, 'g>(
                     inventory,
                     function.operations.start + offset,
                     budget,
+                )? || masked_shifts::native(
+                    inventory,
+                    function.operations.start + offset,
+                    budget,
                 )? => {}
                 OperationKind::Unary {
                     op: UnaryOp::Negate,

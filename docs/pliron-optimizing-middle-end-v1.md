@@ -860,3 +860,71 @@ available. Source tests observe the actual semantic owner inside its single
 production transaction, then preserve the subsequent compilation refusal.
 Successful inert capture is not successful kernel compilation, simulation,
 native execution or hardware qualification.
+
+## Proven masked shift counts
+
+The scalar shift contract additionally accepts an actual source count of the
+form `count & (width - 1)`, with the mask in the right operand position and
+the exact fixed-width integer types retained. A heterogeneous count can use
+the admitted integer conversion at the count position. This does not repair a
+raw dynamic source shift by inventing a mask during lowering.
+
+Source and native correspondence independently check the real mask producer,
+its operand order, type, dominating occurrence and any admitted count cast.
+Ranked and typed expression-domain validation require the exact mask and
+recursively validate its children; masking cannot hide a division by zero or
+another undefined child. The mask establishes only that the shift count is
+in range. Source identity, memory, ABI, effects and value correspondence remain
+separate requirements. Wrong masks, raw dynamic counts and unsupported
+expression shapes continue to refuse.
+
+## Checked integer continuation
+
+Policy6 consumes the existing checked Policy5 result rather than rerunning
+its prefix. Its fixed schedule extends the retained B/C/S/O history by one
+physical-order integer-identity sweep and DCE, producing final I:
+
+```text
+source N -> optional checked erasure E -> materialized B
+  -> checked scalar/CFG and dominance CSE C
+  -> checked store forwarding S -> checked load forwarding O
+  -> integer identities -> DCE -> I
+  -> final-I source, memory, arithmetic, ABI and native-output admission
+```
+
+The rules use exact fixed-width semantics, including checked arithmetic
+overflow results. A live overflow flag cannot be discarded just because the
+value is an identity. This is one deterministic sweep, not a fixed point,
+SROA, general GVN or inlining. A legal no-op still records both continuation
+passes. Historical Policy5 output and its record remain unchanged inside the
+consumed owner.
+
+For example, a surviving typed integer `xor(value, 0)` can be replaced by the
+same value while `xor(value, 3)` remains. The independent checker validates
+the complete O-to-I operation/use relation, not only a reported replacement.
+The record binds B, C, S, O and I, the exact pass roster and transformation
+map. Source-to-output admission preserves real trap origins when removal
+shifts an operation's ordinal.
+
+The fixed Policy6 facade selects direct or UnitLocal handling from the
+retained source owner. Its descriptors, native artifacts and extraction bytes
+are newly derived from I; native O is not reused. Its original-source accessor
+uses actual V12 N identity, distinct from the historical compatibility digest
+retained by the Direct worker handoff.
+
+The continuation uses the caller's work/storage ledger. Callback adoption
+refuses ledger replacement on success, error or panic without refunding or
+charging a substituted ledger. Retained-storage receipts account for these
+stages logically; they are not process RSS or a universal peak-memory bound.
+
+The ordinary-source regression matrix separates normal and opt0 MIR across
+the eight fixed-width integer types, direct/retained helpers and both target
+profiles. Only opt0 cases require identities to survive in O and disappear in
+I; frontend-folded expressions are not evidence of an optimizer rewrite.
+The gate compares actual source/N/O/I, root order and ABI, native owning
+functions, independent extraction bytes and host-Rust byte-oracle simulation.
+The test's existence is not a claim that a particular checkout passed it.
+
+Policy6 remains a checked extraction route. It does not activate the
+protected default publisher, supply a missing signed source-proof producer,
+qualify every tutorial kernel or establish LLVM/GPU execution equivalence.

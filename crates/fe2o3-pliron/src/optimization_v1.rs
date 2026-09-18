@@ -49,6 +49,8 @@ pub enum PlironOptimizationPassV1 {
     SimplifyControlFlow,
     /// Only the trusted, same-ledger fixed policy-3 entrypoint executes this pass.
     DominancePureCommonSubexpressionElimination,
+    /// Only the fixed Policy6 continuation can invoke this same-ledger pass.
+    IntegerNeutralCanonicalization,
 }
 
 impl PlironOptimizationPassV1 {
@@ -64,6 +66,7 @@ impl PlironOptimizationPassV1 {
             Self::DominancePureCommonSubexpressionElimination => {
                 "dominance-pure-common-subexpression-elimination"
             }
+            Self::IntegerNeutralCanonicalization => "integer-neutral-canonicalization",
         }
     }
 }
@@ -463,14 +466,15 @@ impl PlironSession {
         mut cse: Option<&mut crate::fixed_policy_v3::CseLedger<'_, '_>>,
     ) -> Result<PlironOptimizationReportV1, PlironOptimizationErrorV1> {
         let pointer = self.with_operation(root, |pointer, _| pointer)?;
-        if cse.is_none()
-            && plan
-                .passes
-                .contains(&PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination)
-        {
-            return Err(PlironOptimizationErrorV1::PassRejected(
+        if cse.is_none() {
+            for pass in [
                 PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination,
-            ));
+                PlironOptimizationPassV1::IntegerNeutralCanonicalization,
+            ] {
+                if plan.passes.contains(&pass) {
+                    return Err(PlironOptimizationErrorV1::PassRejected(pass));
+                }
+            }
         }
         let Some(owner_root) = self.operation_roots.get(&root.identity).copied() else {
             self.poisoned = true;
@@ -807,7 +811,8 @@ fn run_trusted_pass(
             passes.add_pass(LocalPureCsePassV1)
         }
         PlironOptimizationPassV1::SimplifyControlFlow => passes.add_pass(SimplifyCFGPass),
-        PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination => {
+        PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination
+        | PlironOptimizationPassV1::IntegerNeutralCanonicalization => {
             return Err(TrustedPassFailure);
         }
     }
@@ -827,6 +832,15 @@ fn run_observed_pass_v12(
     observer: Box<dyn pliron::irbuild::observer::RewriteObserver>,
     cse: Option<&mut crate::fixed_policy_v3::CseLedger<'_, '_>>,
 ) -> Result<bool, TrustedPassFailure> {
+    if pass == PlironOptimizationPassV1::IntegerNeutralCanonicalization {
+        return run_observed_integer_identity_v1(
+            pointer,
+            context,
+            analyses,
+            observer,
+            cse.ok_or(TrustedPassFailure)?,
+        );
+    }
     if pass == PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination {
         return run_observed_dominance_cse_v1(
             pointer,
@@ -854,6 +868,9 @@ fn run_observed_pass_v12(
                 }
                 PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination => {
                     "gpu-dominance-pure-cse-v1"
+                }
+                PlironOptimizationPassV1::IntegerNeutralCanonicalization => {
+                    "gpu-integer-neutral-v1"
                 }
             }
         }
@@ -887,7 +904,8 @@ fn run_observed_pass_v12(
                 PlironOptimizationPassV1::LocalPureCommonSubexpressionElimination => {
                     dialect_gpu::cse_v1::local_pure_cse_with_observer_v12(root, context, observer)
                 }
-                PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination => {
+                PlironOptimizationPassV1::DominancePureCommonSubexpressionElimination
+                | PlironOptimizationPassV1::IntegerNeutralCanonicalization => {
                     return Err(pliron::input_error_noloc!("missing policy-3 ledger"));
                 }
             };
@@ -983,3 +1001,5 @@ fn run_observed_dominance_cse_v1(
 #[cfg(test)]
 #[path = "optimization_v1/graph_custody_tests_v1.rs"]
 mod graph_custody_tests_v1;
+
+include!("optimization_integer_continuation_v1.rs");

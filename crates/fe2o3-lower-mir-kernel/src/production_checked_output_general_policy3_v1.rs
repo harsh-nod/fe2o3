@@ -8,6 +8,8 @@ mod census;
 mod constant_shifts;
 #[path = "production_checked_output_exp_v1.rs"]
 mod exp;
+#[path = "production_checked_output_masked_shifts_v1.rs"]
+mod masked_shifts;
 #[path = "production_checked_output_numeric_casts_v1.rs"]
 mod numeric_casts;
 #[path = "production_checked_output_private_memory_policy3_v1.rs"]
@@ -28,6 +30,7 @@ type R<T> = Result<T, E>;
 
 include!("production_checked_output_general_source_context_v1.rs");
 include!("production_checked_output_erased_general_v1.rs");
+include!("production_checked_output_integer_continuation_v1.rs");
 
 fn inventory_error(error: fe2o3_kernel_analysis::CanonicalKirInventoryErrorV1) -> E {
     E::SourceOutput(ProductionSourceOutputErrorV1::Inventory(error))

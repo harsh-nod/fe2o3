@@ -134,6 +134,7 @@ impl CaptureLimitsV12 {
         match policy {
             FixedPolicy::Historical2 => Ok(historical),
             FixedPolicy::Checked3 => historical.for_policy3_nodes(historical.nodes),
+            FixedPolicy::Integer6 => historical.for_policy3_nodes(historical.nodes),
         }
     }
     pub(crate) fn for_policy3_nodes(self, bound: usize) -> Result<Self> {
@@ -261,9 +262,17 @@ pub struct KirOptimizationMapPolicy3V12 {
     data: MapData,
 }
 
+/// Separate observed integer/DCE continuation; never a historical policy map.
+#[derive(Debug, Eq, PartialEq)]
+pub struct KirOptimizationMapIntegerContinuationV12 {
+    data: MapData,
+}
+
 // A single owned payload does not add a policy tag or duplicate graph storage.
 const _: () = assert!(size_of::<KirOptimizationMapV12>() == size_of::<MapData>());
 const _: () = assert!(size_of::<KirOptimizationMapPolicy3V12>() == size_of::<MapData>());
+const _: () =
+    assert!(size_of::<KirOptimizationMapIntegerContinuationV12>() == size_of::<MapData>());
 
 macro_rules! map_accessors {
     ($owner:ident, $policy:expr) => {
@@ -308,6 +317,10 @@ macro_rules! map_accessors {
 }
 map_accessors!(KirOptimizationMapV12, FixedPolicy::Historical2);
 map_accessors!(KirOptimizationMapPolicy3V12, FixedPolicy::Checked3);
+map_accessors!(
+    KirOptimizationMapIntegerContinuationV12,
+    FixedPolicy::Integer6
+);
 
 #[cfg(test)]
 impl KirOptimizationMapV12 {
@@ -430,7 +443,7 @@ impl MapData {
             FixedPolicy::Historical2 => {
                 validate_lifecycle(&self.nodes, &self.events, &self.terminal, &self.passes)?
             }
-            FixedPolicy::Checked3 => validate_lifecycle_for_policy(
+            FixedPolicy::Checked3 | FixedPolicy::Integer6 => validate_lifecycle_for_policy(
                 &self.nodes,
                 &self.events,
                 &self.terminal,
@@ -1326,6 +1339,17 @@ impl CaptureV12 {
     ) -> Result<(KirOptimizationMapPolicy3V12, usize)> {
         self.finish_data(input, output, roster, budget, FixedPolicy::Checked3)
             .map(|(data, storage)| (KirOptimizationMapPolicy3V12 { data }, storage))
+    }
+
+    pub(crate) fn finish_integer_continuation(
+        &self,
+        input: &Owner,
+        output: &Owner,
+        roster: &LiveRosterV12,
+        budget: &mut Budget<'_>,
+    ) -> Result<(KirOptimizationMapIntegerContinuationV12, usize)> {
+        self.finish_data(input, output, roster, budget, FixedPolicy::Integer6)
+            .map(|(data, storage)| (KirOptimizationMapIntegerContinuationV12 { data }, storage))
     }
     fn finish_data(
         &self,

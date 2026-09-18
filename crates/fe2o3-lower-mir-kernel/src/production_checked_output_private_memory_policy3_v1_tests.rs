@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "production_checked_output_admission_policy5_v1_tests.rs"]
 mod policy5_tests;
+#[path = "production_checked_output_admission_policy6_v1_tests.rs"]
+mod policy6_tests;
 
 fn retained_scalar_source() -> ProductionPreRankedKirOwnerV1 {
     retained_scalar_source_with_reads(1)

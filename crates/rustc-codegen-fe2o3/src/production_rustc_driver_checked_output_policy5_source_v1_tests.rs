@@ -176,6 +176,7 @@ impl Callbacks for CallbacksV1 {
                 runtime_domains: Some(runtime_domains::observe(stage.kernels())?),
                 simulation: None,
                 constant_shift: None,
+                masked_shift: None,
                 policy: checked.execution().policy_version(),
                 output_digest: report.output,
                 llvm_bytes: 0,

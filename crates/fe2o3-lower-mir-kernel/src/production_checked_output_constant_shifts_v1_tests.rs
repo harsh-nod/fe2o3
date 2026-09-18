@@ -7,7 +7,7 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_mir_model::semantic_mir_v1::{SemanticLayoutIdentityV1, SemanticTargetDataLayoutV1};
 
-const FIXED: [ScalarType; 8] = [
+pub(crate) const FIXED: [ScalarType; 8] = [
     ScalarType::I8,
     ScalarType::U8,
     ScalarType::I16,
@@ -33,7 +33,7 @@ fn constant(ty: ScalarType, bits: u64) -> Constant {
     }
 }
 
-fn candidate(
+pub(crate) fn candidate(
     scalar: ScalarType,
     op: BinaryOp,
     count: Option<u64>,
@@ -117,7 +117,7 @@ fn candidate(
     module
 }
 
-fn inspect(
+pub(crate) fn inspect(
     candidate: &Module,
     action: impl FnOnce(&CanonicalKirInventoryV1<'_>, usize, &mut AssertOriginBudgetV1<'_>),
 ) {
@@ -216,6 +216,13 @@ fn native_mask_does_not_authorize_dynamic_negative_or_excess_counts() {
                     &candidate(scalar, op, count, mask, true),
                     |inventory, ordinal, budget| {
                         assert!(!native(inventory, ordinal, budget).unwrap());
+                        if mask == Some(width - 1) {
+                            // The new actual-mask census proves native totality,
+                            // never source validity. Genuine raw-source refusal
+                            // is independently checked below after materialization.
+                            scalar_helpers::check(inventory, budget).unwrap();
+                            return;
+                        }
                         assert!(matches!(
                             scalar_helpers::check(inventory, budget),
                             Err(E::Unsupported {

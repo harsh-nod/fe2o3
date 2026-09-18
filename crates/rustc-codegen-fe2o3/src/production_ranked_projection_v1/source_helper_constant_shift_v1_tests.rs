@@ -102,7 +102,9 @@ fn real_helper_context_refuses_dynamic_and_out_of_range_shift_counts() {
                 with_source_helper_values(&source, 0, meter, |context, meter| {
                     assert_eq!(
                         source::derive(&source, 1, &[], meter).err(),
-                        Some("helper shift requires an exact in-range integer literal")
+                        Some(
+                            "helper shift requires an in-range literal or its actual adjacent source mask"
+                        )
                     );
                     assert_eq!(
                         context

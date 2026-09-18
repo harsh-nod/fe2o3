@@ -2317,17 +2317,21 @@ fn authenticate_reviewed_safe_core_wrapping_integer_contract_v1(
     let Some((owner, method)) = contract.canonical_path.rsplit_once("::") else {
         return false;
     };
+    let second_integer = match method {
+        "wrapping_add" | "wrapping_sub" | "wrapping_mul" => integer,
+        "wrapping_shl" | "wrapping_shr" => "u32",
+        _ => return false,
+    };
     contract.item_instance
         && contract.core_identity
         && contract.generic_arguments == 0
         && contract.mir_available
-        && matches!(method, "wrapping_add" | "wrapping_sub" | "wrapping_mul")
         && owner == format!("core::num::<impl {integer}>")
         && contract.safe_signature
         && contract.rust_abi
         && !contract.variadic
         && contract.input_count == 2
-        && contract.second_integer == Some(integer)
+        && contract.second_integer == Some(second_integer)
         && contract.result_integer == Some(integer)
 }
 
@@ -2337,6 +2341,8 @@ fn authenticate_reviewed_safe_core_wrapping_integer_contract_v1(
 /// abs, not cryptographic authentication of a replacement sysroot. It only
 /// discharges the external-HIR source-safety check: real MIR, nested calls and
 /// arithmetic remain subject to ordinary collection, import and verification.
+/// Shift counts use the actual primitive method's `u32` signature. This does
+/// not authenticate unsafe unchecked helpers or prove their range precondition.
 pub(crate) fn authenticate_reviewed_safe_core_wrapping_integer_helper_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
@@ -3291,6 +3297,7 @@ mod tests {
     include!("trusted_device_items/materialization_v1_tests.rs");
 
     include!("trusted_device_items/wrapping_integer_v1_tests.rs");
+    include!("trusted_device_items/wrapping_shift_source_safety_v1_tests.rs");
 
     #[test]
     fn exact_device_provider_rejects_same_name_path_and_source_substitution() {

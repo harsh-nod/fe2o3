@@ -300,7 +300,7 @@ pub(super) fn check_actual(
     }))
 }
 
-fn native_body<'a>(llvm: &'a str, symbol: &str) -> Result<&'a str, SourceFailure> {
+pub(super) fn native_body<'a>(llvm: &'a str, symbol: &str) -> Result<&'a str, SourceFailure> {
     let marker = format!("@{symbol}(");
     let matches = llvm
         .match_indices("define ")

@@ -828,7 +828,8 @@ impl KirPlironGraphV12<'_> {
                 crate::fixed_policy_v3::FixedPolicy::Historical2 => {
                     CaptureV12::new(limits, &roster)
                 }
-                crate::fixed_policy_v3::FixedPolicy::Checked3 => {
+                crate::fixed_policy_v3::FixedPolicy::Checked3
+                | crate::fixed_policy_v3::FixedPolicy::Integer6 => {
                     CaptureV12::new_for_policy(limits, &roster, policy)
                 }
             }
@@ -901,6 +902,27 @@ impl KirPlironGraphV12<'_> {
             Some(native),
             crate::fixed_policy_v3::FixedPolicy::Checked3,
             crate::kir_optimization_map_v12::CaptureV12::finish_policy3,
+        )
+    }
+
+    pub(crate) fn extract_admitted_canonical_with_integer_continuation_map_v1(
+        &mut self,
+        budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        native: &NativeBridgeWitnessV1,
+    ) -> Result<
+        (
+            VerifiedCanonicalKernelIrModuleV12,
+            KirBridgeOptimizedReceiptV1,
+            crate::KirOptimizationMapIntegerContinuationV12,
+            KirBridgeStorageV12,
+        ),
+        KirMappedExtractionErrorV12,
+    > {
+        self.extract_with_map_finalizer_v1(
+            budget,
+            Some(native),
+            crate::fixed_policy_v3::FixedPolicy::Integer6,
+            crate::kir_optimization_map_v12::CaptureV12::finish_integer_continuation,
         )
     }
 

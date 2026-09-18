@@ -9,6 +9,8 @@ use fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy3V1;
 pub(crate) mod native_worker_binding_v1;
 #[path = "compiler_descriptor_checked_output_policy5_v1.rs"]
 pub(crate) mod policy5;
+#[path = "compiler_descriptor_checked_output_policy6_v1.rs"]
+pub(crate) mod policy6;
 
 struct CheckedDescriptorViewV1<'a> {
     semantic: &'a fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
@@ -155,6 +157,8 @@ fn construct_checked_descriptor_v1(
         (ProductionAmdTargetProfileV1::Gfx950, 4) => "production-policy4-checked-gfx950-cov6-v1",
         (ProductionAmdTargetProfileV1::Gfx942, 5) => "production-policy5-checked-gfx942-cov6-v1",
         (ProductionAmdTargetProfileV1::Gfx950, 5) => "production-policy5-checked-gfx950-cov6-v1",
+        (ProductionAmdTargetProfileV1::Gfx942, 6) => "production-policy6-checked-gfx942-cov6-v1",
+        (ProductionAmdTargetProfileV1::Gfx950, 6) => "production-policy6-checked-gfx950-cov6-v1",
         _ => unreachable!("only fixed consuming checked-owner constructors call this helper"),
     };
     let profiles = geometries

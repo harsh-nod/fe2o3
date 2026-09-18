@@ -26,6 +26,8 @@ fn check_native_worker_descriptor_source_inner_v1(
     let view = match owner {
         OutputOwnerV1::Direct5(owner) => policy5::direct_view(owner).map_err(descriptor)?,
         OutputOwnerV1::Erased5(owner) => policy5::erased_view(owner),
+        OutputOwnerV1::Direct6(owner) => policy6::direct_view(owner).map_err(descriptor)?,
+        OutputOwnerV1::Erased6(owner) => policy6::erased_view(owner),
         OutputOwnerV1::Direct(owner) => CheckedDescriptorViewV1 {
             semantic: owner.source_semantic_kir().semantic().semantic(),
             source_launch: owner

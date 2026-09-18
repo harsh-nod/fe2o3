@@ -69,6 +69,13 @@ pub(crate) struct StructuralCensus {
 }
 
 impl Limits {
+    pub(crate) fn for_integer_continuation(self) -> Result<Self> {
+        // The base census already includes three synthesis claims per input
+        // value. A checked binary creates only one false result constant;
+        // two passes use this conservative ten-events-per-registered-node cap.
+        // Exceeding the cap poisons capture instead of truncating its history.
+        self.for_policy3()
+    }
     pub(crate) fn for_policy3(self) -> Result<Self> {
         let events = self.nodes.checked_mul(10).ok_or(E::Arithmetic)?;
         Ok(Self {
@@ -1579,6 +1586,22 @@ impl Capture {
             map.neutral_data_v1(),
             output,
             FixedPolicy::Checked3,
+        )
+    }
+
+    pub(crate) fn finish_integer_continuation(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map: &crate::KirOptimizationMapIntegerContinuationV12,
+        output: &Module,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
+        self.finish_data(
+            ctx,
+            roster,
+            map.neutral_data_v1(),
+            output,
+            FixedPolicy::Integer6,
         )
     }
     fn finish_data(

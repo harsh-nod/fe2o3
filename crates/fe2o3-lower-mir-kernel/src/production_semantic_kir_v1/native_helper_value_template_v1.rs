@@ -100,11 +100,14 @@ impl NormalizedScalarExpressionV1 {
                         ProductionSemanticBinaryOpV2::ShiftLeft
                             | ProductionSemanticBinaryOpV2::ShiftRight
                     ) {
-                        meter.work(8)?;
+                        meter.work(16)?;
                         if *overflow != ProductionOverflowContractV2::Wrapping
-                            || fixed_native_shift_count_v1(rhs, *scalar).is_none()
+                            || (fixed_native_shift_count_v1(rhs, *scalar).is_none()
+                                && !native_masked_shift_count_v1(rhs, *scalar))
                         {
-                            return Err("native shift template is not an exact in-range constant");
+                            return Err(
+                                "native shift template is neither an in-range literal nor an exact mask",
+                            );
                         }
                     }
                     if lhs.template_scalar() != *scalar || rhs.template_scalar() != *scalar {

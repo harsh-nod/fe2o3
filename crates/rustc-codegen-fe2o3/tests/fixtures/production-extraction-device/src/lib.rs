@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "integer-identity")]
+mod integer_identity;
+
 #[cfg(feature = "wave64-capture")]
 mod wave64_capture;
 
@@ -33,6 +36,8 @@ mod f32_exp;
 
 #[cfg(feature = "constant-shift")]
 mod constant_shift;
+#[cfg(feature = "masked-shift")]
+mod masked_shift;
 #[cfg(feature = "numeric-cast")]
 mod numeric_cast;
 #[cfg(feature = "saturating-integer")]
@@ -45,8 +50,10 @@ mod saturating_integer;
 mod write_only_reference;
 
 #[cfg(not(any(
+    feature = "integer-identity",
     feature = "wave64-capture",
     feature = "constant-shift",
+    feature = "masked-shift",
     feature = "scalar-borrow-policy5",
     feature = "defined-helper-reference",
     feature = "f32-exp",

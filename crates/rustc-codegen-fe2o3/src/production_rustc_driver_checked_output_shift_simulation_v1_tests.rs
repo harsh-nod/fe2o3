@@ -93,7 +93,7 @@ fn vectors(integer: Integer) -> Vec<u128> {
     ]
 }
 
-fn backing(
+pub(super) fn backing(
     ty: ScalarType,
     value: u128,
     len: usize,

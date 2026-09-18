@@ -22,6 +22,8 @@ mod erased_native_handoff_tests;
 mod native_output_binding_tests;
 #[path = "production_pipeline_checked_output_policy5_v1_tests.rs"]
 mod policy5_native_handoff_tests;
+#[path = "production_pipeline_checked_output_policy6_v1_tests.rs"]
+mod policy6_native_handoff_tests;
 
 fn typed_roots(owner: &ProductionCheckedOutputOwnerPolicy3V1) -> Vec<TypedDescriptorRootV1> {
     typed_roots_for_source(owner.source_semantic_kir())

@@ -5,11 +5,24 @@ mod general;
 
 #[path = "production_checked_output_admission_policy4_v1.rs"]
 mod policy4;
-pub use policy4::*;
+pub use policy4::{
+    ProductionCheckedOutputAdmissionErrorPolicy4V1, ProductionCheckedOutputOwnerPolicy4V1,
+    ProductionUnitLocalErasedCheckedOutputOwnerPolicy4V1,
+};
 
 #[path = "production_checked_output_admission_policy5_v1.rs"]
 mod policy5;
-pub use policy5::*;
+pub use policy5::{
+    ProductionCheckedOutputAdmissionErrorPolicy5V1, ProductionCheckedOutputOwnerPolicy5V1,
+    ProductionUnitLocalErasedCheckedOutputOwnerPolicy5V1,
+};
+
+#[path = "production_checked_output_admission_policy6_v1.rs"]
+mod policy6;
+pub use policy6::{
+    ProductionCheckedOutputAdmissionErrorPolicy6V1, ProductionCheckedOutputOwnerPolicy6V1,
+    ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1,
+};
 
 #[derive(Clone, Copy)]
 enum OutputAdmissionKindV1 {

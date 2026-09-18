@@ -1,5 +1,6 @@
 mod constant_shift_ranked_v1_tests {
     use super::*;
+    include!("masked_shift_ranked_v1_tests.rs");
 
     fn shifted_source(
         signed: bool,

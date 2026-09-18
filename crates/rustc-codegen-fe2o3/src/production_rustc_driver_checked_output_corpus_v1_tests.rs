@@ -552,6 +552,7 @@ fn private_memory_is_not_counted_as_global_formal_evidence() {
         runtime_domains: Some(runtime_domains::RuntimeDomainObservation::default()),
         simulation: None,
         constant_shift: None,
+        masked_shift: None,
         policy: 4,
         output_digest: [1; 32],
         llvm_bytes: 100,

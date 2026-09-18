@@ -16,8 +16,14 @@ use std::process::Command;
 #[path = "production_context_source_v29_tests.rs"]
 mod context_source_v29_tests;
 
+#[path = "production_rustc_driver_fixed_census_lifecycle_v1_tests.rs"]
+mod fixed_census_lifecycle;
+#[path = "production_rustc_driver_fixed_census_observation_v1_tests.rs"]
+mod fixed_census_observation;
 #[path = "production_rustc_driver_helper_reference_source_v1_tests.rs"]
 mod helper_reference_source;
+#[path = "production_rustc_driver_integer_identity_source_v1_tests.rs"]
+mod integer_identity_source;
 #[path = "production_rustc_driver_wave64_capture_source_v1_tests.rs"]
 mod wave64_capture_source;
 
@@ -51,6 +57,8 @@ struct Observation {
     simulation: Option<simulation::SimulationObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     constant_shift: Option<shift_source::ShiftObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    masked_shift: Option<masked_shift_source::ShiftObservation>,
     policy: u16,
     output_digest: [u8; 32],
     llvm_bytes: usize,
@@ -169,6 +177,7 @@ impl Callbacks for CheckedOutputCallbacks {
                 runtime_domains: Some(runtime_domains::observe(stage.kernels())?),
                 simulation: None,
                 constant_shift: None,
+                masked_shift: None,
                 policy: stage.checked_output().execution().policy_version(),
                 output_digest: *stage.output().canonical().identity().digest(),
                 llvm_bytes: 0,
@@ -210,6 +219,7 @@ impl Callbacks for CheckedOutputCallbacks {
             }
             let simulation_case = simulation::requested()?;
             observation.constant_shift = shift_source::check_actual(&stage, simulation_case)?;
+            observation.masked_shift = masked_shift_source::check_actual(&stage, simulation_case)?;
             let exp_source_identity = exp_source::check_actual_if_requested(&stage)?;
             if let Some(case) = simulation_case {
                 observation.simulation =
@@ -280,8 +290,12 @@ impl Callbacks for CheckedOutputCallbacks {
                 &observation.output_digest,
             )?;
             shift_source::check_native(observation.constant_shift.as_ref(), llvm)?;
+            masked_shift_source::check_native(observation.masked_shift.as_ref(), llvm)?;
             if let Some(case) = simulation_case
-                && !matches!(case, simulation::Case::ConstantShift(_))
+                && !matches!(
+                    case,
+                    simulation::Case::ConstantShift(_) | simulation::Case::MaskedShift(_)
+                )
             {
                 simulation::check_native_arithmetic(case, llvm)?;
             }
@@ -335,6 +349,7 @@ fn checked_output_source_child() {
         serde_json::to_vec(&result).unwrap(),
     )
     .unwrap();
+    masked_shift_source::record_child_refusal(&args, &result);
     assert!(result.is_ok(), "checked native source route: {result:?}");
 }
 
@@ -441,6 +456,7 @@ fn ordinary_rust_private_unit_helper_reaches_checked_native_output() {
 }
 
 enum OrdinarySourceCase {
+    MaskedShift(masked_shift_source::Config),
     ConstantShift(shift_source::Config),
     ScalarBorrowPolicy5,
     RetainedScalarBorrowPolicy5,
@@ -529,12 +545,26 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
             continue;
         }
         let configuration_name = match case {
+            OrdinarySourceCase::MaskedShift(config) => config.name(),
             OrdinarySourceCase::ConstantShift(config) => config.name(),
             OrdinarySourceCase::NumericCast(config) => config.name(),
             OrdinarySourceCase::SaturatingInteger(config) => config.name(),
             _ => String::new(),
         };
         let (name, package_path, feature, roots, reads, writes, calls) = match case {
+            OrdinarySourceCase::MaskedShift(config) => (
+                configuration_name.as_str(),
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("masked-shift"),
+                config.roots(),
+                0,
+                config.roots().len(),
+                if config.batch.retained {
+                    config.roots().len()
+                } else {
+                    0
+                },
+            ),
             OrdinarySourceCase::ConstantShift(config) => (
                 configuration_name.as_str(),
                 "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
@@ -741,6 +771,9 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
         if let OrdinarySourceCase::ConstantShift(config) = case {
             config.configure(&mut args);
         }
+        if let OrdinarySourceCase::MaskedShift(config) = case {
+            config.configure(&mut args);
+        }
         if matches!(
             case,
             OrdinarySourceCase::RetainedScalarBorrowPolicy5
@@ -820,6 +853,9 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
             );
         progress::clear_inherited_jobserver(&mut command);
         let simulation_case = match case {
+            OrdinarySourceCase::MaskedShift(config) => {
+                Some(simulation::Case::MaskedShift(config.batch))
+            }
             OrdinarySourceCase::ConstantShift(config) => {
                 (!config.dynamic).then_some(simulation::Case::ConstantShift(config.batch))
             }
@@ -863,6 +899,9 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
             OrdinarySourceCase::ConstantShift(config) if config.dynamic => {
                 shift_source::expected_refusal_child(&mut command, &response)
             }
+            OrdinarySourceCase::MaskedShift(config) if config.discovery => {
+                config.invoke_discovery(&mut command, &args, &response)
+            }
             _ => {
                 let child = output(&mut command);
                 let result: Result<Observation, SourceFailure> =
@@ -870,6 +909,13 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
                 (child, result)
             }
         };
+        if let OrdinarySourceCase::MaskedShift(config) = case
+            && config.record_refusal(profile, &result)
+        {
+            eprintln!("{}", String::from_utf8_lossy(&child.stdout));
+            eprintln!("{}", String::from_utf8_lossy(&child.stderr));
+            continue;
+        }
         if let OrdinarySourceCase::ConstantShift(config) = case
             && config.dynamic
         {
@@ -879,6 +925,8 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
         }
         let result = result.unwrap();
         if let OrdinarySourceCase::ConstantShift(config) = case {
+            config.check_root_roster(&result.roots).unwrap();
+        } else if let OrdinarySourceCase::MaskedShift(config) = case {
             config.check_root_roster(&result.roots).unwrap();
         } else {
             assert_eq!(result.roots, roots);
@@ -957,6 +1005,9 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
         if let OrdinarySourceCase::ConstantShift(config) = case {
             config.check(&result);
         }
+        if let OrdinarySourceCase::MaskedShift(config) = case {
+            config.check(&result);
+        }
         assert_eq!(
             result.formal_accesses,
             if policy5_case {
@@ -983,6 +1034,9 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
             "actual-source checked native output {diagnostic_name}: {result:?}\n{}",
             String::from_utf8_lossy(&child.stdout)
         );
+        if let OrdinarySourceCase::MaskedShift(config) = case {
+            config.record_qualified(profile, &result);
+        }
         if fixed_facade {
             let extracted = scratch.path().join(format!("{name}-fixed-extractor.ll"));
             let extractor_response = scratch.path().join(format!("{name}-fixed-extractor.json"));
@@ -1085,6 +1139,8 @@ mod dispatch;
 mod exp_source;
 #[path = "production_rustc_driver_checked_output_f32_source_v1_tests.rs"]
 mod f32_source;
+#[path = "production_rustc_driver_checked_output_masked_shift_source_v1_tests.rs"]
+mod masked_shift_source;
 #[path = "production_rustc_driver_checked_output_numeric_cast_source_v1_tests.rs"]
 mod numeric_cast_source;
 #[path = "production_rustc_driver_checked_output_policy5_source_v1_tests.rs"]

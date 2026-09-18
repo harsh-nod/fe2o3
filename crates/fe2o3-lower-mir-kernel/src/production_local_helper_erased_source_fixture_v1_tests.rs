@@ -19,7 +19,7 @@ fn erased_effect_fixture_with_lifetime(
     ProductionPreRankedKirOwnerV1,
     Vec<ProductionRankedSemanticProjectionRootV1>,
 ) {
-    erased_effect_fixture_mode(expected, root_count, lifetime, false)
+    erased_effect_fixture_mode(expected, root_count, lifetime, false, false)
 }
 
 fn erased_effect_fixture_with_load_forwarding(
@@ -29,7 +29,17 @@ fn erased_effect_fixture_with_load_forwarding(
     ProductionPreRankedKirOwnerV1,
     Vec<ProductionRankedSemanticProjectionRootV1>,
 ) {
-    erased_effect_fixture_mode(expected, root_count, None, true)
+    erased_effect_fixture_mode(expected, root_count, None, true, false)
+}
+
+fn erased_effect_fixture_with_integer_identity(
+    expected: bool,
+    root_count: usize,
+) -> (
+    ProductionPreRankedKirOwnerV1,
+    Vec<ProductionRankedSemanticProjectionRootV1>,
+) {
+    erased_effect_fixture_mode(expected, root_count, None, true, true)
 }
 
 fn erased_effect_fixture_mode(
@@ -37,6 +47,7 @@ fn erased_effect_fixture_mode(
     root_count: usize,
     lifetime: Option<SemanticStatementKindV1>,
     load_forwarding: bool,
+    integer_identity: bool,
 ) -> (
     ProductionPreRankedKirOwnerV1,
     Vec<ProductionRankedSemanticProjectionRootV1>,
@@ -124,7 +135,7 @@ fn erased_effect_fixture_mode(
         .unwrap()
         .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ExclusiveOwner])
         .unwrap();
-        let locals = [
+        let mut locals: Vec<_> = [
             UNIT,
             carrier,
             pointer,
@@ -149,6 +160,14 @@ fn erased_effect_fixture_mode(
             )
         })
         .collect();
+        if integer_identity {
+            locals.push(SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([58 + ordinal as u8 * 10; 32]),
+                LOCAL_U64,
+                SemanticLocalRoleV1::Temporary,
+                provenance,
+            ));
+        }
         let pointer_assignment = assignment(
             2,
             pointer,
@@ -211,7 +230,7 @@ fn erased_effect_fixture_mode(
                 } else {
                     SemanticBinaryOpV1::GreaterOrEqual
                 },
-                left: value(6, LOCAL_U64),
+                left: value(if integer_identity { 8 } else { 6 }, LOCAL_U64),
                 right: constant(LOCAL_U64, 8, 8),
             },
         );
@@ -220,7 +239,7 @@ fn erased_effect_fixture_mode(
             expected,
             message: SemanticAssertMessageV1::BoundsCheck {
                 length: constant(LOCAL_U64, 8, 8),
-                index: value(6, LOCAL_U64),
+                index: value(if integer_identity { 8 } else { 6 }, LOCAL_U64),
             },
             target: edge(SemanticEdgeRoleV1::AssertSuccess, 2),
             unwind: SemanticUnwindActionV1::Unreachable,
@@ -255,6 +274,18 @@ fn erased_effect_fixture_mode(
         };
         if let Some(statement) = &lifetime {
             private_statements.insert(1, SemanticStatementV1::new(provenance, statement.clone()));
+        }
+        if integer_identity {
+            let before_predicate = private_statements.len() - 1;
+            private_statements.insert(before_predicate, assignment(
+                8,
+                LOCAL_U64,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::BitXor,
+                    left: value(6, LOCAL_U64),
+                    right: constant(LOCAL_U64, 0, 8),
+                },
+            ));
         }
         let dimensions = SemanticWorkgroupDimensionsV1::new([1, 1, 1]).unwrap();
         let old_entry = function.kernel_entry().unwrap();

@@ -1,6 +1,8 @@
 // Child of the existing genuine erased Policy4 fixtures. Semantic-MIR and
 // fresh source/ranked/N/E/B/C/S/O coverage, not ordinary-Rust or runtime proof.
 use super::*;
+#[path = "production_checked_output_erased_policy6_v1_tests.rs"]
+mod policy6_tests;
 type Final5 = crate::ProductionUnitLocalErasedCheckedOutputOwnerPolicy5V1;
 type Error5 = crate::ProductionCheckedOutputAdmissionErrorPolicy5V1;
 

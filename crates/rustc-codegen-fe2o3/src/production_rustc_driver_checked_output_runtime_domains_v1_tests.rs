@@ -213,6 +213,7 @@ mod tests {
             runtime_domains: None,
             simulation: None,
             constant_shift: None,
+            masked_shift: None,
             policy: 4,
             output_digest: [1; 32],
             llvm_bytes: 1,

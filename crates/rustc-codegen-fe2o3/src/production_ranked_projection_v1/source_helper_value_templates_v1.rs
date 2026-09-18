@@ -9,6 +9,7 @@ type Error = &'static str;
 type Scalar = ProductionSemanticScalarTypeV2;
 
 include!("source_helper_constant_shift_v1.rs");
+include!("source_helper_masked_shift_v1.rs");
 
 #[derive(Clone, Copy)]
 enum Slot {
@@ -202,7 +203,12 @@ impl Frame<'_, '_, '_> {
         Ok(())
     }
 
-    fn rvalue(&mut self, value: &SemanticRvalueV1) -> Result<Slot, Error> {
+    fn rvalue(
+        &mut self,
+        value: &SemanticRvalueV1,
+        block: usize,
+        statement: usize,
+    ) -> Result<Slot, Error> {
         self.meter.work(3)?;
         if let SemanticRvalueKindV1::CheckedBinary(binary) = value.kind() {
             let ty = checked_type(self.types, value.result_type())
@@ -260,10 +266,24 @@ impl Frame<'_, '_, '_> {
             ) =>
             {
                 self.meter.work(8)?;
-                if left.ty() != value.result_type()
-                    || !source_helper_constant_shift_v1(self.types, right, result_scalar)
-                {
-                    return Err("helper shift requires an exact in-range integer literal");
+                let literal = source_helper_constant_shift_v1(self.types, right, result_scalar);
+                let masked = if literal {
+                    false
+                } else {
+                    self.meter.work(64)?;
+                    source_helper_masked_shift_v1(
+                        self.types,
+                        self.function,
+                        block,
+                        statement,
+                        value,
+                        result_scalar,
+                    )
+                };
+                if left.ty() != value.result_type() || !(literal || masked) {
+                    return Err(
+                        "helper shift requires an in-range literal or its actual adjacent source mask",
+                    );
                 }
                 let lhs = self.operand(left)?;
                 let rhs = self.operand(right)?;
@@ -707,11 +727,11 @@ fn derive_inner(
             }
             visited += 1;
             let body = &function.blocks()[block];
-            for statement in body.statements() {
+            for (statement_ordinal, statement) in body.statements().iter().enumerate() {
                 frame.meter.work(2)?;
                 match statement.kind() {
                     SemanticStatementKindV1::Assign(assignment) => {
-                        let value = frame.rvalue(assignment.value())?;
+                        let value = frame.rvalue(assignment.value(), block, statement_ordinal)?;
                         if assignment.destination().ty() != assignment.value().result_type() {
                             return Err("helper assignment type mismatch");
                         }

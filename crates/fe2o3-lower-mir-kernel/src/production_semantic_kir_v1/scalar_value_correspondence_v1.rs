@@ -1,4 +1,5 @@
 include!("constant_shift_value_v1.rs");
+include!("masked_shift_value_v1.rs");
 
 // This compares scalar values, not operation-definedness or overflow flags.
 #[cfg(test)]
@@ -91,10 +92,16 @@ fn scalar_value_expressions_correspond_v1(
                     operation,
                     ProductionSemanticBinaryOpV2::ShiftLeft
                         | ProductionSemanticBinaryOpV2::ShiftRight
-                ) && matches!(rhs.as_ref(), E::Constant { .. })
-                {
-                    compare(rhs, other_rhs, budget)?
-                        || constant_shift_counts_correspond_v1(rhs, other_rhs, *scalar, budget)?
+                ) {
+                    if matches!(rhs.as_ref(), E::Constant { .. }) {
+                        compare(rhs, other_rhs, budget)?
+                            || constant_shift_counts_correspond_v1(rhs, other_rhs, *scalar, budget)?
+                    } else {
+                        compare(rhs, other_rhs, budget)?
+                            || masked_shift_counts_correspond_v1(
+                                rhs, other_rhs, *scalar, next, budget,
+                            )?
+                    }
                 } else {
                     compare(rhs, other_rhs, budget)?
                 }

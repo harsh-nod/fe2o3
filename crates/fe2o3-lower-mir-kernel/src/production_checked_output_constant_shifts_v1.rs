@@ -2,7 +2,7 @@ use super::*;
 use fe2o3_kernel_ir::{CanonicalKirDefinitionCoordinateV1 as Definition, Constant, ScalarType};
 use fe2o3_mir_model::semantic_mir_v1::{SemanticConstantValueV1, SemanticRvalueV1};
 
-fn width(ty: &Type) -> Option<u16> {
+pub(super) fn width(ty: &Type) -> Option<u16> {
     match ty {
         Type::Scalar(ScalarType::I8 | ScalarType::U8) => Some(8),
         Type::Scalar(ScalarType::I16 | ScalarType::U16) => Some(16),
@@ -28,7 +28,10 @@ fn literal(constant: &Constant, ty: &Type) -> Option<u64> {
 
 // Resolve an already-verified dense definition without a graph scan or a raw
 // ValueId lookup. All its coordinates still have to describe this exact row.
-fn defining_operation(inventory: &CanonicalKirInventoryV1<'_>, definition: usize) -> Option<usize> {
+pub(super) fn defining_operation(
+    inventory: &CanonicalKirInventoryV1<'_>,
+    definition: usize,
+) -> Option<usize> {
     let row = inventory.definitions().get(definition)?;
     let Definition::Result {
         operation,
@@ -65,7 +68,7 @@ fn defining_operation(inventory: &CanonicalKirInventoryV1<'_>, definition: usize
         .then_some(ordinal)
 }
 
-fn definition_literal(
+pub(super) fn definition_literal(
     inventory: &CanonicalKirInventoryV1<'_>,
     definition: usize,
     ty: &Type,
@@ -196,4 +199,4 @@ pub(super) fn source(
 
 #[cfg(test)]
 #[path = "production_checked_output_constant_shifts_v1_tests.rs"]
-mod tests;
+pub(crate) mod tests;

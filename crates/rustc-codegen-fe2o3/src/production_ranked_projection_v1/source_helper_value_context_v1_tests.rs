@@ -15,6 +15,9 @@ mod route_tests;
 #[path = "source_helper_constant_shift_v1_tests.rs"]
 mod shift_tests;
 
+#[path = "source_helper_masked_shift_v1_tests.rs"]
+mod masked_shift_tests;
+
 struct TestMeter<'a, 'w> {
     budget: Budget<'w>,
     foreign: Budget<'w>,

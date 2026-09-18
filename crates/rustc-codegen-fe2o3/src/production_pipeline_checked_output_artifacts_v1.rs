@@ -17,6 +17,8 @@ pub(super) enum CheckedArtifactsOwnerRefV1<'a> {
     Erased(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy4V1),
     Direct5(&'a fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy5V1),
     Erased5(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy5V1),
+    Direct6(&'a fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1),
+    Erased6(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1),
 }
 
 impl CheckedArtifactsOwnerRefV1<'_> {
@@ -26,11 +28,25 @@ impl CheckedArtifactsOwnerRefV1<'_> {
             Self::Erased(owner) => owner.output(),
             Self::Direct5(owner) => owner.output(),
             Self::Erased5(owner) => owner.output(),
+            Self::Direct6(owner) => owner.output(),
+            Self::Erased6(owner) => owner.output(),
         }
     }
 
     fn semantic_identity(&self) -> [u8; 32] {
         match self {
+            Self::Direct6(owner) => *owner
+                .source_semantic_kir()
+                .semantic()
+                .semantic()
+                .semantic_sha256()
+                .as_bytes(),
+            Self::Erased6(owner) => *owner
+                .original_source()
+                .semantic_ssa()
+                .source_semantic()
+                .semantic_sha256()
+                .as_bytes(),
             Self::Direct5(owner) => *owner
                 .source_semantic_kir()
                 .semantic()
@@ -72,6 +88,16 @@ impl CheckedArtifactsOwnerRefV1<'_> {
                     .retained_input_storage_floor_v1()
                     .map_err(super::checked_output_policy5_v1::admission);
             }
+            Self::Direct6(owner) => {
+                return owner
+                    .retained_input_storage_floor_v1()
+                    .map_err(super::checked_output_policy6_v1::admission);
+            }
+            Self::Erased6(owner) => {
+                return owner
+                    .retained_input_storage_floor_v1()
+                    .map_err(super::checked_output_policy6_v1::admission);
+            }
         };
         result.map_err(|error| {
             ProductionPipelineError::CheckedOutputStage(CheckedOutputStageErrorV1::Admission(
@@ -97,6 +123,8 @@ impl CheckedArtifactsOwnerRefV1<'_> {
             Self::Erased(owner) => crate::production_worker_handoff::prepare_erased_checked_output_policy4_worker_handoff(owner,catalog,target,llvm_ir,typed_roots,source_envelope,budget),
             Self::Direct5(owner) => crate::production_worker_handoff::prepare_checked_output_policy5_worker_handoff(owner,catalog,target,llvm_ir,typed_roots,source_envelope,budget),
             Self::Erased5(owner) => crate::production_worker_handoff::prepare_erased_checked_output_policy5_worker_handoff(owner,catalog,target,llvm_ir,typed_roots,source_envelope,budget),
+            Self::Direct6(owner) => crate::production_worker_handoff::prepare_checked_output_policy6_worker_handoff(owner,catalog,target,llvm_ir,typed_roots,source_envelope,budget),
+            Self::Erased6(owner) => crate::production_worker_handoff::prepare_erased_checked_output_policy6_worker_handoff(owner,catalog,target,llvm_ir,typed_roots,source_envelope,budget),
         };
         result.map_err(ProductionPipelineError::WorkerHandoff)
     }
@@ -126,12 +154,12 @@ pub(super) fn prepare_checked_artifact_parts_v1(
     #[cfg(test)]
     let phase = timing::begin(
         match &admitted {
-            CheckedArtifactsOwnerRefV1::Direct(_) | CheckedArtifactsOwnerRefV1::Direct5(_) => {
-                timing::Route::Direct
-            }
-            CheckedArtifactsOwnerRefV1::Erased(_) | CheckedArtifactsOwnerRefV1::Erased5(_) => {
-                timing::Route::SilentUnitErased
-            }
+            CheckedArtifactsOwnerRefV1::Direct(_)
+            | CheckedArtifactsOwnerRefV1::Direct5(_)
+            | CheckedArtifactsOwnerRefV1::Direct6(_) => timing::Route::Direct,
+            CheckedArtifactsOwnerRefV1::Erased(_)
+            | CheckedArtifactsOwnerRefV1::Erased5(_)
+            | CheckedArtifactsOwnerRefV1::Erased6(_) => timing::Route::SilentUnitErased,
         },
         timing::Phase::ArtifactPreparation,
     );

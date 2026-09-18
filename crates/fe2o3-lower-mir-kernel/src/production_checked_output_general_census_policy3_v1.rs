@@ -44,7 +44,7 @@ pub(super) fn source_parts(
         // Retained fixed arrays require the exact source/N/ranked relation and
         // the independent actual-B/O private-memory census below. A source
         // array type alone is neither an admission nor a refusal certificate.
-        for block in function.blocks() {
+        for (block_ordinal, block) in function.blocks().iter().enumerate() {
             charge(budget, 1)?;
             match block.terminator().kind() {
                 SemanticTerminatorKindV1::Goto(_)
@@ -79,7 +79,7 @@ pub(super) fn source_parts(
                 }
                 _ => return Err(refused("source", "closed control and assertion grammar")),
             }
-            for statement in block.statements() {
+            for (statement_ordinal, statement) in block.statements().iter().enumerate() {
                 charge(budget, 1)?;
                 let value = match statement.kind() {
                     SemanticStatementKindV1::Nop
@@ -137,7 +137,14 @@ pub(super) fn source_parts(
                     SemanticRvalueKindV1::Binary {
                         operation: SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight,
                         ..
-                    } if constant_shifts::source(source, value, budget)? => {}
+                    } if constant_shifts::source(source, value, budget)?
+                        || masked_shifts::source(
+                            source,
+                            ordinal,
+                            block_ordinal,
+                            statement_ordinal,
+                            budget,
+                        )? => {}
                     SemanticRvalueKindV1::Unary {
                         operation: SemanticUnaryOpV1::Negate,
                         ..
@@ -389,7 +396,11 @@ pub(super) fn native(
             OperationKind::Binary {
                 op: BinaryOp::ShiftLeft | BinaryOp::ShiftRight,
                 ..
-            } if constant_shifts::native(inventory, ordinal, budget)? => None,
+            } if constant_shifts::native(inventory, ordinal, budget)?
+                || masked_shifts::native(inventory, ordinal, budget)? =>
+            {
+                None
+            }
             OperationKind::Unary {
                 op: UnaryOp::Negate,
                 ..
