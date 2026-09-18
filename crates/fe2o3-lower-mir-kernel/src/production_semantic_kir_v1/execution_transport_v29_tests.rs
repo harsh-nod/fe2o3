@@ -1,5 +1,5 @@
 use super::*;
-use execution_binding_tests::{CONTEXT, MUT_CONTEXT, types};
+use execution_binding_tests::{CONTEXT, MUT_CONTEXT, SHARED_CONTEXT, types};
 
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(13);
 const BLOCK: SemanticBlockIdV1 = SemanticBlockIdV1::from_index(0);
@@ -24,6 +24,14 @@ fn function(
     input: SemanticTypeIdV1,
     statements: Vec<SemanticStatementV1>,
 ) -> SemanticFunctionDeclV1 {
+    function_with_reference(input, MUT_CONTEXT, statements)
+}
+
+fn function_with_reference(
+    input: SemanticTypeIdV1,
+    reference: SemanticTypeIdV1,
+    statements: Vec<SemanticStatementV1>,
+) -> SemanticFunctionDeclV1 {
     let source = SemanticSourceProvenanceV1::unavailable();
     let abi = SemanticFunctionAbiV1::from_rustc(
         SemanticAbiIdentityV1::from_sha256([210; 32]),
@@ -43,7 +51,7 @@ fn function(
     let locals = [
         (UNIT, SemanticLocalRoleV1::Return),
         (input, SemanticLocalRoleV1::Argument(0)),
-        (MUT_CONTEXT, SemanticLocalRoleV1::Temporary),
+        (reference, SemanticLocalRoleV1::Temporary),
     ]
     .into_iter()
     .enumerate()
@@ -115,6 +123,35 @@ fn context(types: &[SemanticTypeDeclV1], value: u32) -> SemanticExecutionBinding
             block: BLOCK,
         },
         ValueId(value),
+    )
+    .unwrap()
+}
+
+fn borrowed(
+    types: &[SemanticTypeDeclV1],
+    reference: SemanticTypeIdV1,
+    kind: SemanticBorrowKindV1,
+) -> SemanticExecutionBorrowBindingV29 {
+    SemanticExecutionBorrowBindingV29::from_source(
+        types,
+        SemanticExecutionBorrowSourceV29 {
+            instance: ProductionCallInstanceIdV1(6),
+            block: BLOCK,
+            statement: 0,
+            destination: &place(2, reference),
+            kind,
+            source: &place(1, CONTEXT),
+        },
+        &context(types, 100),
+    )
+    .unwrap()
+}
+
+fn dereferenced(local: u32) -> SemanticPlaceV1 {
+    SemanticPlaceV1::new(
+        SemanticLocalIdV1::from_index(local),
+        vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, CONTEXT).unwrap()],
+        CONTEXT,
     )
     .unwrap()
 }
@@ -387,5 +424,191 @@ fn execution_storage_dead_prevents_later_operand_use() {
         &SemanticOperandV1::Move(place(1, CONTEXT)),
         &mut operations,
     ));
+    assert!(operations.is_empty());
+}
+
+#[test]
+fn execution_dereference_retains_the_complete_borrow_and_cannot_move_out() {
+    let types = types();
+    for (reference, kind) in [
+        (MUT_CONTEXT, SemanticBorrowKindV1::Mutable),
+        (SHARED_CONTEXT, SemanticBorrowKindV1::Shared),
+    ] {
+        let function = function(reference, vec![]);
+        let mut lowering = lowering(&types, &function);
+        let expected = borrowed(&types, reference, kind);
+        lowering.locals[1] = Some(SemanticValueBindingV1::ExecutionBorrow(expected.clone()));
+        let mut operations = Vec::new();
+        let referent = lowering
+            .resolve_place(BLOCK, Some(0), &dereferenced(1), &mut operations)
+            .unwrap();
+        for value in [&referent, &referent.clone()] {
+            assert!(
+                matches!(value, SemanticValueBindingV1::ExecutionReferent(actual) if *actual == expected)
+            );
+            assert!(value.values().is_err());
+            assert!(!semantic_binding_can_restore_from_unique_source_v1(value));
+        }
+        for operand in [
+            SemanticOperandV1::Copy(dereferenced(1)),
+            SemanticOperandV1::Move(dereferenced(1)),
+        ] {
+            refused(
+                lowering.lower_operand(BLOCK, Some(0), &operand, &mut operations),
+                "execution operand requires exact logical field transport",
+            );
+            assert!(
+                matches!(&lowering.locals[1], Some(SemanticValueBindingV1::ExecutionBorrow(actual)) if *actual == expected)
+            );
+        }
+        assert_eq!(
+            require_complete_execution_aggregate_v29(&SemanticValueBindingV1::Aggregate(vec![
+                referent
+            ])),
+            Err("borrowed execution referents cannot become owned values")
+        );
+        assert!(operations.is_empty());
+    }
+}
+
+#[test]
+fn execution_referent_cannot_be_transported_as_an_owned_operand() {
+    let types = types();
+    let function = function(CONTEXT, vec![]);
+    let mut lowering = lowering(&types, &function);
+    let expected = borrowed(&types, MUT_CONTEXT, SemanticBorrowKindV1::Mutable);
+    lowering.locals[1] = Some(SemanticValueBindingV1::ExecutionReferent(expected.clone()));
+    let mut operations = Vec::new();
+    for operand in [
+        SemanticOperandV1::Copy(place(1, CONTEXT)),
+        SemanticOperandV1::Move(place(1, CONTEXT)),
+    ] {
+        refused(
+            lowering.lower_operand(BLOCK, Some(0), &operand, &mut operations),
+            "borrowed execution referents cannot become owned values",
+        );
+        assert!(
+            matches!(&lowering.locals[1], Some(SemanticValueBindingV1::ExecutionReferent(actual)) if *actual == expected)
+        );
+    }
+    assert!(operations.is_empty());
+}
+
+#[test]
+fn execution_reborrow_hook_requires_retained_source_and_preserves_parent() {
+    let types = types();
+    for (parent_reference, parent_kind) in [
+        (MUT_CONTEXT, SemanticBorrowKindV1::Mutable),
+        (SHARED_CONTEXT, SemanticBorrowKindV1::Shared),
+    ] {
+        for (reference, kind) in [
+            (MUT_CONTEXT, SemanticBorrowKindV1::Mutable),
+            (SHARED_CONTEXT, SemanticBorrowKindV1::Shared),
+        ] {
+            let statement = SemanticStatementV1::new(
+                SemanticSourceProvenanceV1::unavailable(),
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    place(2, reference),
+                    SemanticRvalueV1::new(
+                        reference,
+                        SemanticRvalueKindV1::Borrow {
+                            place: dereferenced(1),
+                            kind,
+                        },
+                    ),
+                )),
+            );
+            let empty = function_with_reference(parent_reference, reference, vec![]);
+            let source = function_with_reference(parent_reference, reference, vec![statement]);
+            let mut lowering = lowering(&types, &empty);
+            // Only the retained-assignment hook is exercised, as in the borrow fixture above.
+            lowering.function = &source;
+            let parent = borrowed(&types, parent_reference, parent_kind);
+            lowering.locals[1] = Some(SemanticValueBindingV1::ExecutionBorrow(parent.clone()));
+            let SemanticStatementKindV1::Assign(assignment) =
+                source.blocks()[0].statements()[0].kind()
+            else {
+                unreachable!()
+            };
+            let original = assignment.value().kind();
+            let detached = original.clone();
+            let mut operations = Vec::new();
+            refused(
+                lowering.lower_rvalue(BLOCK, Some(0), reference, &detached, &mut operations),
+                "execution borrow differs from its retained source assignment",
+            );
+            let result =
+                lowering.lower_rvalue(BLOCK, Some(0), reference, original, &mut operations);
+            if parent_kind == SemanticBorrowKindV1::Shared && kind == SemanticBorrowKindV1::Mutable
+            {
+                refused(result, "execution reborrow cannot strengthen shared access");
+            } else {
+                let SemanticValueBindingV1::ExecutionBorrow(child) = result.unwrap() else {
+                    panic!("expected reborrow");
+                };
+                assert_eq!(child.parent, Some(parent.occurrence()));
+                assert_eq!(
+                    child.occurrence(),
+                    SemanticExecutionBorrowOccurrenceV29 {
+                        instance: INSTANCE,
+                        block: BLOCK,
+                        statement: 0,
+                    }
+                );
+                assert_ne!(child.occurrence(), parent.occurrence());
+                assert_eq!(child.borrowed(), parent.borrowed());
+                assert_eq!(child.reference_type(), reference);
+                assert_eq!(child.kind(), kind);
+                assert_eq!(child.source_local(), SemanticLocalIdV1::from_index(1));
+                assert_eq!(child.destination_local(), SemanticLocalIdV1::from_index(2));
+            }
+            assert!(
+                matches!(&lowering.locals[1], Some(SemanticValueBindingV1::ExecutionBorrow(actual)) if *actual == parent)
+            );
+            assert!(operations.is_empty());
+        }
+    }
+}
+
+#[test]
+fn execution_reborrow_uses_the_actual_root_reference_type() {
+    let types = types();
+    let statement = SemanticStatementV1::new(
+        SemanticSourceProvenanceV1::unavailable(),
+        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            place(2, SHARED_CONTEXT),
+            SemanticRvalueV1::new(
+                SHARED_CONTEXT,
+                SemanticRvalueKindV1::Borrow {
+                    place: dereferenced(1),
+                    kind: SemanticBorrowKindV1::Shared,
+                },
+            ),
+        )),
+    );
+    let empty = function_with_reference(SHARED_CONTEXT, SHARED_CONTEXT, vec![]);
+    let source = function_with_reference(SHARED_CONTEXT, SHARED_CONTEXT, vec![statement]);
+    let mut lowering = lowering(&types, &empty);
+    lowering.function = &source;
+    let parent = borrowed(&types, MUT_CONTEXT, SemanticBorrowKindV1::Mutable);
+    lowering.locals[1] = Some(SemanticValueBindingV1::ExecutionBorrow(parent.clone()));
+    let SemanticStatementKindV1::Assign(assignment) = source.blocks()[0].statements()[0].kind()
+    else {
+        unreachable!()
+    };
+    let mut operations = Vec::new();
+    refused(
+        lowering.lower_rvalue(
+            BLOCK,
+            Some(0),
+            SHARED_CONTEXT,
+            assignment.value().kind(),
+            &mut operations,
+        ),
+        "execution borrow nominal reference type changed",
+    );
+    assert!(
+        matches!(&lowering.locals[1], Some(SemanticValueBindingV1::ExecutionBorrow(actual)) if *actual == parent)
+    );
     assert!(operations.is_empty());
 }

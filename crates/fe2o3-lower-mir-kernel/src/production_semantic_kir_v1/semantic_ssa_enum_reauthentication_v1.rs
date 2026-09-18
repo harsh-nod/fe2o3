@@ -44,6 +44,7 @@ fn reauthenticate_ordinary_capabilities_from_enum_payload_v1(
         } => *slot = availability,
         SemanticValueBindingV1::Execution(_)
         | SemanticValueBindingV1::ExecutionBorrow(_)
+        | SemanticValueBindingV1::ExecutionReferent(_)
         | SemanticValueBindingV1::MovedExecution => {
             return Err("execution bindings cannot be restored from enum payloads");
         }
@@ -77,6 +78,7 @@ fn semantic_binding_contains_execution_v29(binding: &SemanticValueBindingV1) -> 
     match binding {
         SemanticValueBindingV1::Execution(_)
         | SemanticValueBindingV1::ExecutionBorrow(_)
+        | SemanticValueBindingV1::ExecutionReferent(_)
         | SemanticValueBindingV1::MovedExecution => true,
         SemanticValueBindingV1::Value {
             ty: Type::Execution(_),

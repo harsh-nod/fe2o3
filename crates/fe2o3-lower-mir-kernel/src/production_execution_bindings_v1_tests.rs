@@ -415,17 +415,24 @@ fn execution_borrow_preserves_source_occurrence_and_exact_reference() {
         assert_eq!(binding.borrowed(), &context);
         let projection =
             SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, CONTEXT).unwrap();
-        assert_eq!(
+        assert!(
             binding
-                .dereference(&types, reference_type, &projection)
-                .unwrap(),
-            &context
+                .check_dereference(&types, reference_type, &projection)
+                .is_ok()
         );
         let wrong = SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, OTHER_CONTEXT)
             .unwrap();
-        assert!(binding.dereference(&types, reference_type, &wrong).is_err());
+        assert!(
+            binding
+                .check_dereference(&types, reference_type, &wrong)
+                .is_err()
+        );
         let wrong = SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), CONTEXT).unwrap();
-        assert!(binding.dereference(&types, reference_type, &wrong).is_err());
+        assert!(
+            binding
+                .check_dereference(&types, reference_type, &wrong)
+                .is_err()
+        );
         assert!(binding.check_type(&types, OTHER_MUT_CONTEXT).is_err());
     }
 }
@@ -477,12 +484,174 @@ fn execution_borrow_refuses_raw_fake_mutability_and_projected_sources() {
 }
 
 #[test]
+fn execution_reborrow_preserves_parent_without_strengthening_access() {
+    let types = types();
+    let context = context(&types);
+    let source = SemanticPlaceV1::new(
+        SemanticLocalIdV1::from_index(3),
+        vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, CONTEXT).unwrap()],
+        CONTEXT,
+    )
+    .unwrap();
+    for (parent_reference, parent_kind) in [
+        (MUT_CONTEXT, SemanticBorrowKindV1::Mutable),
+        (SHARED_CONTEXT, SemanticBorrowKindV1::Shared),
+    ] {
+        let parent = borrow(&types, parent_reference, parent_kind, &context).unwrap();
+        assert_eq!(parent.parent, None);
+        for (reference, kind) in [
+            (MUT_CONTEXT, SemanticBorrowKindV1::Mutable),
+            (SHARED_CONTEXT, SemanticBorrowKindV1::Shared),
+        ] {
+            let destination = place(4, reference);
+            let result = parent.reborrow(
+                &types,
+                parent_reference,
+                SemanticExecutionBorrowSourceV29 {
+                    instance: ProductionCallInstanceIdV1(2),
+                    block: SemanticBlockIdV1::from_index(4),
+                    statement: 5,
+                    destination: &destination,
+                    kind,
+                    source: &source,
+                },
+            );
+            if parent_kind == SemanticBorrowKindV1::Shared && kind == SemanticBorrowKindV1::Mutable
+            {
+                assert_eq!(
+                    result.unwrap_err(),
+                    "execution reborrow cannot strengthen shared access"
+                );
+                continue;
+            }
+            let child = result.unwrap();
+            assert_eq!(child.parent, Some(parent.occurrence()));
+            assert_eq!(child.borrowed(), &context);
+            assert_eq!(child.reference_type(), reference);
+            assert_eq!(child.kind(), kind);
+            assert_eq!(child.source_local(), source.local());
+            assert_eq!(child.destination_local(), destination.local());
+            assert_eq!(
+                child.occurrence(),
+                SemanticExecutionBorrowOccurrenceV29 {
+                    instance: ProductionCallInstanceIdV1(2),
+                    block: SemanticBlockIdV1::from_index(4),
+                    statement: 5,
+                }
+            );
+            assert_eq!(
+                child.reference_identity,
+                types[reference.index() as usize].identity()
+            );
+        }
+    }
+}
+
+#[test]
+fn execution_reborrow_checks_both_reference_types_and_exact_projection() {
+    let types = types();
+    let context = context(&types);
+    let parent = borrow(&types, MUT_CONTEXT, SemanticBorrowKindV1::Mutable, &context).unwrap();
+    let dereference =
+        SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, CONTEXT).unwrap();
+    let wrong_referent =
+        SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, OTHER_CONTEXT).unwrap();
+    let field = SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), CONTEXT).unwrap();
+    for (parent_reference, reference, kind, projections, referent) in [
+        (
+            OTHER_MUT_CONTEXT,
+            MUT_CONTEXT,
+            SemanticBorrowKindV1::Mutable,
+            vec![dereference.clone()],
+            CONTEXT,
+        ),
+        (
+            MUT_CONTEXT,
+            OTHER_MUT_CONTEXT,
+            SemanticBorrowKindV1::Mutable,
+            vec![dereference.clone()],
+            CONTEXT,
+        ),
+        (
+            MUT_CONTEXT,
+            RAW_CONTEXT,
+            SemanticBorrowKindV1::Mutable,
+            vec![dereference.clone()],
+            CONTEXT,
+        ),
+        (
+            MUT_CONTEXT,
+            MUT_CONTEXT,
+            SemanticBorrowKindV1::Fake,
+            vec![dereference.clone()],
+            CONTEXT,
+        ),
+        (
+            MUT_CONTEXT,
+            SHARED_CONTEXT,
+            SemanticBorrowKindV1::Mutable,
+            vec![dereference.clone()],
+            CONTEXT,
+        ),
+        (
+            MUT_CONTEXT,
+            MUT_CONTEXT,
+            SemanticBorrowKindV1::Mutable,
+            vec![wrong_referent],
+            OTHER_CONTEXT,
+        ),
+        (
+            MUT_CONTEXT,
+            MUT_CONTEXT,
+            SemanticBorrowKindV1::Mutable,
+            vec![],
+            CONTEXT,
+        ),
+        (
+            MUT_CONTEXT,
+            MUT_CONTEXT,
+            SemanticBorrowKindV1::Mutable,
+            vec![field.clone()],
+            CONTEXT,
+        ),
+        (
+            MUT_CONTEXT,
+            MUT_CONTEXT,
+            SemanticBorrowKindV1::Mutable,
+            vec![dereference, field],
+            CONTEXT,
+        ),
+    ] {
+        let source =
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(3), projections, referent).unwrap();
+        let destination = place(4, reference);
+        assert!(
+            parent
+                .reborrow(
+                    &types,
+                    parent_reference,
+                    SemanticExecutionBorrowSourceV29 {
+                        instance: ProductionCallInstanceIdV1(1),
+                        block: SemanticBlockIdV1::from_index(2),
+                        statement: 4,
+                        destination: &destination,
+                        kind,
+                        source: &source,
+                    }
+                )
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn execution_bindings_cannot_flatten_or_resurrect_through_enums() {
     let types = types();
     let context = context(&types);
     let borrowed = borrow(&types, MUT_CONTEXT, SemanticBorrowKindV1::Mutable, &context).unwrap();
     for binding in [
         SemanticValueBindingV1::Execution(context),
+        SemanticValueBindingV1::ExecutionReferent(borrowed.clone()),
         SemanticValueBindingV1::ExecutionBorrow(borrowed),
         SemanticValueBindingV1::Value {
             id: ValueId(40),
@@ -496,7 +665,10 @@ fn execution_bindings_cannot_flatten_or_resurrect_through_enums() {
         ));
         assert!(matches!(
             semantic_binding_kind_v1(&binding),
-            "nominal execution role" | "nominal execution borrow" | "ordinary value"
+            "nominal execution role"
+                | "nominal execution borrow"
+                | "borrowed execution referent"
+                | "ordinary value"
         ));
         let nested = SemanticValueBindingV1::Aggregate(vec![SemanticValueBindingV1::Unit, binding]);
         assert!(nested.values().is_err());

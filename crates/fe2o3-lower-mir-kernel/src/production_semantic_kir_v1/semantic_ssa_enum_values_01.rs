@@ -710,8 +710,17 @@ enum SemanticValueBindingV1 {
         view: usize,
     },
     Unmaterialized,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Producer issuance remains gated on source custody")
+    )]
     Execution(SemanticExecutionBindingV29),
     ExecutionBorrow(SemanticExecutionBorrowBindingV29),
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Checked borrowed-role consumers remain gated on source custody")
+    )]
+    ExecutionReferent(SemanticExecutionBorrowBindingV29),
     MovedExecution,
     Aggregate(Vec<SemanticValueBindingV1>),
     Enum {
@@ -841,6 +850,7 @@ fn semantic_binding_kind_v1(binding: &SemanticValueBindingV1) -> &'static str {
         SemanticValueBindingV1::BorrowedAggregate { .. } => "borrowed aggregate view",
         SemanticValueBindingV1::Execution(_) => "nominal execution role",
         SemanticValueBindingV1::ExecutionBorrow(_) => "nominal execution borrow",
+        SemanticValueBindingV1::ExecutionReferent(_) => "borrowed execution referent",
         SemanticValueBindingV1::MovedExecution => "moved execution value",
         SemanticValueBindingV1::Aggregate(_) => "aggregate",
         SemanticValueBindingV1::Enum {
@@ -889,6 +899,7 @@ fn semantic_binding_can_restore_from_unique_source_v1(binding: &SemanticValueBin
         SemanticValueBindingV1::BorrowedAggregate { .. }
         | SemanticValueBindingV1::Execution(_)
         | SemanticValueBindingV1::ExecutionBorrow(_)
+        | SemanticValueBindingV1::ExecutionReferent(_)
         | SemanticValueBindingV1::MovedExecution
         | SemanticValueBindingV1::Unmaterialized
         | SemanticValueBindingV1::Enum { .. }
@@ -917,7 +928,7 @@ impl SemanticValueBindingV1 {
                 Err("unmaterialized enum payload has no ordinary SSA representation")
             }
             Self::MovedExecution => Err("moved execution value cannot be observed"),
-            Self::Execution(_) | Self::ExecutionBorrow(_) => {
+            Self::Execution(_) | Self::ExecutionBorrow(_) | Self::ExecutionReferent(_) => {
                 Err("execution binding has no ordinary scalar representation")
             }
             Self::Unit
@@ -1004,7 +1015,7 @@ impl SemanticValueBindingV1 {
             Self::MovedExecution => {
                 return Err("moved execution value cannot be observed");
             }
-            Self::Execution(_) | Self::ExecutionBorrow(_) => {
+            Self::Execution(_) | Self::ExecutionBorrow(_) | Self::ExecutionReferent(_) => {
                 return Err("execution binding has no ordinary SSA representation");
             }
             Self::MathContext
