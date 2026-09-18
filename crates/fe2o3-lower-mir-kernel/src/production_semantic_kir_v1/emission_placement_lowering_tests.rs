@@ -17,7 +17,7 @@ fn lower_placed_root(
     )
 }
 
-fn lower_placed_function(
+pub(in super::super) fn lower_placed_function(
     ssa: &ProductionSemanticSsaOwnerV1,
     selected: SemanticFunctionIdV1,
     placement: SemanticEmissionPlacementV1,
@@ -134,62 +134,59 @@ fn captured_source_instances_drive_existing_lowering_and_call_expansion() {
             budget,
         )
         .unwrap();
-        let correspondence = caller
-            .call_returns
-            .sites
-            .rows
-            .iter()
-            .find(|site| site.semantic_block == call.occurrence().block)
+        with_production_instance_correspondence_v1(plan, budget, |mapping, budget| {
+            mapping.append_lowered(plan.root(), &caller, budget)?;
+            mapping.append_lowered(child, &callee, budget)?;
+            let call_storage = CallReturnBufferV1::bytes(
+                caller.call_returns.sites.rows.len() + callee.call_returns.sites.rows.len(),
+                caller.call_returns.components.rows.len()
+                    + callee.call_returns.components.rows.len(),
+            )
             .unwrap();
-        let SemanticKirCallReturnKindV1::Call { call_operation, .. } = correspondence.kind else {
-            panic!("selected source call must have retained call correspondence");
-        };
-        let site = FunctionOperationLocation::new(
-            BlockId(call.occurrence().block.index()),
-            call_operation as usize,
-        );
-        let call_storage = CallReturnBufferV1::bytes(
-            caller.call_returns.sites.rows.len() + callee.call_returns.sites.rows.len(),
-            caller.call_returns.components.rows.len() + callee.call_returns.components.rows.len(),
-        )
+            drop(caller.call_returns);
+            drop(callee.call_returns);
+            budget.release_storage(call_storage)?;
+            let expanded = mapping
+                .splice(
+                    call,
+                    caller.function,
+                    callee.function,
+                    BlockId(18),
+                    BlockId(19),
+                    budget,
+                )
+                .unwrap();
+            mapping.check_coordinates(plan.root(), &expanded.caller, budget)?;
+            assert!(!mapping.spans().is_empty());
+            assert!(!mapping.controls().is_empty());
+            assert_eq!(expanded.split.returns, plan.returns(child).unwrap().count());
+            assert!(expanded.callee_required_capabilities.is_empty());
+            let retained = expanded.additional_storage_bytes;
+            let mut module = Module::new("source_instances");
+            module.functions.push(expanded.caller);
+            module.kernels.push(Kernel::new(
+                "placed_root",
+                "placed_root",
+                LaunchDomain::D1 {
+                    x: LaunchExtent::Static(64),
+                },
+            ));
+            assert!(
+                !module.functions[0]
+                    .body
+                    .as_ref()
+                    .unwrap()
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.operations)
+                    .any(|operation| matches!(operation.kind, OperationKind::Call { .. }))
+            );
+            verify_module(&module).unwrap();
+            drop(module);
+            budget.release_storage(retained)?;
+            Ok::<_, InstanceCorrespondenceErrorV1>(())
+        })
         .unwrap();
-        drop(caller.call_returns);
-        drop(callee.call_returns);
-        budget.release_storage(call_storage)?;
-        let expanded = splice_production_call_instance_v1(
-            caller.function,
-            callee.function,
-            site,
-            BlockId(18),
-            BlockId(19),
-            budget,
-        )
-        .unwrap();
-        assert_eq!(expanded.split.returns, plan.returns(child).unwrap().count());
-        assert!(expanded.callee_required_capabilities.is_empty());
-        let retained = expanded.additional_storage_bytes;
-        let mut module = Module::new("source_instances");
-        module.functions.push(expanded.caller);
-        module.kernels.push(Kernel::new(
-            "placed_root",
-            "placed_root",
-            LaunchDomain::D1 {
-                x: LaunchExtent::Static(64),
-            },
-        ));
-        assert!(
-            !module.functions[0]
-                .body
-                .as_ref()
-                .unwrap()
-                .blocks
-                .iter()
-                .flat_map(|block| &block.operations)
-                .any(|operation| matches!(operation.kind, OperationKind::Call { .. }))
-        );
-        verify_module(&module).unwrap();
-        drop(module);
-        budget.release_storage(retained)?;
         Ok::<_, ProductionCallInstanceErrorV1>(())
     })
     .unwrap();

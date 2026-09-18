@@ -375,6 +375,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             pending_semantic_ssa_definitions,
             next_value,
             emission_placement,
+            execution_instance: None,
             assert_failure_block,
             required_workgroup,
             infallible_asserts,

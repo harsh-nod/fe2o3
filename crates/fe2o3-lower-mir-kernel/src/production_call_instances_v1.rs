@@ -9,20 +9,9 @@ use fe2o3_kernel_ir::{
 use fe2o3_mir_model::{SsaBlockIdV1, semantic_mir_v1::*};
 use fe2o3_pliron::{ProductionSemanticSsaFunctionPlanV1, ProductionSemanticSsaOwnerV1};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ProductionCallInstanceIdV1(usize);
-
-impl ProductionCallInstanceIdV1 {
-    pub(crate) const fn index(self) -> usize {
-        self.0
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ProductionCallOccurrenceV1 {
-    pub(crate) caller: ProductionCallInstanceIdV1,
-    pub(crate) block: SemanticBlockIdV1,
-}
+pub(crate) use super::production_call_instance_ids_v1::{
+    ProductionCallInstanceIdV1, ProductionCallOccurrenceV1,
+};
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum ProductionCallInstanceErrorV1 {
