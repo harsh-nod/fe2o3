@@ -710,21 +710,26 @@ fn cursor_unwind_preserves_escaped_storage_and_spent_work() {
 #[test]
 fn cursor_never_refunds_scratch_to_a_replaced_ledger() {
     for mode in 0..3 {
-        captured(Case::Ordinary, |plan, budget| {
+        captured(Case::Ordinary, |plan, _| {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+            let mut budget = Budget::new(&mut work, 1_000_000);
+            budget.reserve_storage(19).unwrap();
             let floor = budget.storage();
-            let ledger = budget.work_ledger_identity_v1();
             let mut foreign = Some(Budget::new(
                 Box::leak(Box::new(CanonicalKernelIrWorkBudgetV1::new(1_000_000))),
                 1_000_000,
             ));
             foreign.as_mut().unwrap().charge_work(5).unwrap();
             foreign.as_mut().unwrap().reserve_storage(900_000).unwrap();
-            let mut original = None;
             let mut scratch = 0;
+            let mut spent_work = 0;
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                with_execution_availability_v29(plan, plan.root(), budget, |_, budget| {
+                with_execution_availability_v29(plan, plan.root(), &mut budget, |_, budget| {
                     scratch = budget.storage() - floor;
-                    original = Some(std::mem::replace(budget, foreign.take().unwrap()));
+                    spent_work = budget.work();
+                    // The adversarial consumer discards its old ledger handle.
+                    // The wrapper must not reclaim its scratch from the new one.
+                    let _ = std::mem::replace(budget, foreign.take().unwrap());
                     match mode {
                         0 => Ok(()),
                         1 => Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch),
@@ -745,11 +750,9 @@ fn cursor_never_refunds_scratch_to_a_replaced_ledger() {
             assert_eq!(budget.storage(), 900_000);
             assert_eq!(budget.peak_storage(), 900_000);
             assert!(budget.failed_storage().is_none());
-            let _ = std::mem::replace(budget, original.take().unwrap());
-            assert!(budget.work_ledger_identity_v1() == ledger);
             assert!(scratch > 0);
-            assert_eq!(budget.storage(), floor + scratch);
-            budget.release_storage(scratch).unwrap();
+            drop(budget);
+            assert_eq!(work.work(), spent_work);
         });
     }
 }

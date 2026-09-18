@@ -618,7 +618,7 @@ fn run_lifecycle(
 }
 
 #[test]
-fn real_source_calls_produce_issue_derive_and_each_provider_return_without_entry_seeds() {
+fn source_calls_produce_issue_derive_and_each_provider_return_without_entry_seeds() {
     for branches in [false, true] {
         let rows = run_lifecycle(branches, Fault::None, 10_000_000, 10_000_000)
             .0
