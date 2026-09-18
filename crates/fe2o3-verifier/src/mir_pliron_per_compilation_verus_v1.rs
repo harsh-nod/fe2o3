@@ -219,6 +219,7 @@ impl ProductionVerusVerifiedMirPlironKernelV1 {
 #[derive(Debug)]
 pub enum ProductionMirPlironPerCompilationVerusErrorV1 {
     TotalOutput(ProductionTotalOutputStagingErrorV2),
+    Derivation(fe2o3_pliron::ProductionMirPlironSemanticContractDerivationErrorV1),
     SemanticContract(ProductionMirPlironSemanticContractErrorV1),
     ParallelContract(ProductionParallelReferenceContractErrorV1),
     ParallelReportMismatch,
@@ -235,6 +236,7 @@ pub enum ProductionMirPlironPerCompilationVerusErrorV1 {
 impl fmt::Display for ProductionMirPlironPerCompilationVerusErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Derivation(error) => write!(formatter, "per-compilation semantic contract derivation failed: {error}"),
             Self::TotalOutput(error) => write!(
                 formatter,
                 "per-compilation total-output reconciliation failed: {error}",
@@ -283,6 +285,7 @@ impl fmt::Display for ProductionMirPlironPerCompilationVerusErrorV1 {
 impl Error for ProductionMirPlironPerCompilationVerusErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Derivation(error) => Some(error),
             Self::TotalOutput(error) => Some(error),
             Self::SemanticContract(error) => Some(error),
             Self::ParallelContract(error) => Some(error),
@@ -355,6 +358,110 @@ pub fn execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
     ),
     ProductionMirPlironPerCompilationVerusErrorV1,
 > {
+    let prepared = prepare_mir_pliron_aggregate_v1(
+        ranked,
+        evidence,
+        contract,
+        structural_report,
+        parallel_contract,
+        parallel_report,
+    )?;
+    let PreparedMirPlironAggregateV1 {
+        source,
+        contract_identity,
+        parallel_contract_identity,
+        pliron_evidence_identity,
+        composition_template_identity,
+        generated_source_identity,
+        binding,
+        retained_count,
+    } = prepared;
+    let (retained, policy) = execute_and_import_generated_mir_pliron_composition_locally_v1(
+        runtime,
+        source,
+        binding,
+        timeout_seconds,
+    )
+    .map_err(ProductionMirPlironPerCompilationVerusErrorV1::Execution)?;
+    let imported = retained.proof();
+    if imported.binding() != binding
+        || imported.boundary() != FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron
+        || !policy.accepts_signer(imported.signer_identity())
+        || policy.toolchain() != imported.toolchain()
+        || !imported.signature_and_policy_verified()
+    {
+        return Err(ProductionMirPlironPerCompilationVerusErrorV1::InconsistentRetainedSubjects);
+    }
+    let aggregate = ProductionMirPlironPerCompilationVerusReportV1 {
+        contract_identity,
+        parallel_contract_identity,
+        pliron_evidence_identity,
+        composition_template_identity,
+        generated_source_identity,
+        obligation_identity: binding.normalized_obligation_effect_ir_hash(),
+        binding,
+        signer_identity: imported.signer_identity(),
+        toolchain: imported.toolchain(),
+        execution_identity: imported.execution_identity(),
+        receipt_identity: imported.receipt_identity(),
+        retained_policy_checked_staging: retained_count,
+    };
+    Ok((
+        ProductionMirPlironPerCompilationVerusExecutionV1 {
+            report: aggregate,
+            retained,
+        },
+        policy,
+    ))
+}
+
+/// Pure preparation shared by actual execution and independent native replay.
+/// It does not certify execution or signer/compiler origin. Legacy contract and
+/// formula generators retain their existing separately bounded resource domains.
+pub(crate) struct PreparedMirPlironAggregateV1 {
+    source: CanonicalGeneratedVerusProofInputV3,
+    pub(crate) contract_identity: DigestV1,
+    pub(crate) parallel_contract_identity: DigestV1,
+    pub(crate) pliron_evidence_identity: DigestV1,
+    pub(crate) composition_template_identity: DigestV1,
+    pub(crate) generated_source_identity: DigestV1,
+    pub(crate) binding: FunctionalRefinementBindingV2,
+    pub(crate) retained_count: u64,
+}
+
+pub(crate) fn rederive_mir_pliron_aggregate_preparation_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    evidence: &ProductionMiddleEndEvidenceV5,
+) -> Result<PreparedMirPlironAggregateV1, ProductionMirPlironPerCompilationVerusErrorV1> {
+    let semantics =
+        fe2o3_pliron::derive_and_reconcile_mir_pliron_semantic_contract_v1(ranked, evidence)
+            .map_err(ProductionMirPlironPerCompilationVerusErrorV1::Derivation)?;
+    let (parallel, parallel_report) =
+        fe2o3_pliron::derive_and_require_parallel_reference_contract_v1(
+            ranked,
+            evidence,
+            semantics.semantic_contract_report(),
+            semantics.contract(),
+        )
+        .map_err(ProductionMirPlironPerCompilationVerusErrorV1::ParallelContract)?;
+    prepare_mir_pliron_aggregate_v1(
+        ranked,
+        evidence,
+        semantics.contract(),
+        semantics.semantic_contract_report(),
+        &parallel,
+        parallel_report,
+    )
+}
+
+fn prepare_mir_pliron_aggregate_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    evidence: &ProductionMiddleEndEvidenceV5,
+    contract: &fe2o3_functional_proof::MirPlironSemanticContractV1,
+    structural_report: ProductionMirPlironSemanticContractReportV1,
+    parallel_contract: &ParallelReferenceContractV1,
+    parallel_report: ProductionParallelReferenceContractReportV1,
+) -> Result<PreparedMirPlironAggregateV1, ProductionMirPlironPerCompilationVerusErrorV1> {
     let total_output = require_total_output_staging_v2(ranked, evidence)
         .map_err(ProductionMirPlironPerCompilationVerusErrorV1::TotalOutput)?;
     let recomputed =
@@ -394,46 +501,19 @@ pub fn execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
         .map_err(|error| {
             ProductionMirPlironPerCompilationVerusErrorV1::GeneratedSource(error.to_string())
         })?;
-    let (retained, policy) = execute_and_import_generated_mir_pliron_composition_locally_v1(
-        runtime,
-        source,
-        binding,
-        timeout_seconds,
-    )
-    .map_err(ProductionMirPlironPerCompilationVerusErrorV1::Execution)?;
-    let imported = retained.proof();
-    if imported.binding() != binding
-        || imported.boundary() != FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron
-        || !policy.accepts_signer(imported.signer_identity())
-        || policy.toolchain() != imported.toolchain()
-        || !imported.signature_and_policy_verified()
-    {
-        return Err(ProductionMirPlironPerCompilationVerusErrorV1::InconsistentRetainedSubjects);
-    }
     let retained_policy_checked_staging =
         u64::try_from(ranked.retained_policy_checked_refinement_staging().len())
             .map_err(|_| ProductionMirPlironPerCompilationVerusErrorV1::CounterOverflow)?;
-    let aggregate = ProductionMirPlironPerCompilationVerusReportV1 {
+    Ok(PreparedMirPlironAggregateV1 {
+        source,
         contract_identity: structural_report.contract_identity(),
         parallel_contract_identity: parallel_report.contract_identity(),
         pliron_evidence_identity: contract.pliron_evidence(),
         composition_template_identity: composition_template_identity_v1(),
         generated_source_identity,
-        obligation_identity,
         binding,
-        signer_identity: imported.signer_identity(),
-        toolchain: imported.toolchain(),
-        execution_identity: imported.execution_identity(),
-        receipt_identity: imported.receipt_identity(),
-        retained_policy_checked_staging,
-    };
-    Ok((
-        ProductionMirPlironPerCompilationVerusExecutionV1 {
-            report: aggregate,
-            retained,
-        },
-        policy,
-    ))
+        retained_count: retained_policy_checked_staging,
+    })
 }
 
 fn derive_compiler_subjects(

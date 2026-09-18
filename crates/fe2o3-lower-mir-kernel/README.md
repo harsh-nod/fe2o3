@@ -411,6 +411,45 @@ The source/ranked and formal engines retain their
 existing bounded accounting domains; new inventory, transport and census
 scratch uses the shared ledger and restores its incoming floor.
 
+### Integer Arithmetic Admission
+
+General checked-output admission accepts ordinary signed/unsigned 8-, 16-,
+32-, and 64-bit add/subtract/multiply only through the source materializer's
+existing checked pair. Result zero is the modular numeric value; result one
+is the overflow flag. Source/N and N/B correspondence and the independently
+checked optimizer transitions must preserve those exact operands, types and
+result roles. An explicit source overflow assertion is still a runtime
+assertion. Plain native integer arithmetic, unchecked MIR operations and
+128-bit source arithmetic are not admitted by this extension.
+
+Unsigned 32-/64-bit division and remainder have a separate, graph-bound
+nonzero-divisor check. It runs independently on actual B, C, and final Policy4
+O using the retained source target. A previous graph's success flag cannot
+authorize a changed operation. Signed division, floating division and narrow
+unsigned division remain outside this contract.
+
+The checker recognizes nonzero literals, exact equality/inequality guards,
+integer-switch edges and supported zero-preserving casts. Its backward search
+tracks a block and an exact SSA definition. It substitutes each predecessor
+edge's actual block arguments before testing that edge's guard, so duplicate
+edges and loop-carried values cannot borrow another value's proof. All reachable
+incoming paths must establish nonzero; the function entry has an explicit
+unknown-input seed even when it has a backedge. A repeated state only bounds
+work and never establishes a fact by itself.
+
+Work and vector capacities use the shared admission ledger. With no division
+candidates, only the operation bitmap is retained. For dynamic candidates the
+search uses at most the largest per-function block-count times definition-count
+workspace, not a product across unrelated functions; it is bounded, not a
+claim of globally sparse complexity. The enclosing transaction restores its
+incoming storage floor on both success and failure.
+
+This is admission of partial arithmetic at its actual execution site, not
+permission to hoist, speculate, forward across, or classify division as pure
+and total. Ranked semantic-expression definedness and backend source projection
+remain independent gates. Component tests do not establish whole-corpus,
+default-pipeline, protected-proof, or hardware qualification.
+
 ## Checked Policy4 Composition
 
 `ProductionCheckedOutputOwnerPolicy4V1` consumes the real ranked/source receipt,
@@ -445,9 +484,26 @@ rehashes the aggregate obligation from its claims and complete ordered staging
 commitments and compares it with the imported signature's binding. This binds
 the exact Middle identity, contracts, generated source and staging order; merely
 comparing enclosing claims would not. Embedded keys establish signature
-consistency, not trusted signer origin. Serialized source replay is not, by
-itself, independent ranked/source equivalence, final output proof provenance,
-or protected compiler-origin authentication.
+consistency, not trusted signer origin. The compatibility commitment-only API
+still explicitly does not reconstruct ranked/source correspondence.
+
+The consuming native backend additionally exports every typed ranked recipe and
+its access/effect source maps from the retained source owner, and transports the
+actual per-effect signed receipt bytes and keys from local proof execution.
+The stronger verifier independently imports those receipts, reruns staged ranked
+compilation, recreates exact V5 evidence, and derives semantic/parallel contracts
+and the aggregate proof source with the same pure preparation used by execution.
+It then consumes the fresh results into the reconstructed source/N owner and
+replays correspondence. Missing typed roots or signed effect receipts fail;
+there is no commitment-only fallback. This typed in-process handoff is not yet
+an autonomous artifact codec. Existing translation checks still exclude complete
+indexed-address and whole operational equivalence. Reconstructed correspondence
+does not establish final-output proof provenance or protected compiler origin.
+
+New transport vectors, maps and names use the canonical work/storage ledger;
+legacy ranked compilation, semantic reconstruction and proof-source generation
+retain their own bounded resource domains. This is not complete allocator/RSS
+accounting. Public test-key consistency fixtures do not certify Verus execution.
 
 The default backend still uses its existing policy. Protected native lineage and
 full corpus admission are still required before default activation; this stage

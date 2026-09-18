@@ -107,8 +107,33 @@ pub(super) fn source(
                         ..
                     } if matches!(
                         source.types()[value.result_type().index() as usize].shape(),
-                        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float { bits: 32 | 64 })
-                    ) => {}
+                        SemanticTypeShapeV1::Scalar(
+                            SemanticScalarTypeV1::Float { bits: 32 | 64 }
+                                | SemanticScalarTypeV1::Integer {
+                                    bits: 8 | 16 | 32 | 64,
+                                    ..
+                                }
+                        )
+                    ) =>
+                    {
+                        // Integer wrapping results materialize as result zero
+                        // of Checked; exact source/N/B joins retain that pair.
+                        // Plain native integer arithmetic remains inadmissible.
+                    }
+                    SemanticRvalueKindV1::Binary {
+                        operation: SemanticBinaryOpV1::Divide | SemanticBinaryOpV1::Remainder,
+                        ..
+                    } if matches!(
+                        source.types()[value.result_type().index() as usize].shape(),
+                        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                            signed: false,
+                            bits: 32 | 64,
+                        })
+                    ) =>
+                    {
+                        // The native census must independently prove a nonzero
+                        // divisor at each actual B/C/O operation, not just N.
+                    }
                     SemanticRvalueKindV1::Load(load)
                         if load.volatility() == SemanticVolatilityV1::NonVolatile => {}
                     _ => {
@@ -187,6 +212,7 @@ fn ty(ty: &Type) -> bool {
 pub(super) fn native(
     inventory: &CanonicalKirInventoryV1<'_>,
     private: &private_memory::PrivateMemory<'_, '_>,
+    division: &unsigned_division::UnsignedDivision<'_, '_>,
     phase: &'static str,
     mut authorized_trap: impl FnMut(usize, CanonicalKirOperationCoordinateV1) -> R<bool>,
     budget: &mut AssertOriginBudgetV1<'_>,
@@ -308,6 +334,18 @@ pub(super) fn native(
                     | CastKind::RestrictPointerAccess,
                 ..
             } => None,
+            OperationKind::Binary {
+                op: BinaryOp::Divide | BinaryOp::Remainder,
+                ..
+            } => {
+                if !division.operation(inventory, ordinal, budget)? {
+                    return Err(refused(
+                        phase,
+                        "unsigned division requires a nonzero divisor on every incoming path",
+                    ));
+                }
+                None
+            }
             OperationKind::Intrinsic(intrinsic)
                 if matches!(
                     intrinsic.kind,

@@ -382,6 +382,48 @@ fn native_cpu_signed_subject_and_normal_source_n_replay_succeeds_without_origin_
 }
 
 #[test]
+fn digest_only_packet_cannot_enter_typed_ranked_source_replay() {
+    let fixture = fixture(0x20);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+    let mut budget = Budget::new(&mut work, STORAGE);
+    budget.reserve_storage(37).unwrap();
+    let result = fixture.with_inputs(|source| {
+        validate_native_compiler_ranked_source_proof_v1(
+            NativeCompilerRankedSourceProofInputsV1 {
+                source,
+                ranked_roots: &[],
+            },
+            &mut budget,
+        )
+    });
+    assert!(matches!(
+        result,
+        Err(E::Mismatch("complete typed ranked root roster"))
+    ));
+    assert_eq!(budget.storage(), 37);
+}
+
+#[test]
+fn typed_ranked_source_entry_is_paid_before_any_packet_work() {
+    let fixture = fixture(0x20);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(7);
+    let mut budget = Budget::new(&mut work, STORAGE);
+    budget.reserve_storage(37).unwrap();
+    let result = fixture.with_inputs(|source| {
+        validate_native_compiler_ranked_source_proof_v1(
+            NativeCompilerRankedSourceProofInputsV1 {
+                source,
+                ranked_roots: &[],
+            },
+            &mut budget,
+        )
+    });
+    assert!(matches!(result,
+        Err(E::Resource(Resource::Work(error))) if error.actual() == 8 && error.limit() == 7));
+    assert_eq!((budget.storage(), budget.work()), (37, 0));
+}
+
+#[test]
 fn native_replay_rejects_altered_n_and_exact_launch_before_subject_publication() {
     let mut wrong = fixture(0x20);
     // Preserve framing and declared subject, alter an actual graph byte.

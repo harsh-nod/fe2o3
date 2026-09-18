@@ -26099,6 +26099,7 @@ mod resource_tests {
     include!("production_semantic_kir_v1/workgroup_sum_wrapping_tests.rs");
     include!("production_semantic_kir_v1/wrapping_arithmetic_v1_tests.rs");
     include!("production_semantic_kir_v1/wrapping_correspondence_v1_tests.rs");
+    include!("production_semantic_kir_v1/wrapping_ranked_correspondence_v1_tests.rs");
     include!("production_semantic_kir_v1/tests/production_enum_downcast_v1_tests.rs");
 
     #[test]

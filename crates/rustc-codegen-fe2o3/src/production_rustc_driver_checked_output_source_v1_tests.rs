@@ -23,6 +23,12 @@ struct Observation {
     roots: Vec<String>,
     reads: usize,
     writes: usize,
+    global_reads: usize,
+    global_writes: usize,
+    private_reads: usize,
+    private_writes: usize,
+    other_reads: usize,
+    other_writes: usize,
     formal_accesses: usize,
     policy: u16,
     output_digest: [u8; 32],
@@ -31,9 +37,40 @@ struct Observation {
     missing_proof_refused: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum SourceStage {
+    Manifest,
+    CargoMetadata,
+    CargoDependencies,
+    Invocation,
+    Rustc,
+    SourceCollection,
+    RankedChecks,
+    Policy4,
+    NativeSourceProof,
+    NativeHandoff,
+    Observation,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SourceFailure {
+    stage: SourceStage,
+    detail: String,
+}
+
+impl SourceFailure {
+    fn new(stage: SourceStage, detail: impl std::fmt::Display) -> Self {
+        Self {
+            stage,
+            detail: detail.to_string(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct CheckedOutputCallbacks {
-    result: Option<Result<Observation, String>>,
+    result: Option<Result<Observation, SourceFailure>>,
     probe_missing_proof: bool,
 }
 
@@ -43,14 +80,15 @@ impl Callbacks for CheckedOutputCallbacks {
             let ranked = transaction_in_active_session_v1(
                 tcx,
                 crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
-            )?
+            )
+            .map_err(|e| SourceFailure::new(SourceStage::SourceCollection, e))?
             .verify_general_kernel_checks()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| SourceFailure::new(SourceStage::RankedChecks, format!("{e:?}")))?;
             assert!(ranked.all_kernel_checks_are_clean());
             assert!(!ranked.grants_artifact_or_launch_authority());
             let stage = ranked
                 .lower_checked_output_policy4_v1()
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| SourceFailure::new(SourceStage::Policy4, format!("{e:?}")))?;
             let admitted = stage.output();
             assert!(!admitted.grants_artifact_or_launch_authority());
             assert!(std::ptr::eq(
@@ -66,6 +104,12 @@ impl Callbacks for CheckedOutputCallbacks {
                     .collect(),
                 reads: 0,
                 writes: 0,
+                global_reads: 0,
+                global_writes: 0,
+                private_reads: 0,
+                private_writes: 0,
+                other_reads: 0,
+                other_writes: 0,
                 formal_accesses: admitted.kernels().iter().map(|k| k.accesses().len()).sum(),
                 policy: admitted.checked_output().execution().policy_version(),
                 output_digest: *admitted.output().canonical().identity().digest(),
@@ -80,14 +124,27 @@ impl Callbacks for CheckedOutputCallbacks {
                 .flat_map(|body| &body.blocks)
                 .flat_map(|block| &block.operations)
             {
-                match &operation.kind {
-                    OperationKind::Load { .. } | OperationKind::GuardedLoad { .. } => {
-                        observation.reads += 1
-                    }
-                    OperationKind::Store { .. } | OperationKind::GuardedStore { .. } => {
-                        observation.writes += 1
-                    }
-                    _ => {}
+                let (write, access) = match &operation.kind {
+                    OperationKind::Load { access, .. }
+                    | OperationKind::GuardedLoad { access, .. } => (false, access),
+                    OperationKind::Store { access, .. }
+                    | OperationKind::GuardedStore { access, .. } => (true, access),
+                    _ => continue,
+                };
+                use fe2o3_kernel_ir::AddressSpace;
+                let count = match (write, access.address_space) {
+                    (false, AddressSpace::Global) => &mut observation.global_reads,
+                    (true, AddressSpace::Global) => &mut observation.global_writes,
+                    (false, AddressSpace::Private) => &mut observation.private_reads,
+                    (true, AddressSpace::Private) => &mut observation.private_writes,
+                    (false, _) => &mut observation.other_reads,
+                    (true, _) => &mut observation.other_writes,
+                };
+                *count += 1;
+                if write {
+                    observation.writes += 1;
+                } else {
+                    observation.reads += 1;
                 }
             }
             if self.probe_missing_proof {
@@ -97,7 +154,7 @@ impl Callbacks for CheckedOutputCallbacks {
                 };
                 let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
                     usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT)
-                        .map_err(|e| e.to_string())?,
+                        .map_err(|e| SourceFailure::new(SourceStage::NativeSourceProof, e))?,
                 );
                 let mut budget =
                     fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
@@ -105,7 +162,9 @@ impl Callbacks for CheckedOutputCallbacks {
                         crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
                     );
                 let floor = stage.retained_storage_floor_v1();
-                budget.reserve_storage(floor).map_err(|e| e.to_string())?;
+                budget
+                    .reserve_storage(floor)
+                    .map_err(|e| SourceFailure::new(SourceStage::NativeSourceProof, e))?;
                 let refused = stage.prepare_native_source_lineage_v1(&mut budget);
                 assert_eq!(budget.storage(), floor);
                 match refused {
@@ -118,16 +177,27 @@ impl Callbacks for CheckedOutputCallbacks {
                     {
                         observation.missing_proof_refused = true
                     }
-                    Err(error) => return Err(format!("unexpected native proof refusal: {error}")),
-                    Ok(_) => return Err("unsigned source acquired native proof custody".into()),
+                    Err(error) => {
+                        return Err(SourceFailure::new(
+                            SourceStage::NativeSourceProof,
+                            format!("unexpected native proof refusal: {error:?}"),
+                        ));
+                    }
+                    Ok(_) => {
+                        return Err(SourceFailure::new(
+                            SourceStage::NativeSourceProof,
+                            "unsigned source acquired native proof custody",
+                        ));
+                    }
                 }
                 return Ok(observation);
             }
             let (handoff, descriptor) = stage
                 .into_worker_handoff_extraction_v1()
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| SourceFailure::new(SourceStage::NativeHandoff, format!("{e:?}")))?;
             assert!(!descriptor.grants_launch_authority());
-            let llvm = std::str::from_utf8(handoff.module_bytes()).map_err(|e| e.to_string())?;
+            let llvm = std::str::from_utf8(handoff.module_bytes())
+                .map_err(|e| SourceFailure::new(SourceStage::NativeHandoff, e))?;
             assert!(llvm.contains("amdgpu_kernel"));
             observation.llvm_bytes = llvm.len();
             observation.descriptor_roots = descriptor.table().kernels().len();
@@ -148,10 +218,22 @@ fn checked_output_source_child() {
         probe_missing_proof: env::var_os(CHILD_PROOF_PROBE).is_some(),
         ..CheckedOutputCallbacks::default()
     };
-    rustc_driver::run_compiler(&args, &mut callbacks);
-    let result = callbacks
-        .result
-        .expect("actual-source callback did not run");
+    let completed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rustc_driver::run_compiler(&args, &mut callbacks);
+    }));
+    let result = if completed.is_err() {
+        Err(SourceFailure::new(
+            SourceStage::Rustc,
+            "rustc or callback panicked; see captured diagnostics",
+        ))
+    } else {
+        callbacks.result.unwrap_or_else(|| {
+            Err(SourceFailure::new(
+                SourceStage::Rustc,
+                "actual-source callback did not run",
+            ))
+        })
+    };
     std::fs::write(
         env::var_os(CHILD_RESULT).expect("child result path"),
         serde_json::to_vec(&result).unwrap(),
@@ -356,7 +438,7 @@ fn ordinary_rust_fill_and_vecadd_reach_checked_native_output() {
                 observation.to_hex(),
             );
         let child = output(&mut command);
-        let result: Result<Observation, String> =
+        let result: Result<Observation, SourceFailure> =
             serde_json::from_slice(&std::fs::read(&response).unwrap()).unwrap();
         let result = result.unwrap();
         assert_eq!(result.roots, [name]);
@@ -379,7 +461,7 @@ fn ordinary_rust_fill_and_vecadd_reach_checked_native_output() {
                     .env(CHILD_PROOF_PROBE, "1")
                     .env(CHILD_RESULT, &proof_response),
             );
-            let result: Result<Observation, String> =
+            let result: Result<Observation, SourceFailure> =
                 serde_json::from_slice(&std::fs::read(proof_response).unwrap()).unwrap();
             let result = result.unwrap();
             assert!(result.missing_proof_refused);
@@ -393,3 +475,8 @@ fn ordinary_rust_fill_and_vecadd_reach_checked_native_output() {
         }
     }
 }
+
+#[path = "production_rustc_driver_checked_output_corpus_v1_tests.rs"]
+mod corpus;
+#[path = "production_rustc_driver_checked_output_cargo_v1_tests.rs"]
+mod corpus_cargo;
