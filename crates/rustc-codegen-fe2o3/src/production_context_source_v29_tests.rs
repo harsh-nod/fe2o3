@@ -23,6 +23,10 @@ struct SourceObservation {
     borrows: usize,
     helper_stores: usize,
     helper_stored_u32: Option<u32>,
+    provider: Option<u32>,
+    provider_calls: usize,
+    provider_returns: usize,
+    provider_returned_u32: Option<u32>,
     structure: String,
 }
 
@@ -81,9 +85,74 @@ fn context_observation_text_preserves_prefix_at_work_and_output_limits() {
     assert_eq!(writer.budget.work(), 1);
 }
 
+// Observe only unique direct return writers, not general value equivalence.
+fn literal_return_through_defined_calls(
+    source: &AdmittedInertSemanticMirV1,
+    mut function: usize,
+    budget: &mut Budget<'_>,
+) -> Result<Option<u32>, ResourceError> {
+    for _ in 0..source.functions().len() {
+        let body = &source.functions()[function];
+        budget.charge_work(1 + body.locals().len())?;
+        let result = body
+            .locals()
+            .iter()
+            .position(|local| local.role() == SemanticLocalRoleV1::Return)
+            .unwrap();
+        let mut writers = 0;
+        let mut literal = None;
+        let mut callee = None;
+        for block in body.blocks() {
+            budget.charge_work(1)?;
+            for statement in block.statements() {
+                budget.charge_work(1)?;
+                if let SemanticStatementKindV1::Assign(assignment) = statement.kind()
+                    && assignment.destination().local().index() as usize == result
+                {
+                    writers += 1;
+                    if assignment.destination().projections().is_empty()
+                        && let SemanticRvalueKindV1::Use(SemanticOperandV1::Constant(value)) =
+                            assignment.value().kind()
+                        && let SemanticConstantValueV1::Scalar(scalar) = value.value()
+                        && source.types()[value.ty().index() as usize].shape()
+                            == &SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                                signed: false,
+                                bits: 32,
+                            })
+                        && scalar.size_bytes() == 4
+                    {
+                        literal = Some(u32::try_from(scalar.bits()).unwrap());
+                    }
+                }
+            }
+            if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
+                && let Some(destination) = call.destination()
+                && destination.place().local().index() as usize == result
+            {
+                writers += 1;
+                if destination.place().projections().is_empty()
+                    && let SemanticCallableDeclV1::Defined { function } =
+                        source.callables()[call.callee().index() as usize]
+                {
+                    callee = Some(function.index() as usize);
+                }
+            }
+        }
+        if writers != 1 {
+            return Ok(None);
+        }
+        match callee {
+            Some(next) => function = next,
+            None => return Ok(literal),
+        }
+    }
+    Ok(None)
+}
+
 fn observe(
     root: ProductionCheckedContextRootV29<'_>,
     budget: &mut Budget<'_>,
+    provider_definition: SemanticItemDefinitionIdentityV1,
 ) -> Result<SourceObservation, ProductionContextRootErrorV29> {
     let ssa = root.semantic_ssa();
     let source = ssa.source_semantic();
@@ -105,6 +174,10 @@ fn observe(
         borrows: 0,
         helper_stores: 0,
         helper_stored_u32: None,
+        provider: None,
+        provider_calls: 0,
+        provider_returns: 0,
+        provider_returned_u32: None,
         structure: String::new(),
     };
     for (index, function) in source.functions().iter().enumerate() {
@@ -125,6 +198,7 @@ fn observe(
                 )
             {
                 observation.derives += 1;
+                assert!(observation.provider.replace(index as u32).is_none());
             }
             for statement in block.statements() {
                 budget.charge_work(2)?;
@@ -162,6 +236,35 @@ fn observe(
             }
         }
     }
+    // Diagnostic source observations only; this does not construct scope custody.
+    if let Some(provider) = observation.provider {
+        assert_ne!(provider, observation.root);
+        assert_ne!(provider, observation.helper);
+        for function in source.functions() {
+            budget.charge_work(1)?;
+            for block in function.blocks() {
+                budget.charge_work(1)?;
+                if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
+                    && matches!(source.callables().get(call.callee().index() as usize),
+                        Some(SemanticCallableDeclV1::Defined { function })
+                            if function.index() == provider)
+                {
+                    observation.provider_calls += 1;
+                }
+            }
+        }
+        let body = &source.functions()[provider as usize];
+        assert_eq!(body.item_definition_identity(), provider_definition);
+        observation.provider_returned_u32 =
+            literal_return_through_defined_calls(source, provider as usize, budget)?;
+        for block in body.blocks() {
+            budget.charge_work(1)?;
+            observation.provider_returns += usize::from(matches!(
+                block.terminator().kind(),
+                SemanticTerminatorKindV1::Return
+            ));
+        }
+    }
     budget.reserve_storage(REPORT_BYTES)?;
     let mut text = String::new();
     text.try_reserve_exact(REPORT_BYTES)
@@ -195,6 +298,23 @@ impl Callbacks for ContextCallbacks {
         use crate::production_pipeline::ProductionPipelineError;
         use fe2o3_lower_mir_kernel::{ProductionPreRankedKirErrorV1, ProductionSemanticKirErrorV1};
         self.result = Some((|| {
+            let provider = tcx
+                .get_diagnostic_item(rustc_span::Symbol::intern("fe2o3_device_with_workgroup_v1"))
+                .expect("reviewed provider identity");
+            assert_eq!(
+                crate::trusted_device_items::classify(tcx, provider),
+                Some(crate::trusted_device_items::TrustedDeviceItem::ExecutionWithWorkgroup)
+            );
+            assert!(crate::production_semantic_terminal_v1::classify(tcx, provider).is_none());
+            let provider_definition =
+                crate::rustc_semantic_adapter_v1::canonical_function_identities_v1(
+                    tcx,
+                    rustc_middle::ty::Instance::new_raw(
+                        provider,
+                        rustc_middle::ty::GenericArgs::identity_for_item(tcx, provider),
+                    ),
+                )
+                .item_definition();
             let transaction = transaction_in_active_session_v1(
                 tcx,
                 crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
@@ -202,7 +322,7 @@ impl Callbacks for ContextCallbacks {
             let mut observation = None;
             let result = transaction.observe_context_handoff_v29(|root, budget| {
                 assert!(observation.is_none(), "one genuine source root");
-                observation = Some(observe(root, budget)?);
+                observation = Some(observe(root, budget, provider_definition)?);
                 Ok(())
             });
             match result {
@@ -483,14 +603,22 @@ fn check_actual_sources(cases: &[(&str, &str)], expected_derives: usize, profile
                 assert_eq!(observation.helper_stores, 1);
                 if opt == 3 && mir == 2 {
                     let expected = match *label {
-                        "constant7" => Some(7),
+                        "constant7" | "discarded" => Some(7),
                         "constant11" => Some(11),
                         _ => None,
                     };
-                    assert_eq!(observation.helper_stored_u32, expected, "{label}");
+                    assert_eq!(observation.provider_returned_u32, expected, "{label}");
                 }
                 if expected_derives != 0 {
                     assert!(observation.borrows > 0);
+                    assert!(observation.provider.is_some());
+                    assert_eq!(observation.provider_calls, 1);
+                    assert_eq!(observation.provider_returns, 1);
+                    assert_eq!(observation.helper_stored_u32, None);
+                } else {
+                    assert_eq!(observation.provider, None);
+                    assert_eq!(observation.provider_calls, 0);
+                    assert_eq!(observation.provider_returns, 0);
                 }
                 if let Some(previous) = observations.get(label) {
                     assert_eq!(&observation, previous, "fresh-process source observation");

@@ -350,6 +350,7 @@ fn every_unimplemented_terminal_is_retained_as_an_explicit_rejection() {
 #[test]
 fn reviewed_rust_helpers_are_traversed_instead_of_hidden_by_a_terminal() {
     for item in [
+        TrustedDeviceItem::ExecutionWithWorkgroup,
         TrustedDeviceItem::Invocation3DCurrent,
         TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,
         TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic,

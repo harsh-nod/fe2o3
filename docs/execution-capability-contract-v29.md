@@ -135,6 +135,20 @@ The V29 materialization gate remains closed. Connected callback expansion and
 its checked pre-owner transformation are still required before any execution,
 simulation export, protected proof or GPU launch can be claimed for this API.
 
+`KernelContext::with_workgroup` now preserves its ordinary Rust function
+boundary with `#[inline(never)]` and an exact reviewed diagnostic-item identity.
+The existing source-closure and compiler-definition checks authenticate the
+provider; the existing reviewed-helper predicate traverses its body instead of
+classifying it as an intrinsic. User callbacks remain subject to source-safety
+checks. No new terminal, wire tag or compiler-issued scope receipt is added.
+
+This boundary lets subsequent scope materialization inspect the actual provider
+call and normal exits even when its callback is inlined inside the provider.
+It does not itself authenticate a particular invocation or prove the complete
+derive/borrow/callback/exit relation. That relation still needs same-source
+instance custody, checked expansion correspondence and lifecycle validation.
+Neither a provider name nor an arbitrary function return can issue ScopeEnd.
+
 The draft V5 body-child extension binds the separately captured original MIR
 digest, original and optimized occurrences, sorted function/local/block IDs,
 and restored-argument binding. The original body is hashed while borrowed,
