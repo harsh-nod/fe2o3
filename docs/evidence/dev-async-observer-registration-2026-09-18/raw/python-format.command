@@ -1,0 +1,1 @@
+ruff format --check docs/evidence/dev-async-observer-registration-2026-09-18/source.py docs/evidence/dev-async-observer-registration-2026-09-18/binaries.py docs/evidence/dev-async-observer-registration-2026-09-18/verify.py 

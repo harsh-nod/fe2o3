@@ -1,5 +1,6 @@
 use super::*;
 use local_operation_tests::{Mode, count, enqueue_local};
+mod registration_tests;
 
 type Engine = RuntimeAsyncCurrentThreadOwnedEngineV1<ThreadBoundBackend>;
 type Handle = RuntimeAsyncProgressHandleV1<ThreadBoundBackend>;

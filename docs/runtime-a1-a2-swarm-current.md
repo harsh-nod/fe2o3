@@ -10,7 +10,20 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest development (2026-09-18): [caller-driven owned progress](runtime-generated-typed-completion-v1.md#canonical-application-integration)
+Latest development (2026-09-18): nonblocking event, stream-progress and paired
+observer registration removes the caller-owner's registration gap without
+blocking or starting a thread. The existing scheduler retains validation,
+capacity, duplicate ordering and paired all-or-nothing admission. Provisional
+observer Drop, acknowledgment wakes, queue Stop and reply credits have focused
+CPU coverage in the
+[registration archive](evidence/dev-async-observer-registration-2026-09-18/README.md).
+GNU and scoped musl each pass 1,101 runtime and 282 host tests, including all
+thirteen new registration cases; 70 doctests and the static checks pass.
+Synchronous calls still reject blocking self-waits. Protected application/native
+execution, formal refinement and performance remain separate; accepted
+checkpoints, A1/A2 and #182 are unchanged.
+
+Earlier development (2026-09-18): [caller-driven owned progress](runtime-generated-typed-completion-v1.md#canonical-application-integration)
 adds a thread-affine runtime owner that shares the background scheduler and
 retirement rules without spawning a thread. Its cooperative ticks and borrowed
 future driver preserve accepted work across deadlines, reject callback reentrancy
@@ -18,9 +31,9 @@ and blocking self-waits, and retain uncertain native custody. The
 [development archive](evidence/dev-current-thread-owner-2026-09-18/README.md)
 records 21 new CPU tests, with 1,088 runtime and 282 host passes on both GNU and
 scoped musl, plus 69 doctests. It keeps these results separate from protected/native
-execution, formal refinement and performance. Synchronous observer registration
-on the caller-owner remains unsupported. Accepted checkpoints, A1/A2 and #182
-are unchanged.
+execution, formal refinement and performance. That packet did not yet include
+nonblocking observer registration. Accepted checkpoints, A1/A2 and #182 are
+unchanged.
 
 Earlier development (2026-09-18): the [C5 typed bundle adapter](runtime-generated-typed-completion-v1.md#heterogeneous-bundles)
 collects 2 through 64 heterogeneous outputs atomically under the original

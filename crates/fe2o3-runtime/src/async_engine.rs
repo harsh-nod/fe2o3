@@ -36,8 +36,10 @@ pub use drain_capture_storage::RuntimeAsyncCapturedBytesV1;
 mod generated_operation;
 mod operation;
 pub use generated_operation::*;
+mod registration;
 mod reply_budget;
 pub use operation::*;
+pub use registration::*;
 mod snapshot;
 pub use snapshot::{RuntimeAsyncLaunchRequestV1, RuntimeAsyncSnapshotErrorV1};
 mod operation_control;
@@ -861,19 +863,20 @@ enum RuntimeAsyncEngineCommandV1<B: RuntimeBackendV1> {
     Register {
         event: RuntimeEventIdV1,
         cell: Arc<RuntimeAsyncFutureCellV1<B::Error>>,
-        response: SyncSender<Result<(), RuntimeAsyncEventRegistrationErrorV1>>,
+        response: registration::RegistrationResponseV1<RuntimeAsyncEventRegistrationErrorV1>,
     },
     RegisterProgress {
         stream: RuntimeStreamIdV1,
         cell: Arc<RuntimeAsyncProgressCellV1<B::Error>>,
-        response: SyncSender<Result<(), RuntimeAsyncProgressRegistrationErrorV1>>,
+        response: registration::RegistrationResponseV1<RuntimeAsyncProgressRegistrationErrorV1>,
     },
     RegisterEventWithProgress {
         event: RuntimeEventIdV1,
         stream: RuntimeStreamIdV1,
         event_cell: Arc<RuntimeAsyncFutureCellV1<B::Error>>,
         progress_cell: Arc<RuntimeAsyncProgressCellV1<B::Error>>,
-        response: SyncSender<Result<(), RuntimeAsyncProgressEventRegistrationErrorV1>>,
+        response:
+            registration::RegistrationResponseV1<RuntimeAsyncProgressEventRegistrationErrorV1>,
     },
     Stop,
 }
@@ -968,6 +971,8 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
     }
 
     /// Registers one unique event for background nonblocking observation.
+    /// This method waits for admission; [`Self::enqueue_event_registration`]
+    /// provides a bounded nonblocking acknowledgment instead.
     pub fn event_future(
         &self,
         event: RuntimeEventIdV1,
@@ -980,7 +985,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
         let command = RuntimeAsyncEngineCommandV1::Register {
             event,
             cell: Arc::clone(&cell),
-            response: response_sender,
+            response: response_sender.into(),
         };
         match self.try_send_command(command) {
             Ok(()) => {}
@@ -1042,6 +1047,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
     /// Registration authorizes the backend scheduling domain selected by this
     /// stream. A backend may publish other dependency-ready work in that same
     /// domain. Retryable failures do not unregister the stream.
+    /// Use [`Self::enqueue_stream_registration`] for nonblocking admission.
     pub fn register_stream(
         &self,
         stream: RuntimeStreamIdV1,
@@ -1055,7 +1061,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         let command = RuntimeAsyncEngineCommandV1::RegisterProgress {
             stream,
             cell: Arc::clone(&cell),
-            response: response_sender,
+            response: response_sender.into(),
         };
         match self.observer.try_send_command(command) {
             Ok(()) => {}
@@ -1080,6 +1086,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
     /// A nonterminal polling error resolves the future and retires its paired
     /// progress registration; explicitly register the same event and stream
     /// again to retry observation. Retryable flush errors retain registration.
+    /// Use [`Self::enqueue_event_registration_with_progress`] for nonblocking admission.
     pub fn event_future_with_progress(
         &self,
         stream: RuntimeStreamIdV1,
@@ -1102,7 +1109,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
             stream,
             event_cell: Arc::clone(&event_cell),
             progress_cell: Arc::clone(&progress_cell),
-            response: response_sender,
+            response: response_sender.into(),
         };
         match self.observer.try_send_command(command) {
             Ok(()) => {}
@@ -1594,6 +1601,9 @@ fn handle_command_v1<B: RuntimeBackendV1 + 'static>(
                                 response.send(Err(RuntimeAsyncEventRegistrationErrorV1::Capacity));
                             return false;
                         }
+                        if response.is_nonblocking() && cell.abandoned.load(Ordering::Acquire) {
+                            return false;
+                        }
                         if response.send(Ok(())).is_ok() {
                             waiters.insert(event, cell);
                             return false;
@@ -1645,6 +1655,9 @@ fn handle_command_v1<B: RuntimeBackendV1 + 'static>(
                 }
                 if progress.entries.len() >= capacity {
                     let _ = response.send(Err(RuntimeAsyncProgressRegistrationErrorV1::Capacity));
+                    return false;
+                }
+                if response.is_nonblocking() && cell.abandoned.load(Ordering::Acquire) {
                     return false;
                 }
                 if response.send(Ok(())).is_ok() {
@@ -1735,6 +1748,12 @@ fn handle_command_v1<B: RuntimeBackendV1 + 'static>(
                                 let _ = response.send(Err(
                                     RuntimeAsyncProgressEventRegistrationErrorV1::ProgressCapacity,
                                 ));
+                                return false;
+                            }
+                            if response.is_nonblocking()
+                                && (event_cell.abandoned.load(Ordering::Acquire)
+                                    || progress_cell.abandoned.load(Ordering::Acquire))
+                            {
                                 return false;
                             }
                             waiters.insert(event, Arc::clone(&event_cell));
@@ -3280,7 +3299,7 @@ mod tests {
                 stream,
                 event_cell: Arc::clone(&event_cell),
                 progress_cell: Arc::clone(&progress_cell),
-                response: response_sender,
+                response: response_sender.into(),
             })
             .unwrap();
         sender.try_send(RuntimeAsyncEngineCommandV1::Stop).unwrap();
@@ -3700,7 +3719,7 @@ mod tests {
             .try_send(RuntimeAsyncEngineCommandV1::RegisterProgress {
                 stream,
                 cell: Arc::clone(&cell),
-                response: response_sender,
+                response: response_sender.into(),
             })
             .unwrap();
         sender.try_send(RuntimeAsyncEngineCommandV1::Stop).unwrap();
@@ -3741,7 +3760,7 @@ mod tests {
             .try_send(RuntimeAsyncEngineCommandV1::RegisterProgress {
                 stream,
                 cell: Arc::clone(&cell),
-                response: response_sender,
+                response: response_sender.into(),
             })
             .unwrap();
         sender.try_send(RuntimeAsyncEngineCommandV1::Stop).unwrap();
@@ -3860,7 +3879,7 @@ mod tests {
             .try_send(RuntimeAsyncEngineCommandV1::RegisterProgress {
                 stream,
                 cell: Arc::clone(&progress_cell),
-                response: progress_response_sender,
+                response: progress_response_sender.into(),
             })
             .unwrap();
         let future_cell = Arc::new(RuntimeAsyncFutureCellV1::new());
@@ -3869,7 +3888,7 @@ mod tests {
             .try_send(RuntimeAsyncEngineCommandV1::Register {
                 event,
                 cell: Arc::clone(&future_cell),
-                response: future_response_sender,
+                response: future_response_sender.into(),
             })
             .unwrap();
 

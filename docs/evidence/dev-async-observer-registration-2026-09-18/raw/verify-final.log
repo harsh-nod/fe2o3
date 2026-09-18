@@ -1,0 +1,17 @@
+{
+  "source_files": 5540,
+  "library_rosters": {
+    "gnu-host": 286,
+    "gnu-runtime": 1118,
+    "musl-host": 286,
+    "musl-runtime": 1118
+  },
+  "new_runtime_tests": 13,
+  "doctests": {
+    "fe2o3_host": 25,
+    "fe2o3_runtime": 45
+  },
+  "unsafe_source": 6,
+  "receipts": 26,
+  "source_and_binaries_unchanged": true
+}

@@ -1,0 +1,19 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 38.50s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-4a27fcbe3e62fbea)
+
+running 11 tests
+test async_engine::tests::owned_tests::current_thread_tests::registration_tests::observer_registration_all_three_owner_apis_progress_without_blocking ... ok
+test async_engine::tests::owned_tests::current_thread_tests::registration_tests::observer_registration_callbacks_and_ack_wakes_cannot_reenter ... ok
+test async_engine::tests::owned_tests::current_thread_tests::registration_tests::observer_registration_capacity_failures_never_commit_half_a_pair ... ok
+test async_engine::tests::owned_tests::current_thread_tests::registration_tests::observer_registration_deadline_retains_original_ack_and_credit ... ok
+test async_engine::tests::owned_tests::current_thread_tests::registration_tests::observer_registration_drop_in_ack_wake_cannot_leave_live_orphan ... ok
+test async_engine::tests::owned_tests::current_thread_tests::registration_tests::observer_registration_foreign_thread_enqueues_without_owning_context ... ok
+test async_engine::tests::owned_tests::current_thread_tests::registration_tests::observer_registration_pre_ack_drop_never_polls_or_flushes_and_allows_reuse ... ok
+test async_engine::tests::owned_tests::current_thread_tests::registration_tests::observer_registration_reply_and_queue_exhaustion_restore_exact_credits ... ok
+test async_engine::tests::owned_tests::current_thread_tests::registration_tests::observer_registration_stop_distinguishes_queued_from_admitted_original_observers ... ok
+test async_engine::tests::owned_tests::current_thread_tests::registration_tests::observer_registration_terminal_pair_does_not_flush_or_hold_registry_capacity ... ok
+test async_engine::tests::owned_tests::current_thread_tests::registration_tests::observer_registration_validation_and_duplicate_precedence_are_unchanged ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 1048 filtered out; finished in 0.02s
+

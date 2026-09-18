@@ -128,9 +128,18 @@ ticks, while callback reentrancy and blocking self-waits remain rejected.
 Shutdown is immediate Stop; drive `begin_drain` first to finish an accepted
 prefix. Cleanup or native-shutdown failure retains custody until process exit.
 
-Synchronous event/progress observer registration remains unavailable on the
-caller-owner thread; generated and tracked operations maintain their own
-progress. This runtime API does not supply the missing verifier/proof provider,
+Synchronous event/progress observer registration still rejects on the
+caller-owner thread. The nonblocking `enqueue_event_registration`,
+`enqueue_stream_registration` and `enqueue_event_registration_with_progress`
+APIs now return bounded acknowledgment futures over the same scheduler commands.
+Their outer result reports command/reply admission or Stop, while their inner
+result reports the existing registration checks and returns the original
+observer. Admission success is not GPU completion. Provisional observer Drop
+uses the existing abandonment flags, without cancelling or releasing native
+work. Generated and tracked operations maintain their own progress. The
+[registration development archive](evidence/dev-async-observer-registration-2026-09-18/README.md)
+keeps this API qualification separate from protected/native execution.
+This runtime API does not supply the missing verifier/proof provider,
 change seccomp, expose receipt construction, or qualify protected application
 execution. Its [CPU development evidence](evidence/dev-current-thread-owner-2026-09-18/README.md)
 is separate from native, sandbox-composition, formal-refinement and performance

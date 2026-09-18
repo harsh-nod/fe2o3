@@ -81,10 +81,13 @@ impl Wake for DriveWake {
 /// accepted between ticks; callbacks during a tick cannot recursively enqueue.
 /// Blocking handle Context calls and generated `try_join` always reject on this
 /// owner thread. Use `enqueue_with_context` and poll completion futures instead.
-/// Synchronous event/progress observer registration also rejects on this owner;
-/// it has no nonblocking registration counterpart. Generated and tracked
-/// operations maintain their own progress without those registrations.
-/// No work progresses unless the application calls `tick` or `drive_until_ready`.
+/// Synchronous event/progress observer registration also rejects on this owner.
+/// Use [`RuntimeAsyncEngineHandleV1::enqueue_event_registration`],
+/// [`RuntimeAsyncProgressHandleV1::enqueue_stream_registration`] or
+/// [`RuntimeAsyncProgressHandleV1::enqueue_event_registration_with_progress`].
+/// Generated and tracked operations maintain their own progress without those
+/// registrations. Owner-side scheduling and observation require `tick` or
+/// `drive_until_ready`; already-issued device work can continue independently.
 /// This API grants no device, compiler, verifier, or completion authority.
 ///
 /// Shutdown is Stop: it discards queued commands without executing them, then
