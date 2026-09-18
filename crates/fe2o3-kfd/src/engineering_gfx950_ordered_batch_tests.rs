@@ -1,5 +1,13 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug)]
+enum PreparationFault {
+    Reset,
+    Poison,
+    Exception,
+    Frontier,
+}
+
 #[derive(Default)]
 struct Fake {
     events: Vec<String>,
@@ -8,6 +16,8 @@ struct Fake {
     retained: usize,
     completed: bool,
     count: usize,
+    fault_after_prepare: Option<(usize, PreparationFault)>,
+    preparation_fault: Option<PreparationFault>,
 }
 
 impl Fake {
@@ -95,9 +105,25 @@ impl OrderedBackend for Fake {
     fn dispatch_fence(&mut self) -> Result<()> {
         self.event("dispatch_fence".into())
     }
-    fn prepare(&mut self, index: usize) -> Result<usize> {
-        self.event(format!("prepare:{index}"))?;
-        Ok(index)
+    fn prepare_all(&mut self, count: usize) -> Result<Vec<usize>> {
+        let mut prepared = Vec::with_capacity(count);
+        for index in 0..count {
+            self.event(format!("prepare:{index}"))?;
+            if let Some((after, fault)) = self.fault_after_prepare
+                && after == index
+            {
+                self.preparation_fault = Some(fault);
+            }
+            prepared.push(index);
+        }
+        Ok(prepared)
+    }
+    fn preparation_fence(&mut self) -> Result<()> {
+        self.event("preparation_fence".into())?;
+        if let Some(fault) = self.preparation_fault {
+            return Err(format!("preparation boundary {fault:?}"));
+        }
+        Ok(())
     }
     fn stage(&mut self, prepared: Vec<usize>) -> Result<usize> {
         self.count = prepared.len();
@@ -161,7 +187,19 @@ fn ordered_one_and_sixteen_stage_every_argument_before_one_publication_and_final
             .iter()
             .rposition(|event| event.starts_with("prepare:"))
             .unwrap();
-        assert!(last_prepare < first_reset);
+        let preparation_fence = fake
+            .events
+            .iter()
+            .position(|event| event == "preparation_fence")
+            .unwrap();
+        assert!(last_prepare < preparation_fence && preparation_fence < first_reset);
+        assert_eq!(
+            fake.events
+                .iter()
+                .filter(|event| *event == "preparation_fence")
+                .count(),
+            1
+        );
         assert_eq!(
             fake.events
                 .iter()
@@ -191,6 +229,39 @@ fn ordered_one_and_sixteen_stage_every_argument_before_one_publication_and_final
             count
         );
         assert_eq!(fake.events.last().unwrap(), "dispatch_fence");
+    }
+}
+
+#[test]
+fn preparation_boundary_faults_prevent_storage_signal_and_publication_effects() {
+    for count in [1, 16] {
+        for after in 0..count {
+            for fault in [
+                PreparationFault::Reset,
+                PreparationFault::Poison,
+                PreparationFault::Exception,
+                PreparationFault::Frontier,
+            ] {
+                let mut fake = Fake {
+                    fault_after_prepare: Some((after, fault)),
+                    ..Fake::default()
+                };
+                let error = run_ordered_batch(&mut fake, count, 600_000).unwrap_err();
+                assert_eq!(error, format!("preparation boundary {fault:?}"));
+                assert!(fake.poisoned);
+                assert!(!fake.completed);
+                assert_eq!(fake.retained, 0);
+                assert_eq!(fake.events.first().unwrap(), "dispatch_fence");
+                assert_eq!(fake.events.last().unwrap(), "preparation_fence");
+                assert_eq!(fake.events.len(), count + 2);
+                for (index, event) in fake.events[1..=count].iter().enumerate() {
+                    assert_eq!(event, &format!("prepare:{index}"));
+                }
+                let before = fake.events.clone();
+                assert!(run_ordered_batch(&mut fake, count, 600_000).is_err());
+                assert_eq!(fake.events, before);
+            }
+        }
     }
 }
 
@@ -229,7 +300,7 @@ fn ordered_boundaries_use_dispatch_policy_without_changing_lifecycle_fences() {
         .split("    fn dispatch_fence(&mut self) -> Result<()> {")
         .nth(1)
         .unwrap()
-        .split("    fn prepare(")
+        .split("    fn prepare_all(")
         .next()
         .unwrap();
     assert!(boundary.contains("self.context.check_currentness(false)?"));
@@ -261,6 +332,81 @@ fn ordered_boundaries_use_dispatch_policy_without_changing_lifecycle_fences() {
         assert_eq!(fake.events.first().unwrap(), "dispatch_fence");
         assert_eq!(fake.events.last().unwrap(), "dispatch_fence");
     }
+}
+
+#[test]
+fn native_batch_preparation_is_immutable_and_freshly_fenced_before_staging() {
+    let ordered = include_str!("engineering_gfx950_ordered_batch.rs");
+    let flow = ordered
+        .split("fn run_ordered_batch(")
+        .nth(1)
+        .unwrap()
+        .split("struct NativeOrdered")
+        .next()
+        .unwrap();
+    let prepare = flow.find("backend.prepare_all(count)?").unwrap();
+    let fence = flow.find("backend.preparation_fence()?").unwrap();
+    let stage = flow.find("backend.stage(prepared)?").unwrap();
+    assert!(prepare < fence && fence < stage);
+    let native_prepare = ordered
+        .split("    fn prepare_all(&mut self, count: usize) -> Result<Vec<PreparedDispatch>> {")
+        .nth(1)
+        .unwrap()
+        .split("    fn preparation_fence(")
+        .next()
+        .unwrap();
+    assert!(native_prepare.contains("let mut scope = self.context.preparation_scope()"));
+    assert_eq!(native_prepare.matches("self.context.").count(), 1);
+    assert!(native_prepare.contains("scope.prepare("));
+    assert!(!native_prepare.contains("Backend::"));
+    let boundary = ordered
+        .split("    fn preparation_fence(&mut self) -> Result<()> {")
+        .nth(1)
+        .unwrap()
+        .split("    fn stage(")
+        .next()
+        .unwrap();
+    assert!(boundary.contains("self.context.check_idle()"));
+    let context = include_str!("engineering_gfx950.rs");
+    let scope = context
+        .split("struct DispatchPreparation<'a> {")
+        .nth(1)
+        .unwrap()
+        .split("fn add_counter(")
+        .next()
+        .unwrap();
+    assert!(scope.contains("kernels: &'a BTreeMap<u64, Kernel>"));
+    assert!(scope.contains("buffers: &'a BTreeMap<u64, Allocation>"));
+    for forbidden in ["&'a mut Context", "Backend::", ".mapping", ".check_idle("] {
+        assert!(
+            !scope.contains(forbidden),
+            "preparation scope contains {forbidden}"
+        );
+    }
+    for required in [
+        "AqlDispatchGeometryV1::new",
+        "kernel.resources.max_flat_workgroup_size()",
+        "patch_pointer_arguments(",
+        "initialize_engineering_cov6_kernarg(",
+    ] {
+        assert!(
+            scope.contains(required),
+            "preparation scope lost {required}"
+        );
+    }
+    let standalone = context
+        .split("    fn prepare_dispatch_with_peer_bindings(")
+        .nth(1)
+        .unwrap()
+        .split("    fn preparation_scope(")
+        .next()
+        .unwrap();
+    assert!(
+        standalone.find("self.check_idle()?").unwrap()
+            < standalone
+                .find("self.preparation_scope().prepare(")
+                .unwrap()
+    );
 }
 
 #[test]
