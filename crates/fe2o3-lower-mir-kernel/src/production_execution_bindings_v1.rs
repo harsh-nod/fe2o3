@@ -244,6 +244,7 @@ struct SemanticExecutionBorrowBindingV29 {
     reference_type: SemanticTypeIdV1,
     reference_identity: SemanticTypeIdentityV1,
     occurrence: SemanticExecutionBorrowOccurrenceV29,
+    parent: Option<SemanticExecutionBorrowOccurrenceV29>,
     destination_local: SemanticLocalIdV1,
     source_local: SemanticLocalIdV1,
     kind: SemanticBorrowKindV1,
@@ -258,6 +259,35 @@ impl SemanticExecutionBorrowBindingV29 {
     ) -> Result<Self, &'static str> {
         if !source.destination.projections().is_empty() || !source.source.projections().is_empty() {
             return Err("projected execution borrow requires occurrence-qualified projection");
+        }
+        Self::from_referent(types, source, borrowed, None)
+    }
+
+    fn reborrow(
+        &self,
+        types: &[SemanticTypeDeclV1],
+        reference_type: SemanticTypeIdV1,
+        source: SemanticExecutionBorrowSourceV29<'_>,
+    ) -> Result<Self, &'static str> {
+        let [projection] = source.source.projections() else {
+            return Err("execution reborrow requires its exact dereferenced source reference");
+        };
+        self.check_dereference(types, reference_type, projection)?;
+        if self.kind == SemanticBorrowKindV1::Shared && source.kind != SemanticBorrowKindV1::Shared
+        {
+            return Err("execution reborrow cannot strengthen shared access");
+        }
+        Self::from_referent(types, source, &self.borrowed, Some(self.occurrence))
+    }
+
+    fn from_referent(
+        types: &[SemanticTypeDeclV1],
+        source: SemanticExecutionBorrowSourceV29<'_>,
+        borrowed: &SemanticExecutionBindingV29,
+        parent: Option<SemanticExecutionBorrowOccurrenceV29>,
+    ) -> Result<Self, &'static str> {
+        if !source.destination.projections().is_empty() {
+            return Err("execution borrow requires a whole destination local");
         }
         borrowed.check_type(types, source.source.ty())?;
         let reference_type = source.destination.ty();
@@ -289,6 +319,7 @@ impl SemanticExecutionBorrowBindingV29 {
                 block: source.block,
                 statement: source.statement,
             },
+            parent,
             destination_local: source.destination.local(),
             source_local: source.source.local(),
             kind: source.kind,
@@ -327,19 +358,19 @@ impl SemanticExecutionBorrowBindingV29 {
         self.borrowed.check_type(types, reference.pointee())
     }
 
-    fn dereference(
+    fn check_dereference(
         &self,
         types: &[SemanticTypeDeclV1],
         reference_type: SemanticTypeIdV1,
         projection: &SemanticProjectionV1,
-    ) -> Result<&SemanticExecutionBindingV29, &'static str> {
+    ) -> Result<(), &'static str> {
         self.check_type(types, reference_type)?;
         if projection.kind() != SemanticProjectionKindV1::Dereference
             || projection.result_type() != self.borrowed.semantic_type()
         {
             return Err("execution borrow projection changes the exact referent type");
         }
-        Ok(&self.borrowed)
+        Ok(())
     }
 
     #[cfg(test)]

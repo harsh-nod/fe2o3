@@ -52,11 +52,6 @@ impl SemanticFunctionLoweringV1<'_> {
             return Ok(None);
         }
         let error = |detail| self.execution_transport_error_v29(block, statement, detail);
-        let SemanticValueBindingV1::Execution(binding) = binding else {
-            return Err(error(
-                "execution reborrows and projected borrows require checked source transport",
-            ));
-        };
         let kind =
             kind.ok_or_else(|| error("execution roles cannot acquire a physical address"))?;
         let instance = self
@@ -82,18 +77,25 @@ impl SemanticFunctionLoweringV1<'_> {
                 "execution borrow differs from its retained source assignment",
             ));
         }
-        let borrowed = SemanticExecutionBorrowBindingV29::from_source(
-            self.types,
-            SemanticExecutionBorrowSourceV29 {
-                instance,
-                block,
-                statement: ordinal,
-                destination: assignment.destination(),
-                kind,
-                source,
-            },
-            binding,
-        )
+        let source_borrow = SemanticExecutionBorrowSourceV29 {
+            instance,
+            block,
+            statement: ordinal,
+            destination: assignment.destination(),
+            kind,
+            source,
+        };
+        let borrowed = match binding {
+            SemanticValueBindingV1::Execution(binding) => {
+                SemanticExecutionBorrowBindingV29::from_source(self.types, source_borrow, binding)
+            }
+            SemanticValueBindingV1::ExecutionBorrow(binding) => binding.reborrow(
+                self.types,
+                self.function.locals()[source.local().index() as usize].ty(),
+                source_borrow,
+            ),
+            _ => Err("execution projected borrows require checked source transport"),
+        }
         .map_err(error)?;
         Ok(Some(SemanticValueBindingV1::ExecutionBorrow(borrowed)))
     }
@@ -178,6 +180,11 @@ impl SemanticFunctionLoweringV1<'_> {
                     return Err(error("mutable execution borrows cannot be copied"));
                 }
             }
+            SemanticValueBindingV1::ExecutionReferent(_) => {
+                return Err(error(
+                    "borrowed execution referents cannot become owned values",
+                ));
+            }
             SemanticValueBindingV1::Aggregate(_) if moved => {
                 require_complete_execution_aggregate_v29(selected).map_err(error)?;
             }
@@ -207,6 +214,9 @@ fn require_complete_execution_aggregate_v29(
     match binding {
         SemanticValueBindingV1::Unmaterialized | SemanticValueBindingV1::MovedExecution => {
             Err("execution aggregate contains a moved value")
+        }
+        SemanticValueBindingV1::ExecutionReferent(_) => {
+            Err("borrowed execution referents cannot become owned values")
         }
         SemanticValueBindingV1::Enum { .. } => {
             Err("execution roles cannot be transported through enums")

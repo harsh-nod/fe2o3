@@ -13877,6 +13877,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     | SemanticValueBindingV1::Unmaterialized
                     | SemanticValueBindingV1::Execution(_)
                     | SemanticValueBindingV1::ExecutionBorrow(_)
+                    | SemanticValueBindingV1::ExecutionReferent(_)
                     | SemanticValueBindingV1::MovedExecution
                     | SemanticValueBindingV1::Aggregate(_)
                     | SemanticValueBindingV1::MathContext
@@ -21926,19 +21927,17 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         .map_or(self.function.locals()[index].ty(), |previous| {
                             previous.result_type()
                         });
-                    SemanticValueBindingV1::Execution(
-                        borrow
-                            .dereference(self.types, reference_type, projection)
-                            .map_err(|detail| {
-                                unsupported(
-                                    self.semantic_function.index(),
-                                    Some(block.index()),
-                                    statement,
-                                    detail,
-                                )
-                            })?
-                            .clone(),
-                    )
+                    borrow
+                        .check_dereference(self.types, reference_type, projection)
+                        .map_err(|detail| {
+                            unsupported(
+                                self.semantic_function.index(),
+                                Some(block.index()),
+                                statement,
+                                detail,
+                            )
+                        })?;
+                    SemanticValueBindingV1::ExecutionReferent(borrow)
                 }
                 (SemanticValueBindingV1::Unit, _) => {
                     return Err(unsupported(
@@ -22192,6 +22191,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             | SemanticValueBindingV1::Unmaterialized
             | SemanticValueBindingV1::Execution(_)
             | SemanticValueBindingV1::ExecutionBorrow(_)
+            | SemanticValueBindingV1::ExecutionReferent(_)
             | SemanticValueBindingV1::MovedExecution
             | SemanticValueBindingV1::Aggregate(_)
             | SemanticValueBindingV1::Enum { .. }
