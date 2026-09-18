@@ -42,6 +42,7 @@ fn execution_derive_borrow_keeps_the_source_use_and_reference_definition() {
             SsaEventV1::Use(SsaVariableIdV1::new(1)),
             SsaEventV1::Define(SsaVariableIdV1::new(2)),
             SsaEventV1::Use(SsaVariableIdV1::new(2)),
+            SsaEventV1::Kill(SsaVariableIdV1::new(2)),
         ],
     );
     let plan = plan_semantic_function_ssa_with_callables_v1(
@@ -78,6 +79,7 @@ fn execution_derive_reborrow_keeps_each_source_use_and_definition() {
             SsaEventV1::Use(SsaVariableIdV1::new(2)),
             SsaEventV1::Define(SsaVariableIdV1::new(3)),
             SsaEventV1::Use(SsaVariableIdV1::new(3)),
+            SsaEventV1::Kill(SsaVariableIdV1::new(3)),
         ],
     );
 }
