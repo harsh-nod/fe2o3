@@ -1,5 +1,5 @@
 pub(crate) use canonical_assertion_graph_tests::{
-    with_backend_erased_bound_v1, with_backend_erased_roster_v1,
+    with_backend_erased_bound_v1, with_backend_erased_roster_v1, with_backend_erased_load_roster_v1,
 };
 
 mod canonical_assertion_graph_tests {

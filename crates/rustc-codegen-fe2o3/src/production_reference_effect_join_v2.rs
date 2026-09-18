@@ -35,6 +35,9 @@ use crate::reference_effect_v1::{
 };
 
 const ROOT_NAME_V2: &str = "semantic_safety_module";
+#[cfg(test)]
+#[path = "production_reference_prepared_observation_v1_tests.rs"]
+pub(crate) mod prepared_observation_v1;
 const LOCAL_PROOF_TIMEOUT_SECONDS_V2: u32 = 60;
 const WHOLE_COMPILE_PROOF_TIMEOUT_SECONDS_V2: u32 = 120;
 const RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1: &str =
@@ -139,6 +142,8 @@ impl CompilerOwnedReferenceEffectRequestV2 {
         ),
         ProductionReferenceEffectJoinErrorV2,
     > {
+        #[cfg(test)]
+        prepared_observation_v1::observe_request(&self);
         let runtime = fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1::open(
             RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
         )

@@ -404,7 +404,7 @@ fn with_unit_local_ranked_stage_inventory_v1<'w, R>(
                     {
                         return Err(unit_local_mismatch_v1());
                     }
-                    let translation = validate_mir_pliron_translation_with_semantic_v1(
+                    let translation = validate_mir_pliron_translation_with_semantic_and_budget_v1(
                         Some(owner.semantic_ssa.source_semantic()),
                         owner.executable.module(),
                         &owner.correspondence,
@@ -413,6 +413,7 @@ fn with_unit_local_ranked_stage_inventory_v1<'w, R>(
                         &candidate.access_sources,
                         &candidate.executable_effect_sources,
                         owner.limits.max_operations,
+                        budget,
                     )
                     .map_err(ProductionSemanticKirErrorV1::MirPlironTranslation)?;
                     unit_local_push_v1(

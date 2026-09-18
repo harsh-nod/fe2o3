@@ -168,9 +168,15 @@ pub(crate) fn prepare_erased_checked_output_policy4_worker_handoff(
     )
 }
 
+#[path = "production_worker_checked_output_policy5_v1.rs"]
+mod checked_output_policy5;
+pub(crate) use checked_output_policy5::*;
+
 enum CheckedOutputOwnerRefV1<'a> {
     Direct(&'a fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1),
     Erased(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy4V1),
+    Direct5(&'a fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy5V1),
+    Erased5(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy5V1),
 }
 
 impl CheckedOutputOwnerRefV1<'_> {
@@ -178,11 +184,23 @@ impl CheckedOutputOwnerRefV1<'_> {
         match self {
             Self::Direct(owner) => owner.output(),
             Self::Erased(owner) => owner.output(),
+            Self::Direct5(owner) => owner.output(),
+            Self::Erased5(owner) => owner.output(),
         }
     }
 
     fn original_identity(&self) -> [u8; 32] {
         match self {
+            Self::Direct5(owner) => *owner
+                .source_semantic_kir()
+                .canonical_kernel_ir_identity()
+                .digest(),
+            Self::Erased5(owner) => *owner
+                .original_source()
+                .executable()
+                .canonical()
+                .identity()
+                .digest(),
             Self::Direct(owner) => *owner
                 .source_semantic_kir()
                 .canonical_kernel_ir_identity()
@@ -206,6 +224,24 @@ impl CheckedOutputOwnerRefV1<'_> {
     {
         use crate::compiler_descriptor::checked_output_policy3_v1 as descriptors;
         match self {
+            Self::Direct5(owner) => {
+                descriptors::policy5::construct_checked_output_policy5_descriptor_source_v1(
+                    envelope,
+                    compiler_module,
+                    typed_roots,
+                    owner,
+                    budget,
+                )
+            }
+            Self::Erased5(owner) => {
+                descriptors::policy5::construct_erased_checked_output_policy5_descriptor_source_v1(
+                    envelope,
+                    compiler_module,
+                    typed_roots,
+                    owner,
+                    budget,
+                )
+            }
             Self::Direct(owner) => {
                 descriptors::construct_checked_output_policy4_descriptor_source_v1(
                     envelope,

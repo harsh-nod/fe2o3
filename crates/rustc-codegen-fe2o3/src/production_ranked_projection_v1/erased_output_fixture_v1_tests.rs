@@ -7,6 +7,17 @@ fn erased_backend_materialized_fixture_v1(
     fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
     Vec<ProductionRankedRootInputV1>,
 ) {
+    erased_backend_materialized_mode_v1(expected, root_count, false)
+}
+
+fn erased_backend_materialized_mode_v1(
+    expected: bool,
+    root_count: usize,
+    load_forwarding: bool,
+) -> (
+    fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    Vec<ProductionRankedRootInputV1>,
+) {
     assert!((1..=2).contains(&root_count));
     let seed = materialized_unit_local_helper_v1();
     let semantic = seed.semantic_ssa().source_semantic();
@@ -138,6 +149,11 @@ fn erased_backend_materialized_fixture_v1(
             SemanticVolatilityV1::NonVolatile,
             None,
         )));
+        let (private_statements, final_statements) = if load_forwarding {
+            (vec![store, global, load.clone(), load, store_loaded, index, predicate], vec![])
+        } else {
+            (vec![store, load, store_loaded, index, predicate], vec![global])
+        };
         let root = assertion_root_with_access(
             vec![
                 (A_UNIT, SemanticLocalRoleV1::Return),
@@ -158,7 +174,7 @@ fn erased_backend_materialized_fixture_v1(
                 ),
                 block(
                     171 + ordinal as u8 * 3,
-                    vec![store, load, store_loaded, index, predicate],
+                    private_statements,
                     SemanticTerminatorKindV1::Assert {
                         condition: typed_operand(5, A_BOOL),
                         expected,
@@ -169,7 +185,7 @@ fn erased_backend_materialized_fixture_v1(
                 ),
                 block(
                     172 + ordinal as u8 * 3,
-                    vec![global],
+                    final_statements,
                     SemanticTerminatorKindV1::Return,
                 ),
             ],
@@ -272,11 +288,44 @@ pub(crate) fn with_backend_erased_roster_v1(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ),
 ) {
+    with_backend_erased_roster_mode_v1(expected, roots, profile, false, next)
+}
+
+pub(crate) fn with_backend_erased_load_roster_v1(
+    expected: bool,
+    roots: usize,
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionUnitLocalErasedSourceOwnerV1,
+        fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
+    with_backend_erased_roster_mode_v1(expected, roots, profile, true, next)
+}
+
+fn with_backend_erased_roster_mode_v1(
+    expected: bool,
+    roots: usize,
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    load_forwarding: bool,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionUnitLocalErasedSourceOwnerV1,
+        fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
     use fe2o3_kernel_ir::{
         CanonicalKernelIrVerificationResourceBudgetV1 as B, CanonicalKernelIrWorkBudgetV1 as W,
         VerifiedCanonicalKernelIrModuleV12 as V,
     };
-    let (source, inputs) = erased_backend_materialized_fixture_v1(expected, roots);
+    let (source, inputs) = if load_forwarding {
+        erased_backend_materialized_mode_v1(expected, roots, true)
+    } else {
+        erased_backend_materialized_fixture_v1(expected, roots)
+    };
     let original = *source.executable().canonical().identity();
     let original_storage = source.unit_local_source_storage_floor_v1().unwrap();
     let program = project_and_verify_ranked_materialized_semantic_mir_v1(

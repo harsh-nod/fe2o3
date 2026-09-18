@@ -42,7 +42,7 @@ impl<'a> GeneralSourceContextV1<'a> {
     fn replay_and_census(self, budget: &mut AssertOriginBudgetV1<'_>) -> R<()> {
         match self {
             Self::Direct(source) => {
-                source.verify_equivalence().map_err(E::Source)?;
+                source.verify_equivalence_with_budget_v1(budget).map_err(E::Source)?;
                 census::source(source, budget)
             }
             Self::Erased(source) => {
@@ -135,4 +135,3 @@ pub(super) fn check_erased_forwarded_output_v1(
         budget,
     )
 }
-

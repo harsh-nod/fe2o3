@@ -19,6 +19,28 @@ fn erased_effect_fixture_with_lifetime(
     ProductionPreRankedKirOwnerV1,
     Vec<ProductionRankedSemanticProjectionRootV1>,
 ) {
+    erased_effect_fixture_mode(expected, root_count, lifetime, false)
+}
+
+fn erased_effect_fixture_with_load_forwarding(
+    expected: bool,
+    root_count: usize,
+) -> (
+    ProductionPreRankedKirOwnerV1,
+    Vec<ProductionRankedSemanticProjectionRootV1>,
+) {
+    erased_effect_fixture_mode(expected, root_count, None, true)
+}
+
+fn erased_effect_fixture_mode(
+    expected: bool,
+    root_count: usize,
+    lifetime: Option<SemanticStatementKindV1>,
+    load_forwarding: bool,
+) -> (
+    ProductionPreRankedKirOwnerV1,
+    Vec<ProductionRankedSemanticProjectionRootV1>,
+) {
     use fe2o3_pliron::{
         ProductionConstructionV1, ProductionNumericalContractV2, ProductionRankedBlockV1,
         ProductionRankedKernelV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
@@ -223,7 +245,14 @@ fn erased_effect_fixture_with_lifetime(
                 None,
             )),
         );
-        let mut private_statements = vec![private_store, private_load, index, predicate];
+        let (mut private_statements, final_statements) = if load_forwarding {
+            (
+                vec![private_store, global_store, private_load.clone(), private_load, index, predicate],
+                vec![],
+            )
+        } else {
+            (vec![private_store, private_load, index, predicate], vec![global_store])
+        };
         if let Some(statement) = &lifetime {
             private_statements.insert(1, SemanticStatementV1::new(provenance, statement.clone()));
         }
@@ -262,7 +291,7 @@ fn erased_effect_fixture_with_lifetime(
                 ),
                 block(
                     172 + ordinal as u8 * 3,
-                    vec![global_store],
+                    final_statements,
                     SemanticTerminatorKindV1::Return,
                 ),
             ],
@@ -402,7 +431,11 @@ fn erased_effect_fixture_with_lifetime(
                 root.source_rank(),
                 lowering,
                 "genuine root global store; original helper effects remain retained\n".to_owned(),
-                vec![ProductionRankedAccessSourceV1::new(2, Some(0), 0, 0, 5)],
+                vec![ProductionRankedAccessSourceV1::new(
+                    if load_forwarding { 1 } else { 2 },
+                    Some(if load_forwarding { 1 } else { 0 }),
+                    0, 0, 5,
+                )],
                 vec![],
             )
         })
