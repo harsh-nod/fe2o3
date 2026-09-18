@@ -4,6 +4,29 @@
 not grant source authenticity, formal verification, safe-launch or hardware
 execution authority.
 
+## Canonical MemorySSA
+
+`CanonicalKirMemorySsaV1` borrows an exact immutable inventory and builds one
+conservative all-memory version graph in linear structural work. Each defined
+function has a LiveOnEntry node; every block has an unpruned phi with all incoming
+edge occurrences, and the entry block also retains its synthetic entry input.
+Block exits are built before predecessor links, so backedges, duplicate edges,
+irreducible regions and disconnected components require no iterative guess.
+
+Ordinary reads use the current version. Writes, allocations, volatile effects,
+atomics, synchronization, calls, assembly, execution operations and compiler
+ordering conservatively define a new version. A Def is a possible clobber or
+ordering barrier, not proof that a physical write occurs. This report proves
+neither aliasing nor initialization, reachability, absence of traps, race freedom
+or legal instruction motion. It does not authorize optimization rewrites.
+
+The report charges construction work, actual vector capacities and its header;
+queries charge fixed work. Its immutable borrow supplies graph custody, not a
+hash-based cache key. Node IDs are local numeric locators, not transferable
+identity. `with_canonical_analysis_scope_v1` in `fe2o3-pliron` lazily retains the
+report beside sparse analysis on the same ledger. This adds an M4 analysis
+prerequisite, not LICM, load forwarding or a new production pass policy.
+
 ## Canonical Physical Occurrences
 
 [`CanonicalKirPhysicalOccurrencesV1`](src/canonical_kir_physical_occurrences_v1.rs)
@@ -55,6 +78,9 @@ These are logical payload bounds, not allocator RSS or standalone unwind guarant
 ## Tests
 
 ```sh
+cargo test --locked -p fe2o3-kernel-analysis --lib memory_ssa
+cargo test --locked -p fe2o3-kernel-analysis --no-default-features --lib memory_ssa
+cargo test --locked -p fe2o3-pliron --lib memory_ssa
 cargo test --locked -p fe2o3-kernel-analysis --lib canonical_kir_physical_occurrences_v1
 cargo test --locked -p fe2o3-kernel-analysis --no-default-features --lib canonical_kir_physical_occurrences_v1
 cargo test --locked -p fe2o3-kernel-analysis --doc CanonicalKirPhysicalOccurrencesV1

@@ -29,6 +29,7 @@ pub(crate) enum CanonicalAssertionErrorV1 {
     Resource(Resource),
     Inventory(CanonicalKirInventoryErrorV1),
     Sparse(CanonicalKirSparseErrorV1),
+    MemorySsa(fe2o3_kernel_analysis::CanonicalKirMemorySsaErrorV1),
     Origin(SemanticKirAssertOriginErrorV1),
     PrivateArray(SemanticKirPrivateArrayQueryErrorV1),
     CallEffects(fe2o3_kernel_analysis::CanonicalKirCallEffectErrorV1),
@@ -40,6 +41,7 @@ impl fmt::Display for CanonicalAssertionErrorV1 {
             Self::Resource(error) => error.fmt(f),
             Self::Inventory(error) => error.fmt(f),
             Self::Sparse(error) => error.fmt(f),
+            Self::MemorySsa(error) => error.fmt(f),
             Self::Origin(error) => error.fmt(f),
             Self::PrivateArray(error) => error.fmt(f),
             Self::CallEffects(error) => error.fmt(f),
@@ -53,6 +55,7 @@ impl Error for CanonicalAssertionErrorV1 {
             Self::Resource(error) => Some(error),
             Self::Inventory(error) => Some(error),
             Self::Sparse(error) => Some(error),
+            Self::MemorySsa(error) => Some(error),
             Self::Origin(error) => Some(error),
             Self::PrivateArray(error) => Some(error),
             Self::CallEffects(error) => Some(error),
@@ -78,6 +81,9 @@ impl From<CanonicalAnalysisScopeErrorV1> for ProjectionError {
             }
             CanonicalAnalysisScopeErrorV1::Sparse(error) => {
                 CanonicalAssertionErrorV1::Sparse(error)
+            }
+            CanonicalAnalysisScopeErrorV1::MemorySsa(error) => {
+                CanonicalAssertionErrorV1::MemorySsa(error)
             }
         })
     }

@@ -376,7 +376,7 @@ pub fn analyze_checked_output_formal_memory_v1(
     })
 }
 
-fn derive_complete_output_obligations_v1(
+pub(crate) fn derive_complete_output_obligations_v1(
     module: &fe2o3_kernel_ir::Module,
 ) -> Result<Box<[FormalMemoryObligations]>, ProductionFormalMemoryErrorV1> {
     if module.kernels.is_empty() {

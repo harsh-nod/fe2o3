@@ -76,6 +76,9 @@ use fe2o3_pliron::{
 use sha2::{Digest as _, Sha256};
 
 include!("production_pre_ranked_v1.rs");
+#[path = "production_checked_output_admission_policy3_v1.rs"]
+mod checked_output_admission_policy3_v1;
+pub use checked_output_admission_policy3_v1::*;
 include!("production_retained_arrays_v1.rs");
 include!("production_assert_origins_v1.rs");
 #[path = "production_slice_view_v1.rs"]
