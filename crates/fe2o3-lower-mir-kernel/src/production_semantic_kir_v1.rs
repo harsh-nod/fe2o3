@@ -12475,6 +12475,7 @@ include!("production_emission_budget_v1.rs");
 include!("production_execution_availability_v29.rs");
 include!("production_execution_call_parameters_v29.rs");
 include!("production_execution_instance_plan_v29.rs");
+include!("production_execution_scalar_operands_v29.rs");
 include!("production_execution_events_v29.rs");
 include!("production_execution_cfg_shape_v29.rs");
 include!("production_execution_cfg_transport_v29.rs");
@@ -13571,7 +13572,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 Ok(())
             }
             SemanticStatementKindV1::Assume(condition) => {
-                let _ = self.lower_operand(block, statement, condition, operations)?;
+                let _ = self.lower_source_operand_v29(
+                    block,
+                    statement,
+                    Some(ExecutionOperandV29::Assume),
+                    condition,
+                    operations,
+                )?;
                 Ok(())
             }
             SemanticStatementKindV1::AtomicRmw(atomic) => {
@@ -14032,7 +14039,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 )
             }
             SemanticRvalueKindV1::Unary { operation, operand } => {
-                let input = self.lower_operand(block, statement, operand, operations)?;
+                let input =
+                    self.lower_rvalue_operand_v29(block, statement, 0, operand, operations)?;
                 let (input, input_ty) = input
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
@@ -14098,7 +14106,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         OperationKind::Constant(canonical_left.expect("checked above")),
                     )?
                 } else {
-                    self.lower_operand(block, statement, left, operations)?
+                    self.lower_rvalue_operand_v29(block, statement, 0, left, operations)?
                 };
                 let (mut left, mut left_ty) = left
                     .value()
@@ -14132,7 +14140,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         OperationKind::Constant(canonical_right.expect("checked above")),
                     )?
                 } else {
-                    self.lower_operand(block, statement, right, operations)?
+                    self.lower_rvalue_operand_v29(block, statement, 1, right, operations)?
                 };
                 let (mut right, mut right_ty) = right
                     .value()
@@ -14313,7 +14321,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 let operand_type =
                     checked_binary_result_type(self.types, semantic_operand_ty, result_type)
                         .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
-                let left = self.lower_operand(block, statement, checked.left(), operations)?;
+                let left =
+                    self.lower_rvalue_operand_v29(block, statement, 0, checked.left(), operations)?;
                 let (left, left_type) = self.normalize_checked_operand(
                     block,
                     statement,
@@ -14321,7 +14330,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     &operand_type,
                     operations,
                 )?;
-                let right = self.lower_operand(block, statement, checked.right(), operations)?;
+                let right = self.lower_rvalue_operand_v29(
+                    block,
+                    statement,
+                    1,
+                    checked.right(),
+                    operations,
+                )?;
                 let (right, right_type) = self.normalize_checked_operand(
                     block,
                     statement,
@@ -14366,7 +14381,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticRvalueKindV1::Cast { kind, operand } => {
                 let (input, input_ty) = self
-                    .lower_operand(block, statement, operand, operations)?
+                    .lower_rvalue_operand_v29(block, statement, 0, operand, operations)?
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
                 let target = match self
@@ -15412,7 +15427,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 targets,
             } => {
                 let (selector, selector_ty) = self
-                    .lower_operand(block, None, discriminant, operations)?
+                    .lower_source_operand_v29(
+                        block,
+                        None,
+                        Some(ExecutionOperandV29::SwitchDiscriminant),
+                        discriminant,
+                        operations,
+                    )?
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
                 if selector_ty == Type::BOOL {
@@ -15498,7 +15519,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             SemanticTerminatorKindV1::Assert {
                 condition,
                 expected,
-                message: _,
+                message,
                 target,
                 unwind,
             } => {
@@ -15511,6 +15532,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     ));
                 }
                 if self.infallible_asserts.contains(&block.index()) {
+                    self.consume_execution_assert_operand_v29(
+                        block,
+                        ExecutionOperandV29::AssertCondition,
+                        condition,
+                        operations,
+                    )?;
+                    self.consume_execution_assert_message_v29(block, message, operations)?;
                     return Ok(Terminator::Branch {
                         target: self.kernel_block_id_v1(target.target())?,
                         arguments: self.edge_arguments(block, 0, target.target(), operations)?,
@@ -15525,7 +15553,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     )
                 })?;
                 let (condition, condition_ty) = self
-                    .lower_operand(block, None, condition, operations)?
+                    .lower_source_operand_v29(
+                        block,
+                        None,
+                        Some(ExecutionOperandV29::AssertCondition),
+                        condition,
+                        operations,
+                    )?
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
                 if condition_ty != Type::BOOL {
@@ -15537,6 +15571,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     ));
                 }
                 let success = self.kernel_block_id_v1(target.target())?;
+                self.consume_execution_assert_message_v29(block, message, operations)?;
                 let success_arguments =
                     self.edge_arguments(block, 0, target.target(), operations)?;
                 let (then_target, then_arguments, else_target, else_arguments) = if *expected {

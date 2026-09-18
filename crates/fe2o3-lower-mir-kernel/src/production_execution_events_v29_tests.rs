@@ -1,31 +1,436 @@
 use super::*;
 
 #[test]
-fn unhooked_scalar_siblings_and_assert_diagnostics_fail_closed() {
-    lower_cfg_fixture(
-        Shape::AssertConstant,
-        |_| {},
-        |_, _, result| {
-            result.unwrap();
-        },
-    );
+fn scalar_sibling_arithmetic_uses_retained_operands_and_preserves_results() {
     for shape in [
         Shape::ScalarBinary,
-        Shape::ScalarSwitch,
-        Shape::AssertMessage,
+        Shape::ScalarUnary,
+        Shape::ScalarCast,
+        Shape::ScalarCheckedBinary,
     ] {
         lower_cfg_fixture(
             shape,
             |_| {},
-            |_, _, result| {
-                let error = result.err().expect("unconsumed nominal-root read");
+            |_, seed, result| {
+                let result = result.unwrap();
+                let body = result.function.body.unwrap();
+                let operations = &body.blocks[0].operations;
+                let scalar = source_operand_constant_v29(operations, Constant::U32(42));
+                let expected = match shape {
+                    Shape::ScalarUnary => OperationKind::Unary {
+                        op: UnaryOp::Not,
+                        operand: scalar,
+                    },
+                    Shape::ScalarCast => OperationKind::Cast {
+                        kind: CastKind::ZeroExtend,
+                        value: scalar,
+                        to: Type::Scalar(ScalarType::U64),
+                    },
+                    _ => OperationKind::Binary {
+                        op: BinaryOp::Checked(CheckedBinaryOperator::Add),
+                        lhs: scalar,
+                        rhs: scalar,
+                    },
+                };
+                let emitted = operations.iter().find(|op| op.kind == expected).unwrap();
                 assert_eq!(
-                    format!("{error:?}"),
-                    format!("{:?}", execution_availability_error_v29())
+                    operations.iter().filter(|op| op.kind == expected).count(),
+                    1
+                );
+                assert_eq!(
+                    emitted.results[0].ty,
+                    Type::Scalar(if matches!(shape, Shape::ScalarCast) {
+                        ScalarType::U64
+                    } else {
+                        ScalarType::U32
+                    })
+                );
+                let observation = result.execution_observation.unwrap();
+                let local = if matches!(shape, Shape::ScalarCast | Shape::ScalarCheckedBinary) {
+                    5
+                } else {
+                    3
+                };
+                let binding = observation.locals[local].as_ref().unwrap();
+                if matches!(shape, Shape::ScalarCheckedBinary) {
+                    assert_eq!(emitted.results.len(), 2);
+                    let SemanticValueBindingV1::Aggregate(fields) = binding else {
+                        panic!("missing checked result and overflow flag");
+                    };
+                    assert_eq!(fields.len(), 2);
+                    for (field, result) in fields.iter().zip(&emitted.results) {
+                        assert_eq!(field.value().unwrap(), (result.id, result.ty.clone()));
+                    }
+                    assert_eq!(emitted.results[1].ty, Type::BOOL);
+                } else {
+                    assert_eq!(
+                        binding.value().unwrap(),
+                        (emitted.results[0].id, emitted.results[0].ty.clone())
+                    );
+                }
+                let Some(SemanticValueBindingV1::Aggregate(fields)) = &observation.locals[4] else {
+                    panic!("missing source tuple");
+                };
+                assert!(
+                    matches!(&fields[0], SemanticValueBindingV1::Execution(value) if value == seed)
+                );
+                assert_eq!(
+                    fields[1].value().unwrap(),
+                    (scalar, Type::Scalar(ScalarType::U32))
                 );
             },
         );
     }
+}
+
+#[test]
+fn scalar_sibling_switch_and_assume_consume_the_selected_scalar() {
+    for shape in [Shape::ScalarSwitch, Shape::ScalarAssume] {
+        lower_cfg_fixture(
+            shape,
+            |_| {},
+            |_, seed, result| {
+                let result = result.unwrap();
+                let body = result.function.body.unwrap();
+                let entry = &body.blocks[0];
+                let scalar = source_operand_constant_v29(
+                    &entry.operations,
+                    if matches!(shape, Shape::ScalarAssume) {
+                        Constant::Bool(true)
+                    } else {
+                        Constant::U32(42)
+                    },
+                );
+                if matches!(shape, Shape::ScalarSwitch) {
+                    let Some(Terminator::Switch {
+                        selector,
+                        cases,
+                        default_target,
+                        ..
+                    }) = &entry.terminator
+                    else {
+                        panic!("missing scalar sibling switch");
+                    };
+                    assert_eq!(*selector, scalar);
+                    assert!(cases.is_empty());
+                    assert_eq!(*default_target, BlockId(18));
+                } else {
+                    assert_eq!(entry.operations.len(), 1);
+                    assert!(
+                        matches!(&entry.terminator, Some(Terminator::Return { values }) if values.is_empty())
+                    );
+                }
+                let observation = result.execution_observation.unwrap();
+                assert!(observation.bindings.values().any(|binding| {
+                    matches!(binding, SemanticValueBindingV1::Aggregate(fields)
+                        if matches!(&fields[0], SemanticValueBindingV1::Execution(value) if value == seed)
+                        && fields[1].value().unwrap().0 == scalar)
+                }));
+            },
+        );
+    }
+}
+
+#[test]
+fn scalar_sibling_asserts_consume_conditions_and_discarded_diagnostics() {
+    for shape in [
+        Shape::AssertMessage,
+        Shape::AssertMessagePair,
+        Shape::AssertConstant,
+        Shape::AssertCondition,
+        Shape::AssertConditionFolded,
+    ] {
+        lower_cfg_fixture(
+            shape,
+            |_| {},
+            |_, seed, result| {
+                let result = result.unwrap();
+                let body = result.function.body.unwrap();
+                let entry = &body.blocks[0];
+                let condition =
+                    source_operand_constant_v29(&entry.operations, Constant::Bool(true));
+                if matches!(shape, Shape::AssertConditionFolded) {
+                    assert!(
+                        matches!(&entry.terminator, Some(Terminator::Branch { target, arguments })
+                        if *target == BlockId(18) && arguments.is_empty())
+                    );
+                    assert_eq!(body.blocks.len(), 2);
+                } else {
+                    assert!(matches!(&entry.terminator,
+                        Some(Terminator::ConditionalBranch { condition: actual, then_target, .. })
+                        if *actual == condition && *then_target == BlockId(18)));
+                }
+                let scalar =
+                    if matches!(shape, Shape::AssertCondition | Shape::AssertConditionFolded) {
+                        condition
+                    } else {
+                        source_operand_constant_v29(&entry.operations, Constant::U32(42))
+                    };
+                let observation = result.execution_observation.unwrap();
+                assert!(observation.bindings.values().any(|binding| {
+                    matches!(binding, SemanticValueBindingV1::Aggregate(fields)
+                        if matches!(&fields[0], SemanticValueBindingV1::Execution(value) if value == seed)
+                        && fields[1].value().unwrap().0 == scalar)
+                }));
+            },
+        );
+    }
+}
+
+#[test]
+fn scalar_arithmetic_does_not_restore_a_moved_nominal_sibling() {
+    lower_cfg_fixture(
+        Shape::ScalarMovedSibling,
+        |_| {},
+        |_, seed, result| {
+            let result = result.unwrap();
+            let body = result.function.body.unwrap();
+            let scalar = source_operand_constant_v29(&body.blocks[0].operations, Constant::U32(42));
+            let emitted = body.blocks[0]
+                .operations
+                .iter()
+                .find(|op| {
+                    op.kind
+                        == OperationKind::Binary {
+                            op: BinaryOp::Checked(CheckedBinaryOperator::Add),
+                            lhs: scalar,
+                            rhs: scalar,
+                        }
+                })
+                .unwrap();
+            let observation = result.execution_observation.unwrap();
+            let Some(SemanticValueBindingV1::Aggregate(fields)) = &observation.locals[4] else {
+                panic!("missing partially moved tuple");
+            };
+            assert!(matches!(fields[0], SemanticValueBindingV1::MovedExecution));
+            assert_eq!(fields[1].value().unwrap().0, scalar);
+            assert!(
+                matches!(&observation.locals[6], Some(SemanticValueBindingV1::Execution(value)) if value == seed)
+            );
+            assert_eq!(
+                observation.locals[3].as_ref().unwrap().value().unwrap().0,
+                emitted.results[0].id
+            );
+        },
+    );
+}
+
+#[test]
+fn every_new_scalar_sibling_source_event_is_mandatory() {
+    use ExecutionOperandV29 as Role;
+    for (shape, expected) in [
+        (
+            Shape::ScalarBinary,
+            vec![Role::RvalueOperand(0), Role::RvalueOperand(1)],
+        ),
+        (Shape::ScalarUnary, vec![Role::RvalueOperand(0)]),
+        (Shape::ScalarCast, vec![Role::RvalueOperand(0)]),
+        (
+            Shape::ScalarCheckedBinary,
+            vec![Role::RvalueOperand(0), Role::RvalueOperand(1)],
+        ),
+        (Shape::ScalarSwitch, vec![Role::SwitchDiscriminant]),
+        (Shape::ScalarAssume, vec![Role::Assume]),
+        (Shape::AssertMessage, vec![Role::AssertMessage(0)]),
+        (
+            Shape::AssertMessagePair,
+            vec![Role::AssertMessage(0), Role::AssertMessage(1)],
+        ),
+        (Shape::AssertCondition, vec![Role::AssertCondition]),
+        (Shape::AssertConditionFolded, vec![Role::AssertCondition]),
+    ] {
+        let mut required = Vec::new();
+        lower_cfg_fixture_with_cursor(
+            shape,
+            |_| {},
+            |cursor| {
+                required.extend_from_slice(&cursor.events.required);
+                let operands = required
+                    .iter()
+                    .skip(3)
+                    .map(|index| {
+                        let event = &cursor.occurrences.events()[*index];
+                        assert_eq!(event.role(), ExecutionEventV29::BaseUse);
+                        assert!(event.is_promoted() && event.resolved().is_some());
+                        assert!(
+                            cursor
+                                .retained_operand(event.site(), event.operand())
+                                .is_some()
+                        );
+                        assert!(
+                            cursor
+                                .retained_operand(event.site(), Role::RvalueOperand(2))
+                                .is_none()
+                        );
+                        assert!(
+                            cursor
+                                .retained_operand(event.site(), Role::CallArgument(0))
+                                .is_none()
+                        );
+                        event.operand()
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(operands, expected, "{shape:?}");
+            },
+            |_, _, result| {
+                result.unwrap();
+            },
+        );
+        for omitted in required {
+            lower_cfg_fixture_with_cursor(
+                shape,
+                |_| {},
+                |cursor| {
+                    cursor.skipped_event = Some(omitted);
+                },
+                |_, _, result| {
+                    let error = result.err().expect("an omitted source event must reject");
+                    assert_eq!(
+                        format!("{error:?}"),
+                        format!("{:?}", execution_availability_error_v29()),
+                        "{shape:?}, omitted {omitted}"
+                    );
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn scalar_sibling_hooks_do_not_permit_owned_field_copies() {
+    lower_cfg_fixture(
+        Shape::CopyOwnedSibling,
+        |_| {},
+        |_, _, result| {
+            let error = result.err().expect("owned execution copy must reject");
+            assert!(format!("{error:?}").contains("owned execution roles cannot be copied"));
+        },
+    );
+}
+
+#[test]
+fn selected_field_archive_checks_reject_moved_and_stale_nominal_values() {
+    lower_cfg_fixture(
+        Shape::ScalarMovedSibling,
+        |_| {},
+        |owner, seed, result| {
+            let observation = result.unwrap().execution_observation.unwrap();
+            let definition = owner
+                .plan_for_function(ROOT)
+                .unwrap()
+                .plan()
+                .resolved_events(SsaBlockIdV1::new(0))
+                .unwrap()
+                .iter()
+                .find_map(|(_, event)| match event {
+                    SsaResolvedEventV1::Define { variable, value } if variable.get() == 4 => {
+                        Some(*value)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let selected = |field, ty| {
+                SemanticPlaceV1::new(
+                    SemanticLocalIdV1::from_index(4),
+                    vec![
+                        SemanticProjectionV1::new(SemanticProjectionKindV1::Field(field), ty)
+                            .unwrap(),
+                    ],
+                    ty,
+                )
+                .unwrap()
+            };
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(100_000);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 100_000);
+            check_execution_archive_v29(
+                &observation.locals,
+                &observation.bindings,
+                &selected(1, U32),
+                definition,
+                &mut budget,
+            )
+            .unwrap();
+            assert!(
+                check_execution_archive_v29(
+                    &observation.locals,
+                    &observation.bindings,
+                    &selected(0, CONTEXT),
+                    definition,
+                    &mut budget
+                )
+                .is_err()
+            );
+            let mut stale = observation.locals.clone();
+            let Some(SemanticValueBindingV1::Aggregate(fields)) = &mut stale[4] else {
+                panic!("missing partially moved tuple");
+            };
+            let mut changed = seed.clone();
+            changed.identity.producer.block = SemanticBlockIdV1::from_index(99);
+            fields[0] = SemanticValueBindingV1::Execution(changed);
+            assert!(
+                check_execution_archive_v29(
+                    &stale,
+                    &observation.bindings,
+                    &selected(0, CONTEXT),
+                    definition,
+                    &mut budget
+                )
+                .is_err()
+            );
+            assert!(
+                check_execution_archive_v29(
+                    &observation.locals,
+                    &BTreeMap::new(),
+                    &selected(1, U32),
+                    definition,
+                    &mut budget
+                )
+                .is_err()
+            );
+            let SemanticValueBindingV1::Aggregate(archived) = &observation.bindings[&definition]
+            else {
+                panic!("missing immutable tuple archive");
+            };
+            assert!(
+                matches!(&archived[0], SemanticValueBindingV1::Execution(value) if value == seed)
+            );
+        },
+    );
+}
+
+fn source_operand_constant_v29(operations: &[Operation], constant: Constant) -> ValueId {
+    operations
+        .iter()
+        .find(|op| op.kind == OperationKind::Constant(constant.clone()))
+        .expect("missing source scalar constant")
+        .results[0]
+        .id
+}
+
+#[test]
+fn scalar_assert_diagnostics_obey_exact_work_and_peak_storage_limits() {
+    let run = |limits| -> Result<(usize, usize), String> {
+        let mut emitted = Err("emitter was not reached".to_owned());
+        let usage = lower_cfg_fixture_with_limits(
+            Shape::AssertMessagePair,
+            limits,
+            |_| {},
+            |_| {},
+            |_, _, result| {
+                emitted = result.map(|_| ()).map_err(|error| format!("{error:?}"));
+            },
+        )?;
+        emitted.map(|()| usage)
+    };
+    // Includes captured-source setup and emission; released scratch still counts
+    // toward the peak, so the storage boundary is not the final live footprint.
+    let (work, storage) = run((10_000_000, 10_000_000)).unwrap();
+    assert!(work > 0 && storage > 0);
+    assert_eq!(run((work, storage)).unwrap(), (work, storage));
+    let short_work = run((work - 1, storage)).unwrap_err();
+    assert!(short_work.contains("Work("), "{short_work}");
+    let short_storage = run((work, storage - 1)).unwrap_err();
+    assert!(short_storage.contains("Storage("), "{short_storage}");
 }
 
 #[test]
