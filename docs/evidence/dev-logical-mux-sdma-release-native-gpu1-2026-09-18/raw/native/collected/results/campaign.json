@@ -1,0 +1,169 @@
+{
+  "commit": "9afafa4176e8b0c6ff53f6892841924f3c7c9c27",
+  "started": {
+    "realtime_ns": 1789760072492843503,
+    "monotonic_ns": 7258969914515464
+  },
+  "cases": [
+    {
+      "case": "logical-mux-2",
+      "test_record": "logical-mux-2-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "logical-mux-2",
+        "logical_lane_count": 2,
+        "native_queue_count": 2,
+        "engine_placement": [
+          0,
+          1
+        ],
+        "cursor_scope": "initial-0-no-advance-source-qualified",
+        "host_delta_bytes": 8192,
+        "host_delta_records": 2,
+        "primary_queue_id": 0,
+        "sdma_queue_ids": [
+          1,
+          2
+        ],
+        "event_id": 1,
+        "doorbell_byte_offset": 0,
+        "released_resources": 11,
+        "public_root_drop_completed": true
+      }
+    },
+    {
+      "case": "logical-mux-4",
+      "test_record": "logical-mux-4-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "logical-mux-4",
+        "logical_lane_count": 4,
+        "native_queue_count": 2,
+        "engine_placement": [
+          0,
+          1
+        ],
+        "cursor_scope": "initial-0-no-advance-source-qualified",
+        "host_delta_bytes": 8192,
+        "host_delta_records": 2,
+        "primary_queue_id": 0,
+        "sdma_queue_ids": [
+          1,
+          2
+        ],
+        "event_id": 1,
+        "doorbell_byte_offset": 0,
+        "released_resources": 11,
+        "public_root_drop_completed": true
+      }
+    },
+    {
+      "case": "logical-mux-8",
+      "test_record": "logical-mux-8-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "logical-mux-8",
+        "logical_lane_count": 8,
+        "native_queue_count": 2,
+        "engine_placement": [
+          0,
+          1
+        ],
+        "cursor_scope": "initial-0-no-advance-source-qualified",
+        "host_delta_bytes": 8192,
+        "host_delta_records": 2,
+        "primary_queue_id": 0,
+        "sdma_queue_ids": [
+          1,
+          2
+        ],
+        "event_id": 1,
+        "doorbell_byte_offset": 0,
+        "released_resources": 11,
+        "public_root_drop_completed": true
+      }
+    },
+    {
+      "case": "logical-mux-14",
+      "test_record": "logical-mux-14-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "logical-mux-14",
+        "logical_lane_count": 14,
+        "native_queue_count": 2,
+        "engine_placement": [
+          0,
+          1
+        ],
+        "cursor_scope": "initial-0-no-advance-source-qualified",
+        "host_delta_bytes": 8192,
+        "host_delta_records": 2,
+        "primary_queue_id": 0,
+        "sdma_queue_ids": [
+          1,
+          2
+        ],
+        "event_id": 1,
+        "doorbell_byte_offset": 0,
+        "released_resources": 11,
+        "public_root_drop_completed": true
+      }
+    },
+    {
+      "case": "logical-mux-16",
+      "test_record": "logical-mux-16-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "logical-mux-16",
+        "logical_lane_count": 16,
+        "native_queue_count": 2,
+        "engine_placement": [
+          0,
+          1
+        ],
+        "cursor_scope": "initial-0-no-advance-source-qualified",
+        "host_delta_bytes": 8192,
+        "host_delta_records": 2,
+        "primary_queue_id": 0,
+        "sdma_queue_ids": [
+          1,
+          2
+        ],
+        "event_id": 1,
+        "doorbell_byte_offset": 0,
+        "released_resources": 11,
+        "public_root_drop_completed": true
+      }
+    }
+  ],
+  "failure": null,
+  "native_ioctl_failure_claim": false,
+  "performance_claim": false,
+  "logical_lane_execution_claim": false,
+  "cursor_observation_claim": false,
+  "payload_after": "matched",
+  "finished": {
+    "realtime_ns": 1789760203511718979,
+    "monotonic_ns": 7259100933390680
+  }
+}

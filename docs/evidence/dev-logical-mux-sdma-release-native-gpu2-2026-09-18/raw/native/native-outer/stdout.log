@@ -1,0 +1,20 @@
+{"owned": "/home/harsh/fe2o3-logical-mux-sdma-20260918.09931d84", "process_group": 1156116, "record": "outer-launch-started", "started_ns": 1789759829882763038}
+{
+  "commit": "9afafa4176e8b0c6ff53f6892841924f3c7c9c27",
+  "started": {
+    "realtime_ns": 1789759829928348687,
+    "monotonic_ns": 7258727350021199
+  },
+  "cases": [],
+  "failure": "ValueError: fresh preflight command passed",
+  "native_ioctl_failure_claim": false,
+  "performance_claim": false,
+  "logical_lane_execution_claim": false,
+  "cursor_observation_claim": false,
+  "payload_after": "matched",
+  "finished": {
+    "realtime_ns": 1789759832155165678,
+    "monotonic_ns": 7258729576838772
+  }
+}
+{"command": ["/usr/bin/timeout", "--signal=TERM", "--kill-after=15s", "3600s", "/usr/bin/python3", "-B", "/home/harsh/fe2o3-logical-mux-sdma-20260918.09931d84/run.py", "--parent-ready-approved"], "error": null, "finished_ns": 1789759832202890014, "group_absent": true, "process_group": 1156116, "record": "outer-launch-finished", "started_ns": 1789759829882763038, "status": 1}

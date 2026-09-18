@@ -1,0 +1,27 @@
+{
+  "command": [
+    "scp",
+    "-r",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x:/home/harsh/fe2o3-logical-mux-sdma-20260918.c0d7c87a",
+    "/home/harsh/.codex-tmp/fe2o3-logical-mux-sdma-native-v2-20260918/collected"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-logical-mux-sdma-native-bundle-v2-20260918",
+  "started_ns": 1789760204541783964,
+  "bound_seconds": 180,
+  "process_group": 731024,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789760233239630273,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

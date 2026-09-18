@@ -1,0 +1,50 @@
+{
+  "name": "logical-mux-4-test",
+  "command": [
+    "/usr/bin/timeout",
+    "--signal=TERM",
+    "--kill-after=5s",
+    "180s",
+    "/usr/bin/prlimit",
+    "--core=0:0",
+    "--fsize=16777216:16777216",
+    "--",
+    "/usr/bin/numactl",
+    "--physcpubind=0-47",
+    "--membind=0",
+    "/home/harsh/fe2o3-logical-mux-sdma-20260918.c0d7c87a/queue-example",
+    "--retained-release-logical-mux-sdma",
+    "4",
+    "0xab83d2ffef0d3cdf"
+  ],
+  "cwd": "/home/harsh/fe2o3-logical-mux-sdma-20260918.c0d7c87a",
+  "environment": {
+    "HOME": "/home/harsh",
+    "PATH": "/usr/bin:/bin:/opt/rocm/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "HSA_XNACK": "0"
+  },
+  "started": {
+    "realtime_ns": 1789760100960757887,
+    "monotonic_ns": 7258998382429939
+  },
+  "spawned": {
+    "realtime_ns": 1789760100965046878,
+    "monotonic_ns": 7258998386718770
+  },
+  "status": 0,
+  "error": null,
+  "process_group": 1167945,
+  "group_absent": true,
+  "t0": {
+    "realtime_ns": 1789760102783026542,
+    "monotonic_ns": 7259000204699215
+  },
+  "outer_bound_seconds": 200,
+  "finished": {
+    "realtime_ns": 1789760102783092771,
+    "monotonic_ns": 7259000204764472
+  },
+  "stdout_sha256": "a5ce69564279c62b3ee0d6a39316ccc7f916fadc8d1da611eeb3b5f176d12c0a",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

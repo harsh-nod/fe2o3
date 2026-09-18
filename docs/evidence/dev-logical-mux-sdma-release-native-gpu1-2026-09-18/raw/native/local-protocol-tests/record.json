@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-logical-mux-sdma-native-bundle-v2-20260918/test_protocol.py",
+    "-v"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-logical-mux-sdma-native-bundle-v2-20260918",
+  "started_ns": 1789760063972907993,
+  "bound_seconds": 30,
+  "process_group": 722333,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789760064191098428,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "5145265eb0f07ee7a64789396fc2cf8a9414240cfbcf748b903d4d7b59c5ae64"
+}

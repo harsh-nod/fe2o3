@@ -1,0 +1,40 @@
+{
+  "name": "placement",
+  "command": [
+    "/usr/bin/numactl",
+    "--physcpubind=0-47",
+    "--membind=0",
+    "/usr/bin/numactl",
+    "--show"
+  ],
+  "cwd": "/home/harsh/fe2o3-logical-mux-sdma-20260918.c0d7c87a",
+  "environment": {
+    "HOME": "/home/harsh",
+    "PATH": "/usr/bin:/bin:/opt/rocm/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "HSA_XNACK": "0"
+  },
+  "started": {
+    "realtime_ns": 1789760072559874988,
+    "monotonic_ns": 7258969981546589
+  },
+  "spawned": {
+    "realtime_ns": 1789760072562503667,
+    "monotonic_ns": 7258969984175268
+  },
+  "status": 0,
+  "error": null,
+  "process_group": 1166971,
+  "group_absent": true,
+  "t0": {
+    "realtime_ns": 1789760072565699354,
+    "monotonic_ns": 7258969987370865
+  },
+  "outer_bound_seconds": 15,
+  "finished": {
+    "realtime_ns": 1789760072565718943,
+    "monotonic_ns": 7258969987390404
+  },
+  "stdout_sha256": "756e97e3a5306549aba9cb56d603af82dc305a7042b1e128365dfa6ad6d4d69e",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

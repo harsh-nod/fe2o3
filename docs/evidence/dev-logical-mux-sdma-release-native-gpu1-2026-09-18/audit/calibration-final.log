@@ -1,0 +1,15 @@
+test_all_five_transcripts_require_exact_logical_mux_release (__main__.ArchiveTests.test_all_five_transcripts_require_exact_logical_mux_release) ... ok
+test_collected_inventory_and_cleanup_must_agree (__main__.ArchiveTests.test_collected_inventory_and_cleanup_must_agree) ... ok
+test_complete_historical_audit (__main__.ArchiveTests.test_complete_historical_audit) ... ok
+test_controller_rejects_incomplete_execution_and_cleanup (__main__.ArchiveTests.test_controller_rejects_incomplete_execution_and_cleanup) ... ok
+test_every_controller_command_binds_bounds_and_stdin (__main__.ArchiveTests.test_every_controller_command_binds_bounds_and_stdin) ... ok
+test_five_case_roster_cannot_be_shortened_or_relabelled (__main__.ArchiveTests.test_five_case_roster_cannot_be_shortened_or_relabelled) ... ok
+test_native_command_identity_and_bounds_are_exact (__main__.ArchiveTests.test_native_command_identity_and_bounds_are_exact) ... ok
+test_nested_cpu_seal_is_manifested_and_cannot_be_omitted (__main__.ArchiveTests.test_nested_cpu_seal_is_manifested_and_cannot_be_omitted) ... ok
+test_raw_endpoint_and_fixed_delayed_window_are_required (__main__.ArchiveTests.test_raw_endpoint_and_fixed_delayed_window_are_required) ... ok
+test_source_binding_rejects_export_identity_drift (__main__.ArchiveTests.test_source_binding_rejects_export_identity_drift) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 7.222s
+
+OK

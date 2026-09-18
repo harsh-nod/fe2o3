@@ -1,0 +1,15 @@
+test_collected_inventory_and_cleanup_must_agree (__main__.ArchiveTests.test_collected_inventory_and_cleanup_must_agree) ... ok
+test_complete_historical_audit (__main__.ArchiveTests.test_complete_historical_audit) ... ok
+test_controller_rejects_incomplete_execution_and_cleanup (__main__.ArchiveTests.test_controller_rejects_incomplete_execution_and_cleanup) ... ok
+test_every_controller_command_binds_bounds_and_stdin (__main__.ArchiveTests.test_every_controller_command_binds_bounds_and_stdin) ... ok
+test_first_preflight_stops_all_five_examples (__main__.ArchiveTests.test_first_preflight_stops_all_five_examples) ... ok
+test_nested_cpu_seal_is_manifested_and_cannot_be_omitted (__main__.ArchiveTests.test_nested_cpu_seal_is_manifested_and_cannot_be_omitted) ... ok
+test_preflight_command_identity_and_bounds_are_exact (__main__.ArchiveTests.test_preflight_command_identity_and_bounds_are_exact) ... ok
+test_refusal_cannot_be_promoted_to_native_execution (__main__.ArchiveTests.test_refusal_cannot_be_promoted_to_native_execution) ... ok
+test_refusal_requires_original_raw_captures (__main__.ArchiveTests.test_refusal_requires_original_raw_captures) ... ok
+test_source_binding_rejects_export_identity_drift (__main__.ArchiveTests.test_source_binding_rejects_export_identity_drift) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 3.481s
+
+OK

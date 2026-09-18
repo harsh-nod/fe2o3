@@ -1,0 +1,27 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -B - approve /home/harsh/fe2o3-logical-mux-sdma-20260918.c0d7c87a"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-logical-mux-sdma-native-bundle-v2-20260918",
+  "started_ns": 1789760070556901667,
+  "bound_seconds": 90,
+  "process_group": 722749,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": "4c0750ba1406b742889de028cd7e66ba61813926f92a51c43ba3a6ffc6760db5",
+  "finished_ns": 1789760071480497575,
+  "stdout_sha256": "af42f9cc852f8760ce5563ee5d1d8c1c47964323d09e1ab4317d90cd41676dff",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

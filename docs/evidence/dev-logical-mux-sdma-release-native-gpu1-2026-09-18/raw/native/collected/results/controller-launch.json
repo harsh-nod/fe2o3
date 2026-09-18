@@ -1,0 +1,18 @@
+{
+  "command": [
+    "/usr/bin/timeout",
+    "--signal=TERM",
+    "--kill-after=15s",
+    "3600s",
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/fe2o3-logical-mux-sdma-20260918.c0d7c87a/run.py",
+    "--parent-ready-approved"
+  ],
+  "process_group": 1166964,
+  "started_ns": 1789760072449040718,
+  "status": 0,
+  "group_absent": true,
+  "error": null,
+  "finished_ns": 1789760203531003055
+}

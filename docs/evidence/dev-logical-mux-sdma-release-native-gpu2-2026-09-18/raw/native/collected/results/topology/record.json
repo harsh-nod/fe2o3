@@ -1,0 +1,45 @@
+{
+  "name": "topology",
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/fe2o3-logical-mux-sdma-20260918.09931d84/source/r26-host-guard.py",
+    "topology",
+    "--gpu-index",
+    "2",
+    "--pci-bdf",
+    "0000:46:00.0",
+    "--unique-id",
+    "0xd2e26fef80cf5c33"
+  ],
+  "cwd": "/home/harsh/fe2o3-logical-mux-sdma-20260918.09931d84",
+  "environment": {
+    "HOME": "/home/harsh",
+    "PATH": "/usr/bin:/bin:/opt/rocm/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "HSA_XNACK": "0"
+  },
+  "started": {
+    "realtime_ns": 1789759829928399282,
+    "monotonic_ns": 7258727350070873
+  },
+  "spawned": {
+    "realtime_ns": 1789759829930091842,
+    "monotonic_ns": 7258727351763503
+  },
+  "status": 0,
+  "error": null,
+  "process_group": 1156118,
+  "group_absent": true,
+  "t0": {
+    "realtime_ns": 1789759829993610442,
+    "monotonic_ns": 7258727415283105
+  },
+  "outer_bound_seconds": 75,
+  "finished": {
+    "realtime_ns": 1789759829993640347,
+    "monotonic_ns": 7258727415311918
+  },
+  "stdout_sha256": "94439dbdc713b0076142d3d1346fdbdc2a42295cdf7e15714ea2c09419fc136a",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

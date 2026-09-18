@@ -1,0 +1,27 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -B - cleanup /home/harsh/fe2o3-logical-mux-sdma-20260918.c0d7c87a '{\"pids\":[1166964,1166968,1166971,1166974,1167063,1167104,1167900,1167932,1167945,1168009,1168954,1168990,1169094,1169127,1169571,1169609,1169642,1169743,1170479,1170535,1170552,1170615,1171240],\"inventory_sha256\":\"3be169753cae9d27f9f8ea142bf2eefb5a56236af39e588acfa7f4ff6009a941\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-logical-mux-sdma-native-bundle-v2-20260918",
+  "started_ns": 1789760233270111690,
+  "bound_seconds": 120,
+  "process_group": 732755,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": "4c0750ba1406b742889de028cd7e66ba61813926f92a51c43ba3a6ffc6760db5",
+  "finished_ns": 1789760234295904186,
+  "stdout_sha256": "5336c2ae138d41fd21dea3f050fbf775cdfcf0c9f5cecb0963b6d8802344d7fb",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

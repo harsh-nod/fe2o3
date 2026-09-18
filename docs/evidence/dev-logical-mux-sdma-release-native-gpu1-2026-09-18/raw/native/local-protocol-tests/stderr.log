@@ -1,0 +1,10 @@
+test_all_five_case_fixtures_with_sparse_ids (__main__.ProtocolTests.test_all_five_case_fixtures_with_sparse_ids) ... ok
+test_complete_transcript_negatives (__main__.ProtocolTests.test_complete_transcript_negatives) ... ok
+test_cross_case_and_unknown_names_reject (__main__.ProtocolTests.test_cross_case_and_unknown_names_reject) ... ok
+test_fixed_windows_and_raw_endpoint (__main__.ProtocolTests.test_fixed_windows_and_raw_endpoint) ... ok
+test_old_combined_protocol_is_not_admitted (__main__.ProtocolTests.test_old_combined_protocol_is_not_admitted) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.082s
+
+OK
