@@ -6,6 +6,8 @@ use fe2o3_kernel_ir::{CanonicalKirOperationCoordinateV1, CanonicalKirOperationOr
 mod census;
 #[path = "production_checked_output_private_memory_policy3_v1.rs"]
 mod private_memory;
+#[path = "production_checked_output_scalar_helpers_v1.rs"]
+mod scalar_helpers;
 #[path = "production_checked_output_unsigned_division_v1.rs"]
 mod unsigned_division;
 
@@ -65,7 +67,7 @@ fn check_inner(
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<Box<[FormalMemoryObligations]>> {
     source.verify_equivalence().map_err(E::Source)?;
-    census::source(source.semantic().semantic(), budget)?;
+    census::source(source, budget)?;
     charge(budget, 3)?;
     let original = source
         .pre_ranked_executable()
@@ -197,10 +199,13 @@ fn check_inner(
     let target = source.semantic().semantic().target();
     let input_division = unsigned_division::check(&input, target, budget)?;
     let output_division = unsigned_division::check(&output, target, budget)?;
+    let input_helpers = scalar_helpers::check(&input, budget)?;
+    let output_helpers = scalar_helpers::check(&output, budget)?;
     census::native(
         &input,
         &private_input,
         &input_division,
+        &input_helpers,
         "B",
         |ordinal, _| Ok(traps[ordinal] == 1),
         budget,
@@ -209,6 +214,7 @@ fn check_inner(
         &output,
         &private_output,
         &output_division,
+        &output_helpers,
         "O",
         |ordinal, coordinate| {
             let row = candidate
@@ -288,10 +294,12 @@ pub(crate) fn check_forwarded_output_v1(
         let private = private_memory::check(&actual, source.limits.max_operations, budget)?;
         let division =
             unsigned_division::check(&actual, source.semantic().semantic().target(), budget)?;
+        let helpers = scalar_helpers::check(&actual, budget)?;
         census::native(
             &actual,
             &private,
             &division,
+            &helpers,
             "forwarded O",
             |_, coordinate| {
                 let old = &input.operations()[operation_ordinal(&input, coordinate)?];

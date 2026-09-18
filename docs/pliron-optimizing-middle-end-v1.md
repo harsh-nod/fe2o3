@@ -254,6 +254,9 @@ the nondefault source-to-LLVM route; it does not execute Verus or kernels,
 publish compiler artifacts, or establish simulator, numerical or GPU results.
 The separate `ordinary_rust_fill_and_vecadd_reach_checked_native_output` parent
 also exercises the missing signed-proof refusal without releasing output.
+Current observations count runtime-read domains from the fresh actual-O reports
+and check their inert V4/policy-3 encoding. Historical reports without this
+optional observation stay unobserved, not retroactively counted as zero.
 
 The corpus prints an external `callback-progress.json` path before each child
 invocation. Its atomically replaced snapshot identifies the active compiler
@@ -281,7 +284,72 @@ whole-roster scans. The index retains `O(R)` storage and can have a higher peak
 than one old per-statement temporary vector. This is an algorithmic bound, not
 a measured end-to-end speedup or a new canonical resource-accounting claim.
 
+The GPU expression resolver also indexes statement-definition positions by local
+and block. A reaching-definition prefix lookup becomes logarithmic, while the
+existing logical statement-visit debit, first failure, dominance fallback and
+cycle handling remain unchanged. Other assertion-proof consumers keep the
+original scan. The sparse index adds storage proportional to definition events
+and an explicit allocation-failure boundary; it does not cache expression trees
+or proof results and has no measured whole-corpus speedup claim.
+
+## Runtime slice reads
+
+Fresh formal-memory extraction can bound an ordinary nonvolatile global read
+whose runtime Index value is not affine. The actual pointer must be exactly
+`GEP(SliceData(formal_slice), index)`, and a successful `index < SliceLength`
+edge for that same slice and value must dominate the actual load. Existing
+all-incoming unique-origin analysis can transport block arguments; ambiguous
+or changing loop origins, false-edge complements and stale pre-arithmetic
+guards do not establish this relation. The rule applies only to the existing
+64-bit Index model and scalar element widths of 1, 2, 4 or 8 bytes.
+
+This is a distinct read-only access domain, not an affine-address theorem.
+Its byte expression stays unbounded and its alias coverage is the whole formal
+allocation. Unsupported reachable accesses keep extraction incomplete; complete
+reports retain the required access coverage and conservative read/write conflicts.
+The rule does not admit writes, atomics, volatile or
+explicit `GuardedLoad` operations, helper call contexts, or arbitrary pointer
+chains. Already-supported affine and guarded accesses keep their existing rows.
+Sparse paid guard indexing avoids scanning the entire CFG for every read; work
+also includes the exact local producer-result lookup and bounded origin queries.
+
+The additive inert formal-memory receipt V4 uses extraction policy 3. The V4
+facade retains V1/V2/V3 bytes and identities; the older codecs reject the new
+domain. Outer formal-memory evidence policy 3 accepts only V4/policy 3, the
+current 64-bit analysis basis and exact nonzero invocation witness. Decoding
+numeric source coordinates does not authenticate a graph or make an incomplete
+extraction complete. Live consumers still require current-owner equivalence,
+complete conflict-free extraction and exact graph/root/witness binding. These
+changes do not activate the candidate optimizer as the default pipeline or
+establish full-corpus, protected-proof, artifact or hardware qualification.
+
 ## Admission tests
+
+General checked-output admission also censuses scalar helper closures from each
+actual B/C/O inventory. Eligible helpers have a direct non-unwinding Rust ABI,
+Bool, signed/unsigned 8/16/32/64-bit or F32/F64 arguments, and Unit or one scalar
+return.
+Source membership is checked against the reconstructed root-qualified function
+correspondence. Every retained helper is checked, including an uncalled helper
+left after independently checked dead-control removal.
+
+The helper census requires complete empty memory effects and a closed scalar
+opcode set. F32/F64 constants, comparisons, selects and strict add/subtract/
+multiply are admitted without reassociation, contraction or fast-math permission.
+Float casts, division, remainder, negation, narrower float formats, pointers,
+aggregates, helper traps, external calls and recursion remain outside this subset.
+Calls remain ordered and block private
+store forwarding. This does not establish termination, helper-result bounds or
+extent facts, optimizer purity, or general tutorial-helper support. Policy4
+continues to forward only its admitted integer loads, not Bool loads. The
+existing actual-inventory nonzero checks still govern division and remainder.
+
+`ordinary_rust_shared_unit_helper_reaches_checked_native_output` exercises the
+ordinary two-root Rust fixture through the same callback as fill and vecadd.
+It requires the admitted Verus runtime for the earlier ranked helper-effect
+join. Without that runtime, the test fails before Policy4; semantic-MIR helper
+and ABI component tests do not substitute for this source qualification. No
+runtime bypass is provided, and this is not whole-corpus qualification.
 
 The production admission is maintained by the following regression gates:
 

@@ -77,10 +77,10 @@ pub(crate) fn observe(bound: &Owner, intermediate: &Owner, output: &Owner) {
         state.attempted = true;
         Some(state.directory.clone())
     });
-    if let Some(directory) = directory {
-        if let Err(error) = write_snapshots(&directory, [bound, intermediate, output]) {
-            let _ = writeln!(io::stderr(), "P4 endpoint snapshots unavailable: {error}");
-        }
+    if let Some(directory) = directory
+        && let Err(error) = write_snapshots(&directory, [bound, intermediate, output])
+    {
+        let _ = writeln!(io::stderr(), "P4 endpoint snapshots unavailable: {error}");
     }
 }
 

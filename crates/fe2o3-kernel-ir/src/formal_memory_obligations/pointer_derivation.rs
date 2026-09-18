@@ -115,19 +115,18 @@ pub(super) fn derive_access(
 ) -> Result<FormalMemoryAccess, AccessDerivationError> {
     // Conditional recipes are cached separately from unconditional affine values.
     // Resolution is deliberately repeated at each actual access context.
-    if let Some(guarded) = &mut context.guarded {
-        if let Some(access) =
+    if let Some(guarded) = &mut context.guarded
+        && let Some(access) =
             guarded.access(location, pointer, kind, access, invocations, predicate)?
-        {
-            return Ok(access);
-        }
+    {
+        return Ok(access);
     }
     let byte_width = context
         .value_types
         .get(&pointer)
         .and_then(pointer_byte_width)
         .ok_or(FormalMemoryIncompleteReason::ElementWidthUnavailable { location, pointer })?;
-    let pointer_expression = derive_pointer_expression(
+    let pointer_expression = match derive_pointer_expression(
         pointer,
         context.definitions,
         context.value_types,
@@ -135,7 +134,29 @@ pub(super) fn derive_access(
         context.private_load_sources,
         &mut context.pointer_derivations,
         location,
-    )?;
+    ) {
+        Ok(expression) => expression,
+        Err(reason) => {
+            // Preserve every established affine/guarded recipe. A new runtime
+            // row replaces only this actual read's failed index derivation.
+            if matches!(
+                &reason,
+                FormalMemoryIncompleteReason::UnsupportedIndexExpression { .. }
+            ) && let Some(guarded) = &mut context.guarded
+                && let Some(access) = guarded.runtime_slice_read(
+                    location,
+                    pointer,
+                    kind,
+                    access,
+                    invocations,
+                    predicate,
+                )?
+            {
+                return Ok(access);
+            }
+            return Err(reason.into());
+        }
+    };
     Ok(FormalMemoryAccess {
         location,
         allocation: pointer_expression.allocation,

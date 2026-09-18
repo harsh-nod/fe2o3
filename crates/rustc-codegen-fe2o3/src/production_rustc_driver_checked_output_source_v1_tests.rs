@@ -25,6 +25,8 @@ const CHILD_TEST: &str =
 #[derive(Debug, Serialize, Deserialize)]
 struct Observation {
     roots: Vec<String>,
+    internal_helpers: usize,
+    helper_calls: usize,
     reads: usize,
     writes: usize,
     global_reads: usize,
@@ -34,6 +36,8 @@ struct Observation {
     other_reads: usize,
     other_writes: usize,
     formal_accesses: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtime_domains: Option<runtime_domains::RuntimeDomainObservation>,
     policy: u16,
     output_digest: [u8; 32],
     llvm_bytes: usize,
@@ -116,12 +120,20 @@ impl Callbacks for CheckedOutputCallbacks {
                 admitted.checked_output().owner()
             ));
             let module = admitted.output().module();
+            let helpers = module
+                .functions
+                .iter()
+                .filter(|function| function.role == fe2o3_kernel_ir::FunctionRole::InternalHelper)
+                .map(|function| &function.id)
+                .collect::<std::collections::BTreeSet<_>>();
             let mut observation = Observation {
                 roots: module
                     .kernels
                     .iter()
                     .map(|k| k.id.as_str().to_owned())
                     .collect(),
+                internal_helpers: helpers.len(),
+                helper_calls: 0,
                 reads: 0,
                 writes: 0,
                 global_reads: 0,
@@ -131,6 +143,7 @@ impl Callbacks for CheckedOutputCallbacks {
                 other_reads: 0,
                 other_writes: 0,
                 formal_accesses: admitted.kernels().iter().map(|k| k.accesses().len()).sum(),
+                runtime_domains: Some(runtime_domains::observe(admitted.kernels())?),
                 policy: admitted.checked_output().execution().policy_version(),
                 output_digest: *admitted.output().canonical().identity().digest(),
                 llvm_bytes: 0,
@@ -144,6 +157,9 @@ impl Callbacks for CheckedOutputCallbacks {
                 .flat_map(|body| &body.blocks)
                 .flat_map(|block| &block.operations)
             {
+                if let OperationKind::Call { callee, .. } = &operation.kind {
+                    observation.helper_calls += usize::from(helpers.contains(callee));
+                }
                 let (write, access) = match &operation.kind {
                     OperationKind::Load { access, .. }
                     | OperationKind::GuardedLoad { access, .. } => (false, access),
@@ -352,6 +368,22 @@ fn artifact(messages: &[serde_json::Value], name: &str) -> PathBuf {
 #[test]
 #[ignore = "requires pinned nightly rust-src, AMD dependencies, and ordinary-source compilation"]
 fn ordinary_rust_fill_and_vecadd_reach_checked_native_output() {
+    ordinary_rust_checked_output_cases(&[OrdinarySourceCase::Fill, OrdinarySourceCase::Vecadd]);
+}
+
+#[test]
+#[ignore = "requires pinned nightly rust-src and admitted Verus runtime for the actual-source helper effect join"]
+fn ordinary_rust_shared_unit_helper_reaches_checked_native_output() {
+    ordinary_rust_checked_output_cases(&[OrdinarySourceCase::SharedUnitHelper]);
+}
+
+enum OrdinarySourceCase {
+    Fill,
+    Vecadd,
+    SharedUnitHelper,
+}
+
+fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -391,8 +423,23 @@ fn ordinary_rust_fill_and_vecadd_reach_checked_native_output() {
     let rustc = env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
     let sysroot = output(clean_command(&rustc).args(["--print", "sysroot"]));
     let sysroot = String::from_utf8(sysroot.stdout).unwrap();
-    for (name, reads, writes) in [("fill", 0, 1), ("vecadd", 2, 1)] {
-        let package_dir = workspace.join("examples").join(name);
+    for case in cases {
+        let (name, package_path, feature, roots, reads, writes, calls) = match case {
+            OrdinarySourceCase::Fill => ("fill", "examples/fill", None, &["fill"][..], 0, 1, 0),
+            OrdinarySourceCase::Vecadd => {
+                ("vecadd", "examples/vecadd", None, &["vecadd"][..], 2, 1, 0)
+            }
+            OrdinarySourceCase::SharedUnitHelper => (
+                "shared-unit-helper",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("multi-root-target-lineage"),
+                &["alpha", "zeta"][..],
+                0,
+                2,
+                2,
+            ),
+        };
+        let package_dir = workspace.join(package_path);
         let manifest = package_dir.join("Cargo.toml");
         let package = metadata["packages"]
             .as_array()
@@ -438,6 +485,9 @@ fn ordinary_rust_fill_and_vecadd_reach_checked_native_output() {
             scratch.path().display().to_string(),
             package_dir.join("src/lib.rs").display().to_string(),
         ];
+        if let Some(feature) = feature {
+            args.push(format!("--cfg=feature=\"{feature}\""));
+        }
         let original: Vec<OsString> = args.iter().map(OsString::from).collect();
         let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&original).unwrap()
         else {
@@ -478,11 +528,17 @@ fn ordinary_rust_fill_and_vecadd_reach_checked_native_output() {
         let result: Result<Observation, SourceFailure> =
             serde_json::from_slice(&std::fs::read(&response).unwrap()).unwrap();
         let result = result.unwrap();
-        assert_eq!(result.roots, [name]);
+        assert_eq!(result.roots, roots);
+        assert_eq!(result.helper_calls, calls);
+        assert_eq!(result.internal_helpers == 0, calls == 0);
         assert_eq!((result.reads, result.writes), (reads, writes));
         assert_eq!(result.formal_accesses, reads + writes);
+        assert_eq!(
+            result.runtime_domains,
+            Some(runtime_domains::RuntimeDomainObservation::default())
+        );
         assert_eq!(result.policy, 4);
-        assert_eq!(result.descriptor_roots, 1);
+        assert_eq!(result.descriptor_roots, roots.len());
         assert_ne!(result.output_digest, [0; 32]);
         assert!(result.llvm_bytes > 0);
         assert!(!result.missing_proof_refused);
@@ -503,6 +559,10 @@ fn ordinary_rust_fill_and_vecadd_reach_checked_native_output() {
                 serde_json::from_slice(&std::fs::read(proof_response).unwrap()).unwrap();
             let result = result.unwrap();
             assert!(result.missing_proof_refused);
+            assert_eq!(
+                result.runtime_domains,
+                Some(runtime_domains::RuntimeDomainObservation::default())
+            );
             assert_eq!(result.policy, 4);
             assert_eq!(result.output_digest, expected_output);
             assert_eq!((result.llvm_bytes, result.descriptor_roots), (0, 0));
@@ -520,3 +580,5 @@ mod corpus;
 mod corpus_cargo;
 #[path = "production_rustc_driver_checked_output_progress_v1_tests.rs"]
 mod progress;
+#[path = "production_rustc_driver_checked_output_runtime_domains_v1_tests.rs"]
+mod runtime_domains;

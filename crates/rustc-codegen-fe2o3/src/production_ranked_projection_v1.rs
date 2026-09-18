@@ -3823,13 +3823,14 @@ fn semantic_rvalue_read_places_v2<'a>(
 }
 
 include!("production_ranked_projection_v1/read_source_index_v1.rs");
+include!("production_ranked_projection_v1/statement_definition_index_v1.rs");
 
 impl<'a> GpuSemanticExpressionResolverV2<'a> {
     fn new(
         types: &'a [SemanticTypeDeclV1],
         function: &'a SemanticFunctionDeclV1,
     ) -> Result<Self, ProductionRankedProjectionErrorV1> {
-        let definitions = SemanticAssertProofsV1::new(types, function)?;
+        let mut definitions = SemanticAssertProofsV1::new(types, function)?;
         let mut borrowed = HashSet::new();
         for statement in function
             .blocks()
@@ -3846,6 +3847,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 borrowed.insert(local as u32);
             }
         }
+        definitions.statement_definitions = Some(StatementDefinitionIndexV1::new(function)?);
         Ok(Self {
             types,
             function,
@@ -13093,6 +13095,7 @@ struct SemanticAssertProofsV1<'a> {
     address_escaped: Vec<bool>,
     assignments: Vec<Option<ScalarAssignmentSiteV1>>,
     checked_assertion_blocks: Vec<Vec<usize>>,
+    statement_definitions: Option<StatementDefinitionIndexV1>,
     dominance: HashMap<(usize, usize), bool>,
     zero_exclusion: HashMap<(usize, usize), bool>,
     work: usize,
@@ -13135,6 +13138,7 @@ impl<'a> SemanticAssertProofsV1<'a> {
             address_escaped: inventory.address_escaped,
             assignments: inventory.assignments,
             checked_assertion_blocks,
+            statement_definitions: None,
             dominance: HashMap::new(),
             zero_exclusion: HashMap::new(),
             work: 0,
@@ -16913,16 +16917,29 @@ impl<'a> SemanticAssertProofsV1<'a> {
         if use_site.statement > block.statements().len() {
             return Ok(None);
         }
-        for statement in (0..use_site.statement).rev() {
-            self.charge(1)?;
-            let kind = block.statements()[statement].kind();
-            let mut defines_local = false;
-            visit_statement_definition_places(kind, &mut |place| {
-                defines_local |= local_definition_index(place) == Some(local);
-            });
-            if !defines_local {
-                continue;
+        let defining_statement = if let Some(index) = &self.statement_definitions {
+            let statement = index.before(local, use_site.block, use_site.statement);
+            let visits = statement.map_or(use_site.statement, |index| use_site.statement - index);
+            charge_statement_scan_equivalent_v1(&mut self.work, visits)?;
+            statement
+        } else {
+            let mut found = None;
+            for statement in (0..use_site.statement).rev() {
+                self.charge(1)?;
+                let kind = block.statements()[statement].kind();
+                let mut defines_local = false;
+                visit_statement_definition_places(kind, &mut |place| {
+                    defines_local |= local_definition_index(place) == Some(local);
+                });
+                if defines_local {
+                    found = Some(statement);
+                    break;
+                }
             }
+            found
+        };
+        if let Some(statement) = defining_statement {
+            let kind = block.statements()[statement].kind();
             return Ok(matches!(kind, SemanticStatementKindV1::Assign(assignment)
                     if assignment.destination().projections().is_empty()
                         && assignment.destination().local().index() as usize == local)
@@ -24715,6 +24732,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_03_tests.rs");
     include!("production_ranked_projection_v1/aggregate_value_projection_v2_tests.rs");
     include!("production_ranked_projection_v1/read_source_index_v1_tests.rs");
+    include!("production_ranked_projection_v1/statement_definition_index_v1_tests.rs");
     include!("production_ranked_projection_v1/write_only_value_projection_v2_tests.rs");
     include!("production_ranked_projection_v1/projection_04_tests.rs");
     include!("production_ranked_projection_v1/dynamic_local_array_tests.rs");
