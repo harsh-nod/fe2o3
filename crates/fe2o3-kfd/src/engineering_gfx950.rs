@@ -144,6 +144,8 @@ struct Context {
     queue_id: Option<u32>,
     doorbell: Option<LinuxDoorbellSliceV1>,
     internal: Vec<Allocation>,
+    // Separate retained storage; legacy queue/signal/ordered slots never move.
+    full_forward_internal: Vec<Allocation>,
     buffers: BTreeMap<u64, Allocation>,
     kernels: BTreeMap<u64, Kernel>,
     handles: BTreeSet<u64>,
@@ -243,6 +245,7 @@ impl Context {
             queue_id: None,
             doorbell: None,
             internal: Vec::new(),
+            full_forward_internal: Vec::new(),
             buffers: BTreeMap::new(),
             kernels: BTreeMap::new(),
             handles: BTreeSet::new(),
@@ -282,6 +285,7 @@ impl Context {
             || self.event.is_some()
             || self.doorbell.is_some()
             || !self.internal.is_empty()
+            || !self.full_forward_internal.is_empty()
         {
             return Err("queue initialization requires destroyed private resources".into());
         }
@@ -1107,6 +1111,9 @@ impl Context {
         while let Some(allocation) = self.internal.pop() {
             self.release_resource(allocation)?;
         }
+        while let Some(allocation) = self.full_forward_internal.pop() {
+            self.release_resource(allocation)?;
+        }
         disabled.complete();
         self.check_currentness(true)?;
         self.ring = AqlSingleProducerRingModelV1::new(
@@ -1135,6 +1142,9 @@ impl Context {
             self.release_resource(allocation)?;
         }
         while let Some(allocation) = self.internal.pop() {
+            self.release_resource(allocation)?;
+        }
+        while let Some(allocation) = self.full_forward_internal.pop() {
             self.release_resource(allocation)?;
         }
         if !self.handles.is_empty() || !self.mmap_offsets.is_empty() || self.total_bytes != 0 {
@@ -1479,6 +1489,24 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
                     // SAFETY: the same dedicated-process trusted-code contract
                     // applies; this command retains every operand until its fence.
                     unsafe { context.dispatch_ordered_batch(dispatches, payload, timeout_ms) }?
+                }
+                CommandV1::DispatchFullForward {
+                    dispatch_count,
+                    plan_bytes,
+                    kernarg_bytes,
+                    timeout_ms,
+                } => {
+                    // SAFETY: the same trusted-code process boundary applies;
+                    // all 616 retained operands are prepared before publication.
+                    unsafe {
+                        context.dispatch_full_forward(
+                            dispatch_count,
+                            plan_bytes,
+                            kernarg_bytes,
+                            payload,
+                            timeout_ms,
+                        )
+                    }?
                 }
                 CommandV1::Allocate { bytes } => context.allocate(bytes)?,
                 CommandV1::Free { buffer } => {

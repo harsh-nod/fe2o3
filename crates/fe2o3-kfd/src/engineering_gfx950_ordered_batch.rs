@@ -9,6 +9,10 @@ use fe2o3_aql::{
 const ORDERED_KERNARG: usize = CWSR + 1;
 const ORDERED_KERNARG_BYTES: usize =
     MAX_ORDERED_BATCH_DISPATCHES_V1 * MAX_KERNARG_BYTES_V1 as usize;
+const FULL_FORWARD_SIGNAL: usize = 0;
+const FULL_FORWARD_KERNARG: usize = 1;
+const FULL_FORWARD_SIGNAL_BYTES: usize = FULL_FORWARD_DISPATCHES_V1 * AMD_SIGNAL_BYTES_V1;
+const FULL_FORWARD_KERNARG_BYTES: usize = MAX_FULL_FORWARD_KERNARG_BYTES_V1 as usize;
 
 trait OrderedBackend {
     type Prepared;
@@ -37,10 +41,30 @@ fn run_ordered_batch(
     count: usize,
     timeout_ms: u32,
 ) -> Result<u64> {
+    run_ordered_dispatches(backend, count, timeout_ms, false)
+}
+
+fn run_full_forward(
+    backend: &mut impl OrderedBackend,
+    count: usize,
+    timeout_ms: u32,
+) -> Result<u64> {
+    run_ordered_dispatches(backend, count, timeout_ms, true)
+}
+
+fn run_ordered_dispatches(
+    backend: &mut impl OrderedBackend,
+    count: usize,
+    timeout_ms: u32,
+    full_forward: bool,
+) -> Result<u64> {
     let result = (|| {
-        if !(1..=MAX_ORDERED_BATCH_DISPATCHES_V1).contains(&count)
-            || !(1..=600_000).contains(&timeout_ms)
-        {
+        let valid_count = if full_forward {
+            count == FULL_FORWARD_DISPATCHES_V1
+        } else {
+            (1..=MAX_ORDERED_BATCH_DISPATCHES_V1).contains(&count)
+        };
+        if !valid_count || !(1..=600_000).contains(&timeout_ms) {
             return Err("ordered batch count or aggregate timeout".into());
         }
         backend.dispatch_fence()?;
@@ -80,6 +104,7 @@ struct NativeOrdered<'a> {
     payload: Vec<u8>,
     offset: usize,
     count: u32,
+    full_forward: bool,
 }
 
 struct OrderedPending {
@@ -106,6 +131,9 @@ fn require_signals_complete(
 impl NativeOrdered<'_> {
     fn retain_storage(&mut self) -> Result<()> {
         self.context.check_idle()?;
+        if self.full_forward {
+            return self.retain_full_forward_storage();
+        }
         match self.context.internal.len() {
             ORDERED_KERNARG => {
                 let allocation = self.context.allocate_resource(
@@ -130,22 +158,96 @@ impl NativeOrdered<'_> {
         Ok(())
     }
 
+    fn retain_full_forward_storage(&mut self) -> Result<()> {
+        match self.context.full_forward_internal.len() {
+            0 => {
+                let signals = self.context.allocate_resource(
+                    FULL_FORWARD_SIGNAL_BYTES,
+                    KfdAllocMemoryFlags::KERNARG,
+                    |_| Ok(()),
+                )?;
+                // Retain even partially initialized storage until queue teardown.
+                self.context.full_forward_internal.push(signals);
+                Backend::initialize_full_forward_signal_slots(
+                    &mut self.context.full_forward_internal[FULL_FORWARD_SIGNAL].mapping,
+                )
+                .map_err(explain)?;
+                let kernargs = self.context.allocate_resource(
+                    FULL_FORWARD_KERNARG_BYTES,
+                    KfdAllocMemoryFlags::KERNARG,
+                    |_| Ok(()),
+                )?;
+                self.context.full_forward_internal.push(kernargs);
+            }
+            2 => {}
+            _ => return Err("full-forward private storage identity".into()),
+        }
+        let signals = &self.context.full_forward_internal[FULL_FORWARD_SIGNAL];
+        let kernargs = &self.context.full_forward_internal[FULL_FORWARD_KERNARG];
+        if signals.requested != FULL_FORWARD_SIGNAL_BYTES
+            || signals.backing != 40_960
+            || kernargs.requested != FULL_FORWARD_KERNARG_BYTES
+            || kernargs.backing != FULL_FORWARD_KERNARG_BYTES
+        {
+            return Err("full-forward retained storage extent".into());
+        }
+        Ok(())
+    }
+
+    fn kernarg_storage(&mut self) -> &mut Allocation {
+        if self.full_forward {
+            &mut self.context.full_forward_internal[FULL_FORWARD_KERNARG]
+        } else {
+            &mut self.context.internal[ORDERED_KERNARG]
+        }
+    }
+
+    fn signal_storage(&mut self) -> &mut Allocation {
+        if self.full_forward {
+            &mut self.context.full_forward_internal[FULL_FORWARD_SIGNAL]
+        } else {
+            &mut self.context.internal[SIGNAL]
+        }
+    }
+
+    fn signal_extent(&self) -> usize {
+        if self.full_forward {
+            FULL_FORWARD_SIGNAL_BYTES
+        } else {
+            PAGE_BYTES
+        }
+    }
+
     fn publish_fixed<const N: usize>(
         &mut self,
         packets: Vec<AqlPreparedKernelDispatchV1>,
         deadline: Instant,
     ) -> Result<OrderedPending> {
-        let count = batch_count::<N>()?;
+        let count = if self.full_forward {
+            if N != FULL_FORWARD_DISPATCHES_V1 {
+                return Err("full-forward fixed cardinality".into());
+            }
+            FULL_FORWARD_DISPATCHES_V1 as u32
+        } else {
+            batch_count::<N>()?
+        };
         let packets: [AqlPreparedKernelDispatchV1; N] = packets
             .try_into()
             .map_err(|_| "ordered batch packet cardinality")?;
         let batch = AqlPreparedKernelDispatchBatchV2::try_from_packets(packets).map_err(explain)?;
         self.context.check_idle()?;
-        require_sequence_capacity(
-            self.context.ring.write(),
-            self.context.last_observed_read,
-            N,
-        )?;
+        if self.full_forward {
+            require_full_forward_capacity(
+                self.context.ring.write(),
+                self.context.last_observed_read,
+            )?;
+        } else {
+            require_sequence_capacity(
+                self.context.ring.write(),
+                self.context.last_observed_read,
+                N,
+            )?;
+        }
         self.context.check_currentness(false)?;
         require_deadline(Instant::now(), deadline)?;
         let reservation = self
@@ -185,6 +287,49 @@ fn batch_count<const N: usize>() -> Result<u32> {
         return Err("ordered batch fixed cardinality".into());
     }
     u32::try_from(N).map_err(explain)
+}
+
+fn require_full_forward_capacity(write: u64, read: u64) -> Result<()> {
+    if read > write
+        || write
+            .checked_add(FULL_FORWARD_DISPATCHES_V1 as u64)
+            .and_then(|next| next.checked_sub(read))
+            .is_none_or(|outstanding| outstanding > MAX_UNRETIRED_RING_PACKETS_V1)
+    {
+        return Err("full-forward exceeds retained ring capacity; rollover required".into());
+    }
+    Ok(())
+}
+
+/// Includes alignment gaps in the arena cap, including a misaligned base.
+fn packed_kernarg_slot(
+    base: u64,
+    cursor: usize,
+    bytes: usize,
+    alignment: u64,
+) -> Result<(usize, usize)> {
+    if bytes > MAX_KERNARG_BYTES_V1 as usize || !alignment.is_power_of_two() {
+        return Err("full-forward kernarg slot contract".into());
+    }
+    let address = base
+        .checked_add(u64::try_from(cursor).map_err(explain)?)
+        .and_then(|address| address.checked_add(alignment - 1))
+        .map(|address| address & !(alignment - 1))
+        .ok_or("full-forward kernarg alignment overflow")?;
+    address
+        .checked_add(u64::try_from(bytes).map_err(explain)?)
+        .ok_or("full-forward kernarg range overflow")?;
+    let offset = usize::try_from(
+        address
+            .checked_sub(base)
+            .ok_or("full-forward kernarg base")?,
+    )
+    .map_err(explain)?;
+    let end = offset
+        .checked_add(bytes)
+        .filter(|end| *end <= FULL_FORWARD_KERNARG_BYTES)
+        .ok_or("full-forward packed kernarg arena limit")?;
+    Ok((offset, end))
 }
 
 impl OrderedBackend for NativeOrdered<'_> {
@@ -231,20 +376,32 @@ impl OrderedBackend for NativeOrdered<'_> {
         }
         self.retain_storage()?;
         let mut packets = Vec::with_capacity(prepared.len());
+        let mut cursor = 0;
         for (index, prepared) in prepared.into_iter().enumerate() {
-            let offset = index
-                .checked_mul(MAX_KERNARG_BYTES_V1 as usize)
-                .ok_or("ordered kernarg slot overflow")?;
             if prepared.bytes.len() > MAX_KERNARG_BYTES_V1 as usize {
                 return Err("ordered kernarg slot extent".into());
             }
-            let kernarg_address = self.context.internal[ORDERED_KERNARG]
-                .va
+            let base = self.kernarg_storage().va;
+            let offset = if self.full_forward {
+                let (offset, end) =
+                    packed_kernarg_slot(base, cursor, prepared.bytes.len(), prepared.alignment)?;
+                cursor = end;
+                offset
+            } else {
+                index
+                    .checked_mul(MAX_KERNARG_BYTES_V1 as usize)
+                    .ok_or("ordered kernarg slot overflow")?
+            };
+            let kernarg_address = base
                 .checked_add(offset as u64)
                 .ok_or("ordered kernarg address")?;
-            let signal_address = self.context.internal[SIGNAL]
+            let signal_offset = index
+                .checked_mul(AMD_SIGNAL_BYTES_V1)
+                .ok_or("ordered signal offset")?;
+            let signal_address = self
+                .signal_storage()
                 .va
-                .checked_add((index * AMD_SIGNAL_BYTES_V1) as u64)
+                .checked_add(u64::try_from(signal_offset).map_err(explain)?)
                 .ok_or("ordered signal address")?;
             packets.push(
                 AqlKernelDispatchPacketV1::new_unpublished_with_ordering(
@@ -259,18 +416,20 @@ impl OrderedBackend for NativeOrdered<'_> {
                 )
                 .map_err(explain)?,
             );
-            Backend::with_bytes_mut(
-                &mut self.context.internal[ORDERED_KERNARG].mapping,
-                ORDERED_KERNARG_BYTES,
-                |mapped| {
-                    let slot = &mut mapped[offset..offset + MAX_KERNARG_BYTES_V1 as usize];
-                    slot.fill(0);
-                    slot[..prepared.bytes.len()].copy_from_slice(&prepared.bytes);
-                },
-            );
+            let (arena_bytes, slot_bytes) = if self.full_forward {
+                (FULL_FORWARD_KERNARG_BYTES, prepared.bytes.len())
+            } else {
+                (ORDERED_KERNARG_BYTES, MAX_KERNARG_BYTES_V1 as usize)
+            };
+            Backend::with_bytes_mut(&mut self.kernarg_storage().mapping, arena_bytes, |mapped| {
+                let slot = &mut mapped[offset..offset + slot_bytes];
+                slot.fill(0);
+                slot[..prepared.bytes.len()].copy_from_slice(&prepared.bytes);
+            });
+            let signal_extent = self.signal_extent();
             Backend::reset_completion_signal_release(
-                &mut self.context.internal[SIGNAL].mapping,
-                PAGE_BYTES,
+                &mut self.signal_storage().mapping,
+                signal_extent,
                 u32::try_from(index).map_err(explain)?,
             )
             .map_err(explain)?;
@@ -279,6 +438,9 @@ impl OrderedBackend for NativeOrdered<'_> {
     }
 
     fn publish(&mut self, packets: Self::Staged, deadline: Instant) -> Result<OrderedPending> {
+        if self.full_forward {
+            return self.publish_fixed::<FULL_FORWARD_DISPATCHES_V1>(packets, deadline);
+        }
         macro_rules! fixed {
             ($($count:literal),+ $(,)?) => {
                 match packets.len() {
@@ -304,9 +466,10 @@ impl OrderedBackend for NativeOrdered<'_> {
         if pending.wait_started.is_some() {
             add_counter(&mut self.context.counters.completion_polls, 1)?;
         }
+        let signal_extent = self.signal_extent();
         let completion = Backend::observe_completion_signal_acquire(
-            &mut self.context.internal[SIGNAL].mapping,
-            PAGE_BYTES,
+            &mut self.signal_storage().mapping,
+            signal_extent,
             pending.count - 1,
         )
         .map_err(explain)?;
@@ -338,11 +501,12 @@ impl OrderedBackend for NativeOrdered<'_> {
     }
 
     fn validate_all(&mut self, pending: &OrderedPending) -> Result<()> {
+        let signal_extent = self.signal_extent();
         let signals = (0..pending.count)
             .map(|slot| {
                 Backend::observe_completion_signal_acquire(
-                    &mut self.context.internal[SIGNAL].mapping,
-                    PAGE_BYTES,
+                    &mut self.signal_storage().mapping,
+                    signal_extent,
                     slot,
                 )
                 .map_err(explain)
@@ -517,9 +681,44 @@ impl Context {
                 payload,
                 offset: 0,
                 count: u32::try_from(count).map_err(explain)?,
+                full_forward: false,
             };
             let elapsed_ns = run_ordered_batch(&mut native, count, timeout_ms)?;
             Ok(ResponseV1::DispatchOrderedBatchCompleted {
+                completed_dispatches: native.count,
+                elapsed_ns,
+            })
+        })();
+        if result.is_err() {
+            self.ordered_batch_poisoned = true;
+        }
+        result
+    }
+
+    /// Separate exact-616 transaction, retaining every argument and signal.
+    pub(super) unsafe fn dispatch_full_forward(
+        &mut self,
+        dispatch_count: u32,
+        plan_bytes: u32,
+        kernarg_bytes: u32,
+        payload: Vec<u8>,
+        timeout_ms: u32,
+    ) -> Result<ResponseV1> {
+        let result = (|| {
+            let (dispatches, payload) =
+                decode_full_forward_payload_v1(dispatch_count, plan_bytes, kernarg_bytes, payload)
+                    .map_err(explain)?;
+            require_full_forward_capacity(self.ring.write(), self.last_observed_read)?;
+            let mut native = NativeOrdered {
+                context: self,
+                commands: dispatches.into_iter().map(Some).collect(),
+                payload,
+                offset: 0,
+                count: FULL_FORWARD_DISPATCHES_V1 as u32,
+                full_forward: true,
+            };
+            let elapsed_ns = run_full_forward(&mut native, FULL_FORWARD_DISPATCHES_V1, timeout_ms)?;
+            Ok(ResponseV1::DispatchFullForwardCompleted {
                 completed_dispatches: native.count,
                 elapsed_ns,
             })

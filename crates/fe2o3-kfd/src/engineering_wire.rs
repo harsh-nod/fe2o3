@@ -19,6 +19,12 @@ pub const MAX_KERNARG_BYTES_V1: u32 = 65_536;
 pub const MAX_POINTER_FIXUPS_V1: usize = 256;
 pub const MAX_SEQUENCE_DISPATCHES_V1: usize = 16;
 pub const MAX_ORDERED_BATCH_DISPATCHES_V1: usize = 16;
+/// Separate full-forward framing; these do not widen any legacy frame or batch.
+pub const FULL_FORWARD_DISPATCHES_V1: usize = 616;
+pub const MAX_FULL_FORWARD_PLAN_BYTES_V1: u32 = 1024 * 1024;
+pub const MAX_FULL_FORWARD_KERNARG_BYTES_V1: u32 = 4 * 1024 * 1024;
+pub const MAX_FULL_FORWARD_PAYLOAD_BYTES_V1: u32 =
+    MAX_FULL_FORWARD_PLAN_BYTES_V1 + MAX_FULL_FORWARD_KERNARG_BYTES_V1;
 /// Conservative dispatch budget when hardware read-pointer reports never advance.
 pub const MAX_UNRETIRED_RING_PACKETS_V1: u64 = 131_072;
 
@@ -61,6 +67,130 @@ pub struct OrderedBatchDispatchV1 {
     pub workgroup: [u16; 3],
     pub grid: [u32; 3],
     pub pointers: Vec<PointerFixupV1>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FullForwardPlanV1 {
+    dispatches: Vec<OrderedBatchDispatchV1>,
+}
+
+/// Bounded JSON plan followed by its exact concatenated, still-unpatched args.
+pub struct FullForwardPayloadV1 {
+    pub plan_bytes: u32,
+    pub kernarg_bytes: u32,
+    pub bytes: Vec<u8>,
+}
+
+fn full_forward_lengths(
+    dispatch_count: u32,
+    plan_bytes: u32,
+    kernarg_bytes: u32,
+) -> io::Result<usize> {
+    if dispatch_count as usize != FULL_FORWARD_DISPATCHES_V1
+        || plan_bytes == 0
+        || plan_bytes > MAX_FULL_FORWARD_PLAN_BYTES_V1
+        || kernarg_bytes > MAX_FULL_FORWARD_KERNARG_BYTES_V1
+    {
+        return Err(invalid("engineering full-forward frame limits"));
+    }
+    plan_bytes
+        .checked_add(kernarg_bytes)
+        .filter(|bytes| *bytes <= MAX_FULL_FORWARD_PAYLOAD_BYTES_V1)
+        .map(|bytes| bytes as usize)
+        .ok_or_else(|| invalid("engineering full-forward payload limit"))
+}
+
+fn full_forward_kernarg_bytes(dispatches: &[OrderedBatchDispatchV1]) -> io::Result<usize> {
+    if dispatches.len() != FULL_FORWARD_DISPATCHES_V1 {
+        return Err(invalid("engineering full-forward exact count"));
+    }
+    dispatches.iter().try_fold(0_usize, |total, dispatch| {
+        if dispatch.payload_bytes > MAX_KERNARG_BYTES_V1
+            || dispatch.pointers.len() > MAX_POINTER_FIXUPS_V1
+        {
+            return Err(invalid("engineering full-forward dispatch limits"));
+        }
+        total
+            .checked_add(dispatch.payload_bytes as usize)
+            .filter(|bytes| *bytes <= MAX_FULL_FORWARD_KERNARG_BYTES_V1 as usize)
+            .ok_or_else(|| invalid("engineering full-forward kernarg limit"))
+    })
+}
+
+struct BoundedPlanWriter(Vec<u8>);
+
+impl Write for BoundedPlanWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0
+            .len()
+            .checked_add(bytes.len())
+            .filter(|length| *length <= MAX_FULL_FORWARD_PLAN_BYTES_V1 as usize)
+            .ok_or_else(|| invalid("engineering full-forward plan limit"))?;
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Encode without ever extending the logical plan/payload beyond its own cap.
+/// Pointers remain owned buffer IDs; native preparation performs all fixups.
+pub fn encode_full_forward_payload_v1(
+    dispatches: &[OrderedBatchDispatchV1],
+    kernargs: &[u8],
+) -> io::Result<FullForwardPayloadV1> {
+    if full_forward_kernarg_bytes(dispatches)? != kernargs.len() {
+        return Err(invalid("engineering full-forward kernarg length"));
+    }
+    #[derive(Serialize)]
+    struct BorrowedPlan<'a> {
+        dispatches: &'a [OrderedBatchDispatchV1],
+    }
+    let mut plan = BoundedPlanWriter(Vec::new());
+    serde_json::to_writer(&mut plan, &BorrowedPlan { dispatches })
+        .map_err(|_| invalid("engineering full-forward plan encoding"))?;
+    let plan_bytes = u32::try_from(plan.0.len()).map_err(|_| invalid("engineering plan length"))?;
+    let kernarg_bytes =
+        u32::try_from(kernargs.len()).map_err(|_| invalid("engineering kernarg length"))?;
+    let length =
+        full_forward_lengths(FULL_FORWARD_DISPATCHES_V1 as u32, plan_bytes, kernarg_bytes)?;
+    let mut bytes = Vec::with_capacity(length);
+    bytes.extend_from_slice(&plan.0);
+    bytes.extend_from_slice(kernargs);
+    Ok(FullForwardPayloadV1 {
+        plan_bytes,
+        kernarg_bytes,
+        bytes,
+    })
+}
+
+/// Decode the separate bounded plan before any native argument preparation.
+pub fn decode_full_forward_payload_v1(
+    dispatch_count: u32,
+    plan_bytes: u32,
+    kernarg_bytes: u32,
+    mut payload: Vec<u8>,
+) -> io::Result<(Vec<OrderedBatchDispatchV1>, Vec<u8>)> {
+    if full_forward_lengths(dispatch_count, plan_bytes, kernarg_bytes)? != payload.len() {
+        return Err(invalid("engineering full-forward payload length"));
+    }
+    let plan_slice = &payload[..plan_bytes as usize];
+    let plan: FullForwardPlanV1 = serde_json::from_slice(plan_slice)
+        .map_err(|_| invalid("engineering full-forward plan JSON"))?;
+    let incoming: serde_json::Value = serde_json::from_slice(plan_slice)
+        .map_err(|_| invalid("engineering full-forward plan JSON"))?;
+    let recognized = serde_json::to_value(&plan)
+        .map_err(|_| invalid("engineering full-forward plan encoding"))?;
+    if incoming != recognized {
+        return Err(invalid("engineering full-forward unrecognized plan fields"));
+    }
+    if full_forward_kernarg_bytes(&plan.dispatches)? != kernarg_bytes as usize {
+        return Err(invalid("engineering full-forward decoded kernarg length"));
+    }
+    Ok((plan.dispatches, payload.split_off(plan_bytes as usize)))
 }
 
 fn ordered_batch_payload_bytes(
@@ -135,6 +265,14 @@ pub enum CommandV1 {
         dispatches: Vec<OrderedBatchDispatchV1>,
         timeout_ms: u32,
     },
+    /// Exact full-forward plan in a separately bounded binary payload. The
+    /// ordinary JSON header retains its original 64-KiB limit.
+    DispatchFullForward {
+        dispatch_count: u32,
+        plan_bytes: u32,
+        kernarg_bytes: u32,
+        timeout_ms: u32,
+    },
     Allocate {
         bytes: u64,
     },
@@ -171,6 +309,17 @@ impl CommandV1 {
     /// Checks framing limits before allocating or reading any binary payload.
     pub fn payload_bytes(&self) -> io::Result<usize> {
         let length = match self {
+            Self::DispatchFullForward {
+                dispatch_count,
+                plan_bytes,
+                kernarg_bytes,
+                timeout_ms,
+            } => {
+                if !(1..=600_000).contains(timeout_ms) {
+                    return Err(invalid("engineering full-forward deadline"));
+                }
+                return full_forward_lengths(*dispatch_count, *plan_bytes, *kernarg_bytes);
+            }
             Self::DispatchSequence { dispatches } => return sequence_payload_bytes(dispatches),
             Self::DispatchOrderedBatch {
                 dispatches,
@@ -273,6 +422,11 @@ pub struct ExplicitArgumentV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResponseV1 {
+    /// All 616 signals and the exit fence passed; this is host wall time.
+    DispatchFullForwardCompleted {
+        completed_dispatches: u32,
+        elapsed_ns: u64,
+    },
     /// Every retained signal completed and the selected exit currentness/idle
     /// fence passed. Time is aggregate host wall time, not GPU/kernel time.
     DispatchOrderedBatchCompleted {
@@ -372,6 +526,10 @@ pub fn write_header_v1(output: &mut impl Write, header: &impl Serialize) -> io::
 fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
+
+#[cfg(test)]
+#[path = "engineering_wire_full_forward_tests.rs"]
+mod full_forward_tests;
 
 #[cfg(test)]
 mod tests {

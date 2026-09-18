@@ -114,6 +114,7 @@ impl OrderedBackend for Fake {
         match count {
             1 => self.expose::<1>()?,
             16 => self.expose::<16>()?,
+            FULL_FORWARD_DISPATCHES_V1 => self.expose::<FULL_FORWARD_DISPATCHES_V1>()?,
             _ => panic!("unsupported fake count"),
         }
         Ok(count)
@@ -141,6 +142,211 @@ impl OrderedBackend for Fake {
     fn poison(&mut self) {
         self.poisoned = true;
     }
+}
+
+#[test]
+fn full_forward_stages_exactly_616_before_one_ordered_publication() {
+    let mut fake = Fake::default();
+    run_full_forward(&mut fake, FULL_FORWARD_DISPATCHES_V1, 600_000).unwrap();
+    assert!(!fake.poisoned);
+    assert!(fake.completed);
+    assert_eq!(fake.retained, 616);
+    for prefix in ["prepare:", "reset:", "body:", "header:", "validate_signal:"] {
+        assert_eq!(
+            fake.events
+                .iter()
+                .filter(|event| event.starts_with(prefix))
+                .count(),
+            616
+        );
+    }
+    for event in [
+        "write_reservation",
+        "doorbell",
+        "complete_frontier",
+        "poll_final_identity_counters_exception",
+    ] {
+        assert_eq!(
+            fake.events
+                .iter()
+                .filter(|candidate| candidate.as_str() == event)
+                .count(),
+            1
+        );
+    }
+    let position = |event: &str| {
+        fake.events
+            .iter()
+            .position(|candidate| candidate == event)
+            .unwrap()
+    };
+    assert!(position("prepare:615") < position("reset:0"));
+    assert!(position("reset:615") < position("write_reservation"));
+    assert!(position("body:615") < position("header:0"));
+    assert!(position("validate_signal:615") < position("complete_frontier"));
+    assert_eq!(fake.events.first().unwrap(), "dispatch_fence");
+    assert_eq!(fake.events.last().unwrap(), "dispatch_fence");
+}
+
+#[test]
+fn full_forward_failure_boundaries_poison_without_further_effects() {
+    let mut success = Fake::default();
+    run_full_forward(&mut success, 616, 600_000).unwrap();
+    let mut boundaries = vec![0, success.events.len() - 1];
+    for event in [
+        "prepare:0",
+        "prepare:615",
+        "retain_storage",
+        "reset:0",
+        "reset:615",
+        "ring_capacity_reservation",
+        "write_reservation",
+        "body:0",
+        "body:615",
+        "header:0",
+        "header:615",
+        "publication_currentness_exception_counters",
+        "doorbell",
+        "poll_final_identity_counters_exception",
+        "validate_signal:0",
+        "validate_signal:308",
+        "validate_signal:615",
+        "complete_frontier",
+    ] {
+        boundaries.push(
+            success
+                .events
+                .iter()
+                .position(|candidate| candidate == event)
+                .unwrap(),
+        );
+    }
+    for fail_at in boundaries {
+        let mut fake = Fake {
+            fail_at: Some(fail_at),
+            ..Fake::default()
+        };
+        assert!(run_full_forward(&mut fake, 616, 600_000).is_err());
+        assert!(fake.poisoned);
+        assert_eq!(fake.events, success.events[..=fail_at]);
+        if fake.events.iter().any(|event| event == "write_reservation") {
+            assert_eq!(fake.retained, 616);
+        }
+        assert!(run_full_forward(&mut fake, 616, 600_000).is_err());
+        assert_eq!(fake.events.len(), fail_at + 1);
+    }
+    for (count, timeout) in [
+        (0, 1),
+        (16, 1),
+        (615, 1),
+        (617, 1),
+        (616, 0),
+        (616, 600_001),
+    ] {
+        let mut fake = Fake::default();
+        assert!(run_full_forward(&mut fake, count, timeout).is_err());
+        assert!(fake.poisoned);
+        assert!(fake.events.is_empty());
+    }
+    let mut fake = Fake::default();
+    assert!(run_ordered_batch(&mut fake, 616, 1).is_err());
+    assert!(batch_count::<616>().is_err());
+    for index in 0..616 {
+        for fault in [
+            AqlCompletionObservationV1::Pending,
+            AqlCompletionObservationV1::Unexpected(-1),
+        ] {
+            let mut signals = [AqlCompletionObservationV1::Completed; 616];
+            signals[index] = fault;
+            assert!(require_signals_complete(signals).is_err());
+        }
+    }
+}
+
+#[test]
+fn full_forward_packed_arena_counts_alignment_and_checks_all_arithmetic() {
+    assert_eq!(FULL_FORWARD_SIGNAL_BYTES, 39_424);
+    assert_eq!(FULL_FORWARD_SIGNAL_BYTES.div_ceil(4096) * 4096, 40_960);
+    assert_eq!(FULL_FORWARD_KERNARG_BYTES, 4_194_304);
+    let mut cursor = 0;
+    for index in 0..616 {
+        let (offset, end) = packed_kernarg_slot(0x100_0000, cursor, 120, 256).unwrap();
+        assert_eq!(offset, index * 256);
+        assert_eq!(end, offset + 120);
+        assert!(offset >= cursor);
+        cursor = end;
+    }
+    assert_eq!(packed_kernarg_slot(0x100_0001, 0, 8, 64).unwrap(), (63, 71));
+    assert_eq!(
+        packed_kernarg_slot(0x100_0000, FULL_FORWARD_KERNARG_BYTES - 8, 8, 8)
+            .unwrap()
+            .1,
+        FULL_FORWARD_KERNARG_BYTES
+    );
+    for (base, cursor, bytes, alignment) in [
+        (0x100_0000, FULL_FORWARD_KERNARG_BYTES - 8, 9, 8),
+        (0x100_0000, FULL_FORWARD_KERNARG_BYTES - 8, 8, 16),
+        (u64::MAX, 0, 8, 8),
+        (u64::MAX, 1, 0, 1),
+        (0x100_0000, usize::MAX, 1, 1),
+        (0x100_0000, 0, 65_537, 8),
+        (0x100_0000, 0, 8, 0),
+        (0x100_0000, 0, 8, 3),
+    ] {
+        assert!(packed_kernarg_slot(base, cursor, bytes, alignment).is_err());
+    }
+}
+
+#[test]
+fn full_forward_capacity_and_owned_storage_do_not_widen_legacy_limits() {
+    let capacity = MAX_UNRETIRED_RING_PACKETS_V1;
+    require_full_forward_capacity(capacity - 616, 0).unwrap();
+    assert!(require_full_forward_capacity(capacity - 615, 0).is_err());
+    assert!(require_full_forward_capacity(u64::MAX, u64::MAX).is_err());
+    assert!(require_full_forward_capacity(1, 2).is_err());
+    assert!(require_sequence_capacity(0, 0, 616).is_err());
+    let mut ring = AqlSingleProducerRingModelV1::new(
+        AqlRingCapacityV1::from_ring_bytes(65_536).unwrap(),
+        1023,
+        1023,
+    )
+    .unwrap();
+    let reservation = ring.reserve_fixed_batch_v2(1023, 616).unwrap();
+    assert_eq!(reservation.entry(0).unwrap().slot_index(), 1023);
+    assert_eq!(reservation.entry(1).unwrap().slot_index(), 0);
+    assert_eq!(reservation.entry(615).unwrap().slot_index(), 614);
+    assert_eq!(reservation.next_write(), 1639);
+    assert!(reservation.entry(616).is_none());
+    let source = include_str!("engineering_gfx950.rs");
+    for method in ["    fn rollover_queue(", "    fn close_inner("] {
+        let body = source
+            .split(method)
+            .nth(1)
+            .unwrap()
+            .split("\n    fn ")
+            .next()
+            .unwrap();
+        assert!(
+            body.find("self.destroy_queue()?").unwrap()
+                < body.find("self.full_forward_internal.pop()").unwrap()
+        );
+    }
+    let source = include_str!("engineering_gfx950_ordered_batch.rs");
+    let retain = source
+        .split("    fn retain_full_forward_storage(")
+        .nth(1)
+        .unwrap()
+        .split("    fn kernarg_storage(")
+        .next()
+        .unwrap();
+    assert!(
+        retain
+            .find("self.context.full_forward_internal.push(signals)")
+            .unwrap()
+            < retain
+                .find("Backend::initialize_full_forward_signal_slots(")
+                .unwrap()
+    );
 }
 
 #[test]

@@ -274,11 +274,37 @@ impl<D: LinuxMemoryDevice> LinuxMemoryBackendFor<D> {
         if !(1..=crate::engineering_wire::MAX_ORDERED_BATCH_DISPATCHES_V1).contains(&count) {
             return Err(malformed_aql_mapping("engineering signal slot count"));
         }
+        Self::initialize_private_signal_slots(mapping, 4096, count)
+    }
+
+    /// Separate exact-616 allocation; never widens the legacy one-page API.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn initialize_full_forward_signal_slots(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<(), MemorySessionError> {
+        let count = crate::engineering_wire::FULL_FORWARD_DISPATCHES_V1;
+        let requested = count
+            .checked_mul(AMD_SIGNAL_BYTES_V1)
+            .ok_or_else(|| malformed_aql_mapping("full-forward signal extent"))?;
+        if requested != 39_424 || mapping.bytes != 40_960 {
+            return Err(malformed_aql_mapping("full-forward signal mapping extent"));
+        }
+        Self::initialize_private_signal_slots(mapping, requested, count)
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    fn initialize_private_signal_slots(
+        mapping: &mut LinuxCpuMapping,
+        requested_bytes: usize,
+        count: usize,
+    ) -> Result<(), MemorySessionError> {
         for index in 0..count {
             let pointer = checked_mapping_pointer(
                 mapping,
-                4096,
-                index * AMD_SIGNAL_BYTES_V1,
+                requested_bytes,
+                index
+                    .checked_mul(AMD_SIGNAL_BYTES_V1)
+                    .ok_or_else(|| malformed_aql_mapping("engineering signal slot offset"))?,
                 AMD_SIGNAL_BYTES_V1,
                 64,
             )?;
@@ -1639,6 +1665,73 @@ mod tests {
         assert!(
             LinuxGfx950MemoryBackend::initialize_engineering_signal_slots(&mut mapping, 16)
                 .is_err()
+        );
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    #[test]
+    fn full_forward_signals_have_exact_owned_extent_and_preserve_mapping_tail() {
+        #[repr(align(4096))]
+        struct SignalPages([u8; 40_960]);
+        let mut pages = SignalPages([0xa5; 40_960]);
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut pages).cast(),
+            bytes: 40_960,
+            active: true,
+            accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
+        };
+        for bytes in [4096, 39_424, 40_959, 40_961] {
+            mapping.bytes = bytes;
+            assert!(
+                LinuxGfx950MemoryBackend::initialize_full_forward_signal_slots(&mut mapping)
+                    .is_err()
+            );
+            assert!(pages.0.iter().all(|byte| *byte == 0xa5));
+        }
+        mapping.bytes = 40_960;
+        LinuxGfx950MemoryBackend::initialize_full_forward_signal_slots(&mut mapping).unwrap();
+        for slot in 0..616 {
+            assert_eq!(
+                LinuxGfx950MemoryBackend::observe_completion_signal_state_acquire(
+                    &mut mapping,
+                    39_424,
+                    slot
+                )
+                .unwrap(),
+                (
+                    fe2o3_aql::AMD_SIGNAL_KIND_USER_V1,
+                    AMD_SIGNAL_VALUE_PENDING_V1
+                )
+            );
+            checked_completion_value(&mut mapping, 39_424, slot)
+                .unwrap()
+                .store(0, Ordering::Release);
+            LinuxGfx950MemoryBackend::reset_completion_signal_release(&mut mapping, 39_424, slot)
+                .unwrap();
+            assert_eq!(
+                LinuxGfx950MemoryBackend::observe_completion_signal_acquire(
+                    &mut mapping,
+                    39_424,
+                    slot
+                )
+                .unwrap(),
+                AqlCompletionObservationV1::Pending
+            );
+        }
+        assert!(
+            LinuxGfx950MemoryBackend::observe_completion_signal_acquire(&mut mapping, 39_424, 616)
+                .is_err()
+        );
+        assert_eq!(&pages.0[39_424..], &[0xa5; 1536]);
+        // The legacy API still rejects a full-forward cardinality.
+        assert!(
+            LinuxGfx950MemoryBackend::initialize_engineering_signal_slots(&mut mapping, 616)
+                .is_err()
+        );
+        mapping.accessible = false;
+        assert!(
+            LinuxGfx950MemoryBackend::initialize_full_forward_signal_slots(&mut mapping).is_err()
         );
     }
 }
