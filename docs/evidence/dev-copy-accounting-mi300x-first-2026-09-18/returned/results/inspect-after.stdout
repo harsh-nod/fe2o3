@@ -1,0 +1,94 @@
+2026-09-18T08:24:31.664226940Z
+runtime-test: OK
+copy-host-observe.py: OK
+8e729393c536a7fdcb7ca42d81a667b55dc7b7163b37c5f27bdb6484698abd89  runtime-test
+5d37b09bf0823854c6a45b914d866c042c1e65486cd96c6301285a0147ae6c51  copy-host-observe.py
+b13c2f7e10d7b97ab16e138f69fddd9d94202beeaae6215d84ae96835546880b  run.sh
+5b3727e2158d6436dabeaf31bdd5212b95e1368c9497ca3c23d34307d99dc60e  inspect.sh
+runtime-test: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), static-pie linked, BuildID[sha1]=99a73d6afff80102d92332a9ff7ba6434200e820, not stripped
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00 
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              DYN (Position-Independent Executable file)
+  Machine:                           Advanced Micro Devices X86-64
+  Version:                           0x1
+  Entry point address:               0x13dc0b
+  Start of program headers:          64 (bytes into file)
+  Start of section headers:          59527680 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               64 (bytes)
+  Size of program headers:           56 (bytes)
+  Number of program headers:         10
+  Size of section headers:           64 (bytes)
+  Number of section headers:         28
+  Section header string table index: 27
+
+Elf file type is DYN (Position-Independent Executable file)
+Entry point 0x13dc0b
+There are 10 program headers, starting at offset 64
+
+Program Headers:
+  Type           Offset             VirtAddr           PhysAddr
+                 FileSiz            MemSiz              Flags  Align
+  LOAD           0x0000000000000000 0x0000000000000000 0x0000000000000000
+                 0x00000000001350f8 0x00000000001350f8  R      0x1000
+  LOAD           0x0000000000136000 0x0000000000136000 0x0000000000136000
+                 0x0000000001587b37 0x0000000001587b37  R E    0x1000
+  LOAD           0x00000000016be000 0x00000000016be000 0x00000000016be000
+                 0x00000000009c68f0 0x00000000009c68f0  R      0x1000
+  LOAD           0x0000000002084c80 0x0000000002085c80 0x0000000002085c80
+                 0x0000000000109f60 0x000000000010b908  RW     0x1000
+  DYNAMIC        0x0000000002172368 0x0000000002173368 0x0000000002173368
+                 0x0000000000000180 0x0000000000000180  RW     0x8
+  NOTE           0x0000000000000270 0x0000000000000270 0x0000000000000270
+                 0x0000000000000024 0x0000000000000024  R      0x4
+  TLS            0x0000000002084c80 0x0000000002085c80 0x0000000002085c80
+                 0x0000000000000230 0x00000000000002e0  R      0x8
+  GNU_EH_FRAME   0x0000000001c8f4b4 0x0000000001c8f4b4 0x0000000001c8f4b4
+                 0x00000000000b13b4 0x00000000000b13b4  R      0x4
+  GNU_STACK      0x0000000000000000 0x0000000000000000 0x0000000000000000
+                 0x0000000000000000 0x0000000000000000  RW     0x10
+  GNU_RELRO      0x0000000002084c80 0x0000000002085c80 0x0000000002085c80
+                 0x0000000000109380 0x0000000000109380  R      0x1
+
+ Section to Segment mapping:
+  Segment Sections...
+   00     .note.gnu.build-id .gnu.hash .dynsym .dynstr .rela.dyn 
+   01     .init .plt .plt.got .text .fini 
+   02     .rodata .eh_frame_hdr .eh_frame .gcc_except_table 
+   03     .tdata .init_array .fini_array .data.rel.ro .dynamic .got .data .bss 
+   04     .dynamic 
+   05     .note.gnu.build-id 
+   06     .tdata .tbss 
+   07     .eh_frame_hdr 
+   08     
+   09     .tdata .init_array .fini_array .data.rel.ro .dynamic .got 
+disk_available_bytes=45636698112
+MemAvailable:   1631413020 kB
+unique_id=54f88318ca05093d
+numa_node=1
+local_cpulist=48-95
+/sys/devices/pci0000:80/0000:80:01.1/0000:81:00.0/0000:82:00.0/0000:83:00.0/0000:84:00.0/0000:85:00.0
+drwxr-xr-x 3 root root 0 Sep 18 08:01 /sys/bus/pci/devices/0000:85:00.0/drm/card33
+lrwxrwxrwx 1 root root 0 Sep  9 23:46 /sys/bus/pci/devices/0000:85:00.0/drm/controlD97 -> card33
+drwxr-xr-x 3 root root 0 Sep 18 08:01 /sys/bus/pci/devices/0000:85:00.0/drm/renderD160
+/usr/bin/python3
+/usr/bin/prlimit
+/usr/bin/timeout
+/usr/bin/numactl
+available: 2 nodes (0-1)
+node 0 cpus: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47
+node 0 size: 967324 MB
+node 0 free: 10348 MB
+node 1 cpus: 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95
+node 1 size: 967569 MB
+node 1 free: 6542 MB
+node distances:
+node   0   1 
+  0:  10  32 
+  1:  32  10 
+2026-09-18T08:24:31.815230607Z

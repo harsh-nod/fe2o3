@@ -1,0 +1,1 @@
+ssh -o BatchMode=yes -o ConnectTimeout=10 mi300x sha256sum /tmp/fe2o3-copy-accounting-20260918.HyOO64fz/runtime-test /tmp/fe2o3-copy-accounting-20260918.HyOO64fz/copy-host-observe.py /tmp/fe2o3-copy-accounting-20260918.HyOO64fz/run.sh /tmp/fe2o3-copy-accounting-20260918.HyOO64fz/inspect.sh 

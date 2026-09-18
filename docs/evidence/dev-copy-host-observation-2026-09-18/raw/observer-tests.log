@@ -1,0 +1,24 @@
+test_launch_failure_is_recorded (test_copy_host_observe.CaptureTests.test_launch_failure_is_recorded) ... ok
+test_timeout_retains_partial_output (test_copy_host_observe.CaptureTests.test_timeout_retains_partial_output) ... ok
+test_truncation_and_non_ascii_cannot_admit (test_copy_host_observe.CaptureTests.test_truncation_and_non_ascii_cannot_admit) ... ok
+test_visibility_removed_without_mutating_parent_environment (test_copy_host_observe.CaptureTests.test_visibility_removed_without_mutating_parent_environment) ... ok
+test_admits_complete_quiet_endpoint_with_other_gpu_attached (test_copy_host_observe.ObserverTests.test_admits_complete_quiet_endpoint_with_other_gpu_attached) ... ok
+test_all_three_sysfs_snapshots_must_pass (test_copy_host_observe.ObserverTests.test_all_three_sysfs_snapshots_must_pass) ... ok
+test_cli_validates_bounds_before_sampling (test_copy_host_observe.ObserverTests.test_cli_validates_bounds_before_sampling) ... ok
+test_identity_change_during_capture_is_not_rehabilitated (test_copy_host_observe.ObserverTests.test_identity_change_during_capture_is_not_rehabilitated) ... ok
+test_invalid_pid_rosters_fail_closed (test_copy_host_observe.ObserverTests.test_invalid_pid_rosters_fail_closed) ... ok
+test_invalid_status_types_numbers_and_identities_fail_closed (test_copy_host_observe.ObserverTests.test_invalid_status_types_numbers_and_identities_fail_closed) ... ok
+test_later_good_observation_cannot_override_first_refusal (test_copy_host_observe.ObserverTests.test_later_good_observation_cannot_override_first_refusal) ... ok
+test_missing_sysfs_does_not_suppress_either_cli (test_copy_host_observe.ObserverTests.test_missing_sysfs_does_not_suppress_either_cli) ... ok
+test_oversized_and_invalid_sysfs_values_reject (test_copy_host_observe.ObserverTests.test_oversized_and_invalid_sysfs_values_reject) ... ok
+test_pid_capture_failure_is_unknown (test_copy_host_observe.ObserverTests.test_pid_capture_failure_is_unknown) ... ok
+test_pid_json_false_success_is_unknown_not_empty (test_copy_host_observe.ObserverTests.test_pid_json_false_success_is_unknown_not_empty) ... ok
+test_status_failure_never_suppresses_pid_capture (test_copy_host_observe.ObserverTests.test_status_failure_never_suppresses_pid_capture) ... ok
+test_threshold_is_exclusive_and_busy_is_zero (test_copy_host_observe.ObserverTests.test_threshold_is_exclusive_and_busy_is_zero) ... ok
+test_unsorted_gpu_indices_and_zero_attachment_records_parse (test_copy_host_observe.ObserverTests.test_unsorted_gpu_indices_and_zero_attachment_records_parse) ... ok
+test_vram_refusal_still_collects_pid_attribution (test_copy_host_observe.ObserverTests.test_vram_refusal_still_collects_pid_attribution) ... ok
+
+----------------------------------------------------------------------
+Ran 19 tests in 0.084s
+
+OK

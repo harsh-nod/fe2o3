@@ -6,6 +6,8 @@ use fe2o3_kfd::{Gfx942DeviceBackingUsageV1, Gfx942HostVisibleBackingUsageV1};
 use std::cell::Cell;
 
 mod cold_allocation;
+#[cfg(feature = "hardware-qualification")]
+mod copy_accounting;
 
 thread_local! { static SELECTION: Cell<Option<bool>> = const { Cell::new(None) }; }
 thread_local! { static PRIMARY_TEARDOWN_CAPACITY: Cell<bool> = const { Cell::new(false) }; }

@@ -1,0 +1,17 @@
+{
+  "audit": "PASS",
+  "source_files": 5543,
+  "changed_source_since_initial": "crates/fe2o3-runtime/src/kfd_backend/retained_release_tests/copy_accounting.rs",
+  "runtime_each": {
+    "passed": 1101,
+    "ignored": 18
+  },
+  "unsafe_policy": {
+    "passed": 5,
+    "ignored": 1
+  },
+  "unchanged_test_binaries": 2,
+  "closed_receipts": 15,
+  "native_acceptance": "separate-packet",
+  "performance_accepted": false
+}

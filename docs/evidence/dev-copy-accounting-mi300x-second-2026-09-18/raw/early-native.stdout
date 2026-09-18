@@ -1,0 +1,9 @@
+
+running 1 test
+test kfd_backend::retained_release_tests::copy_accounting::native_runtime_directional_256_mib_copy_shutdown_refunds_exact_backing ... 
+thread 'kfd_backend::retained_release_tests::copy_accounting::native_runtime_directional_256_mib_copy_shutdown_refunds_exact_backing' (1208225) panicked at crates/fe2o3-runtime/src/kfd_backend/retained_release_tests/copy_accounting.rs:96:9:
+assertion `left == right` failed
+  left: (0, 3, 0)
+ right: (0, 0, 0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+timeout: the monitored command dumped core

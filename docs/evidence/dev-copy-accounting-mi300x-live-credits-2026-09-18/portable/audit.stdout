@@ -1,0 +1,1 @@
+PASS: one native 256 MiB roundtrip/readback and exact backing-refund test; 11 local and 7 remote receipts; source/binary identity, complete endpoints and owned cleanup verified; no performance or continuous-isolation claim

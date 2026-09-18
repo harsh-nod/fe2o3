@@ -1,0 +1,1 @@
+native_launched=true native_exit=0 immediate_exit=0 delay_exit=0 delayed_exit=0 inspect_exit=0 no_retry=true

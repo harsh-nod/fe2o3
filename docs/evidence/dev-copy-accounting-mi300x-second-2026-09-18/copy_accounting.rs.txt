@@ -1,0 +1,190 @@
+//! Exact-size accounting oracle, separate from external VRAM observations.
+
+use super::*;
+use crate::{RuntimeAccessV1, RuntimeContextV1, RuntimeMemoryRegionV1, RuntimePollV1};
+use std::time::Instant;
+
+const COPY_BYTES: u64 = 256 * 1024 * 1024;
+// Pool observations count original buffer capacity; backing credits include padding.
+const STAGING_CAPACITY_BYTES: u64 = fe2o3_kfd::GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as u64;
+const STAGING_BACKING_BYTES: u64 = STAGING_CAPACITY_BYTES.next_multiple_of(4096);
+
+#[test]
+#[ignore = "requires guarded MI300X, FE2O3_TEST_NATIVE_UNIQUE_ID and FE2O3_TEST_NATIVE_ACCOUNTING=1"]
+fn native_runtime_directional_256_mib_copy_shutdown_refunds_exact_backing() {
+    // Explicit workload opt-in, not evidence of device exclusivity.
+    assert_eq!(
+        std::env::var("FE2O3_TEST_NATIVE_ACCOUNTING").as_deref(),
+        Ok("1")
+    );
+    let native = native_device();
+    // Existing deny-all qualification gate; its publication history is not a receipt.
+    let mut backend = KfdRuntimeBackendV1::open_copy_only_qualification_v1(native).unwrap();
+    backend
+        .configure_host_visible_backing_budget_v1(
+            Gfx942HostVisibleBackingBudgetV1::new(1024 * 1024 * 1024, 64).unwrap(),
+        )
+        .unwrap();
+    backend
+        .configure_device_backing_budget_v1(
+            Gfx942DeviceBackingBudgetV1::new(COPY_BYTES, 1).unwrap(),
+        )
+        .unwrap();
+    assert!(backend.host_pool_limits.is_none() && backend.device_pool_limits.is_none());
+    backend.ensure_sdma_queue_v1().unwrap();
+    let baseline_host = backend.host_visible_backing_usage_v1().unwrap();
+    let baseline_device = backend.device_backing_usage_v1().unwrap();
+    assert!(baseline_host.used_backing_bytes > 0 && !baseline_host.poisoned);
+    assert_eq!(baseline_device.used_backing_bytes, 0);
+    assert_eq!(baseline_device.used_allocation_records, 0);
+    assert!(!baseline_device.poisoned);
+    assert_eq!(
+        backend.sdma_memory_pool_observation_v1().unwrap(),
+        fe2o3_kfd::Gfx942SdmaMemoryPoolObservationV1::default()
+    );
+
+    let mut context = RuntimeContextV1::open(backend).unwrap();
+    assert_eq!(context.devices().len(), 1);
+    assert_eq!(context.devices()[0].target(), "gfx942:xnack-");
+    let device = context.devices()[0].id();
+    let stream = context.create_stream(device).unwrap();
+    let [upload, resident, download] = [
+        RuntimeMemoryKindV1::HostVisible,
+        RuntimeMemoryKindV1::DeviceLocal,
+        RuntimeMemoryKindV1::HostVisible,
+    ]
+    .map(|kind| context.allocate(device, kind, COPY_BYTES, 4096).unwrap());
+    let allocated_pool = context.backend().sdma_memory_pool_observation_v1().unwrap();
+    assert_eq!(allocated_pool.checked_out_buffers, 3);
+    assert_eq!(allocated_pool.retained_free_buffers, 1);
+    assert_eq!(allocated_pool.retained_free_bytes, STAGING_CAPACITY_BYTES);
+    let allocated_host = context.backend().host_visible_backing_usage_v1().unwrap();
+    let allocated_device = context.backend().device_backing_usage_v1().unwrap();
+    assert_eq!(
+        allocated_host.used_backing_bytes,
+        baseline_host.used_backing_bytes + 2 * COPY_BYTES + STAGING_BACKING_BYTES
+    );
+    assert_eq!(
+        allocated_host.used_allocation_records,
+        baseline_host.used_allocation_records + 3
+    );
+    assert_eq!(allocated_device.used_backing_bytes, COPY_BYTES);
+    assert_eq!(allocated_device.used_allocation_records, 1);
+    assert!(!allocated_host.poisoned && !allocated_device.poisoned);
+    for disposition in [
+        (
+            baseline_host.reserved_records,
+            baseline_host.retained_records,
+            baseline_host.quarantined_records,
+        ),
+        (
+            baseline_device.reserved_records,
+            baseline_device.retained_records,
+            baseline_device.quarantined_records,
+        ),
+        (
+            allocated_host.reserved_records,
+            allocated_host.retained_records,
+            allocated_host.quarantined_records,
+        ),
+        (
+            allocated_device.reserved_records,
+            allocated_device.retained_records,
+            allocated_device.quarantined_records,
+        ),
+    ] {
+        assert_eq!(disposition, (0, 0, 0));
+    }
+
+    let mut image = vec![0x6d; COPY_BYTES as usize];
+    context.write_allocation(upload, 0, &image).unwrap();
+    image.fill(0x92);
+    context.write_allocation(download, 0, &image).unwrap();
+    drop(image);
+    for (source, destination) in [(upload, resident), (resident, download)] {
+        let mut submission = context
+            .copy_async(
+                stream,
+                RuntimeMemoryRegionV1 {
+                    allocation: source,
+                    access: RuntimeAccessV1::Read,
+                    byte_offset: 0,
+                    byte_len: COPY_BYTES,
+                },
+                RuntimeMemoryRegionV1 {
+                    allocation: destination,
+                    access: RuntimeAccessV1::Write,
+                    byte_offset: 0,
+                    byte_len: COPY_BYTES,
+                },
+                &[],
+            )
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        context.flush_stream(stream).unwrap();
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(!remaining.is_zero(), "copy completion deadline expired");
+            match context
+                .wait(&mut submission, remaining.min(Duration::from_micros(50)))
+                .unwrap()
+            {
+                RuntimePollV1::Succeeded => break,
+                RuntimePollV1::Pending => context.flush_stream(stream).unwrap(),
+                RuntimePollV1::Failed { code } => panic!("copy failed: {code}"),
+            }
+        }
+        context.release_submission(submission).unwrap();
+    }
+    let mut observed = vec![0; STAGING_BACKING_BYTES as usize];
+    for offset in (0..COPY_BYTES).step_by(observed.len()) {
+        observed.fill(0);
+        context
+            .read_allocation(download, offset, &mut observed)
+            .unwrap();
+        assert!(
+            observed.iter().all(|byte| *byte == 0x6d),
+            "full-buffer validation"
+        );
+    }
+    drop(observed);
+    for allocation in [download, resident, upload] {
+        context.release_allocation(allocation).unwrap();
+    }
+    context.destroy_stream(stream).unwrap();
+    let mut backend = context.shutdown().unwrap();
+    let recycled_pool = backend.sdma_memory_pool_observation_v1().unwrap();
+    assert_eq!(recycled_pool.checked_out_buffers, 0);
+    assert_eq!(recycled_pool.retained_free_buffers, 4);
+    assert_eq!(
+        recycled_pool.retained_free_bytes,
+        3 * COPY_BYTES + STAGING_CAPACITY_BYTES
+    );
+    assert!(recycled_pool.reuse_count > 0);
+    assert_eq!(
+        backend.host_visible_backing_usage_v1(),
+        Some(allocated_host)
+    );
+    assert_eq!(backend.device_backing_usage_v1(), Some(allocated_device));
+
+    // Real shutdown performs the trim; the test does not free the pool first.
+    let usage = observe_shutdown(&mut backend);
+    assert_eq!(usage.before, Some(baseline_host));
+    assert_eq!(usage.device_before, Some(baseline_device));
+    assert_eq!(usage.device_completed, Some(baseline_device));
+    let completed_device = usage.device_completed.unwrap();
+    assert_eq!(completed_device.used_backing_bytes, 0);
+    assert_eq!(completed_device.used_allocation_records, 0);
+    assert_eq!(completed_device.reserved_records, 0);
+    assert_eq!(completed_device.retained_records, 0);
+    assert_eq!(completed_device.quarantined_records, 0);
+    assert!(!completed_device.poisoned);
+    assert_retired_shutdown_is_inert(&mut backend);
+    drop(backend);
+    println!(
+        "copy_accounting allocated_pool={allocated_pool:?} recycled_pool={recycled_pool:?} primary={usage:?}"
+    );
+    println!(
+        "native_runtime_directional_copy_accounting=complete bytes_per_allocation={COPY_BYTES} allocations=3 checked_bytes={COPY_BYTES} roundtrips=1 default_cache=true host_backing_after=0 device_backing_after=0 external_vram_baseline=not_asserted performance=not_measured"
+    );
+}

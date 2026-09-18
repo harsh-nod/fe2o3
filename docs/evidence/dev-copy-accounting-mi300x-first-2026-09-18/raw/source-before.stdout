@@ -1,0 +1,74 @@
+{
+  "base": "b87f30d1b87b2dca29e9f03e8b00f99a65b04391",
+  "sourceFiles": 5543,
+  "sourceManifestSha256": "d22891250b363dda63dc154cf5a3e3a66b5bd4cd110cdc7f148c02793cd7834c",
+  "observerSha256": "5d37b09bf0823854c6a45b914d866c042c1e65486cd96c6301285a0147ae6c51",
+  "binarySourcePath": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-afaad0775e07e3e7",
+  "binarySha256": "8e729393c536a7fdcb7ca42d81a667b55dc7b7163b37c5f27bdb6484698abd89",
+  "sourceMatchesFrozenMap": true
+}
+runtime-test: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), static-pie linked, BuildID[sha1]=99a73d6afff80102d92332a9ff7ba6434200e820, not stripped
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00 
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              DYN (Position-Independent Executable file)
+  Machine:                           Advanced Micro Devices X86-64
+  Version:                           0x1
+  Entry point address:               0x13dc0b
+  Start of program headers:          64 (bytes into file)
+  Start of section headers:          59527680 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               64 (bytes)
+  Size of program headers:           56 (bytes)
+  Number of program headers:         10
+  Size of section headers:           64 (bytes)
+  Number of section headers:         28
+  Section header string table index: 27
+
+Elf file type is DYN (Position-Independent Executable file)
+Entry point 0x13dc0b
+There are 10 program headers, starting at offset 64
+
+Program Headers:
+  Type           Offset             VirtAddr           PhysAddr
+                 FileSiz            MemSiz              Flags  Align
+  LOAD           0x0000000000000000 0x0000000000000000 0x0000000000000000
+                 0x00000000001350f8 0x00000000001350f8  R      0x1000
+  LOAD           0x0000000000136000 0x0000000000136000 0x0000000000136000
+                 0x0000000001587b37 0x0000000001587b37  R E    0x1000
+  LOAD           0x00000000016be000 0x00000000016be000 0x00000000016be000
+                 0x00000000009c68f0 0x00000000009c68f0  R      0x1000
+  LOAD           0x0000000002084c80 0x0000000002085c80 0x0000000002085c80
+                 0x0000000000109f60 0x000000000010b908  RW     0x1000
+  DYNAMIC        0x0000000002172368 0x0000000002173368 0x0000000002173368
+                 0x0000000000000180 0x0000000000000180  RW     0x8
+  NOTE           0x0000000000000270 0x0000000000000270 0x0000000000000270
+                 0x0000000000000024 0x0000000000000024  R      0x4
+  TLS            0x0000000002084c80 0x0000000002085c80 0x0000000002085c80
+                 0x0000000000000230 0x00000000000002e0  R      0x8
+  GNU_EH_FRAME   0x0000000001c8f4b4 0x0000000001c8f4b4 0x0000000001c8f4b4
+                 0x00000000000b13b4 0x00000000000b13b4  R      0x4
+  GNU_STACK      0x0000000000000000 0x0000000000000000 0x0000000000000000
+                 0x0000000000000000 0x0000000000000000  RW     0x10
+  GNU_RELRO      0x0000000002084c80 0x0000000002085c80 0x0000000002085c80
+                 0x0000000000109380 0x0000000000109380  R      0x1
+
+ Section to Segment mapping:
+  Segment Sections...
+   00     .note.gnu.build-id .gnu.hash .dynsym .dynstr .rela.dyn 
+   01     .init .plt .plt.got .text .fini 
+   02     .rodata .eh_frame_hdr .eh_frame .gcc_except_table 
+   03     .tdata .init_array .fini_array .data.rel.ro .dynamic .got .data .bss 
+   04     .dynamic 
+   05     .note.gnu.build-id 
+   06     .tdata .tbss 
+   07     .eh_frame_hdr 
+   08     
+   09     .tdata .init_array .fini_array .data.rel.ro .dynamic .got 
+8e729393c536a7fdcb7ca42d81a667b55dc7b7163b37c5f27bdb6484698abd89  runtime-test
+5d37b09bf0823854c6a45b914d866c042c1e65486cd96c6301285a0147ae6c51  copy-host-observe.py
+d22891250b363dda63dc154cf5a3e3a66b5bd4cd110cdc7f148c02793cd7834c  source-qualified-before.log

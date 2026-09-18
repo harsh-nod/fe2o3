@@ -1,0 +1,3 @@
+
+running 1 test
+test kfd_backend::retained_release_tests::copy_accounting::native_runtime_directional_256_mib_copy_shutdown_refunds_exact_backing ... 

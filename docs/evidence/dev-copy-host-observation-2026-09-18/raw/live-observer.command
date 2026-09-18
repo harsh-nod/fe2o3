@@ -1,0 +1,1 @@
+bash -c ssh\ -o\ BatchMode=yes\ -o\ ConnectTimeout=15\ mi300x\ python3\ -B\ -\ --gpu-index\ 4\ --pci-bdf\ 0000:85:00.0\ --unique-id\ 0x54f88318ca05093d\ --samples\ 6\ --interval-ms\ 1000\ \<\ benchmarks/runtime_gfx942/copy-host-observe.py 

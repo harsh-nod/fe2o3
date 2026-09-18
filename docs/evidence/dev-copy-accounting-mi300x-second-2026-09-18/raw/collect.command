@@ -1,0 +1,1 @@
+scp -r -o BatchMode=yes -o ConnectTimeout=10 mi300x:/tmp/fe2o3-copy-accounting-corrected-20260918.W7d8ptkX/results mi300x:/tmp/fe2o3-copy-accounting-corrected-20260918.W7d8ptkX/owner mi300x:/tmp/fe2o3-copy-accounting-corrected-20260918.W7d8ptkX/run.sh mi300x:/tmp/fe2o3-copy-accounting-corrected-20260918.W7d8ptkX/inspect.sh returned/ 

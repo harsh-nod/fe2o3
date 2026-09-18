@@ -1,0 +1,15 @@
+{
+  "audit": "PASS",
+  "source_files": 5543,
+  "runtime_each": {
+    "passed": 1101,
+    "ignored": 18
+  },
+  "new_native_fixture": "ignored-in-CPU-campaign",
+  "observer_tests": 19,
+  "host_guard_tests": 75,
+  "quiet_endpoint_samples": 6,
+  "unchanged_test_binaries": 2,
+  "closed_receipts": 28,
+  "performance_accepted": false
+}

@@ -10,7 +10,26 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest development (2026-09-18): nonblocking event, stream-progress and paired
+Latest copy qualification (2026-09-18): a guarded GPU 4
+[native accounting test](evidence/dev-copy-accounting-mi300x-live-credits-2026-09-18/README.md)
+passes one public 256 MiB H2D/D2H pair with every returned byte checked, default
+cache behavior, exact pool/backing accounting, zero host/device backing after
+ordinary shutdown, and inert repeated shutdown. Preflight, immediate and delayed
+host endpoints pass. The new
+[complete host observer](evidence/dev-copy-host-observation-2026-09-18/README.md)
+captures PID attribution even when VRAM or status fails; its 19 CPU tests and the
+unchanged guard's 75 tests pass. GNU and scoped musl each pass 1,101 runtime tests
+with eighteen hardware/opt-in cases ignored in the
+[final CPU campaign](evidence/dev-copy-accounting-live-credits-2026-09-18/README.md).
+Two earlier fixture-oracle failures remain separately archived: pool capacity is
+not page-rounded backing, and normal live backing credits are retained. Neither
+failed attempt reached the explicit copies. No production runtime algorithm or
+cache policy was changed. These are sequential shared-host observations, not an
+exclusive reservation, matched HIP/HSA performance result, formal refinement, or
+an explanation for earlier VRAM refusals. Accepted checkpoints, A1/A2 and #182
+are unchanged.
+
+Earlier development (2026-09-18): nonblocking event, stream-progress and paired
 observer registration removes the caller-owner's registration gap without
 blocking or starting a thread. The existing scheduler retains validation,
 capacity, duplicate ordering and paired all-or-nothing admission. Provisional
