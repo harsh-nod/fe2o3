@@ -9,6 +9,8 @@ struct ParameterStructureNodeV1<'a> {
 enum ParameterLeafPolicyV1 {
     PointerFree,
     SharedSliceLeaves,
+    // Validation only: nominal pointer words must not become physical arguments.
+    ExecutionAbiWords,
 }
 
 #[derive(Clone, Copy)]
@@ -73,8 +75,21 @@ fn append_parameter_structure_v1(
         | SemanticTypeShapeV1::Pointer(_) => {
             let (kir, leaf) = match declaration.shape() {
                 SemanticTypeShapeV1::Pointer(_)
-                    if policy == ParameterLeafPolicyV1::SharedSliceLeaves
-                        && shared_slice_leaf_v1(types, ty) =>
+                    if policy == ParameterLeafPolicyV1::ExecutionAbiWords
+                        && execution_cfg_nominal_kind_v29(types, ty)? == Some(true) =>
+                {
+                    let scalar = execution_reference_abi_scalar_v29(types, ty)?;
+                    (
+                        Type::Scalar(ScalarType::U64),
+                        ParameterAbiLeafV1::Scalar(scalar),
+                    )
+                }
+                SemanticTypeShapeV1::Pointer(_)
+                    if matches!(
+                        policy,
+                        ParameterLeafPolicyV1::SharedSliceLeaves
+                            | ParameterLeafPolicyV1::ExecutionAbiWords
+                    ) && shared_slice_leaf_v1(types, ty) =>
                 {
                     let SemanticBackendReprV1::ScalarPair { first, second } =
                         declaration.layout().backend_repr()

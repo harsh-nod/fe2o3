@@ -12474,6 +12474,7 @@ include!("production_execution_bindings_v1.rs");
 include!("production_emission_budget_v1.rs");
 include!("production_execution_availability_v29.rs");
 include!("production_execution_call_parameters_v29.rs");
+include!("production_execution_instance_plan_v29.rs");
 include!("production_execution_events_v29.rs");
 include!("production_execution_cfg_shape_v29.rs");
 include!("production_execution_cfg_transport_v29.rs");

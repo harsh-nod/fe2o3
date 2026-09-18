@@ -121,6 +121,22 @@ fn helper_parameter_shape_v1(
     function_id: SemanticFunctionIdV1,
     mapped: fe2o3_mir_model::SemanticAdjustedArgumentV1<'_>,
 ) -> Result<(bool, HelperParameterComponentsV1), ProductionSemanticKirErrorV1> {
+    helper_parameter_shape_with_policy_v1(
+        types,
+        function,
+        function_id,
+        mapped,
+        ParameterLeafPolicyV1::SharedSliceLeaves,
+    )
+}
+
+fn helper_parameter_shape_with_policy_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    function_id: SemanticFunctionIdV1,
+    mapped: fe2o3_mir_model::SemanticAdjustedArgumentV1<'_>,
+    policy: ParameterLeafPolicyV1,
+) -> Result<(bool, HelperParameterComponentsV1), ProductionSemanticKirErrorV1> {
     let argument = mapped.abi();
     if argument.value().adjusted().is_some() || argument.value().pointee_override().is_some() {
         return Err(unsupported(
@@ -147,12 +163,8 @@ fn helper_parameter_shape_v1(
         && mapped.source_ownership() == SemanticSourceArgumentOwnershipV1::ByValue
         && shared_slice_leaf_v1(types, argument.ty())
     {
-        let components = lower_by_value_abi_components_v1(
-            types,
-            function,
-            argument.value(),
-            ParameterLeafPolicyV1::SharedSliceLeaves,
-        )?;
+        let components =
+            lower_by_value_abi_components_v1(types, function, argument.value(), policy)?;
         return Ok((
             true,
             components
@@ -182,24 +194,19 @@ fn helper_parameter_shape_v1(
                 "helper parameter is not an exact by-value scalar aggregate or shared slice",
             ));
         }
-        lower_by_value_abi_components_v1(
-            types,
-            function,
-            argument.value(),
-            ParameterLeafPolicyV1::SharedSliceLeaves,
-        )
-        .map_err(|error| match error {
-            ProductionSemanticKirErrorV1::Unsupported {
-                block,
-                statement,
-                detail,
-                ..
-            } => unsupported(function_id.index(), block, statement, detail),
-            other => other,
-        })?
-        .into_iter()
-        .map(|(path, ty, kir, _, _)| (path, ty, kir))
-        .collect()
+        lower_by_value_abi_components_v1(types, function, argument.value(), policy)
+            .map_err(|error| match error {
+                ProductionSemanticKirErrorV1::Unsupported {
+                    block,
+                    statement,
+                    detail,
+                    ..
+                } => unsupported(function_id.index(), block, statement, detail),
+                other => other,
+            })?
+            .into_iter()
+            .map(|(path, ty, kir, _, _)| (path, ty, kir))
+            .collect()
     };
     Ok((shared_slice, components))
 }

@@ -1,6 +1,10 @@
 use super::*;
 use crate::production_semantic_kir_v1::*;
 
+mod instance_plan_tests {
+    include!("production_execution_instance_plan_v29_tests.rs");
+}
+
 const PAIR: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
 const HELPER: SemanticFunctionIdV1 = SemanticFunctionIdV1::from_index(1);
 
@@ -11,11 +15,19 @@ enum Shape {
     RustCall,
     IndexTuple,
     IndexRustCall,
+    PackedRustCall,
 }
 
 impl Shape {
     fn rust_call(self) -> bool {
-        matches!(self, Self::RustCall | Self::IndexRustCall)
+        matches!(
+            self,
+            Self::RustCall | Self::IndexRustCall | Self::PackedRustCall
+        )
+    }
+
+    fn expanded(self) -> bool {
+        self.rust_call() && !matches!(self, Self::PackedRustCall)
     }
 
     fn index(self) -> bool {
@@ -170,6 +182,12 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
         )
         .unwrap()
     };
+    let helper_abi = helper_abi
+        .with_source_argument_ownership(vec![
+            SemanticSourceArgumentOwnershipV1::ByValue;
+            if rust_call { 2 } else { 1 }
+        ])
+        .unwrap();
     let projected = |field, ty| {
         SemanticPlaceV1::new(
             SemanticLocalIdV1::from_index(1),
@@ -178,7 +196,7 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
         )
         .unwrap()
     };
-    let (locals, context, scalar_input, temporary) = if rust_call {
+    let (locals, context, scalar_input, temporary) = if shape.expanded() {
         (
             vec![
                 local(230, scalar_ty, SemanticLocalRoleV1::Return),
@@ -204,6 +222,28 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
             place(2, CONTEXT),
             place(3, scalar_ty),
             4,
+        )
+    } else if rust_call {
+        let projected = |field, ty| {
+            SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(2),
+                vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Field(field), ty).unwrap(),
+                ],
+                ty,
+            )
+            .unwrap()
+        };
+        (
+            vec![
+                local(230, scalar_ty, SemanticLocalRoleV1::Return),
+                local(231, UNIT, SemanticLocalRoleV1::Argument(0)),
+                local(232, PAIR, SemanticLocalRoleV1::Argument(1)),
+                local(234, CONTEXT, SemanticLocalRoleV1::Temporary),
+            ],
+            projected(0, CONTEXT),
+            projected(1, scalar_ty),
+            3,
         )
     } else {
         (
@@ -270,23 +310,6 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
     .unwrap()
 }
 
-fn child_plan(shape: Shape) -> LoweredFunctionPlanV1 {
-    LoweredFunctionPlanV1 {
-        correspondence_owner: ROOT,
-        semantic_function: HELPER,
-        kernel_ir_function: FunctionId::new("scoped_child"),
-        role: SemanticKirFunctionRoleV1::InternalHelper,
-        parameter_declarations: vec![],
-        parameter_types: vec![shape.physical()],
-        parameter_values: vec![ValueId(300)],
-        call_arguments: vec![],
-        parameter_local_bindings: vec![],
-        parameter_component_bindings: vec![],
-        ignored_parameter_bindings: vec![],
-        result_types: vec![shape.physical()],
-    }
-}
-
 #[derive(Clone, Copy)]
 enum Fault {
     None,
@@ -338,6 +361,19 @@ fn run(
                     let second = instances.calls(instances.root()).unwrap()[1]
                         .child()
                         .unwrap();
+                    let mut plan = execution_instance_plan_v29(
+                        instances,
+                        first,
+                        FunctionId::new("scoped_child"),
+                        SemanticEmissionPlacementV1 {
+                            first_block: 17,
+                            first_value: 300,
+                        },
+                        budget,
+                    )?;
+                    assert_eq!(plan.parameter_types, [shape.physical()]);
+                    assert_eq!(plan.parameter_values, [ValueId(300)]);
+                    assert_eq!(plan.result_types, [shape.physical()]);
                     let (prepared, duplicate) = with_execution_availability_v29(
                         instances,
                         instances.root(),
@@ -407,12 +443,7 @@ fn run(
                             let mut block = BasicBlock::new(BlockId(0));
                             parent.begin_block(SemanticBlockIdV1::from_index(0), &mut block)?;
                             let incoming = instances.incoming(first).unwrap();
-                            let rust_call = shape.rust_call();
-                            let projections = [HelperCallArgumentV1 {
-                                source_argument: u32::from(rust_call),
-                                tuple_field: rust_call.then_some(1),
-                                component: Some(0),
-                            }];
+                            let projections = &plan.call_arguments;
                             if matches!(fault, Fault::ForeignScope) {
                                 let storage = parent.emission_work.as_deref().unwrap().storage();
                                 let mut foreign_work =
@@ -433,7 +464,7 @@ fn run(
                                                     semantic_types: semantic.functions()[1]
                                                         .abi()
                                                         .source_input_types(),
-                                                    projections: &projections,
+                                                    projections,
                                                     parameter_types: vec![shape.physical()],
                                                 },
                                                 &mut block.operations,
@@ -459,7 +490,7 @@ fn run(
                                     semantic_types: semantic.functions()[1]
                                         .abi()
                                         .source_input_types(),
-                                    projections: &projections,
+                                    projections,
                                     parameter_types: vec![shape.physical()],
                                 },
                                 &mut block.operations,
@@ -495,7 +526,7 @@ fn run(
                                     &mut block.operations,
                                     vec![shape.physical()],
                                     OperationKind::Call {
-                                        callee: child_plan(shape).kernel_ir_function,
+                                        callee: plan.kernel_ir_function.clone(),
                                         arguments: prepared.arguments.clone(),
                                     },
                                 )?;
@@ -547,7 +578,7 @@ fn run(
                                         semantic_types: semantic.functions()[1]
                                             .abi()
                                             .source_input_types(),
-                                        projections: &projections,
+                                        projections,
                                         parameter_types: vec![shape.physical()],
                                     },
                                     &mut next_block.operations,
@@ -562,7 +593,6 @@ fn run(
                         },
                     )?;
                     let mut prepared = prepared;
-                    let mut plan = child_plan(shape);
                     match fault {
                         Fault::WrongType => {
                             prepared.execution.as_mut().unwrap().parameter_types[0] = Type::INDEX
@@ -683,6 +713,7 @@ fn scoped_arguments_reach_shared_constructor_entry_archive_and_scalar_emission()
         Shape::Tuple,
         Shape::Struct,
         Shape::IndexTuple,
+        Shape::PackedRustCall,
     ] {
         let result = run(shape, Fault::None, 10_000_000, 10_000_000)
             .0
@@ -700,18 +731,25 @@ fn scoped_arguments_reach_shared_constructor_entry_archive_and_scalar_emission()
             ValueId(90),
         )
         .unwrap();
-        let destination = if shape.rust_call() { 4 } else { 2 };
+        let destination = if shape.expanded() {
+            4
+        } else if shape.rust_call() {
+            3
+        } else {
+            2
+        };
         assert!(matches!(
             &observation.locals[destination],
             Some(SemanticValueBindingV1::Execution(actual)) if actual == &expected
         ));
-        if shape.rust_call() {
+        if shape.expanded() {
             assert!(matches!(
                 observation.locals[2],
                 None | Some(SemanticValueBindingV1::MovedExecution)
             ));
         } else {
-            assert!(matches!(&observation.locals[1],
+            let local = if shape.rust_call() { 2 } else { 1 };
+            assert!(matches!(&observation.locals[local],
                 Some(SemanticValueBindingV1::Aggregate(fields))
                     if matches!(fields[0], SemanticValueBindingV1::MovedExecution)));
         }
