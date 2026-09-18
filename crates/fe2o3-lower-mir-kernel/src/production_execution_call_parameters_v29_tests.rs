@@ -50,8 +50,8 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
     if shape.index() {
         // Keep the fixture's type table closed over the selected scalar width.
         types[U32.index() as usize] = SemanticTypeDeclV1::new(
-            SemanticTypeIdentityV1::from_sha256([200; 32]),
-            SemanticLayoutIdentityV1::from_sha256([200; 32]),
+            SemanticTypeIdentityV1::from_sha256([5; 32]),
+            SemanticLayoutIdentityV1::from_sha256([5; 32]),
             SemanticTypeLayoutV1::new_with_backend_repr(
                 Some(8),
                 8,
@@ -516,7 +516,6 @@ fn run(
                                     SemanticBlockIdV1::from_index(1),
                                     &mut block.operations,
                                 )?;
-                                assert!(arguments.contains(&ValueId(21)));
                                 parent.with_emission_budget_v1(|this, budget| {
                                     this.execution.as_mut().unwrap().finish_block(budget)
                                 })?;
@@ -531,6 +530,15 @@ fn run(
                                     }
                                     _ => panic!("second capture lost aggregate shape"),
                                 };
+                                if let Some(slot) = next_block
+                                    .parameters
+                                    .iter()
+                                    .position(|value| value.id == input)
+                                {
+                                    assert_eq!(arguments[slot], ValueId(21));
+                                } else {
+                                    assert_eq!(input, ValueId(21));
+                                }
                                 let second_prepared = parent.prepare_defined_call_arguments_v1(
                                     SemanticBlockIdV1::from_index(1),
                                     instances.incoming(second).unwrap().source(),
@@ -673,11 +681,11 @@ fn run(
 #[test]
 fn scoped_arguments_reach_shared_constructor_entry_archive_and_scalar_emission() {
     for shape in [
+        Shape::RustCall,
+        Shape::IndexRustCall,
         Shape::Tuple,
         Shape::Struct,
-        Shape::RustCall,
         Shape::IndexTuple,
-        Shape::IndexRustCall,
     ] {
         let result = run(shape, Fault::None, 10_000_000, 10_000_000)
             .0
@@ -722,12 +730,24 @@ fn scoped_arguments_reach_shared_constructor_entry_archive_and_scalar_emission()
             })
             .collect();
         assert_eq!(constants.len(), 1);
+        assert_eq!(
+            constants[0].kind,
+            OperationKind::Constant(if shape.index() {
+                Constant::U64(7)
+            } else {
+                Constant::U32(7)
+            })
+        );
+        assert_eq!(constants[0].results.len(), 1);
+        assert_eq!(constants[0].results[0].ty, shape.physical());
         let binaries: Vec<_> = blocks
             .iter()
             .flat_map(|block| &block.operations)
             .filter(|operation| matches!(operation.kind, OperationKind::Binary { .. }))
             .collect();
         assert_eq!(binaries.len(), 1);
+        assert_eq!(binaries[0].results.len(), 1);
+        assert_eq!(binaries[0].results[0].ty, shape.physical());
         assert_eq!(
             binaries[0].kind,
             OperationKind::Binary {
@@ -758,7 +778,11 @@ fn scoped_call_rejects_instance_identity_type_projection_and_tombstone_substitut
         Fault::ForeignBudget,
         Fault::ForeignScope,
     ] {
-        assert!(run(Shape::Tuple, fault, 10_000_000, 10_000_000).0.is_err());
+        assert!(
+            run(Shape::RustCall, fault, 10_000_000, 10_000_000)
+                .0
+                .is_err()
+        );
     }
 }
 
@@ -812,16 +836,19 @@ fn scoped_call_preserves_second_instance_capture_across_the_real_cfg_edge() {
 
 #[test]
 fn scoped_call_rejects_replacing_an_already_attached_parameter_seed() {
-    assert!(
+    assert!(matches!(
         run(
             Shape::RustCall,
             Fault::DuplicateSeed,
             10_000_000,
             10_000_000
         )
-        .0
-        .is_err()
-    );
+        .0,
+        Err(ProductionSemanticKirErrorV1::Unsupported {
+            detail: "execution call parameters are already attached",
+            ..
+        })
+    ));
 }
 
 #[test]

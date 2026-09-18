@@ -355,7 +355,12 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         'a: 'scope,
     {
         if self.parameters.is_some() {
-            return Err(execution_call_error_v29());
+            return Err(unsupported(
+                self.function_id.index(),
+                None,
+                None,
+                "execution call parameters are already attached",
+            ));
         }
         let mut cursor: ExecutionAvailabilityV29<'scope> = self;
         cursor.parameters = Some(parameters);
