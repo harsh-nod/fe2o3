@@ -28,6 +28,8 @@ mod f32_arithmetic;
 #[cfg(any(feature = "f32-exp", feature = "f32-helper-exp"))]
 mod f32_exp;
 
+#[cfg(feature = "constant-shift")]
+mod constant_shift;
 #[cfg(feature = "numeric-cast")]
 mod numeric_cast;
 #[cfg(feature = "saturating-integer")]
@@ -40,6 +42,7 @@ mod saturating_integer;
 mod write_only_reference;
 
 #[cfg(not(any(
+    feature = "constant-shift",
     feature = "scalar-borrow-policy5",
     feature = "defined-helper-reference",
     feature = "f32-exp",

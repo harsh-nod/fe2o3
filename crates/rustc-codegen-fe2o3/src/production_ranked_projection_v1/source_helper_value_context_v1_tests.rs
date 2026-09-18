@@ -12,6 +12,9 @@ mod ledger_tests;
 #[path = "source_helper_value_route_v1_tests.rs"]
 mod route_tests;
 
+#[path = "source_helper_constant_shift_v1_tests.rs"]
+mod shift_tests;
+
 struct TestMeter<'a, 'w> {
     budget: Budget<'w>,
     foreign: Budget<'w>,

@@ -8,6 +8,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
 type Error = &'static str;
 type Scalar = ProductionSemanticScalarTypeV2;
 
+include!("source_helper_constant_shift_v1.rs");
+
 #[derive(Clone, Copy)]
 enum Slot {
     Uninitialized,
@@ -247,6 +249,34 @@ impl Frame<'_, '_, '_> {
                 let operand = self.operand(operand)?;
                 self.output
                     .push(result_scalar, Kind::Unary(operation, operand), self.meter)?
+            }
+            SemanticRvalueKindV1::Binary {
+                operation,
+                left,
+                right,
+            } if matches!(
+                operation,
+                SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight
+            ) =>
+            {
+                self.meter.work(8)?;
+                if left.ty() != value.result_type()
+                    || !source_helper_constant_shift_v1(self.types, right, result_scalar)
+                {
+                    return Err("helper shift requires an exact in-range integer literal");
+                }
+                let lhs = self.operand(left)?;
+                let rhs = self.operand(right)?;
+                let operation = match operation {
+                    SemanticBinaryOpV1::ShiftLeft => ProductionSemanticBinaryOpV2::ShiftLeft,
+                    SemanticBinaryOpV1::ShiftRight => ProductionSemanticBinaryOpV2::ShiftRight,
+                    _ => unreachable!(),
+                };
+                self.output.push(
+                    result_scalar,
+                    Kind::Binary(operation, ProductionOverflowContractV2::Wrapping, lhs, rhs),
+                    self.meter,
+                )?
             }
             SemanticRvalueKindV1::Binary {
                 operation,

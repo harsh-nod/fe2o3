@@ -134,6 +134,10 @@ pub(super) fn source_parts(
                         value.result_type(),
                         budget,
                     )? => {}
+                    SemanticRvalueKindV1::Binary {
+                        operation: SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight,
+                        ..
+                    } if constant_shifts::source(source, value, budget)? => {}
                     SemanticRvalueKindV1::Unary {
                         operation: SemanticUnaryOpV1::Negate,
                         ..
@@ -382,6 +386,10 @@ pub(super) fn native(
             } if matches!(row.operation.results.as_slice(), [value] if matches!(value.ty, Type::F32 | Type::F64)) => {
                 None
             }
+            OperationKind::Binary {
+                op: BinaryOp::ShiftLeft | BinaryOp::ShiftRight,
+                ..
+            } if constant_shifts::native(inventory, ordinal, budget)? => None,
             OperationKind::Unary {
                 op: UnaryOp::Negate,
                 ..

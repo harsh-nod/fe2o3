@@ -787,3 +787,29 @@ independent full-pair replay, stable canonical coordinates and two fresh-process
 replays. Uninitialized and escaped-pointer graphs require conservative no-ops;
 they are not memory-safe source qualifications. These are observation fixtures,
 not a new compiler IR parser or publication authority.
+
+## Fixed-width literal shifts
+
+The checked scalar route admits left and right shifts of signed and unsigned
+8-, 16-, 32- and 64-bit integers when the source semantic-MIR count operand is a
+nonnegative integer constant strictly below the left operand's width. A
+heterogeneous count type is transported only at this operand position.
+Pointer-sized KIR `Index`,
+128-bit values, dynamic counts and out-of-range counts remain outside this
+contract; masking is not used to repair an invalid source count.
+
+The independent native census requires an actual in-range constant producer or
+the materializer's exact ordered constant-and-width-mask expression. Source
+and native helper derivations preserve the real operand order, body, ABI,
+lifetime and effect checks. Value correspondence still checks direction,
+result signedness and width, overflow contract, left operand and exact count.
+Each check uses the caller's existing work/storage budget without a new graph
+scan or a reset of expression-expansion limits.
+
+Ordinary-source regressions cover both directions, zero and final-bit counts,
+all eight scalar types, direct and retained helpers, and both target profiles.
+They compare actual optimized O against typed host-Rust byte oracles and inspect
+the remaining LLVM shift direction. Separate raw dynamic-count cases must
+refuse at the unchanged source-admission boundary. The retained-MIR setting is
+test-only. These regressions do not establish protected publication, hardware
+execution, dynamic-shift support or full tutorial-corpus qualification.

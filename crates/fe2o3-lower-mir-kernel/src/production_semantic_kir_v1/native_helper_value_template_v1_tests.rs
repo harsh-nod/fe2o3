@@ -144,7 +144,7 @@ fn nested_templates_keep_each_call_arguments_separate() {
         panic!("missing call result");
     };
     assert_ne!(lhs, rhs);
-    assert_eq!(actual.template_validate().unwrap().nodes, 7);
+    assert_eq!(actual.template_validate(&mut meter).unwrap().nodes, 7);
     release_expression(actual, bytes, &mut meter);
     caller.destroy(&mut meter).unwrap();
     callee.destroy(&mut meter).unwrap();

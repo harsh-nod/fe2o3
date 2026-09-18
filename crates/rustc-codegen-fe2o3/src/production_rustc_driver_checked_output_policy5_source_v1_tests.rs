@@ -181,6 +181,7 @@ impl Callbacks for CallbacksV1 {
                     .sum(),
                 runtime_domains: Some(runtime_domains::observe(admitted.kernels())?),
                 simulation: None,
+                constant_shift: None,
                 policy: checked.execution().policy_version(),
                 output_digest: report.output,
                 llvm_bytes: 0,

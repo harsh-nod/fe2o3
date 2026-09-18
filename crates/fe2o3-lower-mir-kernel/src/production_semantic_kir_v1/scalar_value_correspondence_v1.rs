@@ -1,4 +1,9 @@
+include!("constant_shift_value_v1.rs");
+
 // This compares scalar values, not operation-definedness or overflow flags.
+#[cfg(test)]
+include!("constant_shift_value_v1_tests.rs");
+
 // A checked KIR pair's first result implements modular source arithmetic;
 // the reverse implication would discard the source's no-overflow obligation.
 fn scalar_value_expressions_correspond_v1(
@@ -82,7 +87,17 @@ fn scalar_value_expressions_correspond_v1(
                 && scalar == other
                 && (overflow == other_overflow || modular_value)
                 && compare(lhs, other_lhs, budget)?
-                && compare(rhs, other_rhs, budget)?
+                && if matches!(
+                    operation,
+                    ProductionSemanticBinaryOpV2::ShiftLeft
+                        | ProductionSemanticBinaryOpV2::ShiftRight
+                ) && matches!(rhs.as_ref(), E::Constant { .. })
+                {
+                    compare(rhs, other_rhs, budget)?
+                        || constant_shift_counts_correspond_v1(rhs, other_rhs, *scalar, budget)?
+                } else {
+                    compare(rhs, other_rhs, budget)?
+                }
         }
         (
             E::Compare {

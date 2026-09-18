@@ -15,6 +15,8 @@ const CHILD_CASE: &str = "FE2O3_TEST_CHECKED_OUTPUT_SIMULATION_V1";
 const GUARD_ELEMENTS: usize = 4;
 const SENTINEL: f32 = -1234.5;
 const TARGET: SimulationTargetV1 = SimulationTargetV1::amdgpu_64();
+#[path = "production_rustc_driver_checked_output_shift_simulation_v1_tests.rs"]
+pub(super) mod constant_shift;
 #[path = "production_rustc_driver_checked_output_f32_simulation_v1_tests.rs"]
 mod f32_arithmetic;
 #[path = "production_rustc_driver_checked_output_numeric_cast_simulation_v1_tests.rs"]
@@ -27,6 +29,7 @@ mod scalar_borrow;
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum Case {
+    ConstantShift(constant_shift::Batch),
     ScalarBorrow,
     NumericCast(numeric_cast::OperationCase),
     SaturatingInteger(saturating_integer::OperationCase),
@@ -41,6 +44,7 @@ impl Case {
     fn name(self) -> &'static str {
         match self {
             Self::ScalarBorrow => "scalar-borrow-policy5",
+            Self::ConstantShift(case) => case.name(),
             Self::NumericCast(case) => case.name(),
             Self::SaturatingInteger(case) => case.name(),
             Self::Fill => "fill",
@@ -54,6 +58,7 @@ impl Case {
     fn numerical_policy(self) -> &'static str {
         match self {
             Self::ScalarBorrow => scalar_borrow::NUMERICAL_POLICY,
+            Self::ConstantShift(_) => constant_shift::NUMERICAL_POLICY,
             Self::NumericCast(_) => numeric_cast::NUMERICAL_POLICY,
             Self::SaturatingInteger(_) => saturating_integer::NUMERICAL_POLICY,
             Self::Fill | Self::Vecadd | Self::ScalarGemm => {
@@ -65,6 +70,11 @@ impl Case {
 }
 
 pub(super) fn check_native_arithmetic(case: Case, llvm: &str) -> Result<(), SourceFailure> {
+    if matches!(case, Case::ConstantShift(_)) {
+        return Err(failure(
+            "shifts require exact per-root native owner observations",
+        ));
+    }
     if case == Case::ScalarBorrow {
         // The fixed Policy5 child independently compares native private-load
         // count with its exact S/O observation; no arithmetic-specific opcode.
@@ -137,6 +147,7 @@ pub(super) fn requested() -> Result<Option<Case>, SourceFailure> {
         Some(name) => saturating_integer::OperationCase::parse(name)
             .map(Case::SaturatingInteger)
             .or_else(|| numeric_cast::OperationCase::parse(name).map(Case::NumericCast))
+            .or_else(|| constant_shift::Batch::parse(name).map(Case::ConstantShift))
             .map(Some)
             .ok_or_else(|| failure("unknown explicit test simulation request")),
         _ => Err(failure("unknown explicit test simulation request")),
@@ -246,7 +257,10 @@ fn elementwise(case: Case, out_len: usize, extra_inputs: usize) -> Result<Scenar
             (0..out_len).map(|i| rounded_add(a[i], b[i])).collect()
         }
         Case::ScalarGemm => return Err(failure("GEMM requires its recurrence fixture")),
-        Case::ScalarBorrow | Case::SaturatingInteger(_) | Case::NumericCast(_) => {
+        Case::ScalarBorrow
+        | Case::SaturatingInteger(_)
+        | Case::NumericCast(_)
+        | Case::ConstantShift(_) => {
             return Err(failure("integer saturation requires its typed fixture"));
         }
         Case::F32Negate | Case::F32Divide => {
@@ -331,6 +345,7 @@ fn gemm_inputs(
 fn scenarios(case: Case) -> Result<Vec<Scenario>, SourceFailure> {
     match case {
         Case::ScalarBorrow => scalar_borrow::scenarios(),
+        Case::ConstantShift(case) => constant_shift::scenarios(case),
         Case::NumericCast(case) => numeric_cast::scenarios(case),
         Case::SaturatingInteger(case) => saturating_integer::scenarios(case),
         Case::F32Negate | Case::F32Divide => f32_arithmetic::scenarios(case),
@@ -379,6 +394,9 @@ fn scenarios(case: Case) -> Result<Vec<Scenario>, SourceFailure> {
 }
 
 fn require_abi(module: &AdmittedSimulationModuleV1, case: Case) -> Result<&Kernel, SourceFailure> {
+    if matches!(case, Case::ConstantShift(_)) {
+        return Err(failure("shifts require exact multi-root execution plans"));
+    }
     if case == Case::ScalarBorrow {
         return scalar_borrow::require_abi(module);
     }
@@ -506,7 +524,8 @@ fn check_execution(
         | Case::ScalarGemm
         | Case::ScalarBorrow
         | Case::SaturatingInteger(_)
-        | Case::NumericCast(_) => check_backings(execution.shared_buffers(), expected),
+        | Case::NumericCast(_)
+        | Case::ConstantShift(_) => check_backings(execution.shared_buffers(), expected),
     }
 }
 
@@ -574,9 +593,17 @@ pub(super) fn observe(
             "simulator admission changed custody or granted authority",
         ));
     }
-    let kernel = require_abi(&module, case)?;
+    let runs = if let Case::ConstantShift(batch) = case {
+        constant_shift::runs(&module, batch)?
+    } else {
+        let kernel = require_abi(&module, case)?;
+        scenarios(case)?
+            .into_iter()
+            .map(|scenario| (kernel, scenario))
+            .collect()
+    };
     let mut observations = Vec::new();
-    for scenario in scenarios(case)? {
+    for (kernel, scenario) in runs {
         let (grid, workgroup) = launch(kernel, scenario.active)?;
         let request =
             SimulationRequestV1::new(kernel.id.clone(), grid, workgroup, scenario.arguments)

@@ -47,6 +47,8 @@ struct Observation {
     runtime_domains: Option<runtime_domains::RuntimeDomainObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     simulation: Option<simulation::SimulationObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    constant_shift: Option<shift_source::ShiftObservation>,
     policy: u16,
     output_digest: [u8; 32],
     llvm_bytes: usize,
@@ -164,6 +166,7 @@ impl Callbacks for CheckedOutputCallbacks {
                 formal_accesses: stage.kernels().iter().map(|k| k.accesses().len()).sum(),
                 runtime_domains: Some(runtime_domains::observe(stage.kernels())?),
                 simulation: None,
+                constant_shift: None,
                 policy: stage.checked_output().execution().policy_version(),
                 output_digest: *stage.output().canonical().identity().digest(),
                 llvm_bytes: 0,
@@ -204,6 +207,7 @@ impl Callbacks for CheckedOutputCallbacks {
                 }
             }
             let simulation_case = simulation::requested()?;
+            observation.constant_shift = shift_source::check_actual(&stage, simulation_case)?;
             let exp_source_identity = exp_source::check_actual_if_requested(&stage)?;
             if let Some(case) = simulation_case {
                 observation.simulation =
@@ -273,7 +277,10 @@ impl Callbacks for CheckedOutputCallbacks {
                 exp_source_identity,
                 &observation.output_digest,
             )?;
-            if let Some(case) = simulation_case {
+            shift_source::check_native(observation.constant_shift.as_ref(), llvm)?;
+            if let Some(case) = simulation_case
+                && !matches!(case, simulation::Case::ConstantShift(_))
+            {
                 simulation::check_native_arithmetic(case, llvm)?;
             }
             observation.llvm_bytes = llvm.len();
@@ -432,6 +439,7 @@ fn ordinary_rust_private_unit_helper_reaches_checked_native_output() {
 }
 
 enum OrdinarySourceCase {
+    ConstantShift(shift_source::Config),
     ScalarBorrowPolicy5,
     RetainedScalarBorrowPolicy5,
     ScalarBorrowPolicy5Barrier,
@@ -510,11 +518,25 @@ fn ordinary_rust_checked_output_cases_for_profile(
             continue;
         }
         let configuration_name = match case {
+            OrdinarySourceCase::ConstantShift(config) => config.name(),
             OrdinarySourceCase::NumericCast(config) => config.name(),
             OrdinarySourceCase::SaturatingInteger(config) => config.name(),
             _ => String::new(),
         };
         let (name, package_path, feature, roots, reads, writes, calls) = match case {
+            OrdinarySourceCase::ConstantShift(config) => (
+                configuration_name.as_str(),
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("constant-shift"),
+                config.roots(),
+                0,
+                config.roots().len(),
+                if config.batch.retained {
+                    config.roots().len()
+                } else {
+                    0
+                },
+            ),
             OrdinarySourceCase::ScalarBorrowPolicy5
             | OrdinarySourceCase::RetainedScalarBorrowPolicy5
             | OrdinarySourceCase::ScalarBorrowPolicy5Barrier => (
@@ -705,6 +727,9 @@ fn ordinary_rust_checked_output_cases_for_profile(
         if let OrdinarySourceCase::NumericCast(config) = case {
             config.configure(&mut args);
         }
+        if let OrdinarySourceCase::ConstantShift(config) = case {
+            config.configure(&mut args);
+        }
         if matches!(
             case,
             OrdinarySourceCase::RetainedScalarBorrowPolicy5
@@ -783,6 +808,9 @@ fn ordinary_rust_checked_output_cases_for_profile(
             );
         progress::clear_inherited_jobserver(&mut command);
         let simulation_case = match case {
+            OrdinarySourceCase::ConstantShift(config) => {
+                (!config.dynamic).then_some(simulation::Case::ConstantShift(config.batch))
+            }
             OrdinarySourceCase::ScalarBorrowPolicy5
             | OrdinarySourceCase::RetainedScalarBorrowPolicy5
             | OrdinarySourceCase::ScalarBorrowPolicy5Barrier => {
@@ -819,11 +847,30 @@ fn ordinary_rust_checked_output_cases_for_profile(
         );
         let diagnostic_name = format!("{}-{name}", profile.cpu());
         snapshots::configure_child(&mut command, &diagnostic_name);
-        let child = output(&mut command);
-        let result: Result<Observation, SourceFailure> =
-            serde_json::from_slice(&std::fs::read(&response).unwrap()).unwrap();
+        let (child, result) = match case {
+            OrdinarySourceCase::ConstantShift(config) if config.dynamic => {
+                shift_source::expected_refusal_child(&mut command, &response)
+            }
+            _ => {
+                let child = output(&mut command);
+                let result: Result<Observation, SourceFailure> =
+                    serde_json::from_slice(&std::fs::read(&response).unwrap()).unwrap();
+                (child, result)
+            }
+        };
+        if let OrdinarySourceCase::ConstantShift(config) = case
+            && config.dynamic
+        {
+            config.check_refusal(result);
+            eprintln!("ordinary source {diagnostic_name}: exact dynamic-count source refusal");
+            continue;
+        }
         let result = result.unwrap();
-        assert_eq!(result.roots, roots);
+        if let OrdinarySourceCase::ConstantShift(config) = case {
+            config.check_root_roster(&result.roots).unwrap();
+        } else {
+            assert_eq!(result.roots, roots);
+        }
         assert_eq!(
             result.transparent_result_wrappers,
             Some(usize::from(matches!(
@@ -892,6 +939,9 @@ fn ordinary_rust_checked_output_cases_for_profile(
             assert_eq!((result.reads, result.writes), (reads, writes));
         }
         if let OrdinarySourceCase::SaturatingInteger(config) = case {
+            config.check(&result);
+        }
+        if let OrdinarySourceCase::ConstantShift(config) = case {
             config.check(&result);
         }
         assert_eq!(
@@ -990,5 +1040,7 @@ mod progress;
 mod runtime_domains;
 #[path = "production_rustc_driver_checked_output_saturating_source_v1_tests.rs"]
 mod saturating_source;
+#[path = "production_rustc_driver_checked_output_shift_source_v1_tests.rs"]
+mod shift_source;
 #[path = "production_rustc_driver_checked_output_simulation_v1_tests.rs"]
 mod simulation;
