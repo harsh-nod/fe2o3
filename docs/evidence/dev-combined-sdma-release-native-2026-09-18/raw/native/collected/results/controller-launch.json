@@ -1,0 +1,18 @@
+{
+  "command": [
+    "/usr/bin/timeout",
+    "--signal=TERM",
+    "--kill-after=15s",
+    "3600s",
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/fe2o3-combined-sdma-20260918.d3b7bc43/run.py",
+    "--parent-ready-approved"
+  ],
+  "process_group": 474901,
+  "started_ns": 1789753094039009578,
+  "status": 1,
+  "group_absent": true,
+  "error": null,
+  "finished_ns": 1789753237372075298
+}

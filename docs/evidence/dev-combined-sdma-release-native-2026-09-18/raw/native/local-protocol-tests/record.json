@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-combined-sdma-native-bundle-v2-20260918/test_protocol.py",
+    "-v"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-combined-sdma-native-bundle-v2-20260918",
+  "started_ns": 1789753084783966988,
+  "bound_seconds": 30,
+  "process_group": 192368,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789753085001046111,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "8436e7641ac3babdfdc6df49d86dfa2ca085c01fc8657ab6d6ccf14f07cda01c"
+}

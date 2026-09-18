@@ -1,0 +1,4 @@
+Filesystem                    Inodes    IUsed     IFree IUse% Mounted on
+/dev/nvme2n1p2             234356736 34692865 199663871   15% /
+/dev/mapper/sharkvg-homelv 275789824 49991088 225798736   19% /home
+tmpfs                      247666453  1796438 245870015    1% /dev/shm

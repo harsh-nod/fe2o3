@@ -1,0 +1,26 @@
+{
+  "commit": "c19dd3adf33402a63bdcc0404effed39c2f33b75",
+  "source_files_matched": 5557,
+  "cpu_manifest_sha256": "529398ddbab4825c6847e918f26e1a0cc6b4554963f20fc37b7b2d9cbb155477",
+  "binary_sha256": "08e0ed94feac79cb8126e536a3926994ebda3c4eff43e3edc3276faf11a1586d",
+  "cohort_sha256": "9f5447bdbffb3277ff3750f2747a5300d7d69b05065bee149c297a5f4abe08cb",
+  "started_ns": 1789752703539816936,
+  "finished_ns": 1789752707318670550,
+  "signature_command": [
+    "git",
+    "-c",
+    "gpg.ssh.allowedSignersFile=/home/harsh/.codex-tmp/fe2o3-combined-sdma-protocol-20260918/allowed-signers",
+    "verify-commit",
+    "--raw",
+    "c19dd3adf33402a63bdcc0404effed39c2f33b75"
+  ],
+  "signature_exit": 0,
+  "cohort_command": [
+    "git",
+    "cat-file",
+    "--batch"
+  ],
+  "cohort_exit": 0,
+  "source_base_field_ignored_only": true,
+  "native_authorized": false
+}

@@ -1,0 +1,4 @@
+Filesystem                  Size  Used Avail Use% Mounted on
+/dev/nvme2n1p2              3.5T  3.4T     0 100% /
+/dev/mapper/sharkvg-homelv   17T  6.2T  9.5T  40% /home
+tmpfs                       945G  684G  261G  73% /dev/shm

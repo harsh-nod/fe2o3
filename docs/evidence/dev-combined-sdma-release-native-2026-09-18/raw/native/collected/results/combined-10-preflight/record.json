@@ -1,0 +1,46 @@
+{
+  "name": "combined-10-preflight",
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/fe2o3-combined-sdma-20260918.d3b7bc43/source/copy-host-observe.py",
+    "--gpu-index",
+    "1",
+    "--pci-bdf",
+    "0000:26:00.0",
+    "--unique-id",
+    "0xab83d2ffef0d3cdf",
+    "--samples",
+    "1"
+  ],
+  "cwd": "/home/harsh/fe2o3-combined-sdma-20260918.d3b7bc43",
+  "environment": {
+    "HOME": "/home/harsh",
+    "PATH": "/usr/bin:/bin:/opt/rocm/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "HSA_XNACK": "0"
+  },
+  "started": {
+    "realtime_ns": 1789753206978366746,
+    "monotonic_ns": 7252104400038989
+  },
+  "spawned": {
+    "realtime_ns": 1789753206982382048,
+    "monotonic_ns": 7252104404054140
+  },
+  "status": 0,
+  "error": null,
+  "process_group": 484189,
+  "group_absent": true,
+  "t0": {
+    "realtime_ns": 1789753209151569768,
+    "monotonic_ns": 7252106573242651
+  },
+  "outer_bound_seconds": 75,
+  "finished": {
+    "realtime_ns": 1789753209151643348,
+    "monotonic_ns": 7252106573315230
+  },
+  "stdout_sha256": "0b2bb1c1b0aca7003b03c46a30cec06d17214b5347628ceaee7df14a1c78c22f",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

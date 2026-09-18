@@ -1,0 +1,40 @@
+{
+  "name": "placement",
+  "command": [
+    "/usr/bin/numactl",
+    "--physcpubind=0-47",
+    "--membind=0",
+    "/usr/bin/numactl",
+    "--show"
+  ],
+  "cwd": "/home/harsh/fe2o3-combined-sdma-20260918.d3b7bc43",
+  "environment": {
+    "HOME": "/home/harsh",
+    "PATH": "/usr/bin:/bin:/opt/rocm/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "HSA_XNACK": "0"
+  },
+  "started": {
+    "realtime_ns": 1789753094153032654,
+    "monotonic_ns": 7251991574704265
+  },
+  "spawned": {
+    "realtime_ns": 1789753094155250479,
+    "monotonic_ns": 7251991576922130
+  },
+  "status": 0,
+  "error": null,
+  "process_group": 474904,
+  "group_absent": true,
+  "t0": {
+    "realtime_ns": 1789753094158434077,
+    "monotonic_ns": 7251991580105558
+  },
+  "outer_bound_seconds": 15,
+  "finished": {
+    "realtime_ns": 1789753094158457161,
+    "monotonic_ns": 7251991580128623
+  },
+  "stdout_sha256": "756e97e3a5306549aba9cb56d603af82dc305a7042b1e128365dfa6ad6d4d69e",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

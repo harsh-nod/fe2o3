@@ -1,0 +1,27 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -B -c 'import os,json; p='\"'\"'/tmp/fe2o3-combined-sdma-20260918.47b2755b'\"'\"'; assert not os.path.lexists(p); print(json.dumps({'\"'\"'owned'\"'\"':p,'\"'\"'absent'\"'\"':True,'\"'\"'runtime_uploaded'\"'\"':False,'\"'\"'runtime_executed'\"'\"':False},sort_keys=True))'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-combined-sdma-native-bundle-20260918",
+  "started_ns": 1789752812051907873,
+  "bound_seconds": 45,
+  "process_group": 170715,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789752813024245837,
+  "stdout_sha256": "0051c675e71060ce46e52d85d1e0f9aadc3d87b8c00a93402fd50685744fe252",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}
