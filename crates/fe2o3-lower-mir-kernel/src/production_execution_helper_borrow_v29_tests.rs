@@ -496,6 +496,30 @@ fn module_limits(work: usize, storage: usize) -> ProductionSemanticSsaLimitsV1 {
 }
 
 #[test]
+fn nominal_helper_sparse_slots_and_closed_round_have_independent_limits() {
+    use fe2o3_mir_model::SsaPlannerResourceV1::{StorageWords, WorkUnits};
+
+    // Three functions, seven source slots, thirteen helper locals and one seed:
+    // setup 114 + two row passes 20 + scan 1709 + closure 1 = 1844 work.
+    // Retained rows 136 + peak scratch 400 = 536 words. Root sizing next costs 4.
+    for (work, storage, resource, required, limit) in [
+        (1843, usize::MAX, WorkUnits, 1844, 1843),
+        (1844, usize::MAX, WorkUnits, 1848, 1844),
+        (usize::MAX, 535, StorageWords, 536, 535),
+    ] {
+        assert_eq!(
+            owner_with_limits(helper_source(Case::Unused, 2), module_limits(work, storage),)
+                .unwrap_err(),
+            SsaError::AggregateResourceLimit {
+                resource,
+                required,
+                limit,
+            },
+        );
+    }
+}
+
+#[test]
 fn nominal_helper_summary_work_and_storage_are_part_of_exact_module_limits() {
     for prefix in [0, 8] {
         let owner = owner_with_limits(

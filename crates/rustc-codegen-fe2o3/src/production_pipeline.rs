@@ -3553,6 +3553,27 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
             &mut work,
             crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
         );
+        #[cfg(test)]
+        let semantic_ssa = {
+            let mut ssa = semantic_ssa;
+            if ssa.source_semantic().wire_version()
+                == fe2o3_mir_model::semantic_mir_v1::SemanticMirWireVersionV1::V29
+            {
+                let receipt = ssa
+                    .try_capture_occurrences_with_budget_v1(&mut budget)
+                    .map_err(|error| {
+                        ProductionPipelineError::PreRankedMaterialization(
+                            fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1::Occurrences(
+                                error,
+                            ),
+                        )
+                    })?;
+                budget
+                    .reserve_storage(receipt.retained_storage())
+                    .map_err(resource_error)?;
+            }
+            ssa
+        };
         context_handoff_v29::check_context_handoff_v29(
             &bindings.context_entries,
             &semantic_ssa,
