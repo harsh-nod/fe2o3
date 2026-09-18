@@ -408,6 +408,23 @@ This is not default activation or protected publication: the historical direct
 constructor still refuses UnitLocal, extraction still requires extraction-only
 custody, and the typed N/E proof-to-protected-native consuming join remains open.
 
+The distinct `prepare_native_source_lineage_v1` consuming stage now retains the
+original authenticated ranked roster, original N native packet, typed N/E proof,
+collector bindings and actual-O artifacts together. Packet assembly is shared
+with the direct route, but erased source is never converted into a direct/N-only
+owner. Ordered staging commitments come from the same original source owner;
+they do not independently authenticate signing or execution. A paid comparison
+joins the proof's semantic identity and complete catalog bytes to actual O.
+The new state is not a protected artifact or launch capability, and its final
+protected consumer remains unconnected.
+
+The ordinary private-helper source test first requires genuine silent-Unit
+erasure and actual-O native output, then reruns the owning lineage producer.
+Without approved signed ranked execution it must return the precise
+missing-receipt error, preserve its resource floor, and release no LLVM or
+descriptor output. The direct fill rejection remains covered. These unsigned
+tests do not qualify successful signed production execution.
+
 The ranked projector also represents eligible whole scalar-private root loads
 and stores as one-element private views at index zero. A paid per-function
 census excludes arguments, nonscalar storage, every projected use, borrows,

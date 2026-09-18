@@ -113,6 +113,20 @@ pub(crate) struct ErasedCheckedOutputTargetProductionCompilationV1 {
     retained_storage_floor: usize,
 }
 
+/// Distinct consumed state retaining original collector/ranked custody, typed
+/// source/N/E proof, E/B, checked C/O and the actual-O native artifacts. The
+/// protected compiler-origin and final proof-format consumers remain absent.
+#[allow(
+    dead_code,
+    reason = "retained custody for the pending protected-native consumer"
+)]
+pub(crate) struct NativeSourceErasedCheckedOutputProductionCompilationV1 {
+    artifacts: PreparedErasedCheckedOutputArtifactsV1,
+    source_lineage: crate::production_native_source_lineage_v1::PreparedErasedNativeSourceLineageV1,
+    bindings: AuthenticatedProductionBindings,
+    retained_storage_floor: usize,
+}
+
 impl RankedVerifiedProductionCompilation {
     /// Explicit route only. It does not activate the default pipeline or allow
     /// protected publication while final source/native origin joins are absent.
@@ -226,6 +240,64 @@ impl ErasedCheckedOutputTargetProductionCompilationV1 {
     #[allow(dead_code)]
     pub(crate) fn output(&self) -> &Admitted {
         self.artifacts.admitted()
+    }
+
+    /// Consumes this stage's actual original roster. Missing signed execution
+    /// is an error, never a conversion to the Direct/N-only producer.
+    #[allow(dead_code)]
+    pub(crate) fn prepare_native_source_lineage_v1(
+        self,
+        budget: &mut Budget<'_>,
+    ) -> Result<
+        (
+            NativeSourceErasedCheckedOutputProductionCompilationV1,
+            crate::production_native_source_lineage_v1::ErasedNativeSourceLineageStorageV1,
+        ),
+        ProductionPipelineError,
+    > {
+        budget.charge_work(2).map_err(resource)?;
+        if budget.storage() < self.retained_storage_floor {
+            return Err(resource(Resource::Accounting));
+        }
+        let (source_lineage, storage) =
+            crate::production_native_source_lineage_v1::try_prepare_erased_native_source_lineage_v1(
+                self.artifacts.admitted().erased_source(),
+                self.ranked_verification,
+                budget,
+            ).map_err(|error| ProductionPipelineError::CheckedOutputStage(
+                CheckedOutputStageErrorV1::NativeSource(Box::new(error))))?;
+        // The producer returned its receipt unreserved. Keep it live through
+        // the cross-stage comparison, then transfer it unchanged to the caller.
+        budget
+            .reserve_storage(storage.retained_storage())
+            .map_err(resource)?;
+        let catalog_result =
+            source_lineage.check_output_catalog_v1(self.artifacts.catalog(), budget);
+        if let Err(error) = catalog_result {
+            drop(source_lineage);
+            budget
+                .release_storage(storage.retained_storage())
+                .map_err(resource)?;
+            return Err(ProductionPipelineError::CheckedOutputStage(
+                CheckedOutputStageErrorV1::NativeSource(Box::new(error)),
+            ));
+        }
+        budget
+            .release_storage(storage.retained_storage())
+            .map_err(resource)?;
+        let retained_storage_floor = self
+            .retained_storage_floor
+            .checked_add(storage.retained_storage())
+            .ok_or_else(|| resource(Resource::Arithmetic))?;
+        Ok((
+            NativeSourceErasedCheckedOutputProductionCompilationV1 {
+                artifacts: self.artifacts,
+                source_lineage,
+                bindings: self.bindings,
+                retained_storage_floor,
+            },
+            storage,
+        ))
     }
 
     /// Extraction-only coordination bytes, retaining all original extraction

@@ -1,5 +1,16 @@
 //! Native source lineage from genuine attached source and consumed ranked custody.
 
+#[path = "production_native_source_packet_v1.rs"]
+mod packet;
+use packet::{NativeSourceRefV1, prepare_native_source_packet_v1};
+
+#[path = "production_native_erased_source_lineage_v1.rs"]
+mod erased;
+pub(crate) use erased::{
+    ErasedNativeSourceLineageStorageV1, PreparedErasedNativeSourceLineageV1,
+    try_prepare_erased_native_source_lineage_v1,
+};
+
 use crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1;
 use fe2o3_compiler_lineage::{
     InertNativeNeutralSubjectV1, MultiRootProofRosterInputsV3, MultiRootProofRosterKindV3 as Kind,
@@ -205,252 +216,36 @@ pub(crate) fn try_prepare_native_source_lineage_v1(
         return Err(Resource::Accounting.into());
     }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        source.verify_equivalence().map_err(E::Source)?;
-        let native = source
-            .pre_ranked_executable()
-            .ok_or(E::Mismatch("missing native source owner"))?;
-        let launch = source
-            .source_launch_roster()
-            .ok_or(E::Mismatch("missing source launch roster"))?;
-        let semantic = source.semantic().semantic();
-        let count = semantic.roots().len();
-        budget.charge_work(3)?;
-        if ranked.root_count() != count
-            || launch.roots().len() != count
-            || !ranked.every_functional_verification_is_coherent()
-        {
-            return Err(E::Mismatch("complete coherent source/ranked roster"));
-        }
-        let mut joins = reserved_vec(count, budget)?;
-        for root in ranked.roots() {
-            budget.charge_work(2 + root.export_symbol().len())?;
-            let export = std::str::from_utf8(root.export_symbol())
-                .map_err(|_| E::Mismatch("ranked export encoding"))?;
-            joins.push((
-                root.semantic_root().index(),
-                export,
-                root.verification().middle_end_evidence().ranked_ir(),
-            ));
-        }
-        check_native_source_ranked_roster_v1(source, &joins, budget).map_err(E::SourceJoin)?;
-        // Check required signed custody before allocating any native envelopes.
-        for root in ranked.roots() {
-            budget.charge_work(1)?;
-            if root.verification().aggregate_verus_execution().is_none() {
-                return Err(E::MissingSignedRankedReceipt {
-                    root: root.semantic_root().index(),
-                });
-            }
-        }
-        let mut payloads = reserved_vec(count, budget)?;
-        let mut launches = reserved_vec(count, budget)?;
-        let mut order = reserved_vec(count, budget)?;
-        for &index in ranked.canonical_kernel_order() {
-            budget.charge_work(1)?;
-            order.push(u32::try_from(index).map_err(|_| Resource::Arithmetic)?);
-        }
-        for (ordinal, root) in ranked.roots().iter().enumerate() {
-            budget.charge_work(80)?;
-            let launch_root = launch.roots()[ordinal];
-            if root.semantic_root() != semantic.roots()[ordinal]
-                || root.semantic_root() != launch_root.selected_root()
-                || root.semantic_root_identity() != launch_root.semantic_root_identity()
-                || *root.kernel_binding() != launch_root.kernel_binding()
-                || root.source_rank() != launch_root.source_rank()
-            {
-                return Err(E::Mismatch("source launch/ranked root"));
-            }
-            let induction = Induction::from_report(root.verification().semantic_u32_induction())
-                .map_err(E::Induction)?;
-            let execution = root.verification().aggregate_verus_execution().ok_or(
-                E::MissingSignedRankedReceipt {
-                    root: root.semantic_root().index(),
-                },
-            )?;
-            let signed = Signed::from_execution(execution).map_err(E::Signed)?;
-            budget.reserve_storage(
-                induction
-                    .canonical_bytes()
-                    .len()
-                    .checked_add(signed.canonical_bytes().len())
-                    .and_then(|n| n.checked_mul(2))
-                    .ok_or(Resource::Arithmetic)?,
-            )?;
-            let (source_rows, staging_receipt) = native_source_ranked_staging_commitments_v1(
-                source,
-                ordinal,
-                root.semantic_root().index(),
-                budget,
-            )
-            .map_err(E::SourceJoin)?;
-            budget.reserve_storage(staging_receipt.retained_storage())?;
-            let mut staging = reserved_vec(source_rows.len(), budget)?;
-            for row in source_rows {
-                budget.charge_work(289)?;
-                staging.push(NativeCompilerStagingCommitmentV1 {
-                    receipt: row.receipt(),
-                    effect: row.effect(),
-                    signer: row.signer(),
-                    execution: row.execution(),
-                    toolchain: row.toolchain(),
-                });
-            }
-            budget.release_storage(staging_receipt.retained_storage())?;
-            payloads.push((induction, signed, staging));
-            launches.push(ProductionSourceLaunchRootInputV1::new(
-                root.logical_name(),
-                *root.kernel_binding(),
-                launch_root.source_launch(),
-            ));
-        }
-        let semantic_identity = *semantic.semantic_sha256().as_bytes();
-        let (catalog, catalog_storage) =
-            Catalog::from_rows_with_budget(semantic_identity, &[], &[], budget)
-                .map_err(E::Catalog)?;
-        budget.reserve_storage(catalog_storage.retained_storage())?;
-        let graph_bytes = native.canonical().canonical_bytes();
-        let catalog_bytes = catalog.canonical_bytes();
-        let subject = InertNativeNeutralSubjectV1::new(
-            *native.canonical().identity().digest(),
-            u64::try_from(graph_bytes.len()).map_err(|_| Resource::Arithmetic)?,
-            *catalog.digest(),
-            u64::try_from(catalog_bytes.len()).map_err(|_| Resource::Arithmetic)?,
-        )
-        .map_err(E::Subject)?;
-        let native_len = 112usize
-            .checked_add(graph_bytes.len())
-            .and_then(|n| n.checked_add(catalog_bytes.len()))
-            .ok_or(Resource::Arithmetic)?;
-        budget.reserve_storage(native_len)?;
-        budget.charge_work(native_len)?;
-        let native_module = encode_native_neutral_module_v1(&subject, graph_bytes, catalog_bytes)
-            .map_err(E::Native)?;
-        budget.reserve_storage(
-            native_module
-                .capacity()
-                .checked_sub(native_len)
-                .ok_or(Resource::Accounting)?,
-        )?;
-        let mut rows = reserved_vec(count, budget)?;
-        for (ordinal, root) in ranked.roots().iter().enumerate() {
-            budget.charge_work(4)?;
-            let workgroup = launch.roots()[ordinal]
-                .source_launch()
-                .exact_workgroup()
-                .ok_or(E::Mismatch("missing exact source workgroup"))?;
-            rows.push(RootInput {
-                semantic_root: root.semantic_root().index(),
-                semantic_root_identity: *root.semantic_root_identity().as_bytes(),
-                kernel_binding: *root.kernel_binding(),
-                source_rank: root.source_rank(),
-                workgroup,
-                logical_name: root.logical_name(),
-                export_symbol: joins[ordinal].1,
-                kernel_id: joins[ordinal].1,
-                payload: root.verification().middle_end_evidence().canonical_bytes(),
-            });
-        }
-        let identity = *ranked.canonical_roster_identity().as_bytes();
-        let middle = encode_roster(
-            Kind::MiddleEnd,
-            semantic_identity,
-            subject,
-            identity,
-            &order,
-            &rows,
-            budget,
-        )?;
-        for (row, (induction, _, _)) in rows.iter_mut().zip(&payloads) {
-            budget.charge_work(1)?;
-            row.payload = induction.canonical_bytes();
-        }
-        let correspondence = encode_roster(
-            Kind::Correspondence,
-            semantic_identity,
-            subject,
-            identity,
-            &order,
-            &rows,
-            budget,
-        )?;
-        for (row, (_, signed, _)) in rows.iter_mut().zip(&payloads) {
-            budget.charge_work(1)?;
-            row.payload = signed.canonical_bytes();
-        }
-        let verus = encode_roster(
-            Kind::VerusExecution,
-            semantic_identity,
-            subject,
-            identity,
-            &order,
-            &rows,
-            budget,
-        )?;
-        let mut staging_roots = reserved_vec(count, budget)?;
-        for (root, (_, _, staging)) in ranked.roots().iter().zip(&payloads) {
-            budget.charge_work(1)?;
-            staging_roots.push(NativeCompilerRootStagingV1 {
-                semantic_root: root.semantic_root().index(),
-                commitments: staging,
-            });
-        }
-        let (candidates, candidate_storage) =
-            native_source_ranked_candidates_v1(source, budget).map_err(E::SourceJoin)?;
-        budget.reserve_storage(candidate_storage.retained_storage())?;
-        let mut ranked_roots = reserved_vec(count, budget)?;
-        if candidates.len() != count {
-            return Err(E::Mismatch("complete typed ranked candidate roster"));
-        }
-        for (candidate, root) in candidates.iter().zip(ranked.roots()) {
-            budget.charge_work(2)?;
-            ranked_roots.push(NativeCompilerRankedRootV1 {
-                candidate: *candidate,
-                effect_receipts: root.verification().effect_receipts(),
-            });
-        }
-        let (proof, receipt) = validate_native_compiler_ranked_source_proof_v1(
-            NativeCompilerRankedSourceProofInputsV1 {
-                source: NativeCompilerSourceProofInputsV1 {
-                    semantic_mir: semantic.canonical_encoding(),
-                    native_module: &native_module,
-                    middle_end_roster: middle.canonical_bytes(),
-                    correspondence_roster: correspondence.canonical_bytes(),
-                    verus_roster: verus.canonical_bytes(),
-                    launch_inputs: &launches,
-                    staging_roots: &staging_roots,
-                },
-                ranked_roots: &ranked_roots,
+        let parts = prepare_native_source_packet_v1(
+            NativeSourceRefV1::Direct(source),
+            &ranked,
+            || {
+                std::mem::size_of::<PreparedNativeSourceLineageV1>()
+                    .checked_sub(std::mem::size_of::<
+                        ValidatedNativeCompilerRankedSourceProofV1,
+                    >())
+                    .and_then(|n| {
+                        n.checked_sub(
+                            std::mem::size_of::<AuthenticatedRankedVerificationRosterV1>(),
+                        )
+                    })
+                    .ok_or(E::Resource(Resource::Arithmetic))
             },
             budget,
-        )
-        .map_err(E::Replay)?;
-        budget.reserve_storage(receipt.retained_storage())?;
-        let header = std::mem::size_of::<PreparedNativeSourceLineageV1>()
-            .checked_sub(std::mem::size_of::<
-                ValidatedNativeCompilerRankedSourceProofV1,
-            >())
-            .and_then(|n| {
-                n.checked_sub(std::mem::size_of::<AuthenticatedRankedVerificationRosterV1>())
-            })
-            .ok_or(Resource::Arithmetic)?;
-        budget.reserve_storage(header)?;
-        let retained = header
-            .checked_add(native_module.capacity())
-            .and_then(|n| n.checked_add(receipt.retained_storage()))
-            .ok_or(Resource::Arithmetic)?;
-        drop(rows);
-        drop(staging_roots);
-        drop(launches);
-        drop(joins);
-        drop(ranked_roots);
-        drop(candidates);
+            |inputs, budget| {
+                let (proof, receipt) =
+                    validate_native_compiler_ranked_source_proof_v1(inputs, budget)
+                        .map_err(E::Replay)?;
+                Ok((proof, receipt.retained_storage()))
+            },
+        )?;
         Ok((
             PreparedNativeSourceLineageV1 {
                 ranked,
-                proof,
-                native_module,
+                proof: parts.proof,
+                native_module: parts.native_module,
             },
-            NativeSourceLineageStorageV1(retained),
+            NativeSourceLineageStorageV1(parts.retained),
         ))
     }));
     if token != budget.work_ledger_identity_v1() || slot != budget as *const Budget<'_> as usize {

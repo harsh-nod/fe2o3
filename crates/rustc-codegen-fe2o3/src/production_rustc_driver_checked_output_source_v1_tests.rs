@@ -204,7 +204,6 @@ impl Callbacks for CheckedOutputCallbacks {
                     })?);
             }
             if self.probe_missing_proof {
-                let stage = stage.into_direct_proof_probe()?;
                 use crate::production_native_source_lineage_v1::NativeSourceLineageErrorV1;
                 use crate::production_pipeline::{
                     ProductionPipelineError, checked_output_policy4_v1::CheckedOutputStageErrorV1,
@@ -223,7 +222,7 @@ impl Callbacks for CheckedOutputCallbacks {
                     .reserve_storage(floor)
                     .map_err(|e| SourceFailure::new(SourceStage::NativeSourceProof, e))?;
                 let refused = self.progress.run(SourceStage::NativeSourceProof, || {
-                    stage.prepare_native_source_lineage_v1(&mut budget)
+                    stage.probe_native_source_lineage_v1(&mut budget)
                 });
                 assert_eq!(budget.storage(), floor);
                 match refused {
@@ -752,9 +751,21 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
             "actual-source checked native output {name}: {result:?}\n{}",
             String::from_utf8_lossy(&child.stdout)
         );
-        if name == "fill" {
+        if matches!(
+            case,
+            OrdinarySourceCase::Fill | OrdinarySourceCase::PrivateUnitHelper
+        ) {
+            let erased_probe = matches!(case, OrdinarySourceCase::PrivateUnitHelper);
+            if erased_probe {
+                assert_eq!(
+                    dispatch::check_private_helper_route(&result, true).unwrap(),
+                    dispatch::Route::SilentUnitLocal,
+                    "normal-MIR source must reach genuine silent Unit erasure before its proof probe"
+                );
+            }
             let expected_output = result.output_digest;
-            let proof_response = scratch.path().join("fill-proof-refusal.json");
+            let expected_route = result.source_route;
+            let proof_response = scratch.path().join(format!("{name}-proof-refusal.json"));
             simulation::configure_child(&mut command, None);
             snapshots::configure_child(&mut command, &format!("{name}-missing-proof"));
             let probe = output(
@@ -766,6 +777,13 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
                 serde_json::from_slice(&std::fs::read(proof_response).unwrap()).unwrap();
             let result = result.unwrap();
             assert!(result.missing_proof_refused);
+            assert_eq!(result.source_route, expected_route);
+            if erased_probe {
+                assert_eq!(
+                    dispatch::check_private_helper_route(&result, true).unwrap(),
+                    dispatch::Route::SilentUnitLocal
+                );
+            }
             assert_eq!(result.transparent_result_wrappers, Some(0));
             assert!(result.simulation.is_none());
             assert_eq!(
