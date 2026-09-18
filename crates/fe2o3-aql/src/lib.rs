@@ -11,6 +11,8 @@ extern crate alloc;
 
 mod dependency_barrier;
 pub use dependency_barrier::*;
+mod dispatch_profiling;
+pub use dispatch_profiling::*;
 
 use alloc::boxed::Box;
 use core::{

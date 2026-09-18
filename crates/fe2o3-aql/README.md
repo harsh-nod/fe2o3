@@ -77,6 +77,47 @@ The signal event fields are zero. The first profile therefore supports bounded
 busy polling only; interrupt-backed waits remain a later, separately admitted
 extension.
 
+## Inert Dispatch Profiling Values
+
+The additive dispatch-profiling module provides a source-pinned queue-property
+policy, parsing of exact busy-signal timestamp snapshots, and checked arithmetic
+for a bounded GPU/system-clock correlation interval. `Preserve` is the default
+policy and leaves every supplied bit unchanged. `EnableDispatchTimestamps` adds
+only the profiling bit to a supplied word. Neither policy accesses a queue;
+existing queue initialization and default native bytes remain unchanged.
+
+The snapshot parser accepts only 64 supplied bytes with user kind, a zero
+completion value, zero event/reserved fields, and nonzero ordered GPU ticks.
+Equal endpoints remain possible at counter resolution. Parsing these bytes is
+not a native load or proof of successful acquired completion. An owner must
+still bind exact signal generation, packet, queue epoch, selected device,
+mapping/coherency, and successful acquired completion, then capture timestamps
+before reuse. Those ownership and currentness joins are not implemented here.
+
+Clock samples are caller-supplied numbers, not authenticated ioctl receipts.
+The bracket requires nonzero, strictly increasing GPU/system counters and an
+unchanged nonzero system frequency. Conversion rejects extrapolation and
+overflow, floors endpoints to system ticks, and floors duration directly from
+the GPU delta and clock ratio. It does not reproduce ROCr's full drift correction
+or extrapolation and does not correlate the supplied system domain with host
+`Instant`. Counter wrap, reset, changing device identity, and sampling uncertainty
+remain later owner-layer obligations. Arithmetic output is not GPU-duration,
+overlap, benchmark, or performance evidence.
+
+The independent C oracle uses SHA-pinned ROCr 7.2.4 headers to check descriptor
+and signal layouts, the profiling mask, property transformations, and a signal
+byte fixture. It performs no GPU work:
+
+```sh
+sh crates/fe2o3-aql/tests/oracles/run-aql-dispatch-profiling-oracle.sh \
+  "$PINNED_ROCR_HEADERS" "$ORACLE_OUTPUT_DIRECTORY"
+```
+
+Native profiling enablement, retained timestamp extraction, gfx950 clock
+sampling, worker/report schemas, and an unchanged-HSACO profile-off/on canary
+remain unimplemented. The dependency-barrier primitive and earlier ABI schema
+hashes are unchanged.
+
 The pinned legacy `fe2o3-hsa-runtime/native/runtime.c` path is only a reference
 for its final release-`u32` operation. It zeroes a packet body and is not
 evidence for this crate's required INVALID-body discipline.
