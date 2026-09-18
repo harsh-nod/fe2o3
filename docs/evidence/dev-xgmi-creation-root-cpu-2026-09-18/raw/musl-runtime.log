@@ -1,0 +1,24 @@
+    Finished `test` profile [optimized] target(s) in 0.24s
+     Running unittests src/lib.rs (target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-7417496afb88b1b4)
+
+running 17 tests
+test kfd_backend::tests::native_xgmi_batch_selection_is_ready_directional_bounded_and_ordered ... ok
+test kfd_backend::tests::native_xgmi_cancellation_and_shutdown_preserve_phase_custody ... ok
+test kfd_backend::tests::native_xgmi_completed_ticket_bypasses_a_large_ready_backlog ... ok
+test kfd_backend::tests::native_xgmi_completion_slots_cover_every_outstanding_submission ... ok
+test kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_error_latches_before_formatting_and_preserves_roots ... ok
+test kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_panic_retains_selected_attempt_and_original_payload ... ok
+test kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_runtime_keeps_conservative_terminal_preflight_policy ... ok
+test kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_runtime_wires_persistent_roots_and_guards_teardown ... ok
+test kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_success_installs_only_the_selected_direction ... ok
+test kfd_backend::tests::native_xgmi_dependency_and_pending_ownership_rules_are_bounded ... ok
+test kfd_backend::tests::native_xgmi_flush_admission_is_complete_bounded_and_nonmutating ... ok
+test kfd_backend::tests::native_xgmi_pair_and_capability_admission_fail_closed ... ok
+test kfd_backend::tests::native_xgmi_partial_reverse_restoration_keeps_each_restored_owner_indexed ... ok
+test kfd_backend::tests::native_xgmi_peer_admission_binds_direction_and_rejects_hostile_ranges ... ok
+test kfd_backend::tests::native_xgmi_ready_and_in_flight_indexes_remain_bounded_under_stress ... ok
+test kfd_backend::tests::native_xgmi_recoverable_batch_failure_settles_every_logical_owner ... ok
+test kfd_backend::tests::native_xgmi_recoverable_prefix_restoration_preserves_fifo_order ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 1113 filtered out; finished in 0.02s
+

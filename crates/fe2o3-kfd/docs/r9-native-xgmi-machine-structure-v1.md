@@ -37,6 +37,22 @@ separately. The retained process identity and prospective KFD reset stream are
 checked around every packet publication and completion; the full descriptor,
 UAPI, XNACK, DRM-loss, and topology observations remain at the batch edges.
 
+Queue creation requires a mutable, caller-owned
+`Gfx942NativeXgmiSdmaQueueCreationRootV1`. It remains vacant on pure preflight
+failure and after success. Once creation is armed, the root retains the exact
+route and available creation custody through returned errors and panics:
+no-queue, opaque memory-operation, prepared native attempt, or confirmed queue.
+The runtime owns one root per direction and latches terminal state before
+formatting failures or resuming a panic. Both participating sessions and the
+root must remain owned until process teardown after a terminal failure;
+dropping an occupied root aborts. Diagnostic errors own no native resources.
+Independent session quarantines and global poisoning cannot replace an original
+creation panic with a secondary panic. This is a bounded host custody guarantee,
+not arbitrary consuming-memory-primitive unwind refinement, native panic-injection
+qualification, a new cleanup capability, or a performance claim.
+The runtime conservatively terminalizes every creation failure, including a
+lower-level retryable preflight rejection; it does not expose those retry semantics.
+
 The repository benchmark compares the KFD queue with
 `hsa_amd_memory_async_copy` and `hipMemcpyPeerAsync` in both directions. All
 allocation, mapping, pattern setup, poisoning, readback, and validation are

@@ -4,9 +4,10 @@ use std::time::{Duration, Instant};
 
 use fe2o3_kfd::{
     CheckedGfx942XnackMinusDevice, DeviceSelector, Gfx942DeviceMemoryLeaseV1,
-    Gfx942DeviceMemoryUnmappedV1, Gfx942NativeXgmiSdmaQueueV1, Gfx942XgmiMapRecoveryV1,
-    Gfx942XgmiMappedDeviceMemoryV1, Gfx942XgmiSdmaCopyRequestV1, Gfx942XgmiUnmapRecoveryV1,
-    OpenedKfd, SharedGttMemorySessionV1, topology::Gfx942XgmiRouteV1,
+    Gfx942DeviceMemoryUnmappedV1, Gfx942NativeXgmiSdmaQueueCreationRootV1,
+    Gfx942NativeXgmiSdmaQueueV1, Gfx942XgmiMapRecoveryV1, Gfx942XgmiMappedDeviceMemoryV1,
+    Gfx942XgmiSdmaCopyRequestV1, Gfx942XgmiUnmapRecoveryV1, OpenedKfd, SharedGttMemorySessionV1,
+    topology::Gfx942XgmiRouteV1,
 };
 
 const CANARY_BYTES: usize = 32;
@@ -306,8 +307,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .admit_gfx942_xgmi_route(gpu_ids[1], gpu_ids[0])?;
     let mut left = left_device.acquire_shared_gtt_memory_session()?;
     let mut right = right_device.acquire_shared_gtt_memory_session()?;
-    let mut forward_queue = Gfx942NativeXgmiSdmaQueueV1::create(&mut left, &mut right, forward)?;
-    let mut reverse_queue = Gfx942NativeXgmiSdmaQueueV1::create(&mut right, &mut left, reverse)?;
+    let mut forward_root = Gfx942NativeXgmiSdmaQueueCreationRootV1::new();
+    let mut forward_queue =
+        Gfx942NativeXgmiSdmaQueueV1::create(&mut left, &mut right, forward, &mut forward_root)?;
+    let mut reverse_root = Gfx942NativeXgmiSdmaQueueCreationRootV1::new();
+    let mut reverse_queue =
+        Gfx942NativeXgmiSdmaQueueV1::create(&mut right, &mut left, reverse, &mut reverse_root)?;
 
     let mut forward_pairs = Vec::with_capacity(depth);
     let mut reverse_pairs = Vec::with_capacity(depth);

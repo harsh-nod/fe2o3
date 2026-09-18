@@ -1,0 +1,8 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kfd)
+    Finished `test` profile [optimized] target(s) in 47.91s
+     Running unittests examples/kfd-sdma-xgmi-peer-benchmark.rs (target/debug/examples/kfd_sdma_xgmi_peer_benchmark-8e11944678e63c23)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

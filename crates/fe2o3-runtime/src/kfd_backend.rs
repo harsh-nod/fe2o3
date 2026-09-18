@@ -38,14 +38,14 @@ use fe2o3_kfd::{
     Gfx942DirectionalPersistentSdmaWindowTerminalCustodyV1, Gfx942DispatchBatchV1,
     Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1, Gfx942FixedDispatchDataV1,
     Gfx942FixedDispatchPacketV1, Gfx942FixedDispatchSubmissionFailureV1,
-    Gfx942HostVisibleBackingBudgetV1, Gfx942NativeXgmiSdmaQueueV1,
-    Gfx942PersistentComputeBindFailureCustodyV1, Gfx942PersistentComputeBindTerminalCustodyV1,
-    Gfx942PersistentComputeDispatchV1, Gfx942PersistentComputeEffectV1,
-    Gfx942PersistentComputeInputV1, Gfx942PersistentComputePollAndRecycleFailureV1,
-    Gfx942PersistentComputePollAndRecycleV1, Gfx942PersistentComputeReadyTerminalCustodyV1,
-    Gfx942PersistentComputeTerminalCustodyV1, Gfx942PersistentComputeTransitionFailureCustodyV1,
-    Gfx942PersistentComputeWaitAndRecycleV1, Gfx942PersistentSdmaDirectionV1,
-    Gfx942PreparedPersistentComputeDispatchV1,
+    Gfx942HostVisibleBackingBudgetV1, Gfx942NativeXgmiSdmaQueueCreationRootV1,
+    Gfx942NativeXgmiSdmaQueueV1, Gfx942PersistentComputeBindFailureCustodyV1,
+    Gfx942PersistentComputeBindTerminalCustodyV1, Gfx942PersistentComputeDispatchV1,
+    Gfx942PersistentComputeEffectV1, Gfx942PersistentComputeInputV1,
+    Gfx942PersistentComputePollAndRecycleFailureV1, Gfx942PersistentComputePollAndRecycleV1,
+    Gfx942PersistentComputeReadyTerminalCustodyV1, Gfx942PersistentComputeTerminalCustodyV1,
+    Gfx942PersistentComputeTransitionFailureCustodyV1, Gfx942PersistentComputeWaitAndRecycleV1,
+    Gfx942PersistentSdmaDirectionV1, Gfx942PreparedPersistentComputeDispatchV1,
     Gfx942PreparedThreeBindingPersistentComputeDispatchV1, Gfx942RecycledDispatchWriteRequestV1,
     Gfx942RecycledPersistentComputeDispatchV1,
     Gfx942RecycledThreeBindingPersistentComputeDispatchV1, Gfx942SdmaBufferV1,
@@ -7720,6 +7720,7 @@ pub struct KfdNativeXgmiRuntimeBackendV1 {
     sessions: [SharedGttMemorySessionV1; 2],
     routes: [Gfx942XgmiRouteV1; 2],
     queues: [Option<Gfx942NativeXgmiSdmaQueueV1>; 2],
+    queue_creation_roots: [Gfx942NativeXgmiSdmaQueueCreationRootV1; 2],
     terminal: bool,
     shutdown: bool,
     next_handle: u64,
@@ -7738,6 +7739,37 @@ pub struct KfdNativeXgmiRuntimeBackendV1 {
     dependency_retain_counts: HashMap<u64, usize>,
     dependency_depths: HashMap<u64, usize>,
     dependency_waiters: HashMap<u64, Vec<u64>>,
+}
+
+fn settle_xgmi_queue_creation<R, Q, E>(
+    roots: &mut [R; 2],
+    queues: &mut [Option<Q>; 2],
+    terminal: &mut bool,
+    direction: usize,
+    create: impl FnOnce(&mut R) -> Result<Q, E>,
+) -> Result<(), E> {
+    if queues[direction].is_some() {
+        std::process::abort();
+    }
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        create(&mut roots[direction])
+    })) {
+        Ok(Ok(queue)) => {
+            queues[direction] = Some(queue);
+            Ok(())
+        }
+        Ok(Err(error)) => {
+            // Latch before the caller formats or otherwise handles the error.
+            // Preserve the runtime's conservative policy even for a lower-level
+            // retryable preflight rejection with a still-vacant root.
+            *terminal = true;
+            Err(error)
+        }
+        Err(payload) => {
+            *terminal = true;
+            std::panic::resume_unwind(payload)
+        }
+    }
 }
 
 impl fmt::Debug for KfdNativeXgmiRuntimeBackendV1 {
@@ -7772,6 +7804,7 @@ impl fmt::Debug for KfdNativeXgmiRuntimeBackendV1 {
         formatter
             .debug_struct("KfdNativeXgmiRuntimeBackendV1")
             .field("devices", &self.descriptions)
+            .field("queue_creation_roots", &self.queue_creation_roots)
             .field(
                 "queues",
                 &self.queues.iter().filter(|queue| queue.is_some()).count(),
@@ -9199,6 +9232,10 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             sessions: [first, second],
             routes: [forward, reverse],
             queues: [None, None],
+            queue_creation_roots: [
+                Gfx942NativeXgmiSdmaQueueCreationRootV1::new(),
+                Gfx942NativeXgmiSdmaQueueCreationRootV1::new(),
+            ],
             terminal: false,
             shutdown: false,
             next_handle: 1,
@@ -9246,7 +9283,12 @@ impl KfdNativeXgmiRuntimeBackendV1 {
     }
 
     fn require_live(&self) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        if self.terminal {
+        if self.terminal
+            || self
+                .queue_creation_roots
+                .iter()
+                .any(|root| !root.is_vacant())
+        {
             return Err(RuntimeBackendFailureV1::Terminal(
                 KfdRuntimeBackendErrorV1::new(
                     KfdRuntimeBackendErrorKindV1::Terminal,
@@ -9349,18 +9391,20 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         &mut self,
         direction: usize,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_live()?;
         if self.queues[direction].is_some() {
             return Ok(());
         }
         let route = self.routes[direction];
-        let result = {
-            let (source, destination) = Self::session_pair(&mut self.sessions, direction);
-            Gfx942NativeXgmiSdmaQueueV1::create(source, destination, route)
-        };
-        self.queues[direction] = Some(
-            result.map_err(|error| self.terminal_error(format!("XGMI queue creation: {error}")))?,
-        );
-        Ok(())
+        let (source, destination) = Self::session_pair(&mut self.sessions, direction);
+        settle_xgmi_queue_creation(
+            &mut self.queue_creation_roots,
+            &mut self.queues,
+            &mut self.terminal,
+            direction,
+            |root| Gfx942NativeXgmiSdmaQueueV1::create(source, destination, route, root),
+        )
+        .map_err(|error| self.terminal_error(format!("XGMI queue creation: {error}")))
     }
 
     fn restore_unmapped(
@@ -11076,6 +11120,10 @@ impl RuntimeCancellationBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
 impl Drop for KfdNativeXgmiRuntimeBackendV1 {
     fn drop(&mut self) {
         if self.terminal
+            || self
+                .queue_creation_roots
+                .iter()
+                .any(|root| !root.is_vacant())
             || !self.streams.is_empty()
             || !self.allocations.is_empty()
             || !self.submissions.is_empty()
@@ -12764,6 +12812,7 @@ mod retained_release_tests;
 mod tests {
     #[cfg(feature = "hardware-diagnostic")]
     mod directional_wait_diagnostic_tests;
+    mod native_xgmi_creation_tests;
     mod sdma_allocation_tests;
     mod sdma_demotion_tests;
     mod sdma_host_read_tests;

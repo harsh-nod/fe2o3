@@ -42,7 +42,7 @@ fn storage<T>(values: &Vec<Option<T>>) -> StorageObservation {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct CreationOwnerObservation {
+pub(crate) struct CreationOwnerObservation {
     key: QueueKeyV1,
     id: u32,
     engine: Option<u32>,
@@ -63,35 +63,38 @@ pub(crate) struct CreationRosterObservation {
 fn roster(owners: &Vec<Gfx942SdmaQueueOwnerV1>) -> CreationRosterObservation {
     CreationRosterObservation {
         storage: (owners.as_ptr() as usize, owners.len(), owners.capacity()),
-        owners: owners
-            .iter()
-            .map(|owner| CreationOwnerObservation {
-                key: owner.owner,
-                id: owner.queue_id,
-                engine: owner.engine_index,
-                state: (owner.destroyed, owner.poisoned),
-                identities: [
-                    owner
-                        .ring
-                        .as_ref()
-                        .map(PreparationMemoryFixtureV1::primary_token_identity),
-                    owner
-                        .control
-                        .as_ref()
-                        .map(PreparationMemoryFixtureV1::primary_token_identity),
-                    owner.completions.as_ref().map(|v| v.storage_identity()),
-                ],
-                storage: [
-                    storage(&owner.records),
-                    storage(&owner.xgmi_records),
-                    storage(&owner.persistent_window_slots),
-                    storage(&owner.persistent_window_records),
-                ],
-                generations: owner.generations.to_vec(),
-                uncertain: owner.uncertain_xgmi_ticket,
-                doorbell: owner.doorbell.as_ref().map(observe_local_doorbell),
-            })
-            .collect(),
+        owners: owners.iter().map(creation_owner_observation).collect(),
+    }
+}
+
+pub(crate) fn creation_owner_observation(
+    owner: &Gfx942SdmaQueueOwnerV1,
+) -> CreationOwnerObservation {
+    CreationOwnerObservation {
+        key: owner.owner,
+        id: owner.queue_id,
+        engine: owner.engine_index,
+        state: (owner.destroyed, owner.poisoned),
+        identities: [
+            owner
+                .ring
+                .as_ref()
+                .map(PreparationMemoryFixtureV1::primary_token_identity),
+            owner
+                .control
+                .as_ref()
+                .map(PreparationMemoryFixtureV1::primary_token_identity),
+            owner.completions.as_ref().map(|v| v.storage_identity()),
+        ],
+        storage: [
+            storage(&owner.records),
+            storage(&owner.xgmi_records),
+            storage(&owner.persistent_window_slots),
+            storage(&owner.persistent_window_records),
+        ],
+        generations: owner.generations.to_vec(),
+        uncertain: owner.uncertain_xgmi_ticket,
+        doorbell: owner.doorbell.as_ref().map(observe_local_doorbell),
     }
 }
 
@@ -175,32 +178,38 @@ pub(crate) fn creation_observation(set: &Gfx942SdmaQueueSetV1) -> CreationObserv
         profiles: creation_profiles(set),
         primary: roster(primary),
         secondary: secondary.map(roster),
-        attempted: attempted.map(|attempt| match attempt {
-            TerminalGfx942SdmaQueueCreationV1::OpaqueAfterFirstMemoryOperation => {
-                CreationAttemptObservation::Opaque
-            }
-            TerminalGfx942SdmaQueueCreationV1::QueueAttempt {
-                prepared,
-                native,
-                doorbell,
-            } => CreationAttemptObservation::Prepared {
-                key: prepared.owner,
-                engine: prepared.engine_index,
-                identities: [
-                    PreparationMemoryFixtureV1::primary_token_identity(&prepared.ring),
-                    PreparationMemoryFixtureV1::primary_token_identity(&prepared.control),
-                    prepared.completions.storage_identity(),
-                ],
-                storage: Box::new([
-                    storage(&prepared.records),
-                    storage(&prepared.xgmi_records),
-                    storage(&prepared.persistent_window_slots),
-                    storage(&prepared.persistent_window_records),
-                ]),
-                native: Box::new(*native),
-                doorbell: doorbell.as_ref().map(observe_local_doorbell),
-            },
-        }),
+        attempted: attempted.map(creation_attempt_observation),
+    }
+}
+
+pub(crate) fn creation_attempt_observation(
+    attempt: &TerminalGfx942SdmaQueueCreationV1,
+) -> CreationAttemptObservation {
+    match attempt {
+        TerminalGfx942SdmaQueueCreationV1::OpaqueAfterFirstMemoryOperation => {
+            CreationAttemptObservation::Opaque
+        }
+        TerminalGfx942SdmaQueueCreationV1::QueueAttempt {
+            prepared,
+            native,
+            doorbell,
+        } => CreationAttemptObservation::Prepared {
+            key: prepared.owner,
+            engine: prepared.engine_index,
+            identities: [
+                PreparationMemoryFixtureV1::primary_token_identity(&prepared.ring),
+                PreparationMemoryFixtureV1::primary_token_identity(&prepared.control),
+                prepared.completions.storage_identity(),
+            ],
+            storage: Box::new([
+                storage(&prepared.records),
+                storage(&prepared.xgmi_records),
+                storage(&prepared.persistent_window_slots),
+                storage(&prepared.persistent_window_records),
+            ]),
+            native: Box::new(*native),
+            doorbell: doorbell.as_ref().map(observe_local_doorbell),
+        },
     }
 }
 
@@ -612,4 +621,53 @@ pub(crate) fn cleanup_creation_set(set: &mut Gfx942SdmaQueueSetV1) {
             }
         }
     }
+}
+
+pub(crate) fn assert_creation_owner_matches_attempt(
+    owner: &Gfx942SdmaQueueOwnerV1,
+    expected: &CreationAttemptObservation,
+    queue_id: u32,
+) {
+    let CreationAttemptObservation::Prepared {
+        key,
+        engine,
+        identities,
+        storage: expected_storage,
+        native,
+        doorbell,
+    } = expected
+    else {
+        panic!("prepared attempt required")
+    };
+    assert_eq!(
+        **native,
+        Gfx942SdmaQueueCreationNativeObservationV1::ValidatedQueueId(queue_id)
+    );
+    assert_eq!(owner.owner, *key);
+    assert_eq!(owner.engine_index, *engine);
+    assert_eq!(owner.queue_id, queue_id);
+    assert!(!owner.destroyed && !owner.poisoned);
+    assert_eq!(owner.generations, [0; GFX942_SDMA_RING_SLOT_COUNT_V1]);
+    assert!(owner.uncertain_xgmi_ticket.is_none());
+    assert_eq!(
+        *identities,
+        [
+            PreparationMemoryFixtureV1::primary_token_identity(owner.ring.as_ref().unwrap()),
+            PreparationMemoryFixtureV1::primary_token_identity(owner.control.as_ref().unwrap()),
+            owner.completions.as_ref().unwrap().storage_identity(),
+        ]
+    );
+    assert_eq!(
+        **expected_storage,
+        [
+            storage(&owner.records),
+            storage(&owner.xgmi_records),
+            storage(&owner.persistent_window_slots),
+            storage(&owner.persistent_window_records)
+        ]
+    );
+    assert_eq!(
+        *doorbell,
+        owner.doorbell.as_ref().map(observe_local_doorbell)
+    );
 }

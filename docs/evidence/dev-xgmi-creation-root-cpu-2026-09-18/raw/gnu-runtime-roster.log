@@ -1,0 +1,23 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kfd)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+    Finished `test` profile [optimized] target(s) in 3m 13s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-ea143d3d1f258dd4)
+kfd_backend::tests::native_xgmi_batch_selection_is_ready_directional_bounded_and_ordered: test
+kfd_backend::tests::native_xgmi_cancellation_and_shutdown_preserve_phase_custody: test
+kfd_backend::tests::native_xgmi_completed_ticket_bypasses_a_large_ready_backlog: test
+kfd_backend::tests::native_xgmi_completion_slots_cover_every_outstanding_submission: test
+kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_error_latches_before_formatting_and_preserves_roots: test
+kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_panic_retains_selected_attempt_and_original_payload: test
+kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_runtime_keeps_conservative_terminal_preflight_policy: test
+kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_runtime_wires_persistent_roots_and_guards_teardown: test
+kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_success_installs_only_the_selected_direction: test
+kfd_backend::tests::native_xgmi_dependency_and_pending_ownership_rules_are_bounded: test
+kfd_backend::tests::native_xgmi_flush_admission_is_complete_bounded_and_nonmutating: test
+kfd_backend::tests::native_xgmi_pair_and_capability_admission_fail_closed: test
+kfd_backend::tests::native_xgmi_partial_reverse_restoration_keeps_each_restored_owner_indexed: test
+kfd_backend::tests::native_xgmi_peer_admission_binds_direction_and_rejects_hostile_ranges: test
+kfd_backend::tests::native_xgmi_ready_and_in_flight_indexes_remain_bounded_under_stress: test
+kfd_backend::tests::native_xgmi_recoverable_batch_failure_settles_every_logical_owner: test
+kfd_backend::tests::native_xgmi_recoverable_prefix_restoration_preserves_fifo_order: test
+
+17 tests, 0 benchmarks

@@ -1,0 +1,44 @@
+   Compiling serde_core v1.0.229
+   Compiling zmij v1.0.23
+   Compiling serde_json v1.0.151
+   Compiling rustix v1.1.4
+   Compiling serde v1.0.229
+   Compiling num-traits v0.2.19
+   Compiling memchr v2.8.3
+   Compiling itoa v1.0.18
+   Compiling pin-project-lite v0.2.17
+   Compiling slab v0.4.12
+   Compiling futures-task v0.3.34
+   Compiling futures-core v0.3.34
+   Compiling futures-util v0.3.34
+   Compiling rmp v0.8.15
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kfd)
+   Compiling rmpv v1.3.1
+   Compiling futures-executor v0.3.34
+   Compiling fe2o3-profiler-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-debug-protocol v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-debug-protocol)
+   Compiling tokio v1.47.1
+   Compiling fe2o3-completion v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-completion)
+   Compiling fe2o3-host-api v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-host-api)
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+    Finished `test` profile [optimized] target(s) in 4m 51s
+     Running unittests src/lib.rs (target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-7417496afb88b1b4)
+kfd_backend::tests::native_xgmi_batch_selection_is_ready_directional_bounded_and_ordered: test
+kfd_backend::tests::native_xgmi_cancellation_and_shutdown_preserve_phase_custody: test
+kfd_backend::tests::native_xgmi_completed_ticket_bypasses_a_large_ready_backlog: test
+kfd_backend::tests::native_xgmi_completion_slots_cover_every_outstanding_submission: test
+kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_error_latches_before_formatting_and_preserves_roots: test
+kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_panic_retains_selected_attempt_and_original_payload: test
+kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_runtime_keeps_conservative_terminal_preflight_policy: test
+kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_runtime_wires_persistent_roots_and_guards_teardown: test
+kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_success_installs_only_the_selected_direction: test
+kfd_backend::tests::native_xgmi_dependency_and_pending_ownership_rules_are_bounded: test
+kfd_backend::tests::native_xgmi_flush_admission_is_complete_bounded_and_nonmutating: test
+kfd_backend::tests::native_xgmi_pair_and_capability_admission_fail_closed: test
+kfd_backend::tests::native_xgmi_partial_reverse_restoration_keeps_each_restored_owner_indexed: test
+kfd_backend::tests::native_xgmi_peer_admission_binds_direction_and_rejects_hostile_ranges: test
+kfd_backend::tests::native_xgmi_ready_and_in_flight_indexes_remain_bounded_under_stress: test
+kfd_backend::tests::native_xgmi_recoverable_batch_failure_settles_every_logical_owner: test
+kfd_backend::tests::native_xgmi_recoverable_prefix_restoration_preserves_fifo_order: test
+
+17 tests, 0 benchmarks

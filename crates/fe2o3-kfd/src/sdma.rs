@@ -49,6 +49,8 @@ pub(crate) use host_pool_policy::{
 
 pub(crate) mod creation;
 use creation::{SdmaCreationEscrowV1, SdmaCreationProfileV1};
+mod xgmi_creation;
+pub use xgmi_creation::Gfx942NativeXgmiSdmaQueueCreationRootV1;
 
 mod multi_queue;
 #[cfg(feature = "hardware-diagnostic")]
@@ -151,7 +153,7 @@ impl SdmaWaitProfileV1 {
 
 /// Frozen claim boundary for the bounded native gfx942 SDMA implementation.
 pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v15\n",
+    "profile=fe2o3-gfx942-kfd-sdma-copy-r1-v16\n",
     "kfd_sdma_queue_schema_sha256=f489ae5735f8230e4ee788fe1fa9e62b307301c13cf88ee70889b0f455af0b5b\n",
     "sdma_topology_capability_sha256=51236bbd70ece3ee4e14cc1a3e7e7cfbbe0960e745130e1a3943f9e39bc36a26\n",
     "rocm_systems_commit=1b648038a0ac164cf2f06f2a581ced12cf5f7378\n",
@@ -178,7 +180,8 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
     "dispatch-data-bridge=exact-full-extent-host-content-or-completed-h2d-only,move-only-storage-identity-and-queue-and-pool-generation-binding,no-rematerialization,demotion-advances-pool-generation\n",
     "currentness=one-operational-pre-post-envelope-per-submit-batch-or-wait-batch-or-combined-submit-through-observed-completion,authenticated-full-host-write-retains-one-pre-post-envelope-per-max-linear-chunk,persistent-ready-certificate-validation-retains-one-pre-post-envelope,internal-atomics-and-mapped-writes-only-inside-envelope\n",
     "failure=structural-preflight-before-the-first-live-shared-memory-or-currentness-operation-recovers-inputs,retryable-no-native-effect-availability-detached-compute-foreign-buffer-and-recoverable-preparation-failures-preserve-inputs-and-do-not-poison,every-terminal-error-or-caught-unwind-at-or-after-that-boundary-permanently-poisons-process-global-kfd-admission-and-requires-process-teardown-independent-of-whether-a-confirmed-queue-roster-exists,prepared-live-and-terminal-creation-custody-are-distinct,validated-xgmi-route-scope-failure-quarantines-both-participating-sessions,currentness-counter-generation-and-post-preflight-uncertainty-terminally-poison-and-retain-native-custody,every-striped-submit-poll-or-wait-process-teardown-return-invokes-one-central-terminalizer-that-poisons-both-the-local-session-and-process-global-admission,striped-terminal-failure-exposes-audit-only-confirmed-and-at-most-one-indeterminate-and-untouched-observations-without-drain-or-resubmit-authority,striped-wait-timeout-retains-exact-pending-custody-and-does-not-invoke-the-terminalizer,striped-wait-panic-before-the-abort-only-retirement-suffix-preserves-the-exact-sealed-plan-shards-and-ordered-completion-roster-in-terminal-custody-and-invokes-the-same-terminalizer,striped-cursor-commits-only-after-complete-publication-and-closing-currentness\n",
-    "creation-unwind=ordinary-generic-targeted-directional-striped-logical-mux-and-combined-constructors-borrow-one-profile-aware-escrow-outside-the-catch,preallocated-separate-primary-secondary-rosters,confirmed-prefixes-and-prepared-attempt-with-mutable-untrusted-create-args-and-mapped-doorbell-rooted-before-resuming-original-panic,retake-and-final-poison-panics-do-not-replace-original,pre-prepared-memory-operation-custody-remains-opaque,no-arbitrary-consuming-memory-primitive-unwind-refinement,no-public-xgmi-creation-unwind-guarantee,no-terminal-cleanup-authority\n",
+    "creation-unwind=ordinary-generic-targeted-directional-striped-logical-mux-and-combined-constructors-borrow-one-profile-aware-escrow-outside-the-catch,preallocated-separate-primary-secondary-rosters,confirmed-prefixes-and-prepared-attempt-with-mutable-untrusted-create-args-and-mapped-doorbell-rooted-before-resuming-original-panic,retake-and-final-poison-panics-do-not-replace-original,pre-prepared-memory-operation-custody-remains-opaque,no-arbitrary-consuming-memory-primitive-unwind-refinement,no-terminal-cleanup-authority\n",
+    "xgmi-creation-unwind=public-constructor-requires-caller-owned-move-only-inline-root,vacant-before-pure-preflight-and-arm,pending-before-opening-route,borrowed-opaque-or-prepared-native-attempt-retained-through-returned-errors-and-panics,confirmed-owner-rooted-before-closing-route-and-disarm,success-extracts-only-after-disarm,owner-free-diagnostic-errors,source-destination-global-terminalizers-independently-caught,original-creator-panic-preserved-and-secondary-payloads-forgotten,occupied-root-reentry-inert-and-drop-aborts,runtime-roots-per-direction-and-terminal-latch-before-error-formatting-or-resuming-panic,no-full-consuming-memory-primitive-refinement-or-native-panic-injection-proof,no-terminal-cleanup-authority\n",
     "teardown=combined-striped-before-directional-before-compute,standalone-sdma-before-compute,then-release-ring-control-completions-and-pooled-buffers-explicitly,terminal-creation-custody-has-no-in-process-cleanup-authority\n",
     "proof=abstract-pool-generation-retention-and-cross-device-coordinate-theorems-only,r46-model-is-not-an-executable-rust-refinement,host-thread-cpu-and-context-switch-measurements-are-not-proof\n",
     "contracted=ioctl-truth,doorbell-mapping,cpu-gpu-coherence,sha256-collision-resistance,userspace-certificate-is-not-kernel-attestation-or-loaded-kernel-proof,kernel-firmware-packet-consumption,completion,event-driven-completion,gpu-clock-calibration,progress,liveness\n",
@@ -187,7 +190,7 @@ pub const GFX942_SDMA_COPY_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_SDMA_COPY_MANIFEST_V1`].
 pub const GFX942_SDMA_COPY_MANIFEST_SHA256_V1: &str =
-    "f0c2af0746f004f9d90cb64367a995c41122f87ad9572c5c5fcabe64bfe2e115";
+    "16f6189ae54e89be357eb4d3d2b8a8fefeccdae1d8089e3162b14a794cdd3b69";
 
 const SDMA_OP_COPY: u32 = 1;
 const SDMA_OP_FENCE: u32 = 5;
@@ -1527,21 +1530,21 @@ impl Gfx942SdmaQueueOwnerV1 {
         Some(())
     }
 
-    #[allow(clippy::result_large_err)]
     fn create_on_xgmi_engine_in_armed_scope(
         memory: &mut SharedGttMemorySessionV1,
         owner: QueueKeyV1,
         engine: KfdGfx942SdmaXgmiEngineId,
         host: PreparedGfx942SdmaQueueHostResourcesV1,
         creation_arm: &ProcessGlobalKfdRuntimeCreationArmV1,
-    ) -> Result<Self, Gfx942SdmaQueueOwnerCreationFailureV1> {
-        Self::create_with_engine_in_armed_scope(
+        attempted: &mut Option<TerminalGfx942SdmaQueueCreationV1>,
+    ) -> Result<Self, Gfx942SdmaErrorV1> {
+        Self::create_with_borrowed_attempt_in_armed_scope(
             memory,
             owner,
             Some(Gfx942SdmaEngineProfileV1::Xgmi(engine)),
             host,
             creation_arm,
-            &mut None,
+            attempted,
         )
     }
 
@@ -1551,9 +1554,33 @@ impl Gfx942SdmaQueueOwnerV1 {
         owner: QueueKeyV1,
         engine: Option<Gfx942SdmaEngineProfileV1>,
         host: PreparedGfx942SdmaQueueHostResourcesV1,
-        _creation_arm: &ProcessGlobalKfdRuntimeCreationArmV1,
+        creation_arm: &ProcessGlobalKfdRuntimeCreationArmV1,
         attempted: &mut Option<TerminalGfx942SdmaQueueCreationV1>,
     ) -> Result<Self, Gfx942SdmaQueueOwnerCreationFailureV1> {
+        Self::create_with_borrowed_attempt_in_armed_scope(
+            memory,
+            owner,
+            engine,
+            host,
+            creation_arm,
+            attempted,
+        )
+        .map_err(|error| {
+            Gfx942SdmaQueueOwnerCreationFailureV1::terminal(
+                error,
+                attempted.take().unwrap_or_else(|| std::process::abort()),
+            )
+        })
+    }
+
+    fn create_with_borrowed_attempt_in_armed_scope(
+        memory: &mut SharedGttMemorySessionV1,
+        owner: QueueKeyV1,
+        engine: Option<Gfx942SdmaEngineProfileV1>,
+        host: PreparedGfx942SdmaQueueHostResourcesV1,
+        _creation_arm: &ProcessGlobalKfdRuntimeCreationArmV1,
+        attempted: &mut Option<TerminalGfx942SdmaQueueCreationV1>,
+    ) -> Result<Self, Gfx942SdmaErrorV1> {
         if matches!(
             attempted,
             Some(TerminalGfx942SdmaQueueCreationV1::QueueAttempt { .. })
@@ -1650,15 +1677,7 @@ impl Gfx942SdmaQueueOwnerV1 {
                 expected,
             ))
         })();
-        let (prepared, expected) = match prepared {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                return Err(Gfx942SdmaQueueOwnerCreationFailureV1::terminal(
-                    error,
-                    attempted.take().unwrap_or_else(|| std::process::abort()),
-                ));
-            }
-        };
+        let (prepared, expected) = prepared?;
         *attempted = Some(TerminalGfx942SdmaQueueCreationV1::QueueAttempt {
             prepared,
             native: Gfx942SdmaQueueCreationNativeObservationV1::UntrustedIoctlOutputs {
@@ -1666,13 +1685,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             },
             doorbell: None,
         });
-        match creation::finish_native_attempt(memory, attempted, expected, doorbell_failure) {
-            Ok(owner) => Ok(owner),
-            Err(error) => Err(Gfx942SdmaQueueOwnerCreationFailureV1::terminal(
-                error,
-                attempted.take().unwrap_or_else(|| std::process::abort()),
-            )),
-        }
+        creation::finish_native_attempt(memory, attempted, expected, doorbell_failure)
     }
 
     pub(crate) const fn observation(&self) -> Gfx942SdmaQueueObservationV1 {
@@ -3714,18 +3727,12 @@ pub struct Gfx942NativeXgmiSdmaQueueV1 {
     owner: Option<Gfx942SdmaQueueOwnerV1>,
 }
 
-// Both variants retain already-live native authority and cannot be boxed safely.
-#[allow(clippy::large_enum_variant)]
-enum Gfx942NativeXgmiSdmaQueueCreationTerminalV1 {
-    Confirmed(Gfx942SdmaQueueOwnerV1),
-    Attempted(TerminalGfx942SdmaQueueCreationV1),
-}
-
-#[must_use = "terminal XGMI creation custody requires process teardown"]
+/// Owner-free diagnostic. Terminal custody remains in the caller's creation root.
+#[must_use = "terminal XGMI creation requires process teardown"]
 pub struct Gfx942NativeXgmiSdmaQueueCreationFailureV1 {
     error: Gfx942SdmaErrorV1,
     disposition: Gfx942SdmaQueueSetCreationDispositionV1,
-    retained: Option<Gfx942NativeXgmiSdmaQueueCreationTerminalV1>,
+    stage: Option<&'static str>,
 }
 
 impl Gfx942NativeXgmiSdmaQueueCreationFailureV1 {
@@ -3741,18 +3748,7 @@ impl Gfx942NativeXgmiSdmaQueueCreationFailureV1 {
     }
 
     fn terminal_stage(&self) -> Option<&'static str> {
-        match self.retained.as_ref() {
-            None if self.is_terminal() => Some("memory-terminal-no-queue-custody"),
-            None => None,
-            Some(Gfx942NativeXgmiSdmaQueueCreationTerminalV1::Confirmed(owner)) => {
-                let _ = owner;
-                Some("confirmed-queue-retained")
-            }
-            Some(Gfx942NativeXgmiSdmaQueueCreationTerminalV1::Attempted(attempted)) => {
-                let _ = attempted;
-                Some("create-attempt-retained")
-            }
-        }
+        self.stage
     }
 }
 
@@ -3779,30 +3775,17 @@ impl Gfx942NativeXgmiSdmaQueueCreationFailureV1 {
         Self {
             error,
             disposition: Gfx942SdmaQueueSetCreationDispositionV1::Retryable,
-            retained: None,
+            stage: None,
         }
     }
 
-    fn terminal(
-        error: Gfx942SdmaErrorV1,
-        retained: Option<Gfx942NativeXgmiSdmaQueueCreationTerminalV1>,
-    ) -> Self {
-        permanently_poison_process_global_kfd_runtime_gate_v1();
+    fn terminal(error: Gfx942SdmaErrorV1, root: &Gfx942NativeXgmiSdmaQueueCreationRootV1) -> Self {
         Self {
             error,
             disposition: Gfx942SdmaQueueSetCreationDispositionV1::Terminal,
-            retained,
+            stage: root.terminal_stage(),
         }
     }
-}
-
-fn quarantine_xgmi_creation_sessions(
-    source: &mut SharedGttMemorySessionV1,
-    destination: &mut SharedGttMemorySessionV1,
-    detail: &'static str,
-) {
-    let _ = source.quarantine_queue_composition(detail);
-    let _ = destination.quarantine_queue_composition(detail);
 }
 
 #[derive(Clone, Copy)]
@@ -4072,116 +4055,18 @@ fn classify_xgmi_wait_result(
 
 #[allow(clippy::result_large_err)]
 impl Gfx942NativeXgmiSdmaQueueV1 {
+    /// Create using caller-owned custody that outlives every error and unwind.
+    ///
+    /// A terminal failure leaves `root` occupied. Retain it and both sessions
+    /// until process teardown; an occupied root aborts on Drop and grants no
+    /// cleanup or retry authority. Successful creation leaves the root vacant.
     pub fn create(
         source: &mut SharedGttMemorySessionV1,
         destination: &mut SharedGttMemorySessionV1,
         route: crate::topology::Gfx942XgmiRouteV1,
+        root: &mut Gfx942NativeXgmiSdmaQueueCreationRootV1,
     ) -> Result<Self, Gfx942NativeXgmiSdmaQueueCreationFailureV1> {
-        if source.gpu_id() != route.source_gpu_id() {
-            return Err(Gfx942NativeXgmiSdmaQueueCreationFailureV1::retryable(
-                Gfx942SdmaErrorV1::Contract(
-                    "XGMI queue executing GPU does not match directional route",
-                ),
-            ));
-        }
-        let engine =
-            admit_kfd_gfx942_sdma_xgmi_engine_mask(route.link().recommended_sdma_engine_id_mask())
-                .map_err(|_| {
-                    Gfx942NativeXgmiSdmaQueueCreationFailureV1::retryable(
-                        Gfx942SdmaErrorV1::Contract("XGMI SDMA route engine mask"),
-                    )
-                })?;
-        if engine.value() != route.recommended_engine_id() {
-            return Err(Gfx942NativeXgmiSdmaQueueCreationFailureV1::retryable(
-                Gfx942SdmaErrorV1::Contract("XGMI SDMA route engine identity"),
-            ));
-        }
-        let host = prepare_sdma_queue_host_resources()
-            .map_err(recover_sdma_owner_preflight_error)
-            .map_err(Gfx942NativeXgmiSdmaQueueCreationFailureV1::retryable)?;
-        let creation_arm = arm_process_global_kfd_runtime_gate_for_creation_v1().map_err(|_| {
-            Gfx942NativeXgmiSdmaQueueCreationFailureV1::retryable(Gfx942SdmaErrorV1::Contract(
-                "process-global KFD creation gate unavailable",
-            ))
-        })?;
-        if let Err(error) = source.validate_gfx942_xgmi_route_with_peer(destination, route) {
-            quarantine_xgmi_creation_sessions(
-                source,
-                destination,
-                "XGMI SDMA creation opening route validation",
-            );
-            return Err(Gfx942NativeXgmiSdmaQueueCreationFailureV1::terminal(
-                error.into(),
-                None,
-            ));
-        }
-        let owner_key = match source.next_xgmi_sdma_queue_key() {
-            Ok(owner_key) => owner_key,
-            Err(error) => {
-                quarantine_xgmi_creation_sessions(
-                    source,
-                    destination,
-                    "XGMI SDMA creation queue identity failure",
-                );
-                return Err(Gfx942NativeXgmiSdmaQueueCreationFailureV1::terminal(
-                    error.into(),
-                    None,
-                ));
-            }
-        };
-        let owner = match Gfx942SdmaQueueOwnerV1::create_on_xgmi_engine_in_armed_scope(
-            source,
-            owner_key,
-            engine,
-            host,
-            &creation_arm,
-        ) {
-            Ok(owner) => owner,
-            Err(Gfx942SdmaQueueOwnerCreationFailureV1::RetryableBeforeCreate(error)) => {
-                quarantine_xgmi_creation_sessions(
-                    source,
-                    destination,
-                    "XGMI SDMA creation failed after route validation",
-                );
-                return Err(Gfx942NativeXgmiSdmaQueueCreationFailureV1::terminal(
-                    error, None,
-                ));
-            }
-            Err(Gfx942SdmaQueueOwnerCreationFailureV1::TerminalAfterMemoryOperation {
-                error,
-                retained,
-            }) => {
-                quarantine_xgmi_creation_sessions(
-                    source,
-                    destination,
-                    "XGMI SDMA native queue creation failure",
-                );
-                return Err(Gfx942NativeXgmiSdmaQueueCreationFailureV1::terminal(
-                    error,
-                    Some(Gfx942NativeXgmiSdmaQueueCreationTerminalV1::Attempted(
-                        retained,
-                    )),
-                ));
-            }
-        };
-        if let Err(error) = source.validate_gfx942_xgmi_route_with_peer(destination, route) {
-            quarantine_xgmi_creation_sessions(
-                source,
-                destination,
-                "XGMI SDMA creation closing route validation",
-            );
-            return Err(Gfx942NativeXgmiSdmaQueueCreationFailureV1::terminal(
-                error.into(),
-                Some(Gfx942NativeXgmiSdmaQueueCreationTerminalV1::Confirmed(
-                    owner,
-                )),
-            ));
-        }
-        creation_arm.disarm();
-        Ok(Self {
-            route,
-            owner: Some(owner),
-        })
+        xgmi_creation::create(source, destination, route, root)
     }
 
     pub const fn route(&self) -> crate::topology::Gfx942XgmiRouteV1 {
@@ -4659,9 +4544,10 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
 
     /// Destroys the native queue and releases its retained resources.
     ///
-    /// Pre-mutation currentness and pending-work failures leave this queue
-    /// intact for inspection or retry. Any failure after `DESTROY_QUEUE` is
-    /// issued is terminal and retains the remaining resources.
+    /// Borrows the queue until native destruction succeeds. The subsequent
+    /// resource-release path still consumes the owner: errors or unwinds during
+    /// partial release do not guarantee exact retained custody and require
+    /// process teardown. The creation-root guarantee does not cover retirement.
     pub fn destroy_and_release(
         &mut self,
         source: &mut SharedGttMemorySessionV1,
@@ -6990,14 +6876,14 @@ mod tests {
         let retryable = Gfx942NativeXgmiSdmaQueueCreationFailureV1 {
             error: Gfx942SdmaErrorV1::Contract("injected pure preflight"),
             disposition: Gfx942SdmaQueueSetCreationDispositionV1::Retryable,
-            retained: None,
+            stage: None,
         };
         assert!(!retryable.is_terminal());
 
         let terminal_without_queue = Gfx942NativeXgmiSdmaQueueCreationFailureV1 {
             error: Gfx942SdmaErrorV1::Contract("injected post-route failure"),
             disposition: Gfx942SdmaQueueSetCreationDispositionV1::Terminal,
-            retained: None,
+            stage: Some("memory-terminal-no-queue-custody"),
         };
         assert!(terminal_without_queue.is_terminal());
         assert_eq!(
@@ -7061,46 +6947,43 @@ mod tests {
             .split("pub const fn route")
             .next()
             .unwrap();
-        let xgmi_arm = xgmi_create
-            .find("arm_process_global_kfd_runtime_gate_for_creation_v1")
-            .unwrap();
-        let xgmi_host = xgmi_create
-            .find("prepare_sdma_queue_host_resources")
-            .unwrap();
-        let opening_route = xgmi_create
-            .find("validate_gfx942_xgmi_route_with_peer")
-            .unwrap();
-        let scoped_owner = xgmi_create
-            .find("create_on_xgmi_engine_in_armed_scope")
-            .unwrap();
-        let closing_route = xgmi_create
-            .rfind("validate_gfx942_xgmi_route_with_peer")
-            .unwrap();
-        let xgmi_disarm = xgmi_create.find("creation_arm.disarm()").unwrap();
-        assert!(
-            xgmi_host < xgmi_arm
-                && xgmi_arm < opening_route
-                && opening_route < scoped_owner
-                && scoped_owner < closing_route
-                && closing_route < xgmi_disarm
-        );
-        assert!(
-            xgmi_create
-                .matches("quarantine_xgmi_creation_sessions")
-                .count()
-                >= 4
-        );
-        let inherited_preflight_failure = xgmi_create
-            .split("RetryableBeforeCreate(error)")
+        assert!(xgmi_create.contains("xgmi_creation::create(source, destination, route, root)"));
+        let driver = include_str!("sdma/xgmi_creation.rs")
+            .split("fn create_with(")
             .nth(1)
             .unwrap()
-            .split("TerminalAfterMemoryOperation")
+            .split("struct Sessions")
             .next()
             .unwrap();
-        assert!(
-            inherited_preflight_failure
-                .contains("Gfx942NativeXgmiSdmaQueueCreationFailureV1::terminal")
-        );
+        let host = driver.find(".prepare(route)").unwrap();
+        let arm = driver.find(".arm()").unwrap();
+        let begin = driver.find("root.begin(route)").unwrap();
+        let opening = driver.find("context.validate(route)").unwrap();
+        let lower = driver.find("context.create_owner").unwrap();
+        let confirm = driver.find("root.confirm(owner)").unwrap();
+        let closing = driver.rfind("context.validate(route)").unwrap();
+        let disarm = driver.find("context.disarm").unwrap();
+        let finish = driver.find("root.finish()").unwrap();
+        assert!(host < arm && arm < begin && begin < opening && opening < lower);
+        assert!(lower < confirm && confirm < closing && closing < disarm && disarm < finish);
+        let raw = source
+            .split("fn create_with_borrowed_attempt_in_armed_scope(")
+            .nth(1)
+            .unwrap()
+            .split("pub(crate) const fn observation")
+            .next()
+            .unwrap();
+        assert!(!raw.contains("attempted.take()"));
+        assert!(!raw.contains("Gfx942SdmaQueueOwnerCreationFailureV1::terminal"));
+        let xgmi_lower = source
+            .split("fn create_on_xgmi_engine_in_armed_scope(")
+            .nth(1)
+            .unwrap()
+            .split("fn create_with_engine_in_armed_scope(")
+            .next()
+            .unwrap();
+        assert!(!xgmi_lower.contains("&mut None"));
+        assert!(xgmi_lower.contains("create_with_borrowed_attempt_in_armed_scope"));
     }
 
     #[test]
@@ -7138,6 +7021,15 @@ mod tests {
         ) -> Result<(), Gfx942SdmaErrorV1>;
 
         let _: DestroyXgmiQueueV1 = Gfx942NativeXgmiSdmaQueueV1::destroy_and_release;
+        type CreateXgmiQueueV1 =
+            fn(
+                &mut SharedGttMemorySessionV1,
+                &mut SharedGttMemorySessionV1,
+                crate::topology::Gfx942XgmiRouteV1,
+                &mut Gfx942NativeXgmiSdmaQueueCreationRootV1,
+            )
+                -> Result<Gfx942NativeXgmiSdmaQueueV1, Gfx942NativeXgmiSdmaQueueCreationFailureV1>;
+        let _: CreateXgmiQueueV1 = Gfx942NativeXgmiSdmaQueueV1::create;
     }
 
     #[test]
@@ -7396,6 +7288,12 @@ mod tests {
             "striped-wait-timeout-retains-exact-pending-custody-and-does-not-invoke-the-terminalizer",
             "and-invokes-the-same-terminalizer",
             "r46-model-is-not-an-executable-rust-refinement",
+            "public-constructor-requires-caller-owned-move-only-inline-root",
+            "confirmed-owner-rooted-before-closing-route-and-disarm",
+            "owner-free-diagnostic-errors",
+            "original-creator-panic-preserved-and-secondary-payloads-forgotten",
+            "occupied-root-reentry-inert-and-drop-aborts",
+            "no-full-consuming-memory-primitive-refinement-or-native-panic-injection-proof",
             "no-parity-or-striped-tail-wait-speedup-measured-for-this-revision",
             "no-claim-that-spin-closes-the-observed-hip-gap",
         ] {

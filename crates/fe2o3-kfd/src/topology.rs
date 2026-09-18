@@ -2513,7 +2513,7 @@ fn discover_topology_at(root: &Path) -> Result<TopologySnapshot, TopologyError> 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -2797,6 +2797,15 @@ mod tests {
             (Some(2), Some(8))
         );
         assert_eq!(snapshot.gpu_nodes()[1].node_id(), 2);
+    }
+
+    pub(crate) fn admitted_xgmi_routes() -> [Gfx942XgmiRouteV1; 2] {
+        let fixture = Fixture::valid(2);
+        let snapshot = fixture.discover().unwrap();
+        [
+            snapshot.admit_gfx942_xgmi_route(1001, 1002).unwrap(),
+            snapshot.admit_gfx942_xgmi_route(1002, 1001).unwrap(),
+        ]
     }
 
     #[test]
