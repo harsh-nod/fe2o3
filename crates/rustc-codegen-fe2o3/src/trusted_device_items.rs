@@ -165,7 +165,7 @@ pub(crate) enum TrustedHalfOperation {
     Bf16x2FusedMultiplyAdd,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum TrustedAmdGpuInlineOperation {
     VMovB32,
     VAddU32,
@@ -1589,6 +1589,26 @@ fn validate_reviewed_fe2o3_device_provider_definition_v1(
 }
 fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option<&'static str> {
     match item {
+        TrustedDeviceItem::AmdGpuInline(operation) => Some(match operation {
+            TrustedAmdGpuInlineOperation::VMovB32 => {
+                "fe2o3_device::diagnostics::__amdgpu_v_mov_b32_v1"
+            }
+            TrustedAmdGpuInlineOperation::VAddU32 => {
+                "fe2o3_device::diagnostics::__amdgpu_v_add_u32_v1"
+            }
+            TrustedAmdGpuInlineOperation::VSubU32 => {
+                "fe2o3_device::diagnostics::__amdgpu_v_sub_u32_v1"
+            }
+            TrustedAmdGpuInlineOperation::VAndB32 => {
+                "fe2o3_device::diagnostics::__amdgpu_v_and_b32_v1"
+            }
+            TrustedAmdGpuInlineOperation::VOrB32 => {
+                "fe2o3_device::diagnostics::__amdgpu_v_or_b32_v1"
+            }
+            TrustedAmdGpuInlineOperation::VXorB32 => {
+                "fe2o3_device::diagnostics::__amdgpu_v_xor_b32_v1"
+            }
+        }),
         TrustedDeviceItem::KernelError => Some("fe2o3_device::kernel_result::KernelError"),
         TrustedDeviceItem::DisjointSlice => Some("fe2o3_device::DisjointSlice"),
         TrustedDeviceItem::WriteOnlyDisjointSlice => Some("fe2o3_device::WriteOnlyDisjointSlice"),
@@ -3242,6 +3262,85 @@ mod tests {
     include!("trusted_device_items/materialization_v1_tests.rs");
 
     include!("trusted_device_items/wrapping_integer_v1_tests.rs");
+
+    #[test]
+    fn gfx942_inline_v30_providers_require_exact_reviewed_definition_and_source() {
+        let cases = [
+            (
+                TrustedAmdGpuInlineOperation::VMovB32,
+                "__amdgpu_v_mov_b32_v1",
+            ),
+            (
+                TrustedAmdGpuInlineOperation::VAddU32,
+                "__amdgpu_v_add_u32_v1",
+            ),
+            (
+                TrustedAmdGpuInlineOperation::VSubU32,
+                "__amdgpu_v_sub_u32_v1",
+            ),
+            (
+                TrustedAmdGpuInlineOperation::VAndB32,
+                "__amdgpu_v_and_b32_v1",
+            ),
+            (TrustedAmdGpuInlineOperation::VOrB32, "__amdgpu_v_or_b32_v1"),
+            (
+                TrustedAmdGpuInlineOperation::VXorB32,
+                "__amdgpu_v_xor_b32_v1",
+            ),
+        ];
+        for (operation, name) in cases {
+            let item = TrustedDeviceItem::AmdGpuInline(operation);
+            let local = format!("diagnostics::{name}");
+            let exact_path = format!("fe2o3_device::{local}");
+            assert_eq!(
+                exact_provider_compiler_definition_path_v1(item),
+                Some(exact_path.as_str())
+            );
+            let exact = semantic_definition(
+                &local,
+                super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
+                [6; 32],
+            );
+            validate_reviewed_fe2o3_device_provider_definition_v1(item, &exact).unwrap();
+            for wrong_path in [
+                format!("local::{name}"),
+                format!("diagnostics::lookalike::{name}"),
+                "diagnostics::__amdgpu_v_mov_b32_impostor_v1".to_owned(),
+            ] {
+                let changed = semantic_definition(
+                    &wrong_path,
+                    super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
+                    [6; 32],
+                );
+                assert!(
+                    validate_reviewed_fe2o3_device_provider_definition_v1(item, &changed).is_err()
+                );
+            }
+            for wrong_crate in ["local_marker", "fe2o3_device_lookalike"] {
+                let mut changed = exact.clone();
+                changed.provider.crate_name = wrong_crate.into();
+                assert!(
+                    validate_reviewed_fe2o3_device_provider_definition_v1(item, &changed).is_err()
+                );
+            }
+            let mut stale = exact.clone();
+            stale.source_closure_identity[0] ^= 1;
+            assert!(validate_reviewed_fe2o3_device_provider_definition_v1(item, &stale).is_err());
+            // A different legitimate ISA marker is not this operation's provider.
+            let other = if operation == TrustedAmdGpuInlineOperation::VMovB32 {
+                TrustedAmdGpuInlineOperation::VAddU32
+            } else {
+                TrustedAmdGpuInlineOperation::VMovB32
+            };
+            assert!(
+                validate_reviewed_fe2o3_device_provider_definition_v1(
+                    TrustedDeviceItem::AmdGpuInline(other),
+                    &exact
+                )
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn exact_device_provider_rejects_same_name_path_and_source_substitution() {

@@ -1,4 +1,4 @@
-//! Read-only, bounded authoring queries. A snapshot is never executable authority.
+//! Bounded authoring queries and explicit text candidates; never executable authority.
 
 use std::io::{self, Read, Write};
 use std::process::ExitCode;
@@ -9,7 +9,13 @@ use fe2o3_source_isa_observation::multilevel_authoring_v1::{
 };
 use serde::Serialize;
 
-const USAGE: &str = "usage: fe2o3-author inspect\n       fe2o3-author operations --bundle-identity HEX --start N --limit N\n       fe2o3-author select --selector JSON\n       fe2o3-author materialize --selector JSON --helper NAME\nRead exact canonical simulation Bundle V6 bytes from stdin. Output is diagnostic JSON, never a production resume token.";
+#[path = "fe2o3_author/preview.rs"]
+mod preview;
+
+#[path = "fe2o3_author/candidate.rs"]
+mod candidate;
+
+const USAGE: &str = "usage: fe2o3-author inspect\n       fe2o3-author operations --bundle-identity HEX --start N --limit N\n       fe2o3-author select --selector JSON\n       fe2o3-author materialize --selector JSON --helper NAME\n       fe2o3-author preview-helper-insertion --selector JSON --helper NAME --source PATH --expected-source-sha256 HEX\n       fe2o3-author create-source-candidate --selector JSON --helper NAME --source PATH --expected-source-sha256 HEX --expected-proposal-sha256 HEX --candidate PATH\nRead exact canonical simulation Bundle V6 bytes from stdin. Output is diagnostic JSON, never a production resume token. Helper-insertion preview reads only the explicit relative Rust source path and never writes, compiles, or runs source. Explicit candidate creation writes only a new named file on supported Linux filesystems, never replaces the original, and never compiles or runs source.";
 const MAX_SELECTOR_BYTES: usize = 16 * 1024;
 
 enum Query {
@@ -21,6 +27,13 @@ enum Query {
     },
     Select(AuthoringRegionSelectorV1),
     Materialize(AuthoringRegionSelectorV1, String),
+    PreviewHelperInsertion {
+        selector: AuthoringRegionSelectorV1,
+        helper: String,
+        source: String,
+        expected_sha256: String,
+    },
+    CreateSourceCandidate(candidate::Options),
 }
 
 fn decimal(value: &str) -> Result<u32, String> {
@@ -64,6 +77,51 @@ fn parse(arguments: &[String]) -> Result<Query, String> {
         ["select", "--selector", value] => Ok(Query::Select(selector(value)?)),
         ["materialize", "--selector", value, "--helper", helper] => {
             Ok(Query::Materialize(selector(value)?, (*helper).into()))
+        }
+        [
+            "preview-helper-insertion",
+            "--selector",
+            value,
+            "--helper",
+            helper,
+            "--source",
+            source,
+            "--expected-source-sha256",
+            expected_sha256,
+        ] => {
+            preview::validate_arguments(source, expected_sha256)?;
+            Ok(Query::PreviewHelperInsertion {
+                selector: selector(value)?,
+                helper: (*helper).into(),
+                source: (*source).into(),
+                expected_sha256: (*expected_sha256).into(),
+            })
+        }
+        [
+            "create-source-candidate",
+            "--selector",
+            value,
+            "--helper",
+            helper,
+            "--source",
+            source,
+            "--expected-source-sha256",
+            expected_source_sha256,
+            "--expected-proposal-sha256",
+            expected_proposal_sha256,
+            "--candidate",
+            destination,
+        ] => {
+            let options = candidate::Options {
+                selector: selector(value)?,
+                helper: (*helper).into(),
+                source: (*source).into(),
+                expected_source_sha256: (*expected_source_sha256).into(),
+                expected_proposal_sha256: (*expected_proposal_sha256).into(),
+                candidate: (*destination).into(),
+            };
+            options.validate()?;
+            Ok(Query::CreateSourceCandidate(options))
         }
         _ => Err(USAGE.into()),
     }
@@ -111,6 +169,27 @@ fn run(query: Query) -> Result<(), String> {
                 .materialize_typed_rust(&selector, &helper)
                 .map_err(|error| error.to_string())?,
         ),
+        Query::PreviewHelperInsertion {
+            selector,
+            helper,
+            source,
+            expected_sha256,
+        } => output(&preview::prepare(
+            &snapshot,
+            &selector,
+            &helper,
+            &source,
+            &expected_sha256,
+        )?),
+        Query::CreateSourceCandidate(options) => {
+            let receipt = candidate::create(&snapshot, &options)?;
+            output(&receipt).map_err(|error| {
+                format!(
+                    "candidate created and retained at {:?}; receipt output failed; no rollback: {error}",
+                    options.candidate
+                )
+            })
+        }
     }
 }
 

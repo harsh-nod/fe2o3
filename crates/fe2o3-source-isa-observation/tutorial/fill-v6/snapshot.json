@@ -1,1 +1,69 @@
-{"schema":"fe2o3-multilevel-authoring-observation-v1","authority":{"observation_only":true,"authenticates_compiler_execution":false,"source_authenticated":false,"grants_proof_authority":false,"grants_production_resume":false,"grants_load_or_launch":false},"bundle_identity":"8075dd455e9280e38623f5b3dcf4b4fee1141340bca375650565c6f9fed3ab67","bundle_subject_identity":"7c79caa4c5e7e697686c8cf8e667bcaece233e4dfd3dcb3b8e5f356e9ae2fb59","canonical_kir_version":11,"canonical_kir_digest":"be476760d364e97a9a40ea7a1e5a9ab88c96b479ad8d2a0c46f7e5d89d228ccc","canonical_kir_bytes":"494","target":"gfx942:xnack-","source_map_identity":"e9dd7f55295ddff10494c4daf0de1c10300ac622b9c09e2f2e7d6c7486cd7d1c","semantic_mir_identity":"85f8599ee1cae4ef39ef89f6690454baae19c0035c4fb5d4f249a0ac46d874b9","rustc_identity_inventory_receipt_sha256":"a519f74371c565146cfe1eaf0a53524bfdeecce44d46e55ac01807457366cdad","rustc_identity_inventory_receipt_bytes":"535","rustc_preflight_plan_receipt_sha256":"bd626f8bbfdc498a89e308acbf19665fc1162ca2e96b9cea98c1d15d9db3c02c","rustc_preflight_plan_receipt_bytes":"1748","compiler_policy_identity":"unavailable_in_v6","final_artifact_identity":"unavailable_extraction_precedes_final_artifact","operation_count":8,"eliminated_source_span_count":5,"capabilities":[{"level":"structured_rust","read":"source_locations_only","select":"unavailable","materialize":"unavailable","edit":"unavailable","readmit":"unavailable","simulate":"unavailable","inspect":"unavailable"},{"level":"scheduled_tile_rust","read":"unavailable","select":"unavailable","materialize":"unavailable","edit":"unavailable","readmit":"unavailable","simulate":"unavailable","inspect":"unavailable"},{"level":"canonical_simt_v11","read":"available","select":"bounded_contiguous_block","materialize":"validated_existing_u32_inline_isa_draft_only","edit":"external_source_edit_only","readmit":"typed_isa_frontend_unavailable","simulate":"separate_existing_simulator_with_coverage_checks","inspect":"available"},{"level":"physical_register_exact_region","read":"unavailable","select":"unavailable","materialize":"unavailable","edit":"unavailable","readmit":"unavailable","simulate":"unavailable","inspect":"unavailable"}]}
+{
+  "schema": "fe2o3-multilevel-authoring-observation-v1",
+  "authority": {
+    "observation_only": true,
+    "authenticates_compiler_execution": false,
+    "source_authenticated": false,
+    "grants_proof_authority": false,
+    "grants_production_resume": false,
+    "grants_load_or_launch": false
+  },
+  "bundle_identity": "8075dd455e9280e38623f5b3dcf4b4fee1141340bca375650565c6f9fed3ab67",
+  "bundle_subject_identity": "7c79caa4c5e7e697686c8cf8e667bcaece233e4dfd3dcb3b8e5f356e9ae2fb59",
+  "canonical_kir_version": 11,
+  "canonical_kir_digest": "be476760d364e97a9a40ea7a1e5a9ab88c96b479ad8d2a0c46f7e5d89d228ccc",
+  "canonical_kir_bytes": "494",
+  "target": "gfx942:xnack-",
+  "source_map_identity": "e9dd7f55295ddff10494c4daf0de1c10300ac622b9c09e2f2e7d6c7486cd7d1c",
+  "semantic_mir_identity": "85f8599ee1cae4ef39ef89f6690454baae19c0035c4fb5d4f249a0ac46d874b9",
+  "rustc_identity_inventory_receipt_sha256": "a519f74371c565146cfe1eaf0a53524bfdeecce44d46e55ac01807457366cdad",
+  "rustc_identity_inventory_receipt_bytes": "535",
+  "rustc_preflight_plan_receipt_sha256": "bd626f8bbfdc498a89e308acbf19665fc1162ca2e96b9cea98c1d15d9db3c02c",
+  "rustc_preflight_plan_receipt_bytes": "1748",
+  "compiler_policy_identity": "unavailable_in_v6",
+  "final_artifact_identity": "unavailable_extraction_precedes_final_artifact",
+  "operation_count": 8,
+  "eliminated_source_span_count": 5,
+  "capabilities": [
+    {
+      "level": "structured_rust",
+      "read": "source_locations_only",
+      "select": "unavailable",
+      "materialize": "unavailable",
+      "edit": "unavailable",
+      "readmit": "unavailable",
+      "simulate": "unavailable",
+      "inspect": "unavailable"
+    },
+    {
+      "level": "scheduled_tile_rust",
+      "read": "unavailable",
+      "select": "unavailable",
+      "materialize": "unavailable",
+      "edit": "unavailable",
+      "readmit": "unavailable",
+      "simulate": "unavailable",
+      "inspect": "unavailable"
+    },
+    {
+      "level": "canonical_simt_v11",
+      "read": "available",
+      "select": "bounded_contiguous_block",
+      "materialize": "bounded_u32_bitwise_or_validated_inline_isa_draft",
+      "edit": "external_source_edit_only",
+      "readmit": "requires_fresh_source_compilation_supported_subset",
+      "simulate": "separate_existing_simulator_with_coverage_checks",
+      "inspect": "available"
+    },
+    {
+      "level": "physical_register_exact_region",
+      "read": "unavailable",
+      "select": "unavailable",
+      "materialize": "unavailable",
+      "edit": "unavailable",
+      "readmit": "unavailable",
+      "simulate": "unavailable",
+      "inspect": "unavailable"
+    }
+  ]
+}

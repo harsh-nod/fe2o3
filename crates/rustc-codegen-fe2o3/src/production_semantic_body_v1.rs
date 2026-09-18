@@ -279,6 +279,7 @@ pub(crate) struct ProductionSemanticBodyRequestOwnerV1<'tcx> {
     limits: SemanticMirLimitsV1,
     totals: ConstructionTotalsV1,
     callables: HashMap<Instance<'tcx>, ProductionSemanticCallableOwnerRecordV1>,
+    inline_sources: crate::production_inline_source_occurrences_v30::InlineSourceOccurrencesV30,
 }
 
 impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
@@ -332,7 +333,22 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
             limits,
             totals,
             callables,
+            inline_sources: Default::default(),
         })
+    }
+
+    pub(crate) fn with_inline_sources_v30(
+        mut self,
+        sources: crate::production_inline_source_occurrences_v30::InlineSourceOccurrencesV30,
+    ) -> Self {
+        self.inline_sources = sources;
+        self
+    }
+
+    pub(crate) fn require_inline_sources_consumed_v30(
+        &self,
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        self.inline_sources.require_drained().map_err(table)
     }
 
     fn charge(
@@ -1262,14 +1278,35 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                         return Err(unsupported("call with executable unwind edge", block, None));
                     }
                 };
-                Ok(SemanticTerminatorKindV1::Call(
-                    SemanticDirectCallV1::new_callable(
-                        semantic_callee,
-                        arguments,
-                        destination,
-                        unwind,
-                    )?,
-                ))
+                let source = self
+                    .owner
+                    .inline_sources
+                    .take(self.function, raw_block, semantic_callee)
+                    .map_err(table)?;
+                let requires_source = self
+                    .terminal_expansions_by_raw
+                    .get(raw_block as usize)
+                    .copied()
+                    .flatten()
+                    .is_some_and(|recipe| {
+                        matches!(
+                            recipe.expansion,
+                            ProductionTerminalExpansionV1::Gfx942InlineU32(_)
+                        )
+                    });
+                if requires_source != source.is_some() {
+                    return Err(table("assembly call occurrence source binding"));
+                }
+                let mut call = SemanticDirectCallV1::new_callable(
+                    semantic_callee,
+                    arguments,
+                    destination,
+                    unwind,
+                )?;
+                if let Some(source) = source {
+                    call = call.with_inline_assembly_source_v30(source);
+                }
+                Ok(SemanticTerminatorKindV1::Call(call))
             }
             TerminatorKind::TailCall { .. } => Err(unsupported("TailCall terminator", block, None)),
             TerminatorKind::Drop {
@@ -2285,6 +2322,9 @@ fn semantic_borrow_kind_v1(
 
 const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) -> Option<usize> {
     match expansion {
+        ProductionTerminalExpansionV1::Gfx942InlineU32(operation) => Some(
+            crate::production_inline_assembly_v30::input_count(operation),
+        ),
         ProductionTerminalExpansionV1::ThreadIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupDimension(_)
@@ -2662,6 +2702,7 @@ mod tests {
             limits,
             totals: ConstructionTotalsV1::default(),
             callables: HashMap::new(),
+            inline_sources: Default::default(),
         };
 
         owner.charge(SemanticMirResourceV1::Functions, 1).unwrap();

@@ -1,1 +1,70 @@
-{"authority":{"observation_only":true,"authenticates_compiler_execution":false,"source_authenticated":false,"grants_proof_authority":false,"grants_production_resume":false,"grants_load_or_launch":false},"selector":{"bundle_identity":"8075dd455e9280e38623f5b3dcf4b4fee1141340bca375650565c6f9fed3ab67","canonical_kir_digest":"be476760d364e97a9a40ea7a1e5a9ab88c96b479ad8d2a0c46f7e5d89d228ccc","target":"gfx942:xnack-","operations":[{"function":0,"block":0,"operation":0}]},"structural_boundary":"contiguous_operations_in_one_block_no_terminator_selected","source_insertion_boundary":"unavailable_source_application_not_admitted","live_in":[],"live_out":[{"value":7,"ty":"Scalar(Index)"}],"operations":[{"coordinate":{"function":0,"block":0,"operation":0},"function_name":"fill","kind":"intrinsic","semantic_detail":null,"mnemonic":null,"inputs":[],"results":[{"value":7,"ty":"Scalar(Index)"}],"local_memory_effects":[],"complete_local_effect_summary":true,"convergence":"not_analyzed","traps":"not_analyzed","physical_resources":"unavailable_logical_canonical_stage","source_binding":"bundle_content_bound_not_authenticated","source_spans":[{"file_identity":"cbe8b5e25cdb3db48f6d3244fa45383ac0860cb57737316ba8b177f54bc1b008","display_path":"examples/fill/src/lib.rs","byte_start":"198","byte_end":"216","line":10,"column":15}],"materialization":"unavailable_unsupported_operation_or_contract"}],"materialization":"unavailable_unsupported_operation_or_contract"}
+{
+  "authority": {
+    "observation_only": true,
+    "authenticates_compiler_execution": false,
+    "source_authenticated": false,
+    "grants_proof_authority": false,
+    "grants_production_resume": false,
+    "grants_load_or_launch": false
+  },
+  "selector": {
+    "bundle_identity": "8075dd455e9280e38623f5b3dcf4b4fee1141340bca375650565c6f9fed3ab67",
+    "canonical_kir_digest": "be476760d364e97a9a40ea7a1e5a9ab88c96b479ad8d2a0c46f7e5d89d228ccc",
+    "target": "gfx942:xnack-",
+    "operations": [
+      {
+        "function": 0,
+        "block": 0,
+        "operation": 0
+      }
+    ]
+  },
+  "structural_boundary": "contiguous_operations_in_one_block_no_terminator_selected",
+  "source_insertion_boundary": "unavailable_source_application_not_admitted",
+  "live_in": [],
+  "live_out": [
+    {
+      "value": 7,
+      "ty": "Scalar(Index)"
+    }
+  ],
+  "operations": [
+    {
+      "coordinate": {
+        "function": 0,
+        "block": 0,
+        "operation": 0
+      },
+      "function_name": "fill",
+      "kind": "intrinsic",
+      "semantic_detail": null,
+      "mnemonic": null,
+      "inline_assembly_source": null,
+      "inputs": [],
+      "results": [
+        {
+          "value": 7,
+          "ty": "Scalar(Index)"
+        }
+      ],
+      "local_memory_effects": [],
+      "complete_local_effect_summary": true,
+      "convergence": "not_analyzed",
+      "traps": "not_analyzed",
+      "physical_resources": "unavailable_logical_canonical_stage",
+      "source_binding": "bundle_content_bound_not_authenticated",
+      "source_spans": [
+        {
+          "file_identity": "cbe8b5e25cdb3db48f6d3244fa45383ac0860cb57737316ba8b177f54bc1b008",
+          "display_path": "examples/fill/src/lib.rs",
+          "byte_start": "198",
+          "byte_end": "216",
+          "line": 10,
+          "column": 15
+        }
+      ],
+      "materialization": "unavailable_unsupported_operation_or_contract"
+    }
+  ],
+  "materialization": "unavailable_unsupported_operation_or_contract"
+}

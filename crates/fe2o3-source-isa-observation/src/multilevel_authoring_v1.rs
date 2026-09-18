@@ -9,8 +9,8 @@ use std::fmt::{self, Write as _};
 use std::io;
 
 use fe2o3_kernel_ir::{
-    AssemblyOption, DebugSourceMapDocumentV2, DebugSourceMapSpanV1, Function, Module, Operation,
-    OperationKind, ScalarType, Terminator, Type, ValueId, VerifiedSimulationBundleV6,
+    AssemblyOption, BinaryOp, DebugSourceMapDocumentV2, DebugSourceMapSpanV1, Function, Module,
+    Operation, OperationKind, ScalarType, Terminator, Type, ValueId, VerifiedSimulationBundleV6,
     decode_module_v11, validate_gfx942_inline_assembly_v1,
 };
 use serde::{Deserialize, Serialize};
@@ -115,6 +115,16 @@ pub struct AuthoringSourceSpanV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AuthoringAssemblySourceV1 {
+    pub frontend_unit: String,
+    pub function: String,
+    pub contract: String,
+    pub statement: String,
+    /// These are exact retained references, not independent source authentication.
+    pub authority: &'static str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AuthoringOperationV1 {
     pub coordinate: AuthoringOperationCoordinateV1,
     pub function_name: String,
@@ -122,6 +132,7 @@ pub struct AuthoringOperationV1 {
     /// Bounded scalar opcode or literal; absent for operation families not projected here.
     pub semantic_detail: Option<String>,
     pub mnemonic: Option<String>,
+    pub inline_assembly_source: Option<AuthoringAssemblySourceV1>,
     pub inputs: Vec<AuthoringValueV1>,
     pub results: Vec<AuthoringValueV1>,
     pub local_memory_effects: Vec<String>,
@@ -394,9 +405,9 @@ impl AuthoringSnapshotV1 {
                     level: "canonical_simt_v11",
                     read: "available",
                     select: "bounded_contiguous_block",
-                    materialize: "validated_existing_u32_inline_isa_draft_only",
+                    materialize: "bounded_u32_bitwise_or_validated_inline_isa_draft",
                     edit: "external_source_edit_only",
-                    readmit: "typed_isa_frontend_unavailable",
+                    readmit: "requires_fresh_source_compilation_supported_subset",
                     simulate: "separate_existing_simulator_with_coverage_checks",
                     inspect: "available",
                 },
@@ -546,7 +557,7 @@ impl AuthoringSnapshotV1 {
             return Err(AuthoringErrorV1::UnsupportedMaterialization);
         }
         let mut text = BoundedText::new(MAX_AUTHORING_SOURCE_BYTES_V1);
-        writeln!(text, "// Diagnostic source draft; source authentication and frontend readmission are unavailable.")
+        writeln!(text, "// Diagnostic source draft; source authentication and fresh frontend readmission have not been performed.")
             .map_err(|_| AuthoringErrorV1::ResourceLimit)?;
         writeln!(
             text,
@@ -571,20 +582,16 @@ impl AuthoringSnapshotV1 {
         }
         writeln!(text, ") {{").map_err(|_| AuthoringErrorV1::ResourceLimit)?;
         for coordinate in &selector.operations {
-            let instruction =
-                validate_gfx942_inline_assembly_v1(self.operation(*coordinate)?, |value| {
-                    self.value_type(coordinate.function, value)
-                        .and_then(Type::as_scalar)
-                })
-                .map_err(|_| AuthoringErrorV1::UnsupportedMaterialization)?;
+            let instruction = self
+                .draft_instruction(*coordinate, self.operation(*coordinate)?)
+                .ok_or(AuthoringErrorV1::UnsupportedMaterialization)?;
             write!(
                 text,
                 "    let v{}: u32 = fe2o3_device::amdgpu_asm!({}(",
-                instruction.result().0,
-                instruction.instruction().mnemonic()
+                instruction.result.0, instruction.mnemonic
             )
             .map_err(|_| AuthoringErrorV1::ResourceLimit)?;
-            for (index, input) in instruction.inputs().iter().enumerate() {
+            for (index, input) in instruction.inputs.iter().enumerate() {
                 write!(text, "{}v{}", if index == 0 { "" } else { ", " }, input.0)
                     .map_err(|_| AuthoringErrorV1::ResourceLimit)?;
             }
@@ -603,7 +610,7 @@ impl AuthoringSnapshotV1 {
             live_in: region.live_in,
             live_out: region.live_out,
             status: "diagnostic_source_draft_only",
-            frontend_readmission: "unavailable_typed_isa_semantic_frontend_handoff",
+            frontend_readmission: "not_performed_requires_fresh_source_compilation",
             source_application: "unavailable_requires_explicit_new_source_and_normal_frontend",
             semantic_equivalence: "unproved",
             exact_machine_contract: "unproved",
@@ -745,6 +752,16 @@ impl AuthoringSnapshotV1 {
             kind: operation_kind(&operation.kind),
             semantic_detail: semantic_detail(&operation.kind)?,
             mnemonic,
+            inline_assembly_source: match &operation.kind {
+                OperationKind::InlineAssembly(assembly) => Some(AuthoringAssemblySourceV1 {
+                    frontend_unit: hex(&assembly.source.frontend_unit),
+                    function: hex(&assembly.source.function),
+                    contract: hex(&assembly.source.contract),
+                    statement: hex(&assembly.source.statement),
+                    authority: "inert_references_not_source_authentication",
+                }),
+                _ => None,
+            },
             inputs,
             results,
             local_memory_effects: effects,
@@ -790,25 +807,75 @@ impl AuthoringSnapshotV1 {
         coordinate: AuthoringOperationCoordinateV1,
         operation: &Operation,
     ) -> bool {
+        self.draft_instruction(coordinate, operation).is_some()
+    }
+
+    fn draft_instruction(
+        &self,
+        coordinate: AuthoringOperationCoordinateV1,
+        operation: &Operation,
+    ) -> Option<DraftInstructionV1> {
         if self.bundle.target() != "gfx942:xnack-" {
-            return false;
+            return None;
+        }
+        // These three scalar bitwise operations have no overflow, carry,
+        // floating-point, memory, convergence, or implicit-state contract to
+        // reconstruct. The selected graph remains a Binary operation in all
+        // observations: choosing a typed instruction happens only in the inert
+        // generated Rust candidate, never by relabeling the retained program.
+        if let OperationKind::Binary { op, lhs, rhs } = &operation.kind {
+            let mnemonic = match op {
+                BinaryOp::BitAnd => "v_and_b32",
+                BinaryOp::BitOr => "v_or_b32",
+                BinaryOp::BitXor => "v_xor_b32",
+                _ => return None,
+            };
+            let [result] = operation.results.as_slice() else {
+                return None;
+            };
+            if result.ty != Type::Scalar(ScalarType::U32)
+                || [lhs, rhs].into_iter().any(|value| {
+                    self.value_type(coordinate.function, *value)
+                        != Some(&Type::Scalar(ScalarType::U32))
+                })
+            {
+                return None;
+            }
+            return Some(DraftInstructionV1 {
+                result: result.id,
+                mnemonic,
+                inputs: vec![*lhs, *rhs],
+            });
         }
         let OperationKind::InlineAssembly(assembly) = &operation.kind else {
-            return false;
+            return None;
         };
         // The source macro has no syntax for stronger caller-selected contracts.
         if assembly.options.len() != 1 || !assembly.options.contains(&AssemblyOption::NoMemory) {
-            return false;
+            return None;
         }
-        validate_gfx942_inline_assembly_v1(operation, |value| {
+        let instruction = validate_gfx942_inline_assembly_v1(operation, |value| {
             self.value_type(coordinate.function, value)
                 .and_then(Type::as_scalar)
         })
-        .is_ok_and(|instruction| {
-            instruction.scalar_type() == ScalarType::U32
-                && instruction.instruction().has_source_macro()
+        .ok()?;
+        if instruction.scalar_type() != ScalarType::U32
+            || !instruction.instruction().has_source_macro()
+        {
+            return None;
+        }
+        Some(DraftInstructionV1 {
+            result: instruction.result(),
+            mnemonic: instruction.instruction().mnemonic(),
+            inputs: instruction.inputs().to_vec(),
         })
     }
+}
+
+struct DraftInstructionV1 {
+    result: ValueId,
+    mnemonic: &'static str,
+    inputs: Vec<ValueId>,
 }
 
 fn insert_definition(

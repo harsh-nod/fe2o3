@@ -12343,6 +12343,7 @@ fn semantic_source_argument_for_kir_parameter_v1(
 
 include!("production_semantic_kir_v1/semantic_ssa_transport_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_intrinsics_01.rs");
+include!("production_semantic_kir_v1/gfx942_inline_v30.rs");
 include!("production_semantic_kir_v1/semantic_ssa_plan_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 include!("production_call_destination_v1.rs");
@@ -15768,6 +15769,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             self.prepare_call_destination_v1(block, destination.place(), operations)?;
         let mut runtime_guard = None;
         let binding = match operation {
+            SemanticCompilerIntrinsicOperationV1::Gfx942InlineU32(assembly) => {
+                self.lower_gfx942_inline_u32_v30(block, call, *assembly, operations)?
+            }
             SemanticCompilerIntrinsicOperationV1::Execution(_) => {
                 return Err(unsupported(
                     0,

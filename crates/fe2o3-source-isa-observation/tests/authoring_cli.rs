@@ -6,14 +6,24 @@ const SNAPSHOT: &str = include_str!("../tutorial/fill-v6/snapshot.json");
 const SELECTOR: &str = include_str!("../tutorial/fill-v6/selector.json");
 
 fn query(arguments: &[&str], bytes: &[u8]) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_fe2o3-author"))
+    query_at(arguments, bytes, None)
+}
+
+fn query_at(arguments: &[&str], bytes: &[u8], directory: Option<&std::path::Path>) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fe2o3-author"));
+    command
         .args(arguments)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child.stdin.take().unwrap().write_all(bytes).unwrap();
+        .stderr(Stdio::piped());
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
+    let mut child = command.spawn().unwrap();
+    if let Err(error) = child.stdin.take().unwrap().write_all(bytes) {
+        // Closed argv validation can reject before consuming bundle stdin.
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+    }
     child.wait_with_output().unwrap()
 }
 
@@ -93,3 +103,10 @@ fn stale_corrupt_and_unsupported_inputs_fail_without_candidate_output() {
     assert!(rejected.stdout.is_empty());
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("bundle rejected"));
 }
+
+#[path = "authoring_cli/source_preview.rs"]
+mod source_preview;
+
+#[cfg(target_os = "linux")]
+#[path = "authoring_cli/source_candidate.rs"]
+mod source_candidate;

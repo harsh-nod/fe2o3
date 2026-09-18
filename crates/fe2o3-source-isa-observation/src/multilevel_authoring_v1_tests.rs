@@ -237,6 +237,7 @@ fn scalar_bundle_inspection_preserves_exact_identity_and_many_source_origins() {
         .unwrap();
     assert_eq!(page.next_start, Some(1));
     assert_eq!(page.operations[0].kind, "binary");
+    assert!(page.operations[0].inline_assembly_source.is_none());
     assert_eq!(page.operations[0].semantic_detail.as_deref(), Some("BitOr"));
     assert_eq!(page.operations[0].source_spans.len(), 2);
     assert_eq!(page.operations[0].source_spans[0].byte_start, "1");
@@ -262,10 +263,23 @@ fn scalar_bundle_inspection_preserves_exact_identity_and_many_source_origins() {
     );
     let region = snapshot.select_region(&selector(&snapshot, 2)).unwrap();
     assert_eq!(region.live_out[0].value, 3);
-    assert_eq!(
-        snapshot.materialize_typed_rust(&selector(&snapshot, 2), "candidate"),
-        Err(AuthoringErrorV1::UnsupportedMaterialization)
+    let candidate = snapshot
+        .materialize_typed_rust(&selector(&snapshot, 2), "candidate")
+        .unwrap();
+    assert!(candidate.source.contains("amdgpu_asm!(v_or_b32(v40, v7))"));
+    assert!(
+        candidate
+            .source
+            .contains("amdgpu_asm!(v_xor_b32(v90, v40))")
     );
+    assert_eq!(candidate.semantic_equivalence, "unproved");
+    // Materialization did not replace or mislabel the inspected binary graph.
+    let original = snapshot
+        .operation_page(&summary.bundle_identity, 0, 1)
+        .unwrap();
+    assert_eq!(original.operations[0].kind, "binary");
+    assert!(original.operations[0].mnemonic.is_none());
+    assert!(original.operations[0].inline_assembly_source.is_none());
     let encoded = serde_json::to_value(summary).unwrap();
     assert!(encoded["canonical_kir_bytes"].is_string());
 }
@@ -273,6 +287,15 @@ fn scalar_bundle_inspection_preserves_exact_identity_and_many_source_origins() {
 #[test]
 fn diagnostic_draft_keeps_typed_operands_and_definition_order_without_authority() {
     let snapshot = snapshot(true);
+    let page = snapshot
+        .operation_page(&snapshot.summary().bundle_identity, 0, 64)
+        .unwrap();
+    let refs = page.operations[0].inline_assembly_source.as_ref().unwrap();
+    assert_eq!(refs.frontend_unit, "01".repeat(32));
+    assert_eq!(refs.function, "02".repeat(32));
+    assert_eq!(refs.contract, "03".repeat(32));
+    assert_eq!(refs.statement, "04".repeat(32));
+    assert_eq!(refs.authority, "inert_references_not_source_authentication");
     let selection = selector(&snapshot, 2);
     let candidate = snapshot
         .materialize_typed_rust(&selection, "authored_region")
@@ -318,9 +341,87 @@ fn diagnostic_draft_keeps_typed_operands_and_definition_order_without_authority(
     assert_eq!(candidate.authority, AUTHORITY);
     assert_eq!(candidate.semantic_equivalence, "unproved");
     assert_eq!(candidate.exact_machine_contract, "unproved");
-    assert!(candidate.frontend_readmission.starts_with("unavailable"));
+    assert_eq!(
+        candidate.frontend_readmission,
+        "not_performed_requires_fresh_source_compilation"
+    );
     let first_only = snapshot.select_region(&selector(&snapshot, 1)).unwrap();
     assert_eq!(first_only.live_out[0].value, 90);
+}
+
+#[test]
+fn ordinary_u32_bitwise_promotion_is_closed_and_does_not_relabel_snapshots() {
+    for (operator, mnemonic) in [
+        (BinaryOp::BitAnd, "v_and_b32"),
+        (BinaryOp::BitOr, "v_or_b32"),
+        (BinaryOp::BitXor, "v_xor_b32"),
+    ] {
+        let mut module = fixture_module(false, ScalarType::U32, "", None, false);
+        module.functions[1].body.as_mut().unwrap().blocks[0].operations[0].kind =
+            OperationKind::Binary {
+                op: operator,
+                lhs: ValueId(40),
+                rhs: ValueId(7),
+            };
+        let snapshot =
+            AuthoringSnapshotV1::from_bundle_v6(fixture_bundle(module, "gfx942:xnack-", false))
+                .unwrap();
+        let draft = snapshot
+            .materialize_typed_rust(&selector(&snapshot, 1), "selected_compute")
+            .unwrap();
+        assert!(
+            draft
+                .source
+                .contains(&format!("amdgpu_asm!({mnemonic}(v40, v7))"))
+        );
+        assert_eq!(draft.live_out[0].value, 90);
+        assert!(!draft.authority.grants_proof_authority);
+        let region = snapshot.select_region(&selector(&snapshot, 1)).unwrap();
+        assert_eq!(region.operations[0].kind, "binary");
+        assert!(region.operations[0].mnemonic.is_none());
+        assert!(region.operations[0].inline_assembly_source.is_none());
+    }
+}
+
+#[test]
+fn ordinary_promotion_rejects_other_arithmetic_signedness_width_and_targets() {
+    for operator in [
+        BinaryOp::Add,
+        BinaryOp::Subtract,
+        BinaryOp::Multiply,
+        BinaryOp::Divide,
+        BinaryOp::Remainder,
+        BinaryOp::ShiftLeft,
+        BinaryOp::ShiftRight,
+    ] {
+        let mut module = fixture_module(false, ScalarType::U32, "", None, false);
+        module.functions[1].body.as_mut().unwrap().blocks[0].operations[0].kind =
+            OperationKind::Binary {
+                op: operator,
+                lhs: ValueId(40),
+                rhs: ValueId(7),
+            };
+        let snapshot =
+            AuthoringSnapshotV1::from_bundle_v6(fixture_bundle(module, "gfx942:xnack-", false))
+                .unwrap();
+        assert_eq!(
+            snapshot.materialize_typed_rust(&selector(&snapshot, 1), "selected_compute"),
+            Err(AuthoringErrorV1::UnsupportedMaterialization)
+        );
+    }
+    for (ty, target) in [
+        (ScalarType::I32, "gfx942:xnack-"),
+        (ScalarType::U64, "gfx942:xnack-"),
+        (ScalarType::U32, "gfx950"),
+    ] {
+        let module = fixture_module(false, ty, "", None, false);
+        let snapshot =
+            AuthoringSnapshotV1::from_bundle_v6(fixture_bundle(module, target, false)).unwrap();
+        assert_eq!(
+            snapshot.materialize_typed_rust(&selector(&snapshot, 1), "selected_compute"),
+            Err(AuthoringErrorV1::UnsupportedMaterialization)
+        );
+    }
 }
 
 #[test]

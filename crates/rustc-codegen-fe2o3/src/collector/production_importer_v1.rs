@@ -471,7 +471,13 @@ fn construct_complete_request_v1<'tcx>(
 
     let function_count = u32::try_from(plan.function_producers().len())
         .map_err(|_| ProductionSemanticImportErrorV1::RootIdentityMismatch)?;
-    let mut body_owner = build_body_request_owner_v1(plan, types.len(), function_count)?;
+    let inline_sources =
+        crate::production_inline_source_occurrences_v30::InlineSourceOccurrencesV30::from_plan(
+            plan,
+        )
+        .map_err(body_owner_table_mismatch_v1)?;
+    let mut body_owner = build_body_request_owner_v1(plan, types.len(), function_count)?
+        .with_inline_sources_v30(inline_sources);
     let mut callables = (0..function_count)
         .map(|index| SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(index)))
         .collect::<Vec<_>>();
@@ -645,6 +651,9 @@ fn construct_complete_request_v1<'tcx>(
         );
     }
 
+    body_owner
+        .require_inline_sources_consumed_v30()
+        .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
     let contains_execution_roles = types.iter().any(|ty| {
         matches!(
             ty.rust_type_kind(),
@@ -948,6 +957,33 @@ fn terminal_operation_v1<'tcx>(
     let rust_inputs = signature.inputs();
     let rust_output = signature.output();
     match expansion {
+        ProductionTerminalExpansionV1::Gfx942InlineU32(operation)
+            if inputs.len() == crate::production_inline_assembly_v30::input_count(operation)
+                && rust_inputs.len() == inputs.len()
+                && instance.args.is_empty()
+                && abi.canon_abi() == SemanticCanonAbiV1::Rust
+                && abi.extern_abi() == SemanticExternAbiV1::Rust
+                && !abi.c_variadic()
+                && rust_inputs
+                    .iter()
+                    .all(|ty| matches!(ty.kind(), TyKind::Uint(UintTy::U32)))
+                && matches!(rust_output.kind(), TyKind::Uint(UintTy::U32))
+                && inputs.iter().chain(std::iter::once(&output)).all(|ty| {
+                    types.get(ty.index() as usize).is_some_and(|declaration| {
+                        matches!(
+                            declaration.shape(),
+                            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                                signed: false,
+                                bits: 32
+                            })
+                        )
+                    })
+                }) =>
+        {
+            crate::production_inline_assembly_v30::semantic_operation(operation)
+                .map(SemanticCompilerIntrinsicOperationV1::Gfx942InlineU32)
+                .map_err(ProductionSemanticImportErrorV1::SemanticSchema)
+        }
         ProductionTerminalExpansionV1::ThreadIndex(axis)
             if inputs.is_empty()
                 && rust_inputs.is_empty()
@@ -2741,7 +2777,8 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
-        ProductionTerminalExpansionV1::ThreadIndex(_)
+        ProductionTerminalExpansionV1::Gfx942InlineU32(_)
+        | ProductionTerminalExpansionV1::ThreadIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupDimension(_)
         | ProductionTerminalExpansionV1::GridDimension(_)
@@ -4058,6 +4095,13 @@ const fn terminal_operation_tag_for_schema_v1(
 ) -> u8 {
     use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
     match expansion {
+        ProductionTerminalExpansionV1::Gfx942InlineU32(operation) => {
+            if matches!(schema, TerminalIdentitySchemaV1::CombinedV4) {
+                crate::production_inline_assembly_v30::source_terminal_tag(operation)
+            } else {
+                u8::MAX
+            }
+        }
         ProductionTerminalExpansionV1::ThreadIndex(
             fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::X,
         ) => 13,

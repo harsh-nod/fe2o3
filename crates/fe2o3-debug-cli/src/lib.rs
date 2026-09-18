@@ -18,6 +18,7 @@ mod live_rocgdb_kfd_v4;
 mod live_rocgdb_v3;
 mod qualification_v1;
 pub mod reference_archive_v1;
+mod resource_queries_v1;
 #[cfg(target_os = "linux")]
 mod rocgdb_mi_parser_v3;
 #[cfg(target_os = "linux")]
@@ -2938,6 +2939,10 @@ fn run_jsonl_v1<R: BufRead, W: Write>(
                 let response = backend.handle_diagnosis_v2(request);
                 write_diagnosis_response_v2(writer, &response, limits)?;
             }
+            DebugRequestAnyV2::ResourceV1(request) => {
+                let response = backend.handle_resource_queries_v1(request);
+                resource_queries_v1::write_resource_response_v1(writer, &response, limits)?;
+            }
         }
     }
     writer
@@ -3127,6 +3132,7 @@ struct SimulatorBackendV1 {
     wave_width: DebugWaveWidthV1,
     configuration_identity: OpaqueIdentityV1,
     diagnosis_dispatch: DiagnosisDispatchV2,
+    resource_queries: resource_queries_v1::ResourceQueryStateV1,
     diagnosis_input: DiagnosisInputEvidenceV2,
     diagnosis_allocations: BTreeMap<u64, Option<DiagnosisAllocationContractV2>>,
     diagnosis_source_members: Vec<AdmittedDiagnosisSourceMemberV2>,
@@ -3399,6 +3405,7 @@ impl SimulatorBackendV1 {
             wave_width,
             configuration_identity,
             diagnosis_dispatch,
+            resource_queries: resource_queries_v1::ResourceQueryStateV1::new()?,
             diagnosis_input,
             diagnosis_allocations,
             diagnosis_source_members,

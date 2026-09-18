@@ -1817,3 +1817,4 @@ impl fmt::Display for DebuggerErrorV1 {
 }
 
 impl Error for DebuggerErrorV1 {}
+pub mod resource_projection_v1;

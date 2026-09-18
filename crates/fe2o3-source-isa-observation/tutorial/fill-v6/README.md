@@ -20,3 +20,10 @@ the script's output directory; `receipt.json` records their hashes.
 These are exact retained observations, not a requirement that future toolchains
 produce identical IDs. Regenerate into a new directory, review changed source and
 operations, and update fixtures explicitly rather than resealing old evidence.
+
+The read-only snapshot, operation and region JSON projections were refreshed for
+the current capability matrix and additive inline-assembly source-reference
+field using this same retained bundle. Every source-reference field is null for
+this ordinary fill kernel, which still has no eligible bitwise/ISA selection.
+The original bundle, its
+source/build receipt, and its historical stage-availability claims are unchanged.

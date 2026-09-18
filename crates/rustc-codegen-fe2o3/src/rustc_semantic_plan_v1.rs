@@ -3602,6 +3602,13 @@ const fn terminal_expansion_tag_for_schema_v1(
     schema: TerminalIdentitySchemaV1,
 ) -> u8 {
     match expansion {
+        ProductionTerminalExpansionV1::Gfx942InlineU32(operation) => {
+            if matches!(schema, TerminalIdentitySchemaV1::CombinedV4) {
+                crate::production_inline_assembly_v30::source_terminal_tag(operation)
+            } else {
+                u8::MAX
+            }
+        }
         ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::X) => 13,
         ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Y) => 14,
         ProductionTerminalExpansionV1::ThreadIndex(SemanticAxisV1::Z) => 15,

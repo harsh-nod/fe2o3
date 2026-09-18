@@ -52,8 +52,9 @@ impl Gfx942InlineAssemblyInstructionV1 {
 
     /// Whether `amdgpu_asm!` has this spelling for `u32` operands.
     ///
-    /// This does not imply production frontend admission or preservation of assembly
-    /// options. The current source markers have no production semantic expansion.
+    /// The frontend's V30 subset admits these six spellings only for `u32`
+    /// with NoMemory and authenticated per-call source references. This predicate
+    /// alone grants neither source admission nor final GPU artifact authority.
     pub const fn has_source_macro(self) -> bool {
         !matches!(self, Self::SMovB32)
     }

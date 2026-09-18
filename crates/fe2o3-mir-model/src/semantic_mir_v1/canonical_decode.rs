@@ -357,6 +357,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes exact V30 typed ISA calls, excluding the inert V29 capability grammar.
+    pub fn decode_exact_v30_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V30),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -398,6 +410,7 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V14
                         | SemanticMirWireVersionV1::V15
                         | SemanticMirWireVersionV1::V28
+                        | SemanticMirWireVersionV1::V30
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -1670,7 +1683,9 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V29 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V30 {
+            87
+        } else if self.wire_version == SemanticMirWireVersionV1::V29 {
             86
         } else if self.wire_version >= SemanticMirWireVersionV1::V15 {
             68
@@ -1698,7 +1713,9 @@ impl<'a> CanonicalDecoderV1<'a> {
         let offset = self.offset;
         let tag = self.tagged("compiler intrinsic", maximum_tag)?;
         // Historical capability drafts and synthetic scope exit are not callable grammar.
-        if matches!(tag, 69..=80 | 83) {
+        if matches!(tag, 69..=80 | 83)
+            || self.wire_version == SemanticMirWireVersionV1::V30 && matches!(tag, 81..=86)
+        {
             return Err(SemanticMirDecodeErrorV1::InvalidTag {
                 context: "compiler intrinsic",
                 offset,
@@ -1706,6 +1723,14 @@ impl<'a> CanonicalDecoderV1<'a> {
             });
         }
         Ok(match tag {
+            87 => {
+                let kind = self.tagged("gfx942 inline instruction", 5)?;
+                let instruction = SemanticGfx942InlineInstructionV30::from_wire_tag(kind)
+                    .expect("closed instruction tag was checked");
+                SemanticCompilerIntrinsicOperationV1::Gfx942InlineU32(
+                    SemanticGfx942InlineU32V30::new(instruction, self.u16()?)?,
+                )
+            }
             81 => SemanticCompilerIntrinsicOperationV1::Execution(
                 SemanticExecutionOperationV29::ContextIssue {
                     context: SemanticTypeIdV1(self.u32()?),
@@ -2644,15 +2669,27 @@ impl<'a> CanonicalDecoderV1<'a> {
                     ))
                 })?;
                 let unwind = self.unwind()?;
-                SemanticTerminatorKindV1::Call(
-                    SemanticDirectCallV1::new_callable_with_variadic_argument_abis(
-                        callee,
-                        arguments,
-                        variadic_argument_abis,
-                        destination,
-                        unwind,
-                    )?,
-                )
+                let mut call = SemanticDirectCallV1::new_callable_with_variadic_argument_abis(
+                    callee,
+                    arguments,
+                    variadic_argument_abis,
+                    destination,
+                    unwind,
+                )?;
+                if self.wire_version == SemanticMirWireVersionV1::V30 {
+                    let source = self.option("inline assembly source", |decoder| {
+                        Ok(SemanticInlineAssemblySourceV30::new(
+                            decoder.identity()?,
+                            SemanticFunctionIdentityV1(decoder.identity()?),
+                            decoder.identity()?,
+                            decoder.identity()?,
+                        )?)
+                    })?;
+                    if let Some(source) = source {
+                        call = call.with_inline_assembly_source_v30(source);
+                    }
+                }
+                SemanticTerminatorKindV1::Call(call)
             }
             3 => {
                 let callee = SemanticCallableIdV1(self.u32()?);
@@ -2756,6 +2793,7 @@ mod tests {
 
     mod capability_v29_tests;
     mod frozen_v15;
+    mod gfx942_inline_v30_tests;
     mod rust_call_local_tests;
 
     fn identity(tag: u8) -> [u8; 32] {
@@ -5766,9 +5804,13 @@ mod tests {
         ];
         assert_eq!(terminators.len(), 12);
         for terminator in terminators {
-            component_round_trip(terminator, encode_terminator, |decoder| {
-                decoder.terminator()
-            });
+            component_round_trip(
+                terminator,
+                |writer, terminator| {
+                    encode_terminator(writer, terminator, SemanticMirWireVersionV1::V6)
+                },
+                |decoder| decoder.terminator(),
+            );
         }
     }
 }
