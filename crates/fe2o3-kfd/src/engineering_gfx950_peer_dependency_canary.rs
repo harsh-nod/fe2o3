@@ -41,7 +41,7 @@ fn sha(bytes: &[u8]) -> String {
     sha_string(&Sha256::digest(bytes).into())
 }
 
-fn source_contract() -> Result<serde_json::Value> {
+pub(super) fn source_contract() -> Result<serde_json::Value> {
     let mut report = Vec::new();
     for (relative, expected) in SOURCE_PINS {
         let path = Path::new(SOURCE_ROOT).join(relative);

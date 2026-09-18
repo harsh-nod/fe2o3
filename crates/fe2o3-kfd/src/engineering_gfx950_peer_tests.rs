@@ -369,6 +369,7 @@ fn group_tokens_are_incarnation_bound_and_failures_poison_without_native_access(
         poisoned: false,
         closed: false,
         shared_full_currentness: false,
+        dependency_collective: None,
     };
     group.validate_token(token).unwrap();
     for changed in [

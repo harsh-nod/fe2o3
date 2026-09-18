@@ -55,7 +55,7 @@ pub(super) struct LinuxMemoryBackendFor<D> {
 #[cfg(feature = "engineering-gfx950")]
 impl LinuxMemoryBackendFor<crate::CheckedGfx950XnackMinusDevice> {
     // Deliberately separate from MemoryBackend's reviewed generic predicate.
-    // Only the private retained TP2 canary calls this exact dependency header.
+    // Only closed retained TP2 owners call this exact dependency header.
     pub(super) fn publish_engineering_dependency_header(
         mapping: &mut LinuxCpuMapping,
         requested_bytes: usize,

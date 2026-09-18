@@ -130,6 +130,11 @@ impl Gfx950EngineeringPeerGroupV1 {
     ) -> Result<()> {
         self.require_active()?;
         let result = (|| {
+            if self.dependency_collective.is_some()
+                && (operational_currentness || shared_full_currentness)
+            {
+                return Err("TP2 dependency mode requires unshared full currentness".into());
+            }
             for context in &self.contexts {
                 require_fresh_configuration(
                     context.performance.is_some(),
@@ -172,6 +177,9 @@ impl Gfx950EngineeringPeerGroupV1 {
     ) -> Result<Vec<u64>> {
         self.require_active()?;
         let result = (|| {
+            if self.dependency_collective.is_some() {
+                return Err("TP2 dependency mode excludes peer sequences".into());
+            }
             let count = commands.len();
             if !(1..=MAX_SEQUENCE_DISPATCHES_V1).contains(&count) {
                 return Err("peer sequence count is outside 1..16".into());

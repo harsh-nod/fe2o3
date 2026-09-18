@@ -16,6 +16,14 @@ mod round;
 mod dependency_canary;
 pub use dependency_canary::run_gfx950_tp2_dependency_canary_unchecked_v1;
 
+#[path = "engineering_gfx950_peer_dependency.rs"]
+mod dependency;
+pub use dependency::{
+    Gfx950EngineeringTp2DependencyIdentityV1, Gfx950EngineeringTp2DependencyOperationV1,
+    Gfx950EngineeringTp2DependencyQueueV1, Gfx950EngineeringTp2DependencyReceiptV1,
+    Gfx950EngineeringTp2DependencyRequestV1,
+};
+
 static NEXT_GROUP: AtomicU64 = AtomicU64::new(1);
 const LINK_ENABLED: u32 = 1;
 const LINK_NO_ATOMICS: u32 = (1 << 2) | (1 << 3);
@@ -374,6 +382,7 @@ pub struct Gfx950EngineeringPeerGroupV1 {
     poisoned: bool,
     closed: bool,
     shared_full_currentness: bool,
+    dependency_collective: Option<dependency::DependencyOwner>,
 }
 
 impl Gfx950EngineeringPeerGroupV1 {
@@ -413,6 +422,7 @@ impl Gfx950EngineeringPeerGroupV1 {
             poisoned: false,
             closed: false,
             shared_full_currentness: false,
+            dependency_collective: None,
         };
         let result = (|| {
             for &unique_id in unique_ids {
@@ -728,6 +738,7 @@ impl Gfx950EngineeringPeerGroupV1 {
     pub fn close(&mut self) -> Result<()> {
         self.require_active()?;
         let result = (|| {
+            dependency::release_private(self)?;
             let tokens = self
                 .buffers
                 .values()

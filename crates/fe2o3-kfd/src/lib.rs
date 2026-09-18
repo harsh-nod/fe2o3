@@ -36,7 +36,9 @@ mod engineering_gfx950;
 pub use engineering_gfx950::{
     Gfx950EngineeringPeerBufferV1, Gfx950EngineeringPeerDispatchV1, Gfx950EngineeringPeerGroupV1,
     Gfx950EngineeringPeerKernelV1, Gfx950EngineeringPeerPointerV1,
-    run_gfx950_engineering_worker_unchecked_v1,
+    Gfx950EngineeringTp2DependencyIdentityV1, Gfx950EngineeringTp2DependencyOperationV1,
+    Gfx950EngineeringTp2DependencyQueueV1, Gfx950EngineeringTp2DependencyReceiptV1,
+    Gfx950EngineeringTp2DependencyRequestV1, run_gfx950_engineering_worker_unchecked_v1,
     run_gfx950_full_forward_timestamp_worker_unchecked_v1,
     run_gfx950_timestamp_canary_worker_unchecked_v1, run_gfx950_tp2_dependency_canary_unchecked_v1,
 };

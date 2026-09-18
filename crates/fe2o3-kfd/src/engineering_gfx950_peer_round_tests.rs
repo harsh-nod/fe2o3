@@ -239,6 +239,7 @@ fn empty_group() -> Gfx950EngineeringPeerGroupV1 {
         poisoned: false,
         closed: false,
         shared_full_currentness: false,
+        dependency_collective: None,
     }
 }
 

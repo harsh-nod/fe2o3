@@ -251,6 +251,9 @@ impl Gfx950EngineeringPeerGroupV1 {
     ) -> Result<Vec<u64>> {
         self.require_active()?;
         let result = (|| {
+            if self.dependency_collective.is_some() {
+                return Err("TP2 dependency mode excludes independent peer rounds".into());
+            }
             if commands.len() > self.contexts.len() {
                 return Err("peer round count exceeds retained ranks".into());
             }
