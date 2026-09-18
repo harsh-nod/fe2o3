@@ -88,6 +88,28 @@ actions must be consumed once, independent of semantic block construction order.
 The real rustc signature, FnAbi, type identity, physical root and existing
 reference-effect bindings remain intact. No arbitrary role constant is admitted.
 
+Successful body construction now transfers a private, move-only completed entry
+receipt into the request owner. It retains the exact root/helper/issuer/type
+identities, call coordinates, destinations, continuations, unwind actions and
+original/optimized source commitment. Expected helper operands are reconstructed
+from the retained rustc body and checked local/type mappings, including the
+context-only erased-ZST restoration. They are compared with the emitted body
+before retention; a failed body cannot publish a receipt into a reusable owner.
+
+The importer seals the complete issuance roster against the final admitted
+request, including all helper operands, and private production bindings move
+that receipt beside the existing MIR and SSA owners. SSA construction checks
+the exact retained source identity. New operand retention and roster scans share
+the cumulative body-construction work limit. Payload size remains bounded by
+the existing function/call-argument inventories; this is not an allocator/RSS
+accounting guarantee for rustc queries or source construction.
+
+This receipt authenticates entry source custody only. It does not yet retain a
+workgroup derive, callback, exclusive-borrow or complete scope-exit relation.
+The V29 materialization gate remains closed. Connected callback expansion and
+its checked pre-owner transformation are still required before any execution,
+simulation export, protected proof or GPU launch can be claimed for this API.
+
 The draft V5 body-child extension binds the separately captured original MIR
 digest, original and optimized occurrences, sorted function/local/block IDs,
 and restored-argument binding. The original body is hashed while borrowed,

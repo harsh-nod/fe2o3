@@ -255,6 +255,7 @@ impl AuthenticatedRustcPreflightPlanV3 {
 /// substitution as the import surface grows.
 pub(crate) struct ConstructedProductionSemanticMirV1 {
     pub(crate) semantic_mir: AdmittedInertSemanticMirV1,
+    pub(crate) context_entries: super::RetainedContextEntriesV29,
     pub(crate) rustc_identity_inventory: AuthenticatedRustcIdentityInventoryV3,
     pub(crate) rustc_preflight_plan: AuthenticatedRustcPreflightPlanV3,
     pub(crate) rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
@@ -381,7 +382,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
             ));
         }
     };
-    let semantic_mir = construct_complete_request_v1(
+    let (semantic_mir, context_entries) = construct_complete_request_v1(
         tcx,
         canonical_target_layout_v1(target.rustc_layout()),
         &mut plan,
@@ -402,6 +403,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     drop(collection);
     Ok(ConstructedProductionSemanticMirV1 {
         semantic_mir,
+        context_entries,
         rustc_identity_inventory: AuthenticatedRustcIdentityInventoryV3 {
             sha256: rustc_identity_inventory_sha256,
             canonical_transcript: rustc_identity_inventory_transcript,
@@ -442,7 +444,10 @@ fn construct_complete_request_v1<'tcx>(
     types: Vec<SemanticTypeDeclV1>,
     function_abis: ConstructedSemanticFunctionAbisV1,
     terminal_abis: ConstructedSemanticFunctionAbisV1,
-) -> Result<AdmittedInertSemanticMirV1, ProductionSemanticImportErrorV1> {
+) -> Result<
+    (AdmittedInertSemanticMirV1, super::RetainedContextEntriesV29),
+    ProductionSemanticImportErrorV1,
+> {
     let function_abis = function_abis.into_records();
     let terminal_abis = terminal_abis.into_records();
     if function_abis.len() != plan.function_producers().len() {
@@ -661,7 +666,7 @@ fn construct_complete_request_v1<'tcx>(
             fe2o3_mir_model::semantic_mir_v1::SemanticRustTypeKindV1::Execution(_)
         )
     });
-    InertSemanticMirRequestV1::new_with_callables(
+    let semantic = InertSemanticMirRequestV1::new_with_callables(
         target,
         types,
         Vec::new(),
@@ -680,7 +685,11 @@ fn construct_complete_request_v1<'tcx>(
             request.admit_current_production(SemanticMirLimitsV1::default())
         }
     })
-    .map_err(ProductionSemanticImportErrorV1::SemanticSchema)
+    .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?;
+    let context_entries = body_owner
+        .seal_context_entries(&semantic)
+        .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
+    Ok((semantic, context_entries))
 }
 
 fn build_body_request_owner_v1<'tcx>(

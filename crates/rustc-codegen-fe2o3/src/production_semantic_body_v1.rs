@@ -9,14 +9,15 @@ use std::collections::HashMap;
 use std::fmt;
 
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAssignmentV1, SemanticAtomicRmwV1,
-    SemanticBasicBlockV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBlockIdentityV1,
-    SemanticBorrowKindV1, SemanticCallDestinationV1, SemanticCallableIdV1, SemanticCastKindV1,
-    SemanticCheckedBinaryOpV1, SemanticCheckedBinaryRvalueV1,
-    SemanticConstGenericArgumentsIdentityV1, SemanticConstantBytesV1, SemanticConstantV1,
-    SemanticConstantValueV1, SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticEdgeRoleV1,
-    SemanticFunctionAbiV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
-    SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
+    AdmittedInertSemanticMirV1, SemanticAggregateKindV1, SemanticAssertMessageV1,
+    SemanticAssignmentV1, SemanticAtomicRmwV1, SemanticBasicBlockV1, SemanticBinaryOpV1,
+    SemanticBlockIdV1, SemanticBlockIdentityV1, SemanticBorrowKindV1, SemanticCallDestinationV1,
+    SemanticCallableIdV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
+    SemanticCheckedBinaryRvalueV1, SemanticConstGenericArgumentsIdentityV1,
+    SemanticConstantBytesV1, SemanticConstantV1, SemanticConstantValueV1,
+    SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticEdgeRoleV1, SemanticFunctionAbiV1,
+    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
+    SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
     SemanticItemDefinitionIdentityV1, SemanticKernelEntryV1, SemanticLinkSymbolV1,
     SemanticLocalDeclV1, SemanticLocalIdV1, SemanticLocalIdentityV1, SemanticLocalRoleV1,
     SemanticMemoryLoadV1, SemanticMirErrorV1, SemanticMirLimitsV1, SemanticMirResourceV1,
@@ -290,6 +291,7 @@ pub(crate) struct ProductionSemanticBodyRequestOwnerV1<'tcx> {
     limits: SemanticMirLimitsV1,
     totals: ConstructionTotalsV1,
     callables: HashMap<Instance<'tcx>, ProductionSemanticCallableOwnerRecordV1>,
+    context_entries: Vec<crate::collector::RetainedContextEntryV29>,
 }
 
 impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
@@ -363,7 +365,23 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
             limits,
             totals,
             callables,
+            context_entries: Vec::new(),
         })
+    }
+
+    pub(crate) fn seal_context_entries(
+        mut self,
+        semantic: &AdmittedInertSemanticMirV1,
+    ) -> Result<crate::collector::RetainedContextEntriesV29, ProductionSemanticBodyErrorV1> {
+        let entries = std::mem::take(&mut self.context_entries);
+        crate::collector::RetainedContextEntriesV29::seal(entries, semantic, |amount| {
+            self.charge(SemanticMirResourceV1::ValidationWork, amount)
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retained_context_entry_count(&self) -> usize {
+        self.context_entries.len()
     }
 
     fn charge(
@@ -654,9 +672,39 @@ pub(crate) fn construct_production_semantic_body_v1<'a, 'owner, 'tcx>(
     let locals = producer.construct_locals()?;
     let blocks = producer.construct_blocks()?;
     producer.require_all_call_bindings_consumed()?;
-    if let Some(context) = producer.context_entry.take() {
-        context.finish().map_err(table)?;
-    }
+    let context = producer
+        .context_entry
+        .take()
+        .map(|context| {
+            let issuer = producer
+                .owner
+                .callables
+                .get(&context.issuer())
+                .ok_or_else(|| table("context issuer callable"))?
+                .semantic_callable;
+            context.finish(
+                input.tcx,
+                issuer,
+                |local| {
+                    producer
+                        .locals_by_raw
+                        .get(local.index())
+                        .map(|binding| binding.semantic_local)
+                },
+                |ty| {
+                    normalize_type_v1(input.tcx, input.instance, ty)
+                        .ok()
+                        .and_then(|ty| producer.type_ids.get(&ty).copied())
+                },
+                |amount| {
+                    producer
+                        .owner
+                        .charge(SemanticMirResourceV1::ValidationWork, amount)
+                },
+            )
+        })
+        .transpose()?;
+    drop(producer);
 
     let ProductionSemanticFunctionIdentitiesV1 {
         identity,
@@ -685,6 +733,29 @@ pub(crate) fn construct_production_semantic_body_v1<'a, 'owner, 'tcx>(
             function.with_device_ffi_export_symbol(symbol)
         }
     };
+    if let Some(context) = context {
+        let retained = context.bind_function(&function, |amount| {
+            owner.charge(SemanticMirResourceV1::ValidationWork, amount)
+        })?;
+        if owner
+            .context_entries
+            .last()
+            .is_some_and(|entry| entry.function() >= retained.function())
+        {
+            return Err(table("context receipt function order"));
+        }
+        if owner.context_entries.len() == owner.context_entries.capacity() {
+            owner.charge(
+                SemanticMirResourceV1::ValidationWork,
+                owner.context_entries.len() + 1,
+            )?;
+            owner
+                .context_entries
+                .try_reserve(1)
+                .map_err(|_| allocation(SemanticMirResourceV1::Functions))?;
+        }
+        owner.context_entries.push(retained);
+    }
     Ok(function)
 }
 
@@ -2830,6 +2901,7 @@ mod tests {
             limits,
             totals: ConstructionTotalsV1::default(),
             callables: HashMap::new(),
+            context_entries: Vec::new(),
         };
 
         owner.charge(SemanticMirResourceV1::Functions, 1).unwrap();

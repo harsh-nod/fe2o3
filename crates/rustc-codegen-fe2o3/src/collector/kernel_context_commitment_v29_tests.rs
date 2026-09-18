@@ -49,6 +49,7 @@ impl<'tcx> BoundContextEntryV29<'tcx> {
                 consumed: false,
             },
             helper_argument: Some(Local::from_u32(33)),
+            semantic_helper_argument: SemanticLocalIdV1::from_index(52),
             arguments: 3,
         }
     }

@@ -8,7 +8,7 @@ use crate::rustc_semantic_plan_v1::{
     RetainedSemanticFunctionProducerV1, TerminalExpansionRecipeV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticBlockIdV1, SemanticFunctionIdV1, SemanticLocalIdV1,
+    SemanticBlockIdV1, SemanticCallableIdV1, SemanticFunctionIdV1, SemanticLocalIdV1,
 };
 use rustc_middle::mir::{Body, Const, ConstValue, Local, Operand, TerminatorKind, UnwindAction};
 use rustc_middle::ty::{Instance, Ty};
@@ -23,6 +23,12 @@ mod tests;
 #[cfg(test)]
 #[path = "kernel_context_commitment_v29_tests.rs"]
 mod commitment_tests;
+
+#[path = "kernel_context_custody_v29.rs"]
+mod custody;
+pub(crate) use custody::{
+    CompletedContextEntryV29, RetainedContextEntriesV29, RetainedContextEntryV29,
+};
 
 #[derive(Debug)]
 struct BoundCallV29 {
@@ -49,6 +55,7 @@ pub(crate) struct BoundContextEntryV29<'tcx> {
     helper_call: BoundCallV29,
     // None means the optimizer erased argument zero, not that it is optional.
     helper_argument: Option<Local>,
+    semantic_helper_argument: SemanticLocalIdV1,
     arguments: usize,
 }
 
@@ -119,6 +126,14 @@ impl<'tcx> AuthenticatedContextEntriesV1<'tcx> {
                 issuance,
                 helper_call,
                 helper_argument,
+                semantic_helper_argument: *body
+                    .raw_to_semantic_locals
+                    .get(
+                        helper_argument
+                            .unwrap_or(entry.optimized.issuance.destination)
+                            .index(),
+                    )
+                    .ok_or(Error::IdentityTableMismatch)?,
                 arguments: raw.arg_count + 1,
             };
             if bound.insert(function, receipt).is_some() {
@@ -264,6 +279,14 @@ impl<'tcx> BoundContextEntryV29<'tcx> {
                 return Err("context canonical call mapping");
             }
         }
+        if local(
+            self.helper_argument
+                .unwrap_or(self.issuance.raw.destination)
+                .index(),
+        ) != Some(self.semantic_helper_argument)
+        {
+            return Err("context canonical argument mapping");
+        }
         Ok(())
     }
 
@@ -304,11 +327,32 @@ impl<'tcx> BoundContextEntryV29<'tcx> {
         Ok(None)
     }
 
-    pub(crate) fn finish(self) -> Result<(), &'static str> {
+    pub(crate) fn issuer(&self) -> Instance<'tcx> {
+        self.issuer
+    }
+
+    pub(crate) fn finish(
+        self,
+        tcx: rustc_middle::ty::TyCtxt<'tcx>,
+        issuer_callable: SemanticCallableIdV1,
+        local: impl Fn(Local) -> Option<SemanticLocalIdV1>,
+        ty: impl Fn(Ty<'tcx>) -> Option<fe2o3_mir_model::semantic_mir_v1::SemanticTypeIdV1>,
+        charge: impl FnMut(
+            usize,
+        ) -> Result<
+            (),
+            crate::production_semantic_body_v1::ProductionSemanticBodyErrorV1,
+        >,
+    ) -> Result<
+        CompletedContextEntryV29,
+        crate::production_semantic_body_v1::ProductionSemanticBodyErrorV1,
+    > {
         if !self.issuance.consumed || !self.helper_call.consumed {
-            return Err("unused context call occurrence");
+            return Err(crate::production_semantic_body_v1::ProductionSemanticBodyErrorV1::IdentityTableMismatch {
+                table: "unused context call occurrence",
+            });
         }
-        Ok(())
+        CompletedContextEntryV29::from_consumed(self, tcx, issuer_callable, local, ty, charge)
     }
 
     pub(crate) fn commitment<E>(

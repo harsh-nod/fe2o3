@@ -412,6 +412,7 @@ struct ProtectedProductionPublicationCustody {
 }
 
 struct AuthenticatedProductionBindings {
+    context_entries: crate::collector::RetainedContextEntriesV29,
     rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
     rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
@@ -1329,6 +1330,7 @@ impl TargetLoweredProductionCompilation {
             rustc_preflight_plan,
             rustc_target,
             reference_effect_bindings: _,
+            context_entries: _,
             debug_source_files: _,
             debug_source_scopes: _,
             debug_source_variables: _,
@@ -1380,6 +1382,7 @@ impl TargetLoweredProductionCompilation {
             rustc_preflight_plan,
             rustc_target,
             reference_effect_bindings: _,
+            context_entries: _,
             debug_source_files,
             debug_source_scopes,
             debug_source_variables,
@@ -1477,6 +1480,7 @@ impl TargetLoweredProductionCompilation {
             rustc_preflight_plan,
             rustc_target,
             reference_effect_bindings,
+            context_entries: _,
             debug_source_files,
             debug_source_scopes,
             debug_source_variables,
@@ -3172,6 +3176,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         } = self.stage;
         let crate::collector::ConstructedProductionSemanticMirV1 {
             semantic_mir,
+            context_entries,
             rustc_identity_inventory,
             rustc_preflight_plan,
             rustc_target,
@@ -3196,6 +3201,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             stage: AdmittedSemanticMirStage {
                 semantic_mir,
                 bindings: AuthenticatedProductionBindings {
+                    context_entries,
                     rustc_identity_inventory,
                     rustc_preflight_plan,
                     rustc_target,
@@ -3406,6 +3412,16 @@ impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
             fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
         )
         .map_err(ProductionPipelineError::SemanticSsa)?;
+        bindings
+            .context_entries
+            .validate_source(semantic_ssa.source_semantic())
+            .map_err(|error| {
+                ProductionPipelineError::SemanticImport(
+                    crate::collector::ProductionSemanticImportErrorV1::BodyConstruction(Box::new(
+                        error,
+                    )),
+                )
+            })?;
         Ok(ProductionCompilation {
             stage: SsaSemanticMirStage {
                 semantic_ssa,

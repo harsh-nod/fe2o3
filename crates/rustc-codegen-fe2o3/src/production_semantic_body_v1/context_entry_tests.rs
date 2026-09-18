@@ -19,9 +19,10 @@ use rustc_middle::ty::TyCtxt;
 
 const SOURCE: &str = r#"
 pub struct Context;
+pub struct Tag;
 #[inline(never)] pub fn issue() -> Context { Context }
-#[inline(never)] pub fn helper(_: Context, a: u32, b: u32) -> u32 { a ^ b }
-pub fn root(a: u32, b: u32) -> u32 { helper(issue(), a, b) }
+#[inline(never)] pub fn helper(_: Context, a: u32, b: u32, _: Tag) -> u32 { a ^ b }
+pub fn root(a: u32, b: u32, tag: Tag) -> u32 { helper(issue(), a, b, tag) }
 "#;
 
 #[derive(Default)]
@@ -141,6 +142,8 @@ impl Callbacks for ContextCallbacks {
             issuance: BoundCallV29::bind(issuance, planned).unwrap(),
             helper_call: BoundCallV29::bind(helper_call, planned).unwrap(),
             helper_argument,
+            semantic_helper_argument: planned.raw_to_semantic_locals
+                [helper_argument.unwrap_or(issuance.destination).index()],
             arguments: raw.arg_count + 1,
         };
         let type_bindings = plan
@@ -199,36 +202,42 @@ impl Callbacks for ContextCallbacks {
                 semantic_callable: SemanticCallableIdV1::from_index(i as u32),
             })
             .collect::<Vec<_>>();
+        let construct_with_owner =
+            |body: &Body<'tcx>,
+             context_entry,
+             owner: &mut ProductionSemanticBodyRequestOwnerV1<'tcx>| {
+                construct_production_semantic_body_v1(
+                    ProductionSemanticBodyInputV1 {
+                        context_entry,
+                        tcx,
+                        instance: root,
+                        body,
+                        function,
+                        identities: ProductionSemanticFunctionIdentitiesV1::new(
+                            identities.function(),
+                            identities.item_definition(),
+                            identities.monomorphization(),
+                            identities.generic_type_arguments(),
+                            identities.const_generic_arguments(),
+                        ),
+                        role: SemanticFunctionRoleV1::InternalHelper,
+                        export: ProductionSemanticFunctionExportV1::None,
+                        source: planned.source.provenance,
+                        abi: abis[function.index() as usize].clone(),
+                        type_bindings: &type_bindings,
+                        local_bindings: &local_bindings,
+                        block_bindings: &block_bindings,
+                        entry: planned.entry,
+                        direct_calls: &direct_calls,
+                        terminal_expansions: &[],
+                        normalized_intrinsics: &[],
+                    },
+                    owner,
+                )
+            };
         let construct = |body: &Body<'tcx>, context_entry, limits| {
             let mut owner = ProductionSemanticBodyRequestOwnerV1::new(limits, types.len(), &owned)?;
-            construct_production_semantic_body_v1(
-                ProductionSemanticBodyInputV1 {
-                    context_entry,
-                    tcx,
-                    instance: root,
-                    body,
-                    function,
-                    identities: ProductionSemanticFunctionIdentitiesV1::new(
-                        identities.function(),
-                        identities.item_definition(),
-                        identities.monomorphization(),
-                        identities.generic_type_arguments(),
-                        identities.const_generic_arguments(),
-                    ),
-                    role: SemanticFunctionRoleV1::InternalHelper,
-                    export: ProductionSemanticFunctionExportV1::None,
-                    source: planned.source.provenance,
-                    abi: abis[function.index() as usize].clone(),
-                    type_bindings: &type_bindings,
-                    local_bindings: &local_bindings,
-                    block_bindings: &block_bindings,
-                    entry: planned.entry,
-                    direct_calls: &direct_calls,
-                    terminal_expansions: &[],
-                    normalized_intrinsics: &[],
-                },
-                &mut owner,
-            )
+            construct_with_owner(body, context_entry, &mut owner)
         };
         let limits = SemanticMirLimitsV1::default();
         let produced = construct(erased, Some(receipt()), limits).unwrap();
@@ -248,6 +257,17 @@ impl Callbacks for ContextCallbacks {
             planned.raw_to_semantic_locals[helper_argument.unwrap_or(issuance.destination).index()]
         );
         assert!(place.projections().is_empty());
+        let TerminatorKind::Call { args, .. } = &raw.basic_blocks[helper_call.location.block]
+            .terminator()
+            .kind
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            matches!(call.arguments()[3], SemanticOperandV1::Constant(_)),
+            matches!(args[3].node, Operand::Constant(_)),
+            "ordinary ZST remains erased when rustc erases it"
+        );
         let issuer_block =
             planned.raw_to_semantic_blocks[issuance.location.block.index()].index() as usize;
         let SemanticTerminatorKindV1::Call(issue) =
@@ -316,13 +336,69 @@ impl Callbacks for ContextCallbacks {
                 .is_err(),
             "duplicate occurrence"
         );
-        both.finish().unwrap();
-        assert!(receipt().finish().is_err(), "unused occurrences");
+        let issuer_callable = SemanticCallableIdV1::from_index(issuer_function.index());
+        let finish = |bound: BoundContextEntryV29<'tcx>| {
+            bound.finish(
+                tcx,
+                issuer_callable,
+                |local| planned.raw_to_semantic_locals.get(local.index()).copied(),
+                |ty| {
+                    plan.type_producers()
+                        .iter()
+                        .position(|binding| binding.ty == ty)
+                        .map(|index| SemanticTypeIdV1::from_index(index as u32))
+                },
+                |_| Ok(()),
+            )
+        };
+        finish(both).unwrap();
+        for mutation in 0..3 {
+            let mut bound = receipt();
+            bound
+                .consume_call(erased, issuance.location.block.index(), issuer, 0)
+                .unwrap();
+            bound
+                .consume_call(
+                    erased,
+                    helper_call.location.block.index(),
+                    helper,
+                    raw.arg_count + 1,
+                )
+                .unwrap();
+            let changed = bound
+                .finish(
+                    tcx,
+                    issuer_callable,
+                    |local| {
+                        if mutation == 0 {
+                            None
+                        } else if mutation == 1 {
+                            Some(SemanticLocalIdV1::from_index(u32::MAX))
+                        } else {
+                            planned.raw_to_semantic_locals.get(local.index()).copied()
+                        }
+                    },
+                    |ty| {
+                        if mutation == 2 {
+                            None
+                        } else {
+                            plan.type_producers()
+                                .iter()
+                                .position(|binding| binding.ty == ty)
+                                .map(|index| SemanticTypeIdV1::from_index(index as u32))
+                        }
+                    },
+                    |_| Ok(()),
+                )
+                .and_then(|entry| entry.bind_function(&produced, |_| Ok(())));
+            assert!(changed.is_err(), "source mapping substitution {mutation}");
+        }
+        assert!(finish(receipt()).is_err(), "unused occurrences");
         let mut missing = receipt();
         missing
             .consume_call(erased, issuance.location.block.index(), issuer, 0)
             .unwrap();
-        assert!(missing.finish().is_err(), "missing helper");
+        assert!(finish(missing).is_err(), "missing helper");
         let mut wrong = erased.clone();
         let TerminatorKind::Call { args, .. } = &mut wrong.basic_blocks.as_mut()
             [helper_call.location.block]
@@ -341,6 +417,19 @@ impl Callbacks for ContextCallbacks {
             produced,
             "failed construction publishes no reusable receipt"
         );
+        let mut owner =
+            ProductionSemanticBodyRequestOwnerV1::new(limits, types.len(), &owned).unwrap();
+        let mut late_failure = receipt();
+        late_failure.helper_function = issuer_function;
+        assert!(construct_with_owner(erased, Some(late_failure), &mut owner).is_err());
+        assert_eq!(owner.retained_context_entry_count(), 0);
+        construct_with_owner(erased, Some(receipt()), &mut owner).unwrap();
+        assert_eq!(owner.retained_context_entry_count(), 1);
+        assert!(
+            construct_with_owner(erased, Some(receipt()), &mut owner).is_err(),
+            "duplicate completed receipt"
+        );
+        assert_eq!(owner.retained_context_entry_count(), 1);
         for resource in [
             SemanticMirResourceV1::ValidationWork,
             SemanticMirResourceV1::Operands,
