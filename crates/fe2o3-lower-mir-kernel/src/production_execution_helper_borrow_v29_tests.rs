@@ -234,8 +234,12 @@ fn helper_source(case: Case, ignored_prefix: usize) -> AdmittedInertSemanticMirV
                     1,
                 ),
             ),
-            original.blocks()[1].clone(),
-            original.blocks()[2].clone(),
+            block(
+                178,
+                original.blocks()[1].statements().to_vec(),
+                original.blocks()[1].terminator().kind().clone(),
+            ),
+            block(179, vec![], SemanticTerminatorKindV1::Return),
         ]
     };
     let provider = function(
