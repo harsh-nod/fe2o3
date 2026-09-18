@@ -362,7 +362,7 @@ def validate_kernel_inventory(
                               and intervals[selections[key]["case"]["displayedFragmentOrdinal"]][0] <= offset
                               < intervals[selections[key]["case"]["displayedFragmentOrdinal"]][1]}
         if classification in {"conceptual", "helper"}:
-            if ids or refs or status != "not-applicable" or matching_cases:
+            if ids or refs or status != "not-applicable" or (runtime_inventory is not None and matching_cases):
                 _fail("non-kernel classification cannot detach a source case or identity")
             if classification == "conceptual" and role != "conceptual":
                 _fail("executable lesson cannot be downgraded to conceptual")

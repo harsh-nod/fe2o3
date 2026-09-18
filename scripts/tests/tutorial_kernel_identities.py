@@ -249,6 +249,25 @@ class KernelIdentitiesTests(unittest.TestCase):
         self.assertIn(case_ref(0, 1), [row.get("selection") for row in result["unresolvedBindings"]])
         self.assertFalse(result["inventoryComplete"])
 
+    def test_same_name_helper_in_another_fragment_defers_only_the_occurrence_join(self):
+        parts = ["#[kernel] fn good() {}\n#[kernel] fn bad() {}", "mod local { fn good() {} }"]
+        source = "\n\n".join(parts)
+        tab = self.manifest["curriculum"]["lessons"][0]["codeTabs"][0]
+        item = tab["sourceItem"]
+        tab.update(self.tab(source))
+        tab["sourceItem"] = item
+        tab["sourceFragmentsSha256"] = [hashlib.sha256(part.encode()).hexdigest() for part in parts]
+        self.runtime["lessons"][0]["codeTabs"][0] = {"displayedCode": source, "sourceFragments": parts}
+        for row, function in zip(self.inventory()["displayItems"], scan(source), strict=True):
+            row.update(kernelSymbol=function["kernelSymbol"],
+                       functionUtf8Offset=function["functionUtf8Offset"])
+        self.assertFalse(self.validate(False)["inventoryComplete"])
+        self.assertTrue(self.validate()["inventoryComplete"])
+        self.inventory()["displayItems"][0].update(
+            classification="helper", bindingStatus="not-applicable", kernelIds=[],
+        )
+        self.assert_refused("cannot detach a source case")
+
     def test_stale_fragments_bytes_missing_duplicate_and_malformed_fields(self):
         manifest, runtime = copy.deepcopy(self.manifest), copy.deepcopy(self.runtime)
         mutations = [
