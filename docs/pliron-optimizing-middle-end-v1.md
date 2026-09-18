@@ -614,3 +614,55 @@ clamping oracle, including backing bytes, initialization and canaries. Retained
 helper transport and exact source/N/B/C/O replay are not functional reference
 proofs through arbitrary Defined-helper results; that separate relation remains
 required and fail-closed. No protected/default or hardware authority is added.
+
+## Typed integer/F32 conversions
+
+Checked-output admission accepts ordinary Rust numeric conversions between F32
+and signed/unsigned 8/16/32/64-bit integers, including retained scalar helpers.
+The source census checks the exact source and destination types. The native
+census independently reads the actual operand definition, cast kind and result
+type; a claimed opcode or result type alone is insufficient. Each inspected
+numeric-cast candidate charges the existing work ledger before type lookup.
+
+Integer-to-F32 uses round-to-nearest, ties-to-even. F32-to-integer preserves
+Rust's saturating conversion, including NaN-to-zero, using the existing
+`FloatToIntegerSaturating` relation and LLVM saturation intrinsic. This does
+not admit unchecked float-to-integer conversion, F64, narrow floats, Bool,
+Char, pointers, raw Index values, or new bitcasts. Existing source/N/B/C/O and
+helper-effect checks remain mandatory.
+
+The ordinary-source regression enumerates both conversion directions, all
+eight integer types and normal/retained-helper MIR on gfx942 and gfx950, for
+64 configurations. Each actual optimized O is simulated twice against an
+independent host-Rust `as` oracle. Cases include
+signed zero, subnormals, fractional inputs, NaNs, infinities, finite limits and
+rounding boundaries; complete backing bytes, initialization and canaries are
+checked over empty and workgroup-boundary lengths. Native text must retain
+the appropriate signed/unsigned conversion or saturating intrinsic without
+fast-math flags. This is CPU simulation and native-text replay, not execution
+of the emitted LLVM, target hardware evidence or arbitrary helper-reference
+proof.
+
+## Final output worker binding
+
+`PreparedNativeCheckedOutputWorkerHandoffV1` consumes the existing Direct or
+Erased signed-source compilation stage and retains it intact. It joins the
+signed proof's independently reconstructed semantic source, original N,
+optional erased E, catalog and launch roster to the final output owner's
+source. It then checks original collector/context bindings, target/source
+coordinates, descriptor roots, workgroup order and actual O against the
+already prepared native worker handoff. No second lowering or graph copy is
+introduced.
+
+The added storage receipt covers the wrapper delta; the original owners stay
+in the inherited retained floor. Scratch scopes preserve work and failure
+history and reject floor loss or ledger replacement. Borrowed comparison
+inputs are inert and cannot create the owning stage. The wrapper has no
+raw-parts constructor, publication conversion or launch authority.
+
+Component tests cover both source routes and targets, exact/short resources,
+source/target/descriptor substitutions and a genuinely different same-target
+prepared handoff rejected at the actual-O/native join. These are not a full
+signed-stage construction test. That positive still needs the authentic signed
+source producer and approved proof runtime; the missing-receipt refusal and
+protected/default activation gates remain unchanged.

@@ -5,6 +5,9 @@ use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1;
 use fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy3V1;
 
+#[path = "compiler_descriptor_native_worker_binding_v1.rs"]
+pub(crate) mod native_worker_binding_v1;
+
 struct CheckedDescriptorViewV1<'a> {
     semantic: &'a fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     source_launch: &'a fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1,

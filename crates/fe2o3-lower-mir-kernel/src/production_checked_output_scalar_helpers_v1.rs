@@ -190,7 +190,10 @@ pub(super) fn check<'i, 'g>(
                 _ => return Err(refused("scalar helpers", "closed scalar helper control")),
             }
         }
-        for row in &inventory.operations()[function.operations.clone()] {
+        for (offset, row) in inventory.operations()[function.operations.clone()]
+            .iter()
+            .enumerate()
+        {
             charge(budget, 4)?;
             if !row.effects.is_empty() || !row.compiler_ordering().is_empty() {
                 return Err(refused(
@@ -244,6 +247,14 @@ pub(super) fn check<'i, 'g>(
                         return Err(refused("scalar helpers", "closed scalar helper opcode"));
                     }
                 }
+                OperationKind::Cast {
+                    kind: CastKind::IntegerToFloat | CastKind::FloatToInteger,
+                    ..
+                } if numeric_casts::native(
+                    inventory,
+                    function.operations.start + offset,
+                    budget,
+                )? => {}
                 OperationKind::Cast {
                     kind:
                         CastKind::Truncate

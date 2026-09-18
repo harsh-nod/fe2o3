@@ -20,6 +20,8 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
 ))]
 mod f32_arithmetic;
 
+#[cfg(feature = "numeric-cast")]
+mod numeric_cast;
 #[cfg(feature = "saturating-integer")]
 mod saturating_integer;
 
@@ -31,6 +33,7 @@ mod write_only_reference;
 
 #[cfg(not(any(
     feature = "saturating-integer",
+    feature = "numeric-cast",
     feature = "atomic-rmw",
     feature = "multi-root-ownership",
     feature = "multi-root-target-lineage",

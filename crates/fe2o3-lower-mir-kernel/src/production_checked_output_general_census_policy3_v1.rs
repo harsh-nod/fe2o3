@@ -115,6 +115,15 @@ pub(super) fn source_parts(
                             | SemanticBinaryOpV1::GreaterOrEqual,
                         ..
                     } => {}
+                    SemanticRvalueKindV1::Cast {
+                        kind: SemanticCastKindV1::Float,
+                        operand,
+                    } if numeric_casts::source_integer_to_f32(
+                        source,
+                        operand.ty(),
+                        value.result_type(),
+                        budget,
+                    )? => {}
                     SemanticRvalueKindV1::Unary {
                         operation: SemanticUnaryOpV1::Negate,
                         ..
@@ -372,6 +381,10 @@ pub(super) fn native(
                 // rule below. No reciprocal rewrite or fast-math permission.
                 None
             }
+            OperationKind::Cast {
+                kind: CastKind::IntegerToFloat | CastKind::FloatToInteger,
+                ..
+            } if numeric_casts::native(inventory, ordinal, budget)? => None,
             OperationKind::Cast {
                 kind:
                     CastKind::Truncate
