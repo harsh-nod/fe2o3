@@ -372,6 +372,23 @@ pub(crate) fn encode_module_v12_with_work_v1(
     encode_module_with_work_v1(module, KERNEL_IR_VERSION_V12, budget)
 }
 
+/// Exact V15 byte and auxiliary extents, using the shared counting traversal.
+pub(crate) fn count_module_v15_wire_extent_with_work_v1(
+    module: &Module,
+    budget: &mut CanonicalKernelIrWorkBudgetV1,
+) -> Result<(usize, usize), KernelIrEncodeError> {
+    let extent = count_module_with_work_v1(module, KERNEL_IR_VERSION_V15, budget, false)?;
+    Ok((extent.wire_bytes(), extent.peak_auxiliary_bytes()))
+}
+
+/// Full exact V15 encoding with counting and byte emission on one work ledger.
+pub(crate) fn encode_module_v15_with_work_v1(
+    module: &Module,
+    budget: &mut CanonicalKernelIrWorkBudgetV1,
+) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module_with_work_v1(module, KERNEL_IR_VERSION_V15, budget)
+}
+
 fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncodeError> {
     let mut writer = Writer::new(version, None);
     write_module_v1(module, &mut writer, true)?;
@@ -528,6 +545,19 @@ pub(crate) fn decode_module_v12_with_work_v1(
     )
 }
 
+/// Exact V15 only; allocation admission does not establish semantic validity.
+pub(crate) fn decode_module_v15_with_allocation_budget_v1(
+    bytes: &[u8],
+    budget: &mut crate::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<Module, KernelIrDecodeError> {
+    decode_module_impl_v1(
+        bytes,
+        KERNEL_IR_VERSION_V15,
+        false,
+        Some(DecodeBudgetV12::Resources(budget)),
+    )
+}
+
 fn decode_module(
     bytes: &[u8],
     maximum_version: u16,
@@ -604,7 +634,8 @@ fn decode_module_impl_v1(
             .map_err(KernelIrDecodeError::WorkLimit)?;
     }
     let allocation_scratch = if let Some(budget @ DecodeBudgetV12::Resources(_)) = budget.as_mut() {
-        let extent = count_module_v12_wire_extent_with_work_v1(&module, budget.work_budget())?;
+        // Re-encode scratch must use the decoded schema, including V15 roles.
+        let extent = count_module_with_work_v1(&module, version, budget.work_budget(), false)?;
         let scratch = decoded_tree_payload_bound_v12::<&FunctionId>(module.kernels.len())?
             .checked_add(extent.peak_auxiliary_bytes())
             .ok_or(KernelIrDecodeError::Resource(
