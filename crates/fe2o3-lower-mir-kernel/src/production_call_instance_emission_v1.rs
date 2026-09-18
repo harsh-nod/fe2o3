@@ -601,10 +601,10 @@ mod call_instance_emission_tests {
         let mut right = BasicBlock::new(BlockId(19));
         right.operations.push(Operation::effect_free(
             ValueDef::new(ValueId(102), scalar.clone()),
-            OperationKind::Cast {
-                kind: CastKind::Bitcast,
-                value: ValueId(100),
-                to: scalar.clone(),
+            OperationKind::Binary {
+                op: BinaryOp::BitOr,
+                lhs: ValueId(100),
+                rhs: ValueId(100),
             },
         ));
         right.terminator = Some(Terminator::Return {

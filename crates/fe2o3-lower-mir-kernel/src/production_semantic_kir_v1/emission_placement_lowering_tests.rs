@@ -106,9 +106,20 @@ fn captured_source_instances_drive_existing_lowering_and_call_expansion() {
     with_production_call_instances_v1(&ssa, root, &mut budget, |plan, budget| {
         assert!(std::ptr::eq(plan.owner(), &ssa));
         assert_eq!(plan.instances().len(), 2);
+        assert_eq!(plan.id_at(0), Some(plan.root()));
+        assert!(plan.id_at(2).is_none());
         let call = &plan.calls(plan.root()).unwrap()[0];
         let child = call.child().unwrap();
         let child_row = plan.instance(child).unwrap();
+        assert_eq!(child.index(), 1);
+        assert!(std::ptr::eq(
+            child_row.ssa(),
+            ssa.plan_for_function(child_row.function()).unwrap()
+        ));
+        assert!(
+            matches!(call.callable(), SemanticCallableDeclV1::Defined { function }
+            if *function == child_row.function())
+        );
         let caller =
             lower_placed_function(&ssa, root, SemanticEmissionPlacementV1::default(), budget)
                 .unwrap();
@@ -136,6 +147,14 @@ fn captured_source_instances_drive_existing_lowering_and_call_expansion() {
             BlockId(call.occurrence().block.index()),
             call_operation as usize,
         );
+        let call_storage = CallReturnBufferV1::bytes(
+            caller.call_returns.sites.rows.len() + callee.call_returns.sites.rows.len(),
+            caller.call_returns.components.rows.len() + callee.call_returns.components.rows.len(),
+        )
+        .unwrap();
+        drop(caller.call_returns);
+        drop(callee.call_returns);
+        budget.release_storage(call_storage)?;
         let expanded = splice_production_call_instance_v1(
             caller.function,
             callee.function,
@@ -361,10 +380,38 @@ fn placed_source_switches_preserve_nonzero_entry_and_loop_phi_transport() {
             .into_iter()
             .enumerate()
             .map(|(index, ty)| {
+                let layout = match ty.shape() {
+                    SemanticTypeShapeV1::Scalar(scalar) => {
+                        let (size, bits, maximum) = match scalar {
+                            SemanticScalarTypeV1::Bool => (1, 8, 1),
+                            SemanticScalarTypeV1::Integer {
+                                signed: false,
+                                bits: 32,
+                            } => (4, 32, u128::from(u32::MAX)),
+                            SemanticScalarTypeV1::Integer {
+                                signed: false,
+                                bits: 64,
+                            } => (8, 64, u128::from(u64::MAX)),
+                            _ => panic!("unexpected induction-fixture scalar"),
+                        };
+                        SemanticTypeLayoutV1::new_with_backend_repr(
+                            Some(size),
+                            size,
+                            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                                SemanticBackendPrimitiveV1::integer(false, bits, size),
+                                SemanticScalarValidityRangeV1::new(0, maximum),
+                            )),
+                            false,
+                        )
+                        .unwrap()
+                    }
+                    SemanticTypeShapeV1::Unit => ty.layout().clone(),
+                    _ => panic!("unexpected induction-fixture type"),
+                };
                 SemanticTypeDeclV1::new(
                     SemanticTypeIdentityV1::from_sha256([10 + index as u8; 32]),
                     ty.layout_identity(),
-                    ty.layout().clone(),
+                    layout,
                     ty.shape().clone(),
                 )
                 .with_rustc_abi_properties(ty.abi_properties())
