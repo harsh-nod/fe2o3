@@ -183,8 +183,13 @@ fn exact_event<'a>(
     let mut matching = events
         .iter()
         .filter(|event| event.site() == site && event.operand() == operand && event.role() == role);
-    let event = matching.next().expect("retained source event");
-    assert!(matching.next().is_none(), "unique source event");
+    let event = matching.next().unwrap_or_else(|| {
+        panic!("missing source event: {site:?} {operand:?} {role:?} local={local:?}")
+    });
+    assert!(
+        matching.next().is_none(),
+        "duplicate source event: {site:?} {operand:?} {role:?}"
+    );
     assert_eq!(
         event.event().variable(),
         SsaVariableIdV1::new(local.index())
@@ -353,6 +358,11 @@ fn observe(
                 .enumerate()
                 .filter(|(ordinal, ty)| {
                     context_reference(source, **ty, root.context_type())
+                        && matches!(
+                            source.types()[ty.index() as usize].shape(),
+                            SemanticTypeShapeV1::Pointer(pointer)
+                                if pointer.mutability() == SemanticMutabilityV1::Mutable
+                        )
                         && body.abi().source_argument_ownership()[*ordinal]
                             == SemanticSourceArgumentOwnershipV1::UniqueBorrow
                 });
