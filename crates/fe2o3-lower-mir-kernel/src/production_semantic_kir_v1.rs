@@ -10772,7 +10772,10 @@ fn lower_one_semantic_function_with_calls_v29(
         placement,
         execution,
     )?;
-    lowering.execution_calls = execution_calls;
+    lowering.execution_calls = match execution_calls {
+        Some(consumer) => Some(&mut *consumer as &mut (dyn ExecutionDefinedCallConsumerV29 + '_)),
+        None => None,
+    };
 
     let order = semantic_ssa
         .plan()
