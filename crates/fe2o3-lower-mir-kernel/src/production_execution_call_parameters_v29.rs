@@ -9,6 +9,10 @@ struct ExecutionCallScopeV29<'scope> {
 #[derive(Clone, Copy)]
 enum DefinedCallProjectionV29<'scope> {
     Ordinary,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Scope materializer integration remains gated")
+    )]
     Execution(ExecutionCallScopeV29<'scope>),
 }
 
@@ -347,6 +351,10 @@ fn prepare_execution_parameters_v29<'scope>(
 }
 
 impl<'a> ExecutionAvailabilityV29<'a> {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Scope materializer integration remains gated")
+    )]
     fn with_call_parameters_v29<'scope>(
         self,
         parameters: PreparedExecutionParametersV29<'scope>,

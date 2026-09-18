@@ -446,7 +446,6 @@ fn run(
                                 );
                                 assert!(block.operations.is_empty());
                                 assert_eq!(foreign.peak_storage(), 0);
-                                drop(foreign);
                                 assert_eq!(foreign_work.work(), 0);
                                 return Err(rejected.expect_err("foreign scope token accepted"));
                             }
@@ -604,7 +603,6 @@ fn run(
                             Ok(_) => panic!("foreign call-parameter ledger accepted"),
                         };
                         assert_eq!(foreign.peak_storage(), 0);
-                        drop(foreign);
                         assert_eq!(foreign_work.work(), 12);
                         return Err(error);
                     }
@@ -674,7 +672,6 @@ fn run(
         })?
     })();
     let peak = budget.peak_storage();
-    drop(budget);
     (result, work.work(), peak)
 }
 
