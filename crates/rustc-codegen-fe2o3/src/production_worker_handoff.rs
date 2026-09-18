@@ -44,6 +44,17 @@ pub(crate) struct PreparedProductionWorkerHandoff {
 }
 
 impl PreparedProductionWorkerHandoff {
+    #[cfg(test)]
+    pub(crate) fn llvm_ir(&self) -> &str {
+        std::str::from_utf8(self.handoff.module_bytes())
+            .expect("this producer retains only LLVM text")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn descriptor_source(&self) -> &CompilerDescriptorSourceV1 {
+        &self.compiler_descriptor_source
+    }
+
     pub(crate) fn into_validated_parts(
         self,
     ) -> Result<(CompilerModuleHandoffV2, CompilerDescriptorSourceV1), ProductionWorkerHandoffError>
@@ -94,6 +105,73 @@ pub(crate) fn prepare_production_worker_handoff(
         &formal,
     )
     .map_err(ProductionWorkerHandoffError::CompilerDescriptor)?;
+    assemble_production_worker_handoff(target, envelope, compiler_module, descriptor_source)
+}
+
+/// Prepares and replays final LLVM from the exact admitted Policy3 O.
+///
+/// Caller retains and reserves N/B/O, the catalog and logical LLVM/descriptor
+/// payloads through this call. The inherited descriptor, FFI and handoff engines
+/// retain their separate bounded allocation domains; this is not whole-compiler
+/// heap accounting. Only typed owner/target checks and native replay use `budget`.
+/// This produces inert handoff bytes, never legacy lineage or publication rights.
+pub(crate) fn prepare_checked_output_policy3_worker_handoff(
+    admitted: &fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy3V1,
+    catalog: &fe2o3_kernel_ir::InertCanonicalKernelIrContractCatalogV1,
+    target: fe2o3_compiler_ffi::DeviceTargetV1,
+    llvm_ir: String,
+    typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+    observed_source_envelope: Option<CompilerFfiEnvelopeV1>,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<PreparedProductionWorkerHandoff, ProductionWorkerHandoffError> {
+    let module = admitted.output().module();
+    validate_exact_target_binding(target, module)?;
+    let profile =
+        fe2o3_amd_target::ProductionAmdTargetProfileV1::from_device_target(&target.to_string())
+            .ok_or(ProductionWorkerHandoffError::MissingProductionBindings)?;
+    let compiler_module = retain_production_compiler_module_text_v1(module, llvm_ir)
+        .map_err(ProductionWorkerHandoffError::CompilerModule)?;
+    let envelope = derive_production_compiler_ffi_envelope(
+        target,
+        module,
+        &compiler_module,
+        observed_source_envelope,
+        *admitted
+            .source_semantic_kir()
+            .canonical_kernel_ir_identity()
+            .digest(),
+    )?;
+    validate_envelope_module_roles(&envelope, &compiler_module)?;
+    let descriptor_source =
+        crate::compiler_descriptor::checked_output_policy3_v1::construct_checked_output_policy3_descriptor_source_v1(
+            &envelope, &compiler_module, typed_roots, admitted, budget,
+        )
+        .map_err(ProductionWorkerHandoffError::CompilerDescriptor)?;
+    let prepared =
+        assemble_production_worker_handoff(target, envelope, compiler_module, descriptor_source)?;
+    let final_llvm = std::str::from_utf8(prepared.handoff.module_bytes())
+        .map_err(|_| ProductionWorkerHandoffError::MissingProductionBindings)?;
+    // The borrowed relation is consumed before any subsequent allocation. Its
+    // exact immutable inputs remain in the outer move-only stage.
+    let _ = dialect_amdgcn::check_native_v12_text_descriptor_relation_v1(
+        admitted.output(),
+        catalog,
+        admitted.output().canonical().canonical_bytes(),
+        profile,
+        prepared.compiler_descriptor_source.table(),
+        final_llvm,
+        budget,
+    )
+    .map_err(ProductionWorkerHandoffError::NativeOutputReplay)?;
+    Ok(prepared)
+}
+
+fn assemble_production_worker_handoff(
+    target: fe2o3_compiler_ffi::DeviceTargetV1,
+    envelope: CompilerFfiEnvelopeV1,
+    compiler_module: crate::kernel_ir_codegen::InertCompilerModuleTextV1,
+    descriptor_source: CompilerDescriptorSourceV1,
+) -> Result<PreparedProductionWorkerHandoff, ProductionWorkerHandoffError> {
     let compiler_module = bind_compiler_descriptor_source_v1(compiler_module, &descriptor_source)
         .map_err(ProductionWorkerHandoffError::CompilerModule)?;
     let symbol_manifest = construct_symbol_manifest(&compiler_module)
@@ -350,6 +428,7 @@ pub(crate) enum ProductionWorkerHandoffError {
     CompilerModule(CompilerModuleConstructionError),
     CompilerEnvelope(CompilerFfiEnvelopeError),
     CompilerDescriptor(CompilerDescriptorError),
+    NativeOutputReplay(dialect_amdgcn::NativeV12TextDescriptorReplayErrorV1),
     SymbolManifest(CompilerModuleSymbolManifestErrorV1),
     Handoff(CompilerModuleHandoffErrorV2),
 }
@@ -410,6 +489,7 @@ impl fmt::Display for ProductionWorkerHandoffError {
                     "compiler descriptor construction failed: {error}"
                 )
             }
+            Self::NativeOutputReplay(error) => write!(formatter, "exact native output replay failed: {error}"),
             Self::SymbolManifest(error) => {
                 write!(
                     formatter,
@@ -432,6 +512,7 @@ impl Error for ProductionWorkerHandoffError {
             Self::CompilerModule(error) => Some(error),
             Self::CompilerEnvelope(error) => Some(error),
             Self::CompilerDescriptor(error) => Some(error),
+            Self::NativeOutputReplay(error) => Some(error),
             Self::SymbolManifest(error) => Some(error),
             Self::Handoff(error) => Some(error),
             Self::MissingProductionBindings

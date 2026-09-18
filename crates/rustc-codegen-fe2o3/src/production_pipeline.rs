@@ -21,6 +21,9 @@ use crate::protected_rustc_invocation::{
     AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1,
 };
 
+#[path = "production_pipeline_checked_output_policy3_v1.rs"]
+pub(crate) mod checked_output_policy3_v1;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProductionDisposition {
     HostOnly,
@@ -68,6 +71,7 @@ pub(crate) enum ProductionPipelineError {
     TargetBinding(dialect_amdgcn::ProductionTargetBindingErrorV1),
     TargetOptimization(fe2o3_kernel_opt::KernelIrPlironOptimizationErrorV2),
     TargetOptimizationV3(fe2o3_kernel_opt::KernelIrPlironOptimizationErrorV3),
+    CheckedOutputStage(checked_output_policy3_v1::CheckedOutputStageErrorV1),
     TargetKernelIrV8(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV8),
     TargetKernelIrV9(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV9),
     TargetKernelIrV11(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV11),
@@ -98,6 +102,7 @@ impl From<Box<ProductionPipelineError>> for ProductionPipelineError {
 impl fmt::Display for ProductionPipelineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CheckedOutputStage(error) => write!(formatter, "checked-output production stage failed: {error}"),
             Self::CustomLlvmConfiguration => formatter.write_str(
                 "production compilation rejects caller-selected LLVM arguments or passes before transaction construction",
             ),
@@ -291,6 +296,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::TargetBinding(error) => Some(error),
             Self::TargetOptimization(error) => Some(error),
             Self::TargetOptimizationV3(error) => Some(error),
+            Self::CheckedOutputStage(error) => Some(error),
             Self::TargetKernelIrV8(error) => Some(error),
             Self::TargetKernelIrV9(error) => Some(error),
             Self::TargetKernelIrV11(error) => Some(error),

@@ -6,6 +6,16 @@ pub(crate) fn with_backend_checked_output_policy3_v1(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ),
 ) {
+    with_backend_checked_output_policy3_owned_v1(profile, |owner, budget| next(&owner, budget));
+}
+
+pub(crate) fn with_backend_checked_output_policy3_owned_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy3V1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
     use fe2o3_kernel_ir::{
         CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
         CanonicalKernelIrWorkBudgetV1 as Work, VerifiedCanonicalKernelIrModuleV12,
@@ -133,16 +143,16 @@ pub(crate) fn with_backend_checked_output_policy3_v1(
     let verified = program.into_verified_roster_receipt().unwrap();
     let (receipt, _verification) = verified.into_module_verified_receipt().unwrap();
     let floor = budget.storage();
-    let admitted = fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy3V1::try_admit(
-        receipt,
-        bound,
-        checked,
-        &mut budget,
-    )
-    .unwrap();
-    next(&admitted, &mut budget);
+    let admitted =
+        fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy3V1::try_admit_general_v1(
+            receipt,
+            bound,
+            checked,
+            &mut budget,
+        )
+        .unwrap();
+    next(admitted, &mut budget);
     assert_eq!(budget.storage(), floor);
-    drop(admitted);
     budget
         .release_storage(checked_storage + bound_storage.retained_storage() + retained)
         .unwrap();

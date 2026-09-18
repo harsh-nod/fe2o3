@@ -367,6 +367,46 @@ protected artifacts and hardware qualification remain separate gates. This is
 an M5/M7 prerequisite, not completion of either milestone or formal verification
 of the compiler.
 
+## Guarded Global Output Admission
+
+`ProductionCheckedOutputOwnerPolicy3V1::try_admit_general_v1` consumes the same
+real materialized source/ranked receipt, target-bound B, and checked Policy3 O.
+It adds a separate, privately tagged admission contract; the older scalar
+constructor keeps its original restrictions. Revalidation dispatches by that
+private tag, not by a caller-supplied mode or a fallback.
+
+The new grammar includes signed/unsigned scalars, booleans, indices, F32/F64,
+global scalar slices/pointers, ordinary global loads/stores and supported guarded
+accesses. It admits branches, switches and source-authorized assertion
+failure traps. Exact source/ranked replay, N/B coordinates, independent B/O
+transition checking and complete source-block/assertion transport are required.
+A retained conditional assertion still executes at runtime; it is not a
+statically discharged bounds check. Existing ranked progress checks still apply;
+this admission adds no blanket acyclic requirement or general loop-carried
+address support. A supported source-loop positive through final admission remains
+to be qualified; an unconditional nonterminating source loop is refused before
+the required ranked receipt can be constructed.
+
+Memory obligations are freshly derived from actual O for every kernel. Only
+the existing structural guarded-access exception can be resolved by checking
+the actual output predicate, address and slice extent. All other incomplete
+reasons fail closed. A full physical-access census matches each output access
+to its fresh formal location, kind, address space and alignment. Runtime bounds
+and alias requirements remain obligations, not authenticated launch values.
+
+Private addresses, helper interfaces, collectives, atomics, volatile or ordered
+effects, unsupported address provenance and unsupported arithmetic remain
+outside this contract. The source/ranked and formal engines retain their
+existing bounded accounting domains; new inventory, transport and census
+scratch uses the shared ledger and restores its incoming floor.
+
+The backend's move-only checked-output stage consumes this owner, lowers actual
+O through native V12 LLVM lowering, constructs its descriptor/handoff and
+independently replays the final LLVM and descriptor relation. It retains the
+authenticated source bindings and ranked roster. Protected native lineage and
+full corpus admission are still required before default activation; this stage
+does not relabel old proof receipts or publish an artifact.
+
 ## Source-Qualified Pipeline Catalogs
 
 The B1 library extension constructs pipeline contracts from the actual sealed
