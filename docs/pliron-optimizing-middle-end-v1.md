@@ -217,6 +217,44 @@ native protected provenance, complete admission and tutorial qualification pass.
 This composition does not complete #271's expanded scalar, loop, memory or GPU
 optimization milestones.
 
+Its native source handoff retains full signed per-effect receipts, not just
+staging hashes. Independent replay reconstructs semantic MIR/SSA/N, recompiles
+the complete typed ranked roster, recreates exact V5 evidence, derives both
+contracts and the aggregate generated source, and consumes the fresh ranked
+results into the reconstructed source owner. The original and reconstructed
+owners remain distinct custody objects. Embedded keys establish consistency
+only; indexed-address/whole-operational equivalence, protected compiler origin,
+final-output provenance and default activation are still separate requirements.
+The in-process typed handoff is not a serialized artifact recipe format.
+
+### Ordinary-source corpus gate
+
+The ignored `ordinary_tutorial_corpus_requires_every_checked_policy4_output`
+test reads every configuration in the tutorial manifest, preserving target,
+Cargo features, lockfile/source hashes and the exact expected kernel roster.
+Cargo builds dependencies with `--offline --locked`; the captured root rustc
+arguments, environment and working directory then drive the real compiler
+callback. Each case must reach checked Policy4 output with LLVM and a matching
+descriptor. A dependency failure or compiler refusal fails the all-case gate;
+neither is counted as a pass or silently removed from coverage.
+
+With the pinned nightly and its required rustc components installed, run:
+
+```sh
+cargo test --offline --locked --no-default-features \
+  -p rustc-codegen-fe2o3 --lib \
+  ordinary_tutorial_corpus_requires_every_checked_policy4_output \
+  -- --ignored --nocapture
+```
+
+Set `FE2O3_TEST_CHECKED_OUTPUT_CORPUS_REPORT_V1` to an absolute output filename
+to retain the structured per-case report, including all refusals. The harness
+cleans its temporary dependency and subprocess directories. This gate checks
+the nondefault source-to-LLVM route; it does not execute Verus or kernels,
+publish compiler artifacts, or establish simulator, numerical or GPU results.
+The separate `ordinary_rust_fill_and_vecadd_reach_checked_native_output` parent
+also exercises the missing signed-proof refusal without releasing output.
+
 ## Admission tests
 
 The production admission is maintained by the following regression gates:

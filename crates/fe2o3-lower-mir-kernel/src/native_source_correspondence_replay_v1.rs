@@ -18,8 +18,9 @@ use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, SemanticMirDecodeErrorV1, SemanticMirLimitsV1,
 };
 use fe2o3_pliron::{
-    ProductionSemanticMirErrorV1, ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1,
-    ProductionSemanticSsaErrorV1, ProductionSemanticSsaLimitsV1, ProductionSemanticSsaOwnerV1,
+    ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionSemanticMirErrorV1,
+    ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1, ProductionSemanticSsaErrorV1,
+    ProductionSemanticSsaLimitsV1, ProductionSemanticSsaOwnerV1,
 };
 
 /// Failure of normal source replay or an exact retained ranked-subject join.
@@ -43,6 +44,8 @@ pub enum NativeSourceReplayErrorV1 {
     Inventory(CanonicalKirInventoryErrorV1),
     /// The catalog did not bind the exact reconstructed graph.
     CatalogBinding(KernelIrContractCatalogBindingErrorV1),
+    /// Fresh ranked checks did not correspond to the reconstructed source owner.
+    RankedSource(super::ProductionSemanticKirErrorV1),
     /// An explicitly named subject or supported-policy equality failed.
     Mismatch(&'static str),
 }
@@ -69,6 +72,7 @@ impl From<Resource> for NativeSourceReplayErrorV1 {
 pub struct ReplayedNativeSourceV1 {
     source: ProductionPreRankedKirOwnerV1,
     catalog: Catalog,
+    retained_storage: usize,
 }
 impl ReplayedNativeSourceV1 {
     /// Borrows the complete normal-constructor source/N owner.
@@ -78,6 +82,10 @@ impl ReplayedNativeSourceV1 {
     /// Borrows the exact independently graph-checked catalog.
     pub fn catalog(&self) -> &Catalog {
         &self.catalog
+    }
+    /// The complete replay receipt which must remain reserved while this owner lives.
+    pub const fn retained_storage(&self) -> usize {
+        self.retained_storage
     }
     /// Detached retained launch equality does not authenticate its origin.
     pub const fn authenticates_launch_origin(&self) -> bool {
@@ -98,6 +106,368 @@ impl NativeSourceReplayStorageV1 {
     /// Additional retained logical storage to reserve before further allocation.
     pub const fn retained_storage(self) -> usize {
         self.0
+    }
+}
+
+/// An inert typed recipe, with no ranked verification or source-origin authority.
+/// The borrowed form leaves all nested recipe allocations with their existing owner.
+#[derive(Clone, Copy, Debug)]
+pub struct NativeRankedSourceCandidateV1<'a> {
+    semantic_root: u32,
+    launch_rank: u8,
+    kernel: &'a ProductionRankedKernelV1,
+    access_sources: &'a [super::ProductionRankedAccessSourceV1],
+    executable_effect_sources: &'a [super::ProductionRankedExecutableEffectSourceV1],
+    ranked_ir: &'a str,
+}
+
+impl<'a> NativeRankedSourceCandidateV1<'a> {
+    /// Packages untrusted parts without validating their relation or provenance.
+    pub const fn from_untrusted_parts(
+        semantic_root: u32,
+        launch_rank: u8,
+        kernel: &'a ProductionRankedKernelV1,
+        access_sources: &'a [super::ProductionRankedAccessSourceV1],
+        executable_effect_sources: &'a [super::ProductionRankedExecutableEffectSourceV1],
+        ranked_ir: &'a str,
+    ) -> Self {
+        Self {
+            semantic_root,
+            launch_rank,
+            kernel,
+            access_sources,
+            executable_effect_sources,
+            ranked_ir,
+        }
+    }
+    /// Canonical semantic root selected by this candidate.
+    pub const fn semantic_root(&self) -> u32 {
+        self.semantic_root
+    }
+    /// Source launch rank claimed by this candidate.
+    pub const fn launch_rank(&self) -> u8 {
+        self.launch_rank
+    }
+    /// Complete typed ranked construction recipe, not a verified graph.
+    pub const fn kernel(&self) -> &'a ProductionRankedKernelV1 {
+        self.kernel
+    }
+    /// Complete ordered source/access correspondence recipe.
+    pub const fn access_sources(&self) -> &'a [super::ProductionRankedAccessSourceV1] {
+        self.access_sources
+    }
+    /// Complete ordered compiler-generated executable-effect recipe.
+    pub const fn executable_effect_sources(
+        &self,
+    ) -> &'a [super::ProductionRankedExecutableEffectSourceV1] {
+        self.executable_effect_sources
+    }
+    /// Retained diagnostic text; never interpreted as a semantic proof.
+    pub const fn ranked_ir(&self) -> &'a str {
+        self.ranked_ir
+    }
+}
+
+/// Actual returned candidate vector capacity plus its header. Borrowed nested
+/// fields remain covered by the source owner's separate allocation domain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeRankedCandidateStorageV1(usize);
+impl NativeRankedCandidateStorageV1 {
+    /// Reserve before another allocation, and drop the vector before release.
+    pub const fn retained_storage(self) -> usize {
+        self.0
+    }
+}
+
+/// Exports every genuine retained source root in canonical order. No subset or
+/// caller-provided text is accepted. Work is `8 + 5 * roots + 2 * name bytes`;
+/// each name is compared with the actual typed kernel. Actual vector capacity
+/// is reserved before writing any row. The incoming storage floor is restored.
+pub fn native_source_ranked_candidates_v1<'a>(
+    source: &'a super::ProductionSemanticKirOwnerV1,
+    budget: &mut Budget<'_>,
+) -> Result<
+    (
+        Vec<NativeRankedSourceCandidateV1<'a>>,
+        NativeRankedCandidateStorageV1,
+    ),
+    NativeSourceReplayErrorV1,
+> {
+    budget.charge_work(8)?;
+    let minimum = source.pre_ranked_retained_analysis_storage_v1().ok_or(
+        NativeSourceReplayErrorV1::Mismatch("missing native source owner"),
+    )?;
+    if budget.storage() < minimum {
+        return Err(Resource::Accounting.into());
+    }
+    native_source_transfer_v1(budget, |budget| {
+        let roots = source.semantic().semantic().roots();
+        if roots.is_empty() || roots.len() != source.generic_checks.len() {
+            return Err(NativeSourceReplayErrorV1::Mismatch(
+                "complete typed ranked roster",
+            ));
+        }
+        let header = std::mem::size_of::<Vec<NativeRankedSourceCandidateV1<'_>>>();
+        budget.reserve_storage(header)?;
+        let mut candidates = native_source_vector_v1(roots.len(), budget)?;
+        for (root, retained) in roots.iter().zip(source.generic_checks.iter()) {
+            budget.charge_work(
+                5usize
+                    .checked_add(retained.function_name.len())
+                    .and_then(|n| n.checked_add(retained.lowering.kernel().function_name().len()))
+                    .ok_or(Resource::Arithmetic)?,
+            )?;
+            if *root != retained.selected_root
+                || retained.function_name != retained.lowering.kernel().function_name()
+            {
+                return Err(NativeSourceReplayErrorV1::Mismatch(
+                    "typed ranked root identity",
+                ));
+            }
+            candidates.push(NativeRankedSourceCandidateV1::from_untrusted_parts(
+                root.index(),
+                retained.launch_rank,
+                retained.lowering.kernel(),
+                &retained.access_sources,
+                &retained.executable_effect_sources,
+                &retained.ranked_ir,
+            ));
+        }
+        let storage = header
+            .checked_add(native_source_vector_capacity_v1(&candidates)?)
+            .ok_or(Resource::Arithmetic)?;
+        Ok((candidates, NativeRankedCandidateStorageV1(storage)))
+    })
+}
+
+/// Reconstructed native source retaining freshly compiled ranked checks and
+/// their independently replayed source correspondence. This is not publication
+/// authority or a claim of complete indexed-address/operational equivalence.
+///
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::ReplayedRankedNativeSourceV1;
+/// fn copy(owner: ReplayedRankedNativeSourceV1) { let _ = owner.clone(); }
+/// ```
+pub struct ReplayedRankedNativeSourceV1 {
+    source: super::ProductionSemanticKirOwnerV1,
+    catalog: Catalog,
+}
+impl ReplayedRankedNativeSourceV1 {
+    /// The actual retained source/ranked owner, not a detached success report.
+    pub const fn source(&self) -> &super::ProductionSemanticKirOwnerV1 {
+        &self.source
+    }
+    /// The catalog independently checked against the reconstructed native graph.
+    pub const fn catalog(&self) -> &Catalog {
+        &self.catalog
+    }
+    /// Independent source/ranked equality does not authenticate compiler origin.
+    pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+    /// No object, runtime, launch, or publication authority is created.
+    pub const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Additional copied transport and wrapper storage; the consumed replay source
+/// and freshly compiled lowerings keep their separate incoming reservations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeRankedAttachmentStorageV1(usize);
+impl NativeRankedAttachmentStorageV1 {
+    /// Reserve alongside the input receipts, and release only after owner drop.
+    pub const fn retained_storage(self) -> usize {
+        self.0
+    }
+}
+
+/// Attaches a complete fresh ranked roster to the already reconstructed N owner,
+/// then replays the resulting source correspondence. Exact candidate recipes
+/// must equal the fresh lowering recipes before attachment. All inputs are
+/// consumed on failure; their incoming reservations remain caller-owned.
+///
+/// New copied maps/text, root vectors and wrapper are charged using their actual
+/// capacities. Existing ranked compilation and source reconstruction retain
+/// their separate bounded allocation/work domains, as in production attachment.
+/// This receipt is not a claim of complete allocator/RSS accounting.
+pub fn attach_replayed_native_source_ranked_v1(
+    replayed: ReplayedNativeSourceV1,
+    candidates: &[NativeRankedSourceCandidateV1<'_>],
+    lowerings: Vec<ProductionRankedKernelLoweringInputV1>,
+    budget: &mut Budget<'_>,
+) -> Result<
+    (
+        ReplayedRankedNativeSourceV1,
+        NativeRankedAttachmentStorageV1,
+    ),
+    NativeSourceReplayErrorV1,
+> {
+    budget.charge_work(8)?;
+    if budget.storage() < replayed.retained_storage {
+        return Err(Resource::Accounting.into());
+    }
+    native_source_transfer_v1(budget, move |budget| {
+        let semantic_roots = replayed.source.semantic_ssa().source_semantic().roots();
+        if candidates.is_empty()
+            || candidates.len() != semantic_roots.len()
+            || candidates.len() != lowerings.len()
+        {
+            return Err(NativeSourceReplayErrorV1::Mismatch(
+                "complete fresh ranked roster",
+            ));
+        }
+        let wrapper = std::mem::size_of::<ReplayedRankedNativeSourceV1>();
+        budget.reserve_storage(wrapper)?;
+        let mut roots = native_source_vector_v1(candidates.len(), budget)?;
+        let retained_roots = candidates
+            .len()
+            .checked_mul(std::mem::size_of::<super::RetainedGenericKernelChecksV1>())
+            .ok_or(Resource::Arithmetic)?;
+        budget.reserve_storage(retained_roots)?;
+        let mut retained = wrapper
+            .checked_add(retained_roots)
+            .ok_or(Resource::Arithmetic)?;
+        for ((candidate, lowering), semantic_root) in
+            candidates.iter().zip(lowerings).zip(semantic_roots)
+        {
+            budget.charge_work(5)?;
+            // Typed recipe equality belongs to the existing ranked construction
+            // domain; no diagnostic string is parsed to establish this relation.
+            if candidate.semantic_root != semantic_root.index()
+                || candidate.kernel != lowering.kernel()
+            {
+                return Err(NativeSourceReplayErrorV1::Mismatch(
+                    "exact fresh ranked root/recipe",
+                ));
+            }
+            let function_name_bytes = candidate.kernel.function_name().len();
+            budget.charge_work(function_name_bytes)?;
+            budget.reserve_storage(function_name_bytes)?;
+            retained = retained
+                .checked_add(function_name_bytes)
+                .ok_or(Resource::Arithmetic)?;
+            let mut access_sources =
+                native_source_vector_v1(candidate.access_sources.len(), budget)?;
+            budget.charge_work(candidate.access_sources.len())?;
+            access_sources.extend_from_slice(candidate.access_sources);
+            let mut effect_sources =
+                native_source_vector_v1(candidate.executable_effect_sources.len(), budget)?;
+            budget.charge_work(candidate.executable_effect_sources.len())?;
+            effect_sources.extend_from_slice(candidate.executable_effect_sources);
+            budget.charge_work(candidate.ranked_ir.len())?;
+            budget.reserve_storage(candidate.ranked_ir.len())?;
+            let mut ranked_ir = String::new();
+            ranked_ir
+                .try_reserve_exact(candidate.ranked_ir.len())
+                .map_err(|_| Resource::Allocation)?;
+            budget.reserve_storage(
+                ranked_ir
+                    .capacity()
+                    .checked_sub(candidate.ranked_ir.len())
+                    .ok_or(Resource::Accounting)?,
+            )?;
+            ranked_ir.push_str(candidate.ranked_ir);
+            retained = retained
+                .checked_add(
+                    candidate
+                        .access_sources
+                        .len()
+                        .checked_mul(std::mem::size_of::<super::ProductionRankedAccessSourceV1>())
+                        .ok_or(Resource::Arithmetic)?,
+                )
+                .and_then(|n| {
+                    n.checked_add(candidate.executable_effect_sources.len().checked_mul(
+                        std::mem::size_of::<super::ProductionRankedExecutableEffectSourceV1>(),
+                    )?)
+                })
+                .and_then(|n| n.checked_add(candidate.ranked_ir.len()))
+                .ok_or(Resource::Arithmetic)?;
+            roots.push(super::ProductionRankedSemanticProjectionRootV1::new(
+                *semantic_root,
+                candidate.launch_rank,
+                lowering,
+                ranked_ir,
+                access_sources,
+                effect_sources,
+            ));
+        }
+        let ReplayedNativeSourceV1 {
+            source, catalog, ..
+        } = replayed;
+        let receipt = super::ProductionMaterializedRankedModuleReceiptV1::from_unvalidated_projection_roster_candidate(source, roots)
+            .map_err(NativeSourceReplayErrorV1::RankedSource)?;
+        let source =
+            super::ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(receipt)
+                .map_err(NativeSourceReplayErrorV1::RankedSource)?;
+        // The existing attachment creates these strings. Their exact retained
+        // capacities, not just the requested payload, transfer with this owner.
+        for root in &source.generic_checks {
+            let surplus = root
+                .function_name
+                .capacity()
+                .checked_sub(root.function_name.len())
+                .ok_or(Resource::Accounting)?;
+            budget.reserve_storage(surplus)?;
+            retained = retained.checked_add(surplus).ok_or(Resource::Arithmetic)?;
+        }
+        source
+            .verify_equivalence()
+            .map_err(NativeSourceReplayErrorV1::RankedSource)?;
+        Ok((
+            ReplayedRankedNativeSourceV1 { source, catalog },
+            NativeRankedAttachmentStorageV1(retained),
+        ))
+    })
+}
+
+fn native_source_vector_capacity_v1<T>(values: &Vec<T>) -> Result<usize, Resource> {
+    values
+        .capacity()
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or(Resource::Arithmetic)
+}
+
+fn native_source_vector_v1<T>(length: usize, budget: &mut Budget<'_>) -> Result<Vec<T>, Resource> {
+    let requested = length
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or(Resource::Arithmetic)?;
+    budget.reserve_storage(requested)?;
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(length)
+        .map_err(|_| Resource::Allocation)?;
+    budget.reserve_storage(
+        native_source_vector_capacity_v1(&values)?
+            .checked_sub(requested)
+            .ok_or(Resource::Accounting)?,
+    )?;
+    Ok(values)
+}
+
+fn native_source_transfer_v1<T>(
+    budget: &mut Budget<'_>,
+    run: impl FnOnce(&mut Budget<'_>) -> Result<T, NativeSourceReplayErrorV1>,
+) -> Result<T, NativeSourceReplayErrorV1> {
+    let floor = budget.storage();
+    let token = budget.work_ledger_identity_v1();
+    let slot = budget as *const Budget<'_> as usize;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(budget)));
+    if token != budget.work_ledger_identity_v1() || slot != budget as *const Budget<'_> as usize {
+        drop(result);
+        return Err(Resource::Accounting.into());
+    }
+    let Some(release) = budget.storage().checked_sub(floor) else {
+        drop(result);
+        return Err(Resource::Accounting.into());
+    };
+    if let Err(error) = budget.release_storage(release) {
+        drop(result);
+        return Err(error.into());
+    }
+    match result {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
     }
 }
 
@@ -406,7 +776,11 @@ pub fn replay_native_source_correspondence_v1(
             .and_then(|n| n.checked_add(catalog_storage.retained_storage()))
             .ok_or(Resource::Arithmetic)?;
         Ok((
-            ReplayedNativeSourceV1 { source, catalog },
+            ReplayedNativeSourceV1 {
+                source,
+                catalog,
+                retained_storage: retained,
+            },
             NativeSourceReplayStorageV1(retained),
         ))
     }));

@@ -150,7 +150,7 @@ pub struct PreparedFunctionalRefinementReceiptV2 {
 /// repeat the same signature, result, boundary, binding, and toolchain checks.
 /// This owner alone does not establish compiler custody or later-stage refinement.
 #[derive(Debug)]
-pub(crate) struct RetainedImportedFunctionalRefinementReceiptV2 {
+pub struct RetainedImportedFunctionalRefinementReceiptV2 {
     proof: ImportedFunctionalRefinementProofV2,
     verifying_key: [u8; 32],
     wire: [u8; FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2],
@@ -167,6 +167,50 @@ impl RetainedImportedFunctionalRefinementReceiptV2 {
 
     pub(crate) const fn wire(&self) -> &[u8; FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2] {
         &self.wire
+    }
+
+    /// Transfers the imported staging proof and its inert signature transport.
+    /// The embedded key does not establish an admitted signer or compiler origin.
+    pub fn into_parts(
+        self,
+    ) -> (
+        ImportedFunctionalRefinementProofV2,
+        InertFunctionalRefinementReceiptSignatureV2,
+    ) {
+        (
+            self.proof,
+            InertFunctionalRefinementReceiptSignatureV2 {
+                wire: self.wire,
+                verifying_key: self.verifying_key,
+            },
+        )
+    }
+}
+
+/// Untrusted signature bytes for independent receipt import, not proof authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InertFunctionalRefinementReceiptSignatureV2 {
+    wire: [u8; FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2],
+    verifying_key: [u8; 32],
+}
+
+impl InertFunctionalRefinementReceiptSignatureV2 {
+    pub const fn from_untrusted_parts(
+        wire: [u8; FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2],
+        verifying_key: [u8; 32],
+    ) -> Self {
+        Self {
+            wire,
+            verifying_key,
+        }
+    }
+
+    pub const fn wire(&self) -> &[u8; FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2] {
+        &self.wire
+    }
+
+    pub const fn verifying_key(&self) -> &[u8; 32] {
+        &self.verifying_key
     }
 }
 
@@ -226,10 +270,41 @@ pub fn execute_and_import_ranked_functional_refinement_locally_v2(
     ),
     FunctionalRefinementVerusExecutionErrorV2,
 > {
+    let (binding, retained, policy) = execute_and_retain_ranked_functional_refinement_locally_v2(
+        runtime,
+        kernel,
+        block_index,
+        operation_index,
+        subjects,
+        timeout_seconds,
+    )?;
+    let (proof, _) = retained.into_parts();
+    Ok((binding, proof, policy))
+}
+
+/// Executes the same local proof path while retaining the exact signed wire/key
+/// needed by independent ranked reconstruction. No caller-authored proof source
+/// or admitted-signer authority is accepted by this producer.
+pub fn execute_and_retain_ranked_functional_refinement_locally_v2(
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+    subjects: FunctionalRefinementSubjectsV2,
+    timeout_seconds: u32,
+) -> Result<
+    (
+        FunctionalRefinementBindingV2,
+        RetainedImportedFunctionalRefinementReceiptV2,
+        ProductionRefinementStagingPolicyV2,
+    ),
+    FunctionalRefinementVerusExecutionErrorV2,
+> {
     let signing = SigningKey::generate(&mut OsRng);
+    let verifying_key = signing.verifying_key().to_bytes();
     let toolchain = functional_refinement_verus_toolchain_identity_v2(runtime)?;
     let policy = FunctionalRefinementImportPolicyV2::new(
-        signing.verifying_key().to_bytes(),
+        verifying_key,
         toolchain,
         FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
     )
@@ -255,7 +330,15 @@ pub fn execute_and_import_ranked_functional_refinement_locally_v2(
     let proof = importer
         .import(FunctionalRefinementImportExpectationV2::new(binding), &wire)
         .map_err(FunctionalRefinementVerusExecutionErrorV2::receipt)?;
-    Ok((binding, proof, production_policy))
+    Ok((
+        binding,
+        RetainedImportedFunctionalRefinementReceiptV2 {
+            proof,
+            verifying_key,
+            wire,
+        },
+        production_policy,
+    ))
 }
 
 /// Verifier-private execution/import join for other compiler-owned generated
@@ -1413,6 +1496,82 @@ mod tests {
             digest(4),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn retained_effect_signature_survives_move_and_independent_reimport() {
+        let signing = SigningKey::from_bytes(&[0x63; 32]);
+        let verifying_key = signing.verifying_key().to_bytes();
+        let toolchain = VerusToolchainIdentityV2::new(
+            digest(10),
+            digest(11),
+            digest(12),
+            digest(13),
+            digest(14),
+        )
+        .unwrap();
+        let binding = FunctionalRefinementBindingV2::from_subjects(subjects(), digest(15)).unwrap();
+        let policy = FunctionalRefinementImportPolicyV2::new(
+            verifying_key,
+            toolchain,
+            FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+        )
+        .unwrap();
+        // A CPU consistency test key, not evidence of actual Verus execution.
+        let unsigned = UnsignedFunctionalRefinementReceiptV2::from_verified_execution_join(
+            policy.signer_identity(),
+            binding,
+            toolchain,
+            digest(16),
+            FunctionalRefinementResultV2::Proved,
+            FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+        )
+        .unwrap();
+        let signature = signing.sign(unsigned.signing_bytes()).to_bytes();
+        let wire = unsigned.attach_signature(signature);
+        let import = |wire: &[u8]| {
+            FunctionalRefinementReceiptImporterV2::new(policy.clone(), 1)
+                .unwrap()
+                .import(FunctionalRefinementImportExpectationV2::new(binding), wire)
+        };
+        let retained = RetainedImportedFunctionalRefinementReceiptV2 {
+            proof: import(&wire).unwrap(),
+            verifying_key,
+            wire,
+        };
+        let (proof, sidecar) = retained.into_parts();
+        assert_eq!(*sidecar.wire(), wire);
+        assert_eq!(*sidecar.verifying_key(), verifying_key);
+        assert_eq!(
+            proof.receipt_identity(),
+            import(sidecar.wire()).unwrap().receipt_identity()
+        );
+        assert_eq!(
+            sidecar,
+            InertFunctionalRefinementReceiptSignatureV2::from_untrusted_parts(wire, verifying_key)
+        );
+        let mut mutated = wire;
+        let last = mutated.len() - 1;
+        mutated[last] ^= 1;
+        assert!(import(&mutated).is_err());
+        let wrong_key = SigningKey::from_bytes(&[0x64; 32])
+            .verifying_key()
+            .to_bytes();
+        let wrong_policy = FunctionalRefinementImportPolicyV2::new(
+            wrong_key,
+            toolchain,
+            FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+        )
+        .unwrap();
+        assert!(
+            FunctionalRefinementReceiptImporterV2::new(wrong_policy, 1)
+                .unwrap()
+                .import(
+                    FunctionalRefinementImportExpectationV2::new(binding),
+                    sidecar.wire()
+                )
+                .is_err()
+        );
     }
 
     fn formula_kernel(expected_kind: SemanticBinaryKindAttr) -> ProductionRankedKernelV1 {

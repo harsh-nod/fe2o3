@@ -114,8 +114,10 @@ pub use executor::{
 };
 pub use functional_refinement_receipt_v2::{
     FunctionalRefinementVerusExecutionErrorKindV2, FunctionalRefinementVerusExecutionErrorV2,
-    PreparedFunctionalRefinementReceiptV2,
+    InertFunctionalRefinementReceiptSignatureV2, PreparedFunctionalRefinementReceiptV2,
+    RetainedImportedFunctionalRefinementReceiptV2,
     execute_and_import_ranked_functional_refinement_locally_v2,
+    execute_and_retain_ranked_functional_refinement_locally_v2,
     functional_refinement_verus_toolchain_identity_v2,
     prepare_ranked_functional_refinement_receipt_v2,
 };

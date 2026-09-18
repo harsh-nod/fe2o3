@@ -3,6 +3,12 @@ use super::*;
 #[path = "production_checked_output_private_memory_policy3_v1_tests.rs"]
 mod private_memory_tests;
 
+#[path = "production_checked_output_unsigned_division_admission_v1_tests.rs"]
+mod unsigned_division_admission_tests;
+
+#[path = "production_checked_output_wrapping_admission_v1_tests.rs"]
+mod wrapping_admission_tests;
+
 fn general_control_source(looping: bool) -> ProductionPreRankedKirOwnerV1 {
     general_control_and_read_source(looping, false)
 }
