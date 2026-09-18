@@ -464,6 +464,7 @@ fn with_borrowed_source_and_emission(
             &mut private,
             None,
             &mut call_budget,
+            SemanticEmissionPlacementV1::default(),
         )
         .unwrap();
         macro_rules! append {

@@ -228,10 +228,10 @@ impl SemanticFunctionLoweringV1<'_> {
                 budget.reserve_storage(argument_product_v1(function.as_str().len(), 3)?)?;
                 let carrier = match &leaf.transport {
                     BorrowedAggregateLeafTransportV1::ScalarSlot { value_type, alignment } => {
-                        let allocation = FunctionOperationLocation::new(BlockId(block.index()), operations.len());
+                        let allocation = FunctionOperationLocation::new(this.kernel_block_id_v1(block)?, operations.len());
                         let pointer_ty = leaf.parameter_type(AccessMode::ReadWrite, budget)?;
                         let (pointer, ty) = this.emit(operations, pointer_ty, OperationKind::Alloca { element: value_type.clone(), count: None, address_space: AddressSpace::Private, alignment: *alignment })?.value().map_err(borrowed_aggregate_error_v1)?;
-                        let initialization = FunctionOperationLocation::new(BlockId(block.index()), operations.len());
+                        let initialization = FunctionOperationLocation::new(this.kernel_block_id_v1(block)?, operations.len());
                         this.push_memory_store_v1(operations, pointer, value.id, MemoryAccess::new(AddressSpace::Private, *alignment), None)?;
                         *value = ValueDef::new(pointer, ty);
                         BorrowedAggregateCarrierCandidateV1::ScalarCell {
@@ -501,7 +501,7 @@ impl SemanticFunctionLoweringV1<'_> {
                     call: BorrowedAggregateOperationLocatorV1 {
                         function: caller_id.clone(),
                         location: FunctionOperationLocation::new(
-                            BlockId(block.index()),
+                            this.kernel_block_id_v1(block)?,
                             ordinal as usize,
                         ),
                     },

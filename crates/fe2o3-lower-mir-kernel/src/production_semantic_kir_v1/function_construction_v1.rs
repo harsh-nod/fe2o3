@@ -53,6 +53,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 0,
                 &mut budget,
             )?,
+            SemanticEmissionPlacementV1::default(),
         )
     }
 
@@ -78,6 +79,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         private_array_work: PrivateArrayRecorderWorkV1<'a>,
         private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
         call_returns: CallReturnBufferV1,
+        emission_placement: SemanticEmissionPlacementV1,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         Self::new_interprocedural_with_borrowed(
             types,
@@ -101,6 +103,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             call_returns,
             BorrowedAggregatePreparationV1::default(),
             None,
+            emission_placement,
         )
     }
 
@@ -127,6 +130,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         call_returns: CallReturnBufferV1,
         borrowed_aggregate_preparation: BorrowedAggregatePreparationV1,
         mut borrowed_aggregate_work: Option<&'a mut dyn BorrowedAggregateBudgetV1>,
+        emission_placement: SemanticEmissionPlacementV1,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let mut locals = vec![None; function.locals().len()];
         let mut borrowed_aggregate_views = Vec::new();
@@ -212,12 +216,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 });
             }
         }
-        let parameter_floor = parameters
-            .values
-            .iter()
-            .filter_map(|value| value.0.checked_add(1))
-            .max()
-            .unwrap_or(0);
+        let parameter_floor = emission_placement.value_floor(parameters.values)?;
         let mut direct_parameters = BTreeMap::new();
         if let Some(parameter_local_bindings) = parameters.local_bindings {
             for binding in parameter_local_bindings {
@@ -375,6 +374,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             semantic_ssa_bindings: BTreeMap::new(),
             pending_semantic_ssa_definitions,
             next_value,
+            emission_placement,
             assert_failure_block,
             required_workgroup,
             infallible_asserts,

@@ -183,6 +183,80 @@ fn lower_entry_owner(
 }
 
 #[test]
+fn placed_owned_entry_keeps_source_anchors_and_relocates_borrowed_operations() {
+    let source = entry_owner_source(vec![], false);
+    let semantic = source.source_semantic();
+    let root = semantic.roots()[0];
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+    let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000);
+    let mut closure = ReachableClosureBudgetV1::new(1_000_000);
+    let plans = (1..4)
+        .map(|index| {
+            let id = SemanticFunctionIdV1::from_index(index);
+            direct_scalar_helper_plan_v1(
+                semantic, root, id,
+                helper_function_id_v1(id, &semantic.functions()[index as usize]),
+                1_000_000, &mut closure, &mut budget,
+            ).unwrap()
+        })
+        .collect::<Vec<_>>();
+    let ids = plans.iter().map(|plan| (plan.semantic_function, plan.kernel_ir_function.clone())).collect();
+    let signatures = plans.iter().map(|plan| {
+        let abi = semantic.functions()[plan.semantic_function.index() as usize].abi();
+        (plan.semantic_function, LoweredFunctionSignatureV1 {
+            parameter_semantic_types: abi.source_input_types().to_vec(),
+            call_arguments: plan.call_arguments.clone(),
+            parameter_types: plan.parameter_types.clone(),
+            result_types: plan.result_types.clone(),
+            result_semantic_type: abi.source_output_type(),
+        })
+    }).collect();
+    let mut private = PrivateArrayLazyBudgetV1::new(1, 10_000);
+    let placed = lower_one_semantic_function_v1(
+        semantic, &plans[0], source.plan_for_function(plans[0].semantic_function).unwrap(),
+        &ids, &signatures, Some([64, 1, 1]), BTreeSet::new(), 1, false, 10_000,
+        None, &mut private, None, &mut budget,
+        SemanticEmissionPlacementV1 { first_block: 17, first_value: 100 },
+    ).unwrap();
+    let function = &placed.function;
+    let body = function.body.as_ref().unwrap();
+    let operation = |locator: &BorrowedAggregateOperationLocatorV1| {
+        assert_eq!(locator.function, function.id);
+        &body.blocks.iter().find(|block| block.id == locator.location.block).unwrap()
+            .operations[locator.location.operation_index]
+    };
+    assert_eq!(placed.borrowed_aggregate_fields.len(), 2);
+    for (index, field) in placed.borrowed_aggregate_fields.iter().enumerate() {
+        assert_eq!(field.owner.function, plans[0].semantic_function);
+        assert_eq!(field.owner.local, SemanticLocalIdV1::from_index(1));
+        assert_eq!(field.source_definition, BorrowedAggregateSourceAnchorV1::Entry { local: field.owner.local });
+        assert_eq!(field.owner.lifetime_start, field.source_definition);
+        let BorrowedAggregateCarrierCandidateV1::ScalarCell { pointer, allocation, initialization } = &field.carrier else {
+            panic!("entry parameter must have a scalar cell");
+        };
+        assert_eq!(pointer.function, function.id);
+        assert_eq!(allocation.location.block, BlockId(17));
+        assert_eq!(initialization.location.block, BlockId(17));
+        let alloca = operation(allocation);
+        assert!(matches!(alloca.kind, OperationKind::Alloca { .. }));
+        assert_eq!(alloca.results[0].id, pointer.value);
+        assert!(matches!(operation(initialization).kind, OperationKind::Store { pointer: actual, value, .. }
+            if actual == pointer.value && value == body.parameters[index]));
+    }
+    assert_eq!(placed.borrowed_aggregate_calls.len(), 4);
+    for call in &placed.borrowed_aggregate_calls {
+        assert_eq!(call.root, root);
+        assert_eq!(call.caller, plans[0].semantic_function);
+        assert!(call.block.index() < 2);
+        assert_eq!(call.call.location.block, BlockId(17 + call.block.index()));
+        let OperationKind::Call { arguments, .. } = &operation(&call.call).kind else {
+            panic!("borrowed call locator must point to the emitted call");
+        };
+        assert_eq!(arguments[call.physical_argument as usize], call.actual.value);
+    }
+}
+
+#[test]
 fn owned_entry_storage_uses_exact_parameters_once_and_keeps_replay_closed() {
     let source = entry_owner_source(vec![], false);
     let (module, rows) = lower_entry_owner(&source, usize::MAX, usize::MAX)

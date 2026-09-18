@@ -1,5 +1,6 @@
 //! Ordinary Rust through the checked-output stage, without a shipping selector.
 use super::*;
+use crate::production_pipeline::checked_output_policy4_v1::snapshots;
 use fe2o3_kernel_ir::OperationKind;
 use fe2o3_rustc_invocation::{
     CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, PortablePackageIdentityV1, RustcInvocationV2,
@@ -40,7 +41,7 @@ struct Observation {
     missing_proof_refused: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 enum SourceStage {
     Manifest,
@@ -75,23 +76,39 @@ impl SourceFailure {
 struct CheckedOutputCallbacks {
     result: Option<Result<Observation, SourceFailure>>,
     probe_missing_proof: bool,
+    progress: progress::CallbackProgress,
+    endpoint_directory: Option<PathBuf>,
 }
 
 impl Callbacks for CheckedOutputCallbacks {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
+        self.progress.end(progress::Outcome::Complete);
         self.result = Some((|| {
-            let ranked = transaction_in_active_session_v1(
-                tcx,
-                crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
-            )
-            .map_err(|e| SourceFailure::new(SourceStage::SourceCollection, e))?
-            .verify_general_kernel_checks()
-            .map_err(|e| SourceFailure::new(SourceStage::RankedChecks, format!("{e:?}")))?;
+            let transaction = self
+                .progress
+                .run(SourceStage::SourceCollection, || {
+                    transaction_in_active_session_v1(
+                        tcx,
+                        crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+                    )
+                })
+                .map_err(|e| SourceFailure::new(SourceStage::SourceCollection, e))?;
+            let ranked = self
+                .progress
+                .run(SourceStage::RankedChecks, || {
+                    transaction.verify_general_kernel_checks()
+                })
+                .map_err(|e| SourceFailure::new(SourceStage::RankedChecks, format!("{e:?}")))?;
             assert!(ranked.all_kernel_checks_are_clean());
             assert!(!ranked.grants_artifact_or_launch_authority());
-            let stage = ranked
-                .lower_checked_output_policy4_v1()
-                .map_err(|e| SourceFailure::new(SourceStage::Policy4, format!("{e:?}")))?;
+            // This call contains B/C admission and fresh O checks; an error alone
+            // does not identify which internal endpoint failed.
+            let stage = snapshots::with_directory(self.endpoint_directory.as_deref(), || {
+                self.progress.run(SourceStage::Policy4, || {
+                    ranked.lower_checked_output_policy4_v1()
+                })
+            })
+            .map_err(|e| SourceFailure::new(SourceStage::Policy4, format!("{e:?}")))?;
             let admitted = stage.output();
             assert!(!admitted.grants_artifact_or_launch_authority());
             assert!(std::ptr::eq(
@@ -168,7 +185,9 @@ impl Callbacks for CheckedOutputCallbacks {
                 budget
                     .reserve_storage(floor)
                     .map_err(|e| SourceFailure::new(SourceStage::NativeSourceProof, e))?;
-                let refused = stage.prepare_native_source_lineage_v1(&mut budget);
+                let refused = self.progress.run(SourceStage::NativeSourceProof, || {
+                    stage.prepare_native_source_lineage_v1(&mut budget)
+                });
                 assert_eq!(budget.storage(), floor);
                 match refused {
                     Err(ProductionPipelineError::CheckedOutputStage(
@@ -195,8 +214,11 @@ impl Callbacks for CheckedOutputCallbacks {
                 }
                 return Ok(observation);
             }
-            let (handoff, descriptor) = stage
-                .into_worker_handoff_extraction_v1()
+            let (handoff, descriptor) = self
+                .progress
+                .run(SourceStage::NativeHandoff, || {
+                    stage.into_worker_handoff_extraction_v1()
+                })
                 .map_err(|e| SourceFailure::new(SourceStage::NativeHandoff, format!("{e:?}")))?;
             assert!(!descriptor.grants_launch_authority());
             let llvm = std::str::from_utf8(handoff.module_bytes())
@@ -219,8 +241,11 @@ fn checked_output_source_child() {
     let args: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     let mut callbacks = CheckedOutputCallbacks {
         probe_missing_proof: env::var_os(CHILD_PROOF_PROBE).is_some(),
+        progress: progress::CallbackProgress::from_environment(),
+        endpoint_directory: snapshots::child_directory(),
         ..CheckedOutputCallbacks::default()
     };
+    callbacks.progress.begin(SourceStage::Rustc);
     let completed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         rustc_driver::run_compiler(&args, &mut callbacks);
     }));
@@ -237,6 +262,13 @@ fn checked_output_source_child() {
             ))
         })
     };
+    callbacks.progress.finish(if completed.is_err() {
+        progress::Outcome::Panicked
+    } else if result.is_ok() {
+        progress::Outcome::Complete
+    } else {
+        progress::Outcome::Refused
+    });
     std::fs::write(
         env::var_os(CHILD_RESULT).expect("child result path"),
         serde_json::to_vec(&result).unwrap(),
@@ -440,6 +472,8 @@ fn ordinary_rust_fill_and_vecadd_reach_checked_native_output() {
                 CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
                 observation.to_hex(),
             );
+        progress::clear_inherited_jobserver(&mut command);
+        snapshots::configure_child(&mut command, name);
         let child = output(&mut command);
         let result: Result<Observation, SourceFailure> =
             serde_json::from_slice(&std::fs::read(&response).unwrap()).unwrap();
@@ -459,6 +493,7 @@ fn ordinary_rust_fill_and_vecadd_reach_checked_native_output() {
         if name == "fill" {
             let expected_output = result.output_digest;
             let proof_response = scratch.path().join("fill-proof-refusal.json");
+            snapshots::configure_child(&mut command, &format!("{name}-missing-proof"));
             let probe = output(
                 command
                     .env(CHILD_PROOF_PROBE, "1")
@@ -483,3 +518,5 @@ fn ordinary_rust_fill_and_vecadd_reach_checked_native_output() {
 mod corpus;
 #[path = "production_rustc_driver_checked_output_cargo_v1_tests.rs"]
 mod corpus_cargo;
+#[path = "production_rustc_driver_checked_output_progress_v1_tests.rs"]
+mod progress;
