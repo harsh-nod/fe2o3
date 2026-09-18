@@ -543,7 +543,7 @@ fn function_commitment_writer_never_allocates_payload_and_prepays_walks() {
         charge_work: &mut reject,
     });
     assert_eq!(writer.count(23), Err(error.clone()));
-    assert_eq!(writer.raw(&[0; 5]), Err(error));
+    assert_eq!(writer.raw(&[0; 5]), Err(error.clone()));
     assert_eq!(writer.written, 0);
     drop(writer);
     assert_eq!(observed, vec![23, 6]);
