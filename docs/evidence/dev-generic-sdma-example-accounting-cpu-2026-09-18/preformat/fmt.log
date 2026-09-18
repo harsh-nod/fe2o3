@@ -1,0 +1,12 @@
+Diff in /home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kfd/src/queue_live/construction_primary/integration_release_generic_sdma_tests.rs:115:
+                 let before = memory.observation().host.unwrap();
+                 assert!(before.used_backing_bytes > 0 && before.used_allocation_records > 0);
+                 assert_eq!(before.reserved_records, 0);
+-                assert_eq!(before.retained_records as u64, before.used_allocation_records);
++                assert_eq!(
++                    before.retained_records as u64,
++                    before.used_allocation_records
++                );
+                 assert_eq!(before.quarantined_records, 0);
+                 assert!(!before.poisoned);
+                 let set = sdma_fixture::generic(memory, key, engine);

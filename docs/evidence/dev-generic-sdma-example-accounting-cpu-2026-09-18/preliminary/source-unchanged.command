@@ -1,0 +1,1 @@
+cmp /home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-generic-sdma-example-accounting-cpu-2026-09-18/raw/source-before.log /home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-generic-sdma-example-accounting-cpu-2026-09-18/raw/source-after.log 

@@ -1,0 +1,9 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized] target(s) in 55.97s
+     Running unittests src/lib.rs (target/x86_64-unknown-linux-musl/debug/deps/fe2o3_kfd-651f18105a2bee25)
+
+running 1 test
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_orders_original_owner_and_refunds_all_backing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1416 filtered out; finished in 3.74s
+

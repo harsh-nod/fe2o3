@@ -1,0 +1,13 @@
+    Finished `test` profile [unoptimized] target(s) in 0.24s
+     Running unittests examples/kfd-compute-aql-queue.rs (target/debug/examples/kfd_compute_aql_queue-ef89939edd70a521)
+
+running 6 tests
+test tests::all_is_an_explicit_selection ... ok
+test tests::explicit_unique_ids_accept_decimal_and_hex ... ok
+test tests::host_usage_oracle_counts_live_retained_records_and_empty_refund ... ok
+test tests::malformed_or_ambiguous_arguments_are_rejected ... ok
+test tests::retained_release_requires_explicit_mode_and_device_selection ... ok
+test tests::single_sdma_requires_a_known_profile_and_one_explicit_device ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -80,6 +80,22 @@ fn parse_selection(args: impl IntoIterator<Item = String>) -> Result<Options, St
     Ok(Options { selection, release })
 }
 
+fn retained_host_usage(
+    budget: Gfx942HostVisibleBackingBudgetV1,
+    bytes: u64,
+    records: usize,
+) -> Gfx942HostVisibleBackingUsageV1 {
+    Gfx942HostVisibleBackingUsageV1 {
+        budget,
+        used_backing_bytes: bytes,
+        used_allocation_records: records as u64,
+        reserved_records: 0,
+        retained_records: records,
+        quarantined_records: 0,
+        poisoned: false,
+    }
+}
+
 fn release_single_sdma(
     mut queue: ComputeAqlQueueSessionV1,
     engine: Option<u32>,
@@ -108,10 +124,14 @@ fn release_single_sdma(
         Gfx942HostVisibleBackingBudgetV1::new(16 * 1024 * 1024, 32).unwrap()
     );
     assert!(host_before.used_backing_bytes > 0 && host_before.used_allocation_records > 0);
-    assert_eq!(host_before.reserved_records, 0);
-    assert_eq!(host_before.retained_records, 0);
-    assert_eq!(host_before.quarantined_records, 0);
-    assert!(!host_before.poisoned);
+    assert_eq!(
+        host_before,
+        retained_host_usage(
+            host_before.budget,
+            host_before.used_backing_bytes,
+            usize::try_from(host_before.used_allocation_records).unwrap(),
+        )
+    );
     let sdma = match engine {
         Some(index) => queue.enable_gfx942_sdma_copy_engine_on_engine_index(index)?,
         None => queue.enable_sdma_copy_engine()?,
@@ -122,11 +142,11 @@ fn release_single_sdma(
     // Only the ordinary coherent completion page joins the host account.
     assert_eq!(
         queue.host_visible_backing_usage_v1(),
-        Some(Gfx942HostVisibleBackingUsageV1 {
-            used_backing_bytes: host_before.used_backing_bytes + 4096,
-            used_allocation_records: host_before.used_allocation_records + 1,
-            ..host_before
-        })
+        Some(retained_host_usage(
+            host_before.budget,
+            host_before.used_backing_bytes + 4096,
+            host_before.retained_records + 1,
+        ))
     );
     assert_eq!(
         queue.sdma_memory_pool_observation()?,
@@ -138,11 +158,7 @@ fn release_single_sdma(
     let destroyed = custody.release_in_place()?;
     assert_eq!(destroyed.queue_id(), primary_id);
     assert_eq!(destroyed.released_resources(), 8);
-    let empty_host = Gfx942HostVisibleBackingUsageV1 {
-        used_backing_bytes: 0,
-        used_allocation_records: 0,
-        ..host_before
-    };
+    let empty_host = retained_host_usage(host_before.budget, 0, 0);
     assert_eq!(custody.device_backing_usage_v1(), Some(device_before));
     assert_eq!(custody.host_visible_backing_usage_v1(), Some(empty_host));
     assert!(matches!(
@@ -295,10 +311,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{GpuSelection, Options, ReleaseMode, parse_selection};
+    use super::{
+        Gfx942HostVisibleBackingBudgetV1, Gfx942HostVisibleBackingUsageV1, GpuSelection, Options,
+        ReleaseMode, parse_selection, retained_host_usage,
+    };
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn host_usage_oracle_counts_live_retained_records_and_empty_refund() {
+        let budget = Gfx942HostVisibleBackingBudgetV1::new(16 * 1024 * 1024, 32).unwrap();
+        for records in [0, 1, 2] {
+            assert_eq!(
+                retained_host_usage(budget, records * 4096, records as usize),
+                Gfx942HostVisibleBackingUsageV1 {
+                    budget,
+                    used_backing_bytes: records * 4096,
+                    used_allocation_records: records,
+                    reserved_records: 0,
+                    retained_records: records as usize,
+                    quarantined_records: 0,
+                    poisoned: false,
+                }
+            );
+        }
     }
 
     #[test]

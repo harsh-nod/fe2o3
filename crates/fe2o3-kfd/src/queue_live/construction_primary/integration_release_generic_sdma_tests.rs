@@ -111,7 +111,24 @@ fn constructed_generic_release_rejects_malformed_or_pending_owner_without_effect
 fn constructed_generic_release_orders_original_owner_and_refunds_all_backing() {
     for engine in [None, Some(0), Some(1)] {
         for dispatch in [false, true] {
-            let (mut parent, t, gate) = with_generic(engine, dispatch);
+            let (mut parent, t, gate) = sdma_cases::with_sdma_profile(dispatch, |memory, key| {
+                let before = memory.observation().host.unwrap();
+                assert!(before.used_backing_bytes > 0 && before.used_allocation_records > 0);
+                assert_eq!(before.reserved_records, 0);
+                assert_eq!(
+                    before.retained_records as u64,
+                    before.used_allocation_records
+                );
+                assert_eq!(before.quarantined_records, 0);
+                assert!(!before.poisoned);
+                let set = sdma_fixture::generic(memory, key, engine);
+                let mut expected = before;
+                expected.used_backing_bytes += 4096;
+                expected.used_allocation_records += 1;
+                expected.retained_records += 1;
+                assert_eq!(memory.observation().host, Some(expected));
+                set
+            });
             let before = sdma_fixture::unreleased_observation(parent.sdma.as_ref().unwrap());
             assert!(
                 parent

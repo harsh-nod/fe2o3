@@ -1,0 +1,1 @@
+env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_BUILD_JOBS=2 CARGO_TERM_COLOR=never RUST_TEST_THREADS=1 cargo test --frozen -p fe2o3-kfd --all-features --lib constructed_generic_release_orders_original_owner_and_refunds_all_backing 
