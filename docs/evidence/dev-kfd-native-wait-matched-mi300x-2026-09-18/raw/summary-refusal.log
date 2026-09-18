@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-kfd-native-wait-matched-mi300x-2026-09-18/summarize.py", line 49, in <module>
+    print(json.dumps(summarize(), indent=2))
+                     ^^^^^^^^^^^
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-kfd-native-wait-matched-mi300x-2026-09-18/summarize.py", line 42, in summarize
+    assert (ARCHIVE / "raw/benchmark.exit").read_text() == "0\n"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

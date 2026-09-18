@@ -1,0 +1,1 @@
+scp -q docs/evidence/dev-kfd-native-wait-matched-mi300x-2026-09-18/prepare.sh docs/evidence/dev-kfd-native-wait-matched-mi300x-2026-09-18/cleanup.sh mi300x:/tmp/fe2o3-kfd-native-wait-matched-20260918.tS8fnkzm/ 

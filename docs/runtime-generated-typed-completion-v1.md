@@ -105,6 +105,28 @@ inert domain metadata; they do not mint protected completion receipts. Genuine
 public protected/native bundle completion, formal Rust/native refinement and
 performance remain separate requirements.
 
+## Canonical Application Integration
+
+Source review at `ecad7245f` identifies two independent prerequisites for a real
+public protected bundle execution. The repository ships no production
+`WorkerV3ProtectedVerifierBackendV1` plus
+`WorkerV3SemanticMachineRefinementBackendV1` implementation or corresponding
+semantic-to-machine proof artifact. Test-only verifier implementations and
+lower native vecadd fixtures do not satisfy that authority boundary.
+
+Separately, the canonical `cargo fe2o3 run` application sandbox prohibits thread
+creation, while every public runtime async engine starts an owner thread. Even
+with a genuine deployment verifier, those APIs cannot currently compose in that
+single-threaded process. The synchronous inherited application helper creates
+no original async completion receipt and cannot stand in for this path.
+
+The runtime-side next step is caller-driven owned progress on the current
+thread, sharing the existing scheduler, operation registry, original reply
+cells, Stop/drain and cleanup machinery. Nonblocking enqueue between ticks must
+remain distinct from callback reentrancy and blocking self-waits. This is an
+unimplemented integration requirement, not permission to relax seccomp, expose
+receipt constructors, or promote inert CPU metadata to execution authority.
+
 ## Cancellation Boundary
 
 Host-only prepared/reserved custody can be explicitly discarded. After accepted

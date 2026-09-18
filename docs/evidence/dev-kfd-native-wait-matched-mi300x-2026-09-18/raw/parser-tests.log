@@ -1,0 +1,14 @@
+test_current_binary_metadata_and_source_accepted (__main__.CampaignIdentityTests.test_current_binary_metadata_and_source_accepted) ... ok
+test_old_binary_paths_rejected (__main__.CampaignIdentityTests.test_old_binary_paths_rejected) ... ok
+test_old_source_context_rejected (__main__.CampaignIdentityTests.test_old_source_context_rejected) ... ok
+test_available_cpu_metrics (fixture.NativeParserTests.test_available_cpu_metrics) ... ok
+test_closed_policy_and_window_fixtures (fixture.NativeParserTests.test_closed_policy_and_window_fixtures) ... ok
+test_incomplete_and_malformed_campaign_rejected (fixture.NativeParserTests.test_incomplete_and_malformed_campaign_rejected) ... ok
+test_malformed_native_rows_rejected (fixture.NativeParserTests.test_malformed_native_rows_rejected) ... ok
+test_missing_reordered_and_duplicate_rows_rejected (fixture.NativeParserTests.test_missing_reordered_and_duplicate_rows_rejected) ... ok
+test_synthetic_full_campaign (fixture.NativeParserTests.test_synthetic_full_campaign) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.146s
+
+OK

@@ -20,6 +20,15 @@ four and seventeen ignored respectively; 67 public API doctests pass. The
 separates this compositional CPU evidence from protected native bundle execution,
 formal refinement and performance. Accepted checkpoints, A1/A2 and #182 are unchanged.
 
+The subsequent [matched native-wait attempt](evidence/dev-kfd-native-wait-matched-mi300x-2026-09-18/README.md)
+stopped after A/1 when another process attached to all eight GPUs. Thirteen
+legacy KFD round trips and teardown succeeded; no B/C/HSA cell launched and no
+performance ratio is accepted. The owned remote scratch directory is removed.
+Source review also identifies a runtime integration prerequisite: the canonical
+`cargo fe2o3 run` application sandbox forbids thread creation, but public async
+engines all spawn threads. [Caller-driven owned progress](runtime-generated-typed-completion-v1.md#canonical-application-integration)
+is needed independently of the missing production verifier/refinement provider.
+
 Earlier development (2026-09-18): the opt-in persistent SDMA native-wait
 [diagnostic success paths](evidence/dev-kfd-native-wait-smoke-mi300x-2026-09-18/README.md)
 now run on MI300X with both 1 ms and 25 us requested-sleep ceilings. Each policy

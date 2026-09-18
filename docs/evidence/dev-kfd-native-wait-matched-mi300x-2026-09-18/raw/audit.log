@@ -1,0 +1,157 @@
+{
+  "source": "ecad7245fa9fa051daf3a9cb3cd82724da5446eb",
+  "source_files": 5534,
+  "harness_sha256": {
+    "prepare.sh": "89aac6fac25dea6966b84eda7d5457da69edf90720cb25bd231be43d8a3fcde4",
+    "guard.sh": "3c9c1408c8afcd6bdb1a85f208ed9af6a96ba363f9a2f069529fa047d1ebfa89",
+    "run.sh": "ddf95084511b8becad9f57bc7a4a51953769508c805e0f7ea865d9229ebc2370",
+    "cleanup.sh": "5a5964ce64dc67542dea105166c1a8b3e614275b49d0c33ef37677bf384c1ae8"
+  },
+  "binary_sha256": {
+    "/tmp/fe2o3-kfd-native-wait-matched-20260918.tS8fnkzm/target/release/examples/gfx942-runtime-directional-window-benchmark": "6bf6436d6a694895f95f72513e6fcf9f4c385441f64d053e8c97cd1edd9b969c",
+    "/tmp/fe2o3-kfd-native-wait-matched-20260918.tS8fnkzm/hsa-copy-pool-engine": "5d7e0578ea8078bf10066bbd7f36fe78608449af6fb6d647f2ec4503e86d9e33"
+  },
+  "receipts": {
+    "create": {
+      "exit": 0,
+      "started": "2026-09-18T06:42:09.976301888Z",
+      "finished": "2026-09-18T06:42:10.894576005Z"
+    },
+    "stage-build": {
+      "exit": 0,
+      "started": "2026-09-18T06:42:34.805591346Z",
+      "finished": "2026-09-18T06:42:36.140862153Z"
+    },
+    "prepare": {
+      "exit": 0,
+      "started": "2026-09-18T06:42:36.114882156Z",
+      "finished": "2026-09-18T06:43:37.645863499Z"
+    },
+    "parser-tests": {
+      "exit": 0,
+      "started": "2026-09-18T06:43:40.986893137Z",
+      "finished": "2026-09-18T06:43:41.286352531Z"
+    },
+    "stage-run": {
+      "exit": 0,
+      "started": "2026-09-18T06:43:54.855208831Z",
+      "finished": "2026-09-18T06:43:56.118229990Z"
+    },
+    "occupancy-before": {
+      "exit": 0,
+      "started": "2026-09-18T06:43:56.331959629Z",
+      "finished": "2026-09-18T06:43:59.359715455Z"
+    },
+    "inspect-before": {
+      "exit": 0,
+      "started": "2026-09-18T06:43:59.544612109Z",
+      "finished": "2026-09-18T06:44:00.499586221Z"
+    },
+    "benchmark": {
+      "exit": 1,
+      "started": "2026-09-18T06:44:19.477671739Z",
+      "finished": "2026-09-18T06:45:03.584991948Z"
+    },
+    "postfailure-processes": {
+      "exit": 0,
+      "started": "2026-09-18T06:45:24.183347603Z",
+      "finished": "2026-09-18T06:45:27.169604415Z"
+    },
+    "inspect-after": {
+      "exit": 0,
+      "started": "2026-09-18T06:45:53.635559341Z",
+      "finished": "2026-09-18T06:45:54.500424627Z"
+    },
+    "collect-results": {
+      "exit": 0,
+      "started": "2026-09-18T06:45:54.654152536Z",
+      "finished": "2026-09-18T06:45:56.298305207Z"
+    },
+    "cleanup": {
+      "exit": 0,
+      "started": "2026-09-18T06:45:56.466071587Z",
+      "finished": "2026-09-18T06:46:08.309936760Z"
+    },
+    "interruption-report": {
+      "exit": 0,
+      "started": "2026-09-18T06:47:44.696272401Z",
+      "finished": "2026-09-18T06:47:44.807269308Z"
+    },
+    "summary-refusal": {
+      "exit": 1,
+      "started": "2026-09-18T06:47:44.968455487Z",
+      "finished": "2026-09-18T06:47:45.172071131Z"
+    },
+    "parser-tests-final": {
+      "exit": 0,
+      "started": "2026-09-18T06:48:53.526517777Z",
+      "finished": "2026-09-18T06:48:53.872796144Z"
+    },
+    "python-lint": {
+      "exit": 0,
+      "started": "2026-09-18T06:52:01.354034449Z",
+      "finished": "2026-09-18T06:52:01.388675300Z"
+    },
+    "python-format": {
+      "exit": 0,
+      "started": "2026-09-18T06:52:01.562700425Z",
+      "finished": "2026-09-18T06:52:01.595000300Z"
+    },
+    "shellcheck": {
+      "exit": 0,
+      "started": "2026-09-18T06:52:01.746350385Z",
+      "finished": "2026-09-18T06:52:02.056629387Z"
+    }
+  },
+  "interruption": {
+    "source": "ecad7245fa9fa051daf3a9cb3cd82724da5446eb",
+    "accepted_campaign": false,
+    "completed_processes": [
+      "A/1"
+    ],
+    "completed_legacy_rounds": 13,
+    "performance_qualified_processes": 0,
+    "native_profiled_processes": 0,
+    "hsa_processes": 0,
+    "comparisons": null,
+    "stop_reason": "A/1 postflight found a process attached to GPU 4; final VRAM threshold failed",
+    "postflight_attached_pid": 536718,
+    "postflight_attached_gpu_indices": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "gpu4_snapshots": [
+      {
+        "Unique ID": "0x54f88318ca05093d",
+        "GPU use (%)": "0",
+        "PCI Bus": "0000:85:00.0",
+        "VRAM Total Memory (B)": "206141652992",
+        "VRAM Total Used Memory (B)": "298647552"
+      },
+      {
+        "Unique ID": "0x54f88318ca05093d",
+        "GPU use (%)": "0",
+        "PCI Bus": "0000:85:00.0",
+        "VRAM Total Memory (B)": "206141652992",
+        "VRAM Total Used Memory (B)": "298659840"
+      },
+      {
+        "Unique ID": "0x54f88318ca05093d",
+        "GPU use (%)": "0",
+        "PCI Bus": "0000:85:00.0",
+        "VRAM Total Memory (B)": "206141652992",
+        "VRAM Total Used Memory (B)": "648527872"
+      }
+    ],
+    "scope": "Legacy buffer validation and explicit teardown completed; no qualified timings, native-wait hardware coverage, performance attribution, parity, or formal-proof claim. A separate attached process was observed after A/1; whether it overlapped the measured interval is not established."
+  },
+  "parser_tests": 12,
+  "remote_owned_directory_removed": true,
+  "scope": "Interrupted-run integrity and cleanup only; no accepted performance comparison."
+}

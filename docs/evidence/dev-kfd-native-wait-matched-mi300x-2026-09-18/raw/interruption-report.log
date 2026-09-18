@@ -1,0 +1,48 @@
+{
+  "source": "ecad7245fa9fa051daf3a9cb3cd82724da5446eb",
+  "accepted_campaign": false,
+  "completed_processes": [
+    "A/1"
+  ],
+  "completed_legacy_rounds": 13,
+  "performance_qualified_processes": 0,
+  "native_profiled_processes": 0,
+  "hsa_processes": 0,
+  "comparisons": null,
+  "stop_reason": "A/1 postflight found a process attached to GPU 4; final VRAM threshold failed",
+  "postflight_attached_pid": 536718,
+  "postflight_attached_gpu_indices": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "gpu4_snapshots": [
+    {
+      "Unique ID": "0x54f88318ca05093d",
+      "GPU use (%)": "0",
+      "PCI Bus": "0000:85:00.0",
+      "VRAM Total Memory (B)": "206141652992",
+      "VRAM Total Used Memory (B)": "298647552"
+    },
+    {
+      "Unique ID": "0x54f88318ca05093d",
+      "GPU use (%)": "0",
+      "PCI Bus": "0000:85:00.0",
+      "VRAM Total Memory (B)": "206141652992",
+      "VRAM Total Used Memory (B)": "298659840"
+    },
+    {
+      "Unique ID": "0x54f88318ca05093d",
+      "GPU use (%)": "0",
+      "PCI Bus": "0000:85:00.0",
+      "VRAM Total Memory (B)": "206141652992",
+      "VRAM Total Used Memory (B)": "648527872"
+    }
+  ],
+  "scope": "Legacy buffer validation and explicit teardown completed; no qualified timings, native-wait hardware coverage, performance attribution, parity, or formal-proof claim. A separate attached process was observed after A/1; whether it overlapped the measured interval is not established."
+}
