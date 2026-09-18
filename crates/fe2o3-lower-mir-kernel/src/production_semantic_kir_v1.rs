@@ -10653,7 +10653,7 @@ fn lower_one_semantic_function_v1(
         max_operations,
         assert_origins,
         private_array_work,
-        private_array_sources,
+        private_array_sources.map(|(root, outer)| PrivateArraySourcesV1::Merged(root, outer)),
         call_budget,
         placement,
         execution,
@@ -10676,7 +10676,7 @@ fn lower_one_semantic_function_with_calls_v29(
     max_operations: usize,
     mut assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
     private_array_work: &mut PrivateArrayLazyBudgetV1,
-    private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
+    private_array_sources: Option<PrivateArraySourcesV1<'_>>,
     call_budget: &mut ArgumentBudgetV1<'_>,
     placement: SemanticEmissionPlacementV1,
     execution: Option<ExecutionAvailabilityV29<'_>>,
@@ -12259,52 +12259,16 @@ fn lower_single_root_module(
         module.functions.push(declaration);
     }
 
-    let dimensions = required_workgroup;
-    let workgroup_extents = dimensions.map(|dimensions| dimensions.map(u64::from));
-    let retained_extent = |axis: usize| {
-        authenticated_launch
-            .filter(|layout| {
-                layout.full_physical_workgroups
-                    && workgroup_extents == Some(layout.workgroup_extents)
-                    && layout.global_extents[axis] == layout.workgroup_extents[axis]
-            })
-            .and_then(|layout| u32::try_from(layout.global_extents[axis]).ok())
-            .filter(|extent| *extent != 0)
-            .map_or(LaunchExtent::Dynamic, LaunchExtent::Static)
-    };
-    let launch = match (launch_rank, dimensions) {
-        (1, Some([_, 1, 1]) | None) => LaunchDomain::D1 {
-            x: retained_extent(0),
-        },
-        (2, Some([_, _, 1]) | None) => LaunchDomain::D2 {
-            x: retained_extent(0),
-            y: retained_extent(1),
-        },
-        (3, Some(_) | None) => LaunchDomain::D3 {
-            x: retained_extent(0),
-            y: retained_extent(1),
-            z: retained_extent(2),
-        },
-        _ => {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "authenticated launch rank disagrees with source workgroup axes",
-            ));
-        }
-    };
-    let entry_function_id = FunctionId::new(symbol);
-    let mut kernel = Kernel::new(symbol, entry_function_id.clone(), launch);
-    if let Some([x, y, z]) = required_workgroup {
-        kernel.workgroup_size = Some(WorkgroupSize::new(x, y, z));
-    }
     let entry_function = module
-        .function(&entry_function_id)
+        .function(&FunctionId::new(symbol))
         .expect("lowered entry function is retained");
-    kernel
-        .required_capabilities
-        .extend(entry_function.required_capabilities.iter().cloned());
+    let kernel = semantic_kernel_metadata_v1(
+        symbol,
+        entry_function,
+        required_workgroup,
+        launch_rank,
+        authenticated_launch,
+    )?;
     module.kernels.push(kernel);
 
     let effects = analyze_interprocedural_effects_v1(&module)
@@ -12428,6 +12392,8 @@ include!("production_execution_call_sink_v29.rs");
 include!("production_execution_lifecycle_consumer_v29.rs");
 include!("production_execution_lifecycle_producer_v29.rs");
 include!("production_execution_instance_plan_v29.rs");
+include!("production_scoped_root_emission_v29.rs");
+include!("production_kernel_metadata_v1.rs");
 include!("production_execution_scalar_operands_v29.rs");
 include!("production_execution_events_v29.rs");
 include!("production_execution_cfg_shape_v29.rs");

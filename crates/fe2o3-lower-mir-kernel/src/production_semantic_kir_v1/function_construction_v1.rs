@@ -18,7 +18,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         authenticated_ranked_control: bool,
         max_operations: usize,
         mut private_array_work: PrivateArrayRecorderWorkV1<'a>,
-        private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
+        private_array_sources: Option<PrivateArraySourcesV1<'_>>,
         call_returns: CallReturnBufferV1,
         mut emission_work: Option<&'a mut dyn SemanticEmissionBudgetV1>,
         emission_placement: SemanticEmissionPlacementV1,
@@ -243,14 +243,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let mut private_array_outer = PrivateArrayPayloadV1::default();
         if private_array_enabled {
             private_array_work.activate()?;
-            if let Some((root, outer)) = private_array_sources {
-                private_array_outer = root.payload(0, 0, 0, &mut private_array_work)?;
-                if let Some(outer) = outer {
-                    private_array_outer = private_array_outer.add(
-                        outer.payload(0, 0, 0, &mut private_array_work)?,
-                        &mut private_array_work,
-                    )?;
-                }
+            if let Some(sources) = private_array_sources {
+                private_array_outer = sources.payload(&mut private_array_work)?;
             }
         }
         Ok(Self {

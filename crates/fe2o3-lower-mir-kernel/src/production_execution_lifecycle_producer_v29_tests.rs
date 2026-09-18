@@ -2,6 +2,10 @@ use super::*;
 #[path = "production_execution_helper_borrow_v29_tests.rs"]
 mod helper_borrow_tests;
 
+mod scoped_root_tests {
+    include!("production_scoped_root_emission_v29_tests.rs");
+}
+
 use crate::{
     ProductionContextCallBoundaryV29 as Boundary, ProductionContextRootInputV29 as RootInput,
     ProductionSourceLaunchInputV1, ProductionSourceLaunchRootInputV1,
@@ -295,6 +299,10 @@ enum Fault {
     ChangedCatalog,
     SwappedEvents,
     LateLimit,
+    Orchestrated {
+        groups: u32,
+        limits: ProductionSemanticKirLimitsV1,
+    },
 }
 
 fn run_lifecycle(
@@ -327,7 +335,18 @@ fn run_lifecycle(
             &[ProductionSourceLaunchRootInputV1::new(
                 "lifecycle_fixture",
                 [88; 32],
-                ProductionSourceLaunchInputV1::new(1, Some([64, 1, 1]), [2, 1, 1]),
+                ProductionSourceLaunchInputV1::new(
+                    1,
+                    Some([64, 1, 1]),
+                    [
+                        match fault {
+                            Fault::Orchestrated { groups, .. } => groups,
+                            _ => 2,
+                        },
+                        1,
+                        1,
+                    ],
+                ),
             )],
         )
         .unwrap();
@@ -402,6 +421,16 @@ fn run_lifecycle(
             },
             &mut budget,
         )?;
+        if let Fault::Orchestrated { groups, limits } = fault {
+            return scoped_root_tests::emit_checked(
+                &source,
+                &launch,
+                roots[0],
+                groups,
+                limits,
+                &mut budget,
+            );
+        }
         let floor = budget.storage();
         let outcome =
             with_production_call_instances_v1(&owner, ROOT, &mut budget, |instances, budget| {

@@ -47,6 +47,29 @@ struct PrivateArrayPayloadV1 {
     capacity: usize,
 }
 
+enum PrivateArraySourcesV1<'a> {
+    Merged(&'a PrivateArrayMergeV1, Option<&'a PrivateArrayMergeV1>),
+    Pending(PrivateArrayPayloadV1),
+}
+
+impl PrivateArraySourcesV1<'_> {
+    fn payload(
+        self,
+        work: &mut PrivateArrayRecorderWorkV1<'_>,
+    ) -> Result<PrivateArrayPayloadV1, ProductionSemanticKirErrorV1> {
+        match self {
+            Self::Merged(root, outer) => {
+                let payload = root.payload(0, 0, 0, work)?;
+                match outer {
+                    Some(outer) => payload.add(outer.payload(0, 0, 0, work)?, work),
+                    None => Ok(payload),
+                }
+            }
+            Self::Pending(payload) => Ok(payload),
+        }
+    }
+}
+
 impl PrivateArrayPayloadV1 {
     fn add<W: PrivateArrayChargeV1<Error = ProductionSemanticKirErrorV1>>(
         self,
