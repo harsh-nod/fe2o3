@@ -29,9 +29,24 @@ trait ExecutionLifecycleConsumerV29 {
         block: SemanticBlockIdV1,
         operations: &[Operation],
     ) -> Result<(), ProductionSemanticKirErrorV1>;
+
+    fn finish(
+        &mut self,
+        lowering: &mut SemanticFunctionLoweringV1<'_>,
+    ) -> Result<PendingLifecycleEventsV29, ProductionSemanticKirErrorV1>;
 }
 
 impl SemanticFunctionLoweringV1<'_> {
+    fn take_execution_lifecycle_events_v29(
+        &mut self,
+    ) -> Result<Option<PendingLifecycleEventsV29>, ProductionSemanticKirErrorV1> {
+        if self.lifecycle.is_none() {
+            return Ok(None);
+        }
+        self.with_execution_lifecycle_v29(|consumer, lowering| consumer.finish(lowering))
+            .map(Some)
+    }
+
     fn with_execution_lifecycle_v29<R>(
         &mut self,
         consume: impl FnOnce(

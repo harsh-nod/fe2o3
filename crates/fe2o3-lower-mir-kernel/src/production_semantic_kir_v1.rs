@@ -10245,6 +10245,7 @@ struct LoweredFunctionResultV1 {
     execution_observation: Option<ExecutionTestObservationV29>,
     source_call_instance: Option<ProductionCallInstanceIdV1>,
     instance_assert_origins: Option<InstanceAssertCaptureV1>,
+    lifecycle_events: Option<PendingLifecycleEventsV29>,
     private_arrays: PrivateArrayFunctionRowsV1,
     function: Function,
     operation_capabilities: BTreeSet<fe2o3_kernel_ir::TargetCapability>,
@@ -10949,6 +10950,7 @@ fn lower_one_semantic_function_with_calls_v29(
         block.terminator = Some(Terminator::Unreachable);
         target_blocks.push(block);
     }
+    let lifecycle_events = lowering.take_execution_lifecycle_events_v29()?;
     let emitted_operations = lowering.emitted_operations;
     let next_value = lowering.next_value;
     #[cfg(test)]
@@ -11051,6 +11053,7 @@ fn lower_one_semantic_function_with_calls_v29(
         execution_observation,
         source_call_instance,
         instance_assert_origins,
+        lifecycle_events,
         private_arrays,
         function: lowered,
         operation_capabilities,
@@ -12559,6 +12562,7 @@ include!("production_execution_availability_v29.rs");
 include!("production_execution_call_parameters_v29.rs");
 include!("production_execution_call_sink_v29.rs");
 include!("production_execution_lifecycle_consumer_v29.rs");
+include!("production_execution_lifecycle_producer_v29.rs");
 include!("production_execution_instance_plan_v29.rs");
 include!("production_execution_scalar_operands_v29.rs");
 include!("production_execution_events_v29.rs");

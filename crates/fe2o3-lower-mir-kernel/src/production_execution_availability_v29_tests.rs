@@ -746,7 +746,7 @@ fn cursor_never_refunds_scratch_to_a_replaced_ledger() {
             assert_eq!(budget.peak_storage(), 900_000);
             assert!(budget.failed_storage().is_none());
             let _ = std::mem::replace(budget, original.take().unwrap());
-            assert_eq!(budget.work_ledger_identity_v1(), ledger);
+            assert!(budget.work_ledger_identity_v1() == ledger);
             assert!(scratch > 0);
             assert_eq!(budget.storage(), floor + scratch);
             budget.release_storage(scratch).unwrap();

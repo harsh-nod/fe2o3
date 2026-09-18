@@ -68,7 +68,6 @@ impl SemanticExecutionIdentityV29 {
 }
 
 impl SemanticExecutionBindingV29 {
-    #[cfg(test)]
     fn new_identity(
         types: &[SemanticTypeDeclV1],
         semantic_type: SemanticTypeIdV1,
@@ -87,7 +86,6 @@ impl SemanticExecutionBindingV29 {
         ))
     }
 
-    #[cfg(test)]
     fn context(
         types: &[SemanticTypeDeclV1],
         semantic_type: SemanticTypeIdV1,
@@ -106,7 +104,6 @@ impl SemanticExecutionBindingV29 {
         })
     }
 
-    #[cfg(test)]
     fn workgroup(
         types: &[SemanticTypeDeclV1],
         semantic_type: SemanticTypeIdV1,
