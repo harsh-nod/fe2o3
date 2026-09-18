@@ -819,9 +819,9 @@ impl<'a> Analyzer<'a> {
                 fe2o3_kernel_ir::MemoryIntrinsicOperation::PointerDistance { .. },
             ) => join_values(operation.kind.operands(), &self.report.values),
             OperationKind::MemoryIntrinsic(_) => Variation::Varying,
-            OperationKind::InlineAssembly(_) | OperationKind::Gfx942OrderedRegion(_) => {
-                Variation::Varying
-            }
+            OperationKind::InlineAssembly(_)
+            | OperationKind::Gfx942OrderedRegion(_)
+            | OperationKind::Gfx942OrderedProgram(_) => Variation::Varying,
             OperationKind::Matrix(_) => Variation::Varying,
             OperationKind::Gfx950LdsTranspose(transpose) => match transpose.kind {
                 fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Current { .. }

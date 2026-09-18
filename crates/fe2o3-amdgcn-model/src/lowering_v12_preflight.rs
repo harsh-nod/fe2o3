@@ -6,18 +6,30 @@ use fe2o3_kernel_ir::{Module, OperationKind, Type};
 /// Check the whole module before graph selection or textual emission. Uncalled
 /// declarations, unreachable blocks, and dead results are still input syntax.
 pub(super) fn reject_unsupported_v12_module(module: &Module) -> Result<(), LoweringErrors> {
-    reject_unsupported_module(module, false)
+    reject_unsupported_module(module, None)
 }
 
 pub(super) fn reject_unsupported_v16_module(
     owner: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV16,
 ) -> Result<(), LoweringErrors> {
-    reject_unsupported_module(owner.module(), true)
+    reject_unsupported_module(owner.module(), Some(OrderedProfile::RegionV16))
+}
+
+pub(super) fn reject_unsupported_v17_module(
+    owner: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV17,
+) -> Result<(), LoweringErrors> {
+    reject_unsupported_module(owner.module(), Some(OrderedProfile::ProgramV17))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum OrderedProfile {
+    RegionV16,
+    ProgramV17,
 }
 
 fn reject_unsupported_module(
     module: &Module,
-    ordered_region_v16: bool,
+    ordered: Option<OrderedProfile>,
 ) -> Result<(), LoweringErrors> {
     for function in &module.functions {
         for ty in function
@@ -54,13 +66,25 @@ fn reject_unsupported_module(
                 // compiler effects must receive an explicit backend decision.
                 let embedded = match &operation.kind {
                     OperationKind::Gfx942OrderedRegion(_) => {
-                        if !ordered_region_v16 {
+                        if ordered != Some(OrderedProfile::RegionV16) {
                             return Err(LoweringErrors::one(
                                 LoweringLocation::device_operation(
                                     module, function, block.id, ordinal,
                                 ),
                                 LoweringDiagnosticCode::UnsupportedOperation,
                                 "ordered regions require the exact canonical V16 owner entry point",
+                            ));
+                        }
+                        None
+                    }
+                    OperationKind::Gfx942OrderedProgram(_) => {
+                        if ordered != Some(OrderedProfile::ProgramV17) {
+                            return Err(LoweringErrors::one(
+                                LoweringLocation::device_operation(
+                                    module, function, block.id, ordinal,
+                                ),
+                                LoweringDiagnosticCode::UnsupportedOperation,
+                                "ordered programs require the exact canonical V17 owner entry point",
                             ));
                         }
                         None

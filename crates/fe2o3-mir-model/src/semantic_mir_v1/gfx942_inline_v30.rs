@@ -193,7 +193,12 @@ pub(super) fn validate_call_source(
     );
     match (is_assembly, call.inline_assembly_source_v30) {
         (false, None) => Ok(()),
-        (true, Some(source)) if source.function == function.identity => Ok(()),
+        (true, Some(source))
+            if source.function == function.identity
+                && call.ordered_program_source_v32.is_none() =>
+        {
+            Ok(())
+        }
         _ => Err(SemanticMirErrorV1::InvalidInlineAssemblyV30),
     }
 }

@@ -62,6 +62,11 @@ pub const KERNEL_IR_VERSION_V12: u16 = 12;
 pub const KERNEL_IR_VERSION_V15: u16 = 15;
 /// V12 grammar plus the closed gfx942 ordered region; not V15 Execution.
 pub const KERNEL_IR_VERSION_V16: u16 = 16;
+/// V12 grammar plus bounded ordered programs; excludes V15 Execution and V16 pairs.
+pub const KERNEL_IR_VERSION_V17: u16 = 17;
+
+#[path = "wire/ordered_program_v17.rs"]
+mod ordered_program_v17;
 
 #[path = "wire/ordered_region_v16.rs"]
 mod ordered_region_v16;
@@ -340,6 +345,11 @@ pub fn encode_module_v16(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError
     encode_module(module, KERNEL_IR_VERSION_V16)
 }
 
+/// Encodes V17 structure without source, physical-resource or proof authority.
+pub fn encode_module_v17(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V17)
+}
+
 /// Authority-free storage extents observed through the V12 encoding schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KernelIrV12WireExtentV1 {
@@ -532,6 +542,23 @@ pub fn decode_module_v16(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V16, false)
 }
 
+/// Decodes exact V17 only. Semantic verification and source custody are separate.
+pub fn decode_module_v17(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V17, false)
+}
+
+pub(crate) fn decode_module_v17_with_allocation_budget_v1(
+    bytes: &[u8],
+    budget: &mut crate::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<Module, KernelIrDecodeError> {
+    decode_module_impl_v1(
+        bytes,
+        KERNEL_IR_VERSION_V17,
+        false,
+        Some(DecodeBudgetV12::Resources(budget)),
+    )
+}
+
 pub(crate) fn decode_module_v16_with_allocation_budget_v1(
     bytes: &[u8],
     budget: &mut crate::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
@@ -584,7 +611,7 @@ fn decode_module_impl_v1(
         || (!accept_older && version != maximum_version)
         || !matches!(
             version,
-            1..=12 | KERNEL_IR_VERSION_V15 | KERNEL_IR_VERSION_V16
+            1..=12 | KERNEL_IR_VERSION_V15 | KERNEL_IR_VERSION_V16 | KERNEL_IR_VERSION_V17
         )
     {
         return Err(KernelIrDecodeError::UnknownVersion(version));
@@ -1200,6 +1227,16 @@ fn encode_operation_kind(
             writer.u8(24)?;
             encode_gfx950_lds_transpose_operation(writer, transpose)?;
         }
+        OperationKind::Gfx942OrderedProgram(program) => {
+            if writer.version != KERNEL_IR_VERSION_V17 {
+                return Err(KernelIrEncodeError::UnsupportedInVersion {
+                    version: writer.version,
+                    feature: "gfx942 ordered program",
+                });
+            }
+            writer.u8(39)?;
+            ordered_program_v17::encode(writer, program)?;
+        }
         OperationKind::Gfx942OrderedRegion(region) => {
             if writer.version != KERNEL_IR_VERSION_V16 {
                 return Err(KernelIrEncodeError::UnsupportedInVersion {
@@ -1223,6 +1260,9 @@ fn decode_operation_kind(
     reader: &mut Reader<'_, '_>,
 ) -> Result<OperationKind, KernelIrDecodeError> {
     Ok(match reader.u8()? {
+        39 if reader.version == KERNEL_IR_VERSION_V17 => {
+            OperationKind::Gfx942OrderedProgram(ordered_program_v17::decode(reader)?)
+        }
         38 if reader.version == KERNEL_IR_VERSION_V16 => {
             OperationKind::Gfx942OrderedRegion(ordered_region_v16::decode(reader)?)
         }

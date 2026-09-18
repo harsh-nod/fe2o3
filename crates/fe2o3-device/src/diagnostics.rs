@@ -99,6 +99,30 @@ device_operation!(__amdgpu_v_and_b32_v1, "fe2o3_device_amdgpu_v_and_b32_v1", (lh
 device_operation!(__amdgpu_v_or_b32_v1, "fe2o3_device_amdgpu_v_or_b32_v1", (lhs: u32, rhs: u32) -> u32);
 device_operation!(__amdgpu_v_xor_b32_v1, "fe2o3_device_amdgpu_v_xor_b32_v1", (lhs: u32, rhs: u32) -> u32);
 device_operation!(__amdgpu_ordered_xor_add_e32_v1, "fe2o3_device_amdgpu_ordered_xor_add_e32_v1", (a: u32, b: u32, c: u32, scratch: u8, output: u8, input0: u8, input1: u8, input2: u8) -> u32);
+
+#[doc(hidden)]
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_amdgpu_ordered_program_e32_v1"]
+pub fn __amdgpu_ordered_program_e32_v1<
+    const N: u8,
+    const P0: u64,
+    const P1: u64,
+    const P2: u64,
+    const P3: u64,
+>(
+    a: u32,
+    b: u32,
+    c: u32,
+    scratch: u8,
+    output: u8,
+    input0: u8,
+    input1: u8,
+    input2: u8,
+) -> u32 {
+    let _ = (a, b, c, scratch, output, input0, input1, input2);
+    unreachable!("__amdgpu_ordered_program_e32_v1 must be lowered by the fe2o3 backend")
+}
+
 device_operation!(__gpu_printf_0_v1, "fe2o3_device_gpu_printf_0_v1", (format_id: u32) -> ());
 device_operation!(__gpu_printf_1_v1, "fe2o3_device_gpu_printf_1_v1", (format_id: u32, value0: u32) -> ());
 device_operation!(__gpu_printf_2_v1, "fe2o3_device_gpu_printf_2_v1", (format_id: u32, value0: u32, value1: u32) -> ());

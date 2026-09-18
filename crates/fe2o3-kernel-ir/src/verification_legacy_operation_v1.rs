@@ -388,6 +388,9 @@ impl<'a, 'module, 'work> VerificationFunctionPassV1<'a, 'module, 'work> {
             OperationKind::Gfx942OrderedRegion(_) => {
                 self.verify_ordered_region_v16(operation, location)
             }
+            OperationKind::Gfx942OrderedProgram(_) => {
+                self.verify_ordered_program_v17(operation, location)
+            }
         }
     }
 

@@ -381,6 +381,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes exact V32 programs, excluding V31 regions and V29 capabilities.
+    pub fn decode_exact_v32_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V32),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -424,6 +436,7 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V28
                         | SemanticMirWireVersionV1::V30
                         | SemanticMirWireVersionV1::V31
+                        | SemanticMirWireVersionV1::V32
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -1696,7 +1709,9 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V31 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V32 {
+            89
+        } else if self.wire_version == SemanticMirWireVersionV1::V31 {
             88
         } else if self.wire_version == SemanticMirWireVersionV1::V30 {
             87
@@ -1731,8 +1746,11 @@ impl<'a> CanonicalDecoderV1<'a> {
         if matches!(tag, 69..=80 | 83)
             || matches!(
                 self.wire_version,
-                SemanticMirWireVersionV1::V30 | SemanticMirWireVersionV1::V31
+                SemanticMirWireVersionV1::V30
+                    | SemanticMirWireVersionV1::V31
+                    | SemanticMirWireVersionV1::V32
             ) && matches!(tag, 81..=86)
+            || self.wire_version == SemanticMirWireVersionV1::V32 && tag == 88
         {
             return Err(SemanticMirDecodeErrorV1::InvalidTag {
                 context: "compiler intrinsic",
@@ -1741,6 +1759,17 @@ impl<'a> CanonicalDecoderV1<'a> {
             });
         }
         Ok(match tag {
+            89 => {
+                self.tagged("gfx942 ordered program revision", 0)?;
+                let count = self.u8()?;
+                let mut descriptors = [0; SEMANTIC_GFX942_U32_PROGRAM_MAX_STEPS_V32];
+                for descriptor in &mut descriptors {
+                    *descriptor = self.u16()?;
+                }
+                SemanticCompilerIntrinsicOperationV1::Gfx942OrderedProgram(
+                    SemanticGfx942U32ProgramV32::from_descriptors(count, descriptors)?,
+                )
+            }
             88 => {
                 let tag = self.tagged("gfx942 ordered region profile", 0)?;
                 SemanticCompilerIntrinsicOperationV1::Gfx942OrderedRegion(
@@ -2703,7 +2732,9 @@ impl<'a> CanonicalDecoderV1<'a> {
                 )?;
                 if matches!(
                     self.wire_version,
-                    SemanticMirWireVersionV1::V30 | SemanticMirWireVersionV1::V31
+                    SemanticMirWireVersionV1::V30
+                        | SemanticMirWireVersionV1::V31
+                        | SemanticMirWireVersionV1::V32
                 ) {
                     let source = self.option("inline assembly source", |decoder| {
                         Ok(SemanticInlineAssemblySourceV30::new(
@@ -2728,6 +2759,19 @@ impl<'a> CanonicalDecoderV1<'a> {
                     })?;
                     if let Some(source) = source {
                         call = call.with_ordered_region_source_v31(source);
+                    }
+                }
+                if self.wire_version == SemanticMirWireVersionV1::V32 {
+                    let source = self.option("ordered program source", |decoder| {
+                        Ok(SemanticOrderedProgramSourceV32::new(
+                            decoder.identity()?,
+                            SemanticFunctionIdentityV1(decoder.identity()?),
+                            decoder.identity()?,
+                            decoder.identity()?,
+                        )?)
+                    })?;
+                    if let Some(source) = source {
+                        call = call.with_ordered_program_source_v32(source);
                     }
                 }
                 SemanticTerminatorKindV1::Call(call)
@@ -2835,6 +2879,7 @@ mod tests {
     mod capability_v29_tests;
     mod frozen_v15;
     mod gfx942_inline_v30_tests;
+    mod gfx942_ordered_program_v32_tests;
     mod gfx942_ordered_region_v31_tests;
     mod rust_call_local_tests;
 

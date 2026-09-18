@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 mod diagnostic_kir_v16;
+mod diagnostic_kir_v17;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[allow(unsafe_code)]
 mod hardware_linux_v2;
@@ -75,12 +76,13 @@ use fe2o3_kir_sim_cli::{
     load_debug_simulation_bundle_v3, load_debug_simulation_bundle_v4,
     load_debug_simulation_bundle_v5, load_debug_simulation_bundle_v6,
     load_debug_simulation_input_bytes_v1, load_debug_simulation_input_v1,
-    load_debug_simulation_input_v16, load_debug_simulation_schedule_v1,
+    load_debug_simulation_input_v16, load_debug_simulation_input_v17,
+    load_debug_simulation_schedule_v1,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: fe2o3-debug sim ((--kir-v7 PATH | --diagnostic-kir-v16 PATH | --bundle PATH | --bundle-v2 PATH | --bundle-v3 PATH | --bundle-v4 PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH | --kir-v7-fd FD --request-fd FD) [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug typed-layout (--bundle-v3 PATH | --bundle-v4 PATH) --request PATH\n       fe2o3-debug qualification --manifest /absolute/path/to/qualification.json\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug (live-rocgdb-kfd-v4 | live-rocgdb-kfd-v5) --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
+const USAGE: &str = "usage: fe2o3-debug sim ((--kir-v7 PATH | --diagnostic-kir-v16 PATH | --diagnostic-kir-v17 PATH | --bundle PATH | --bundle-v2 PATH | --bundle-v3 PATH | --bundle-v4 PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH | --kir-v7-fd FD --request-fd FD) [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug typed-layout (--bundle-v3 PATH | --bundle-v4 PATH) --request PATH\n       fe2o3-debug qualification --manifest /absolute/path/to/qualification.json\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug (live-rocgdb-kfd-v4 | live-rocgdb-kfd-v5) --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
 #[cfg(target_os = "linux")]
 const MAX_SEALED_DEBUG_INPUT_BYTES_V1: usize = 16 * 1024 * 1024;
@@ -113,6 +115,7 @@ struct LiveKfdOptionsV3 {
 enum ProgramInputV1 {
     KirV7(PathBuf),
     DiagnosticKirV16(PathBuf),
+    DiagnosticKirV17(PathBuf),
     SealedKirV7Fd(i32),
     Bundle(PathBuf),
     BundleV2(PathBuf),
@@ -2052,6 +2055,15 @@ pub fn main() -> ExitCode {
         }
     };
     let (admitted, bundle, bundle_v2) = match (&options.program, &options.request) {
+        (ProgramInputV1::DiagnosticKirV17(path), RequestInputV1::Path(request)) => {
+            match load_debug_simulation_input_v17(path, request) {
+                Ok(input) => (input, None, None),
+                Err(error) => {
+                    write_input_error(&error);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
         (ProgramInputV1::DiagnosticKirV16(path), RequestInputV1::Path(request)) => {
             match load_debug_simulation_input_v16(path, request) {
                 Ok(input) => (input, None, None),
@@ -2466,6 +2478,7 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
     }
     let mut kir_v7 = None;
     let mut diagnostic_kir_v16 = None;
+    let mut diagnostic_kir_v17 = None;
     let mut kir_v7_fd = None;
     let mut bundle = None;
     let mut bundle_v2 = None;
@@ -2491,6 +2504,12 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
                 &mut diagnostic_kir_v16,
                 PathBuf::from(value),
                 "--diagnostic-kir-v16",
+            )?;
+        } else if option == OsStr::new("--diagnostic-kir-v17") {
+            set_once(
+                &mut diagnostic_kir_v17,
+                PathBuf::from(value),
+                "--diagnostic-kir-v17",
             )?;
         } else if option == OsStr::new("--kir-v7-fd") {
             set_once(
@@ -2572,33 +2591,39 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
         bundle_v5,
         bundle_v6,
         diagnostic_kir_v16,
+        diagnostic_kir_v17,
     ) {
-        (Some(path), None, None, None, None, None, None, None, None) => ProgramInputV1::KirV7(path),
-        (None, Some(fd), None, None, None, None, None, None, None) => {
+        (Some(path), None, None, None, None, None, None, None, None, None) => {
+            ProgramInputV1::KirV7(path)
+        }
+        (None, Some(fd), None, None, None, None, None, None, None, None) => {
             ProgramInputV1::SealedKirV7Fd(fd)
         }
-        (None, None, Some(path), None, None, None, None, None, None) => {
+        (None, None, Some(path), None, None, None, None, None, None, None) => {
             ProgramInputV1::Bundle(path)
         }
-        (None, None, None, Some(path), None, None, None, None, None) => {
+        (None, None, None, Some(path), None, None, None, None, None, None) => {
             ProgramInputV1::BundleV2(path)
         }
-        (None, None, None, None, Some(path), None, None, None, None) => {
+        (None, None, None, None, Some(path), None, None, None, None, None) => {
             ProgramInputV1::BundleV3(path)
         }
-        (None, None, None, None, None, Some(path), None, None, None) => {
+        (None, None, None, None, None, Some(path), None, None, None, None) => {
             ProgramInputV1::BundleV4(path)
         }
-        (None, None, None, None, None, None, Some(path), None, None) => {
+        (None, None, None, None, None, None, Some(path), None, None, None) => {
             ProgramInputV1::BundleV5(path)
         }
-        (None, None, None, None, None, None, None, Some(path), None) => {
+        (None, None, None, None, None, None, None, Some(path), None, None) => {
             ProgramInputV1::BundleV6(path)
         }
-        (None, None, None, None, None, None, None, None, Some(path)) => {
+        (None, None, None, None, None, None, None, None, Some(path), None) => {
             ProgramInputV1::DiagnosticKirV16(path)
         }
-        (None, None, None, None, None, None, None, None, None) => {
+        (None, None, None, None, None, None, None, None, None, Some(path)) => {
+            ProgramInputV1::DiagnosticKirV17(path)
+        }
+        (None, None, None, None, None, None, None, None, None, None) => {
             return Err(format!("exactly one program input is required; {USAGE}"));
         }
         _ => {
@@ -2607,6 +2632,13 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
     };
     if matches!(program, ProgramInputV1::DiagnosticKirV16(_)) {
         diagnostic_kir_v16::require_supported_options(
+            wave_width,
+            source_map.is_some() || source_bundle_subject.is_some(),
+            replay_schedule.is_some(),
+        )?;
+    }
+    if matches!(program, ProgramInputV1::DiagnosticKirV17(_)) {
+        diagnostic_kir_v17::require_supported_options(
             wave_width,
             source_map.is_some() || source_bundle_subject.is_some(),
             replay_schedule.is_some(),
@@ -3240,8 +3272,16 @@ impl SimulatorBackendV1 {
         replay_schedule: Option<&SimulationScheduleRecordV1>,
     ) -> Result<Self, String> {
         let diagnostic_v16 = input.module.identity().wire_version() == 16;
+        let diagnostic_v17 = input.module.identity().wire_version() == 17;
         if diagnostic_v16 {
             diagnostic_kir_v16::require_supported_options(
+                wave_width,
+                source_map.is_some() || source_map_v2.is_some(),
+                replay_schedule.is_some(),
+            )?;
+        }
+        if diagnostic_v17 {
+            diagnostic_kir_v17::require_supported_options(
                 wave_width,
                 source_map.is_some() || source_map_v2.is_some(),
                 replay_schedule.is_some(),
@@ -3251,7 +3291,7 @@ impl SimulatorBackendV1 {
             launch_extent: input.request.grid.0,
             workgroup_size: input.request.workgroup.0,
         };
-        let diagnosis_allocations = if diagnostic_v16 {
+        let diagnosis_allocations = if diagnostic_v16 || diagnostic_v17 {
             BTreeMap::new()
         } else {
             diagnosis_initial_allocations_v2(&input)?
@@ -3263,6 +3303,13 @@ impl SimulatorBackendV1 {
             .map_err(|error| error.to_string())?;
         let base_configuration_identity = if diagnostic_v16 {
             diagnostic_kir_v16::configuration_identity(
+                &input,
+                wave_width,
+                capture_limits,
+                debugger_limits,
+            )?
+        } else if diagnostic_v17 {
+            diagnostic_kir_v17::configuration_identity(
                 &input,
                 wave_width,
                 capture_limits,
@@ -3410,8 +3457,8 @@ impl SimulatorBackendV1 {
             diagnosis_source_members.extend_from_slice(&source_map.diagnosis_operation_members);
         }
         // Diagnosis V2 literally labels canonical_kir_v7. Never construct that
-        // declaration for raw V16, even as a transient or unavailable DTO.
-        let diagnosis_input = if diagnostic_v16 {
+        // declaration for raw V16/V17, even as a transient or unavailable DTO.
+        let diagnosis_input = if diagnostic_v16 || diagnostic_v17 {
             None
         } else {
             Some(DiagnosisInputEvidenceV2 {
@@ -3854,7 +3901,11 @@ impl SimulatorBackendV1 {
             return self.diagnosis_error_v2(
                 Some(request_id),
                 DebugErrorCodeV1::UnsupportedSchema,
-                diagnostic_kir_v16::DIAGNOSIS_UNAVAILABLE,
+                if self.module.identity().wire_version() == 17 {
+                    diagnostic_kir_v17::DIAGNOSIS_UNAVAILABLE
+                } else {
+                    diagnostic_kir_v16::DIAGNOSIS_UNAVAILABLE
+                },
             );
         };
         let query_bytes = match serde_json::to_vec(&filter) {

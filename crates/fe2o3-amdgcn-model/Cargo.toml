@@ -19,3 +19,6 @@ fe2o3-kernel-analysis = { workspace = true, default-features = false }
 fe2o3-kernel-opt.workspace = true
 fe2o3-llvm-handoff.workspace = true
 sha2.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { workspace = true, features = ["fs"] }

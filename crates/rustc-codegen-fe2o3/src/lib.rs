@@ -30,6 +30,8 @@ mod production_inline_assembly_v30;
 mod production_inline_source_occurrences_v30;
 mod production_mir_pliron_verus_join_v1;
 mod production_native_source_lineage_v1;
+mod production_ordered_program_source_occurrences_v32;
+mod production_ordered_program_v32;
 mod production_ordered_region_v31;
 mod production_ordered_source_occurrences_v31;
 mod production_pipeline;
@@ -91,6 +93,7 @@ pub use production_ranked_projection_v1::ProductionRankedSemanticProjectionRoste
 
 #[doc(hidden)]
 pub use production_rustc_driver_v1::{
+    run_diagnostic_ordered_program_kir_extraction_driver_v17,
     run_diagnostic_ordered_region_kir_extraction_driver_v16,
     run_production_amdgpu_compiler_handoff_extraction_driver_v1,
     run_production_amdgpu_llvm_extraction_driver_v1, run_production_extraction_driver_v1,

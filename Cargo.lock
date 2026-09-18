@@ -733,6 +733,7 @@ dependencies = [
  "fe2o3-kernel-ir",
  "fe2o3-kernel-opt",
  "fe2o3-llvm-handoff",
+ "rustix",
  "sha2 0.11.0",
 ]
 

@@ -34,6 +34,7 @@ const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V4: &str = "FE2O3_EXTRACT_SIMULATION_BU
 const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V5: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V5";
 const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V6: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V6";
 const EXTRACT_DIAGNOSTIC_KIR_PATH_ENV_V16: &str = "FE2O3_EXTRACT_DIAGNOSTIC_KIR_PATH_V16";
+const EXTRACT_DIAGNOSTIC_KIR_PATH_ENV_V17: &str = "FE2O3_EXTRACT_DIAGNOSTIC_KIR_PATH_V17";
 const EXTRACT_CRATE_BINDING_PATH_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_BINDING_PATH_V1";
 
 fn main() {
@@ -44,6 +45,14 @@ fn main() {
     let simulation_v5 = env::var_os(EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V5);
     let simulation_v6 = env::var_os(EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V6);
     let diagnostic_kir_v16 = env::var_os(EXTRACT_DIAGNOSTIC_KIR_PATH_ENV_V16);
+    let diagnostic_kir_v17 = env::var_os(EXTRACT_DIAGNOSTIC_KIR_PATH_ENV_V17);
+    if let Err(error) = require_disjoint_diagnostic_outputs(
+        diagnostic_kir_v16.is_some(),
+        diagnostic_kir_v17.is_some(),
+    ) {
+        eprintln!("fe2o3 rustc extraction: {error}");
+        std::process::exit(1);
+    }
     let (simulation_output, version) = match select_simulation_output(
         simulation_v1,
         simulation_v2,
@@ -81,7 +90,8 @@ fn main() {
     )
     .map(|prepared| select_simulation_mode(prepared, version))
     .map(|prepared| select_compiler_handoff_mode(prepared, generic_handoff))
-    .and_then(|prepared| select_diagnostic_kir_v16_mode(prepared, diagnostic_kir_v16));
+    .and_then(|prepared| select_diagnostic_kir_v16_mode(prepared, diagnostic_kir_v16))
+    .and_then(|prepared| select_diagnostic_kir_v17_mode(prepared, diagnostic_kir_v17));
     let code = match prepared.and_then(execute) {
         Ok(code) => code,
         Err(error) => {
@@ -138,6 +148,40 @@ enum ExtractionModeV1 {
     SimulationBundleV5(OsString),
     SimulationBundleV6(OsString),
     DiagnosticKirV16(OsString),
+    DiagnosticKirV17(OsString),
+}
+
+fn require_disjoint_diagnostic_outputs(v16: bool, v17: bool) -> Result<(), String> {
+    if v16 && v17 {
+        Err("diagnostic KIR V16 and V17 outputs are mutually exclusive".to_owned())
+    } else {
+        Ok(())
+    }
+}
+
+fn select_diagnostic_kir_v17_mode(
+    mut prepared: PreparedExtractionV1,
+    output: Option<OsString>,
+) -> Result<PreparedExtractionV1, String> {
+    let Some(output) = output else {
+        return Ok(prepared);
+    };
+    if output.is_empty() {
+        return Err(format!(
+            "{EXTRACT_DIAGNOSTIC_KIR_PATH_ENV_V17} must not be empty"
+        ));
+    }
+    if let PreparedExtractionV1::Selected(selected) = &mut prepared {
+        if !matches!(selected.mode, ExtractionModeV1::KernelIr)
+            || selected.crate_binding_output.is_some()
+        {
+            return Err(format!(
+                "{EXTRACT_DIAGNOSTIC_KIR_PATH_ENV_V17} is mutually exclusive with V16, ranked, LLVM, compiler-handoff, simulation-bundle and crate-binding outputs"
+            ));
+        }
+        selected.mode = ExtractionModeV1::DiagnosticKirV17(output);
+    }
+    Ok(prepared)
 }
 
 fn select_diagnostic_kir_v16_mode(
@@ -620,6 +664,12 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
                 std::path::Path::new(&output),
             )?;
         }
+        ExtractionModeV1::DiagnosticKirV17(output) => {
+            rustc_codegen_fe2o3::run_diagnostic_ordered_program_kir_extraction_driver_v17(
+                &selected.args,
+                std::path::Path::new(&output),
+            )?;
+        }
     }
     if let Some(output) = selected.crate_binding_output {
         publish_selected_crate_binding_v1(&output, selected.crate_binding)?;
@@ -690,6 +740,7 @@ fn exit_code(status: ExitStatus) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("fe2o3-rustc-extract/ordered_program_v17_tests.rs");
 
     #[test]
     fn simulation_bundle_environment_is_versioned_and_mutually_exclusive() {

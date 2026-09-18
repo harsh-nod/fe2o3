@@ -78,6 +78,8 @@ use sha2::{Digest as _, Sha256};
 include!("production_pre_ranked_v1.rs");
 include!("production_ordered_region_pre_ranked_v16.rs");
 include!("production_ordered_region_inspection_v1.rs");
+include!("production_ordered_program_pre_ranked_v17.rs");
+include!("production_ordered_program_inspection_v1.rs");
 #[path = "native_source_correspondence_replay_v1.rs"]
 mod native_source_correspondence_replay_v1;
 pub use native_source_correspondence_replay_v1::*;
@@ -12378,6 +12380,7 @@ include!("production_semantic_kir_v1/semantic_ssa_transport_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_intrinsics_01.rs");
 include!("production_semantic_kir_v1/gfx942_inline_v30.rs");
 include!("production_semantic_kir_v1/gfx942_ordered_region_v31.rs");
+include!("production_semantic_kir_v1/gfx942_ordered_program_v32.rs");
 include!("production_semantic_kir_v1/semantic_ssa_plan_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 include!("production_call_destination_v1.rs");
@@ -15808,6 +15811,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticCompilerIntrinsicOperationV1::Gfx942OrderedRegion(profile) => {
                 self.lower_gfx942_ordered_region_v31(block, call, *profile, operations)?
+            }
+            SemanticCompilerIntrinsicOperationV1::Gfx942OrderedProgram(program) => {
+                self.lower_gfx942_ordered_program_v32(block, call, *program, operations)?
             }
             SemanticCompilerIntrinsicOperationV1::Execution(_) => {
                 return Err(unsupported(

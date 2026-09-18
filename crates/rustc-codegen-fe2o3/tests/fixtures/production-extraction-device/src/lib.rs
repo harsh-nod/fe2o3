@@ -33,6 +33,22 @@ mod assembly_reference_v30;
 ))]
 mod ordered_region_v31;
 
+#[cfg(any(
+    feature = "ordered-program-v32",
+    feature = "ordered-program-one-v32",
+    feature = "ordered-program-sixteen-v32",
+    feature = "ordered-program-unused-v32",
+    feature = "ordered-program-dynamic-v32",
+    feature = "ordered-program-alias-v32",
+    feature = "ordered-program-divergent-v32",
+    feature = "ordered-program-wrong-launch-v32",
+    feature = "ordered-program-invalid-count-v32",
+    feature = "ordered-program-invalid-opcode-v32",
+    feature = "ordered-program-read-before-init-v32",
+    feature = "ordered-program-padding-v32",
+))]
+mod ordered_program_v32;
+
 #[cfg(not(any(
     feature = "atomic-rmw",
     feature = "multi-root-ownership",
@@ -75,6 +91,18 @@ mod ordered_region_v31;
     feature = "ordered-region-dynamic-v31",
     feature = "ordered-region-divergent-v31",
     feature = "ordered-region-wrong-launch-v31",
+    feature = "ordered-program-v32",
+    feature = "ordered-program-one-v32",
+    feature = "ordered-program-sixteen-v32",
+    feature = "ordered-program-unused-v32",
+    feature = "ordered-program-dynamic-v32",
+    feature = "ordered-program-alias-v32",
+    feature = "ordered-program-divergent-v32",
+    feature = "ordered-program-wrong-launch-v32",
+    feature = "ordered-program-invalid-count-v32",
+    feature = "ordered-program-invalid-opcode-v32",
+    feature = "ordered-program-read-before-init-v32",
+    feature = "ordered-program-padding-v32",
     feature = "scalar-transmute",
     feature = "fabs-f32",
     feature = "is-finite-fabs-f32",

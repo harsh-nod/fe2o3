@@ -207,6 +207,13 @@ impl OperationKind {
             Self::Gfx942OrderedRegion(region) => {
                 region.inputs().iter().copied().try_for_each(&mut visitor)?;
             }
+            Self::Gfx942OrderedProgram(program) => {
+                program
+                    .inputs()
+                    .iter()
+                    .copied()
+                    .try_for_each(&mut visitor)?;
+            }
             Self::InlineAssembly(assembly) => {
                 for operand in &assembly.operands {
                     match operand.kind {

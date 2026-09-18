@@ -260,6 +260,7 @@ impl Operation {
                 IntrinsicKind::InvocationIndex { .. } | IntrinsicKind::LaunchExtent { .. } => {}
             },
             Op::Gfx942OrderedRegion(_)
+            | Op::Gfx942OrderedProgram(_)
             | Op::VerificationContract(_)
             | Op::VectorLayoutConvert(_)
             | Op::Constant(_)

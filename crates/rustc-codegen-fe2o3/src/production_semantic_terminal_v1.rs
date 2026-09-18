@@ -29,6 +29,7 @@ pub(crate) enum ProductionBf16ConversionV1 {
 pub(crate) enum ProductionTerminalExpansionV1 {
     Gfx942InlineU32(TrustedAmdGpuInlineOperation),
     Gfx942OrderedXorAddE32,
+    Gfx942OrderedProgramE32,
     ThreadIndex(SemanticAxisV1),
     WorkgroupIndex(SemanticAxisV1),
     WorkgroupDimension(SemanticAxisV1),
@@ -163,6 +164,9 @@ impl ProductionSemanticTerminalRuleV1 {
         match item {
             TrustedDeviceItem::AmdGpuOrderedXorAddE32 => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32)
+            }
+            TrustedDeviceItem::AmdGpuOrderedProgramE32 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx942OrderedProgramE32)
             }
             TrustedDeviceItem::AmdGpuInline(operation) => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx942InlineU32(operation))
@@ -815,6 +819,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32) => {
                 TrustedDeviceItem::AmdGpuOrderedXorAddE32
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx942OrderedProgramE32) => {
+                TrustedDeviceItem::AmdGpuOrderedProgramE32
             }
             Self::Expand(ProductionTerminalExpansionV1::Gfx942InlineU32(operation)) => {
                 TrustedDeviceItem::AmdGpuInline(operation)

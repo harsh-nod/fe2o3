@@ -13,6 +13,7 @@ const OUTPUT_ENV_V4: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V4";
 const OUTPUT_ENV_V5: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V5";
 const OUTPUT_ENV_V6: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V6";
 const DIAGNOSTIC_KIR_ENV_V16: &str = "FE2O3_EXTRACT_DIAGNOSTIC_KIR_PATH_V16";
+const DIAGNOSTIC_KIR_ENV_V17: &str = "FE2O3_EXTRACT_DIAGNOSTIC_KIR_PATH_V17";
 const CRATE_ENV: &str = "FE2O3_EXTRACT_CRATE_V1";
 const MAX_SYSROOT_OUTPUT_BYTES: u64 = 4096;
 
@@ -35,6 +36,7 @@ fn main() -> ExitCode {
 enum ExportFormat {
     SimulationBundle(u16),
     DiagnosticKirV16,
+    DiagnosticKirV17,
 }
 
 impl ExportFormat {
@@ -48,6 +50,7 @@ impl ExportFormat {
             Self::SimulationBundle(6) => OUTPUT_ENV_V6,
             Self::SimulationBundle(_) => unreachable!("parser admits only bundle versions 1--6"),
             Self::DiagnosticKirV16 => DIAGNOSTIC_KIR_ENV_V16,
+            Self::DiagnosticKirV17 => DIAGNOSTIC_KIR_ENV_V17,
         }
     }
 
@@ -55,6 +58,7 @@ impl ExportFormat {
         match self {
             Self::SimulationBundle(_) => "simulation bundle",
             Self::DiagnosticKirV16 => "diagnostic canonical KIR V16",
+            Self::DiagnosticKirV17 => "diagnostic canonical KIR V17",
         }
     }
 
@@ -63,6 +67,7 @@ impl ExportFormat {
             Self::SimulationBundle(version) => fixed_target_rustflags(target, *version),
             // Raw logical diagnostics do not request source-variable capture.
             Self::DiagnosticKirV16 => fixed_target_rustflags(target, 1),
+            Self::DiagnosticKirV17 => fixed_target_rustflags(target, 1),
         }
     }
 }
@@ -84,6 +89,7 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
     let mut target_profile = ProductionAmdTargetProfileV1::Gfx942;
     let mut bundle_version = None;
     let mut diagnostic_kir_v16 = false;
+    let mut diagnostic_kir_v17 = false;
     let mut cargo_args = Vec::new();
     let mut args = args.into_iter();
     while let Some(argument) = args.next() {
@@ -94,6 +100,12 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
         let Some(argument) = argument.to_str() else {
             return Err("options before `--` must be valid UTF-8".to_owned());
         };
+        if argument == "--diagnostic-kir-v17" {
+            if std::mem::replace(&mut diagnostic_kir_v17, true) {
+                return Err("--diagnostic-kir-v17 may be specified only once".to_owned());
+            }
+            continue;
+        }
         if argument == "--diagnostic-kir-v16" {
             if std::mem::replace(&mut diagnostic_kir_v16, true) {
                 return Err("--diagnostic-kir-v16 may be specified only once".to_owned());
@@ -157,17 +169,29 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
             _ => unreachable!("closed option table"),
         }
     }
-    let format = match (diagnostic_kir_v16, bundle_version) {
-        (true, Some(_)) => {
-            return Err(
-                "--diagnostic-kir-v16 and --bundle-version are mutually exclusive".to_owned(),
-            );
+    let format = if diagnostic_kir_v17 {
+        if diagnostic_kir_v16 || bundle_version.is_some() {
+            return Err("--diagnostic-kir-v17, --diagnostic-kir-v16 and --bundle-version are mutually exclusive".to_owned());
         }
-        (true, None) if target_profile != ProductionAmdTargetProfileV1::Gfx942 => {
-            return Err("--diagnostic-kir-v16 supports only the exact gfx942 profile".to_owned());
+        if target_profile != ProductionAmdTargetProfileV1::Gfx942 {
+            return Err("--diagnostic-kir-v17 supports only the exact gfx942 profile".to_owned());
         }
-        (true, None) => ExportFormat::DiagnosticKirV16,
-        (false, version) => ExportFormat::SimulationBundle(version.unwrap_or(1)),
+        ExportFormat::DiagnosticKirV17
+    } else {
+        match (diagnostic_kir_v16, bundle_version) {
+            (true, Some(_)) => {
+                return Err(
+                    "--diagnostic-kir-v16 and --bundle-version are mutually exclusive".to_owned(),
+                );
+            }
+            (true, None) if target_profile != ProductionAmdTargetProfileV1::Gfx942 => {
+                return Err(
+                    "--diagnostic-kir-v16 supports only the exact gfx942 profile".to_owned(),
+                );
+            }
+            (true, None) => ExportFormat::DiagnosticKirV16,
+            (false, version) => ExportFormat::SimulationBundle(version.unwrap_or(1)),
+        }
     };
     let crate_name = crate_name.ok_or_else(|| "missing required --crate".to_owned())?;
     validate_crate_name(&crate_name)?;
@@ -311,6 +335,7 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
         .env_remove(OUTPUT_ENV_V5)
         .env_remove(OUTPUT_ENV_V6)
         .env_remove(DIAGNOSTIC_KIR_ENV_V16)
+        .env_remove(DIAGNOSTIC_KIR_ENV_V17)
         .env(CRATE_ENV, &options.crate_name)
         .env(output_env, &options.output);
     let status = command
@@ -381,7 +406,7 @@ fn reject_conflicting_environment() -> Result<(), String> {
     Ok(())
 }
 
-const fn conflicting_extraction_environment() -> [&'static str; 13] {
+const fn conflicting_extraction_environment() -> [&'static str; 14] {
     [
         OUTPUT_ENV,
         OUTPUT_ENV_V2,
@@ -390,6 +415,7 @@ const fn conflicting_extraction_environment() -> [&'static str; 13] {
         OUTPUT_ENV_V5,
         OUTPUT_ENV_V6,
         DIAGNOSTIC_KIR_ENV_V16,
+        DIAGNOSTIC_KIR_ENV_V17,
         "FE2O3_EXTRACT_RANKED_MEMORY_V1",
         "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1",
         "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1",
@@ -421,12 +447,13 @@ fn absolute_path(current_dir: &Path, path: PathBuf) -> PathBuf {
 }
 
 const fn usage() -> &'static str {
-    "usage: fe2o3-export-sim --crate <rustc-crate-name> --output <bundle.fe2sim> [--bundle-version 1|2|3|4|5|6] [--target gfx942|gfx950] [--target-dir <dir>] [-- <Cargo package/feature args>]\n       fe2o3-export-sim --diagnostic-kir-v16 --crate <rustc-crate-name> --output <kernel.kir> [--target gfx942] [--target-dir <dir>] [-- <Cargo package/feature args>]\nDiagnostic KIR V16 is raw pre-ranked CPU/debug input for the closed ordered-region profile, not a simulation bundle, source authentication, production resume or proof/artifact/load/launch authority. It is mutually exclusive with --bundle-version; no production fallback is attempted."
+    "usage: fe2o3-export-sim --crate <rustc-crate-name> --output <bundle.fe2sim> [--bundle-version 1|2|3|4|5|6] [--target gfx942|gfx950] [--target-dir <dir>] [-- <Cargo package/feature args>]\n       fe2o3-export-sim --diagnostic-kir-v16 --crate <rustc-crate-name> --output <kernel.kir> [--target gfx942] [--target-dir <dir>] [-- <Cargo package/feature args>]\nDiagnostic KIR V16 is raw pre-ranked CPU/debug input for the closed ordered-region profile, not a simulation bundle, source authentication, production resume or proof/artifact/load/launch authority. It is mutually exclusive with --bundle-version; no production fallback is attempted.\n       fe2o3-export-sim --diagnostic-kir-v17 --crate <rustc-crate-name> --output <program.kir> [--target gfx942] [--target-dir <dir>] [-- <Cargo package/feature args>]\nDiagnostic KIR V17 is raw pre-ranked CPU/debug input for the closed one-to-sixteen-step ordered u32 program. V16, V17 and --bundle-version are mutually exclusive; raw diagnostics carry no source authentication, production resume or proof/artifact/load/launch authority. No production fallback is attempted."
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("fe2o3-export-sim/ordered_program_v17_tests.rs");
 
     fn diagnostic_args() -> Vec<OsString> {
         [

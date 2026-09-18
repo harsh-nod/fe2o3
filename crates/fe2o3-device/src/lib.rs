@@ -33,6 +33,8 @@ pub mod lds;
 pub mod math;
 pub mod memory;
 pub mod mx;
+#[doc(hidden)]
+pub mod ordered_program;
 pub mod simd;
 pub mod sync;
 pub mod tensor;

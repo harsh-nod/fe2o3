@@ -48,6 +48,8 @@ use crate::{
     SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1,
 };
 
+#[path = "execute_ordered_program_v17.rs"]
+mod ordered_program_v17;
 #[path = "execute_ordered_region_v16.rs"]
 mod ordered_region_v16;
 
@@ -6369,6 +6371,9 @@ fn execute_operation(
     } else if matches!(&operation.kind, OperationKind::Gfx942OrderedRegion(_)) {
         let site = operation_site(function_index, block, ordinal);
         ordered_region_v16::execute(engine, values, operation, &site)
+    } else if matches!(&operation.kind, OperationKind::Gfx942OrderedProgram(_)) {
+        let site = operation_site(function_index, block, ordinal);
+        ordered_program_v17::execute(engine, values, operation, &site)
     } else {
         execute_non_assembly_operation(
             engine,
@@ -6844,6 +6849,7 @@ fn execute_non_assembly_operation(
         | OperationKind::Gfx950LdsTranspose(_)
         | OperationKind::InlineAssembly(_)
         | OperationKind::Gfx942OrderedRegion(_)
+        | OperationKind::Gfx942OrderedProgram(_)
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
         | OperationKind::VectorLayoutConvert(_)

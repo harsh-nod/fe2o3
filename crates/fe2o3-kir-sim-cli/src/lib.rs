@@ -78,7 +78,7 @@ impl AdmittedSimulationInputV1 {
     }
 
     /// Exact artifact/request/target/limit binding used by persisted schedules.
-    /// Diagnostic V16 has no persisted schedule representation and is rejected
+    /// Diagnostic V16/V17 have no persisted schedule representation and are rejected
     /// explicitly; successful CPU admission does not grant a schedule binding.
     pub fn persisted_schedule_binding(
         &self,
@@ -92,7 +92,7 @@ impl AdmittedSimulationInputV1 {
             ),
         };
         // Also guard callers that replace the public module of an otherwise
-        // bundle-backed input. Bundle metadata must never relabel raw V16.
+        // bundle-backed input. Bundle metadata must never relabel raw V16/V17.
         if !matches!(self.module.identity().wire_version(), 7 | 9 | 10 | 11 | 12) {
             return Err(unsupported());
         }
@@ -635,6 +635,56 @@ pub fn load_debug_simulation_input_bytes_v16(
             stage: "platform".to_owned(),
             code: "unsupported_platform".to_owned(),
             message: "diagnostic V16 byte admission requires Linux".to_owned(),
+        })
+    }
+}
+
+/// Securely admits exact canonical V17 bytes and a strict simulation request.
+///
+/// This diagnostic CPU route authenticates neither source nor hardware and
+/// grants no compiler, artifact, launch, source-map or persisted-schedule
+/// authority. Canonical admission uses a cumulative work/storage ledger;
+/// simulator admission separately checks resident storage after bounded decode,
+/// not as a process-wide pre-allocation or RSS guarantee.
+pub fn load_debug_simulation_input_v17(
+    kir_v17: &Path,
+    request: &Path,
+) -> Result<AdmittedSimulationInputV1, SimulationInputErrorV1> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::diagnostic_kir_v17::load_debug_simulation_input_v17(kir_v17, request)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (kir_v17, request);
+        Err(SimulationInputErrorV1 {
+            stage: "platform".to_owned(),
+            code: "unsupported_platform".to_owned(),
+            message: "diagnostic V17 input admission requires Linux".to_owned(),
+        })
+    }
+}
+
+/// Admits bounded, already captured diagnostic V17 and strict request bytes.
+///
+/// Unlike the path route this does not authenticate a filesystem capture. Its
+/// canonical ledger accounts borrowed slice extents, not unknown caller-owned
+/// allocation capacities. It otherwise uses the same admission and CPU limits.
+pub fn load_debug_simulation_input_bytes_v17(
+    kir_v17: &[u8],
+    request: &[u8],
+) -> Result<AdmittedSimulationInputV1, SimulationInputErrorV1> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::diagnostic_kir_v17::load_debug_simulation_input_bytes_v17(kir_v17, request)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (kir_v17, request);
+        Err(SimulationInputErrorV1 {
+            stage: "platform".to_owned(),
+            code: "unsupported_platform".to_owned(),
+            message: "diagnostic V17 byte admission requires Linux".to_owned(),
         })
     }
 }

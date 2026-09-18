@@ -23,6 +23,10 @@ mod checked_output_source_v1_tests;
 mod ordered_region_diagnostic_export_v16;
 pub use ordered_region_diagnostic_export_v16::run_diagnostic_ordered_region_kir_extraction_driver_v16;
 
+#[path = "production_rustc_driver_v1/ordered_program_diagnostic_export_v17.rs"]
+mod ordered_program_diagnostic_export_v17;
+pub use ordered_program_diagnostic_export_v17::run_diagnostic_ordered_program_kir_extraction_driver_v17;
+
 #[derive(Default)]
 struct ProductionExtractionCallbacksV1 {
     ranked_memory: bool,
@@ -32,13 +36,19 @@ struct ProductionExtractionCallbacksV1 {
     simulation_bundle_output: Option<PathBuf>,
     simulation_bundle_version: u16,
     diagnostic_kir_v16_output: Option<PathBuf>,
+    diagnostic_kir_v17_output: Option<PathBuf>,
     result: Option<Result<(), String>>,
 }
 
 impl Callbacks for ProductionExtractionCallbacksV1 {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         self.result = Some(
-            if let Some(output) = self.diagnostic_kir_v16_output.as_deref() {
+            if self.diagnostic_kir_v16_output.is_some() && self.diagnostic_kir_v17_output.is_some()
+            {
+                Err("diagnostic KIR V16 and V17 callbacks are mutually exclusive".to_owned())
+            } else if let Some(output) = self.diagnostic_kir_v17_output.as_deref() {
+                ordered_program_diagnostic_export_v17::extract_in_active_session_v17(tcx, output)
+            } else if let Some(output) = self.diagnostic_kir_v16_output.as_deref() {
                 ordered_region_diagnostic_export_v16::extract_in_active_session_v16(tcx, output)
             } else if let Some(output) = self.simulation_bundle_output.as_deref() {
                 match self.simulation_bundle_version {
@@ -689,6 +699,7 @@ pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(),
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
         diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -712,6 +723,7 @@ pub fn run_production_amdgpu_llvm_extraction_driver_v1(
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
         diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -734,6 +746,7 @@ pub fn run_production_gfx942_llvm_extraction_driver_v1(
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
         diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -780,6 +793,7 @@ pub fn run_production_gfx942_compiler_handoff_extraction_driver_v1(
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
         diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -804,6 +818,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v1(
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 1,
         diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -827,6 +842,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v2(
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 2,
         diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -850,6 +866,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v3(
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 3,
         diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -873,6 +890,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v4(
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 4,
         diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -896,6 +914,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v5(
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 5,
         diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -919,6 +938,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v6(
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 6,
         diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         result: None,
     };
     run_production_driver_v1(

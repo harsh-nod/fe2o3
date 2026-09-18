@@ -944,6 +944,7 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                     ) => {}
                 OperationKind::Execution(_)
                 | OperationKind::Gfx942OrderedRegion(_)
+                | OperationKind::Gfx942OrderedProgram(_)
                 | OperationKind::VerificationContract(_)
                 | OperationKind::VectorLoad(_)
                 | OperationKind::VectorStore(_)

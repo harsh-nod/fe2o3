@@ -43,6 +43,9 @@ use v12_preflight::reject_unsupported_v12_module;
 #[path = "lowering/ordered_region_v16.rs"]
 mod ordered_region_v16;
 pub use ordered_region_v16::lower_canonical_v16_compiler_module_to_gfx942_xnack_minus_llvm_ir;
+#[path = "lowering/ordered_program_v17.rs"]
+mod ordered_program_v17;
+pub use ordered_program_v17::lower_canonical_v17_compiler_module_to_gfx942_xnack_minus_llvm_ir;
 
 include!("lowering_native_v12.rs");
 
@@ -638,12 +641,14 @@ fn lower_kernel_to_llvm_ir_for_target(
         &module.required_capabilities,
         "module",
         target,
+        None,
     )?;
     let kernel_wave = validate_capabilities(
         LoweringLocation::kernel(module, kernel),
         &kernel.required_capabilities,
         "kernel",
         target,
+        None,
     )?;
 
     let workgroup_size = validate_launch(module, kernel, target)?;
@@ -655,6 +660,7 @@ fn lower_kernel_to_llvm_ir_for_target(
         &entry.required_capabilities,
         "entry function",
         target,
+        None,
     )?;
     if let Some(exact_target) = target.exact_target_binding() {
         require_exact_kernel_binding(module, kernel, entry, exact_target)?;
@@ -1064,6 +1070,49 @@ fn lower_compiler_module_with_ordered_region_context_v16(
     require_kernel: bool,
     ordered_region_owner: Option<&fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV16>,
 ) -> Result<String, LoweringErrors> {
+    lower_compiler_module_with_ordered_context(
+        module,
+        target,
+        launch_policies,
+        semantic_anchor_identity,
+        require_kernel,
+        ordered_region_owner.map(OrderedModuleOwner::RegionV16),
+    )
+}
+
+fn lower_compiler_module_with_ordered_program_context_v17(
+    module: &Module,
+    target: LoweringTarget,
+    launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+    semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
+    require_kernel: bool,
+    owner: Option<&fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV17>,
+) -> Result<String, LoweringErrors> {
+    lower_compiler_module_with_ordered_context(
+        module,
+        target,
+        launch_policies,
+        semantic_anchor_identity,
+        require_kernel,
+        owner.map(OrderedModuleOwner::ProgramV17),
+    )
+}
+
+// Typed and mutually exclusive contexts; no arbitrary version or Module opt-in.
+#[derive(Clone, Copy)]
+enum OrderedModuleOwner<'a> {
+    RegionV16(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV16),
+    ProgramV17(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV17),
+}
+
+fn lower_compiler_module_with_ordered_context(
+    module: &Module,
+    target: LoweringTarget,
+    launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+    semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
+    require_kernel: bool,
+    ordered_owner: Option<OrderedModuleOwner<'_>>,
+) -> Result<String, LoweringErrors> {
     if require_kernel && module.kernels.is_empty() {
         return Err(LoweringErrors::one(
             LoweringLocation::module(module),
@@ -1072,11 +1121,16 @@ fn lower_compiler_module_with_ordered_region_context_v16(
         ));
     }
     verify_module(module).map_err(LoweringErrors::verification)?;
-    if let Some(owner) = ordered_region_owner {
-        ordered_region_v16::validate_owner_context(module, target, owner)?;
-        v12_preflight::reject_unsupported_v16_module(owner)?;
-    } else {
-        reject_unsupported_v12_module(module)?;
+    match ordered_owner {
+        Some(OrderedModuleOwner::RegionV16(owner)) => {
+            ordered_region_v16::validate_owner_context(module, target, owner)?;
+            v12_preflight::reject_unsupported_v16_module(owner)?;
+        }
+        Some(OrderedModuleOwner::ProgramV17(owner)) => {
+            ordered_program_v17::validate_owner_context(module, target, owner)?;
+            v12_preflight::reject_unsupported_v17_module(owner)?;
+        }
+        None => reject_unsupported_v12_module(module)?,
     }
 
     if let Some(exact_target) = target.exact_target_binding() {
@@ -1091,6 +1145,7 @@ fn lower_compiler_module_with_ordered_region_context_v16(
         &module.required_capabilities,
         "module",
         target,
+        ordered_owner,
     )?;
     let mut kernels = module.kernels.iter().collect::<Vec<_>>();
     kernels.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
@@ -1255,6 +1310,7 @@ fn lower_compiler_module_with_ordered_region_context_v16(
                     &function.required_capabilities,
                     "external declaration",
                     target,
+                    ordered_owner,
                 )?;
                 declarations.push(*function);
             }
@@ -1268,8 +1324,14 @@ fn lower_compiler_module_with_ordered_region_context_v16(
         }
     }
 
-    let wave_plan =
-        infer_effective_wave_widths(module, module_wave, &kernels, &helper_definitions, target)?;
+    let wave_plan = infer_effective_wave_widths(
+        module,
+        module_wave,
+        &kernels,
+        &helper_definitions,
+        target,
+        ordered_owner,
+    )?;
 
     let mut kernel_lowerers = Vec::with_capacity(kernels.len());
     for kernel in &kernels {
@@ -1314,7 +1376,10 @@ fn lower_compiler_module_with_ordered_region_context_v16(
                     *emission
                 }),
         )?;
-        lowerer.ordered_region_v16 = ordered_region_owner.is_some();
+        lowerer.ordered_region_v16 =
+            matches!(ordered_owner, Some(OrderedModuleOwner::RegionV16(_)));
+        lowerer.ordered_program_v17 =
+            matches!(ordered_owner, Some(OrderedModuleOwner::ProgramV17(_)));
         preflight_function(&mut lowerer)?;
         kernel_lowerers.push(lowerer);
     }
@@ -1508,6 +1573,7 @@ fn infer_effective_wave_widths(
     kernels: &[&Kernel],
     helpers: &[&Function],
     target: LoweringTarget,
+    ordered_owner: Option<OrderedModuleOwner<'_>>,
 ) -> Result<EffectiveWavePlan, LoweringErrors> {
     enforce_call_graph_limit(
         module,
@@ -1557,6 +1623,7 @@ fn infer_effective_wave_widths(
             &function.required_capabilities,
             "device function",
             target,
+            ordered_owner,
         )?;
         component_claims[component_of[index]]
             .extend([module_wave, function_wave].into_iter().flatten());
@@ -1575,12 +1642,14 @@ fn infer_effective_wave_widths(
             &kernel.required_capabilities,
             "kernel",
             target,
+            ordered_owner,
         )?;
         let entry_wave = validate_capabilities(
             LoweringLocation::function(module, kernel, entry),
             &entry.required_capabilities,
             "entry function",
             target,
+            ordered_owner,
         )?;
         let root_wave = unique_wave_width(
             LoweringLocation::function(module, kernel, entry),
@@ -2599,11 +2668,14 @@ fn emit_compiler_module(
 
     let mut output = CapacityLimitedText::try_new(module, MAX_COMPILER_MODULE_TEXT_BYTES)?;
     writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"").unwrap();
-    // V16's closed target path emits directly for the pinned LLVM22 worker.
+    // Closed V16/V17 target paths emit directly for the pinned LLVM22 worker.
     // The older renderer intentionally retains the Rust/frontend layout. Select
     // the existing reviewed worker profile here, before any module text exists;
     // never edit captured LLVM or relax the worker's exact layout validation.
-    let data_layout = if kernels.iter().any(|lowerer| lowerer.ordered_region_v16) {
+    let data_layout = if kernels
+        .iter()
+        .any(|lowerer| lowerer.ordered_region_v16 || lowerer.ordered_program_v17)
+    {
         Some(fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1)
     } else {
         target.data_layout()
@@ -3233,6 +3305,7 @@ fn validate_capabilities(
     capabilities: &BTreeSet<TargetCapability>,
     owner: &str,
     target: LoweringTarget,
+    ordered_owner: Option<OrderedModuleOwner<'_>>,
 ) -> Result<Option<WaveWidth>, LoweringErrors> {
     let mut wave_width = None;
     for capability in capabilities {
@@ -3255,6 +3328,12 @@ fn validate_capabilities(
                     && namespace
                         == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_REGION_CAPABILITY_NAMESPACE
                     && name == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_REGION_CAPABILITY_NAME => {}
+            TargetCapability::Extension { namespace, name }
+                if target == LoweringTarget::Gfx942XnackMinusV1
+                    && matches!(ordered_owner, Some(OrderedModuleOwner::ProgramV17(_)))
+                    && namespace
+                        == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_PROGRAM_CAPABILITY_NAMESPACE
+                    && name == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_PROGRAM_CAPABILITY_NAME => {}
             TargetCapability::Extension { namespace, name }
                 if target.supports_gfx942_inline_assembly()
                     && namespace == AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE
@@ -3644,6 +3723,7 @@ struct FunctionLowerer<'a> {
     split_edges: Vec<bool>,
     semantic_anchor_emission: SemanticAnchorEmissionV1,
     ordered_region_v16: bool,
+    ordered_program_v17: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -3993,6 +4073,7 @@ impl<'a> FunctionLowerer<'a> {
             split_edges,
             semantic_anchor_emission,
             ordered_region_v16: false,
+            ordered_program_v17: false,
         })
     }
 
@@ -4024,6 +4105,7 @@ impl<'a> FunctionLowerer<'a> {
             split_edges,
             semantic_anchor_emission,
             ordered_region_v16: false,
+            ordered_program_v17: false,
         })
     }
 
@@ -4050,6 +4132,7 @@ impl<'a> FunctionLowerer<'a> {
             split_edges,
             semantic_anchor_emission: SemanticAnchorEmissionV1::Disabled,
             ordered_region_v16: false,
+            ordered_program_v17: false,
         })
     }
 
@@ -4153,7 +4236,9 @@ impl<'a> FunctionLowerer<'a> {
         );
         let is_inline_assembly = matches!(
             operation.kind,
-            OperationKind::InlineAssembly(_) | OperationKind::Gfx942OrderedRegion(_)
+            OperationKind::InlineAssembly(_)
+                | OperationKind::Gfx942OrderedRegion(_)
+                | OperationKind::Gfx942OrderedProgram(_)
         );
         let is_matrix = matches!(operation.kind, OperationKind::Matrix(_));
         let is_gfx950_collective_or_lds_transpose = matches!(
@@ -4198,6 +4283,11 @@ impl<'a> FunctionLowerer<'a> {
                     TargetCapability::Extension { namespace, name }
                         if namespace == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_REGION_CAPABILITY_NAMESPACE
                             && name == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_REGION_CAPABILITY_NAME
+                ) || matches!(
+                    capability,
+                    TargetCapability::Extension { namespace, name }
+                        if namespace == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_PROGRAM_CAPABILITY_NAMESPACE
+                            && name == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_PROGRAM_CAPABILITY_NAME
                 ) || matches!(
                     capability,
                     TargetCapability::Extension { namespace, name }
@@ -4795,6 +4885,9 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Gfx942OrderedRegion(_) => {
                 self.validate_ordered_region_v16(operation, &location)?;
+            }
+            OperationKind::Gfx942OrderedProgram(_) => {
+                self.validate_ordered_program_v17(operation, &location)?;
             }
             OperationKind::Matrix(matrix) => {
                 self.validate_matrix(matrix, &location)?;
@@ -6958,6 +7051,9 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Gfx942OrderedRegion(region) => {
                 self.emit_ordered_region_v16(output, operation, region);
+            }
+            OperationKind::Gfx942OrderedProgram(program) => {
+                self.emit_ordered_program_v17(output, operation, program);
             }
             OperationKind::Matrix(matrix) => {
                 self.emit_matrix(output, block, operation_index, operation, matrix);

@@ -6,10 +6,10 @@ use fe2o3_kernel_ir::{
     VerifiedCanonicalKernelIrIdentityV7, VerifiedCanonicalKernelIrIdentityV9,
     VerifiedCanonicalKernelIrIdentityV10, VerifiedCanonicalKernelIrIdentityV11,
     VerifiedCanonicalKernelIrIdentityV12, VerifiedCanonicalKernelIrIdentityV16,
-    VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV10,
-    VerifiedCanonicalKernelIrV11, VerifiedCanonicalKernelIrV12, decode_module_v7, decode_module_v9,
-    decode_module_v10, decode_module_v11, decode_module_v12, encode_module_v7, encode_module_v9,
-    encode_module_v10, encode_module_v11, encode_module_v12,
+    VerifiedCanonicalKernelIrIdentityV17, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV9,
+    VerifiedCanonicalKernelIrV10, VerifiedCanonicalKernelIrV11, VerifiedCanonicalKernelIrV12,
+    decode_module_v7, decode_module_v9, decode_module_v10, decode_module_v11, decode_module_v12,
+    encode_module_v7, encode_module_v9, encode_module_v10, encode_module_v11, encode_module_v12,
 };
 
 const HARD_MAX_CANONICAL_BYTES_V1: usize = 16 * 1024 * 1024;
@@ -802,6 +802,16 @@ impl From<VerifiedCanonicalKernelIrIdentityV16> for SimulationKernelIrIdentityV1
     }
 }
 
+impl From<VerifiedCanonicalKernelIrIdentityV17> for SimulationKernelIrIdentityV1 {
+    fn from(identity: VerifiedCanonicalKernelIrIdentityV17) -> Self {
+        Self {
+            wire_version: fe2o3_kernel_ir::KERNEL_IR_VERSION_V17,
+            digest: *identity.digest(),
+            canonical_length: identity.canonical_length(),
+        }
+    }
+}
+
 /// Exact canonical KIR owner admitted for simulation. This owner is intentionally not `Clone`.
 #[derive(Debug)]
 pub struct AdmittedSimulationModuleV1 {
@@ -1011,7 +1021,7 @@ impl fmt::Display for SimulationAdmissionErrorV1 {
                 )
             }
             Self::CanonicalRoundTripMismatch => {
-                formatter.write_str("admitted V16 execution view changed exact canonical bytes")
+                formatter.write_str("admitted execution view changed exact canonical bytes")
             }
             Self::ResidentBytesOverflow => {
                 write!(

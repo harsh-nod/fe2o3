@@ -219,6 +219,7 @@ fn checked_call<'a>(
         .ordered_region_source_v31
         .ok_or(SemanticMirErrorV1::InvalidOrderedRegionV31)?;
     if call.inline_assembly_source_v30.is_some()
+        || call.ordered_program_source_v32.is_some()
         || source.function != function.identity
         || !signature_matches(request, &binding.abi)
         || !call.variadic_argument_abis.is_empty()
