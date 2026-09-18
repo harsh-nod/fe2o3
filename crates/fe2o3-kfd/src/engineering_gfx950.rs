@@ -31,6 +31,8 @@ use crate::{CheckedGfx950XnackMinusDevice, DeviceSelector, OpenedKfd};
 
 #[path = "engineering_gfx950_dispatch_timestamps.rs"]
 mod dispatch_timestamps;
+#[path = "engineering_gfx950_full_forward_timestamps.rs"]
+mod full_forward_timestamps;
 #[path = "engineering_gfx950_ordered_batch.rs"]
 mod ordered_batch;
 #[path = "engineering_gfx950_peer.rs"]
@@ -141,6 +143,7 @@ fn wait_for_serial_completion(
 /// result retains the owner until process teardown instead of retrying frees.
 struct Context {
     timestamp_canary: Option<dispatch_timestamps::CanaryOwner>,
+    full_forward_timestamps: Option<full_forward_timestamps::FullForwardTimestampOwner>,
     backend: Backend,
     unique_id: u64,
     runtime: Option<LinuxKfdRuntimeEnabledV1>,
@@ -236,13 +239,17 @@ const CWSR: usize = 5;
 
 impl Context {
     fn open(device: CheckedGfx950XnackMinusDevice) -> Result<Self> {
-        Self::open_with_timestamp_canary(device, None)
+        Self::open_with_timestamp_canary(device, None, None)
     }
 
     fn open_with_timestamp_canary(
         device: CheckedGfx950XnackMinusDevice,
         timestamp_policy: Option<fe2o3_aql::AmdQueueProfilingPolicyV1>,
+        full_forward_timestamps: Option<full_forward_timestamps::FullForwardTimestampOwner>,
     ) -> Result<Self> {
+        if timestamp_policy.is_some() && full_forward_timestamps.is_some() {
+            return Err("timestamp modes are mutually exclusive".into());
+        }
         let unique_id = device.observation().unique_id();
         validate_profile(device.topology_snapshot(), unique_id).map_err(str::to_owned)?;
         if rustix::param::page_size() != PAGE_BYTES {
@@ -250,6 +257,7 @@ impl Context {
         }
         let mut context = Self {
             timestamp_canary: timestamp_policy.map(dispatch_timestamps::CanaryOwner::new),
+            full_forward_timestamps,
             backend: Backend::new(device),
             unique_id,
             runtime: None,
@@ -316,7 +324,15 @@ impl Context {
             |bytes| crate::queue::submit::initialize_invalid_ring(bytes).map_err(explain),
         )?;
         self.internal.push(ring);
-        let timestamp_policy = self.timestamp_canary.as_ref().map(|owner| owner.policy);
+        let timestamp_policy = self
+            .timestamp_canary
+            .as_ref()
+            .map(|owner| owner.policy)
+            .or_else(|| {
+                self.full_forward_timestamps
+                    .as_ref()
+                    .map(|owner| owner.policy)
+            });
         let control = self.allocate_resource(
             PAGE_BYTES,
             KfdAllocMemoryFlags::USERPTR_QUEUE_CONTROL,
@@ -1484,7 +1500,7 @@ fn patch_pointer_arguments(
 /// ```
 pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Result<()> {
     // SAFETY: the caller supplies the documented disposable-process contract.
-    unsafe { run_worker(unique_id, None) }
+    unsafe { run_worker(unique_id, None, None) }
 }
 
 /// Runs the explicit serial-only off/on timestamp canary with no timing authority.
@@ -1497,12 +1513,30 @@ pub unsafe fn run_gfx950_timestamp_canary_worker_unchecked_v1(
     policy: fe2o3_aql::AmdQueueProfilingPolicyV1,
 ) -> Result<()> {
     // SAFETY: identical expert boundary; the policy enables diagnostics only.
-    unsafe { run_worker(unique_id, Some(policy)) }
+    unsafe { run_worker(unique_id, Some(policy), None) }
+}
+
+/// Runs bounded exact-616 diagnostics to a new owned file, without timing authority.
+///
+/// # Safety
+/// The same dedicated-process, trusted-machine-code and immediate-termination
+/// contract as `run_gfx950_engineering_worker_unchecked_v1` applies.
+pub unsafe fn run_gfx950_full_forward_timestamp_worker_unchecked_v1(
+    unique_id: u64,
+    policy: fe2o3_aql::AmdQueueProfilingPolicyV1,
+    output: &std::path::Path,
+) -> Result<()> {
+    // File ownership and create-new checks precede every KFD operation.
+    let owner =
+        full_forward_timestamps::FullForwardTimestampOwner::open(output, unique_id, policy)?;
+    // SAFETY: identical expert boundary; diagnostics grant no execution authority.
+    unsafe { run_worker(unique_id, None, Some(owner)) }
 }
 
 unsafe fn run_worker(
     unique_id: u64,
     timestamp_policy: Option<fe2o3_aql::AmdQueueProfilingPolicyV1>,
+    full_forward_timestamps: Option<full_forward_timestamps::FullForwardTimestampOwner>,
 ) -> Result<()> {
     let kfd = OpenedKfd::open_default()
         .map_err(explain)?
@@ -1511,9 +1545,9 @@ unsafe fn run_worker(
     let device = kfd
         .bind_gfx950_xnack_minus(DeviceSelector::UniqueId(unique_id))
         .map_err(explain)?;
-    let mut context = match timestamp_policy {
-        None => Context::open(device)?,
-        Some(policy) => Context::open_with_timestamp_canary(device, Some(policy))?,
+    let mut context = match (timestamp_policy, full_forward_timestamps) {
+        (None, None) => Context::open(device)?,
+        (policy, owner) => Context::open_with_timestamp_canary(device, policy, owner)?,
     };
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
@@ -1532,10 +1566,17 @@ unsafe fn run_worker(
         output.flush().map_err(explain)?;
         loop {
             let Some(command) = read_header_v1::<CommandV1>(&mut input).map_err(explain)? else {
+                if context.full_forward_timestamps.is_some() {
+                    return Err("full-forward diagnostic requires explicit clean Close".into());
+                }
                 return context.close_inner();
             };
             let payload_bytes = command.payload_bytes().map_err(explain)?;
             context.admit_timestamp_command(&command)?;
+            full_forward_timestamps::admit_command(
+                context.full_forward_timestamps.is_some(),
+                &command,
+            )?;
             let mut payload = vec![0; payload_bytes];
             input.read_exact(&mut payload).map_err(explain)?;
             let command_started = context.profile_started();
@@ -1648,6 +1689,9 @@ unsafe fn run_worker(
                 }
                 CommandV1::Close => {
                     context.close_inner()?;
+                    if let Some(owner) = context.full_forward_timestamps.as_mut() {
+                        owner.close()?;
+                    }
                     ResponseV1::Closed
                 }
             };

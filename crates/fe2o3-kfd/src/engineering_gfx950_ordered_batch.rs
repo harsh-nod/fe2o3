@@ -106,6 +106,8 @@ struct NativeOrdered<'a> {
     count: u32,
     full_forward: bool,
     preparation: Option<FullForwardPreparation>,
+    timestamp_payload_sha256: Option<[u8; 32]>,
+    timestamp_bindings: Vec<full_forward_timestamps::StageBinding>,
 }
 
 // This state is local to one exclusively borrowed, exact-616 transaction. It
@@ -169,6 +171,7 @@ struct OrderedPending {
     deadline: Instant,
     next_currentness: Instant,
     wait_started: Option<Instant>,
+    timestamp_identity: Option<full_forward_timestamps::BatchIdentity>,
 }
 
 fn require_signals_complete(
@@ -183,6 +186,114 @@ fn require_signals_complete(
 }
 
 impl NativeOrdered<'_> {
+    fn timestamp_identity(
+        &self,
+        first: u64,
+        next: u64,
+        generation: u64,
+    ) -> Result<full_forward_timestamps::BatchIdentity> {
+        let signal = self
+            .context
+            .full_forward_internal
+            .get(FULL_FORWARD_SIGNAL)
+            .ok_or("timestamp retained signal arena absent")?;
+        if !self.full_forward
+            || signal.requested != FULL_FORWARD_SIGNAL_BYTES
+            || signal.backing != 40_960
+        {
+            return Err("timestamp signal arena extent changed".into());
+        }
+        Ok(full_forward_timestamps::BatchIdentity {
+            unique: self.context.unique_id,
+            gpu: self.context.backend.gpu_id(),
+            epoch: self.context.queue_epoch,
+            first,
+            next,
+            generation,
+            signal_handle: signal.handle,
+            signal_va: signal.va,
+        })
+    }
+
+    fn require_timestamp_identity(
+        &self,
+        expected: full_forward_timestamps::BatchIdentity,
+    ) -> Result<()> {
+        let owner = self
+            .context
+            .full_forward_timestamps
+            .as_ref()
+            .ok_or("timestamp owner absent")?;
+        if self.timestamp_identity(expected.first, expected.next, expected.generation)? != expected
+            || owner.identity()? != expected
+            || self.context.ring.write() != expected.next
+        {
+            return Err("full-forward timestamp native identity changed".into());
+        }
+        Ok(())
+    }
+
+    fn timestamp_clock(&mut self) -> Result<DispatchClockSampleV1> {
+        let policy = self
+            .context
+            .full_forward_timestamps
+            .as_ref()
+            .ok_or("timestamp owner absent")?
+            .policy;
+        if Backend::observe_engineering_queue_properties(
+            &mut self.context.internal[CONTROL].mapping,
+        )
+        .map_err(explain)?
+            != policy.properties(0)
+        {
+            return Err("full-forward timestamp queue properties changed".into());
+        }
+        self.context
+            .backend
+            .observe_engineering_clock_correlation()
+            .map(full_forward_timestamps::clock_sample)
+            .map_err(explain)
+    }
+
+    fn flush_timestamps(&mut self) -> Result<()> {
+        if let Some(owner) = self.context.full_forward_timestamps.as_ref() {
+            let identity = owner.identity()?;
+            self.require_timestamp_identity(identity)?;
+            require_completed_frontier(self.context.completed_write, identity.next)?;
+            self.context
+                .full_forward_timestamps
+                .as_mut()
+                .ok_or("timestamp owner absent")?
+                .flush_completed(identity)?;
+            // File I/O is outside dispatch elapsed, but must not hide a changed
+            // native owner/status before the unchanged completion response.
+            self.context.check_currentness(false)?;
+            self.context.check_idle()?;
+            require_completed_frontier(self.context.completed_write, identity.next)?;
+            if self.timestamp_identity(identity.first, identity.next, identity.generation)?
+                != identity
+                || self.context.ring.write() != identity.next
+            {
+                return Err("full-forward timestamp identity changed during file output".into());
+            }
+            let policy = self
+                .context
+                .full_forward_timestamps
+                .as_ref()
+                .ok_or("timestamp owner absent")?
+                .policy;
+            if Backend::observe_engineering_queue_properties(
+                &mut self.context.internal[CONTROL].mapping,
+            )
+            .map_err(explain)?
+                != policy.properties(0)
+            {
+                return Err("full-forward timestamp properties changed during file output".into());
+            }
+        }
+        Ok(())
+    }
+
     fn preparation_identity(&self) -> [u64; 4] {
         [
             self.context.unique_id,
@@ -319,6 +430,29 @@ impl NativeOrdered<'_> {
             .reserve_fixed_batch_v2(self.context.last_observed_read, batch.packet_count())
             .map_err(explain)?;
         let next = reservation.next_write();
+        let timestamp_identity = if self.context.full_forward_timestamps.is_some() {
+            let identity = self
+                .context
+                .full_forward_timestamps
+                .as_ref()
+                .ok_or("timestamp owner absent")?
+                .identity()?;
+            self.require_timestamp_identity(identity)?;
+            if reservation.first_packet_id() != identity.first || next != identity.next {
+                return Err("timestamp reservation changed".into());
+            }
+            let before = self.timestamp_clock()?;
+            self.require_timestamp_identity(identity)?;
+            self.context
+                .full_forward_timestamps
+                .as_mut()
+                .ok_or("timestamp owner absent")?
+                .published(identity, before)?;
+            require_deadline(Instant::now(), deadline)?;
+            Some(identity)
+        } else {
+            None
+        };
         let publish_started = self.context.profile_started();
         // No rollback or signal/arena reuse is allowed after this reservation.
         expose_batch(
@@ -341,6 +475,7 @@ impl NativeOrdered<'_> {
             deadline,
             next_currentness: Instant::now(),
             wait_started: self.context.profile_started(),
+            timestamp_identity,
         })
     }
 }
@@ -469,6 +604,22 @@ impl OrderedBackend for NativeOrdered<'_> {
             )?
         };
         self.offset = end;
+        if self.timestamp_payload_sha256.is_some() {
+            let kernel = self
+                .context
+                .kernels
+                .get(&command.kernel)
+                .ok_or("timestamp stage kernel absent")?;
+            self.timestamp_bindings
+                .push(full_forward_timestamps::StageBinding {
+                    kernel_id: command.kernel,
+                    kernel_symbol: kernel.metadata.symbol.clone(),
+                    kernel_sha256: kernel.metadata.object_sha256,
+                    grid: command.grid,
+                    workgroup: command.workgroup,
+                    kernarg_bytes: command.payload_bytes,
+                });
+        }
         Ok(prepared)
     }
 
@@ -483,6 +634,20 @@ impl OrderedBackend for NativeOrdered<'_> {
                 .require_complete(self.preparation_identity())?;
         }
         self.retain_storage()?;
+        if let Some(hash) = self.timestamp_payload_sha256 {
+            require_completed_frontier(self.context.completed_write, self.context.ring.write())?;
+            let first = self.context.ring.write();
+            let next = first
+                .checked_add(FULL_FORWARD_DISPATCHES_V1 as u64)
+                .ok_or("timestamp packet overflow")?;
+            let identity = self.timestamp_identity(first, next, 0)?;
+            let bindings = std::mem::take(&mut self.timestamp_bindings);
+            self.context
+                .full_forward_timestamps
+                .as_mut()
+                .ok_or("timestamp owner absent")?
+                .begin(identity, hash, bindings)?;
+        }
         let mut packets = Vec::with_capacity(prepared.len());
         let mut cursor = 0;
         for (index, prepared) in prepared.into_iter().enumerate() {
@@ -534,13 +699,26 @@ impl OrderedBackend for NativeOrdered<'_> {
                 slot.fill(0);
                 slot[..prepared.bytes.len()].copy_from_slice(&prepared.bytes);
             });
-            let signal_extent = self.signal_extent();
-            Backend::reset_completion_signal_release(
-                &mut self.signal_storage().mapping,
-                signal_extent,
-                u32::try_from(index).map_err(explain)?,
-            )
-            .map_err(explain)?;
+            if self.timestamp_payload_sha256.is_some() {
+                Backend::reset_full_forward_timestamp_signal_release(
+                    &mut self.signal_storage().mapping,
+                    u32::try_from(index).map_err(explain)?,
+                )
+                .map_err(explain)?;
+                self.context
+                    .full_forward_timestamps
+                    .as_mut()
+                    .ok_or("timestamp owner absent")?
+                    .stage_slot(index)?;
+            } else {
+                let signal_extent = self.signal_extent();
+                Backend::reset_completion_signal_release(
+                    &mut self.signal_storage().mapping,
+                    signal_extent,
+                    u32::try_from(index).map_err(explain)?,
+                )
+                .map_err(explain)?;
+            }
         }
         Ok(packets)
     }
@@ -609,6 +787,32 @@ impl OrderedBackend for NativeOrdered<'_> {
     }
 
     fn validate_all(&mut self, pending: &OrderedPending) -> Result<()> {
+        if let Some(identity) = pending.timestamp_identity {
+            self.require_timestamp_identity(identity)?;
+            require_deadline(Instant::now(), pending.deadline)?;
+            if pending.count as usize != FULL_FORWARD_DISPATCHES_V1 {
+                return Err("timestamp retained cardinality changed".into());
+            }
+            let mut snapshots = Vec::with_capacity(FULL_FORWARD_DISPATCHES_V1);
+            for slot in 0..pending.count {
+                let (state, raw) = Backend::observe_full_forward_timestamp_signal_acquire(
+                    &mut self.signal_storage().mapping,
+                    slot,
+                )
+                .map_err(explain)?;
+                require_signals_complete([state])?;
+                snapshots.push(raw.ok_or("acquired full-forward timestamp snapshot absent")?);
+            }
+            let after = self.timestamp_clock()?;
+            self.require_timestamp_identity(identity)?;
+            require_deadline(Instant::now(), pending.deadline)?;
+            return self
+                .context
+                .full_forward_timestamps
+                .as_mut()
+                .ok_or("timestamp owner absent")?
+                .capture(identity, snapshots, after);
+        }
         let signal_extent = self.signal_extent();
         let signals = (0..pending.count)
             .map(|slot| {
@@ -624,6 +828,9 @@ impl OrderedBackend for NativeOrdered<'_> {
     }
 
     fn complete(&mut self, pending: OrderedPending) -> Result<()> {
+        if let Some(identity) = pending.timestamp_identity {
+            self.require_timestamp_identity(identity)?;
+        }
         require_pending_dispatch_identity(
             [
                 self.context.unique_id,
@@ -791,6 +998,8 @@ impl Context {
                 count: u32::try_from(count).map_err(explain)?,
                 full_forward: false,
                 preparation: None,
+                timestamp_payload_sha256: None,
+                timestamp_bindings: Vec::new(),
             };
             let elapsed_ns = run_ordered_batch(&mut native, count, timeout_ms)?;
             Ok(ResponseV1::DispatchOrderedBatchCompleted {
@@ -814,6 +1023,10 @@ impl Context {
         timeout_ms: u32,
     ) -> Result<ResponseV1> {
         let result = (|| {
+            let timestamp_payload_sha256 = self
+                .full_forward_timestamps
+                .as_ref()
+                .map(|_| Sha256::digest(&payload).into());
             let (dispatches, payload) =
                 decode_full_forward_payload_v1(dispatch_count, plan_bytes, kernarg_bytes, payload)
                     .map_err(explain)?;
@@ -826,8 +1039,11 @@ impl Context {
                 count: FULL_FORWARD_DISPATCHES_V1 as u32,
                 full_forward: true,
                 preparation: None,
+                timestamp_payload_sha256,
+                timestamp_bindings: Vec::new(),
             };
             let elapsed_ns = run_full_forward(&mut native, FULL_FORWARD_DISPATCHES_V1, timeout_ms)?;
+            native.flush_timestamps()?;
             Ok(ResponseV1::DispatchFullForwardCompleted {
                 completed_dispatches: native.count,
                 elapsed_ns,

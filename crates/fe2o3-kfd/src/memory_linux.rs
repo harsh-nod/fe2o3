@@ -116,6 +116,38 @@ impl LinuxMemoryBackendFor<crate::CheckedGfx950XnackMinusDevice> {
         self.device.topology_snapshot()
     }
 
+    /// Exact retained full-forward arena only; the owner retires every prior slot.
+    pub(super) fn reset_full_forward_timestamp_signal_release(
+        mapping: &mut LinuxCpuMapping,
+        slot: u32,
+    ) -> Result<(), MemorySessionError> {
+        let pointer = checked_full_forward_timestamp_slot(mapping, slot)?;
+        // SAFETY: the owner has an idle retained slot; neither field aliases its
+        // atomic completion value. Clear before the release reset/publication.
+        unsafe {
+            pointer.add(32).cast::<u64>().write_volatile(0);
+            pointer.add(40).cast::<u64>().write_volatile(0);
+        }
+        checked_completion_value(mapping, 39_424, slot)?
+            .store(AMD_SIGNAL_VALUE_PENDING_V1, Ordering::Release);
+        Ok(())
+    }
+
+    /// The owner binds arena, slot and generation; no snapshot before this acquire.
+    pub(super) fn observe_full_forward_timestamp_signal_acquire(
+        mapping: &mut LinuxCpuMapping,
+        slot: u32,
+    ) -> Result<(AqlCompletionObservationV1, Option<[u8; 64]>), MemorySessionError> {
+        let pointer = checked_full_forward_timestamp_slot(mapping, slot)?;
+        let value = checked_completion_value(mapping, 39_424, slot)?.load(Ordering::Acquire);
+        let snapshot = completed_engineering_signal_snapshot(value, |index| {
+            // SAFETY: the closure runs only after exact acquired zero; the owner
+            // prohibits reuse. The atomic word is supplied from the acquire above.
+            unsafe { pointer.add(index * 8).cast::<u64>().read_volatile() }.to_le_bytes()
+        });
+        Ok((classify_acquired_completion_value_v1(value), snapshot))
+    }
+
     pub(super) fn engineering_peer_device(&mut self) -> &mut crate::CheckedGfx950XnackMinusDevice {
         &mut self.device
     }
@@ -127,6 +159,22 @@ impl LinuxMemoryBackendFor<crate::CheckedGfx950XnackMinusDevice> {
             .check_engineering_operational_currentness()
             .map_err(Into::into)
     }
+}
+
+#[cfg(feature = "engineering-gfx950")]
+fn checked_full_forward_timestamp_slot(
+    mapping: &mut LinuxCpuMapping,
+    slot: u32,
+) -> Result<*mut u8, MemorySessionError> {
+    if mapping.bytes != 40_960
+        || slot >= 616
+        || mapping.reservation_phase.load(Ordering::Acquire) != VA_IDENTITY_MAPPED
+    {
+        return Err(malformed_aql_mapping(
+            "full-forward timestamp arena identity or slot",
+        ));
+    }
+    checked_mapping_pointer(mapping, 39_424, slot as usize * 64, 64, 64)
 }
 
 #[cfg(feature = "engineering-gfx950")]
@@ -1356,6 +1404,109 @@ mod tests {
         .unwrap();
         assert_eq!(words, [0, 2, 3, 4, 5, 6, 7]);
         assert_eq!(&snapshot[8..16], &[0; 8]);
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    #[test]
+    fn full_timestamp_slots_acquire_exact_zero_reset_every_generation_and_preserve_tail() {
+        #[repr(align(4096))]
+        struct Pages([u8; 40_960]);
+        let mut pages = Pages([0xa5; 40_960]);
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut pages).cast(),
+            bytes: 40_960,
+            active: true,
+            accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
+        };
+        LinuxGfx950MemoryBackend::initialize_full_forward_signal_slots(&mut mapping).unwrap();
+        for _generation in 1..=3 {
+            for slot in 0..616 {
+                let offset = slot as usize * 64;
+                pages.0[offset + 32..offset + 40].copy_from_slice(&12u64.to_le_bytes());
+                pages.0[offset + 40..offset + 48].copy_from_slice(&18u64.to_le_bytes());
+                for value in [1, -1, i64::MIN, i64::MAX] {
+                    checked_completion_value(&mut mapping, 39_424, slot)
+                        .unwrap()
+                        .store(value, Ordering::Release);
+                    assert!(
+                        LinuxGfx950MemoryBackend::observe_full_forward_timestamp_signal_acquire(
+                            &mut mapping,
+                            slot
+                        )
+                        .unwrap()
+                        .1
+                        .is_none()
+                    );
+                }
+                checked_completion_value(&mut mapping, 39_424, slot)
+                    .unwrap()
+                    .store(0, Ordering::Release);
+                let (state, raw) =
+                    LinuxGfx950MemoryBackend::observe_full_forward_timestamp_signal_acquire(
+                        &mut mapping,
+                        slot,
+                    )
+                    .unwrap();
+                assert_eq!(state, AqlCompletionObservationV1::Completed);
+                assert_eq!(&raw.unwrap()[32..40], &12u64.to_le_bytes());
+                LinuxGfx950MemoryBackend::reset_full_forward_timestamp_signal_release(
+                    &mut mapping,
+                    slot,
+                )
+                .unwrap();
+                assert_eq!(&pages.0[offset + 32..offset + 48], &[0; 16]);
+            }
+        }
+        assert_eq!(&pages.0[39_424..], &[0xa5; 1536]);
+        for slot in [616, u32::MAX] {
+            assert!(
+                LinuxGfx950MemoryBackend::observe_full_forward_timestamp_signal_acquire(
+                    &mut mapping,
+                    slot
+                )
+                .is_err()
+            );
+            assert!(
+                LinuxGfx950MemoryBackend::reset_full_forward_timestamp_signal_release(
+                    &mut mapping,
+                    slot
+                )
+                .is_err()
+            );
+        }
+        for state in 0..6 {
+            mapping.active = state != 0;
+            mapping.accessible = state != 1;
+            mapping.bytes = match state {
+                2 => 39_424,
+                3 => 4096,
+                4 => 40_961,
+                _ => 40_960,
+            };
+            mapping.reservation_phase.store(
+                if state == 5 {
+                    VA_GUARDED
+                } else {
+                    VA_IDENTITY_MAPPED
+                },
+                Ordering::Release,
+            );
+            assert!(
+                LinuxGfx950MemoryBackend::observe_full_forward_timestamp_signal_acquire(
+                    &mut mapping,
+                    0
+                )
+                .is_err()
+            );
+            assert!(
+                LinuxGfx950MemoryBackend::reset_full_forward_timestamp_signal_release(
+                    &mut mapping,
+                    0
+                )
+                .is_err()
+            );
+        }
     }
 
     #[cfg(feature = "engineering-gfx950")]
