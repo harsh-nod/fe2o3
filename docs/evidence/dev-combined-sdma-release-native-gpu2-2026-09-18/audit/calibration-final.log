@@ -1,0 +1,15 @@
+test_all_seven_transcripts_require_exact_combined_release (__main__.ArchiveTests.test_all_seven_transcripts_require_exact_combined_release) ... ok
+test_collected_inventory_and_cleanup_must_agree (__main__.ArchiveTests.test_collected_inventory_and_cleanup_must_agree) ... ok
+test_complete_historical_audit (__main__.ArchiveTests.test_complete_historical_audit) ... ok
+test_controller_rejects_incomplete_execution_and_cleanup (__main__.ArchiveTests.test_controller_rejects_incomplete_execution_and_cleanup) ... ok
+test_every_controller_command_binds_bounds_and_stdin (__main__.ArchiveTests.test_every_controller_command_binds_bounds_and_stdin) ... ok
+test_native_command_identity_and_bounds_are_exact (__main__.ArchiveTests.test_native_command_identity_and_bounds_are_exact) ... ok
+test_protocol_delta_cannot_change_parsing_semantics (__main__.ArchiveTests.test_protocol_delta_cannot_change_parsing_semantics) ... ok
+test_raw_endpoint_and_fixed_delayed_window_are_required (__main__.ArchiveTests.test_raw_endpoint_and_fixed_delayed_window_are_required) ... ok
+test_seven_case_roster_cannot_be_shortened_or_relabelled (__main__.ArchiveTests.test_seven_case_roster_cannot_be_shortened_or_relabelled) ... ok
+test_source_binding_rejects_export_identity_drift (__main__.ArchiveTests.test_source_binding_rejects_export_identity_drift) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 22.057s
+
+OK

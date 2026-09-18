@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-combined-sdma-control-v3-20260918/test_controller.py",
+    "-v"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-combined-sdma-native-bundle-v3-20260918",
+  "started_ns": 1789753684221759284,
+  "bound_seconds": 30,
+  "process_group": 234011,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789753684441153023,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "1efbc529b820ff21b82335c0d9eddfc6f5f601984bcbc58b07200f3f9c0fc9b0"
+}

@@ -1,0 +1,30 @@
+{
+  "owned": "UNCREATED",
+  "payload_sha256": "af0725e9424354c52cbef6a73eff917d54a0c599fb2047a4a559797d84e93abf",
+  "native_attempted": false,
+  "collected_verified": false,
+  "cleanup_closed": false,
+  "independent_absence_closed": false,
+  "failure": null,
+  "local_only": true,
+  "records": [
+    {
+      "name": "local-protocol-tests",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "local-payload-verify",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    },
+    {
+      "name": "local-controller-wiring-tests",
+      "status": 0,
+      "error": null,
+      "group_absent": true
+    }
+  ]
+}

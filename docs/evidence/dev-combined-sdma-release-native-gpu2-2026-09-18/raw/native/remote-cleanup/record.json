@@ -1,0 +1,27 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -B - cleanup /home/harsh/fe2o3-combined-sdma-20260918.2cf1a6cf '{\"pids\":[515335,515359,515372,515377,515760,515950,517962,518009,518070,518316,519963,520116,520270,520528,524419,524581,524608,524749,525907,526027,526281,527224,528426,528714,528878,529474,532494,532566,532644,533579,535849],\"inventory_sha256\":\"53812c56cfcabe90ba2785716c2959d9700fcea9f0913e72deca743d3f68f8ce\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-combined-sdma-native-bundle-v3-20260918",
+  "started_ns": 1789753990695156712,
+  "bound_seconds": 120,
+  "process_group": 253816,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": "9b7ec6b9d7026ef86921c3301a6517995e67ca70b1666ed01fd07d4c78ebc593",
+  "finished_ns": 1789753991767572502,
+  "stdout_sha256": "5e2b331d38608c94400e1393e1c9fb7ad0623dfdf25197d1bcb0dcf05a2fd08e",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}
