@@ -7,8 +7,9 @@
 - Before/after source fingerprint:
   `e3152e71c0780d430a1be772990c3ed764ff2074b4fc7ca8b09005d4573c6044`.
 - This evidence-only child does not change the executed implementation.
-- Host: `mi300x`; pinned `nightly-2026-04-03`, offline/locked Cargo,
-  one build job/test thread, incremental disabled and shared build lock.
+- Host: `mi300x`; pinned `nightly-2026-04-03`, offline Cargo and locked outer
+  qualification commands, one build job/test thread, incremental disabled
+  and shared build lock. Generated source fixtures create their own lockfiles.
 - Existing 8 GiB target cap and disk/memory reserves were retained.
 
 This normal merge combines the authenticated context bridge with the published
