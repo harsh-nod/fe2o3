@@ -11,6 +11,8 @@ use production_call_instances_v1::ProductionCallInstancePlanV1 as ExecutionInsta
 struct ExecutionAvailabilityV29<'a> {
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     instance: ProductionCallInstanceIdV1,
+    source: ExecutionCallSourceV29,
+    function_id: SemanticFunctionIdV1,
     function: &'a SemanticFunctionDeclV1,
     ssa: &'a ProductionSemanticSsaFunctionPlanV1,
     occurrences: ProductionSemanticSsaFunctionOccurrencesV1<'a>,
@@ -22,6 +24,7 @@ struct ExecutionAvailabilityV29<'a> {
     block: Option<SsaBlockIdV1>,
     cfg: ExecutionCfgV29<'a>,
     events: ExecutionEventsV29,
+    parameters: Option<PreparedExecutionParametersV29>,
     #[cfg(test)]
     entry_seeds: Vec<(u32, SemanticValueBindingV1)>,
     #[cfg(test)]
@@ -127,6 +130,8 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         Ok(Self {
             ledger: budget.work_ledger_identity_v1(),
             instance,
+            source: ExecutionCallSourceV29::from_instances(instances, budget)?,
+            function_id: row.function(),
             function: row.declaration(),
             ssa: row.ssa(),
             occurrences,
@@ -138,6 +143,7 @@ impl<'a> ExecutionAvailabilityV29<'a> {
             block: None,
             cfg,
             events,
+            parameters: None,
             #[cfg(test)]
             entry_seeds: Vec::new(),
             #[cfg(test)]

@@ -11,6 +11,10 @@ mod cfg_tests {
     include!("production_execution_cfg_transport_v29_tests.rs");
 }
 
+mod call_parameter_tests {
+    include!("production_execution_call_parameters_v29_tests.rs");
+}
+
 #[derive(Clone, Copy)]
 enum Flow {
     Linear,

@@ -22,7 +22,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         call_returns: CallReturnBufferV1,
         mut emission_work: Option<&'a mut dyn SemanticEmissionBudgetV1>,
         emission_placement: SemanticEmissionPlacementV1,
-        execution: Option<ExecutionAvailabilityV29<'a>>,
+        mut execution: Option<ExecutionAvailabilityV29<'a>>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         if let Some(execution) = &execution {
             execution.check_source(function, semantic_ssa)?;
@@ -70,6 +70,15 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 });
             }
         }
+        let nominal_floor = if let Some(cursor) = execution.as_mut() {
+            cursor.install_call_parameters_v29(
+                &parameters,
+                &mut locals,
+                emission_work.as_deref_mut(),
+            )?
+        } else {
+            0
+        };
         #[cfg(test)]
         if let Some(cursor) = &execution {
             // Inert fixture inputs only; no producer is constructed in production.
@@ -103,7 +112,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         }
         let mut next_value = u32::try_from(function.locals().len())
             .map_err(|_| unsupported(0, None, None, "local count does not fit Kernel IR"))?;
-        next_value = next_value.max(parameter_floor);
+        next_value = next_value.max(parameter_floor).max(nominal_floor);
         let control_flow_ssa = SemanticControlFlowSsaPlanV1::analyze_with_execution_v29(
             SemanticSsaTransportInputV1 {
                 types,

@@ -122,6 +122,7 @@ pub(crate) struct ProductionInstanceExitV1 {
 
 /// A source argument selector, not a flattened physical argument or authority.
 pub(crate) struct ProductionInstanceParameterV1<'s> {
+    pub(crate) source_argument: u32,
     pub(crate) operand: &'s SemanticOperandV1,
     pub(crate) tuple_field: Option<u32>,
     pub(crate) ty: SemanticTypeIdV1,
@@ -299,6 +300,7 @@ impl<'s> ProductionCallInstancePlanV1<'s> {
             return Err(Error::InvalidParameter);
         }
         Ok(ProductionInstanceParameterV1 {
+            source_argument: argument,
             operand,
             tuple_field,
             ty,

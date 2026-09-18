@@ -1,4 +1,5 @@
 struct DefinedCallArgumentSignatureV1<'a> {
+    projection: DefinedCallProjectionV29,
     semantic_types: &'a [SemanticTypeIdV1],
     projections: &'a [HelperCallArgumentV1],
     parameter_types: Vec<Type>,
@@ -7,9 +8,10 @@ struct DefinedCallArgumentSignatureV1<'a> {
 struct PreparedDefinedCallArgumentsV1 {
     source_bindings: Vec<SemanticValueBindingV1>,
     arguments: Vec<ValueId>,
+    execution: Option<PreparedExecutionCallOriginV29>,
 }
 
-impl SemanticFunctionLoweringV1<'_> {
+impl<'a> SemanticFunctionLoweringV1<'a> {
     fn lower_return(
         &mut self,
         block: SemanticBlockIdV1,
@@ -143,13 +145,24 @@ impl SemanticFunctionLoweringV1<'_> {
                 "defined call argument or result arity changed",
             ));
         }
+        let execution = self.prepare_execution_call_origin_v29(block, call, callee, &signature)?;
         // Moving each source operand once precedes outer-tuple expansion.
-        let mut source_bindings = Vec::new();
-        source_bindings
-            .try_reserve_exact(call.arguments().len())
-            .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-                resource: ProductionSemanticKirResourceV1::AnalysisStorage,
-            })?;
+        let mut source_bindings = if execution.is_some() {
+            emission_vec_v1(
+                call.arguments().len(),
+                self.emission_work
+                    .as_deref_mut()
+                    .ok_or(ArgumentResourceV1::Accounting)?,
+            )?
+        } else {
+            let mut bindings = Vec::new();
+            bindings
+                .try_reserve_exact(call.arguments().len())
+                .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
+                    resource: ProductionSemanticKirResourceV1::AnalysisStorage,
+                })?;
+            bindings
+        };
         for (index, (argument, expected)) in call
             .arguments()
             .iter()
@@ -174,12 +187,31 @@ impl SemanticFunctionLoweringV1<'_> {
                 operations,
             )?);
         }
-        let mut arguments = Vec::new();
-        arguments
-            .try_reserve_exact(signature.parameter_types.len())
-            .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
-                resource: ProductionSemanticKirResourceV1::AnalysisStorage,
-            })?;
+        if execution.is_some() {
+            let budget = self
+                .emission_work
+                .as_deref_mut()
+                .ok_or(ArgumentResourceV1::Accounting)?;
+            for (binding, ty) in source_bindings.iter().zip(signature.semantic_types) {
+                execution_call_shape_v29(self.types, *ty, binding, budget)?;
+            }
+        }
+        let mut arguments = if execution.is_some() {
+            emission_vec_v1(
+                signature.parameter_types.len(),
+                self.emission_work
+                    .as_deref_mut()
+                    .ok_or(ArgumentResourceV1::Accounting)?,
+            )?
+        } else {
+            let mut arguments = Vec::new();
+            arguments
+                .try_reserve_exact(signature.parameter_types.len())
+                .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
+                    resource: ProductionSemanticKirResourceV1::AnalysisStorage,
+                })?;
+            arguments
+        };
         let mut flattened = None;
         for (parameter, (projection, expected)) in signature
             .projections
@@ -228,7 +260,21 @@ impl SemanticFunctionLoweringV1<'_> {
                         .as_ref()
                         .is_none_or(|(previous, _)| *previous != key)
                     {
-                        flattened = Some((key, binding.values().map_err(failure)?));
+                        let values = if execution.is_some() {
+                            let budget = self
+                                .emission_work
+                                .as_deref_mut()
+                                .ok_or(ArgumentResourceV1::Accounting)?;
+                            let mut physical = Vec::new();
+                            execution_cfg_values_v29(binding, &mut physical, &mut 0, budget)?;
+                            let mut values = emission_vec_v1(physical.len(), budget)?;
+                            budget.charge_work(physical.len())?;
+                            values.extend(physical.into_iter().map(|value| (value.id, value.ty)));
+                            values
+                        } else {
+                            binding.values().map_err(failure)?
+                        };
+                        flattened = Some((key, values));
                     }
                     flattened
                         .as_ref()
@@ -274,6 +320,7 @@ impl SemanticFunctionLoweringV1<'_> {
         Ok(PreparedDefinedCallArgumentsV1 {
             source_bindings,
             arguments,
+            execution,
         })
     }
 
@@ -384,11 +431,13 @@ impl SemanticFunctionLoweringV1<'_> {
         let PreparedDefinedCallArgumentsV1 {
             source_bindings: _source_bindings,
             arguments,
+            execution: _,
         } = self.prepare_defined_call_arguments_v1(
             block,
             call,
             callee,
             DefinedCallArgumentSignatureV1 {
+                projection: DefinedCallProjectionV29::Ordinary,
                 semantic_types: &signature.parameter_semantic_types,
                 projections: &signature.call_arguments,
                 parameter_types: signature.parameter_types,
