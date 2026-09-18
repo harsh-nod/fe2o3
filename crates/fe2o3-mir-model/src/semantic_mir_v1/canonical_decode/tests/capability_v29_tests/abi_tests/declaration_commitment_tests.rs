@@ -127,7 +127,6 @@ fn declaration_commitments_detect_fresh_admitted_binding_substitutions() {
     changed_binding("consts", |b| b.const_generic_arguments_identity.0[0] ^= 1);
     changed_binding("ABI identity", |b| b.abi.identity.0[0] ^= 1);
     changed_binding("ABI layout", |b| b.abi.layout_identity.0[0] ^= 1);
-    changed_binding("unwind policy", |b| b.abi.can_unwind = true);
     changed_binding("source", |b| {
         b.source = SemanticSourceProvenanceV1::new(
             Some(
@@ -154,6 +153,24 @@ fn declaration_commitments_detect_fresh_admitted_binding_substitutions() {
         };
         operation_identity.0[0] ^= 1;
     });
+}
+
+#[test]
+fn declaration_encoding_does_not_grant_admission_to_unsupported_abi() {
+    let original = callable_request(1);
+    let mut changed = original.clone();
+    let SemanticCallableDeclV1::CompilerIntrinsic { binding, .. } = &mut changed.callables[1]
+    else {
+        panic!()
+    };
+    binding.abi.can_unwind = true;
+    assert!(
+        changed
+            .clone()
+            .admit_exact_v29(SemanticMirLimitsV1::default())
+            .is_err()
+    );
+    assert_ne!(commit(&original), commit(&changed));
 }
 
 #[test]

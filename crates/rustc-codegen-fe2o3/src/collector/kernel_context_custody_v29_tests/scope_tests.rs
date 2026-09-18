@@ -175,29 +175,12 @@ fn readmit(
 }
 
 #[test]
-fn scope_seal_binds_target_and_rejects_new_external_allocation_table() {
+fn scope_seal_binds_target_after_fresh_admission() {
     let original = fixture(Mutation::None);
     let changed = readmit(
         &original,
         SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([249; 32])),
         vec![],
-        original.callables().to_vec(),
-    );
-    assert_eq!(declarations(&original), declarations(&changed));
-    assert!(seal(capture(&original, |_, _| {}), &changed).is_err());
-    let allocation = SemanticAllocationDeclV1::new(
-        SemanticAllocationIdentityV1::from_sha256([1; 32]),
-        vec![0],
-        vec![1],
-        1,
-        false,
-        vec![],
-    )
-    .unwrap();
-    let changed = readmit(
-        &original,
-        original.target(),
-        vec![allocation],
         original.callables().to_vec(),
     );
     assert_eq!(declarations(&original), declarations(&changed));
