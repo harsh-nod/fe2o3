@@ -29,6 +29,8 @@ use crate::queue_linux::{
 };
 use crate::{CheckedGfx950XnackMinusDevice, DeviceSelector, OpenedKfd};
 
+#[path = "engineering_gfx950_dispatch_timestamps.rs"]
+mod dispatch_timestamps;
 #[path = "engineering_gfx950_ordered_batch.rs"]
 mod ordered_batch;
 #[path = "engineering_gfx950_peer.rs"]
@@ -73,6 +75,7 @@ struct PreparedDispatch {
 }
 
 struct PendingDispatch {
+    timestamp: Option<dispatch_timestamps::PendingTimestamp>,
     unique_id: u64,
     queue_epoch: u64,
     next: u64,
@@ -137,6 +140,7 @@ fn wait_for_serial_completion(
 /// entries, including the separately opted-in peer group. Any uncertain native
 /// result retains the owner until process teardown instead of retrying frees.
 struct Context {
+    timestamp_canary: Option<dispatch_timestamps::CanaryOwner>,
     backend: Backend,
     unique_id: u64,
     runtime: Option<LinuxKfdRuntimeEnabledV1>,
@@ -232,12 +236,20 @@ const CWSR: usize = 5;
 
 impl Context {
     fn open(device: CheckedGfx950XnackMinusDevice) -> Result<Self> {
+        Self::open_with_timestamp_canary(device, None)
+    }
+
+    fn open_with_timestamp_canary(
+        device: CheckedGfx950XnackMinusDevice,
+        timestamp_policy: Option<fe2o3_aql::AmdQueueProfilingPolicyV1>,
+    ) -> Result<Self> {
         let unique_id = device.observation().unique_id();
         validate_profile(device.topology_snapshot(), unique_id).map_err(str::to_owned)?;
         if rustix::param::page_size() != PAGE_BYTES {
             return Err("unsupported host page size".into());
         }
         let mut context = Self {
+            timestamp_canary: timestamp_policy.map(dispatch_timestamps::CanaryOwner::new),
             backend: Backend::new(device),
             unique_id,
             runtime: None,
@@ -304,10 +316,17 @@ impl Context {
             |bytes| crate::queue::submit::initialize_invalid_ring(bytes).map_err(explain),
         )?;
         self.internal.push(ring);
+        let timestamp_policy = self.timestamp_canary.as_ref().map(|owner| owner.policy);
         let control = self.allocate_resource(
             PAGE_BYTES,
             KfdAllocMemoryFlags::USERPTR_QUEUE_CONTROL,
-            |bytes| crate::queue::submit::initialize_amd_aql_control(bytes).map_err(explain),
+            |bytes| {
+                crate::queue::submit::initialize_amd_aql_control(bytes).map_err(explain)?;
+                if let Some(policy) = timestamp_policy {
+                    dispatch_timestamps::apply_queue_policy(bytes, policy)?;
+                }
+                Ok(())
+            },
         )?;
         self.internal.push(control);
         Backend::initialize_engineering_error_payload(&mut self.internal[CONTROL].mapping)
@@ -902,8 +921,15 @@ impl Context {
                 mapped[..bytes.len()].copy_from_slice(&bytes);
             },
         );
-        Backend::reset_completion_signal_release(&mut self.internal[SIGNAL].mapping, PAGE_BYTES, 0)
+        let timestamp = self.begin_timestamp_dispatch(reservation.packet_id())?;
+        if timestamp.is_none() {
+            Backend::reset_completion_signal_release(
+                &mut self.internal[SIGNAL].mapping,
+                PAGE_BYTES,
+                0,
+            )
             .map_err(explain)?;
+        }
         let packet = AqlKernelDispatchPacketV1::new_unpublished(
             geometry,
             0,
@@ -932,6 +958,7 @@ impl Context {
             .map_err(explain)?;
         record_elapsed(&mut self.counters.dispatch_publish_ns, publish_started)?;
         Ok(PendingDispatch {
+            timestamp,
             unique_id: self.unique_id,
             queue_epoch: self.queue_epoch,
             next,
@@ -953,12 +980,25 @@ impl Context {
         if pending.wait_started.is_some() {
             add_counter(&mut self.counters.completion_polls, 1)?;
         }
-        let completion = Backend::observe_completion_signal_acquire(
-            &mut self.internal[SIGNAL].mapping,
-            PAGE_BYTES,
-            0,
-        )
-        .map_err(explain)?;
+        if let Some(timestamp) = &pending.timestamp {
+            self.require_timestamp_pending(timestamp, pending.next)?;
+        }
+        let (completion, timestamp_snapshot) = if pending.timestamp.is_some() {
+            Backend::observe_engineering_timestamp_signal_acquire(
+                &mut self.internal[SIGNAL].mapping,
+            )
+            .map_err(explain)?
+        } else {
+            (
+                Backend::observe_completion_signal_acquire(
+                    &mut self.internal[SIGNAL].mapping,
+                    PAGE_BYTES,
+                    0,
+                )
+                .map_err(explain)?,
+                None,
+            )
+        };
         let counters =
             Backend::observe_aql_counters(&mut self.internal[CONTROL].mapping, PAGE_BYTES)
                 .map_err(explain)?;
@@ -990,6 +1030,13 @@ impl Context {
         self.completed_write = pending.next;
         record_elapsed(&mut self.counters.dispatch_wait_ns, pending.wait_started)?;
         self.check_idle()?;
+        if let Some(timestamp) = &pending.timestamp {
+            self.finish_timestamp_dispatch(
+                timestamp,
+                pending.next,
+                timestamp_snapshot.ok_or("completed timestamp snapshot missing")?,
+            )?;
+        }
         if pending.profiled {
             add_counter(&mut self.counters.dispatches, 1)?;
         }
@@ -1436,6 +1483,27 @@ fn patch_pointer_arguments(
 /// fe2o3_kfd::run_gfx950_engineering_worker_unchecked_v1(1).unwrap();
 /// ```
 pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Result<()> {
+    // SAFETY: the caller supplies the documented disposable-process contract.
+    unsafe { run_worker(unique_id, None) }
+}
+
+/// Runs the explicit serial-only off/on timestamp canary with no timing authority.
+///
+/// # Safety
+/// The same dedicated-process, trusted-machine-code and immediate-termination
+/// contract as `run_gfx950_engineering_worker_unchecked_v1` applies.
+pub unsafe fn run_gfx950_timestamp_canary_worker_unchecked_v1(
+    unique_id: u64,
+    policy: fe2o3_aql::AmdQueueProfilingPolicyV1,
+) -> Result<()> {
+    // SAFETY: identical expert boundary; the policy enables diagnostics only.
+    unsafe { run_worker(unique_id, Some(policy)) }
+}
+
+unsafe fn run_worker(
+    unique_id: u64,
+    timestamp_policy: Option<fe2o3_aql::AmdQueueProfilingPolicyV1>,
+) -> Result<()> {
     let kfd = OpenedKfd::open_default()
         .map_err(explain)?
         .admit_uapi()
@@ -1443,7 +1511,10 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
     let device = kfd
         .bind_gfx950_xnack_minus(DeviceSelector::UniqueId(unique_id))
         .map_err(explain)?;
-    let mut context = Context::open(device)?;
+    let mut context = match timestamp_policy {
+        None => Context::open(device)?,
+        Some(policy) => Context::open_with_timestamp_canary(device, Some(policy))?,
+    };
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
     let mut fatal_response_written = false;
@@ -1464,11 +1535,21 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
                 return context.close_inner();
             };
             let payload_bytes = command.payload_bytes().map_err(explain)?;
+            context.admit_timestamp_command(&command)?;
             let mut payload = vec![0; payload_bytes];
             input.read_exact(&mut payload).map_err(explain)?;
             let command_started = context.profile_started();
             let mut response_payload = Vec::new();
             let response = match command {
+                CommandV1::TakeDispatchTimestampObservation {
+                    expected_queue_epoch,
+                    expected_packet_id,
+                    expected_signal_generation,
+                } => context.take_timestamp_observation([
+                    expected_queue_epoch,
+                    expected_packet_id,
+                    expected_signal_generation,
+                ])?,
                 CommandV1::ConfigurePerformance {
                     cache_kernel_admission,
                     operational_currentness,

@@ -243,6 +243,12 @@ fn sequence_payload_bytes(dispatches: &[SequenceDispatchV1]) -> io::Result<usize
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CommandV1 {
+    /// One-use diagnostics for an explicitly selected serial timestamp canary.
+    TakeDispatchTimestampObservation {
+        expected_queue_epoch: u64,
+        expected_packet_id: u64,
+        expected_signal_generation: u64,
+    },
     /// Explicit engineering policy, accepted once before user resources exist.
     ConfigurePerformance {
         cache_kernel_admission: bool,
@@ -360,6 +366,7 @@ impl CommandV1 {
             | Self::Free { .. }
             | Self::ConfigurePerformance { .. }
             | Self::PerformanceSnapshot
+            | Self::TakeDispatchTimestampObservation { .. }
             | Self::RolloverQueue { .. }
             | Self::Close => 0,
             _ => return Err(invalid("engineering frame limits")),
@@ -419,9 +426,54 @@ pub struct ExplicitArgumentV1 {
     pub access: Option<BufferAccessV1>,
 }
 
+/// Raw KFD clock domains. No field is a host Instant or an assumed nanosecond.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DispatchClockSampleV1 {
+    pub gpu_ticks: u64,
+    pub cpu_ticks: u64,
+    pub system_ticks: u64,
+    pub system_frequency_hz: u64,
+    pub gpu_id: u32,
+}
+
+/// Bracket interpolation, rounded down, with no calibrated accuracy claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DispatchCorrelatedIntervalV1 {
+    pub start_system_ticks: u64,
+    pub end_system_ticks: u64,
+    pub system_frequency_hz: u64,
+    pub duration_ns_floor: u64,
+}
+
+/// Completed engineering observation, not runtime or timing authority.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DispatchTimestampObservationV1 {
+    pub authority: String,
+    pub queue_profiling_enabled: bool,
+    pub queue_properties: u32,
+    pub device_unique_id: u64,
+    pub gpu_id: u32,
+    pub queue_epoch: u64,
+    pub packet_id: u64,
+    pub signal_slot: u32,
+    pub signal_generation: u64,
+    pub acquired_value: i64,
+    /// Two fixed halves enforce exactly 64 bytes during deserialization.
+    pub signal_snapshot: [[u8; 32]; 2],
+    pub before: DispatchClockSampleV1,
+    pub after: DispatchClockSampleV1,
+    pub correlated: Option<DispatchCorrelatedIntervalV1>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResponseV1 {
+    DispatchTimestampObservation {
+        observation: DispatchTimestampObservationV1,
+    },
     /// All 616 signals and the exit fence passed; this is host wall time.
     DispatchFullForwardCompleted {
         completed_dispatches: u32,
@@ -535,6 +587,72 @@ mod full_forward_tests;
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn timestamp_request_is_exact_bounded_additive_and_old_response_bytes_unchanged() {
+        let request = CommandV1::TakeDispatchTimestampObservation {
+            expected_queue_epoch: 0,
+            expected_packet_id: 2,
+            expected_signal_generation: 3,
+        };
+        assert_eq!(request.payload_bytes().unwrap(), 0);
+        let mut bytes = Vec::new();
+        write_header_v1(&mut bytes, &request).unwrap();
+        let decoded: CommandV1 = read_header_v1(&mut bytes.as_slice()).unwrap().unwrap();
+        assert_eq!(decoded, request);
+        let response = serde_json::to_vec(&ResponseV1::Dispatched { elapsed_ns: 123 }).unwrap();
+        assert_eq!(response, br#"{"op":"dispatched","elapsed_ns":123}"#);
+        for value in [
+            serde_json::json!({"op":"take_dispatch_timestamp_observation","expected_queue_epoch":0,"expected_packet_id":2}),
+            serde_json::json!({"op":"take_dispatch_timestamp_observation","expected_queue_epoch":0,"expected_packet_id":2,"expected_signal_generation":3,"profile":true}),
+        ] {
+            assert!(serde_json::from_value::<CommandV1>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn timestamp_snapshot_wire_has_exact_fixed_extent() {
+        let sample = DispatchClockSampleV1 {
+            gpu_ticks: 1,
+            cpu_ticks: 2,
+            system_ticks: 3,
+            system_frequency_hz: 4,
+            gpu_id: 5,
+        };
+        let observation = DispatchTimestampObservationV1 {
+            authority: "none".into(),
+            queue_profiling_enabled: false,
+            queue_properties: 0,
+            device_unique_id: 6,
+            gpu_id: 5,
+            queue_epoch: 0,
+            packet_id: 0,
+            signal_slot: 0,
+            signal_generation: 1,
+            acquired_value: 0,
+            signal_snapshot: [[0; 32]; 2],
+            before: sample,
+            after: sample,
+            correlated: None,
+        };
+        let value = serde_json::to_value(&observation).unwrap();
+        assert_eq!(
+            serde_json::from_value::<DispatchTimestampObservationV1>(value.clone()).unwrap(),
+            observation
+        );
+        for snapshot in [
+            serde_json::json!([]),
+            serde_json::json!(vec![vec![0; 32]]),
+            serde_json::json!(vec![vec![0; 31], vec![0; 32]]),
+        ] {
+            let mut bad = value.clone();
+            bad["signal_snapshot"] = snapshot;
+            assert!(serde_json::from_value::<DispatchTimestampObservationV1>(bad).is_err());
+        }
+        let mut bad = value;
+        bad["host_instant_ns"] = serde_json::json!(123);
+        assert!(serde_json::from_value::<DispatchTimestampObservationV1>(bad).is_err());
+    }
 
     #[test]
     fn sequences_have_exact_cumulative_payload_and_time_bounds() {

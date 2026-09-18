@@ -104,6 +104,29 @@ impl fmt::Debug for CheckedGfx950XnackMinusDevice {
 }
 
 impl CheckedGfx950XnackMinusDevice {
+    /// Engineering-only paired clock observation; not a dispatch timestamp.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(crate) fn observe_engineering_clock_correlation(
+        &mut self,
+    ) -> Result<crate::KfdClockCorrelationObservationV1, DeviceBindingError> {
+        let result = (|| {
+            self.check_engineering_operational_currentness()?;
+            let selected = self.observation.kfd_gpu_id();
+            let raw = crate::linux::observe_clock_counters(&self.kfd.opened.fd, selected)?;
+            let observation = crate::currentness::admit_clock_correlation(raw, selected).ok_or(
+                DeviceBindingError::ObservableCurrentnessChanged(
+                    "gfx950 engineering clock correlation",
+                ),
+            )?;
+            self.check_engineering_operational_currentness()?;
+            Ok(observation)
+        })();
+        if result.is_err() {
+            self.currentness_poisoned = true;
+        }
+        result
+    }
+
     /// Identifies this binding's selected source contract, not runtime authority.
     pub fn observation_profile_sha256_v1(&self) -> [u8; 32] {
         Sha256::digest(self.profile_manifest).into()

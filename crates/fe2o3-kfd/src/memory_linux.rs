@@ -54,6 +54,64 @@ pub(super) struct LinuxMemoryBackendFor<D> {
 
 #[cfg(feature = "engineering-gfx950")]
 impl LinuxMemoryBackendFor<crate::CheckedGfx950XnackMinusDevice> {
+    pub(super) fn observe_engineering_queue_properties(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<u32, MemorySessionError> {
+        require_engineering_timestamp_mapping(mapping)?;
+        let pointer = checked_mapping_pointer(
+            mapping,
+            4096,
+            fe2o3_aql::AMD_QUEUE_PROPERTIES_OFFSET_V1,
+            4,
+            4,
+        )?;
+        // SAFETY: the property word is inside the retained live control page.
+        Ok(u32::from_le(unsafe {
+            pointer.cast::<u32>().read_volatile()
+        }))
+    }
+
+    pub(super) fn observe_engineering_clock_correlation(
+        &mut self,
+    ) -> Result<crate::KfdClockCorrelationObservationV1, MemorySessionError> {
+        self.device
+            .observe_engineering_clock_correlation()
+            .map_err(Into::into)
+    }
+
+    /// The private serial owner must have retired the prior signal generation.
+    pub(super) fn reset_engineering_timestamp_signal_release(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<(), MemorySessionError> {
+        require_engineering_timestamp_mapping(mapping)?;
+        let pointer = checked_mapping_pointer(mapping, 4096, 0, 64, 64)?;
+        // SAFETY: the caller retains the idle slot exclusively before publication.
+        // These plain words do not alias the atomic completion value at offset 8.
+        unsafe {
+            pointer.add(32).cast::<u64>().write_volatile(0);
+            pointer.add(40).cast::<u64>().write_volatile(0);
+        }
+        checked_completion_value(mapping, 4096, 0)?
+            .store(AMD_SIGNAL_VALUE_PENDING_V1, Ordering::Release);
+        Ok(())
+    }
+
+    /// Snapshot only after this call's exact acquired completion. The caller
+    /// retains the slot generation and forbids reset/publication during the call.
+    pub(super) fn observe_engineering_timestamp_signal_acquire(
+        mapping: &mut LinuxCpuMapping,
+    ) -> Result<(AqlCompletionObservationV1, Option<[u8; 64]>), MemorySessionError> {
+        require_engineering_timestamp_mapping(mapping)?;
+        let pointer = checked_mapping_pointer(mapping, 4096, 0, 64, 64)?;
+        let value = checked_completion_value(mapping, 4096, 0)?.load(Ordering::Acquire);
+        let snapshot = completed_engineering_signal_snapshot(value, |index| {
+            // SAFETY: invoked only after acquired zero, on an owned completed
+            // signal with no reset. Word 1 is atomic and is never read here.
+            unsafe { pointer.add(index * 8).cast::<u64>().read_volatile() }.to_le_bytes()
+        });
+        Ok((classify_acquired_completion_value_v1(value), snapshot))
+    }
+
     pub(super) fn engineering_peer_topology(&self) -> &crate::topology::HostTopologySnapshot {
         self.device.topology_snapshot()
     }
@@ -69,6 +127,36 @@ impl LinuxMemoryBackendFor<crate::CheckedGfx950XnackMinusDevice> {
             .check_engineering_operational_currentness()
             .map_err(Into::into)
     }
+}
+
+#[cfg(feature = "engineering-gfx950")]
+fn require_engineering_timestamp_mapping(
+    mapping: &LinuxCpuMapping,
+) -> Result<(), MemorySessionError> {
+    if mapping.bytes != 4096
+        || mapping.reservation_phase.load(Ordering::Acquire) != VA_IDENTITY_MAPPED
+    {
+        return Err(malformed_aql_mapping(
+            "timestamp mapping identity or extent",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "engineering-gfx950")]
+fn completed_engineering_signal_snapshot(
+    acquired_value: i64,
+    mut read_word: impl FnMut(usize) -> [u8; 8],
+) -> Option<[u8; 64]> {
+    if acquired_value != 0 {
+        return None;
+    }
+    let mut bytes = [0; 64];
+    for index in [0, 2, 3, 4, 5, 6, 7] {
+        bytes[index * 8..index * 8 + 8].copy_from_slice(&read_word(index));
+    }
+    bytes[8..16].copy_from_slice(&acquired_value.to_le_bytes());
+    Some(bytes)
 }
 
 /// Sealed inside the KFD adapter: only separately checked target tokens may
@@ -1250,6 +1338,87 @@ impl Drop for LinuxCpuMapping {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "engineering-gfx950")]
+    #[test]
+    fn timestamp_snapshot_reads_only_after_exact_zero_and_never_reads_atomic_word() {
+        for value in [1, -1, i64::MAX, i64::MIN] {
+            assert!(
+                completed_engineering_signal_snapshot(value, |_| panic!("pending field read"))
+                    .is_none()
+            );
+        }
+        let mut words = Vec::new();
+        let snapshot = completed_engineering_signal_snapshot(0, |word| {
+            words.push(word);
+            (word as u64).to_le_bytes()
+        })
+        .unwrap();
+        assert_eq!(words, [0, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(&snapshot[8..16], &[0; 8]);
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    #[test]
+    fn timestamp_signal_reset_and_snapshot_are_bounded_and_preserve_tail() {
+        let mut page = MinimumRing([0xa5; 4096]);
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut page).cast(),
+            bytes: 4096,
+            active: true,
+            accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
+        };
+        LinuxGfx950MemoryBackend::initialize_engineering_signal(&mut mapping).unwrap();
+        page.0[32..40].copy_from_slice(&12_u64.to_le_bytes());
+        page.0[40..48].copy_from_slice(&18_u64.to_le_bytes());
+        assert!(
+            LinuxGfx950MemoryBackend::observe_engineering_timestamp_signal_acquire(&mut mapping)
+                .unwrap()
+                .1
+                .is_none()
+        );
+        checked_completion_value(&mut mapping, 4096, 0)
+            .unwrap()
+            .store(0, Ordering::Release);
+        let (state, raw) =
+            LinuxGfx950MemoryBackend::observe_engineering_timestamp_signal_acquire(&mut mapping)
+                .unwrap();
+        assert_eq!(state, AqlCompletionObservationV1::Completed);
+        assert_eq!(&raw.unwrap()[32..40], &12_u64.to_le_bytes());
+        LinuxGfx950MemoryBackend::reset_engineering_timestamp_signal_release(&mut mapping).unwrap();
+        assert_eq!(&page.0[32..48], &[0; 16]);
+        assert!(page.0[64..].iter().all(|byte| *byte == 0xa5));
+        assert!(
+            LinuxGfx950MemoryBackend::observe_engineering_timestamp_signal_acquire(&mut mapping)
+                .unwrap()
+                .1
+                .is_none()
+        );
+        for state in 0..4 {
+            mapping.active = state != 0;
+            mapping.accessible = state != 1;
+            mapping.bytes = if state == 2 { 4095 } else { 4096 };
+            mapping.reservation_phase.store(
+                if state == 3 {
+                    VA_GUARDED
+                } else {
+                    VA_IDENTITY_MAPPED
+                },
+                Ordering::Release,
+            );
+            assert!(
+                LinuxGfx950MemoryBackend::reset_engineering_timestamp_signal_release(&mut mapping)
+                    .is_err()
+            );
+            assert!(
+                LinuxGfx950MemoryBackend::observe_engineering_timestamp_signal_acquire(
+                    &mut mapping
+                )
+                .is_err()
+            );
+        }
+    }
     use fe2o3_aql::{
         AQL_SYSTEM_SCOPED_BARRIER_AND_HEADER_V1,
         AQL_SYSTEM_SCOPED_WAIT_FOR_PRIOR_KERNEL_DISPATCH_HEADER_V1, AmdBusyCompletionSignalV1,

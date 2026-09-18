@@ -194,7 +194,7 @@ impl KfdClockCorrelationObservationV1 {
     }
 }
 
-fn admit_clock_correlation(
+pub(crate) fn admit_clock_correlation(
     raw: fe2o3_kfd_uapi::KfdIoctlGetClockCountersArgs,
     selected_gpu: u32,
 ) -> Option<KfdClockCorrelationObservationV1> {
