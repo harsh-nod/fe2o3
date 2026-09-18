@@ -646,7 +646,7 @@ fn production_context_handoff_joins_ssa_and_launch_under_the_shared_budget() {
     use fe2o3_lower_mir_kernel::ProductionContextRootErrorV29;
     for count in [1, 4] {
         let semantic = fixture_roots(Mutation::None, count);
-        let entries = sealed_roots(&semantic);
+        let entries = scope_tests::complete(&semantic);
         let launch = launch_roster(&semantic);
         let owner = ssa_owner(semantic);
         let exact = {

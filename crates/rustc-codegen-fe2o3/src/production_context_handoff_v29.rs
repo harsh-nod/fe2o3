@@ -35,15 +35,31 @@ pub(crate) fn check_context_handoff_v29(
         &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ) -> Result<(), ProductionContextRootErrorV29>,
 ) -> Result<(), ProductionPipelineError> {
-    entries
-        .visit_root_anchors_v29(ssa.source_semantic(), budget, |entry, budget| {
+    let source = entries
+        .materialization_source_v29(ssa.source_semantic(), budget)
+        .map_err(|error| match error {
+            ContextRootVisitErrorV29::Source(error) => ProductionPipelineError::SemanticImport(
+                crate::collector::ProductionSemanticImportErrorV1::BodyConstruction(Box::new(
+                    error,
+                )),
+            ),
+            ContextRootVisitErrorV29::Resource(error) => {
+                ProductionPipelineError::ContextHandoff(error.into())
+            }
+            ContextRootVisitErrorV29::Consumer(never) => match never {},
+        })?;
+    let Some(source) = source else {
+        return Ok(());
+    };
+    for entry in source.roots() {
+        let mut check = |budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>| {
             budget.charge_work(32)?;
             let (root, root_identity) = entry.root();
             let (helper, helper_identity) = entry.helper();
             let (issuer, issuer_identity) = entry.issuer();
             let (context_type, context_identity) = entry.context();
             let input = ProductionContextRootInputV29 {
-                semantic_sha256: ssa.source_semantic_sha256(),
+                semantic_sha256: source.semantic_sha256(),
                 root,
                 root_identity,
                 helper,
@@ -60,20 +76,10 @@ pub(crate) fn check_context_handoff_v29(
             with_checked_context_root_v29(ssa, launch, input, budget, |root, budget| {
                 use_root(root, budget)
             })
-        })
-        .map_err(|error| match error {
-            ContextRootVisitErrorV29::Source(error) => ProductionPipelineError::SemanticImport(
-                crate::collector::ProductionSemanticImportErrorV1::BodyConstruction(Box::new(
-                    error,
-                )),
-            ),
-            ContextRootVisitErrorV29::Resource(error) => {
-                ProductionPipelineError::ContextHandoff(error.into())
-            }
-            ContextRootVisitErrorV29::Consumer(error) => {
-                ProductionPipelineError::ContextHandoff(error)
-            }
-        })
+        };
+        check(budget).map_err(ProductionPipelineError::ContextHandoff)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
