@@ -327,14 +327,18 @@ establish full-corpus, protected-proof, artifact or hardware qualification.
 
 General checked-output admission also censuses scalar helper closures from each
 actual B/C/O inventory. Eligible helpers have a direct non-unwinding Rust ABI,
-Bool or signed/unsigned 8/16/32/64-bit arguments, and Unit or one scalar return.
+Bool, signed/unsigned 8/16/32/64-bit or F32/F64 arguments, and Unit or one scalar
+return.
 Source membership is checked against the reconstructed root-qualified function
 correspondence. Every retained helper is checked, including an uncalled helper
 left after independently checked dead-control removal.
 
 The helper census requires complete empty memory effects and a closed scalar
-opcode set; pointers, aggregates, floats, helper traps, external calls and
-recursion remain outside this subset. Calls remain ordered and block private
+opcode set. F32/F64 constants, comparisons, selects and strict add/subtract/
+multiply are admitted without reassociation, contraction or fast-math permission.
+Float casts, division, remainder, negation, narrower float formats, pointers,
+aggregates, helper traps, external calls and recursion remain outside this subset.
+Calls remain ordered and block private
 store forwarding. This does not establish termination, helper-result bounds or
 extent facts, optimizer purity, or general tutorial-helper support. Policy4
 continues to forward only its admitted integer loads, not Bool loads. The

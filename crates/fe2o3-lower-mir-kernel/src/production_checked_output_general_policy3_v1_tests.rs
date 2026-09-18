@@ -12,6 +12,9 @@ mod wrapping_admission_tests;
 #[path = "production_checked_output_scalar_helper_admission_v1_tests.rs"]
 mod scalar_helper_admission_tests;
 
+#[path = "production_checked_output_float_helper_admission_v1_tests.rs"]
+mod float_helper_admission_tests;
+
 fn general_control_source(looping: bool) -> ProductionPreRankedKirOwnerV1 {
     general_control_and_read_source(looping, false)
 }

@@ -1,5 +1,7 @@
 use super::*;
 
+#[path = "production_checked_output_scalar_helper_float_v1_tests.rs"]
+mod float_tests;
 #[path = "production_checked_output_scalar_helper_source_abi_v1_tests.rs"]
 mod source_abi_tests;
 use fe2o3_kernel_analysis::CanonicalKirInventoryV1 as Inventory;
@@ -303,21 +305,16 @@ fn unit_helpers_are_supported_without_inventing_a_scalar_result() {
 }
 
 #[test]
-fn pointer_and_float_signatures_and_multiple_scalar_results_stay_closed() {
-    for ty in [
-        Type::F32,
-        Type::F64,
-        Type::pointer(
-            Type::Scalar(ScalarType::U32),
-            AddressSpace::Global,
-            AccessMode::ReadOnly,
-        ),
-    ] {
-        expect_refusal(
-            module(vec![identity("h", ty)]),
-            "direct ordinary scalar signature",
-        );
-    }
+fn pointer_signatures_and_multiple_scalar_results_stay_closed() {
+    let ty = Type::pointer(
+        Type::Scalar(ScalarType::U32),
+        AddressSpace::Global,
+        AccessMode::ReadOnly,
+    );
+    expect_refusal(
+        module(vec![identity("h", ty)]),
+        "direct ordinary scalar signature",
+    );
     let mut multiple = identity("h", Type::Scalar(ScalarType::U32));
     multiple
         .signature

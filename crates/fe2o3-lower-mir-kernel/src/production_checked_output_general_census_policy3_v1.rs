@@ -12,7 +12,10 @@ pub(super) fn source(
     charge(budget, 4)?;
     if source.roots().is_empty() || !source.statics().is_empty() || !source.allocations().is_empty()
     {
-        return Err(refused("source", "root-only global interface"));
+        return Err(refused(
+            "source",
+            "nonempty roots without source statics or allocations",
+        ));
     }
     scalar_helpers::check_source(owner, budget)?;
     for function in source.functions() {

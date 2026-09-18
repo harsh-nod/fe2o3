@@ -92,6 +92,8 @@ fn scalar(ty: &Type) -> bool {
                 | ScalarType::I64
                 | ScalarType::U64
                 | ScalarType::Index
+                | ScalarType::F32
+                | ScalarType::F64
         )
     )
 }
@@ -204,24 +206,53 @@ pub(super) fn check<'i, 'g>(
                     op: UnaryOp::Not, ..
                 }
                 | OperationKind::Binary {
-                    op:
-                        BinaryOp::BitAnd
-                        | BinaryOp::BitOr
-                        | BinaryOp::BitXor
-                        | BinaryOp::Checked(_)
-                        | BinaryOp::Divide
-                        | BinaryOp::Remainder,
+                    op: BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Checked(_),
                     ..
                 }
-                | OperationKind::Cast {
+                | OperationKind::Call { .. } => {}
+                OperationKind::Binary {
+                    op: BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply,
+                    ..
+                } => {
+                    // Preserve the existing strict native FP policy. This
+                    // admits no fast-math flags, integer overflow shortcut,
+                    // call purity, or returned-value range facts.
+                    charge(budget, 2)?;
+                    if !matches!(row.operation.results.as_slice(), [result]
+                        if matches!(result.ty, Type::F32 | Type::F64))
+                    {
+                        return Err(refused("scalar helpers", "closed scalar helper opcode"));
+                    }
+                }
+                OperationKind::Binary {
+                    op: BinaryOp::Divide | BinaryOp::Remainder,
+                    ..
+                } => {
+                    charge(budget, 2)?;
+                    if matches!(row.operation.results.as_slice(), [result]
+                        if matches!(result.ty, Type::F32 | Type::F64))
+                    {
+                        return Err(refused("scalar helpers", "closed scalar helper opcode"));
+                    }
+                }
+                OperationKind::Cast {
                     kind:
                         CastKind::Truncate
                         | CastKind::ZeroExtend
                         | CastKind::SignExtend
                         | CastKind::Bitcast,
                     ..
+                } => {
+                    charge(budget, 3)?;
+                    let operand = &inventory.uses()[row.operands.start];
+                    let input = inventory.definitions()[operand.definition].ty;
+                    if matches!(input, Type::Scalar(ScalarType::F32 | ScalarType::F64))
+                        || matches!(row.operation.results.as_slice(), [result]
+                            if matches!(result.ty, Type::F32 | Type::F64))
+                    {
+                        return Err(refused("scalar helpers", "closed scalar helper opcode"));
+                    }
                 }
-                | OperationKind::Call { .. } => {}
                 _ => return Err(refused("scalar helpers", "closed scalar helper opcode")),
             }
         }
@@ -264,6 +295,7 @@ fn source_scalar(semantic: &AdmittedInertSemanticMirV1, ty: SemanticTypeIdV1) ->
             .map(SemanticTypeDeclV1::shape),
         Some(SemanticTypeShapeV1::Scalar(
             SemanticScalarTypeV1::Bool
+                | SemanticScalarTypeV1::Float { bits: 32 | 64 }
                 | SemanticScalarTypeV1::Integer {
                     bits: 8 | 16 | 32 | 64,
                     ..
