@@ -12,6 +12,10 @@ pub use performance::Gfx950EngineeringPeerDispatchV1;
 #[path = "engineering_gfx950_peer_round.rs"]
 mod round;
 
+#[path = "engineering_gfx950_peer_dependency_canary.rs"]
+mod dependency_canary;
+pub use dependency_canary::run_gfx950_tp2_dependency_canary_unchecked_v1;
+
 static NEXT_GROUP: AtomicU64 = AtomicU64::new(1);
 const LINK_ENABLED: u32 = 1;
 const LINK_NO_ATOMICS: u32 = (1 << 2) | (1 << 3);
@@ -331,6 +335,13 @@ fn checked_roster(unique_ids: &[u64]) -> Result<()> {
     Ok(())
 }
 
+fn checked_control_roster(unique_ids: &[u64], policy: QueueControlPolicy) -> Result<()> {
+    if policy == QueueControlPolicy::DependencyCanaryGttUncached && unique_ids.len() != 2 {
+        return Err("dependency control-memory experiment requires exactly two devices".into());
+    }
+    checked_roster(unique_ids)
+}
+
 fn require_peer_access(
     owner: usize,
     rank: usize,
@@ -378,7 +389,17 @@ impl Gfx950EngineeringPeerGroupV1 {
     /// fe2o3_kfd::Gfx950EngineeringPeerGroupV1::open_unchecked(&[1, 2]).unwrap();
     /// ```
     pub unsafe fn open_unchecked(unique_ids: &[u64]) -> Result<Self> {
-        checked_roster(unique_ids)?;
+        // SAFETY: preserve the existing dedicated-process contract and policy.
+        unsafe {
+            Self::open_with_queue_control_unchecked(unique_ids, QueueControlPolicy::UserptrCoherent)
+        }
+    }
+
+    unsafe fn open_with_queue_control_unchecked(
+        unique_ids: &[u64],
+        policy: QueueControlPolicy,
+    ) -> Result<Self> {
+        checked_control_roster(unique_ids, policy)?;
         let incarnation = NEXT_GROUP
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
@@ -401,7 +422,9 @@ impl Gfx950EngineeringPeerGroupV1 {
                     .map_err(explain)?
                     .bind_gfx950_xnack_minus(DeviceSelector::UniqueId(unique_id))
                     .map_err(explain)?;
-                group.contexts.push(Context::open(device)?);
+                group.contexts.push(Context::open_with_queue_control(
+                    device, None, None, policy,
+                )?);
             }
             check_contexts(&mut group.contexts, group.shared_full_currentness)?;
             let snapshot = group.contexts[0].backend.engineering_peer_topology();

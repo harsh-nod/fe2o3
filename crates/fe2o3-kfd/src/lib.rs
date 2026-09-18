@@ -38,7 +38,7 @@ pub use engineering_gfx950::{
     Gfx950EngineeringPeerKernelV1, Gfx950EngineeringPeerPointerV1,
     run_gfx950_engineering_worker_unchecked_v1,
     run_gfx950_full_forward_timestamp_worker_unchecked_v1,
-    run_gfx950_timestamp_canary_worker_unchecked_v1,
+    run_gfx950_timestamp_canary_worker_unchecked_v1, run_gfx950_tp2_dependency_canary_unchecked_v1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

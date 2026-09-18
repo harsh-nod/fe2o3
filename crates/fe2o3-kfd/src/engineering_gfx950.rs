@@ -40,6 +40,7 @@ mod peer;
 pub use peer::{
     Gfx950EngineeringPeerBufferV1, Gfx950EngineeringPeerDispatchV1, Gfx950EngineeringPeerGroupV1,
     Gfx950EngineeringPeerKernelV1, Gfx950EngineeringPeerPointerV1,
+    run_gfx950_tp2_dependency_canary_unchecked_v1,
 };
 
 type Result<T> = std::result::Result<T, String>;
@@ -142,6 +143,7 @@ fn wait_for_serial_completion(
 /// entries, including the separately opted-in peer group. Any uncertain native
 /// result retains the owner until process teardown instead of retrying frees.
 struct Context {
+    queue_control_policy: QueueControlPolicy,
     timestamp_canary: Option<dispatch_timestamps::CanaryOwner>,
     full_forward_timestamps: Option<full_forward_timestamps::FullForwardTimestampOwner>,
     backend: Backend,
@@ -153,6 +155,8 @@ struct Context {
     internal: Vec<Allocation>,
     // Separate retained storage; legacy queue/signal/ordered slots never move.
     full_forward_internal: Vec<Allocation>,
+    // Dedicated dependency-canary owners; never exposed as buffer arguments.
+    dependency_internal: Vec<Allocation>,
     buffers: BTreeMap<u64, Allocation>,
     kernels: BTreeMap<u64, Kernel>,
     handles: BTreeSet<u64>,
@@ -237,6 +241,32 @@ const KERNARG: usize = 3;
 const EOP: usize = 4;
 const CWSR: usize = 5;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueueControlPolicy {
+    UserptrCoherent,
+    // Canary-only experiment changes both backing and UNCACHED, not one cache bit.
+    DependencyCanaryGttUncached,
+}
+
+impl QueueControlPolicy {
+    fn flags(self) -> KfdAllocMemoryFlags {
+        match self {
+            Self::UserptrCoherent => KfdAllocMemoryFlags::USERPTR_QUEUE_CONTROL,
+            Self::DependencyCanaryGttUncached => KfdAllocMemoryFlags::KERNARG,
+        }
+    }
+
+    fn validate_modes(self, timestamps: bool, full_forward_timestamps: bool) -> Result<()> {
+        if self == Self::DependencyCanaryGttUncached && (timestamps || full_forward_timestamps) {
+            return Err("dependency control-memory experiment excludes timestamp modes".into());
+        }
+        if timestamps && full_forward_timestamps {
+            return Err("timestamp modes are mutually exclusive".into());
+        }
+        Ok(())
+    }
+}
+
 impl Context {
     fn open(device: CheckedGfx950XnackMinusDevice) -> Result<Self> {
         Self::open_with_timestamp_canary(device, None, None)
@@ -247,15 +277,31 @@ impl Context {
         timestamp_policy: Option<fe2o3_aql::AmdQueueProfilingPolicyV1>,
         full_forward_timestamps: Option<full_forward_timestamps::FullForwardTimestampOwner>,
     ) -> Result<Self> {
-        if timestamp_policy.is_some() && full_forward_timestamps.is_some() {
-            return Err("timestamp modes are mutually exclusive".into());
-        }
+        Self::open_with_queue_control(
+            device,
+            timestamp_policy,
+            full_forward_timestamps,
+            QueueControlPolicy::UserptrCoherent,
+        )
+    }
+
+    fn open_with_queue_control(
+        device: CheckedGfx950XnackMinusDevice,
+        timestamp_policy: Option<fe2o3_aql::AmdQueueProfilingPolicyV1>,
+        full_forward_timestamps: Option<full_forward_timestamps::FullForwardTimestampOwner>,
+        queue_control_policy: QueueControlPolicy,
+    ) -> Result<Self> {
+        queue_control_policy.validate_modes(
+            timestamp_policy.is_some(),
+            full_forward_timestamps.is_some(),
+        )?;
         let unique_id = device.observation().unique_id();
         validate_profile(device.topology_snapshot(), unique_id).map_err(str::to_owned)?;
         if rustix::param::page_size() != PAGE_BYTES {
             return Err("unsupported host page size".into());
         }
         let mut context = Self {
+            queue_control_policy,
             timestamp_canary: timestamp_policy.map(dispatch_timestamps::CanaryOwner::new),
             full_forward_timestamps,
             backend: Backend::new(device),
@@ -266,6 +312,7 @@ impl Context {
             doorbell: None,
             internal: Vec::new(),
             full_forward_internal: Vec::new(),
+            dependency_internal: Vec::new(),
             buffers: BTreeMap::new(),
             kernels: BTreeMap::new(),
             handles: BTreeSet::new(),
@@ -306,6 +353,7 @@ impl Context {
             || self.doorbell.is_some()
             || !self.internal.is_empty()
             || !self.full_forward_internal.is_empty()
+            || !self.dependency_internal.is_empty()
         {
             return Err("queue initialization requires destroyed private resources".into());
         }
@@ -333,17 +381,14 @@ impl Context {
                     .as_ref()
                     .map(|owner| owner.policy)
             });
-        let control = self.allocate_resource(
-            PAGE_BYTES,
-            KfdAllocMemoryFlags::USERPTR_QUEUE_CONTROL,
-            |bytes| {
+        let control =
+            self.allocate_resource(PAGE_BYTES, self.queue_control_policy.flags(), |bytes| {
                 crate::queue::submit::initialize_amd_aql_control(bytes).map_err(explain)?;
                 if let Some(policy) = timestamp_policy {
                     dispatch_timestamps::apply_queue_policy(bytes, policy)?;
                 }
                 Ok(())
-            },
-        )?;
+            })?;
         self.internal.push(control);
         Backend::initialize_engineering_error_payload(&mut self.internal[CONTROL].mapping)
             .map_err(explain)?;
@@ -1175,6 +1220,9 @@ impl Context {
         expected_epoch: u64,
         expected_completed: u64,
     ) -> Result<ResponseV1> {
+        if !self.dependency_internal.is_empty() {
+            return Err("dependency-canary owners forbid queue rollover".into());
+        }
         let next_epoch = next_queue_epoch(
             self.queue_epoch,
             expected_epoch,
@@ -1225,6 +1273,9 @@ impl Context {
             self.release_resource(allocation)?;
         }
         while let Some(allocation) = self.full_forward_internal.pop() {
+            self.release_resource(allocation)?;
+        }
+        while let Some(allocation) = self.dependency_internal.pop() {
             self.release_resource(allocation)?;
         }
         if !self.handles.is_empty() || !self.mmap_offsets.is_empty() || self.total_bytes != 0 {

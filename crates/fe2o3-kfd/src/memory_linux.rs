@@ -54,6 +54,29 @@ pub(super) struct LinuxMemoryBackendFor<D> {
 
 #[cfg(feature = "engineering-gfx950")]
 impl LinuxMemoryBackendFor<crate::CheckedGfx950XnackMinusDevice> {
+    // Deliberately separate from MemoryBackend's reviewed generic predicate.
+    // Only the private retained TP2 canary calls this exact dependency header.
+    pub(super) fn publish_engineering_dependency_header(
+        mapping: &mut LinuxCpuMapping,
+        requested_bytes: usize,
+        slot_index: u32,
+    ) -> Result<(), MemorySessionError> {
+        let offset = usize::try_from(slot_index)
+            .ok()
+            .and_then(|index| index.checked_mul(64))
+            .ok_or_else(|| malformed_aql_mapping("dependency packet offset"))?;
+        let pointer = checked_mapping_pointer(mapping, requested_bytes, offset, 64, 4)?;
+        // SAFETY: exact initialized AtomicU32 at the retained exclusive slot.
+        let atomic = unsafe { &*pointer.cast::<AtomicU32>() };
+        if u32::from_le(atomic.load(Ordering::Relaxed)) != 1 {
+            return Err(malformed_aql_mapping(
+                "dependency packet is not unpublished",
+            ));
+        }
+        atomic.store(0x1503_u32.to_le(), Ordering::Release);
+        Ok(())
+    }
+
     pub(super) fn observe_engineering_queue_properties(
         mapping: &mut LinuxCpuMapping,
     ) -> Result<u32, MemorySessionError> {
@@ -1663,6 +1686,54 @@ mod tests {
         );
         assert_eq!(&control.0[..8], &0xaaaa_aaaa_aaaa_aaaa_u64.to_le_bytes());
         assert_eq!(&control.0[8..16], &0xbbbb_bbbb_bbbb_bbbb_u64.to_le_bytes());
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    #[test]
+    fn dependency_header_has_separate_exact_bounded_release_path() {
+        let mut ring = MinimumRing([0; 4096]);
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut ring).cast(),
+            bytes: 4096,
+            active: true,
+            accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
+        };
+        let mut packet = [0; 64];
+        packet[..4].copy_from_slice(&1_u32.to_le_bytes());
+        packet[8..16].copy_from_slice(&0x1000_u64.to_le_bytes());
+        packet[56..64].copy_from_slice(&0x2040_u64.to_le_bytes());
+        LinuxGfx950MemoryBackend::write_aql_slot(&mut mapping, 4096, 1, &packet).unwrap();
+        assert!(
+            LinuxGfx950MemoryBackend::publish_aql_header(&mut mapping, 4096, 1, 0x1503).is_err()
+        );
+        LinuxGfx950MemoryBackend::publish_engineering_dependency_header(&mut mapping, 4096, 1)
+            .unwrap();
+        assert_eq!(
+            LinuxGfx950MemoryBackend::observe_aql_packet_header_acquire(&mut mapping, 4096, 1)
+                .unwrap(),
+            (1, 0x1503, 0)
+        );
+        assert_eq!(&ring.0[68..128], &packet[4..64]);
+        assert!(
+            LinuxGfx950MemoryBackend::publish_engineering_dependency_header(&mut mapping, 4096, 1)
+                .is_err()
+        );
+        assert!(
+            LinuxGfx950MemoryBackend::publish_engineering_dependency_header(&mut mapping, 4096, 64)
+                .is_err()
+        );
+        packet[..4].copy_from_slice(&0x10001_u32.to_le_bytes());
+        LinuxGfx950MemoryBackend::write_aql_slot(&mut mapping, 4096, 2, &packet).unwrap();
+        assert!(
+            LinuxGfx950MemoryBackend::publish_engineering_dependency_header(&mut mapping, 4096, 2)
+                .is_err()
+        );
+        mapping.accessible = false;
+        assert!(
+            LinuxGfx950MemoryBackend::publish_engineering_dependency_header(&mut mapping, 4096, 3)
+                .is_err()
+        );
     }
 
     #[test]

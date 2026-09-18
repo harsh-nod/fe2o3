@@ -12,6 +12,12 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+#[cfg(all(feature = "engineering-gfx950", target_arch = "x86_64"))]
+#[path = "topology_engineering_gtt_signal.rs"]
+mod engineering_gtt_signal;
+#[cfg(all(feature = "engineering-gfx950", target_arch = "x86_64"))]
+pub(crate) use engineering_gtt_signal::EngineeringGttSignalRoutesV1;
+
 /// Kernel-owned topology tree used by the first Linux KFD profile.
 pub const DEFAULT_TOPOLOGY_ROOT: &str = "/sys/class/kfd/kfd/topology";
 pub const DEFAULT_BOOT_ID_PATH: &str = "/proc/sys/kernel/random/boot_id";
@@ -2597,6 +2603,9 @@ mod tests {
 
     #[cfg(feature = "engineering-gfx950")]
     include!("topology_gfx950_asrock_tests.rs");
+
+    #[cfg(feature = "engineering-gfx950")]
+    include!("topology_engineering_gtt_signal_tests.rs");
 
     #[test]
     fn sdma_topology_capability_manifest_is_frozen() {

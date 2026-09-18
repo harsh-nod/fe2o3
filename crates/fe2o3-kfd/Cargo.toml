@@ -22,6 +22,11 @@ name = "fe2o3-gfx950-engineering-worker"
 path = "src/bin/gfx950_engineering_worker.rs"
 required-features = ["engineering-gfx950"]
 
+[[bin]]
+name = "fe2o3-gfx950-tp2-dependency-canary"
+path = "src/bin/gfx950_tp2_dependency_canary.rs"
+required-features = ["engineering-gfx950"]
+
 [[example]]
 name = "kfd-host-visible-memory"
 required-features = ["live-validation"]
