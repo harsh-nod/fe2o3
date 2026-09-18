@@ -45,6 +45,7 @@ pub(crate) enum ProductionPipelineError {
     SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     SemanticSsa(fe2o3_pliron::ProductionSemanticSsaErrorV1),
+    ContextHandoff(fe2o3_lower_mir_kernel::ProductionContextRootErrorV29),
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
@@ -116,6 +117,7 @@ impl fmt::Display for ProductionPipelineError {
             Self::SemanticSsa(error) => {
                 write!(formatter, "production compilation semantic SSA planning failed: {error}")
             }
+            Self::ContextHandoff(error) => write!(formatter, "production compilation context root handoff failed: {error}"),
             Self::RankedProjection(error) => {
                 write!(formatter, "production compilation general kernel verification failed: {error}")
             }
@@ -275,6 +277,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::SemanticImport(error) => Some(error),
             Self::SemanticMiddleEnd(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
+            Self::ContextHandoff(error) => Some(error),
             Self::RankedProjection(error) => Some(error),
             Self::RankedVerification(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
@@ -3432,6 +3435,11 @@ impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
     }
 }
 
+#[path = "production_context_handoff_v29.rs"]
+mod context_handoff_v29;
+#[cfg(test)]
+pub(crate) use context_handoff_v29::check_context_handoff_v29;
+
 impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
     fn require_target_neutral_lowering(self) -> ProductionPipelineError {
         let SsaSemanticMirStage {
@@ -3505,6 +3513,12 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
             &mut work,
             crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
         );
+        context_handoff_v29::check_context_handoff_v29(
+            &bindings.context_entries,
+            &semantic_ssa,
+            &launch,
+            &mut budget,
+        )?;
         let materialized =
             fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
                 semantic_ssa,

@@ -13,7 +13,8 @@ mod flow;
 #[path = "kernel_context_semantic_v29.rs"]
 mod semantic;
 pub(crate) use semantic::{
-    BoundContextEntryV29, RetainedContextEntriesV29, RetainedContextEntryV29,
+    BoundContextEntryV29, CallBoundaryV29, ContextRootVisitErrorV29, RetainedContextEntriesV29,
+    RetainedContextEntryV29,
 };
 
 pub(crate) struct CapturedContextProducersV1<'tcx> {

@@ -131,6 +131,11 @@ enum Mutation {
 }
 
 fn fixture(mutation: Mutation) -> AdmittedInertSemanticMirV1 {
+    fixture_roots(mutation, 1)
+}
+
+fn fixture_roots(mutation: Mutation, roots: u8) -> AdmittedInertSemanticMirV1 {
+    assert!((1..=8).contains(&roots));
     let aggregate_layout = |fields| {
         SemanticTypeLayoutV1::aggregate_with_backend_repr(
             Some(0),
@@ -246,36 +251,60 @@ fn fixture(mutation: Mutation) -> AdmittedInertSemanticMirV1 {
         arguments[1] = SemanticOperandV1::Move(place(1, U32));
     }
     let mut blocks = vec![
-        block(10, vec![], call(2, vec![], 3, CONTEXT, 1)),
-        block(11, vec![], call(1, arguments, 4, UNIT, 2)),
+        block(
+            10,
+            vec![],
+            call(u32::from(roots) + 1, vec![], 3, CONTEXT, 1),
+        ),
+        block(11, vec![], call(u32::from(roots), arguments, 4, UNIT, 2)),
         block(12, vec![unit_return()], SemanticTerminatorKindV1::Return),
     ];
     if matches!(mutation, Mutation::ExtraIssue) {
-        blocks[2] = block(12, vec![], call(2, vec![], 3, CONTEXT, 3));
+        blocks[2] = block(
+            12,
+            vec![],
+            call(u32::from(roots) + 1, vec![], 3, CONTEXT, 3),
+        );
         blocks.push(block(
             13,
             vec![unit_return()],
             SemanticTerminatorKindV1::Return,
         ));
     }
-    let root = function(
-        40,
-        SemanticFunctionRoleV1::KernelRoot,
-        abi(40, true, &[U32, U32], UNIT),
-        &[
-            (UNIT, SemanticLocalRoleV1::Return),
-            (U32, SemanticLocalRoleV1::Argument(0)),
-            (U32, SemanticLocalRoleV1::Argument(1)),
-            (CONTEXT, SemanticLocalRoleV1::Temporary),
-            (UNIT, SemanticLocalRoleV1::Temporary),
-        ],
-        blocks,
-    )
-    .with_kernel_entry(SemanticKernelEntryV1::new(
-        SemanticLinkSymbolV1::new(b"custody_root".to_vec()).unwrap(),
-        SemanticKernelBindingIdentityV1::from_sha256([60; 32]),
-        SemanticKernelSourceContractV1::new(None, None, None).unwrap(),
-    ));
+    let mut functions = Vec::new();
+    for index in 0..roots {
+        let root = function(
+            40 + index,
+            SemanticFunctionRoleV1::KernelRoot,
+            abi(40 + index, true, &[U32, U32], UNIT),
+            &[
+                (UNIT, SemanticLocalRoleV1::Return),
+                (U32, SemanticLocalRoleV1::Argument(0)),
+                (U32, SemanticLocalRoleV1::Argument(1)),
+                (CONTEXT, SemanticLocalRoleV1::Temporary),
+                (UNIT, SemanticLocalRoleV1::Temporary),
+            ],
+            blocks.clone(),
+        )
+        .with_kernel_entry(SemanticKernelEntryV1::new(
+            SemanticLinkSymbolV1::new(format!("custody_root_{index}").into_bytes()).unwrap(),
+            SemanticKernelBindingIdentityV1::from_sha256([60 + index; 32]),
+            SemanticKernelSourceContractV1::new(
+                Some(
+                    SemanticKernelLaunchBoundsV1::new(
+                        Some(SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap()),
+                        None,
+                        None,
+                    )
+                    .unwrap(),
+                ),
+                None,
+                None,
+            )
+            .unwrap(),
+        ));
+        functions.push(root);
+    }
     let helper = function(
         if matches!(mutation, Mutation::HelperIdentity) {
             51
@@ -296,10 +325,10 @@ fn fixture(mutation: Mutation) -> AdmittedInertSemanticMirV1 {
             SemanticTerminatorKindV1::Return,
         )],
     );
-    let mut callables = vec![
-        SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
-        SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(1)),
-    ];
+    functions.push(helper);
+    let mut callables = (0..=u32::from(roots))
+        .map(|id| SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(id)))
+        .collect::<Vec<_>>();
     let tag = if matches!(mutation, Mutation::Issuer) {
         71
     } else {
@@ -326,9 +355,11 @@ fn fixture(mutation: Mutation) -> AdmittedInertSemanticMirV1 {
         vec![],
         vec![],
         vec![],
-        vec![root, helper],
+        functions,
         callables,
-        vec![SemanticFunctionIdV1::from_index(0)],
+        (0..u32::from(roots))
+            .map(SemanticFunctionIdV1::from_index)
+            .collect(),
     )
     .unwrap()
     .admit_exact_v29(SemanticMirLimitsV1::default())
@@ -368,6 +399,302 @@ fn retained() -> RetainedContextEntryV29 {
     completed()
         .bind_function(&fixture(Mutation::None).functions()[0], |_| Ok(()))
         .unwrap()
+}
+
+fn sealed_roots(semantic: &AdmittedInertSemanticMirV1) -> RetainedContextEntriesV29 {
+    let roots = semantic.roots().len() as u32;
+    let entries = (0..roots)
+        .map(|root| {
+            let mut entry = completed();
+            entry.function = SemanticFunctionIdV1::from_index(root);
+            entry.root_identity = semantic.functions()[root as usize].identity();
+            entry.helper = SemanticFunctionIdV1::from_index(roots);
+            entry.issuer = SemanticCallableIdV1::from_index(roots + 1);
+            entry
+                .bind_function(&semantic.functions()[root as usize], |_| Ok(()))
+                .unwrap()
+        })
+        .collect();
+    RetainedContextEntriesV29::seal(entries, semantic, |_| Ok(())).unwrap()
+}
+
+fn ssa_owner(semantic: AdmittedInertSemanticMirV1) -> fe2o3_pliron::ProductionSemanticSsaOwnerV1 {
+    fe2o3_pliron::ProductionSemanticSsaOwnerV1::try_new(
+        fe2o3_pliron::ProductionSemanticMirOwnerV1::try_new(
+            semantic,
+            fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
+        )
+        .unwrap(),
+        fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap()
+}
+
+fn launch_roster(
+    semantic: &AdmittedInertSemanticMirV1,
+) -> fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1 {
+    use fe2o3_lower_mir_kernel::{
+        ProductionSourceLaunchInputV1, ProductionSourceLaunchRootInputV1,
+    };
+    let names = (0..semantic.roots().len())
+        .map(|i| format!("root_{i}"))
+        .collect::<Vec<_>>();
+    let inputs = semantic
+        .roots()
+        .iter()
+        .zip(&names)
+        .map(|(root, name)| {
+            ProductionSourceLaunchRootInputV1::new(
+                name,
+                *semantic.functions()[root.index() as usize]
+                    .kernel_entry()
+                    .unwrap()
+                    .kernel_binding_identity()
+                    .as_bytes(),
+                ProductionSourceLaunchInputV1::new(1, Some([64, 1, 1]), [2, 1, 1]),
+            )
+        })
+        .collect::<Vec<_>>();
+    fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1::try_new(semantic, &inputs).unwrap()
+}
+
+#[test]
+fn borrowed_context_anchors_keep_exact_metadata_and_canonical_order() {
+    for count in [1, 4] {
+        let semantic = fixture_roots(Mutation::None, count);
+        let entries = sealed_roots(&semantic);
+        let owner = ssa_owner(semantic);
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100);
+        let mut budget = VisitBudget::new(&mut work, 7);
+        budget.reserve_storage(7).unwrap();
+        let mut roots = Vec::new();
+        entries
+            .visit_root_anchors_v29(owner.source_semantic(), &mut budget, |entry, budget| {
+                budget.charge_work(entry.helper_operands().len())?;
+                roots.push(entry.root().0);
+                assert_eq!(
+                    entry.root().1,
+                    owner.source_semantic().functions()[entry.function().index() as usize]
+                        .identity()
+                );
+                assert_eq!(
+                    entry.helper(),
+                    (
+                        SemanticFunctionIdV1::from_index(u32::from(count)),
+                        SemanticFunctionIdentityV1::from_sha256([50; 32])
+                    )
+                );
+                assert_eq!(
+                    entry.issuer(),
+                    (
+                        SemanticCallableIdV1::from_index(u32::from(count) + 1),
+                        SemanticFunctionIdentityV1::from_sha256([70; 32])
+                    )
+                );
+                assert_eq!(
+                    entry.context(),
+                    (CONTEXT, SemanticTypeIdentityV1::from_sha256([4; 32]))
+                );
+                assert_eq!(
+                    entry.issuance().location(),
+                    (SemanticBlockIdV1::from_index(0), 0)
+                );
+                assert_eq!(
+                    entry.issuance().destination(),
+                    (SemanticLocalIdV1::from_index(3), CONTEXT)
+                );
+                assert_eq!(
+                    entry.issuance().continuation(),
+                    SemanticBlockIdV1::from_index(1)
+                );
+                assert_eq!(
+                    entry.issuance().unwind(),
+                    SemanticUnwindActionV1::Unreachable
+                );
+                assert_eq!(
+                    entry.helper_call().location(),
+                    (SemanticBlockIdV1::from_index(1), 0)
+                );
+                assert_eq!(
+                    entry.helper_call().destination(),
+                    (SemanticLocalIdV1::from_index(4), UNIT)
+                );
+                assert_eq!(
+                    entry.helper_call().continuation(),
+                    SemanticBlockIdV1::from_index(2)
+                );
+                assert_eq!(
+                    entry.helper_call().unwind(),
+                    SemanticUnwindActionV1::Unreachable
+                );
+                assert_eq!(entry.helper_argument(), SemanticLocalIdV1::from_index(3));
+                assert_eq!(entry.helper_operands(), completed().arguments);
+                Ok::<_, VisitResource>(())
+            })
+            .unwrap();
+        assert_eq!(roots, owner.source_semantic().roots());
+        assert_eq!(budget.storage(), 7);
+        assert_eq!(work.work(), 1 + usize::from(count) * 4);
+    }
+}
+
+#[test]
+fn borrowed_context_visits_prepay_enumeration_and_share_consumer_budget() {
+    for count in [1, 4] {
+        let semantic = fixture_roots(Mutation::None, count);
+        let entries = sealed_roots(&semantic);
+        let exact = 1 + usize::from(count);
+        for limit in [0, exact - 1, exact] {
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(limit);
+            let mut budget = VisitBudget::new(&mut work, 0);
+            let mut visits = 0;
+            let result = entries.visit_root_anchors_v29(&semantic, &mut budget, |_, _| {
+                visits += 1;
+                Ok::<_, ()>(())
+            });
+            assert_eq!(result.is_ok(), limit == exact);
+            assert_eq!(
+                visits,
+                if limit == exact {
+                    usize::from(count)
+                } else {
+                    0
+                }
+            );
+            assert_eq!(budget.storage(), 0);
+        }
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(exact);
+        let mut budget = VisitBudget::new(&mut work, 0);
+        assert!(matches!(
+            entries
+                .visit_root_anchors_v29(&semantic, &mut budget, |_, budget| budget.charge_work(1)),
+            Err(ContextRootVisitErrorV29::Consumer(_))
+        ));
+        assert_eq!(work.work(), exact);
+    }
+}
+
+#[test]
+fn borrowed_context_visits_reject_source_substitution_before_callbacks() {
+    let source = fixture(Mutation::None);
+    let entries = sealed_roots(&source);
+    for mutation in [
+        Mutation::Arguments,
+        Mutation::ArgumentKind,
+        Mutation::Issuer,
+        Mutation::ExtraIssue,
+        Mutation::HelperIdentity,
+        Mutation::ContextIdentity,
+    ] {
+        let semantic = fixture(mutation);
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100);
+        let mut budget = VisitBudget::new(&mut work, 0);
+        let mut visits = 0;
+        assert!(matches!(
+            entries.visit_root_anchors_v29(&semantic, &mut budget, |_, _| {
+                visits += 1;
+                Ok::<_, ()>(())
+            }),
+            Err(ContextRootVisitErrorV29::Source(_))
+        ));
+        assert_eq!(visits, 0);
+    }
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100);
+    let mut budget = VisitBudget::new(&mut work, 0);
+    assert!(matches!(
+        entries.visit_root_anchors_v29(&source, &mut budget, |_, _| Err("consumer")),
+        Err(ContextRootVisitErrorV29::Consumer("consumer"))
+    ));
+}
+
+#[test]
+fn borrowed_context_visits_stop_at_late_consumer_failure_without_resetting_budget() {
+    let semantic = fixture_roots(Mutation::None, 4);
+    let entries = sealed_roots(&semantic);
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100);
+    let mut budget = VisitBudget::new(&mut work, 7);
+    budget.charge_work(11).unwrap();
+    budget.reserve_storage(7).unwrap();
+    let mut visits = 0;
+    assert!(matches!(
+        entries.visit_root_anchors_v29(&semantic, &mut budget, |_, budget| {
+            visits += 1;
+            budget.charge_work(3).unwrap();
+            if visits == 2 { Err("consumer") } else { Ok(()) }
+        }),
+        Err(ContextRootVisitErrorV29::Consumer("consumer"))
+    ));
+    assert_eq!(visits, 2);
+    assert_eq!(budget.storage(), 7);
+    assert_eq!(work.work(), 11 + 1 + 4 + 2 * 3);
+}
+
+#[test]
+fn production_context_handoff_joins_ssa_and_launch_under_the_shared_budget() {
+    use crate::production_pipeline::{ProductionPipelineError, check_context_handoff_v29};
+    use fe2o3_lower_mir_kernel::ProductionContextRootErrorV29;
+    for count in [1, 4] {
+        let semantic = fixture_roots(Mutation::None, count);
+        let entries = sealed_roots(&semantic);
+        let launch = launch_roster(&semantic);
+        let owner = ssa_owner(semantic);
+        let exact = {
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(10_000);
+            let mut budget = VisitBudget::new(&mut work, 0);
+            check_context_handoff_v29(&entries, &owner, &launch, &mut budget).unwrap();
+            work.work()
+        };
+        for prior in [0, 11] {
+            for limit in [exact - 1, exact] {
+                let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(prior + limit);
+                let mut budget = VisitBudget::new(&mut work, 7);
+                budget.charge_work(prior).unwrap();
+                budget.reserve_storage(7).unwrap();
+                let result = check_context_handoff_v29(&entries, &owner, &launch, &mut budget);
+                if limit == exact {
+                    result.unwrap();
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(ProductionPipelineError::ContextHandoff(
+                            ProductionContextRootErrorV29::Resource(_)
+                        ))
+                    ));
+                }
+                assert_eq!(budget.storage(), 7);
+                if limit == exact {
+                    assert_eq!(work.work(), prior + exact);
+                } else {
+                    assert!((prior..=prior + limit).contains(&work.work()));
+                }
+            }
+        }
+        let different = fixture_roots(Mutation::Arguments, count);
+        let different_launch = launch_roster(&different);
+        let different_owner = ssa_owner(different);
+        for (ssa, launch, source_mismatch) in [
+            (&different_owner, &launch, true),
+            (&owner, &different_launch, false),
+            (&different_owner, &different_launch, true),
+        ] {
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(exact);
+            let mut budget = VisitBudget::new(&mut work, 0);
+            let error = check_context_handoff_v29(&entries, ssa, launch, &mut budget).unwrap_err();
+            if source_mismatch {
+                assert!(matches!(
+                    error,
+                    ProductionPipelineError::SemanticImport(
+                        crate::collector::ProductionSemanticImportErrorV1::BodyConstruction(_)
+                    )
+                ));
+            } else {
+                assert!(matches!(
+                    error,
+                    ProductionPipelineError::ContextHandoff(ProductionContextRootErrorV29::Launch)
+                ));
+            }
+        }
+    }
 }
 
 #[test]
@@ -462,23 +789,25 @@ fn retained_context_seal_uses_exact_cumulative_work_budget() {
 #[test]
 fn completed_context_rechecks_typed_call_boundaries_before_retention() {
     let semantic = fixture(Mutation::None);
-    for mutation in 0..11 {
+    for mutation in 0..15 {
         let corrupt = |entry: &mut CompletedContextEntryV29| {
-            if mutation == 10 {
+            if mutation == 14 {
                 entry.helper_argument = SemanticLocalIdV1::from_index(2);
                 return;
             }
-            let call = if mutation < 5 {
+            let call = if mutation < 7 {
                 &mut entry.issuance
             } else {
                 &mut entry.helper_call
             };
-            match mutation % 5 {
+            match mutation % 7 {
                 0 => call.destination_type = U32,
                 1 => call.destination = SemanticLocalIdV1::from_index(0),
                 2 => call.target = SemanticBlockIdV1::from_index(0),
                 3 => call.statements = 1,
                 4 => call.unwind = SemanticUnwindActionV1::Continue,
+                5 => call.block = SemanticBlockIdV1::from_index(2),
+                6 => call.block = SemanticBlockIdV1::from_index(u32::MAX),
                 _ => unreachable!(),
             }
         };

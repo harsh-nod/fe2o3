@@ -2,6 +2,10 @@
 
 use super::{BoundCallV29, BoundContextEntryV29};
 use crate::production_semantic_body_v1::ProductionSemanticBodyErrorV1 as Error;
+use fe2o3_kernel_ir::{
+    CanonicalKernelIrVerificationResourceBudgetV1 as VisitBudget,
+    CanonicalKernelIrVerificationResourceErrorV1 as VisitResource,
+};
 use fe2o3_mir_model::semantic_mir_v1::*;
 
 #[cfg(test)]
@@ -15,7 +19,7 @@ fn mismatch() -> Error {
 }
 
 #[derive(Debug)]
-struct CallBoundaryV29 {
+pub(crate) struct CallBoundaryV29 {
     block: SemanticBlockIdV1,
     statements: usize,
     destination: SemanticLocalIdV1,
@@ -25,6 +29,22 @@ struct CallBoundaryV29 {
 }
 
 impl CallBoundaryV29 {
+    pub(crate) fn location(&self) -> (SemanticBlockIdV1, usize) {
+        (self.block, self.statements)
+    }
+
+    pub(crate) fn destination(&self) -> (SemanticLocalIdV1, SemanticTypeIdV1) {
+        (self.destination, self.destination_type)
+    }
+
+    pub(crate) fn continuation(&self) -> SemanticBlockIdV1 {
+        self.target
+    }
+
+    pub(crate) fn unwind(&self) -> SemanticUnwindActionV1 {
+        self.unwind
+    }
+
     fn from_consumed(
         call: BoundCallV29,
         destination_type: SemanticTypeIdV1,
@@ -48,21 +68,21 @@ impl CallBoundaryV29 {
         &self,
         function: &'a SemanticFunctionDeclV1,
     ) -> Result<&'a SemanticDirectCallV1, Error> {
+        let (block_id, statements) = self.location();
         let block = function
             .blocks()
-            .get(self.block.index() as usize)
+            .get(block_id.index() as usize)
             .ok_or_else(mismatch)?;
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             return Err(mismatch());
         };
         let destination = call.destination().ok_or_else(mismatch)?;
-        if block.statements().len() != self.statements
-            || destination.place().local() != self.destination
-            || destination.place().ty() != self.destination_type
+        if block.statements().len() != statements
+            || (destination.place().local(), destination.place().ty()) != self.destination()
             || !destination.place().projections().is_empty()
-            || destination.edge().target() != self.target
+            || destination.edge().target() != self.continuation()
             || destination.edge().role() != SemanticEdgeRoleV1::CallReturn
-            || call.unwind() != self.unwind
+            || call.unwind() != self.unwind()
             || !call.variadic_argument_abis().is_empty()
         {
             return Err(mismatch());
@@ -229,7 +249,39 @@ pub(crate) struct RetainedContextEntryV29 {
 
 impl RetainedContextEntryV29 {
     pub(crate) fn function(&self) -> SemanticFunctionIdV1 {
-        self.source.function
+        self.root().0
+    }
+
+    pub(crate) fn root(&self) -> (SemanticFunctionIdV1, SemanticFunctionIdentityV1) {
+        (self.source.function, self.source.root_identity)
+    }
+
+    pub(crate) fn helper(&self) -> (SemanticFunctionIdV1, SemanticFunctionIdentityV1) {
+        (self.source.helper, self.source.helper_identity)
+    }
+
+    pub(crate) fn issuer(&self) -> (SemanticCallableIdV1, SemanticFunctionIdentityV1) {
+        (self.source.issuer, self.source.issuer_identity)
+    }
+
+    pub(crate) fn context(&self) -> (SemanticTypeIdV1, SemanticTypeIdentityV1) {
+        (self.context, self.source.context_identity)
+    }
+
+    pub(crate) fn issuance(&self) -> &CallBoundaryV29 {
+        &self.source.issuance
+    }
+
+    pub(crate) fn helper_call(&self) -> &CallBoundaryV29 {
+        &self.source.helper_call
+    }
+
+    pub(crate) fn helper_argument(&self) -> SemanticLocalIdV1 {
+        self.source.helper_argument
+    }
+
+    pub(crate) fn helper_operands(&self) -> &[SemanticOperandV1] {
+        &self.source.arguments
     }
 
     fn check(
@@ -237,45 +289,48 @@ impl RetainedContextEntryV29 {
         semantic: &AdmittedInertSemanticMirV1,
         charge: &mut impl FnMut(usize) -> Result<(), Error>,
     ) -> Result<(), Error> {
-        let source = &self.source;
-        charge(20 + source.arguments.len())?;
+        charge(20 + self.helper_operands().len())?;
+        let (root_id, root_identity) = self.root();
+        let (helper_id, helper_identity) = self.helper();
+        let (issuer_id, issuer_identity) = self.issuer();
+        let (context_id, context_identity) = self.context();
         let function = semantic
             .functions()
-            .get(source.function.index() as usize)
+            .get(root_id.index() as usize)
             .ok_or_else(mismatch)?;
         let helper = semantic
             .functions()
-            .get(source.helper.index() as usize)
+            .get(helper_id.index() as usize)
             .ok_or_else(mismatch)?;
-        let issuance = source.issuance.observe(function)?;
-        let helper_call = source.helper_call.observe(function)?;
-        if function.identity() != source.root_identity
+        let issuance = self.issuance().observe(function)?;
+        let helper_call = self.helper_call().observe(function)?;
+        if function.identity() != root_identity
             || function.role() != SemanticFunctionRoleV1::KernelRoot
             || function.kernel_entry().is_none()
             || helper.role() != SemanticFunctionRoleV1::InternalHelper
-            || helper.identity() != source.helper_identity
-            || issuance.callee() != source.issuer
+            || helper.identity() != helper_identity
+            || issuance.callee() != issuer_id
             || !issuance.arguments().is_empty()
-            || issuance.destination().ok_or_else(mismatch)?.place().ty() != self.context
-            || helper_call.arguments() != source.arguments
+            || issuance.destination().ok_or_else(mismatch)?.place().ty() != context_id
+            || helper_call.arguments() != self.helper_operands()
             || !matches!(helper_call.arguments().first(), Some(SemanticOperandV1::Move(place))
-                if place.local() == source.helper_argument && place.projections().is_empty() && place.ty() == self.context)
+                if place.local() == self.helper_argument() && place.projections().is_empty() && place.ty() == context_id)
             || !matches!(semantic.callables().get(helper_call.callee().index() as usize),
-                Some(SemanticCallableDeclV1::Defined { function }) if *function == source.helper)
-            || !matches!(semantic.callables().get(source.issuer.index() as usize),
+                Some(SemanticCallableDeclV1::Defined { function }) if *function == helper_id)
+            || !matches!(semantic.callables().get(issuer_id.index() as usize),
                 Some(SemanticCallableDeclV1::CompilerIntrinsic { binding,
                     operation: SemanticCompilerIntrinsicOperationV1::Execution(
                         SemanticExecutionOperationV29::ContextIssue { context }), ..
-                }) if *context == self.context && binding.identity() == source.issuer_identity)
+                }) if *context == context_id && binding.identity() == issuer_identity)
             || semantic
                 .types()
-                .get(self.context.index() as usize)
+                .get(context_id.index() as usize)
                 .map(SemanticTypeDeclV1::identity)
-                != Some(source.context_identity)
+                != Some(context_identity)
             || !matches!(
                 semantic
                     .types()
-                    .get(self.context.index() as usize)
+                    .get(context_id.index() as usize)
                     .map(SemanticTypeDeclV1::rust_type_kind),
                 Some(SemanticRustTypeKindV1::Execution(
                     SemanticExecutionRoleV29::KernelContext
@@ -295,7 +350,37 @@ pub(crate) struct RetainedContextEntriesV29 {
     semantic_sha256: [u8; 32],
 }
 
+#[derive(Debug)]
+pub(crate) enum ContextRootVisitErrorV29<E> {
+    Source(Error),
+    Resource(VisitResource),
+    Consumer(E),
+}
+
 impl RetainedContextEntriesV29 {
+    /// Borrows authenticated anchors in canonical root order, never cloned authority.
+    /// Source identity and enumeration work are checked before the first callback.
+    /// Consumers share this budget and must discard partial plans on any error.
+    pub(crate) fn visit_root_anchors_v29<'w, E>(
+        &self,
+        semantic: &AdmittedInertSemanticMirV1,
+        budget: &mut VisitBudget<'w>,
+        mut visit: impl FnMut(&RetainedContextEntryV29, &mut VisitBudget<'w>) -> Result<(), E>,
+    ) -> Result<(), ContextRootVisitErrorV29<E>> {
+        budget
+            .charge_work(1)
+            .map_err(ContextRootVisitErrorV29::Resource)?;
+        self.validate_source(semantic)
+            .map_err(ContextRootVisitErrorV29::Source)?;
+        budget
+            .charge_work(self.entries.len())
+            .map_err(ContextRootVisitErrorV29::Resource)?;
+        for entry in &self.entries {
+            visit(entry, budget).map_err(ContextRootVisitErrorV29::Consumer)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn seal(
         entries: Vec<RetainedContextEntryV29>,
         semantic: &AdmittedInertSemanticMirV1,

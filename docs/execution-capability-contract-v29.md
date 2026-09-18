@@ -104,6 +104,31 @@ the cumulative body-construction work limit. Payload size remains bounded by
 the existing function/call-argument inventories; this is not an allocator/RSS
 accounting guarantee for rustc queries or source construction.
 
+The private `visit_root_anchors_v29` visitor exposes immutable retained entries
+only after checking the complete admitted-source identity and prepaying entry
+enumeration. Root/helper/issuer/type IDs and identities, both typed call
+boundaries, context-local mapping and expected helper operands remain borrowed
+from the original receipt. Consumers receive the same cumulative canonical
+budget and must abandon partial plans on any error; visitor errors do not roll
+back caller-owned side effects or accounting.
+
+Immediately before pre-ranked materialization, the production transaction
+projects those records into the shared lowerer's `with_checked_context_root_v29`
+input. Expected operands come from the receipt, not the candidate. The lowerer
+joins them to the actual source calls, SSA plans and exact source-launch row.
+Its public input is untrusted data and its scoped view establishes consistency,
+not source authentication or new execution authority. Original private bindings
+retain source custody. Source grid inputs still rely on the existing retained
+launch contract, not an independent copy authenticated by semantic MIR.
+
+This connected handoff currently has no callback-expansion consumer. It checks
+root agreement and then reaches the unchanged materialization gate. The next
+consumer should derive callback, borrow, result and complete-exit structure from
+the authenticated immutable semantic owner wherever that representation is
+complete; a second raw-MIR parser or receipt is not required without a concrete
+information gap. Independent expansion correspondence and scope discharge are
+still necessary.
+
 This receipt authenticates entry source custody only. It does not yet retain a
 workgroup derive, callback, exclusive-borrow or complete scope-exit relation.
 The V29 materialization gate remains closed. Connected callback expansion and

@@ -38,8 +38,9 @@ use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc
 
 mod kernel_context_auth_v1;
 pub(crate) use kernel_context_auth_v1::{
-    AuthenticatedContextEntriesV1, BoundContextEntryV29, CapturedContextProducersV1,
-    RetainedContextEntriesV29, RetainedContextEntryV29, capture_context_producers_v1,
+    AuthenticatedContextEntriesV1, BoundContextEntryV29, CallBoundaryV29,
+    CapturedContextProducersV1, ContextRootVisitErrorV29, RetainedContextEntriesV29,
+    RetainedContextEntryV29, capture_context_producers_v1,
 };
 mod closure_flow_v1;
 mod kernel_context_frontend_v1;

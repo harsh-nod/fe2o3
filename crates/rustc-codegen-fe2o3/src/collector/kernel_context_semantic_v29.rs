@@ -27,7 +27,8 @@ mod commitment_tests;
 #[path = "kernel_context_custody_v29.rs"]
 mod custody;
 pub(crate) use custody::{
-    CompletedContextEntryV29, RetainedContextEntriesV29, RetainedContextEntryV29,
+    CallBoundaryV29, CompletedContextEntryV29, ContextRootVisitErrorV29, RetainedContextEntriesV29,
+    RetainedContextEntryV29,
 };
 
 #[derive(Debug)]
