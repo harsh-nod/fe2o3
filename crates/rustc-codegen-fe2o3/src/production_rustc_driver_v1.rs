@@ -945,6 +945,10 @@ fn require_canonical_overflow_checks_v1(args: &[String]) -> Result<(), String> {
 }
 
 #[cfg(test)]
+#[cfg(target_os = "linux")]
+mod gfx942_inline_value_qualification_v30_tests;
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn generic_handoff_accepts_exact_targets_and_legacy_remains_gfx942_only() {

@@ -2871,7 +2871,12 @@ fn missing_ranked_effect_v1(
     }
 }
 
+#[path = "production_semantic_kir_v1/gfx942_inline_scalar_correspondence_v30.rs"]
+mod gfx942_inline_scalar_correspondence_v30;
+use gfx942_inline_scalar_correspondence_v30::Gfx942InlineScalarCorrespondenceV30;
+
 struct KirCorrelationIndexV1<'module> {
+    inline_scalar: Gfx942InlineScalarCorrespondenceV30<'module>,
     blocks: BTreeMap<BlockId, &'module [Operation]>,
     operations: BTreeMap<FunctionOperationLocation, &'module Operation>,
     definitions: BTreeMap<ValueId, &'module Operation>,
@@ -3380,6 +3385,7 @@ fn build_kir_correlation_index<'module>(
         }
     }
     Some(KirCorrelationIndexV1 {
+        inline_scalar: Gfx942InlineScalarCorrespondenceV30::empty(),
         blocks,
         operations,
         definitions,
@@ -4326,6 +4332,13 @@ fn normalize_kir_expression_inner_v1(
         )
     };
     Some(match &operation.kind {
+        OperationKind::InlineAssembly(_) => {
+            return kir
+                .inline_scalar
+                .normalize(operation, value, budget, |input, budget| {
+                    recurse(input, visiting, budget)
+                });
+        }
         OperationKind::Constant(constant) => {
             let (constant_scalar, bits) = normalize_kir_constant_v1(constant)?;
             if constant_scalar != scalar {
@@ -6380,7 +6393,7 @@ fn validate_mir_pliron_translation_with_semantic_v1(
     let mut budget = UnsupportedIndexCorrelationBudgetV1 {
         remaining: work_limit,
     };
-    let kir = build_kir_correlation_index(body, max_operations, &mut budget)
+    let mut kir = build_kir_correlation_index(body, max_operations, &mut budget)
         .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
     let (correspondence_owner, semantic_function) = correspondence
         .lowered_functions()
@@ -6391,6 +6404,15 @@ fn validate_mir_pliron_translation_with_semantic_v1(
         })
         .map(|record| (record.correspondence_owner(), record.semantic_function()))
         .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
+    kir.inline_scalar = Gfx942InlineScalarCorrespondenceV30::build(
+        semantic,
+        correspondence,
+        correspondence_owner,
+        semantic_function,
+        function,
+        &kir,
+        &mut budget,
+    )?;
     let generated_memory_effects = validate_generated_executable_effect_relations_v1(
         semantic,
         correspondence_owner,
@@ -26079,6 +26101,10 @@ mod shared_slice_helper_parameter_tests {
 
 #[cfg(test)]
 mod resource_tests {
+    mod gfx942_inline_scalar_correspondence_v30_tests {
+        use super::*;
+        include!("production_semantic_kir_v1/gfx942_inline_scalar_correspondence_v30_tests.rs");
+    }
     mod fixed_array_bounds_v1_tests {
         include!("production_semantic_kir_v1/fixed_array_bounds_v1_tests.rs");
         include!("production_semantic_kir_v1/dynamic_local_array_tests.rs");

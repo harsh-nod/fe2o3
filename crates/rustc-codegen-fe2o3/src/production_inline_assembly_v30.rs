@@ -64,7 +64,7 @@ mod tests {
             let semantic = semantic_operation(trusted).unwrap();
             assert_eq!(source_terminal_tag(trusted), tag);
             assert_eq!(input_count(trusted), arity);
-            assert_eq!(semantic.input_count() as usize, arity);
+            assert_eq!(semantic.input_count(), arity);
             assert_eq!(semantic.instruction().mnemonic(), mnemonic);
             assert_eq!(
                 semantic.option_bits(),

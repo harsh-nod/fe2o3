@@ -19,11 +19,11 @@ and its embedded Source Map V2. They do not decode a second authoritative IR.
 | --- | --- | --- |
 | Instruction contract | Existing gfx942 integer subset, shared operand/effect validation | Broad ISA, explicit allocation, scheduling and exact encodings |
 | CPU execution | Six VGPR integer operations, exact 32-bit result bits | SGPR uniformity, EXEC/VCC/SCC state, instruction latency |
-| Lowering | Existing LLVM inline-assembly path uses the shared contract | Direct assembler backend and final-code exact-contract checks |
+| Lowering | Shared inline-assembly contract; actual source-ranked V8/seven-pass target route and separate diagnostic V6/KIR V11 LLVM observation | Direct assembler backend and final-code exact-contract checks |
 | Debugger | Explicit `sim --bundle-v6` admission with embedded source binding | Live physical register/resource-state capture |
 | Inspection | Bounded immutable source-bound snapshots and region boundaries | Mutable graph editor and production resume from snapshots |
-| Source candidate | Six typed u32 markers enter the real source exporter; selected generated-helper variants freshly export and pass an independent CPU case | General source replacement and final ranked/protected artifact admission |
-| Resource display | Exact stopped CPU checkpoint bytes/initialization and bounded allocation/access pages | Allocation-lifetime inference, physical register values, GPU timings |
+| Source candidate | Six typed u32 markers enter the real source exporter; selected generated-helper variants freshly export and pass an independent CPU case | General source replacement, actual reference-bound proof qualification and protected artifact admission |
+| Resource display | Exact stopped global/LDS CPU checkpoint bytes/initialization and bounded allocation/access pages | Allocation-lifetime inference, physical register values, GPU timings |
 
 ## Integer contract
 
@@ -45,6 +45,25 @@ stale snapshot selectors, oversized requests and inconsistent resource snapshots
 Existing surrounding KIR checks still own memory bounds/permissions,
 initializedness, control flow, races and synchronization. Passing these checks
 does not establish unmodeled hardware behavior or a universal refinement proof.
+
+### Scalar values do not replace authored instructions
+
+The direct-root source resolver now recognizes the six exact u32 marker call
+results under bounded definition, escape, ABI, source-identity and call-return-edge
+dominance checks. Operands are resolved at the call site, not after later local
+mutations. Move projects its input; add/sub and bitwise values use the existing
+u32 wrapping expression contract. The independent lowerer correspondence joins
+the exact source occurrence and terminator span to original KIR operands/types;
+the normal immutable checked-owner replay still rejects equal-valued SSA
+substitutions. Actual instructions remain `InlineAssembly`, not ordinary `Binary`.
+
+These source and checked-owner model tests are separate from actual source
+captures. A further formal rule discharges only unknown memory effects for the
+six validated u32/NoMemory-only operations. It does not prove a pointer index,
+source authority, universal value equivalence or ordering/performance. Surrounding
+memory checks remain mandatory; unsupported assembly stays incomplete. Selected
+production compilation retains its fixed overflow checks, so checked Rust
+arithmetic must not be silently treated as wrapping to make a test pass.
 
 ## Inspection command
 
@@ -131,9 +150,53 @@ the candidate is a separate explicit user action; the original needs no undo.
 
 ## The source-admission dependency
 
+### Exercise the normal source-ranked target route
+
+After building `fe2o3-rustc-extract` with the configured toolchain, use a new
+capture directory:
+
+```sh
+ranked_run=$(mktemp -d)
+node scripts/assembly-source-ranked-smoke.mjs "$ranked_run/capture"
+```
+
+This runs fresh rustc callbacks over the unchanged typed assembly fixture,
+first for mandatory source-ranked checks, then normal production target
+lowering. The actual `assembly-source-ranked-r3` run passed both. Its explicit
+CFG bounds checks produce plain output stores: the normal route selected KIR
+V8 with zero `GuardedStore` operations and seven optimizer passes. The LLVM
+text retains seven assembly calls, all six templates and VGPR constraints.
+This route neither forces KIR V11 nor uses the diagnostic bundle lowerer below.
+
+Inspect `input.json`, both process/validated observation reports, stderr,
+`production-target.ll` and `receipt.json`. The working compiler closure remains
+unattested, and this diagnostic does not expose semantic/KIR identities. The
+ranked memory report does not by itself demonstrate the typed stored-value
+expression. A separate opt-in test now observes that expression through the real
+rustc callback and the already-computed source projection, with no synthetic
+reference binding or ranked-graph amendment:
+
+```sh
+cargo test -p rustc-codegen-fe2o3 --lib \
+  production_rustc_driver_v1::gfx942_inline_value_qualification_v30_tests::actual_source_seven_call_expression \
+  -- --exact --ignored --nocapture
+```
+
+Run under the same pinned nightly and serialize it with other Cargo builds.
+It retains a new temporary observation directory (or a new directory specified
+by `FE2O3_TEST_ISA_VALUE_OUTPUT_V30`). Structured Cargo artifacts supply the real
+AMD core/device dependencies; the isolated test child checks the exact source
+expression `OR(AND(XOR(SUB(ADD(a,b),b),b),255),256)` with u32 wrapping semantics
+and canonical overflow checks enabled. Moves disappear only from the value
+abstraction; the separate LLVM observation still checks all seven calls.
+This assertion passed on actual unchanged source. It is not a reference-bound
+checked-owner/proof bridge. No machine code, protected artifact, load/launch
+permission or GPU result is produced by either observation.
+
 ### Inspect LLVM text without minting an artifact
 
-The diagnostic example uses the existing Bundle V6 decoder, exact gfx942 target
+This separate diagnostic example uses the existing Bundle V6 decoder, KIR V11,
+exact gfx942 target
 binder and complete-module LLVM lowerer:
 
 ```sh
@@ -286,10 +349,12 @@ proof, arbitrary-source replacement, final artifact admission or hardware result
 
 ### Fresh source compilation is not final artifact qualification
 
-The source exporter and CPU oracle exercise the source/MIR/KIR path. They do not
-establish final ranked verification, exact machine encodings, protected artifact
-admission or hardware execution. The generated-helper smoke exercises source
-correspondence; final-admission owners remain separate, and neither fixture
+The source exporter and CPU oracle exercise the source/MIR/KIR path. The separate
+source-ranked smoke now observes the normal V8 target route, while closed scalar
+relations are covered by model-level checked-owner tests. These distinct results
+do not establish an actual reference-bound proof bridge, exact machine encodings,
+protected artifact admission or hardware execution. The generated-helper smoke
+exercises source correspondence; final-admission owners remain separate, and neither fixture
 bypasses them. Replacing an authored instruction with ordinary
 arithmetic to avoid a failed check would lose its instruction-selection contract
 and is not an acceptable shortcut.
@@ -298,6 +363,65 @@ The eventual loop is source -> checked lowering -> explicit source promotion ->
 fresh source compilation. Editing does not reuse prior proof receipts or captures.
 Restoring retained high-level source is distinct from lifting edited assembly;
 arbitrary assembly has no promised inverse into its original Rust.
+
+## Reproduce stopped LDS observations from ordinary source
+
+The existing fixture
+`crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs`,
+feature `workgroup_reduce_u32`, needs no new compiler producer or source edits.
+It reduces scalar value 2 across one required 64-invocation workgroup using 256
+bytes of workgroup scratch, then writes through checked `DisjointSlice<u32>` access.
+
+With `fe2o3-export-sim`, `fe2o3-kir-sim` and `fe2o3-debug` already built using the
+configured toolchain, produce a fresh actual V5 export, then query it separately:
+
+```sh
+lds_run=$(mktemp -d)
+node scripts/resource-query-lds-source-export.mjs "$lds_run/export"
+node scripts/resource-query-lds-v5-smoke.mjs "$lds_run/export" "$lds_run/capture"
+```
+
+`CARGO_TARGET_DIR` selects the existing debug binaries when they are outside the
+default target directory. The export script freshly compiles only the existing
+fixture feature through `fe2o3-export-sim`; it does not build the tooling itself.
+It requires a new output directory, bounds the compiler process group and output,
+and records failure without generating successful metadata or a fallback bundle.
+The portable source export passed as `lds-source-export-r2` and reproduced the
+same bundle/source hashes as the earlier separately generated r1 export.
+
+The query input directory contains `kernel-v5.fe2sim`, `export.json`,
+`export-stdout.txt` and `export-stderr.txt`. The bounded export observation records
+the exact fixture/source and bundle hashes, exporter command/exit status and raw
+log hashes, gfx942 target, configured nightly, checkout/dirty state and unavailable
+compiler-closure attestation. These are inert cross-file observations, not
+source-byte authentication by a compiler receipt. The simulator and debugger
+independently admit the real bundle; this command builds no tools or source and
+does not fall back to constructed KIR.
+
+Actual `resource-query-lds-v5-r3`, consuming `lds-source-export-r1`, passed the
+independent CPU oracle: all 64 output words are 128 and the two canary words stay
+unchanged. At stopped checkpoints it verifies uninitialized LDS, the first
+four-byte write of 2, reverse pre-write bytes/initialization and no future access,
+then the complete reduction tree's 256 bytes and initializedness before the first
+global output write. Full bounded history contains 448 workgroup writes and 832
+reads at that point; the completed output has 64 global writes. Stale full
+anchors and one-use page tokens reject after forward/reverse revision changes.
+
+The debugger's wave width 32 is an explicit logical visualization of the
+64-invocation workgroup, not gfx942 hardware wave32. Allocation ordinals come from
+each actual stopped inventory, not fixture assumptions. Generation 0 does not
+prove lifetime; owning scope, lifetime, physical base, physical registers and
+access-source association remain unavailable. The final inspected state is the
+last captured operation checkpoint reached by reversing from completion, not a
+post-release lifetime observation.
+
+Review `resource-query-results.json`, the exact request/response JSONL files and
+`receipt.json`. The successful run used 219 commands and retained 1,280,347
+response bytes. The companion site's `examples/source_lds_resource_v1.json`
+retains four actual checkpoints and whole selected pages with their original
+scan counts/tokens; the adjacent full transcripts preserve all 219 pairs.
+A selected page is not the complete access history, and none of these captures
+supplies physical resource qualification, hardware timing or publication status.
 
 ## Independent remaining milestones
 
