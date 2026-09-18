@@ -483,13 +483,38 @@ locals and copy edges; it is not a new alias, initialization or borrow theorem.
 The helper census requires complete empty memory effects and a closed scalar
 opcode set. F32/F64 constants, comparisons, selects and strict add/subtract/
 multiply are admitted without reassociation, contraction or fast-math permission.
-Float casts, division, remainder, negation, narrower float formats, pointers,
+Exact F32 negation and division are also admitted for roots and retained scalar
+helpers. Native lowering emits plain `fneg float` and `fdiv float`; it does not
+replace division with a reciprocal or apply integer nonzero checks to F32.
+Float casts, F64 division/negation, float remainder, narrower formats, pointers,
 aggregates, helper traps, external calls and recursion remain outside this subset.
 Calls remain ordered and block private
 store forwarding. This does not establish termination, helper-result bounds or
 extent facts, optimizer purity, or general tutorial-helper support. Policy4
 continues to forward only its admitted integer loads, not Bool loads. The
-existing actual-inventory nonzero checks still govern division and remainder.
+existing actual-inventory nonzero checks still govern integer division and
+remainder.
+
+The F32 component tests retain a real global output write and exercise both
+direct and retained-helper forms through source/N/B/C/O replay on both target
+profiles. The actual-O CPU model uses bit-exact sign inversion for negation and
+nearest-ties-to-even software division. Its vectors include signed zero,
+subnormals, infinities, rounding, overflow, underflow and dynamic NaNs. Division
+NaNs are compared by classification, not by a claimed native payload/sign
+choice. Literal NaN constants remain refused by native emission because its
+widened hexadecimal spelling cannot preserve every payload; exact source-NaN
+payload mutations still fail correspondence. Native text and descriptor replay
+is not LLVM execution, hardware qualification or protected artifact authority.
+
+`ordinary_rust_f32_arithmetic_reaches_actual_o_native_and_simulator` adds four
+ordinary-Rust source configurations: direct negation/division on normal MIR and
+scalar-helper variants with test-only `-Zinline-mir=no`. It requires actual O's
+two dynamic F32 inputs, output-slice ABI, retained arithmetic, and the expected
+helper call count. Its 56 scenarios each run twice across zero-length and
+workgroup-boundary output sizes, checking initialization, scalar preservation
+and canaries. Strict native `fneg`/`fdiv` and numerical attributes are checked
+after the ordinary actual-output handoff; no workload-name compiler dispatch is
+introduced. The existing fill, vecadd and scalar-GEMM oracles are unchanged.
 
 `ordinary_rust_shared_unit_helper_reaches_checked_native_output` exercises the
 ordinary two-root Rust fixture through the same callback as fill and vecadd.

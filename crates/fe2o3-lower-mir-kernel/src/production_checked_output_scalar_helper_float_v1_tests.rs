@@ -101,13 +101,19 @@ fn float_constants_compare_and_select_preserve_exact_nan_and_signed_zero_bits() 
 }
 
 #[test]
-fn float_divide_remainder_negation_and_numeric_casts_remain_closed() {
+fn f64_divide_negation_float_remainder_and_numeric_casts_remain_closed() {
     for ty in [Type::F32, Type::F64] {
         for op in [BinaryOp::Divide, BinaryOp::Remainder] {
+            if ty == Type::F32 && op == BinaryOp::Divide {
+                continue;
+            }
             expect_refusal(
                 module(vec![floating_helper(ty.clone(), op)]),
                 "closed scalar helper opcode",
             );
+        }
+        if ty == Type::F32 {
+            continue;
         }
         let mut function = identity("negative", ty.clone());
         let block = &mut function.body.as_mut().unwrap().blocks[0];

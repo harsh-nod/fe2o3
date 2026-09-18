@@ -1409,6 +1409,7 @@ dependencies = [
  "dialect-mir",
  "fe2o3-amd-target",
  "fe2o3-kernel-analysis",
+ "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
  "fe2o3-kernel-opt",
  "fe2o3-kir-sim",

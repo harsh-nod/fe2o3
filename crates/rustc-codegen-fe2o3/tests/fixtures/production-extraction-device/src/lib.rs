@@ -13,6 +13,14 @@ use fe2o3_device::memory;
 use fe2o3_device::{DisjointSlice, kernel, thread};
 
 #[cfg(any(
+    feature = "f32-negate",
+    feature = "f32-divide",
+    feature = "f32-helper-negate",
+    feature = "f32-helper-divide",
+))]
+mod f32_arithmetic;
+
+#[cfg(any(
     feature = "reference-write-only-positive",
     feature = "reference-write-only-coordinate-read",
 ))]
@@ -24,6 +32,10 @@ mod write_only_reference;
     feature = "multi-root-target-lineage",
     feature = "wrapped-fill",
     feature = "private-unit-helper",
+    feature = "f32-negate",
+    feature = "f32-divide",
+    feature = "f32-helper-negate",
+    feature = "f32-helper-divide",
     feature = "three-root-ownership",
     feature = "write-only-output",
     feature = "write-only-disjoint-output",

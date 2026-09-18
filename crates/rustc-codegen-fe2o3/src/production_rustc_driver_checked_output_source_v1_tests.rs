@@ -196,7 +196,8 @@ impl Callbacks for CheckedOutputCallbacks {
                     observation.reads += 1;
                 }
             }
-            if let Some(case) = simulation::requested()? {
+            let simulation_case = simulation::requested()?;
+            if let Some(case) = simulation_case {
                 observation.simulation =
                     Some(self.progress.run(SourceStage::Simulation, || {
                         simulation::observe(stage.output().canonical(), case)
@@ -260,6 +261,9 @@ impl Callbacks for CheckedOutputCallbacks {
             let llvm = std::str::from_utf8(handoff.module_bytes())
                 .map_err(|e| SourceFailure::new(SourceStage::NativeHandoff, e))?;
             assert!(llvm.contains("amdgpu_kernel"));
+            if let Some(case) = simulation_case {
+                simulation::check_native_arithmetic(case, llvm)?;
+            }
             observation.llvm_bytes = llvm.len();
             observation.descriptor_roots = descriptor.table().kernels().len();
             Ok(observation)
@@ -423,6 +427,10 @@ enum OrdinarySourceCase {
     SharedUnitHelper,
     PrivateUnitHelper,
     RetainedPrivateUnitHelper,
+    F32Negate,
+    F32Divide,
+    RetainedF32Negate,
+    RetainedF32Divide,
 }
 
 fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
@@ -504,6 +512,42 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
                 2,
                 2,
             ),
+            OrdinarySourceCase::F32Negate => (
+                "f32-negate",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("f32-negate"),
+                &["f32_negate"][..],
+                0,
+                1,
+                0,
+            ),
+            OrdinarySourceCase::F32Divide => (
+                "f32-divide",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("f32-divide"),
+                &["f32_divide"][..],
+                0,
+                1,
+                0,
+            ),
+            OrdinarySourceCase::RetainedF32Negate => (
+                "retained-f32-negate",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("f32-helper-negate"),
+                &["f32_helper_negate"][..],
+                0,
+                1,
+                1,
+            ),
+            OrdinarySourceCase::RetainedF32Divide => (
+                "retained-f32-divide",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("f32-helper-divide"),
+                &["f32_helper_divide"][..],
+                0,
+                1,
+                1,
+            ),
             OrdinarySourceCase::PrivateUnitHelper
             | OrdinarySourceCase::RetainedPrivateUnitHelper => (
                 if matches!(case, OrdinarySourceCase::RetainedPrivateUnitHelper) {
@@ -573,6 +617,12 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         if matches!(case, OrdinarySourceCase::RetainedWrappedFill) {
             args.push("-Zinline-mir=no".into());
         }
+        if matches!(
+            case,
+            OrdinarySourceCase::RetainedF32Negate | OrdinarySourceCase::RetainedF32Divide
+        ) {
+            args.push("-Zinline-mir=no".into());
+        }
         if matches!(case, OrdinarySourceCase::RetainedPrivateUnitHelper) {
             args.push("-Zinline-mir=no".into());
             args.push("-Zmir-opt-level=0".into());
@@ -620,6 +670,12 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
             | OrdinarySourceCase::RetainedPrivateUnitHelper => Some(simulation::Case::Fill),
             OrdinarySourceCase::Vecadd => Some(simulation::Case::Vecadd),
             OrdinarySourceCase::SharedUnitHelper => None,
+            OrdinarySourceCase::F32Negate | OrdinarySourceCase::RetainedF32Negate => {
+                Some(simulation::Case::F32Negate)
+            }
+            OrdinarySourceCase::F32Divide | OrdinarySourceCase::RetainedF32Divide => {
+                Some(simulation::Case::F32Divide)
+            }
         };
         simulation::configure_child(&mut command, simulation_case);
         snapshots::configure_child(&mut command, name);
@@ -654,6 +710,27 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         } else {
             assert_eq!(result.helper_calls, calls);
             assert_eq!(result.internal_helpers == 0, calls == 0);
+        }
+        if matches!(
+            case,
+            OrdinarySourceCase::F32Negate
+                | OrdinarySourceCase::F32Divide
+                | OrdinarySourceCase::RetainedF32Negate
+                | OrdinarySourceCase::RetainedF32Divide
+        ) {
+            assert_eq!(
+                dispatch::check_private_helper_route(&result, false).unwrap(),
+                dispatch::Route::DirectRawEmpty
+            );
+            eprintln!(
+                "ordinary F32 source {name}: actual O helpers={}, calls={}; -Zinline-mir=no={}",
+                result.internal_helpers,
+                result.helper_calls,
+                matches!(
+                    case,
+                    OrdinarySourceCase::RetainedF32Negate | OrdinarySourceCase::RetainedF32Divide
+                )
+            );
         }
         assert_eq!((result.reads, result.writes), (reads, writes));
         assert_eq!(result.formal_accesses, reads + writes);
@@ -712,6 +789,8 @@ mod corpus;
 mod corpus_cargo;
 #[path = "production_rustc_driver_checked_output_dispatch_v1_tests.rs"]
 mod dispatch;
+#[path = "production_rustc_driver_checked_output_f32_source_v1_tests.rs"]
+mod f32_source;
 #[path = "production_rustc_driver_checked_output_progress_v1_tests.rs"]
 mod progress;
 #[path = "production_rustc_driver_checked_output_runtime_domains_v1_tests.rs"]
