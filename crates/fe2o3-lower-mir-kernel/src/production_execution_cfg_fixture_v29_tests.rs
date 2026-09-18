@@ -1,4 +1,6 @@
-#[derive(Clone, Copy)]
+use fe2o3_mir_model::semantic_mir_v1::SemanticCheckedBinaryRvalueV1;
+
+#[derive(Clone, Copy, Debug)]
 enum Shape {
     Diamond,
     Mixed,
@@ -7,8 +9,17 @@ enum Shape {
     Storage,
     Independent,
     ScalarBinary,
+    ScalarUnary,
+    ScalarCast,
+    ScalarCheckedBinary,
+    ScalarAssume,
+    ScalarMovedSibling,
+    CopyOwnedSibling,
     ScalarSwitch,
     AssertMessage,
+    AssertMessagePair,
+    AssertCondition,
+    AssertConditionFolded,
     AssertConstant,
     Cycle,
 }
@@ -22,25 +33,50 @@ fn cfg_owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
             | Shape::MovedSibling
             | Shape::Storage
             | Shape::ScalarBinary
+            | Shape::ScalarUnary
+            | Shape::ScalarCast
+            | Shape::ScalarCheckedBinary
+            | Shape::ScalarAssume
+            | Shape::ScalarMovedSibling
+            | Shape::CopyOwnedSibling
             | Shape::ScalarSwitch
             | Shape::AssertMessage
+            | Shape::AssertMessagePair
+            | Shape::AssertCondition
+            | Shape::AssertConditionFolded
             | Shape::AssertConstant
     );
+    let boolean_sibling = matches!(
+        shape,
+        Shape::ScalarAssume | Shape::AssertCondition | Shape::AssertConditionFolded
+    );
+    let bool_ty = SemanticTypeIdV1::from_index(types.len() as u32 + u32::from(mixed));
+    let sibling_type = if boolean_sibling { bool_ty } else { U32 };
     if mixed {
         types.push(SemanticTypeDeclV1::new(
             SemanticTypeIdentityV1::from_sha256([201; 32]),
             SemanticLayoutIdentityV1::from_sha256([201; 32]),
             SemanticTypeLayoutV1::aggregate(
-                Some(4),
-                4,
+                Some(if boolean_sibling { 1 } else { 4 }),
+                if boolean_sibling { 1 } else { 4 },
                 SemanticAggregateLayoutV1::new(vec![0, 0], vec![]).unwrap(),
             )
             .unwrap(),
-            SemanticTypeShapeV1::Tuple(SemanticAggregateTypeV1::new(vec![CONTEXT, U32]).unwrap()),
+            SemanticTypeShapeV1::Tuple(
+                SemanticAggregateTypeV1::new(vec![CONTEXT, sibling_type]).unwrap(),
+            ),
         ));
     }
-    let bool_ty = SemanticTypeIdV1::from_index(types.len() as u32);
-    if matches!(shape, Shape::AssertMessage | Shape::AssertConstant) {
+    if matches!(
+        shape,
+        Shape::AssertMessage
+            | Shape::AssertMessagePair
+            | Shape::AssertCondition
+            | Shape::AssertConditionFolded
+            | Shape::AssertConstant
+            | Shape::ScalarAssume
+            | Shape::ScalarCheckedBinary
+    ) {
         types.push(SemanticTypeDeclV1::new(
             SemanticTypeIdentityV1::from_sha256([240; 32]),
             SemanticLayoutIdentityV1::from_sha256([240; 32]),
@@ -58,6 +94,48 @@ fn cfg_owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
         ));
     }
     let result = if mixed { PAIR } else { CONTEXT };
+    let output_type = if matches!(shape, Shape::ScalarCast | Shape::ScalarCheckedBinary) {
+        let ty = SemanticTypeIdV1::from_index(types.len() as u32);
+        let (layout, shape) = if matches!(shape, Shape::ScalarCast) {
+            (
+                SemanticTypeLayoutV1::new_with_backend_repr(
+                    Some(8),
+                    8,
+                    SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                        SemanticBackendPrimitiveV1::integer(false, 64, 8),
+                        SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+                    )),
+                    false,
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 64,
+                }),
+            )
+        } else {
+            (
+                SemanticTypeLayoutV1::aggregate(
+                    Some(8),
+                    4,
+                    SemanticAggregateLayoutV1::new(vec![0, 4], vec![]).unwrap(),
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::Tuple(
+                    SemanticAggregateTypeV1::new(vec![U32, bool_ty]).unwrap(),
+                ),
+            )
+        };
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([246; 32]),
+            SemanticLayoutIdentityV1::from_sha256([246; 32]),
+            layout,
+            shape,
+        ));
+        ty
+    } else {
+        result
+    };
     let edge =
         |role, target| SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target));
     let goto = |target| SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, target));
@@ -65,7 +143,19 @@ fn cfg_owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
         SemanticRvalueKindV1::Aggregate(
             SemanticAggregateRvalueV1::new(
                 SemanticAggregateKindV1::Tuple,
-                vec![SemanticOperandV1::Move(place(1, CONTEXT)), scalar(value)],
+                vec![
+                    SemanticOperandV1::Move(place(1, CONTEXT)),
+                    if boolean_sibling {
+                        SemanticOperandV1::Constant(SemanticConstantV1::new(
+                            bool_ty,
+                            SemanticConstantValueV1::Scalar(
+                                SemanticScalarValueV1::new(1, 1).unwrap(),
+                            ),
+                        ))
+                    } else {
+                        scalar(value)
+                    },
+                ],
             )
             .unwrap(),
         )
@@ -88,21 +178,84 @@ fn cfg_owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
     };
     let blocks = if matches!(
         shape,
-        Shape::ScalarBinary | Shape::ScalarSwitch | Shape::AssertMessage | Shape::AssertConstant
+        Shape::ScalarBinary
+            | Shape::ScalarUnary
+            | Shape::ScalarCast
+            | Shape::ScalarCheckedBinary
+            | Shape::ScalarAssume
+            | Shape::ScalarMovedSibling
+            | Shape::CopyOwnedSibling
+            | Shape::ScalarSwitch
+            | Shape::AssertMessage
+            | Shape::AssertMessagePair
+            | Shape::AssertCondition
+            | Shape::AssertConditionFolded
+            | Shape::AssertConstant
     ) {
-        let operand = SemanticOperandV1::Copy(field(1, U32));
+        let operand = SemanticOperandV1::Copy(field(1, sibling_type));
         let mut statements = vec![assign(place(4, PAIR), pair(42))];
+        if matches!(shape, Shape::ScalarMovedSibling) {
+            statements.push(assign(
+                place(6, CONTEXT),
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Move(field(0, CONTEXT))),
+            ));
+        }
         let terminator = match shape {
-            Shape::ScalarBinary => {
+            Shape::ScalarBinary | Shape::ScalarMovedSibling => {
                 statements.push(assign(
                     place(3, U32),
                     SemanticRvalueKindV1::Binary {
                         operation: SemanticBinaryOpV1::Add,
                         left: operand,
-                        right: scalar(1),
+                        right: SemanticOperandV1::Copy(field(1, U32)),
                     },
                 ));
-                goto(1)
+                SemanticTerminatorKindV1::Return
+            }
+            Shape::ScalarUnary => {
+                statements.push(assign(
+                    place(3, U32),
+                    SemanticRvalueKindV1::Unary {
+                        operation: SemanticUnaryOpV1::Not,
+                        operand,
+                    },
+                ));
+                SemanticTerminatorKindV1::Return
+            }
+            Shape::ScalarCast => {
+                statements.push(assign(
+                    place(5, output_type),
+                    SemanticRvalueKindV1::Cast {
+                        kind: SemanticCastKindV1::Integer,
+                        operand,
+                    },
+                ));
+                SemanticTerminatorKindV1::Return
+            }
+            Shape::ScalarCheckedBinary => {
+                statements.push(assign(
+                    place(5, output_type),
+                    SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+                        SemanticCheckedBinaryOpV1::Add,
+                        operand,
+                        SemanticOperandV1::Copy(field(1, U32)),
+                    )),
+                ));
+                SemanticTerminatorKindV1::Return
+            }
+            Shape::ScalarAssume => {
+                statements.push(SemanticStatementV1::new(
+                    source(),
+                    SemanticStatementKindV1::Assume(operand),
+                ));
+                SemanticTerminatorKindV1::Return
+            }
+            Shape::CopyOwnedSibling => {
+                statements.push(assign(
+                    place(6, CONTEXT),
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(field(0, CONTEXT))),
+                ));
+                SemanticTerminatorKindV1::Return
             }
             Shape::ScalarSwitch => SemanticTerminatorKindV1::SwitchInt {
                 discriminant: operand,
@@ -112,28 +265,52 @@ fn cfg_owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
                 )
                 .unwrap(),
             },
-            Shape::AssertMessage | Shape::AssertConstant => SemanticTerminatorKindV1::Assert {
-                condition: SemanticOperandV1::Constant(SemanticConstantV1::new(
-                    bool_ty,
-                    SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(1, 1).unwrap()),
-                )),
+            Shape::AssertMessage
+            | Shape::AssertMessagePair
+            | Shape::AssertCondition
+            | Shape::AssertConditionFolded
+            | Shape::AssertConstant => SemanticTerminatorKindV1::Assert {
+                condition: if boolean_sibling {
+                    operand.clone()
+                } else {
+                    SemanticOperandV1::Constant(SemanticConstantV1::new(
+                        bool_ty,
+                        SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(1, 1).unwrap()),
+                    ))
+                },
                 expected: true,
-                message: SemanticAssertMessageV1::DivisionByZero(
-                    if matches!(shape, Shape::AssertConstant) {
-                        scalar(42)
-                    } else {
-                        operand
-                    },
-                ),
+                message: if matches!(shape, Shape::AssertMessagePair) {
+                    SemanticAssertMessageV1::BoundsCheck {
+                        length: operand.clone(),
+                        index: operand,
+                    }
+                } else {
+                    SemanticAssertMessageV1::DivisionByZero(
+                        if matches!(
+                            shape,
+                            Shape::AssertConstant
+                                | Shape::AssertCondition
+                                | Shape::AssertConditionFolded
+                        ) {
+                            scalar(42)
+                        } else {
+                            operand
+                        },
+                    )
+                },
                 target: edge(SemanticEdgeRoleV1::AssertSuccess, 1),
                 unwind: SemanticUnwindActionV1::Unreachable,
             },
             _ => unreachable!(),
         };
-        vec![
-            block(211, statements, terminator),
-            block(212, vec![], SemanticTerminatorKindV1::Return),
-        ]
+        if matches!(terminator, SemanticTerminatorKindV1::Return) {
+            vec![block(211, statements, terminator)]
+        } else {
+            vec![
+                block(211, statements, terminator),
+                block(212, vec![], SemanticTerminatorKindV1::Return),
+            ]
+        }
     } else if matches!(shape, Shape::Storage) {
         let storage = |live, index| {
             SemanticStatementV1::new(
@@ -290,7 +467,7 @@ fn cfg_owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
             local(222, CONTEXT, SemanticLocalRoleV1::Argument(1)),
             local(223, U32, SemanticLocalRoleV1::Argument(2)),
             local(224, result, SemanticLocalRoleV1::Temporary),
-            local(225, result, SemanticLocalRoleV1::Temporary),
+            local(225, output_type, SemanticLocalRoleV1::Temporary),
             local(226, CONTEXT, SemanticLocalRoleV1::Temporary),
         ],
         blocks,
@@ -343,13 +520,36 @@ fn lower_cfg_fixture_with_cursor(
         Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1>,
     ),
 ) {
+    lower_cfg_fixture_with_limits(
+        shape,
+        (10_000_000, 10_000_000),
+        change_seed,
+        change_cursor,
+        inspect,
+    )
+    .unwrap();
+}
+
+fn lower_cfg_fixture_with_limits(
+    shape: Shape,
+    (work_limit, storage_limit): (usize, usize),
+    change_seed: impl FnOnce(&mut SemanticExecutionBindingV29),
+    change_cursor: impl FnOnce(&mut ExecutionAvailabilityV29<'_>),
+    inspect: impl FnOnce(
+        &ProductionSemanticSsaOwnerV1,
+        &SemanticExecutionBindingV29,
+        Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1>,
+    ),
+) -> Result<(usize, usize), String> {
     let mut owner = cfg_owner(shape);
-    let mut work = CanonicalKernelIrWorkBudgetV1::new(10_000_000);
-    let mut budget = ArgumentBudgetV1::new(&mut work, 10_000_000);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+    let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
     let captured = owner
         .try_capture_occurrences_with_budget_v1(&mut budget)
-        .unwrap();
-    budget.reserve_storage(captured.retained_storage()).unwrap();
+        .map_err(|error| format!("{error:?}"))?;
+    budget
+        .reserve_storage(captured.retained_storage())
+        .map_err(|error| format!("{error:?}"))?;
     with_production_call_instances_v1(&owner, ROOT, &mut budget, |instances, budget| {
         let seed = SemanticExecutionBindingV29::context(
             owner.source_semantic().types(),
@@ -400,7 +600,12 @@ fn lower_cfg_fixture_with_cursor(
                     &BTreeMap::new(),
                     &BTreeMap::new(),
                     Some([64, 1, 1]),
-                    BTreeSet::new(),
+                    if matches!(shape, Shape::AssertConditionFolded) {
+                        // Test the existing success-folded emitter path only.
+                        BTreeSet::from([0])
+                    } else {
+                        BTreeSet::new()
+                    },
                     1,
                     false,
                     1024,
@@ -419,5 +624,6 @@ fn lower_cfg_fixture_with_cursor(
         inspect(&owner, &seed, result);
         Ok::<(), production_call_instances_v1::ProductionCallInstanceErrorV1>(())
     })
-    .unwrap();
+    .map_err(|error| format!("{error:?}"))?;
+    Ok((budget.work(), budget.peak_storage()))
 }

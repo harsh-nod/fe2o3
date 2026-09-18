@@ -389,6 +389,29 @@ impl<'a> ExecutionAvailabilityV29<'a> {
                 };
                 call.arguments().get(index as usize)
             }
+            (ExecutionSiteV29::Terminator { block }, role) => match self
+                .function
+                .blocks()
+                .get(block.get() as usize)?
+                .terminator()
+                .kind()
+            {
+                SemanticTerminatorKindV1::SwitchInt { discriminant, .. }
+                    if role == ExecutionOperandV29::SwitchDiscriminant =>
+                {
+                    Some(discriminant)
+                }
+                SemanticTerminatorKindV1::Assert {
+                    condition, message, ..
+                } => match role {
+                    ExecutionOperandV29::AssertCondition => Some(condition),
+                    ExecutionOperandV29::AssertMessage(index) => {
+                        execution_assert_operand_v29(message, index)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            },
             (
                 ExecutionSiteV29::Statement { block, statement },
                 ExecutionOperandV29::RvalueOperand(index),
@@ -404,12 +427,41 @@ impl<'a> ExecutionAvailabilityV29<'a> {
                     return None;
                 };
                 match assignment.value().kind() {
-                    SemanticRvalueKindV1::Use(operand) if index == 0 => Some(operand),
+                    SemanticRvalueKindV1::Use(operand)
+                    | SemanticRvalueKindV1::Unary { operand, .. }
+                    | SemanticRvalueKindV1::Cast { operand, .. }
+                        if index == 0 =>
+                    {
+                        Some(operand)
+                    }
+                    SemanticRvalueKindV1::Binary { left, right, .. } => match index {
+                        0 => Some(left),
+                        1 => Some(right),
+                        _ => None,
+                    },
+                    SemanticRvalueKindV1::CheckedBinary(operation) => match index {
+                        0 => Some(operation.left()),
+                        1 => Some(operation.right()),
+                        _ => None,
+                    },
                     SemanticRvalueKindV1::Aggregate(aggregate) => {
                         aggregate.operands().get(index as usize)
                     }
                     _ => None,
                 }
+            }
+            (ExecutionSiteV29::Statement { block, statement }, ExecutionOperandV29::Assume) => {
+                let SemanticStatementKindV1::Assume(condition) = self
+                    .function
+                    .blocks()
+                    .get(block.get() as usize)?
+                    .statements()
+                    .get(statement as usize)?
+                    .kind()
+                else {
+                    return None;
+                };
+                Some(condition)
             }
             _ => None,
         }
