@@ -370,8 +370,7 @@ fn loop_consumption_requires_redefinition_before_the_backedge() {
     use fe2o3_mir_model::SsaPlannerErrorV1;
     use fe2o3_pliron::{ProductionSemanticSsaErrorV1, SemanticPartialMoveViolationV1};
     let rejected = execution_owner(Flow::Loop { redefine: false })
-        .err()
-        .expect("consumed loop input must be rejected");
+        .expect_err("consumed loop input must be rejected");
     match rejected {
         ProductionSemanticSsaErrorV1::Planner { function, error } => {
             assert_eq!(function.index(), 1);
