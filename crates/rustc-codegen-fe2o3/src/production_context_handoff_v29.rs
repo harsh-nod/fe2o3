@@ -4,8 +4,9 @@
 use crate::collector::{CallBoundaryV29, ContextRootVisitErrorV29, RetainedContextEntriesV29};
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1;
 use fe2o3_lower_mir_kernel::{
-    ProductionContextCallBoundaryV29, ProductionContextRootInputV29,
-    ProductionSourceLaunchRosterV1, with_checked_context_root_v29,
+    ProductionCheckedContextRootV29, ProductionContextCallBoundaryV29,
+    ProductionContextRootErrorV29, ProductionContextRootInputV29, ProductionSourceLaunchRosterV1,
+    with_checked_context_root_v29,
 };
 use fe2o3_pliron::ProductionSemanticSsaOwnerV1;
 
@@ -29,6 +30,10 @@ pub(crate) fn check_context_handoff_v29(
     ssa: &ProductionSemanticSsaOwnerV1,
     launch: &ProductionSourceLaunchRosterV1,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    mut use_root: impl for<'a> FnMut(
+        ProductionCheckedContextRootV29<'a>,
+        &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<(), ProductionContextRootErrorV29>,
 ) -> Result<(), ProductionPipelineError> {
     entries
         .visit_root_anchors_v29(ssa.source_semantic(), budget, |entry, budget| {
@@ -52,7 +57,9 @@ pub(crate) fn check_context_handoff_v29(
                 helper_context_local: entry.helper_argument(),
                 helper_arguments: entry.helper_operands(),
             };
-            with_checked_context_root_v29(ssa, launch, input, budget, |_, _| Ok(()))
+            with_checked_context_root_v29(ssa, launch, input, budget, |root, budget| {
+                use_root(root, budget)
+            })
         })
         .map_err(|error| match error {
             ContextRootVisitErrorV29::Source(error) => ProductionPipelineError::SemanticImport(
@@ -67,4 +74,21 @@ pub(crate) fn check_context_handoff_v29(
                 ProductionPipelineError::ContextHandoff(error)
             }
         })
+}
+
+#[cfg(test)]
+impl<'tcx> super::ProductionCompilation<'tcx, super::CollectedRustStage<'tcx>> {
+    pub(crate) fn observe_context_handoff_v29(
+        self,
+        use_root: impl for<'a> FnMut(
+            ProductionCheckedContextRootV29<'a>,
+            &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<(), ProductionContextRootErrorV29>,
+    ) -> Result<(), Box<ProductionPipelineError>> {
+        self.import_semantic_mir()?
+            .construct_semantic_middle_end()?
+            .construct_semantic_ssa()?
+            .materialize_with_context_observer_v29(use_root)
+            .map(|_| ())
+    }
 }

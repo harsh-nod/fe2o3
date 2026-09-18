@@ -12,6 +12,9 @@ use sha2::{Digest as _, Sha256};
 use std::ffi::OsString;
 use std::process::Command;
 
+#[path = "production_context_source_v29_tests.rs"]
+mod context_source_v29_tests;
+
 const CHILD_ARGS: &str = "FE2O3_TEST_CHECKED_OUTPUT_ARGS_V1";
 const CHILD_RESULT: &str = "FE2O3_TEST_CHECKED_OUTPUT_RESULT_V1";
 const CHILD_PROOF_PROBE: &str = "FE2O3_TEST_CHECKED_OUTPUT_PROOF_PROBE_V1";

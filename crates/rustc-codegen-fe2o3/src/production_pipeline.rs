@@ -3461,6 +3461,19 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
     fn materialize_target_neutral(
         self,
     ) -> Result<MaterializedNeutralProductionCompilation, Box<ProductionPipelineError>> {
+        self.materialize_with_context_observer_v29(|_, _| Ok(()))
+    }
+
+    fn materialize_with_context_observer_v29(
+        self,
+        use_root: impl for<'a> FnMut(
+            fe2o3_lower_mir_kernel::ProductionCheckedContextRootV29<'a>,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<
+            (),
+            fe2o3_lower_mir_kernel::ProductionContextRootErrorV29,
+        >,
+    ) -> Result<MaterializedNeutralProductionCompilation, Box<ProductionPipelineError>> {
         let SsaSemanticMirStage {
             semantic_ssa,
             bindings,
@@ -3518,6 +3531,7 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
             &semantic_ssa,
             &launch,
             &mut budget,
+            use_root,
         )?;
         let materialized =
             fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(

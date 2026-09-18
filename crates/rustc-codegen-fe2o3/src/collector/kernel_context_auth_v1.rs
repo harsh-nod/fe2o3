@@ -187,7 +187,7 @@ pub(crate) fn capture_context_producers_v1<'tcx>(
                 "nominal kernel marker is shared by distinct physical roots",
             ));
         }
-        let context = authenticate_signature(tcx, root, helper, marker_ty)?;
+        let context = authenticate_source_signature(tcx, root, helper, marker_ty)?;
         // This query is borrowed before monomorphization can steal it. No
         // optimized-MIR query may run under this borrow.
         let source = tcx.mir_drops_elaborated_and_const_checked(local);
@@ -208,6 +208,14 @@ pub(crate) fn capture_context_producers_v1<'tcx>(
             flow,
             original_mir_sha256,
         });
+    }
+    // FnAbi can request optimized MIR to deduce parameter attributes. Capture
+    // every original root before those queries can steal any producer body.
+    for proof in &proofs {
+        let marker = tcx.type_of(proof.marker).instantiate_identity();
+        if authenticate_signature(tcx, proof.root, proof.helper, marker)? != proof.context {
+            return Err(error("context signature changed after source capture"));
+        }
     }
     Ok(CapturedContextProducersV1 {
         declarations,
@@ -393,7 +401,7 @@ fn marker_definition<'tcx>(
     Ok((marker, ty))
 }
 
-fn authenticate_signature<'tcx>(
+fn authenticate_source_signature<'tcx>(
     tcx: TyCtxt<'tcx>,
     root: Instance<'tcx>,
     helper: Instance<'tcx>,
@@ -446,6 +454,19 @@ fn authenticate_signature<'tcx>(
     {
         return Err(error("logical context kernel/target/launch brands differ"));
     }
+    Ok(context)
+}
+
+fn authenticate_signature<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    root: Instance<'tcx>,
+    helper: Instance<'tcx>,
+    marker: Ty<'tcx>,
+) -> Result<Ty<'tcx>, CollectError> {
+    let context = authenticate_source_signature(tcx, root, helper, marker)?;
+    let physical = source_signature_v1(tcx, root).map_err(error)?;
+    let logical = source_signature_v1(tcx, helper).map_err(error)?;
+    let discard_result = physical.output().is_unit() && exact_kernel_result(tcx, logical.output());
     let env = TypingEnv::fully_monomorphized();
     let root_abi = tcx
         .fn_abi_of_instance(env.as_query_input((root, ty::List::empty())))

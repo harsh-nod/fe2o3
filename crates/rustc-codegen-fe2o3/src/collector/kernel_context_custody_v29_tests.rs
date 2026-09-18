@@ -641,7 +641,11 @@ fn production_context_handoff_joins_ssa_and_launch_under_the_shared_budget() {
         let exact = {
             let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(10_000);
             let mut budget = VisitBudget::new(&mut work, 0);
-            check_context_handoff_v29(&entries, &owner, &launch, &mut budget).unwrap();
+            check_context_handoff_v29(&entries, &owner, &launch, &mut budget, |root, _| {
+                assert!(std::ptr::eq(root.semantic_ssa(), &owner));
+                Ok(())
+            })
+            .unwrap();
             work.work()
         };
         for prior in [0, 11] {
@@ -650,7 +654,13 @@ fn production_context_handoff_joins_ssa_and_launch_under_the_shared_budget() {
                 let mut budget = VisitBudget::new(&mut work, 7);
                 budget.charge_work(prior).unwrap();
                 budget.reserve_storage(7).unwrap();
-                let result = check_context_handoff_v29(&entries, &owner, &launch, &mut budget);
+                let result = check_context_handoff_v29(
+                    &entries,
+                    &owner,
+                    &launch,
+                    &mut budget,
+                    |_, _| Ok(()),
+                );
                 if limit == exact {
                     result.unwrap();
                 } else {
@@ -679,7 +689,10 @@ fn production_context_handoff_joins_ssa_and_launch_under_the_shared_budget() {
         ] {
             let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(exact);
             let mut budget = VisitBudget::new(&mut work, 0);
-            let error = check_context_handoff_v29(&entries, ssa, launch, &mut budget).unwrap_err();
+            let error = check_context_handoff_v29(&entries, ssa, launch, &mut budget, |_, _| {
+                panic!("substitution must reject before the observer")
+            })
+            .unwrap_err();
             if source_mismatch {
                 assert!(matches!(
                     error,
@@ -694,6 +707,37 @@ fn production_context_handoff_joins_ssa_and_launch_under_the_shared_budget() {
                 ));
             }
         }
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(exact);
+        let mut budget = VisitBudget::new(&mut work, 0);
+        let mut visits = 0;
+        let error = check_context_handoff_v29(&entries, &owner, &launch, &mut budget, |_, _| {
+            visits += 1;
+            Err(ProductionContextRootErrorV29::Arguments)
+        })
+        .unwrap_err();
+        assert_eq!(visits, 1);
+        assert!(matches!(
+            error,
+            ProductionPipelineError::ContextHandoff(ProductionContextRootErrorV29::Arguments)
+        ));
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(exact);
+        let mut budget = VisitBudget::new(&mut work, 7);
+        budget.reserve_storage(7).unwrap();
+        let mut visits = 0;
+        let error =
+            check_context_handoff_v29(&entries, &owner, &launch, &mut budget, |_, budget| {
+                visits += 1;
+                budget.charge_work(usize::MAX)?;
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(visits, 1);
+        assert_eq!(budget.storage(), 7);
+        assert!(budget.work() > 0);
+        assert!(matches!(
+            error,
+            ProductionPipelineError::ContextHandoff(ProductionContextRootErrorV29::Resource(_))
+        ));
     }
 }
 
