@@ -230,6 +230,53 @@ impl FormalSliceBoundedDomainV1 {
 pub enum FormalAccessDomainV1 {
     LaunchEnvelope,
     SliceBounded(FormalSliceBoundedDomainV1),
+    RuntimeSliceReadBounded(FormalRuntimeSliceReadDomainV1),
+}
+
+/// An ordinary read bounded by an exact runtime slice-length true edge.
+/// The index is opaque, not an invocation number or an affine byte address.
+/// Coordinates are inert without fresh extraction from the verified module.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FormalRuntimeSliceReadDomainV1 {
+    allocation: FormalAllocationIdentity,
+    slice: ValueId,
+    index: ValueId,
+    guard_index: ValueId,
+    length: ValueId,
+    predicate: ValueId,
+    pointer: ValueId,
+    element_bytes: u64,
+    path: FormalGuardedPathV1,
+}
+
+impl FormalRuntimeSliceReadDomainV1 {
+    pub const fn allocation(self) -> FormalAllocationIdentity {
+        self.allocation
+    }
+    pub const fn slice(self) -> ValueId {
+        self.slice
+    }
+    pub const fn index(self) -> ValueId {
+        self.index
+    }
+    pub const fn guard_index(self) -> ValueId {
+        self.guard_index
+    }
+    pub const fn length(self) -> ValueId {
+        self.length
+    }
+    pub const fn predicate(self) -> ValueId {
+        self.predicate
+    }
+    pub const fn pointer(self) -> ValueId {
+        self.pointer
+    }
+    pub const fn element_bytes(self) -> u64 {
+        self.element_bytes
+    }
+    pub const fn path(self) -> FormalGuardedPathV1 {
+        self.path
+    }
 }
 
 /// A compiler-derived, per-invocation byte region rooted at a formal kernel
@@ -301,6 +348,7 @@ pub struct FormalBoundsRequirement {
 pub enum FormalBoundsKindV1 {
     FixedMinimumBytes(u64),
     SliceElementAtGuardedIndex(FormalSliceBoundedDomainV1),
+    RuntimeSliceElementAtGuardedIndex(FormalRuntimeSliceReadDomainV1),
 }
 
 impl FormalBoundsRequirement {
@@ -1689,25 +1737,33 @@ fn derive_bounds_requirements(
         if let Some(guarded) = guarded.as_mut() {
             guarded.bounds_work()?;
         }
-        let kind = if let FormalAccessDomainV1::SliceBounded(domain) = access.domain {
-            FormalBoundsKindV1::SliceElementAtGuardedIndex(domain)
-        } else {
-            let range = match access.byte_offset {
-                // Only guarded reads are admitted with an unbounded affine
-                // expression, and their bounds stay behind the distinct ranked
-                // proof reason emitted at extraction time.
-                ByteExpression::Unbounded => continue,
-                ByteExpression::Affine { .. } => match access_envelope(access) {
-                    Some(range) => range,
-                    None => {
-                        reasons.insert(FormalMemoryIncompleteReason::AddressArithmeticOverflow {
-                            location: access.location,
-                        });
-                        continue;
-                    }
-                },
-            };
-            FormalBoundsKindV1::FixedMinimumBytes(range.end_exclusive)
+        let kind = match access.domain {
+            FormalAccessDomainV1::SliceBounded(domain) => {
+                FormalBoundsKindV1::SliceElementAtGuardedIndex(domain)
+            }
+            FormalAccessDomainV1::RuntimeSliceReadBounded(domain) => {
+                FormalBoundsKindV1::RuntimeSliceElementAtGuardedIndex(domain)
+            }
+            FormalAccessDomainV1::LaunchEnvelope => {
+                let range = match access.byte_offset {
+                    // Only guarded reads are admitted with an unbounded affine
+                    // expression, and their bounds stay behind the distinct ranked
+                    // proof reason emitted at extraction time.
+                    ByteExpression::Unbounded => continue,
+                    ByteExpression::Affine { .. } => match access_envelope(access) {
+                        Some(range) => range,
+                        None => {
+                            reasons.insert(
+                                FormalMemoryIncompleteReason::AddressArithmeticOverflow {
+                                    location: access.location,
+                                },
+                            );
+                            continue;
+                        }
+                    },
+                };
+                FormalBoundsKindV1::FixedMinimumBytes(range.end_exclusive)
+            }
         };
         guarded_access_v1::report_push(
             guarded,
@@ -1760,7 +1816,7 @@ fn derive_alias_requirements(
     let mut entries = Vec::<(FormalAllocationIdentity, AllocationEnvelope)>::new();
     for access in accesses {
         guarded_access_v1::report_work(guarded, 8)?;
-        let range = if matches!(access.domain, FormalAccessDomainV1::SliceBounded(_)) {
+        let range = if access.domain != FormalAccessDomainV1::LaunchEnvelope {
             FormalAliasRegionV1::WholeFormalAllocation
         } else {
             match access.byte_offset {

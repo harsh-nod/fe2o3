@@ -19,7 +19,7 @@ use fe2o3_compiler_lineage::{
 };
 use fe2o3_kernel_ir::{
     AddressSpace, AmdGpuDiagnosticOperation, BasicBlock, BinaryOp, CheckedBinaryOperator,
-    FormalMemoryReceiptErrorV1, FunctionBody, FunctionRole, InertFormalMemoryReceiptFormatV3,
+    FormalMemoryReceiptErrorV1, FunctionBody, FunctionRole, InertFormalMemoryReceiptFormatV4,
     MemoryAccess, Module, OperationKind, Terminator, VerifiedCanonicalKernelIrErrorV8,
     VerifiedCanonicalKernelIrErrorV9, VerifiedCanonicalKernelIrErrorV11,
     VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV11,
@@ -42,6 +42,10 @@ use crate::{
 };
 
 const CORRESPONDENCE_MAGIC_V1: [u8; 8] = *b"F2MRCOP2";
+
+#[cfg(test)]
+#[path = "compiler_multi_root_runtime_read_v1_tests.rs"]
+mod runtime_read_tests;
 const CORRESPONDENCE_VERSION_V1: u16 = 2;
 const CORRESPONDENCE_POLICY_V1: u16 = 1;
 const RANKED_ROSTER_IDENTITY_DOMAIN_V1: &[u8] =
@@ -109,7 +113,7 @@ pub struct ValidatedCompilerMultiRootProofRootV1 {
     kernel_id: Box<str>,
     middle_end: InertProductionMiddleEndEvidenceV5,
     semantic_u32_induction: InertCanonicalSemanticU32InductionEvidenceV1,
-    formal_memory: InertFormalMemoryReceiptFormatV3,
+    formal_memory: InertFormalMemoryReceiptFormatV4,
     verus_execution: CanonicalProductionMirPlironVerusExecutionEvidenceV1,
 }
 
@@ -165,7 +169,7 @@ impl ValidatedCompilerMultiRootProofRootV1 {
     }
 
     /// Returns the independently decoded formal-memory obligation receipt.
-    pub const fn formal_memory(&self) -> &InertFormalMemoryReceiptFormatV3 {
+    pub const fn formal_memory(&self) -> &InertFormalMemoryReceiptFormatV4 {
         &self.formal_memory
     }
 
@@ -608,9 +612,9 @@ fn decode_formal_root_payload_v1(
     ordinal: usize,
     kernel_id: &str,
     payload: &[u8],
-) -> Result<InertFormalMemoryReceiptFormatV3, CompilerMultiRootProofValidationErrorV1> {
+) -> Result<InertFormalMemoryReceiptFormatV4, CompilerMultiRootProofValidationErrorV1> {
     let decoded =
-        InertFormalMemoryReceiptFormatV3::decode_current(payload.to_vec()).map_err(|source| {
+        InertFormalMemoryReceiptFormatV4::decode_current(payload.to_vec()).map_err(|source| {
             CompilerMultiRootProofValidationErrorV1::FormalMemoryPayload {
                 root: ordinal,
                 source,
@@ -2042,7 +2046,7 @@ mod tests {
         .unwrap();
         assert!(report.is_complete());
         let receipt =
-            InertFormalMemoryReceiptFormatV3::from_current_obligations(report.obligations())
+            InertFormalMemoryReceiptFormatV4::from_current_obligations(report.obligations())
                 .unwrap();
         if width == fe2o3_kernel_ir::FormalIndexWidth::Bits32 {
             // Bits32 is an inert codec case, never a claim of complete physical analysis.
@@ -2055,7 +2059,7 @@ mod tests {
             }
             assert_eq!(bytes[cursor], 2);
             bytes[cursor] = 1;
-            let inert = InertFormalMemoryReceiptFormatV3::decode_current(bytes).unwrap();
+            let inert = InertFormalMemoryReceiptFormatV4::decode_current(bytes).unwrap();
             assert_eq!(inert.metadata().index_width(), width);
             assert!(!inert.grants_authority());
             inert.into_canonical_bytes()
@@ -2066,21 +2070,21 @@ mod tests {
 
     #[test]
     fn nested_formal_consumer_preserves_each_format_and_exact_root_binding() {
-        use fe2o3_kernel_ir::{FormalIndexWidth, FormalMemoryReceiptEncodingV3};
+        use fe2o3_kernel_ir::{FormalIndexWidth, FormalMemoryReceiptEncodingV4};
         for (ordinal, name, guarded, width, encoding) in [
             (
                 0,
                 "alpha",
                 false,
                 FormalIndexWidth::Bits64,
-                FormalMemoryReceiptEncodingV3::LegacyV1,
+                FormalMemoryReceiptEncodingV4::LegacyV1,
             ),
             (
                 1,
                 "zeta",
                 true,
                 FormalIndexWidth::Bits64,
-                FormalMemoryReceiptEncodingV3::GuardedV3,
+                FormalMemoryReceiptEncodingV4::GuardedV3,
             ),
             // The bare multiroot payload contract is inert, unlike singleton V4 policy2.
             (
@@ -2088,7 +2092,7 @@ mod tests {
                 "other",
                 true,
                 FormalIndexWidth::Bits32,
-                FormalMemoryReceiptEncodingV3::GuardedV3,
+                FormalMemoryReceiptEncodingV4::GuardedV3,
             ),
         ] {
             let payload = formal_component_payload(name, guarded, width);

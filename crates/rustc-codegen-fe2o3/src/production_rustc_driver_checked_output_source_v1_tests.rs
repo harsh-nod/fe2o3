@@ -33,6 +33,8 @@ struct Observation {
     other_reads: usize,
     other_writes: usize,
     formal_accesses: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtime_domains: Option<runtime_domains::RuntimeDomainObservation>,
     policy: u16,
     output_digest: [u8; 32],
     llvm_bytes: usize,
@@ -138,6 +140,7 @@ impl Callbacks for CheckedOutputCallbacks {
                 other_reads: 0,
                 other_writes: 0,
                 formal_accesses: admitted.kernels().iter().map(|k| k.accesses().len()).sum(),
+                runtime_domains: Some(runtime_domains::observe(admitted.kernels())?),
                 policy: admitted.checked_output().execution().policy_version(),
                 output_digest: *admitted.output().canonical().identity().digest(),
                 llvm_bytes: 0,
@@ -527,6 +530,10 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         assert_eq!(result.internal_helpers == 0, calls == 0);
         assert_eq!((result.reads, result.writes), (reads, writes));
         assert_eq!(result.formal_accesses, reads + writes);
+        assert_eq!(
+            result.runtime_domains,
+            Some(runtime_domains::RuntimeDomainObservation::default())
+        );
         assert_eq!(result.policy, 4);
         assert_eq!(result.descriptor_roots, roots.len());
         assert_ne!(result.output_digest, [0; 32]);
@@ -549,6 +556,10 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
                 serde_json::from_slice(&std::fs::read(proof_response).unwrap()).unwrap();
             let result = result.unwrap();
             assert!(result.missing_proof_refused);
+            assert_eq!(
+                result.runtime_domains,
+                Some(runtime_domains::RuntimeDomainObservation::default())
+            );
             assert_eq!(result.policy, 4);
             assert_eq!(result.output_digest, expected_output);
             assert_eq!((result.llvm_bytes, result.descriptor_roots), (0, 0));
@@ -566,3 +577,5 @@ mod corpus;
 mod corpus_cargo;
 #[path = "production_rustc_driver_checked_output_progress_v1_tests.rs"]
 mod progress;
+#[path = "production_rustc_driver_checked_output_runtime_domains_v1_tests.rs"]
+mod runtime_domains;
