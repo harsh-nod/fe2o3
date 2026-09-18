@@ -1085,7 +1085,7 @@ fn unsigned_division_work_failure_after_bitmap_allocation_remains_caller_releasa
             ))
         ));
         assert_eq!(budget.work(), 9);
-        assert!(budget.storage() >= floor + fixed_header() + bitmap_header() + 1);
+        assert!(budget.storage() > floor + fixed_header() + bitmap_header());
         assert_eq!(budget.peak_storage(), budget.storage());
         assert_eq!(budget.failed_storage(), None);
         budget.release_storage(budget.storage() - floor).unwrap();

@@ -281,7 +281,37 @@ whole-roster scans. The index retains `O(R)` storage and can have a higher peak
 than one old per-statement temporary vector. This is an algorithmic bound, not
 a measured end-to-end speedup or a new canonical resource-accounting claim.
 
+The GPU expression resolver also indexes statement-definition positions by local
+and block. A reaching-definition prefix lookup becomes logarithmic, while the
+existing logical statement-visit debit, first failure, dominance fallback and
+cycle handling remain unchanged. Other assertion-proof consumers keep the
+original scan. The sparse index adds storage proportional to definition events
+and an explicit allocation-failure boundary; it does not cache expression trees
+or proof results and has no measured whole-corpus speedup claim.
+
 ## Admission tests
+
+General checked-output admission also censuses scalar helper closures from each
+actual B/C/O inventory. Eligible helpers have a direct non-unwinding Rust ABI,
+Bool or signed/unsigned 8/16/32/64-bit arguments, and Unit or one scalar return.
+Source membership is checked against the reconstructed root-qualified function
+correspondence. Every retained helper is checked, including an uncalled helper
+left after independently checked dead-control removal.
+
+The helper census requires complete empty memory effects and a closed scalar
+opcode set; pointers, aggregates, floats, helper traps, external calls and
+recursion remain outside this subset. Calls remain ordered and block private
+store forwarding. This does not establish termination, helper-result bounds or
+extent facts, optimizer purity, or general tutorial-helper support. Policy4
+continues to forward only its admitted integer loads, not Bool loads. The
+existing actual-inventory nonzero checks still govern division and remainder.
+
+`ordinary_rust_shared_unit_helper_reaches_checked_native_output` exercises the
+ordinary two-root Rust fixture through the same callback as fill and vecadd.
+It requires the admitted Verus runtime for the earlier ranked helper-effect
+join. Without that runtime, the test fails before Policy4; semantic-MIR helper
+and ABI component tests do not substitute for this source qualification. No
+runtime bypass is provided, and this is not whole-corpus qualification.
 
 The production admission is maintained by the following regression gates:
 
