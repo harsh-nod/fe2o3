@@ -1085,3 +1085,13 @@ This remains R126 development. Native success/failure qualification of the three
 single-queue profiles, formal implementation correspondence and matched HIP/HSA
 performance remain unclaimed. Earlier sealed native receipts describe their
 exact historical source, not this extension.
+The `kfd-compute-aql-queue` example now exposes a bounded public success probe:
+`--retained-release-sdma (generic|0|1) <selected-unique-id>`. It rejects `--all`
+for these profiles, creates the primary and one SDMA queue in an isolated child,
+checks retained-path admission, original queue IDs, eight released resources,
+exact configured backing-account refunds and inert retry, then emits its
+completion marker after dropping the completed public custody. It submits no
+packets or MMIO stores. The ordinary coherent host account excludes intrinsic
+ring/control and other non-accounted profiles; its refund is not an aggregate
+process residency claim. Native execution evidence is separate from CPU CLI
+tests and does not cover submitted work, native faults or throughput.
