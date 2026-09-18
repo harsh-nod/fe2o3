@@ -37,6 +37,7 @@ pub(super) fn check<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) {
         vec![function].into_boxed_slice(),
         [0x79; 32],
         DebugSourceCaptureRequestV2::SourceVariables,
+        None,
     )
     .unwrap();
     assert!(plan.direct_call_producers().is_empty());
@@ -110,6 +111,7 @@ pub(super) fn check<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) {
         .unwrap();
         construct_production_semantic_body_v1(
             ProductionSemanticBodyInputV1 {
+                context_entry: None,
                 tcx,
                 instance,
                 body,

@@ -85,6 +85,9 @@ pub(super) fn extract_closures(tcx: TyCtxt<'_>) -> Vec<ClosureLayoutResult> {
 
         let mut inventory = BTreeMap::new();
         collect_fixture_types(tcx, ty, &mut inventory);
+        if name == "captureless" {
+            collect_fixture_types(tcx, tcx.types.unit, &mut inventory);
+        }
         let producers = inventory
             .into_iter()
             .map(|(identity, ty)| {
@@ -121,6 +124,47 @@ pub(super) fn extract_closures(tcx: TyCtxt<'_>) -> Vec<ClosureLayoutResult> {
             assert_eq!(observed, identity.as_bytes());
             let captures = arguments.as_closure().upvar_tys();
             let layout = layout_cx.layout_of(ty).unwrap();
+            let layout_identity = rustc_semantic_layout_identity_v1(tcx, canonical_target, layout);
+            assert_eq!(record.layout_identity(), layout_identity);
+            let normalized = tcx
+                .try_normalize_erasing_regions(TypingEnv::fully_monomorphized(), ty)
+                .unwrap();
+            assert_eq!(
+                layout_identity,
+                rustc_semantic_layout_identity_v1(
+                    tcx,
+                    canonical_target,
+                    layout_cx.layout_of(normalized).unwrap(),
+                )
+            );
+            assert_eq!(
+                layout_identity.as_bytes(),
+                &crate::rustc_semantic_adapter_v1::domain_digest(
+                    b"fe2o3/semantic-mir/semantic-layout/v2",
+                    &[
+                        canonical_target.identity().as_bytes(),
+                        &rustc_type_layout_sha256_v1(tcx, layout),
+                    ],
+                )
+            );
+            assert_ne!(
+                layout_identity,
+                rustc_semantic_layout_identity_v1(
+                    tcx,
+                    canonical_target_layout_v1(&other_target),
+                    layout
+                )
+            );
+            if name == "captureless" {
+                let unit_layout = layout_cx.layout_of(tcx.types.unit).unwrap();
+                assert_eq!(layout.layout, unit_layout.layout);
+                let unit = types
+                    .iter()
+                    .find(|record| matches!(record.shape(), SemanticTypeShapeV1::Unit))
+                    .unwrap();
+                assert_ne!(record.layout(), unit.layout());
+                assert_ne!(layout_identity, unit.layout_identity());
+            }
             let SemanticTypeShapeV1::Aggregate(aggregate) = record.shape() else {
                 panic!("closure must be a nominal aggregate, including captureless closures");
             };
@@ -217,6 +261,7 @@ fn collect_fixture_types<'tcx>(
             }
         }
         TyKind::Bool | TyKind::Int(_) | TyKind::Uint(_) | TyKind::Float(_) => {}
+        TyKind::Tuple(fields) if fields.is_empty() => {}
         other => panic!("unexpected fixture type {other:?}"),
     }
 }
@@ -258,6 +303,10 @@ fn live_closure_types_preserve_nominal_identity_layout_and_capture_order() {
             right.facts.abi_alignment_bytes
         );
         assert_ne!(left.record.identity(), right.record.identity());
+        assert_ne!(
+            left.record.layout_identity(),
+            right.record.layout_identity()
+        );
         assert_ne!(
             left.evidence.semantic_type(),
             right.evidence.semantic_type()

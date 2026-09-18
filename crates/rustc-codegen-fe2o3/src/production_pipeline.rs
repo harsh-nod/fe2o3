@@ -45,6 +45,7 @@ pub(crate) enum ProductionPipelineError {
     SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     SemanticSsa(fe2o3_pliron::ProductionSemanticSsaErrorV1),
+    ContextHandoff(fe2o3_lower_mir_kernel::ProductionContextRootErrorV29),
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
@@ -116,6 +117,7 @@ impl fmt::Display for ProductionPipelineError {
             Self::SemanticSsa(error) => {
                 write!(formatter, "production compilation semantic SSA planning failed: {error}")
             }
+            Self::ContextHandoff(error) => write!(formatter, "production compilation context root handoff failed: {error}"),
             Self::RankedProjection(error) => {
                 write!(formatter, "production compilation general kernel verification failed: {error}")
             }
@@ -275,6 +277,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::SemanticImport(error) => Some(error),
             Self::SemanticMiddleEnd(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
+            Self::ContextHandoff(error) => Some(error),
             Self::RankedProjection(error) => Some(error),
             Self::RankedVerification(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
@@ -412,6 +415,7 @@ struct ProtectedProductionPublicationCustody {
 }
 
 struct AuthenticatedProductionBindings {
+    context_entries: crate::collector::RetainedContextEntriesV29,
     rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
     rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
@@ -1329,6 +1333,7 @@ impl TargetLoweredProductionCompilation {
             rustc_preflight_plan,
             rustc_target,
             reference_effect_bindings: _,
+            context_entries: _,
             debug_source_files: _,
             debug_source_scopes: _,
             debug_source_variables: _,
@@ -1380,6 +1385,7 @@ impl TargetLoweredProductionCompilation {
             rustc_preflight_plan,
             rustc_target,
             reference_effect_bindings: _,
+            context_entries: _,
             debug_source_files,
             debug_source_scopes,
             debug_source_variables,
@@ -1477,6 +1483,7 @@ impl TargetLoweredProductionCompilation {
             rustc_preflight_plan,
             rustc_target,
             reference_effect_bindings,
+            context_entries: _,
             debug_source_files,
             debug_source_scopes,
             debug_source_variables,
@@ -3172,6 +3179,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         } = self.stage;
         let crate::collector::ConstructedProductionSemanticMirV1 {
             semantic_mir,
+            context_entries,
             rustc_identity_inventory,
             rustc_preflight_plan,
             rustc_target,
@@ -3196,6 +3204,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             stage: AdmittedSemanticMirStage {
                 semantic_mir,
                 bindings: AuthenticatedProductionBindings {
+                    context_entries,
                     rustc_identity_inventory,
                     rustc_preflight_plan,
                     rustc_target,
@@ -3406,6 +3415,16 @@ impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
             fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
         )
         .map_err(ProductionPipelineError::SemanticSsa)?;
+        bindings
+            .context_entries
+            .validate_source(semantic_ssa.source_semantic())
+            .map_err(|error| {
+                ProductionPipelineError::SemanticImport(
+                    crate::collector::ProductionSemanticImportErrorV1::BodyConstruction(Box::new(
+                        error,
+                    )),
+                )
+            })?;
         Ok(ProductionCompilation {
             stage: SsaSemanticMirStage {
                 semantic_ssa,
@@ -3415,6 +3434,11 @@ impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
         })
     }
 }
+
+#[path = "production_context_handoff_v29.rs"]
+mod context_handoff_v29;
+#[cfg(test)]
+pub(crate) use context_handoff_v29::check_context_handoff_v29;
 
 impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
     fn require_target_neutral_lowering(self) -> ProductionPipelineError {
@@ -3436,6 +3460,19 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
 
     fn materialize_target_neutral(
         self,
+    ) -> Result<MaterializedNeutralProductionCompilation, Box<ProductionPipelineError>> {
+        self.materialize_with_context_observer_v29(|_, _| Ok(()))
+    }
+
+    fn materialize_with_context_observer_v29(
+        self,
+        use_root: impl for<'a> FnMut(
+            fe2o3_lower_mir_kernel::ProductionCheckedContextRootV29<'a>,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<
+            (),
+            fe2o3_lower_mir_kernel::ProductionContextRootErrorV29,
+        >,
     ) -> Result<MaterializedNeutralProductionCompilation, Box<ProductionPipelineError>> {
         let SsaSemanticMirStage {
             semantic_ssa,
@@ -3489,6 +3526,13 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
             &mut work,
             crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
         );
+        context_handoff_v29::check_context_handoff_v29(
+            &bindings.context_entries,
+            &semantic_ssa,
+            &launch,
+            &mut budget,
+            use_root,
+        )?;
         let materialized =
             fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
                 semantic_ssa,

@@ -9,6 +9,7 @@ use crate::rust_type_layout_general::{TypeLayoutFacts, TypeLayoutKind, extract_c
 use crate::rustc_semantic_adapter_v1::{
     canonical_function_identities_v1, canonical_target_layout_v1, rustc_mir_body_sha256_v1,
 };
+use crate::rustc_semantic_plan_v1::SourceClosureWorkV1;
 use crate::semantic_layout_bridge::rustc_semantic_layout_target_v1;
 use fe2o3_mir_model::semantic_mir_v1::{SemanticFunctionIdentityV1, SemanticLayoutIdentityV1};
 use rustc_hir::Mutability;
@@ -21,8 +22,18 @@ use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{
     ClosureKind, EarlyBinder, Instance, InstanceKind, Ty, TyCtxt, TyKind, TypingEnv,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
+
+#[path = "closure_profile_v1/alias_flow_v1.rs"]
+mod alias_flow_v1;
+#[path = "closure_profile_v1/constants_v1.rs"]
+mod constants_v1;
+#[path = "closure_profile_v1/once_shim_v1.rs"]
+mod once_shim_v1;
+#[path = "closure_profile_v1/uses_v1.rs"]
+mod uses_v1;
+pub(crate) use once_shim_v1::{authenticate_once_shim_v1, is_shim_receiver_call_v1};
 
 const MAX_CLOSURES: usize = 8;
 const MAX_CAPTURES: usize = 8;
@@ -89,6 +100,76 @@ pub(crate) struct StaticClosureCallV1 {
     pub(crate) target_definition_hash: [u8; 16],
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ClosureForwardV1 {
+    pub(crate) block: usize,
+    pub(crate) argument: usize,
+    pub(crate) source: ClosureForwardSourceV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ClosureForwardSourceV1 {
+    Local(usize),
+    EmptyConstant(constants_v1::EmptyClosureConstantV1),
+}
+
+/// Layout and uses observed before caller provenance is resolved. This cannot
+/// become an admission without an origin for every exact environment local.
+pub(crate) struct RawClosureObservationV1 {
+    environments: Vec<ClosureEnvironmentV1>,
+    calls: Vec<StaticClosureCallV1>,
+    forwards: Vec<ClosureForwardV1>,
+    observation: CompilerClosureObservationV2,
+}
+
+impl RawClosureObservationV1 {
+    pub(crate) fn environments(&self) -> &[ClosureEnvironmentV1] {
+        &self.environments
+    }
+
+    pub(crate) fn forwards(&self) -> &[ClosureForwardV1] {
+        &self.forwards
+    }
+
+    pub(crate) fn calls(&self) -> &[StaticClosureCallV1] {
+        &self.calls
+    }
+
+    pub(crate) fn admit(
+        mut self,
+        origins: &BTreeMap<usize, ClosureOriginV1>,
+        policy: ClosureOriginPolicyV1,
+        work: &mut SourceClosureWorkV1,
+    ) -> Result<BoundedClosureAdmissionV2, ClosureProfileErrorV1> {
+        if origins.len() != self.environments.len() {
+            return Err(ClosureProfileErrorV1::new("closure origin roster changed"));
+        }
+        for environment in &mut self.environments {
+            charge_work(work, 1)?;
+            let origin = *origins
+                .get(&environment.local)
+                .ok_or_else(|| ClosureProfileErrorV1::new("closure origin is unresolved"))?;
+            if environment.origin == ClosureOriginV1::DeviceInternal
+                && origin != ClosureOriginV1::DeviceInternal
+            {
+                return Err(ClosureProfileErrorV1::new(
+                    "closure aggregate origin changed",
+                ));
+            }
+            require_origin(policy, origin)?;
+            for capture in &environment.captures {
+                validate_capture_layout_v1(&capture.layout, origin, work)?;
+            }
+            environment.origin = origin;
+        }
+        Ok(BoundedClosureAdmissionV2 {
+            environments: self.environments,
+            calls: self.calls,
+            observation: self.observation,
+        })
+    }
+}
+
 /// The existing compiler identity axes under which bounded admission succeeded.
 /// No independent lowering recipe or proof identity is introduced.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -119,16 +200,25 @@ impl BoundedClosureAdmissionV2 {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn observe_closures_v2<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
 ) -> Result<Option<BoundedClosureAdmissionV2>, ClosureProfileErrorV1> {
-    if !contains_concrete_closure_v1(tcx, instance)? {
-        return Ok(None);
-    }
-    analyze_bounded_closures_v2(tcx, instance, ClosureOriginPolicyV1::Either).map(Some)
+    let mut work = SourceClosureWorkV1::default();
+    observe_raw_closures_v1(tcx, instance, &BTreeMap::new(), &mut work)?
+        .map(|raw| {
+            let origins = raw
+                .environments
+                .iter()
+                .map(|env| (env.local, env.origin))
+                .collect();
+            raw.admit(&origins, ClosureOriginPolicyV1::Either, &mut work)
+        })
+        .transpose()
 }
 
+#[cfg(test)]
 pub(crate) fn revalidate_closure_observation_v2<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
@@ -148,7 +238,7 @@ pub(crate) fn revalidate_closure_observation_v2<'tcx>(
 pub(crate) struct ClosureProfileErrorV1(String);
 
 impl ClosureProfileErrorV1 {
-    fn new(reason: impl Into<String>) -> Self {
+    pub(crate) fn new(reason: impl Into<String>) -> Self {
         Self(reason.into())
     }
 }
@@ -165,25 +255,39 @@ impl fmt::Display for ClosureProfileErrorV1 {
 
 impl std::error::Error for ClosureProfileErrorV1 {}
 
+#[cfg(test)]
 pub(crate) fn analyze_bounded_closures_v2<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     policy: ClosureOriginPolicyV1,
 ) -> Result<BoundedClosureAdmissionV2, ClosureProfileErrorV1> {
-    let target = rustc_semantic_layout_target_v1(tcx).map_err(|error| {
-        ClosureProfileErrorV1::new(format!(
-            "live closure layout target is unavailable: {error}"
-        ))
-    })?;
-    if tcx.sess.target.pointer_width != 64 {
-        return Err(ClosureProfileErrorV1::new(
-            "the bounded closure profile requires a 64-bit compiler target",
-        ));
-    }
+    let mut work = SourceClosureWorkV1::default();
+    let raw =
+        observe_raw_closures_v1(tcx, instance, &BTreeMap::new(), &mut work)?.ok_or_else(|| {
+            ClosureProfileErrorV1::new(
+                "the requested closure profile contains no concrete closure environment",
+            )
+        })?;
+    let origins = raw
+        .environments
+        .iter()
+        .map(|env| (env.local, env.origin))
+        .collect();
+    raw.admit(&origins, policy, &mut work)
+}
+
+pub(crate) fn observe_raw_closures_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    forwarding: &BTreeMap<usize, BTreeSet<usize>>,
+    work: &mut SourceClosureWorkV1,
+) -> Result<Option<RawClosureObservationV1>, ClosureProfileErrorV1> {
     let body = tcx.instance_mir(instance.def);
-    reject_dynamic_types(tcx, instance, body)?;
+    charge_work(work, body.local_decls.len())?;
+    reject_dynamic_types(tcx, instance, body, work)?;
     let own_receiver = own_closure_receiver_v1(tcx, instance, body)?;
-    let creations = closure_creations(body)?;
+    let creations = closure_creations(body, work)?;
+    charge_work(work, body.local_decls.len())?;
     let typed_closure_locals = body
         .local_decls
         .iter_enumerated()
@@ -195,11 +299,14 @@ pub(crate) fn analyze_bounded_closures_v2<'tcx>(
                 .map(|_| local)
         })
         .collect::<BTreeSet<_>>();
-    let value_aliases = closure_value_aliases(body, &typed_closure_locals)?;
+    let value_aliases = alias_flow_v1::value_aliases(body, &typed_closure_locals, &mut |amount| {
+        charge_work(work, amount)
+    })?;
     let mut environments = Vec::new();
     let mut closure_locals = BTreeSet::new();
 
     for (local, declaration) in body.local_decls.iter_enumerated() {
+        charge_work(work, 1)?;
         if Some(local) == own_receiver {
             continue;
         }
@@ -211,11 +318,6 @@ pub(crate) fn analyze_bounded_closures_v2<'tcx>(
             return Err(ClosureProfileErrorV1::new(
                 "returning a closure escapes its environment",
             ));
-        }
-        if environments.len() == MAX_CLOSURES {
-            return Err(ClosureProfileErrorV1::new(format!(
-                "closure count exceeds {MAX_CLOSURES}"
-            )));
         }
         let origin = if local.as_usize() != 0 && local.as_usize() <= body.arg_count {
             ClosureOriginV1::HostArgument
@@ -229,7 +331,11 @@ pub(crate) fn analyze_bounded_closures_v2<'tcx>(
                 local.as_usize()
             )));
         };
-        require_origin(policy, origin)?;
+        if environments.len() == MAX_CLOSURES {
+            return Err(ClosureProfileErrorV1::new(format!(
+                "closure count exceeds {MAX_CLOSURES}"
+            )));
+        }
         let call_kind = closure_kind(args.as_closure().kind_ty().to_opt_closure_kind())?;
         let upvars = args.as_closure().upvar_tys();
         if upvars.len() > MAX_CAPTURES {
@@ -268,6 +374,7 @@ pub(crate) fn analyze_bounded_closures_v2<'tcx>(
 
         let mut captures = Vec::with_capacity(upvars.len());
         for (source_index, raw_ty) in upvars.iter().enumerate() {
+            charge_work(work, 1)?;
             let capture_ty = normalized_ty(tcx, instance, raw_ty, "closure capture")?;
             if capture_ty.needs_drop(tcx, TypingEnv::fully_monomorphized()) {
                 return Err(ClosureProfileErrorV1::new(format!(
@@ -292,17 +399,12 @@ pub(crate) fn analyze_bounded_closures_v2<'tcx>(
                 }
                 _ => ClosureCaptureModeV1::ByValue,
             };
-            if origin == ClosureOriginV1::HostArgument && mode != ClosureCaptureModeV1::ByValue {
-                return Err(ClosureProfileErrorV1::new(
-                    "host closure references require an eligible allocation/completion token; none is present in V1",
-                ));
-            }
             let facts = extract_capture_layout(tcx, capture_ty).map_err(|error| {
                 ClosureProfileErrorV1::new(format!(
                     "capture {source_index} has unsupported physical layout: {error}"
                 ))
             })?;
-            validate_capture_layout_v1(&facts, origin)?;
+            validate_capture_layout_v1(&facts, ClosureOriginV1::DeviceInternal, work)?;
             let field = layout.field(&layout_cx, source_index);
             if field.size.bytes() != facts.size_bytes
                 || field.align.abi.bytes() != facts.abi_alignment_bytes
@@ -335,48 +437,73 @@ pub(crate) fn analyze_bounded_closures_v2<'tcx>(
         });
     }
 
-    if environments.is_empty() {
-        return Err(ClosureProfileErrorV1::new(
-            "the requested closure profile contains no concrete closure environment",
-        ));
-    }
     environments.sort_by_key(|environment| environment.local);
-    let aliases = closure_reference_aliases(body, &closure_locals, &value_aliases)?;
-    let calls = validate_uses_and_calls(
+    let aliases =
+        alias_flow_v1::reference_aliases(body, &closure_locals, &value_aliases, &mut |amount| {
+            charge_work(work, amount)
+        })?;
+    let (calls, forwards, saw_closure_constant) = uses_v1::validate_uses_and_calls(
         tcx,
         instance,
         body,
-        &environments,
-        &closure_locals,
-        &aliases,
+        uses_v1::ClosureUsesV1 {
+            environments: &environments,
+            closure_locals: &closure_locals,
+            aliases: &aliases,
+            forwarding,
+        },
+        work,
     )?;
-    Ok(BoundedClosureAdmissionV2 {
+    if environments.is_empty() && !saw_closure_constant {
+        return Ok(None);
+    }
+    let target = rustc_semantic_layout_target_v1(tcx).map_err(|error| {
+        ClosureProfileErrorV1::new(format!(
+            "live closure layout target is unavailable: {error}"
+        ))
+    })?;
+    if tcx.sess.target.pointer_width != 64 {
+        return Err(ClosureProfileErrorV1::new(
+            "the bounded closure profile requires a 64-bit compiler target",
+        ));
+    }
+    Ok(Some(RawClosureObservationV1 {
         environments,
         calls,
+        forwards,
         observation: CompilerClosureObservationV2 {
             function: canonical_function_identities_v1(tcx, instance).function(),
             mir_body: rustc_mir_body_sha256_v1(tcx, instance),
             target: canonical_target_layout_v1(&target).identity(),
         },
-    })
+    }))
 }
 
-pub(crate) fn contains_concrete_closure_v1<'tcx>(
+fn charge_work(work: &mut SourceClosureWorkV1, amount: usize) -> Result<(), ClosureProfileErrorV1> {
+    work.charge(amount)
+        .map_err(|error| ClosureProfileErrorV1::new(error.to_string()))
+}
+
+#[cfg(test)]
+pub(crate) fn scan_untracked_uses_for_test<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
+    body: &Body<'tcx>,
+    work: &mut SourceClosureWorkV1,
 ) -> Result<bool, ClosureProfileErrorV1> {
-    let body = tcx.instance_mir(instance.def);
-    let own_receiver = own_closure_receiver_v1(tcx, instance, body)?;
-    for (local, declaration) in body.local_decls.iter_enumerated() {
-        if Some(local) == own_receiver {
-            continue;
-        }
-        let ty = normalized_ty(tcx, instance, declaration.ty, "closure presence check")?;
-        if matches!(ty.kind(), TyKind::Closure(..)) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    uses_v1::validate_uses_and_calls(
+        tcx,
+        instance,
+        body,
+        uses_v1::ClosureUsesV1 {
+            environments: &[],
+            closure_locals: &BTreeSet::new(),
+            aliases: &BTreeMap::new(),
+            forwarding: &BTreeMap::new(),
+        },
+        work,
+    )
+    .map(|(_, _, constant)| constant)
 }
 
 fn own_closure_receiver_v1<'tcx>(
@@ -384,10 +511,9 @@ fn own_closure_receiver_v1<'tcx>(
     instance: Instance<'tcx>,
     body: &Body<'tcx>,
 ) -> Result<Option<Local>, ClosureProfileErrorV1> {
-    let InstanceKind::Item(definition) = instance.def else {
-        return Ok(None);
-    };
-    if tcx.def_kind(definition) != rustc_hir::def::DefKind::Closure {
+    let is_closure_body = matches!(instance.def, InstanceKind::Item(definition)
+        if tcx.def_kind(definition) == rustc_hir::def::DefKind::Closure);
+    if !is_closure_body && authenticate_once_shim_v1(tcx, instance)?.is_none() {
         return Ok(None);
     }
     let signature =
@@ -440,7 +566,7 @@ fn closure_kind(kind: Option<ClosureKind>) -> Result<ClosureCallKindV1, ClosureP
     }
 }
 
-fn normalized_ty<'tcx>(
+pub(crate) fn normalized_ty<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     ty: Ty<'tcx>,
@@ -459,10 +585,13 @@ fn reject_dynamic_types<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     body: &Body<'tcx>,
+    work: &mut SourceClosureWorkV1,
 ) -> Result<(), ClosureProfileErrorV1> {
+    let mut visited = HashSet::new();
     for declaration in &body.local_decls {
+        charge_work(work, 1)?;
         let ty = normalized_ty(tcx, instance, declaration.ty, "local type")?;
-        if contains_dynamic_type(ty) {
+        if contains_dynamic_type(ty, &mut visited, work)? {
             return Err(ClosureProfileErrorV1::new(
                 "dynamic dispatch and dyn callable environments are forbidden",
             ));
@@ -471,21 +600,43 @@ fn reject_dynamic_types<'tcx>(
     Ok(())
 }
 
-fn contains_dynamic_type(ty: Ty<'_>) -> bool {
-    match ty.kind() {
-        TyKind::Dynamic(..) => true,
-        TyKind::Ref(_, pointee, _) | TyKind::RawPtr(pointee, _) => contains_dynamic_type(*pointee),
-        TyKind::Tuple(fields) => fields.iter().any(contains_dynamic_type),
-        _ => false,
+fn contains_dynamic_type<'tcx>(
+    ty: Ty<'tcx>,
+    visited: &mut HashSet<Ty<'tcx>>,
+    work: &mut SourceClosureWorkV1,
+) -> Result<bool, ClosureProfileErrorV1> {
+    charge_work(work, 1)?;
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        charge_work(work, 1)?;
+        if !visited.insert(ty) {
+            continue;
+        }
+        match ty.kind() {
+            TyKind::Dynamic(..) => return Ok(true),
+            TyKind::Ref(_, pointee, _) | TyKind::RawPtr(pointee, _) => {
+                charge_work(work, 1)?;
+                pending.push(*pointee);
+            }
+            TyKind::Tuple(fields) => {
+                charge_work(work, fields.len())?;
+                pending.extend(fields.iter());
+            }
+            _ => {}
+        }
     }
+    Ok(false)
 }
 
 fn closure_creations(
     body: &Body<'_>,
+    work: &mut SourceClosureWorkV1,
 ) -> Result<BTreeMap<Local, (DefId, usize)>, ClosureProfileErrorV1> {
     let mut result = BTreeMap::new();
     for block in body.basic_blocks.iter() {
+        charge_work(work, 1)?;
         for statement in &block.statements {
+            charge_work(work, 1)?;
             let Some((destination, Rvalue::Aggregate(kind, operands))) = statement.kind.as_assign()
             else {
                 continue;
@@ -514,9 +665,11 @@ fn closure_creations(
 fn validate_capture_layout_v1(
     facts: &TypeLayoutFacts,
     origin: ClosureOriginV1,
+    work: &mut SourceClosureWorkV1,
 ) -> Result<(), ClosureProfileErrorV1> {
     use crate::rust_type_layout_general::PointerKind;
 
+    charge_work(work, 1)?;
     match &facts.kind {
         TypeLayoutKind::Closure { .. } => Err(ClosureProfileErrorV1::new(
             "nested closure captures are outside the bounded profile",
@@ -528,7 +681,7 @@ fn validate_capture_layout_v1(
                     "host closure references require an eligible allocation/completion token; none is present in V1",
                 ));
             }
-            validate_capture_layout_v1(element, origin)
+            validate_capture_layout_v1(element, origin, work)
         }
         TypeLayoutKind::Pointer(pointer) => {
             match pointer.kind {
@@ -546,421 +699,17 @@ fn validate_capture_layout_v1(
                 }
                 PointerKind::SharedReference | PointerKind::MutableReference => {}
             }
-            validate_capture_layout_v1(&pointer.pointee, origin)
+            validate_capture_layout_v1(&pointer.pointee, origin, work)
         }
-        TypeLayoutKind::Array(array) => validate_capture_layout_v1(&array.element, origin),
+        TypeLayoutKind::Array(array) => validate_capture_layout_v1(&array.element, origin, work),
         TypeLayoutKind::Tuple(fields) => fields
             .iter()
-            .try_for_each(|field| validate_capture_layout_v1(&field.layout, origin)),
+            .try_for_each(|field| validate_capture_layout_v1(&field.layout, origin, work)),
         TypeLayoutKind::Adt(adt) => adt
             .variants
             .iter()
             .flat_map(|variant| &variant.fields)
-            .try_for_each(|field| validate_capture_layout_v1(&field.layout, origin)),
-    }
-}
-
-fn closure_reference_aliases(
-    body: &Body<'_>,
-    closure_locals: &BTreeSet<Local>,
-    value_aliases: &BTreeMap<Local, Local>,
-) -> Result<BTreeMap<Local, Local>, ClosureProfileErrorV1> {
-    let mut aliases = value_aliases.clone();
-    for block in body.basic_blocks.iter() {
-        for statement in &block.statements {
-            let Some((destination, Rvalue::Ref(_, _, source))) = statement.kind.as_assign() else {
-                continue;
-            };
-            let (Some(destination), Some(source)) = (destination.as_local(), source.as_local())
-            else {
-                continue;
-            };
-            let Some(root) = resolve_alias_root(source, closure_locals, &aliases) else {
-                continue;
-            };
-            if aliases.insert(destination, root).is_some() {
-                return Err(ClosureProfileErrorV1::new(
-                    "closure receiver alias is assigned more than once",
-                ));
-            }
-        }
-    }
-    Ok(aliases)
-}
-
-fn closure_value_aliases(
-    body: &Body<'_>,
-    typed_closure_locals: &BTreeSet<Local>,
-) -> Result<BTreeMap<Local, Local>, ClosureProfileErrorV1> {
-    let mut aliases = BTreeMap::new();
-    for block in body.basic_blocks.iter() {
-        for statement in &block.statements {
-            let Some((destination, Rvalue::Use(operand))) = statement.kind.as_assign() else {
-                continue;
-            };
-            let (Some(destination), Some(source)) =
-                (destination.as_local(), operand_local(operand))
-            else {
-                continue;
-            };
-            if !typed_closure_locals.contains(&destination)
-                || !typed_closure_locals.contains(&source)
-            {
-                continue;
-            }
-            if destination.as_usize() == 0 {
-                return Err(ClosureProfileErrorV1::new(
-                    "returning a forwarded closure escapes its environment",
-                ));
-            }
-            if aliases.insert(destination, source).is_some() {
-                return Err(ClosureProfileErrorV1::new(
-                    "closure value forwarding local is assigned more than once",
-                ));
-            }
-        }
-    }
-    Ok(aliases)
-}
-
-fn resolve_alias_root(
-    mut local: Local,
-    roots: &BTreeSet<Local>,
-    aliases: &BTreeMap<Local, Local>,
-) -> Option<Local> {
-    for _ in 0..=MAX_CLOSURES {
-        if roots.contains(&local) {
-            return Some(local);
-        }
-        local = *aliases.get(&local)?;
-    }
-    None
-}
-
-fn validate_uses_and_calls<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    instance: Instance<'tcx>,
-    body: &Body<'tcx>,
-    environments: &[ClosureEnvironmentV1],
-    closure_locals: &BTreeSet<Local>,
-    aliases: &BTreeMap<Local, Local>,
-) -> Result<Vec<StaticClosureCallV1>, ClosureProfileErrorV1> {
-    let by_local = environments
-        .iter()
-        .map(|environment| (Local::from_usize(environment.local), environment))
-        .collect::<BTreeMap<_, _>>();
-    let mut calls = Vec::new();
-    let mut call_counts = BTreeMap::<Local, usize>::new();
-    for (block_index, block) in body.basic_blocks.iter_enumerated() {
-        for statement in &block.statements {
-            if let Some((destination, value)) = statement.kind.as_assign() {
-                if allowed_closure_assignment(*destination, value, closure_locals, aliases) {
-                    continue;
-                }
-                if rvalue_mentions_closure(value, closure_locals, aliases) {
-                    return Err(ClosureProfileErrorV1::new(format!(
-                        "closure value escapes through an unsupported assignment in bb{}",
-                        block_index.as_usize()
-                    )));
-                }
-            } else if statement_mentions_closure(&statement.kind, closure_locals, aliases) {
-                return Err(ClosureProfileErrorV1::new(format!(
-                    "closure value is used by an unsupported statement in bb{}",
-                    block_index.as_usize()
-                )));
-            }
-        }
-        let Some(terminator) = &block.terminator else {
-            continue;
-        };
-        match &terminator.kind {
-            TerminatorKind::Call { func, args, .. } => {
-                if operand_mentions_closure(func, closure_locals, aliases) {
-                    return Err(ClosureProfileErrorV1::new(
-                        "closure value escapes through an indirect call target",
-                    ));
-                }
-                let receiver = args
-                    .first()
-                    .and_then(|argument| operand_local(&argument.node));
-                let closure_local =
-                    receiver.and_then(|local| resolve_alias_root(local, closure_locals, aliases));
-                if let Some(closure_local) = closure_local {
-                    let environment = by_local[&closure_local];
-                    let call_kind = declared_call_kind(tcx, func)?;
-                    if !call_kind_allowed(environment.call_kind, call_kind) {
-                        return Err(ClosureProfileErrorV1::new(
-                            "closure invoked through an incompatible Fn trait",
-                        ));
-                    }
-                    if args.len() != 2 {
-                        return Err(ClosureProfileErrorV1::new(
-                            "bounded closure calls require receiver plus one tuple argument",
-                        ));
-                    }
-                    let argument_count = tuple_argument_count(tcx, instance, body, &args[1].node)?;
-                    if argument_count > MAX_CALL_ARGUMENTS {
-                        return Err(ClosureProfileErrorV1::new(format!(
-                            "closure call argument count exceeds {MAX_CALL_ARGUMENTS}"
-                        )));
-                    }
-                    let target = resolve_direct_call(tcx, instance, func)?;
-                    if tcx.def_path_hash(target.def_id()).0.to_le_bytes()
-                        != environment.definition_hash
-                        && !matches!(target.def, InstanceKind::ClosureOnceShim { .. })
-                    {
-                        return Err(ClosureProfileErrorV1::new(
-                            "closure call did not resolve to its compiler-generated body or once shim",
-                        ));
-                    }
-                    for argument in args.iter().skip(1) {
-                        if operand_mentions_closure(&argument.node, closure_locals, aliases) {
-                            return Err(ClosureProfileErrorV1::new(
-                                "closure value escapes through a non-receiver call argument",
-                            ));
-                        }
-                    }
-                    *call_counts.entry(closure_local).or_default() += 1;
-                    calls.push(StaticClosureCallV1 {
-                        block: block_index.as_usize(),
-                        closure_local: closure_local.as_usize(),
-                        call_kind,
-                        argument_count,
-                        target_definition_hash: tcx.def_path_hash(target.def_id()).0.to_le_bytes(),
-                    });
-                    if calls.len() > MAX_STATIC_CALLS {
-                        return Err(ClosureProfileErrorV1::new(format!(
-                            "closure call count exceeds {MAX_STATIC_CALLS}"
-                        )));
-                    }
-                } else if args.iter().any(|argument| {
-                    operand_mentions_closure(&argument.node, closure_locals, aliases)
-                }) {
-                    return Err(ClosureProfileErrorV1::new(
-                        "closure value escapes to a non-closure call",
-                    ));
-                }
-            }
-            TerminatorKind::TailCall { func, args, .. }
-                if operand_mentions_closure(func, closure_locals, aliases)
-                    || args.iter().any(|argument| {
-                        operand_mentions_closure(&argument.node, closure_locals, aliases)
-                    }) =>
-            {
-                return Err(ClosureProfileErrorV1::new(
-                    "closure value escapes through a tail call",
-                ));
-            }
-            TerminatorKind::Drop { place, .. }
-                if place_mentions_closure(*place, closure_locals, aliases) =>
-            {
-                let allowed = place
-                    .as_local()
-                    .and_then(|local| resolve_alias_root(local, closure_locals, aliases))
-                    .is_some();
-                if !allowed {
-                    return Err(ClosureProfileErrorV1::new(
-                        "closure drop must consume one unprojected closure or receiver alias",
-                    ));
-                }
-            }
-            TerminatorKind::SwitchInt { discr, .. }
-                if operand_mentions_closure(discr, closure_locals, aliases) =>
-            {
-                return Err(ClosureProfileErrorV1::new(
-                    "closure value is used as a switch discriminant",
-                ));
-            }
-            TerminatorKind::Assert { cond, .. }
-                if operand_mentions_closure(cond, closure_locals, aliases) =>
-            {
-                return Err(ClosureProfileErrorV1::new(
-                    "closure value is used as an assertion condition",
-                ));
-            }
-            TerminatorKind::Yield {
-                value, resume_arg, ..
-            } if operand_mentions_closure(value, closure_locals, aliases)
-                || place_mentions_closure(*resume_arg, closure_locals, aliases) =>
-            {
-                return Err(ClosureProfileErrorV1::new(
-                    "closure value escapes through a coroutine yield",
-                ));
-            }
-            TerminatorKind::InlineAsm { operands, .. }
-                if operands.iter().any(|operand| {
-                    inline_asm_mentions_closure(operand, closure_locals, aliases)
-                }) =>
-            {
-                return Err(ClosureProfileErrorV1::new(
-                    "closure value escapes through inline assembly",
-                ));
-            }
-            _ => {}
-        }
-    }
-    for environment in environments {
-        let local = Local::from_usize(environment.local);
-        let count = call_counts.get(&local).copied().unwrap_or(0);
-        if count == 0 || (environment.call_kind == ClosureCallKindV1::FnOnce && count != 1) {
-            return Err(ClosureProfileErrorV1::new(format!(
-                "closure local{} has invalid call count {count} for {:?}",
-                environment.local, environment.call_kind
-            )));
-        }
-    }
-    calls.sort_by_key(|call| (call.block, call.closure_local));
-    Ok(calls)
-}
-
-fn allowed_closure_assignment(
-    destination: Place<'_>,
-    value: &Rvalue<'_>,
-    closure_locals: &BTreeSet<Local>,
-    aliases: &BTreeMap<Local, Local>,
-) -> bool {
-    match value {
-        Rvalue::Aggregate(kind, _) => {
-            matches!(&**kind, AggregateKind::Closure(..))
-                && destination
-                    .as_local()
-                    .is_some_and(|local| closure_locals.contains(&local))
-        }
-        Rvalue::Ref(_, _, source) => {
-            let Some(destination) = destination.as_local() else {
-                return false;
-            };
-            aliases.contains_key(&destination)
-                && source
-                    .as_local()
-                    .and_then(|local| resolve_alias_root(local, closure_locals, aliases))
-                    .is_some()
-        }
-        Rvalue::Use(operand) => {
-            let Some(destination) = destination.as_local() else {
-                return false;
-            };
-            let Some(source) = operand_local(operand) else {
-                return false;
-            };
-            source != destination
-                && aliases.contains_key(&destination)
-                && resolve_alias_root(source, closure_locals, aliases).is_some()
-        }
-        _ => false,
-    }
-}
-
-fn statement_mentions_closure(
-    statement: &StatementKind<'_>,
-    closures: &BTreeSet<Local>,
-    aliases: &BTreeMap<Local, Local>,
-) -> bool {
-    match statement {
-        StatementKind::Assign(_) => false,
-        StatementKind::FakeRead(contents) => place_mentions_closure(contents.1, closures, aliases),
-        StatementKind::SetDiscriminant { place, .. }
-        | StatementKind::Retag(_, place)
-        | StatementKind::PlaceMention(place)
-        | StatementKind::BackwardIncompatibleDropHint { place, .. } => {
-            place_mentions_closure(**place, closures, aliases)
-        }
-        StatementKind::AscribeUserType(contents, _) => {
-            place_mentions_closure(contents.0, closures, aliases)
-        }
-        StatementKind::Intrinsic(intrinsic) => match intrinsic.as_ref() {
-            NonDivergingIntrinsic::Assume(operand) => {
-                operand_mentions_closure(operand, closures, aliases)
-            }
-            NonDivergingIntrinsic::CopyNonOverlapping(copy) => {
-                operand_mentions_closure(&copy.src, closures, aliases)
-                    || operand_mentions_closure(&copy.dst, closures, aliases)
-                    || operand_mentions_closure(&copy.count, closures, aliases)
-            }
-        },
-        StatementKind::StorageLive(_)
-        | StatementKind::StorageDead(_)
-        | StatementKind::Coverage(_)
-        | StatementKind::ConstEvalCounter
-        | StatementKind::Nop => false,
-    }
-}
-
-fn inline_asm_mentions_closure(
-    operand: &InlineAsmOperand<'_>,
-    closures: &BTreeSet<Local>,
-    aliases: &BTreeMap<Local, Local>,
-) -> bool {
-    match operand {
-        InlineAsmOperand::In { value, .. } => operand_mentions_closure(value, closures, aliases),
-        InlineAsmOperand::Out {
-            place: Some(place), ..
-        } => place_mentions_closure(*place, closures, aliases),
-        InlineAsmOperand::InOut {
-            in_value,
-            out_place,
-            ..
-        } => {
-            operand_mentions_closure(in_value, closures, aliases)
-                || out_place.is_some_and(|place| place_mentions_closure(place, closures, aliases))
-        }
-        InlineAsmOperand::Out { place: None, .. }
-        | InlineAsmOperand::Const { .. }
-        | InlineAsmOperand::SymFn { .. }
-        | InlineAsmOperand::SymStatic { .. }
-        | InlineAsmOperand::Label { .. } => false,
-    }
-}
-
-fn rvalue_mentions_closure(
-    rvalue: &Rvalue<'_>,
-    closures: &BTreeSet<Local>,
-    aliases: &BTreeMap<Local, Local>,
-) -> bool {
-    match rvalue {
-        Rvalue::Use(operand)
-        | Rvalue::Repeat(operand, _)
-        | Rvalue::UnaryOp(_, operand)
-        | Rvalue::Cast(_, operand, _)
-        | Rvalue::WrapUnsafeBinder(operand, _) => {
-            operand_mentions_closure(operand, closures, aliases)
-        }
-        Rvalue::Ref(_, _, place)
-        | Rvalue::RawPtr(_, place)
-        | Rvalue::Discriminant(place)
-        | Rvalue::CopyForDeref(place) => place_mentions_closure(*place, closures, aliases),
-        Rvalue::BinaryOp(_, operands) => {
-            operand_mentions_closure(&operands.0, closures, aliases)
-                || operand_mentions_closure(&operands.1, closures, aliases)
-        }
-        Rvalue::Aggregate(_, operands) => operands
-            .iter()
-            .any(|operand| operand_mentions_closure(operand, closures, aliases)),
-        Rvalue::ThreadLocalRef(_) => false,
-    }
-}
-
-fn operand_mentions_closure(
-    operand: &Operand<'_>,
-    closures: &BTreeSet<Local>,
-    aliases: &BTreeMap<Local, Local>,
-) -> bool {
-    operand_local(operand)
-        .is_some_and(|local| closures.contains(&local) || aliases.contains_key(&local))
-}
-
-fn place_mentions_closure(
-    place: Place<'_>,
-    closures: &BTreeSet<Local>,
-    aliases: &BTreeMap<Local, Local>,
-) -> bool {
-    closures.contains(&place.local) || aliases.contains_key(&place.local)
-}
-
-fn operand_local(operand: &Operand<'_>) -> Option<Local> {
-    match operand {
-        Operand::Copy(place) | Operand::Move(place) => place.as_local(),
-        Operand::Constant(_) | Operand::RuntimeChecks(_) => None,
+            .try_for_each(|field| validate_capture_layout_v1(&field.layout, origin, work)),
     }
 }
 
@@ -1006,7 +755,7 @@ fn call_kind_allowed(actual: ClosureCallKindV1, invoked: ClosureCallKindV1) -> b
     )
 }
 
-fn resolve_direct_call<'tcx>(
+pub(crate) fn resolve_direct_call<'tcx>(
     tcx: TyCtxt<'tcx>,
     caller: Instance<'tcx>,
     func: &Operand<'tcx>,

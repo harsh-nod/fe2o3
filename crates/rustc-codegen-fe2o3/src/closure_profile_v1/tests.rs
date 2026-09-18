@@ -234,6 +234,7 @@ fn device_reference_elements(input: &[&u32]) -> u32 {
 
 #[derive(Clone, Debug)]
 struct DriverResults {
+    type_dag_cases: usize,
     wrapped_capture_cases: usize,
     receiver_cases: usize,
     rust_call_abi_cases: usize,
@@ -311,6 +312,7 @@ impl Callbacks for CaptureCallbacks {
         }
 
         self.results = Some(DriverResults {
+            type_dag_cases: check_type_dag_work(tcx),
             wrapped_capture_cases: check_wrapped_captures(tcx),
             receiver_cases: check_own_receivers(tcx),
             rust_call_abi_cases: check_rust_call_signatures(tcx),
@@ -543,6 +545,30 @@ fn check_rust_call_signatures(tcx: TyCtxt<'_>) -> usize {
         assert_eq!(physical.ret.layout.ty, signature.output(), "{name}");
     }
     cases.len()
+}
+
+fn check_type_dag_work(tcx: TyCtxt<'_>) -> usize {
+    use fe2o3_mir_model::semantic_mir_v1::{SemanticMirLimitsV1, SemanticMirResourceV1};
+    let mut ty = tcx.types.u32;
+    for _ in 0..32 {
+        ty = Ty::new_tup(tcx, &[ty, ty]);
+    }
+    let maximum =
+        SemanticMirLimitsV1::default().limit(SemanticMirResourceV1::ValidationWork) as usize;
+    let mut work = SourceClosureWorkV1::default();
+    work.charge(maximum - 256).unwrap();
+    let mut visited = HashSet::new();
+    assert!(!contains_dynamic_type(ty, &mut visited, &mut work).unwrap());
+    assert_eq!(visited.len(), 33);
+    let mut short = SourceClosureWorkV1::default();
+    short.charge(maximum - 2).unwrap();
+    assert!(contains_dynamic_type(ty, &mut HashSet::new(), &mut short).is_err());
+    2
+}
+
+#[test]
+fn nested_type_dags_are_deduplicated_and_charged_to_the_shared_budget() {
+    assert_eq!(compiler_results().type_dag_cases, 2);
 }
 
 fn check_own_receivers(tcx: TyCtxt<'_>) -> usize {

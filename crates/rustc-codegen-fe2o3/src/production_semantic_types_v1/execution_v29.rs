@@ -5,7 +5,7 @@ use rustc_middle::ty::{GenericArgKind, Ty, TyCtxt, TyKind, UintTy};
 
 use crate::trusted_device_items::TrustedDeviceItem;
 
-pub(super) fn role<'tcx>(
+pub(crate) fn role<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
     item: TrustedDeviceItem,

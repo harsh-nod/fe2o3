@@ -9,14 +9,15 @@ use std::collections::HashMap;
 use std::fmt;
 
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAssignmentV1, SemanticAtomicRmwV1,
-    SemanticBasicBlockV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBlockIdentityV1,
-    SemanticBorrowKindV1, SemanticCallDestinationV1, SemanticCallableIdV1, SemanticCastKindV1,
-    SemanticCheckedBinaryOpV1, SemanticCheckedBinaryRvalueV1,
-    SemanticConstGenericArgumentsIdentityV1, SemanticConstantBytesV1, SemanticConstantV1,
-    SemanticConstantValueV1, SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticEdgeRoleV1,
-    SemanticFunctionAbiV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
-    SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
+    AdmittedInertSemanticMirV1, SemanticAggregateKindV1, SemanticAssertMessageV1,
+    SemanticAssignmentV1, SemanticAtomicRmwV1, SemanticBasicBlockV1, SemanticBinaryOpV1,
+    SemanticBlockIdV1, SemanticBlockIdentityV1, SemanticBorrowKindV1, SemanticCallDestinationV1,
+    SemanticCallableIdV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
+    SemanticCheckedBinaryRvalueV1, SemanticConstGenericArgumentsIdentityV1,
+    SemanticConstantBytesV1, SemanticConstantV1, SemanticConstantValueV1,
+    SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticEdgeRoleV1, SemanticFunctionAbiV1,
+    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
+    SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
     SemanticItemDefinitionIdentityV1, SemanticKernelEntryV1, SemanticLinkSymbolV1,
     SemanticLocalDeclV1, SemanticLocalIdV1, SemanticLocalIdentityV1, SemanticLocalRoleV1,
     SemanticMemoryLoadV1, SemanticMirErrorV1, SemanticMirLimitsV1, SemanticMirResourceV1,
@@ -43,6 +44,17 @@ use crate::production_rustc_slice_metadata_v1::{
     SliceMetadataErrorV1, SliceMetadataPlanV1, SliceMetadataRewriteV1,
 };
 use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
+
+pub(crate) mod receiver_materialization_v1;
+pub(crate) mod receiver_reborrow_v1;
+use receiver_materialization_v1::{ReceiverLocalV1, ReceiverMaterializationV1};
+
+#[cfg(test)]
+#[path = "production_semantic_body_v1/construction_work_tests.rs"]
+mod construction_work_tests;
+#[cfg(test)]
+#[path = "production_semantic_body_v1/receiver_construction_tests.rs"]
+mod receiver_construction_tests;
 
 const MAX_ERROR_COMPONENT_CHARS_V1: usize = 512;
 
@@ -279,15 +291,36 @@ pub(crate) struct ProductionSemanticBodyRequestOwnerV1<'tcx> {
     limits: SemanticMirLimitsV1,
     totals: ConstructionTotalsV1,
     callables: HashMap<Instance<'tcx>, ProductionSemanticCallableOwnerRecordV1>,
+    context_entries: Vec<crate::collector::RetainedContextEntryV29>,
 }
 
 impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
+    #[cfg(test)]
     pub(crate) fn new(
         limits: SemanticMirLimitsV1,
         type_count: usize,
         callable_entries: &[ProductionSemanticCallableOwnerEntryV1<'tcx>],
     ) -> Result<Self, ProductionSemanticBodyErrorV1> {
-        let mut totals = ConstructionTotalsV1::default();
+        Self::with_preflight_work(
+            crate::rustc_semantic_plan_v1::ProductionSemanticConstructionWorkV1::for_test(
+                limits, 0,
+            ),
+            type_count,
+            callable_entries,
+        )
+    }
+
+    pub(crate) fn with_preflight_work(
+        work: crate::rustc_semantic_plan_v1::ProductionSemanticConstructionWorkV1,
+        type_count: usize,
+        callable_entries: &[ProductionSemanticCallableOwnerEntryV1<'tcx>],
+    ) -> Result<Self, ProductionSemanticBodyErrorV1> {
+        let (limits, validation_work) = work.into_parts();
+        let mut totals = ConstructionTotalsV1 {
+            validation_work,
+            ..ConstructionTotalsV1::default()
+        };
+        totals.charge(SemanticMirResourceV1::ValidationWork, 0, limits)?;
         totals.charge(SemanticMirResourceV1::Types, type_count, limits)?;
         totals.charge(
             SemanticMirResourceV1::Callables,
@@ -332,7 +365,23 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
             limits,
             totals,
             callables,
+            context_entries: Vec::new(),
         })
+    }
+
+    pub(crate) fn seal_context_entries(
+        mut self,
+        semantic: &AdmittedInertSemanticMirV1,
+    ) -> Result<crate::collector::RetainedContextEntriesV29, ProductionSemanticBodyErrorV1> {
+        let entries = std::mem::take(&mut self.context_entries);
+        crate::collector::RetainedContextEntriesV29::seal(entries, semantic, |amount| {
+            self.charge(SemanticMirResourceV1::ValidationWork, amount)
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retained_context_entry_count(&self) -> usize {
+        self.context_entries.len()
     }
 
     fn charge(
@@ -394,6 +443,7 @@ fn require_canonical_callable_id_v1(
 }
 
 pub(crate) struct ProductionSemanticBodyInputV1<'a, 'tcx> {
+    pub(crate) context_entry: Option<crate::collector::BoundContextEntryV29<'tcx>>,
     pub(crate) tcx: TyCtxt<'tcx>,
     pub(crate) instance: Instance<'tcx>,
     pub(crate) body: &'a Body<'tcx>,
@@ -571,6 +621,8 @@ impl ConstructionTotalsV1 {
 }
 
 struct BodyProducerV1<'a, 'owner, 'tcx> {
+    context_entry: Option<crate::collector::BoundContextEntryV29<'tcx>>,
+    receiver_reborrow: Option<ReceiverMaterializationV1<'tcx>>,
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     body: &'a Body<'tcx>,
@@ -578,7 +630,7 @@ struct BodyProducerV1<'a, 'owner, 'tcx> {
     type_ids: HashMap<Ty<'tcx>, SemanticTypeIdV1>,
     rust_call_tuple_argument: Option<u32>,
     locals_by_raw: Vec<&'a ProductionSemanticLocalBindingV1>,
-    locals_by_semantic: Vec<&'a ProductionSemanticLocalBindingV1>,
+    locals_by_semantic: Vec<Option<&'a ProductionSemanticLocalBindingV1>>,
     blocks_by_raw: Vec<&'a ProductionSemanticBlockBindingV1>,
     blocks_by_semantic: Vec<&'a ProductionSemanticBlockBindingV1>,
     direct_calls_by_raw: Vec<Option<&'a ProductionSemanticDirectCallBindingV1<'tcx>>>,
@@ -602,19 +654,57 @@ type CallTablesV1<'a, 'tcx> = (
     TerminalExpansionTableV1<'a, 'tcx>,
     NormalizedIntrinsicTableV1<'a, 'tcx>,
 );
+type LocalTablesV1<'a> = (
+    Vec<&'a ProductionSemanticLocalBindingV1>,
+    Vec<Option<&'a ProductionSemanticLocalBindingV1>>,
+);
 
 pub(crate) fn construct_production_semantic_body_v1<'a, 'owner, 'tcx>(
-    input: ProductionSemanticBodyInputV1<'a, 'tcx>,
+    mut input: ProductionSemanticBodyInputV1<'a, 'tcx>,
     owner: &'owner mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
 ) -> Result<SemanticFunctionDeclV1, ProductionSemanticBodyErrorV1> {
     validate_export_role_v1(input.role, &input.export)?;
     let abi = input.abi.clone();
     let export = input.export.clone();
     let entry = input.entry;
-    let mut producer = BodyProducerV1::new(&input, owner)?;
+    let context_entry = input.context_entry.take();
+    let mut producer = BodyProducerV1::new(&input, owner, context_entry)?;
     let locals = producer.construct_locals()?;
     let blocks = producer.construct_blocks()?;
     producer.require_all_call_bindings_consumed()?;
+    let context = producer
+        .context_entry
+        .take()
+        .map(|context| {
+            let issuer = producer
+                .owner
+                .callables
+                .get(&context.issuer())
+                .ok_or_else(|| table("context issuer callable"))?
+                .semantic_callable;
+            context.finish(
+                input.tcx,
+                issuer,
+                |local| {
+                    producer
+                        .locals_by_raw
+                        .get(local.index())
+                        .map(|binding| binding.semantic_local)
+                },
+                |ty| {
+                    normalize_type_v1(input.tcx, input.instance, ty)
+                        .ok()
+                        .and_then(|ty| producer.type_ids.get(&ty).copied())
+                },
+                |amount| {
+                    producer
+                        .owner
+                        .charge(SemanticMirResourceV1::ValidationWork, amount)
+                },
+            )
+        })
+        .transpose()?;
+    drop(producer);
 
     let ProductionSemanticFunctionIdentitiesV1 {
         identity,
@@ -643,6 +733,29 @@ pub(crate) fn construct_production_semantic_body_v1<'a, 'owner, 'tcx>(
             function.with_device_ffi_export_symbol(symbol)
         }
     };
+    if let Some(context) = context {
+        let retained = context.bind_function(&function, |amount| {
+            owner.charge(SemanticMirResourceV1::ValidationWork, amount)
+        })?;
+        if owner
+            .context_entries
+            .last()
+            .is_some_and(|entry| entry.function() >= retained.function())
+        {
+            return Err(table("context receipt function order"));
+        }
+        if owner.context_entries.len() == owner.context_entries.capacity() {
+            owner.charge(
+                SemanticMirResourceV1::ValidationWork,
+                owner.context_entries.len() + 1,
+            )?;
+            owner
+                .context_entries
+                .try_reserve(1)
+                .map_err(|_| allocation(SemanticMirResourceV1::Functions))?;
+        }
+        owner.context_entries.push(retained);
+    }
     Ok(function)
 }
 
@@ -650,6 +763,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
     fn new(
         input: &'a ProductionSemanticBodyInputV1<'a, 'tcx>,
         owner: &'owner mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
+        context_entry: Option<crate::collector::BoundContextEntryV29<'tcx>>,
     ) -> Result<Self, ProductionSemanticBodyErrorV1> {
         let owned_callable = owner.defined_callable(input.instance)?;
         if owned_callable.index() != input.function.index() {
@@ -679,10 +793,42 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
         )?;
 
         let type_ids = build_type_table_v1(input.tcx, input.instance, input.type_bindings, owner)?;
-        let (locals_by_raw, locals_by_semantic) =
-            build_local_tables_v1(input.body, input.local_bindings, owner)?;
         let (blocks_by_raw, blocks_by_semantic) =
             build_block_tables_v1(input.body, input.block_bindings, owner)?;
+        let call_tables = build_call_tables_v1(
+            input.function,
+            input.body.basic_blocks.len(),
+            input.direct_calls,
+            input.terminal_expansions,
+            input.normalized_intrinsics,
+            owner,
+        )?;
+        let receiver_reborrow = ReceiverMaterializationV1::derive(
+            input,
+            &blocks_by_raw,
+            &call_tables,
+            &type_ids,
+            context_entry.is_some(),
+            owner,
+        )?;
+        let (locals_by_raw, locals_by_semantic) = build_local_tables_v1(
+            input.body,
+            input.local_bindings,
+            receiver_reborrow.as_ref().map(|reborrow| reborrow.local),
+            owner,
+        )?;
+        if let Some(context) = &context_entry {
+            owner.charge(SemanticMirResourceV1::ValidationWork, 1)?;
+            context
+                .validate_body(
+                    input.instance,
+                    input.function,
+                    input.body,
+                    |raw| locals_by_raw.get(raw).map(|binding| binding.semantic_local),
+                    |raw| blocks_by_raw.get(raw).map(|binding| binding.semantic_block),
+                )
+                .map_err(table)?;
+        }
         if blocks_by_raw
             .get(START_BLOCK.index())
             .map(|binding| binding.semantic_block)
@@ -691,14 +837,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             return Err(table("entry block binding"));
         }
         let (direct_calls_by_raw, terminal_expansions_by_raw, normalized_intrinsics_by_raw) =
-            build_call_tables_v1(
-                input.function,
-                input.body.basic_blocks.len(),
-                input.direct_calls,
-                input.terminal_expansions,
-                input.normalized_intrinsics,
-                owner,
-            )?;
+            call_tables;
         let consumed_direct_calls = try_filled_vec_v1(
             input.body.basic_blocks.len(),
             false,
@@ -730,6 +869,8 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 ),
             })?;
         let mut producer = Self {
+            context_entry,
+            receiver_reborrow,
             tcx: input.tcx,
             instance: input.instance,
             body: input.body,
@@ -847,8 +988,21 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
     ) -> Result<Vec<SemanticLocalDeclV1>, ProductionSemanticBodyErrorV1> {
         let mut locals = try_vec_v1(self.locals_by_semantic.len(), SemanticMirResourceV1::Locals)?;
         for index in 0..self.locals_by_semantic.len() {
-            let binding = self.locals_by_semantic[index];
             self.work()?;
+            let Some(binding) = self.locals_by_semantic[index] else {
+                let reborrow = self
+                    .receiver_reborrow
+                    .as_ref()
+                    .filter(|reborrow| reborrow.local.local.index() as usize == index)
+                    .ok_or_else(|| table("shared receiver local slot"))?;
+                locals.push(SemanticLocalDeclV1::new(
+                    reborrow.local.identity,
+                    reborrow.ty,
+                    SemanticLocalRoleV1::Temporary,
+                    self.blocks_by_raw[reborrow.observation.block() as usize].terminator_source,
+                ));
+                continue;
+            };
             let raw = usize::try_from(binding.rustc_local).map_err(|_| table("local table"))?;
             let declaration = self
                 .body
@@ -894,6 +1048,13 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 .statements
                 .len()
                 .checked_add(usize::from(has_normalized_intrinsic))
+                .and_then(|count| {
+                    count.checked_add(usize::from(
+                        self.receiver_reborrow
+                            .as_ref()
+                            .is_some_and(|reborrow| reborrow.observation.block() == raw_block),
+                    ))
+                })
                 .ok_or_else(|| table("statement source table"))?;
             self.owner
                 .charge(SemanticMirResourceV1::Statements, semantic_statement_count)?;
@@ -923,7 +1084,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 ));
                 terminator
             } else {
-                self.construct_terminator(raw_block, &terminator.kind)?
+                self.construct_terminator(raw_block, &terminator.kind, &mut statements)?
             };
             blocks.push(SemanticBasicBlockV1::new(
                 binding.identity,
@@ -1200,6 +1361,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
         &mut self,
         raw_block: u32,
         terminator: &TerminatorKind<'tcx>,
+        statements: &mut Vec<SemanticStatementV1>,
     ) -> Result<SemanticTerminatorKindV1, ProductionSemanticBodyErrorV1> {
         let block = Some(raw_block);
         match terminator {
@@ -1243,9 +1405,45 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 let resolved = resolve_direct_call_v1(self.tcx, self.instance, self.body, func)
                     .map_err(|construct| unsupported(construct, block, None))?;
                 let semantic_callee = self.resolve_call_binding(raw_block, resolved, args.len())?;
+                let receiver = self.consume_receiver_reborrow(raw_block, resolved)?;
+                let replacement = if let Some((statement, operand)) = receiver {
+                    statements.push(SemanticStatementV1::new(
+                        self.blocks_by_raw[raw_block as usize].terminator_source,
+                        statement,
+                    ));
+                    Some(operand)
+                } else {
+                    None
+                };
+                let restored = if let Some(context) = &mut self.context_entry {
+                    self.owner
+                        .charge(SemanticMirResourceV1::ValidationWork, 1)?;
+                    context
+                        .consume_call(self.body, raw_block as usize, resolved, args.len())
+                        .map_err(table)?
+                } else {
+                    None
+                };
                 let mut arguments = try_vec_v1(args.len(), SemanticMirResourceV1::CallArguments)?;
-                for argument in args {
-                    arguments.push(self.construct_operand(&argument.node, block, None)?);
+                for (ordinal, argument) in args.iter().enumerate() {
+                    if ordinal == 0
+                        && let Some(operand) = &replacement
+                    {
+                        self.owner.charge(SemanticMirResourceV1::Operands, 1)?;
+                        self.work()?;
+                        arguments.push(operand.clone());
+                        continue;
+                    }
+                    let restored_operand;
+                    let operand = if ordinal == 0
+                        && let Some(local) = restored
+                    {
+                        restored_operand = Operand::Move(Place::from(local));
+                        &restored_operand
+                    } else {
+                        &argument.node
+                    };
+                    arguments.push(self.construct_operand(operand, block, None)?);
                 }
                 let destination = if let Some(target) = target {
                     Some(SemanticCallDestinationV1::new(
@@ -1846,6 +2044,11 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             },
         };
         if let Some(expansion) = expansion {
+            if expansion == ProductionTerminalExpansionV1::ContextIssue
+                && self.context_entry.is_none()
+            {
+                return Err(table("context issuer without source custody"));
+            }
             let recipe = self
                 .terminal_expansions_by_raw
                 .get(index)
@@ -1887,6 +2090,13 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
     }
 
     fn require_all_call_bindings_consumed(&self) -> Result<(), ProductionSemanticBodyErrorV1> {
+        if self
+            .receiver_reborrow
+            .as_ref()
+            .is_some_and(|reborrow| !reborrow.consumed)
+        {
+            return Err(table("unused shared receiver reborrow"));
+        }
         for (index, binding) in self.direct_calls_by_raw.iter().enumerate() {
             if binding.is_some() && !self.consumed_direct_calls[index] {
                 return Err(table("unused direct-call binding"));
@@ -2021,19 +2231,18 @@ fn build_type_table_v1<'tcx>(
 fn build_local_tables_v1<'a, 'tcx>(
     body: &Body<'_>,
     bindings: &'a [ProductionSemanticLocalBindingV1],
+    inserted: Option<ReceiverLocalV1>,
     owner: &mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
-) -> Result<
-    (
-        Vec<&'a ProductionSemanticLocalBindingV1>,
-        Vec<&'a ProductionSemanticLocalBindingV1>,
-    ),
-    ProductionSemanticBodyErrorV1,
-> {
+) -> Result<LocalTablesV1<'a>, ProductionSemanticBodyErrorV1> {
     if bindings.len() != body.local_decls.len() {
         return Err(table("local table"));
     }
     let mut by_raw = try_filled_vec_v1(bindings.len(), None, SemanticMirResourceV1::Locals)?;
-    let mut by_semantic = try_filled_vec_v1(bindings.len(), None, SemanticMirResourceV1::Locals)?;
+    let count = bindings
+        .len()
+        .checked_add(usize::from(inserted.is_some()))
+        .ok_or_else(|| table("local table size"))?;
+    let mut by_semantic = try_filled_vec_v1(count, None, SemanticMirResourceV1::Locals)?;
     for binding in bindings {
         owner.charge(SemanticMirResourceV1::ValidationWork, 1)?;
         insert_dense_binding_v1(&mut by_raw, binding.rustc_local, binding, "local table")?;
@@ -2044,9 +2253,25 @@ fn build_local_tables_v1<'a, 'tcx>(
             "local table",
         )?;
     }
+    let mut previous = None;
+    for (index, binding) in by_semantic.iter().enumerate() {
+        owner.charge(SemanticMirResourceV1::ValidationWork, 1)?;
+        let identity = if inserted.is_some_and(|local| local.local.index() as usize == index) {
+            if binding.is_some() {
+                return Err(table("occupied shared receiver slot"));
+            }
+            inserted.unwrap().identity
+        } else {
+            binding.ok_or_else(|| table("local table"))?.identity
+        };
+        if inserted.is_some() && previous.is_some_and(|previous| previous >= identity) {
+            return Err(table("noncanonical shared receiver local union"));
+        }
+        previous = Some(identity);
+    }
     Ok((
         collect_dense_bindings_v1(by_raw, "local table")?,
-        collect_dense_bindings_v1(by_semantic, "local table")?,
+        by_semantic,
     ))
 }
 
@@ -2285,7 +2510,12 @@ fn semantic_borrow_kind_v1(
 
 const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) -> Option<usize> {
     match expansion {
-        ProductionTerminalExpansionV1::ThreadIndex(_)
+        ProductionTerminalExpansionV1::WorkgroupDerive
+        | ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32
+        | ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32 => Some(1),
+        ProductionTerminalExpansionV1::MaskedTileLoadU32 => Some(3),
+        ProductionTerminalExpansionV1::ContextIssue
+        | ProductionTerminalExpansionV1::ThreadIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupDimension(_)
         | ProductionTerminalExpansionV1::GridDimension(_)
@@ -2485,6 +2715,15 @@ mod tests {
 
     #[test]
     fn terminal_expansion_arities_are_closed() {
+        for (expansion, count) in [
+            (ProductionTerminalExpansionV1::ContextIssue, 0),
+            (ProductionTerminalExpansionV1::WorkgroupDerive, 1),
+            (ProductionTerminalExpansionV1::MaskedTileLoadU32, 3),
+            (ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32, 1),
+            (ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32, 1),
+        ] {
+            assert_eq!(terminal_argument_count_v1(expansion), Some(count));
+        }
         assert_eq!(
             terminal_argument_count_v1(ProductionTerminalExpansionV1::ThreadIndex1d),
             Some(0)
@@ -2662,6 +2901,7 @@ mod tests {
             limits,
             totals: ConstructionTotalsV1::default(),
             callables: HashMap::new(),
+            context_entries: Vec::new(),
         };
 
         owner.charge(SemanticMirResourceV1::Functions, 1).unwrap();
