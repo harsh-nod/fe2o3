@@ -251,7 +251,8 @@ pub use production_application::{
 };
 #[cfg(target_os = "linux")]
 pub use production_application::{
-    ProductionWorkerV3KfdApplicationErrorV1, ProductionWorkerV3KfdPreparationErrorV1,
+    ProductionWorkerV3AuthenticationErrorV1, ProductionWorkerV3KfdApplicationErrorV1,
+    ProductionWorkerV3KfdPreparationErrorV1, authenticate_inherited_worker_v3_application_v1,
     prepare_inherited_worker_v3_kfd_application_v1,
 };
 #[cfg(feature = "qualification-legacy-hip-hsa")]

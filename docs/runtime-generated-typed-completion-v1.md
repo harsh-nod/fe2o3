@@ -107,17 +107,30 @@ performance remain separate requirements.
 
 ## Canonical Application Integration
 
-Source review at `ecad7245f` identifies two independent prerequisites for a real
-public protected bundle execution. The repository ships no production
+The repository still ships no production
 `WorkerV3ProtectedVerifierBackendV1` plus
 `WorkerV3SemanticMachineRefinementBackendV1` implementation or corresponding
 semantic-to-machine proof artifact. Test-only verifier implementations and
 lower native vecadd fixtures do not satisfy that authority boundary.
 
-Separately, the canonical `cargo fe2o3 run` application sandbox prohibits thread
-creation. The background async engines therefore cannot compose in that
-single-threaded process. The synchronous inherited application helper creates
-no original async completion receipt and cannot stand in for this path.
+The local bootstrap path no longer requires either generic launch authority or
+the old synchronous invocation helper. `KfdRuntimeBackendV1` exposes a
+Worker-V3-generated-only constructor for a unique device or an already checked
+device. That profile keeps the allocation, stream and copy facilities used by
+protected generated adoption, while public generic launch capability is false
+and ordinary, atomic and collective submissions are rejected. It does not mint
+verification or semantic-machine authority. The host
+`authenticate_inherited_worker_v3_application_v1` helper consumes the existing
+startup handoff and returns its original authenticated linear executable owner;
+argument reservation and runtime construction remain subsequent operations.
+The older synchronous helper keeps its source-reviewed handoff-then-verification
+sequence and invocation error surface through the same bootstrap. Focused CPU
+coverage exercises the public error-variant mapping without manufacturing a
+process-environment handoff.
+
+The canonical `cargo fe2o3 run` application sandbox prohibits thread creation.
+The background async engines therefore cannot compose in that single-threaded
+process.
 
 `RuntimeAsyncCurrentThreadOwnedEngineV1` now offers caller-driven owned progress
 without creating a thread. It shares the background scheduler, operation
@@ -141,7 +154,9 @@ work. Generated and tracked operations maintain their own progress. The
 keeps this API qualification separate from protected/native execution.
 This runtime API does not supply the missing verifier/proof provider,
 change seccomp, expose receipt construction, or qualify protected application
-execution. Its [CPU development evidence](evidence/dev-current-thread-owner-2026-09-18/README.md)
+execution. The [generated-only bootstrap CPU evidence](evidence/dev-worker-generated-bootstrap-2026-09-18/README.md)
+has no protected native execution or proof claim. The current-thread owner's
+[CPU development evidence](evidence/dev-current-thread-owner-2026-09-18/README.md)
 is separate from native, sandbox-composition, formal-refinement and performance
 acceptance. Public protected typed bundle execution remains open.
 

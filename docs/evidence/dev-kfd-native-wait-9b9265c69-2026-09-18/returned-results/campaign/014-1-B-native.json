@@ -1,0 +1,45 @@
+{
+  "schema": "fe2o3.matched-command.v1",
+  "name": "014-1-B-native",
+  "argv": [
+    "/usr/bin/timeout",
+    "--signal=TERM",
+    "--kill-after=5s",
+    "180s",
+    "/usr/bin/prlimit",
+    "--core=0:0",
+    "--",
+    "/usr/bin/numactl",
+    "--physcpubind=48-95",
+    "--membind=1",
+    "/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/target/release/examples/gfx942-runtime-directional-window-benchmark",
+    "0x54f88318ca05093d",
+    "268435456",
+    "3",
+    "10",
+    "diagnostic-native-sleep1ms"
+  ],
+  "cwd": "/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/source",
+  "environment_override": {},
+  "visibility_unset": [
+    "HIP_VISIBLE_DEVICES",
+    "ROCR_VISIBLE_DEVICES",
+    "CUDA_VISIBLE_DEVICES",
+    "GPU_DEVICE_ORDINAL"
+  ],
+  "started": {
+    "utc": "2026-09-18T09:16:15.417503546Z",
+    "monotonic_ns": 7221872839189599
+  },
+  "pid": 1444653,
+  "exit": 0,
+  "error": null,
+  "group_absent": true,
+  "outer_bound_seconds": 200,
+  "finished": {
+    "utc": "2026-09-18T09:16:33.932986140Z",
+    "monotonic_ns": 7221891354703570
+  },
+  "stdout_sha256": "60b0dd8a6f916500f1d2e9cef305b8059bf848c00b4f6e1412cc965668c67209",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

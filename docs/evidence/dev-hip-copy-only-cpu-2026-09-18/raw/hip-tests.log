@@ -1,0 +1,15 @@
+test_cleanup_failures_cannot_emit_success (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_cleanup_failures_cannot_emit_success) ... ok
+test_complete_round_roster_and_no_allocator_exercise (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_complete_round_roster_and_no_allocator_exercise) ... ok
+test_full_buffer_corruption_prevents_results (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_full_buffer_corruption_prevents_results) ... ok
+test_identity_and_target_rejection_precede_allocations (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_identity_and_target_rejection_precede_allocations) ... ok
+test_invalid_arguments_reject_before_native_selection (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_invalid_arguments_reject_before_native_selection) ... ok
+test_late_output_failure_is_not_success (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_late_output_failure_is_not_success) ... ok
+test_legacy_mode_preserves_allocator_exercise_and_single_row (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_legacy_mode_preserves_allocator_exercise_and_single_row) ... ok
+test_maximum_round_count_without_warmups (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_maximum_round_count_without_warmups) ... ok
+test_setup_failures_never_submit (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_setup_failures_never_submit) ... ok
+test_unproved_completion_never_reuses_or_releases (test_hip_copy_diagnostic.HipCopyDiagnosticTests.test_unproved_completion_never_reuses_or_releases) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 2.799s
+
+OK

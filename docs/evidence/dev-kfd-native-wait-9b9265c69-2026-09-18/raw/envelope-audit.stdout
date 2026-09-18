@@ -1,0 +1,125 @@
+{
+  "source": "9b9265c6919cb8dff9506f2c6ffa7b7f2538905f",
+  "campaign_exit": 1,
+  "complete_matched_campaign": false,
+  "attempted_cells": [
+    "1-A",
+    "1-B",
+    "1-D"
+  ],
+  "native_processes": 3,
+  "failure": "RuntimeError: sticky cell failure: 021-1-D-immediate",
+  "endpoints": [
+    {
+      "key": "1-A",
+      "phase": "pre",
+      "admitted": true,
+      "reasons": [],
+      "selected_pids": [],
+      "sysfs_vram": [
+        298647552,
+        298647552,
+        298647552
+      ]
+    },
+    {
+      "key": "1-A",
+      "phase": "immediate",
+      "admitted": true,
+      "reasons": [],
+      "selected_pids": [],
+      "sysfs_vram": [
+        298647552,
+        298647552,
+        298647552
+      ]
+    },
+    {
+      "key": "1-A",
+      "phase": "delayed",
+      "admitted": true,
+      "reasons": [],
+      "selected_pids": [],
+      "sysfs_vram": [
+        298647552,
+        298647552,
+        298647552
+      ]
+    },
+    {
+      "key": "1-B",
+      "phase": "pre",
+      "admitted": true,
+      "reasons": [],
+      "selected_pids": [],
+      "sysfs_vram": [
+        298647552,
+        298647552,
+        298647552
+      ]
+    },
+    {
+      "key": "1-B",
+      "phase": "immediate",
+      "admitted": true,
+      "reasons": [],
+      "selected_pids": [],
+      "sysfs_vram": [
+        298647552,
+        298647552,
+        298647552
+      ]
+    },
+    {
+      "key": "1-B",
+      "phase": "delayed",
+      "admitted": true,
+      "reasons": [],
+      "selected_pids": [],
+      "sysfs_vram": [
+        298647552,
+        298647552,
+        298647552
+      ]
+    },
+    {
+      "key": "1-D",
+      "phase": "pre",
+      "admitted": true,
+      "reasons": [],
+      "selected_pids": [],
+      "sysfs_vram": [
+        298647552,
+        298647552,
+        298647552
+      ]
+    },
+    {
+      "key": "1-D",
+      "phase": "immediate",
+      "admitted": false,
+      "reasons": [
+        "sysfs-before-busy"
+      ],
+      "selected_pids": [],
+      "sysfs_vram": [
+        298696704,
+        298647552,
+        298647552
+      ]
+    },
+    {
+      "key": "1-D",
+      "phase": "delayed",
+      "admitted": true,
+      "reasons": [],
+      "selected_pids": [],
+      "sysfs_vram": [
+        298647552,
+        298647552,
+        298647552
+      ]
+    }
+  ],
+  "comparisons_emitted": false
+}

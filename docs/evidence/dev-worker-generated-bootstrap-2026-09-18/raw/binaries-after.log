@@ -1,0 +1,18 @@
+{
+  "gnu-runtime": {
+    "path": "target/debug/deps/fe2o3_runtime-47b18d551c529e90",
+    "sha256": "057e5d3bdeae3e8374b50b05fd917fdc16b7dfcddabeeb34c8a9f5021bba7ca7"
+  },
+  "gnu-host": {
+    "path": "target/debug/deps/fe2o3_host-ba5114b53aa85ed7",
+    "sha256": "5a5fc999c7e21c0c5816aa19fe3f7cfff5d9d5f3ddba415a6724cf4ff63aad26"
+  },
+  "musl-runtime": {
+    "path": "target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-afaad0775e07e3e7",
+    "sha256": "a0817cc0c01836592b2f874216258105309c88bc7b4d071d8b23f3c9f70404f6"
+  },
+  "musl-host": {
+    "path": "target/x86_64-unknown-linux-musl/debug/deps/fe2o3_host-0526106949c2dcd0",
+    "sha256": "de5d155fe061cd0bee6aa205ec25174e4a13e30ef36ed30e4a4bb973d6c22b5d"
+  }
+}

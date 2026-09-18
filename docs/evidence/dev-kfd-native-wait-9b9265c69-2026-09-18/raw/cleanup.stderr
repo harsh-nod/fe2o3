@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/cleanup.py", line 85, in <module>
+    main()
+  File "/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/cleanup.py", line 47, in main
+    references = scan()
+                 ^^^^^^
+  File "/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/cleanup.py", line 25, in scan
+    *list((process / "fd").iterdir()),
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/pathlib.py", line 1058, in iterdir
+    for name in os.listdir(self):
+                ^^^^^^^^^^^^^^^^
+PermissionError: [Errno 13] Permission denied: '/proc/1444849/fd'

@@ -1,0 +1,11 @@
+test_complete_endpoint_and_sticky_refusal (__main__.CheckerTests.test_complete_endpoint_and_sticky_refusal) ... ok
+test_endpoint_mutations (__main__.CheckerTests.test_endpoint_mutations) ... ok
+test_envelope_mutations (__main__.CheckerTests.test_envelope_mutations) ... ok
+test_full_envelope_and_paired_process_summary (__main__.CheckerTests.test_full_envelope_and_paired_process_summary) ... ok
+test_incomplete_refuses_summary_even_after_good_delayed_endpoint (__main__.CheckerTests.test_incomplete_refuses_summary_even_after_good_delayed_endpoint) ... ok
+test_real_historical_payloads_and_refusals (__main__.CheckerTests.test_real_historical_payloads_and_refusals) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.758s
+
+OK

@@ -1,0 +1,90 @@
+{
+  "schema": "fe2o3.matched-campaign.v1",
+  "source_commit": "9b9265c6919cb8dff9506f2c6ffa7b7f2538905f",
+  "orders": [
+    "ABDC",
+    "BCAD",
+    "CDBA",
+    "DACB"
+  ],
+  "started": {
+    "utc": "2026-09-18T09:15:28.014724241Z",
+    "monotonic_ns": 7221825436407960
+  },
+  "cells": [
+    {
+      "key": "1-A",
+      "records": [
+        "007-1-A-pre",
+        "008-1-A-native",
+        "009-1-A-immediate",
+        "010-1-A-delay",
+        "011-1-A-delayed",
+        "012-1-A-payload"
+      ],
+      "admitted": true
+    },
+    {
+      "key": "1-B",
+      "records": [
+        "013-1-B-pre",
+        "014-1-B-native",
+        "015-1-B-immediate",
+        "016-1-B-delay",
+        "017-1-B-delayed",
+        "018-1-B-payload"
+      ],
+      "admitted": true
+    },
+    {
+      "key": "1-D",
+      "records": [
+        "019-1-D-pre",
+        "020-1-D-native",
+        "021-1-D-immediate",
+        "022-1-D-delay",
+        "023-1-D-delayed",
+        "024-1-D-payload"
+      ],
+      "admitted": true
+    }
+  ],
+  "failure": "RuntimeError: sticky cell failure: 021-1-D-immediate",
+  "scope": "guarded-shared-host-endpoints-not-reservation",
+  "finished": {
+    "utc": "2026-09-18T09:17:27.812780076Z",
+    "monotonic_ns": 7221945234455654
+  },
+  "records": [
+    "000-source-before",
+    "001-binaries-before",
+    "002-platform-before",
+    "003-scripts-before",
+    "004-topology",
+    "005-placement",
+    "006-topology-check",
+    "007-1-A-pre",
+    "008-1-A-native",
+    "009-1-A-immediate",
+    "010-1-A-delay",
+    "011-1-A-delayed",
+    "012-1-A-payload",
+    "013-1-B-pre",
+    "014-1-B-native",
+    "015-1-B-immediate",
+    "016-1-B-delay",
+    "017-1-B-delayed",
+    "018-1-B-payload",
+    "019-1-D-pre",
+    "020-1-D-native",
+    "021-1-D-immediate",
+    "022-1-D-delay",
+    "023-1-D-delayed",
+    "024-1-D-payload",
+    "025-source-after",
+    "026-binaries-after",
+    "027-platform-after",
+    "028-scripts-after"
+  ],
+  "exit": 1
+}

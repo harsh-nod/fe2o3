@@ -1,0 +1,24 @@
+{
+  "audit": "PASS",
+  "scope": "CPU only; no native, formal proof or performance acceptance",
+  "source_files": 5547,
+  "unchanged_test_binaries": 4,
+  "runtime_each": {
+    "passed": 1102,
+    "ignored": 18
+  },
+  "host_each": {
+    "passed": 283,
+    "ignored": 4
+  },
+  "doctests": {
+    "fe2o3_host": 26,
+    "fe2o3_runtime": 46
+  },
+  "public_api_passed": 1,
+  "unsafe_policy": {
+    "passed": 5,
+    "ignored": 1
+  },
+  "closed_receipts": 24
+}

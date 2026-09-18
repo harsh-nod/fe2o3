@@ -1,0 +1,35 @@
+{
+  "schema": "fe2o3.matched-command.v1",
+  "name": "006-topology-check",
+  "argv": [
+    "/usr/bin/python3",
+    "-B",
+    "/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/check.py",
+    "--topology",
+    "/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/results/campaign/004-topology.stdout",
+    "/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/results/campaign/005-placement.stdout"
+  ],
+  "cwd": "/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/source",
+  "environment_override": {},
+  "visibility_unset": [
+    "HIP_VISIBLE_DEVICES",
+    "ROCR_VISIBLE_DEVICES",
+    "CUDA_VISIBLE_DEVICES",
+    "GPU_DEVICE_ORDINAL"
+  ],
+  "started": {
+    "utc": "2026-09-18T09:15:28.293766587Z",
+    "monotonic_ns": 7221825715457167
+  },
+  "pid": 1442505,
+  "exit": 0,
+  "error": null,
+  "group_absent": true,
+  "outer_bound_seconds": 200,
+  "finished": {
+    "utc": "2026-09-18T09:15:28.360918699Z",
+    "monotonic_ns": 7221825782635578
+  },
+  "stdout_sha256": "31e2da6f6a5bebd697428e2721a65e12c2dc38dfe90382fd685fcc1b4d2026ff",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

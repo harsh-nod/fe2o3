@@ -1,0 +1,51 @@
+{
+  "schema": "fe2o3.matched-command.v1",
+  "name": "020-1-D-native",
+  "argv": [
+    "/usr/bin/timeout",
+    "--signal=TERM",
+    "--kill-after=5s",
+    "180s",
+    "/usr/bin/prlimit",
+    "--core=0:0",
+    "--",
+    "/usr/bin/numactl",
+    "--physcpubind=48-95",
+    "--membind=1",
+    "/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/hsa-copy-pool-engine",
+    "0",
+    "1",
+    "268435456",
+    "3",
+    "10",
+    "0x54f88318ca05093d",
+    "fine",
+    "engine1"
+  ],
+  "cwd": "/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/source",
+  "environment_override": {
+    "HSA_XNACK": "0",
+    "ROCR_VISIBLE_DEVICES": "4"
+  },
+  "visibility_unset": [
+    "HIP_VISIBLE_DEVICES",
+    "ROCR_VISIBLE_DEVICES",
+    "CUDA_VISIBLE_DEVICES",
+    "GPU_DEVICE_ORDINAL"
+  ],
+  "started": {
+    "utc": "2026-09-18T09:17:00.392594257Z",
+    "monotonic_ns": 7221917814279909
+  },
+  "pid": 1449084,
+  "exit": 0,
+  "error": null,
+  "group_absent": true,
+  "outer_bound_seconds": 200,
+  "finished": {
+    "utc": "2026-09-18T09:17:03.217572657Z",
+    "monotonic_ns": 7221920639293201
+  },
+  "stdout_sha256": "5c7daa3195fc64d4453cafbd86822a4477da1108a92c2a2ceff46e00e2e2bb9a",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

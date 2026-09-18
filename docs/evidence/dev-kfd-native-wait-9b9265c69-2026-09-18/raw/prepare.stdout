@@ -1,0 +1,128 @@
+2026-09-18T09:01:31.620958988Z
+disk_available_bytes=44558020608
+MemAvailable:   1625846912 kB
+source.tar: OK
+source-files.sha256: OK
+rustc 1.96.0-nightly (55e86c996 2026-04-02)
+binary: rustc
+commit-hash: 55e86c996809902e8bbad512cfb4d2c18be446d9
+commit-date: 2026-04-02
+host: x86_64-unknown-linux-gnu
+release: 1.96.0-nightly
+LLVM version: 22.1.2
+cargo 1.96.0-nightly (888f67534 2026-03-30)
+release: 1.96.0-nightly
+commit-hash: 888f675344eb1cf2308fd53183e667bdd2c58e51
+commit-date: 2026-03-30
+host: x86_64-unknown-linux-gnu
+libgit2: 1.9.2 (sys:0.20.4 vendored)
+libcurl: 8.19.0-DEV (sys:0.4.87+curl-8.19.0 vendored ssl:OpenSSL/3.5.4)
+ssl: OpenSSL 3.5.4 30 Sep 2025
+os: Ubuntu 24.4.0 (noble) [64-bit]
+g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+Copyright (C) 2023 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+Linux sharkmi300x-1 6.8.0-124-generic #124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+/opt/rocm-7.2.4
+cargo_command=cargo build --frozen --release --jobs 2 -p fe2o3-runtime --features hardware-diagnostic --example gfx942-runtime-directional-window-benchmark 
+hsa_command=g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic -isystem /opt/rocm/include benchmarks/runtime_gfx942/async_copy_hsa_pool_engine.cpp -L/opt/rocm/lib -Wl\,-rpath\,/opt/rocm/lib -lhsa-runtime64 -o /tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/hsa-copy-pool-engine 
+/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/target/release/examples/gfx942-runtime-directional-window-benchmark: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, BuildID[sha1]=9188fb54c6785909f153dfe9c328e3e8baaef3a5, not stripped
+/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/hsa-copy-pool-engine:                                                ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=38bdf3917a5d82cbd0e9184d2065325e902d6287, for GNU/Linux 3.2.0, not stripped
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00 
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              DYN (Position-Independent Executable file)
+  Machine:                           Advanced Micro Devices X86-64
+  Version:                           0x1
+  Entry point address:               0xb6700
+  Start of program headers:          64 (bytes into file)
+  Start of section headers:          4848648 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               64 (bytes)
+  Size of program headers:           56 (bytes)
+  Number of program headers:         12
+  Size of section headers:           64 (bytes)
+  Number of section headers:         35
+  Section header string table index: 33
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00 
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              DYN (Position-Independent Executable file)
+  Machine:                           Advanced Micro Devices X86-64
+  Version:                           0x1
+  Entry point address:               0x35a0
+  Start of program headers:          64 (bytes into file)
+  Start of section headers:          33912 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               64 (bytes)
+  Size of program headers:           56 (bytes)
+  Number of program headers:         13
+  Size of section headers:           64 (bytes)
+  Number of section headers:         32
+  Section header string table index: 31
+/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/target/release/examples/gfx942-runtime-directional-window-benchmark: OK
+/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/hsa-copy-pool-engine: OK
+/lib/x86_64-linux-gnu/libc.so.6: OK
+/lib/x86_64-linux-gnu/libelf.so.1: OK
+/lib/x86_64-linux-gnu/libgcc_s.so.1: OK
+/lib/x86_64-linux-gnu/libm.so.6: OK
+/lib/x86_64-linux-gnu/libnuma.so.1: OK
+/lib/x86_64-linux-gnu/libstdc++.so.6: OK
+/lib/x86_64-linux-gnu/libz.so.1: OK
+/lib/x86_64-linux-gnu/libzstd.so.1: OK
+/lib64/ld-linux-x86-64.so.2: OK
+/opt/amdgpu/lib/x86_64-linux-gnu/libdrm.so.2: OK
+/opt/amdgpu/lib/x86_64-linux-gnu/libdrm_amdgpu.so.1: OK
+/opt/rocm/lib/libhsa-runtime64.so.1: OK
+/opt/rocm/lib/librocprofiler-register.so.0: OK
+/opt/rocm/lib/libhsa-runtime64.so: OK
+/opt/rocm/include/hsa/hsa.h: OK
+/opt/rocm/include/hsa/hsa_ext_amd.h: OK
+/usr/bin/g++: OK
+/usr/bin/ld: OK
+/usr/bin/numactl: OK
+/usr/bin/timeout: OK
+/usr/bin/prlimit: OK
+/usr/bin/python3: OK
+/opt/rocm/bin/rocm-smi: OK
+/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/rustc: OK
+/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/cargo: OK
+8cc0a27ff79a55a6141f61d9fd7e52476ef39421dbc7d6dbd1b8f8aafc14a182  /tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/target/release/examples/gfx942-runtime-directional-window-benchmark
+5d7e0578ea8078bf10066bbd7f36fe78608449af6fb6d647f2ec4503e86d9e33  /tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/hsa-copy-pool-engine
+3a15d66867d83762c7f2f1e37359cb8f6c5743edb369c65285cb0b1c4f7498bf  /lib/x86_64-linux-gnu/libc.so.6
+248c989360783cdc52f3659921de852c2efcc2097253ce58e34443f856412814  /lib/x86_64-linux-gnu/libelf.so.1
+d93224d2b0dab4247598be683adca02f5cf00586f99c187579cd7e92058fb7cb  /lib/x86_64-linux-gnu/libgcc_s.so.1
+fce00b6f25f459cf4ae0b7fae4257909a1a8a86f9149e7c029a5d617baf1ccd0  /lib/x86_64-linux-gnu/libm.so.6
+02d7582c5d391e460e56aa67a414360e3183b968206645b9123f9dc7bff5d009  /lib/x86_64-linux-gnu/libnuma.so.1
+1fd75fe70354a416d75aef22bcae68c47bd25d20e2d0568c30b1a9838cf62f11  /lib/x86_64-linux-gnu/libstdc++.so.6
+86200da370f20476a2507e9097a789b5ef97269b4ca8d5e164ad82dab9d99892  /lib/x86_64-linux-gnu/libz.so.1
+0a2128bc10841fb29e76d08d945864dfb0b6a66da5df6df5d8299197439e54bb  /lib/x86_64-linux-gnu/libzstd.so.1
+c20a2dc8917c755f02b94049356320fe1f62ac7d9f8994731f807d9df39302da  /lib64/ld-linux-x86-64.so.2
+3666067992714d60452faebefbb78ebf8b6bafeb38de394b7ac9dc2a67b64b54  /opt/amdgpu/lib/x86_64-linux-gnu/libdrm.so.2
+f9a734ec7bd7594a4660c387e8e4393b2a509d563cdd06e83e0d13a6c1b0b112  /opt/amdgpu/lib/x86_64-linux-gnu/libdrm_amdgpu.so.1
+b8cdfe93d343649a35c1daf73a0a3a6840f09379ebeee9be65670461ffea43f4  /opt/rocm/lib/libhsa-runtime64.so.1
+1a23a2b5a62dc7feee9259b9a307bca94caef7cfbaebc7b1b20a0289ed7e69f0  /opt/rocm/lib/librocprofiler-register.so.0
+b8cdfe93d343649a35c1daf73a0a3a6840f09379ebeee9be65670461ffea43f4  /opt/rocm/lib/libhsa-runtime64.so
+51ea864cc3e83a9ce824c294dd98a5724eeec87b76fafded1a01d406206ce0f5  /opt/rocm/include/hsa/hsa.h
+a59a80700f9fa697f6067b6f5442aca5bdc494eaf20a2da639fd46038a7462b6  /opt/rocm/include/hsa/hsa_ext_amd.h
+1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769  /usr/bin/g++
+e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b  /usr/bin/ld
+f3944bcd7848d64424f8daf27f350b03d7f3281b2fb9be5eaaba0ddd0e72efb8  /usr/bin/numactl
+12690a043dfd555a6c14ccc1564f5649c18f1762c0d6ff66729948130898ec52  /usr/bin/timeout
+17064f67e650d6152a6902b013aab496b54c87587c8eea6f5023aafee6154069  /usr/bin/prlimit
+e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f  /usr/bin/python3
+5a64729944c9bcd7eccd647ddc39cca1a942b3a51cf234fa1cb59a7b20591f46  /opt/rocm/bin/rocm-smi
+08dfef109ad22d90556dbd2f964543cd93843dcd75a2e9792c173667392a1950  /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/rustc
+c9ad606cb1dbb4a65aa27c80be88ed61eb2b811b6450eeec6794f60ed78b94a3  /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/cargo
+prepare_complete=true native_launched=false source_commit=9b9265c6919cb8dff9506f2c6ffa7b7f2538905f cpu_build_jobs=2
+2026-09-18T09:03:05.133275615Z

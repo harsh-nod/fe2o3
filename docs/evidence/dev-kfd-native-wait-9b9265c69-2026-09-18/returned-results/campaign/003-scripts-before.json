@@ -1,0 +1,32 @@
+{
+  "schema": "fe2o3.matched-command.v1",
+  "name": "003-scripts-before",
+  "argv": [
+    "/usr/bin/sha256sum",
+    "-c",
+    "/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/scripts.sha256"
+  ],
+  "cwd": "/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/source",
+  "environment_override": {},
+  "visibility_unset": [
+    "HIP_VISIBLE_DEVICES",
+    "ROCR_VISIBLE_DEVICES",
+    "CUDA_VISIBLE_DEVICES",
+    "GPU_DEVICE_ORDINAL"
+  ],
+  "started": {
+    "utc": "2026-09-18T09:15:28.209021352Z",
+    "monotonic_ns": 7221825630709257
+  },
+  "pid": 1442502,
+  "exit": 0,
+  "error": null,
+  "group_absent": true,
+  "outer_bound_seconds": 200,
+  "finished": {
+    "utc": "2026-09-18T09:15:28.216485523Z",
+    "monotonic_ns": 7221825638183884
+  },
+  "stdout_sha256": "bc175bfb3b1683f48623dd20cce9c95201170bff45af21929ef621a5b7c8be69",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

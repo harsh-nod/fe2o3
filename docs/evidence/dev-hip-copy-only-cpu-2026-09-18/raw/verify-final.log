@@ -1,0 +1,10 @@
+{
+  "audit": "PASS",
+  "benchmark_source_files": 88,
+  "hip_mock_tests": 10,
+  "argument_tests": 2,
+  "closed_receipts": 10,
+  "gpu_used": false,
+  "native_hip_qualification": false,
+  "performance_accepted": false
+}

@@ -69,7 +69,8 @@ fn install_with_access(
 }
 
 fn context() -> RuntimeContextV1<KfdRuntimeBackendV1> {
-    let mut context = RuntimeContextV1::open(KfdRuntimeBackendV1::mock()).unwrap();
+    let mut context =
+        RuntimeContextV1::open(KfdRuntimeBackendV1::mock_worker_v3_generated_only_v1()).unwrap();
     context
         .configure_allocation_admission_v1(context.devices()[0].id(), 120, 6)
         .unwrap();

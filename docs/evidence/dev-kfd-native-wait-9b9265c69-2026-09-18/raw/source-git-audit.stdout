@@ -1,0 +1,4 @@
+commit=9b9265c6919cb8dff9506f2c6ffa7b7f2538905f source_scope=5543 extra_pinned_validators=2 total_git_blobs=5545 exact_roster_and_content=true
+git_blob=49fa4557d28fc2b8cb754f18d27746727fc0e7c7 path=benchmarks/runtime_gfx942/async_copy_hip.cpp
+git_blob=50b03cb0640a20c69980e1d62adf6cfd64f4b7f0 path=docs/evidence/dev-kfd-native-wait-mi300x-2026-09-18/summarize.py
+git_blob=e2dc66e8c38a6e2f7f04cba5eea847992986ba29 path=docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/summarize.py

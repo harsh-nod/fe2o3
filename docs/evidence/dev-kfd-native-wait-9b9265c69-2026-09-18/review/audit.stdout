@@ -1,0 +1,9 @@
+{
+  "portable_audit": "PASS",
+  "raw_receipts": 24,
+  "command_records": 29,
+  "source_files": 5545,
+  "campaign_exit": 1,
+  "cleanup_absent": true,
+  "scope": "guarded shared-host observations, no reservation or HIP cell"
+}

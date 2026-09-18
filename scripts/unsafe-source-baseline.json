@@ -580,8 +580,8 @@
     "function": 1
   },
   "crates/fe2o3-host/src/production_application.rs": {
-    "block": 2,
-    "function": 2
+    "block": 3,
+    "function": 3
   },
   "crates/fe2o3-host/src/tile_interop.rs": {
     "block": 1,

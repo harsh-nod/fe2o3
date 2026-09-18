@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/kfd-matched-9b9265c69-20260918.vIUYFo8l/check.py", line 688, in <module>
+    main()
+  File "/home/harsh/.codex-tmp/kfd-matched-9b9265c69-20260918.vIUYFo8l/check.py", line 682, in main
+    audit(args.audit or args.summary, args.summary is not None), indent=2
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/harsh/.codex-tmp/kfd-matched-9b9265c69-20260918.vIUYFo8l/check.py", line 641, in audit
+    need(
+  File "/home/harsh/.codex-tmp/kfd-matched-9b9265c69-20260918.vIUYFo8l/check.py", line 61, in need
+    raise ValueError(message)
+ValueError: refuse all ratios for incomplete or rejected campaign

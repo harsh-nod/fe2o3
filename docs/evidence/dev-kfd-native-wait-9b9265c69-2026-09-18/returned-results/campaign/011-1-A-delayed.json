@@ -1,0 +1,40 @@
+{
+  "schema": "fe2o3.matched-command.v1",
+  "name": "011-1-A-delayed",
+  "argv": [
+    "/usr/bin/python3",
+    "-B",
+    "/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/source/benchmarks/runtime_gfx942/copy-host-observe.py",
+    "--gpu-index",
+    "4",
+    "--pci-bdf",
+    "0000:85:00.0",
+    "--unique-id",
+    "0x54f88318ca05093d",
+    "--samples",
+    "1"
+  ],
+  "cwd": "/tmp/fe2o3-kfd-matched-9b9265c69-20260918.EOQ4SkyD/source",
+  "environment_override": {},
+  "visibility_unset": [
+    "HIP_VISIBLE_DEVICES",
+    "ROCR_VISIBLE_DEVICES",
+    "CUDA_VISIBLE_DEVICES",
+    "GPU_DEVICE_ORDINAL"
+  ],
+  "started": {
+    "utc": "2026-09-18T09:16:11.101275312Z",
+    "monotonic_ns": 7221868522960684
+  },
+  "pid": 1444339,
+  "exit": 0,
+  "error": null,
+  "group_absent": true,
+  "outer_bound_seconds": 200,
+  "finished": {
+    "utc": "2026-09-18T09:16:13.223470727Z",
+    "monotonic_ns": 7221870645183810
+  },
+  "stdout_sha256": "92c16e3471eefb8bd18b13573c94462ff1589df802b3925da2aabf929adc58f2",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

@@ -1,0 +1,1 @@
+shellcheck /home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-worker-generated-bootstrap-2026-09-18/record.sh /home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-worker-generated-bootstrap-2026-09-18/qualify.sh /home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-worker-generated-bootstrap-2026-09-18/seal.sh 

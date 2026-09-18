@@ -10,7 +10,32 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest copy qualification (2026-09-18): a guarded GPU 4
+Latest bootstrap development (2026-09-18): the
+[Worker V3 generated-only bootstrap](evidence/dev-worker-generated-bootstrap-2026-09-18/README.md)
+opens allocation/stream/copy facilities without generic launch authority and
+returns the inherited handoff's original authenticated executable owner before
+runtime construction. Ordinary, atomic and collective facade launches reject
+before argument encoding; all 37 generated ISSUE CPU cases use this restricted
+profile. GNU and scoped musl each pass 1,102 runtime and 283 host tests, with
+eighteen and four ignored respectively. The protected verifier/refinement
+provider, proof artifacts and actual sandbox/native composition remain missing.
+Accepted checkpoints, A1/A2 and #182 are unchanged.
+
+The separate [HIP copy-only diagnostic](evidence/dev-hip-copy-only-cpu-2026-09-18/README.md)
+adds bounded directional raw rounds, full-buffer validation and cleanup-gated
+output without the legacy allocator workload. Ten CPU mock groups and two
+argument-helper tests pass. No native HIP or matched performance is claimed.
+
+The new [committed-source matched attempt](evidence/dev-kfd-native-wait-9b9265c69-2026-09-18/README.md)
+ran KFD A/1, KFD B/1 and HSA D/1 on GPU 4, each validating thirteen 256 MiB round
+trips. It stopped on D/1's immediate sysfs busy reading of 46%; VRAM was below
+the threshold and the later PID capture identified no GPU 4 attachment. Later
+idle readings do not erase that refusal or establish its cause. C and later
+blocks did not run, no HIP cell exists, and no matched ratio is accepted. The
+owned 463 MB remote directory was removed and path/recorded process-group absence
+confirmed, with unrelated unreadable `/proc` entries explicitly disclosed.
+
+Earlier copy qualification (2026-09-18): a guarded GPU 4
 [native accounting test](evidence/dev-copy-accounting-mi300x-live-credits-2026-09-18/README.md)
 passes one public 256 MiB H2D/D2H pair with every returned byte checked, default
 cache behavior, exact pool/backing accounting, zero host/device backing after

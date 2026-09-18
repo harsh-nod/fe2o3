@@ -42,14 +42,18 @@ static bool uuid_matches(hipUUID uuid, uint64_t expected) {
 }
 
 static bool target_matches(const char* target) {
-  return std::strncmp(target, "gfx942", 6) == 0 &&
-         std::strstr(target, ":xnack-") != nullptr;
+  const char* xnack = std::strstr(target, ":xnack-");
+  return std::strncmp(target, "gfx942:", 7) == 0 && xnack != nullptr &&
+         (xnack[7] == '\0' || xnack[7] == ':') &&
+         std::strstr(target, ":xnack+") == nullptr;
 }
 
 int main(int argc, char** argv) {
-  if (argc != 7) {
+  const bool diagnostic =
+      argc == 8 && std::strcmp(argv[7], "diagnostic-copy-only") == 0;
+  if (argc != 7 && !diagnostic) {
     std::fprintf(stderr,
-                 "usage: async-copy-hip <device-index> <bytes> <depth> <warmups> <samples> <expected-unique-id>\n");
+                 "usage: async-copy-hip <device-index> <bytes> <depth> <warmups> <samples> <expected-unique-id> [diagnostic-copy-only]\n");
     return 2;
   }
   int device_index = 0;
@@ -66,6 +70,17 @@ int main(int argc, char** argv) {
   const size_t depth = workload.depth;
   const size_t warmups = workload.warmups;
   const size_t samples = workload.samples;
+  if (diagnostic && (depth != 1 || bytes > 256 * 1024 * 1024 ||
+                     workload.total_iterations > 10000))
+    return 2;
+  struct Round {
+    uint64_t h2d_ns;
+    uint64_t d2h_ns;
+  };
+  // Bounded diagnostic storage is admitted before native setup. No output row
+  // becomes a result until every round, validation and explicit release succeeds.
+  std::vector<Round> rounds;
+  if (diagnostic) rounds.reserve(workload.total_iterations);
   HIP_CHECK(hipSetDevice(device_index));
   hipUUID uuid{};
   hipDeviceProp_t properties{};
@@ -88,8 +103,10 @@ int main(int argc, char** argv) {
   }
 
   std::vector<uint64_t> h2d, d2h;
-  h2d.reserve(samples);
-  d2h.reserve(samples);
+  if (!diagnostic) {
+    h2d.reserve(samples);
+    d2h.reserve(samples);
+  }
   for (size_t iteration = 0; iteration < workload.total_iterations;
        ++iteration) {
     for (size_t i = 0; i < depth; ++i) {
@@ -115,32 +132,67 @@ int main(int argc, char** argv) {
                        [value](uint8_t byte) { return byte == value; }))
         return 3;
     }
-    if (iteration >= warmups) {
+    if (diagnostic) {
+      const auto upload_ns =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(middle - start).count();
+      const auto download_ns =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(end - middle).count();
+      if (upload_ns <= 0 || download_ns <= 0) return 2;
+      rounds.push_back({static_cast<uint64_t>(upload_ns),
+                        static_cast<uint64_t>(download_ns)});
+    } else if (iteration >= warmups) {
       h2d.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(middle - start).count());
       d2h.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(end - middle).count());
     }
   }
-  constexpr size_t pool_iterations = 10000;
-  auto pool_start = std::chrono::steady_clock::now();
-  for (size_t i = 0; i < pool_iterations; ++i) {
-    void* ptr = nullptr;
-    HIP_CHECK(hipMallocAsync(&ptr, bytes, streams[0]));
-    HIP_CHECK(hipFreeAsync(ptr, streams[0]));
+  uint64_t pool_ns = 0;
+  if (!diagnostic) {
+    constexpr size_t pool_iterations = 10000;
+    auto pool_start = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < pool_iterations; ++i) {
+      void* ptr = nullptr;
+      HIP_CHECK(hipMallocAsync(&ptr, bytes, streams[0]));
+      HIP_CHECK(hipFreeAsync(ptr, streams[0]));
+    }
+    HIP_CHECK(hipStreamSynchronize(streams[0]));
+    auto pool_end = std::chrono::steady_clock::now();
+    pool_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(pool_end - pool_start).count() /
+              pool_iterations;
   }
-  HIP_CHECK(hipStreamSynchronize(streams[0]));
-  auto pool_end = std::chrono::steady_clock::now();
-  uint64_t pool_ns =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(pool_end - pool_start).count() /
-      pool_iterations;
 
-  uint64_t h2d_p50 = percentile(h2d, 1, 2), h2d_p95 = percentile(h2d, 19, 20);
-  uint64_t d2h_p50 = percentile(d2h, 1, 2), d2h_p95 = percentile(d2h, 19, 20);
   for (size_t i = 0; i < depth; ++i) {
     HIP_CHECK(hipFree(device[i]));
     HIP_CHECK(hipHostFree(upload[i]));
     HIP_CHECK(hipHostFree(download[i]));
     HIP_CHECK(hipStreamDestroy(streams[i]));
   }
+  if (diagnostic) {
+    constexpr const char* schema = "fe2o3.hip-directional-copy-diagnostic.v1";
+    std::printf(
+        "schema=%s record=config device_index=%d unique_id=%016llx target=%s "
+        "xnack=disabled bytes=%zu depth=1 warmups=%zu samples=%zu "
+        "host_allocation=hipHostMallocDefault stream=nonblocking "
+        "engine=runtime_selected allocator_benchmark=disabled\n",
+        schema, device_index, static_cast<unsigned long long>(expected_unique_id),
+        properties.gcnArchName, bytes, warmups, samples);
+    for (size_t index = 0; index < rounds.size(); ++index) {
+      std::printf(
+          "schema=%s record=round index=%zu phase=%s pattern=%u checked_bytes=%zu "
+          "h2d_total_ns=%llu d2h_total_ns=%llu\n",
+          schema, index, index < warmups ? "warmup" : "sample",
+          static_cast<unsigned>(round_pattern(index, 0)), bytes,
+          static_cast<unsigned long long>(rounds[index].h2d_ns),
+          static_cast<unsigned long long>(rounds[index].d2h_ns));
+    }
+    std::printf(
+        "schema=%s record=complete validated_rounds=%zu measured_rounds=%zu "
+        "allocations_released=3 streams_destroyed=1\n",
+        schema, rounds.size(), samples);
+    if (std::fflush(stdout) != 0 || std::ferror(stdout)) return 2;
+    return 0;
+  }
+  uint64_t h2d_p50 = percentile(h2d, 1, 2), h2d_p95 = percentile(h2d, 19, 20);
+  uint64_t d2h_p50 = percentile(d2h, 1, 2), d2h_p95 = percentile(d2h, 19, 20);
   std::printf(
       "backend=hip schema=fe2o3.async-copy-benchmark.v1 device_index=%d unique_id=%016llx target=%s xnack=disabled bytes=%zu depth=%zu warmups=%zu samples=%zu h2d_p50_ns=%llu h2d_p95_ns=%llu h2d_p50_GBps=%.3f d2h_p50_ns=%llu d2h_p95_ns=%llu d2h_p50_GBps=%.3f device_pool_alloc_free_pair_ns=%llu\n",
       device_index, static_cast<unsigned long long>(expected_unique_id),

@@ -516,6 +516,7 @@ pub unsafe trait KfdRuntimeSemanticLaunchAuthorityV1: KfdRuntimeLaunchAuthorityV
 enum KfdRuntimeLaunchGateV1 {
     Production(Box<dyn KfdRuntimeLaunchAuthorityV1>),
     Semantic(Box<dyn KfdRuntimeSemanticLaunchAuthorityV1>),
+    WorkerV3GeneratedOnly,
     #[cfg(feature = "hardware-qualification")]
     CopyOnlyQualification,
     #[cfg(feature = "hardware-qualification")]
@@ -540,6 +541,7 @@ impl fmt::Debug for KfdRuntimeLaunchGateV1 {
             Self::Semantic(authority) => {
                 formatter.debug_tuple("Semantic").field(authority).finish()
             }
+            Self::WorkerV3GeneratedOnly => formatter.write_str("WorkerV3GeneratedOnly"),
             #[cfg(feature = "hardware-qualification")]
             Self::CopyOnlyQualification => formatter.write_str("CopyOnlyQualification"),
             #[cfg(feature = "hardware-qualification")]
@@ -559,6 +561,7 @@ impl KfdRuntimeLaunchGateV1 {
         catch_authority_callback_v1(|| match self {
             Self::Production(authority) => authority.authorize_launch_v1(request),
             Self::Semantic(authority) => authority.authorize_launch_v1(request),
+            Self::WorkerV3GeneratedOnly => false,
             #[cfg(feature = "hardware-qualification")]
             Self::CopyOnlyQualification => false,
             #[cfg(feature = "hardware-qualification")]
@@ -627,6 +630,10 @@ impl KfdRuntimeLaunchGateV1 {
                 .iter()
                 .copied()
                 .any(collective_profile_is_admissible_v1)
+    }
+
+    fn advertises_generic_compute_v1(&self) -> bool {
+        !matches!(self, Self::WorkerV3GeneratedOnly)
     }
 }
 
@@ -1352,6 +1359,31 @@ impl KfdRuntimeBackendV1 {
         )
     }
 
+    /// Opens a backend for authenticated Worker V3 generated execution only.
+    ///
+    /// The returned backend exposes allocation, stream, and copy facilities used
+    /// by the protected generated route, but advertises and admits no public
+    /// generic, atomic, or collective kernel launch. This constructor does not
+    /// create verifier or semantic-machine authority.
+    ///
+    /// ```no_run
+    /// use fe2o3_runtime::{KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1};
+    ///
+    /// fn open_generated_only(
+    ///     device_unique_id: u64,
+    /// ) -> Result<KfdRuntimeBackendV1, KfdRuntimeBackendErrorV1> {
+    ///     KfdRuntimeBackendV1::open_worker_v3_generated_only_v1(device_unique_id)
+    /// }
+    /// ```
+    pub fn open_worker_v3_generated_only_v1(
+        device_unique_id: u64,
+    ) -> Result<Self, KfdRuntimeBackendErrorV1> {
+        Self::open_default_with_gate(
+            device_unique_id,
+            KfdRuntimeLaunchGateV1::WorkerV3GeneratedOnly,
+        )
+    }
+
     #[cfg(feature = "hardware-qualification")]
     /// Opens the exact repository-owned gfx942 vecadd qualification backend.
     ///
@@ -1481,6 +1513,17 @@ impl KfdRuntimeBackendV1 {
         )
     }
 
+    /// Wraps a checked device for authenticated Worker V3 generated execution only.
+    ///
+    /// As with [`Self::open_worker_v3_generated_only_v1`], this grants no public
+    /// generic launch authority and does not stand in for Worker V3 verification
+    /// or semantic-machine refinement.
+    pub fn from_checked_device_worker_v3_generated_only_v1(
+        device: CheckedGfx942XnackMinusDevice,
+    ) -> Self {
+        Self::from_checked_device_with_gate(device, KfdRuntimeLaunchGateV1::WorkerV3GeneratedOnly)
+    }
+
     fn from_checked_device_with_gate(
         device: CheckedGfx942XnackMinusDevice,
         launch_gate: KfdRuntimeLaunchGateV1,
@@ -1532,6 +1575,7 @@ impl KfdRuntimeBackendV1 {
         staging_budgets: StagingBudgetsV1,
     ) -> Self {
         let native_available = admitted_device.is_some();
+        description.capabilities.typed_async_launch &= launch_gate.advertises_generic_compute_v1();
         description.capabilities.atomics = launch_gate.advertises_atomics_v1();
         description.capabilities.collectives = launch_gate.advertises_collectives_v1();
         Self {
@@ -5230,6 +5274,25 @@ impl KfdRuntimeBackendV1 {
     }
 
     #[cfg(test)]
+    pub(crate) fn mock_worker_v3_generated_only_v1() -> Self {
+        Self::new_with_staging_budgets(
+            BackendDeviceDescriptionV1 {
+                backend_device: 7,
+                name: "mock generated-only gfx942".to_owned(),
+                target: "gfx942:xnack-".to_owned(),
+                global_memory_bytes: 0,
+                capabilities: kfd_capabilities_v1(),
+            },
+            None,
+            KfdRuntimeLaunchGateV1::WorkerV3GeneratedOnly,
+            StagingBudgetsV1 {
+                max_allocation_bytes: KFD_RUNTIME_MAX_STAGED_ALLOCATION_BYTES_V1,
+                max_context_bytes: KFD_RUNTIME_MAX_STAGED_CONTEXT_BYTES_V1,
+            },
+        )
+    }
+
+    #[cfg(test)]
     fn mock_with_staging_budgets(staging_budgets: StagingBudgetsV1) -> Self {
         Self::new_with_staging_budgets(
             BackendDeviceDescriptionV1 {
@@ -5716,9 +5779,9 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
             return RuntimeExecutionCapabilitiesV1::default();
         }
         RuntimeExecutionCapabilitiesV1 {
-            concurrent_compute: true,
+            concurrent_compute: self.launch_gate.advertises_generic_compute_v1(),
             native_async_copy: true,
-            compute_copy_overlap: true,
+            compute_copy_overlap: self.launch_gate.advertises_generic_compute_v1(),
             memory_pool: true,
             cancellation: true,
             atomics: self.launch_gate.advertises_atomics_v1(),
@@ -13172,6 +13235,33 @@ mod tests {
     struct ThreeBindingContextArgumentsV1 {
         allocations: [crate::RuntimeAllocationIdV1; 3],
         byte_len: u64,
+    }
+
+    struct GeneratedOnlyRejectedArgumentsV1;
+
+    impl crate::RuntimeArgumentsV1 for GeneratedOnlyRejectedArgumentsV1 {
+        const SIGNATURE_V1: [u8; 32] = [7; 32];
+
+        fn encode_explicit_kernarg_v1(&self) -> Vec<u8> {
+            panic!("generated-only rejection must precede argument encoding")
+        }
+
+        fn bindings_v1(&self) -> Vec<crate::RuntimeBindingV1> {
+            panic!("generated-only rejection must precede binding extraction")
+        }
+    }
+
+    impl crate::RuntimeAtomicArgumentsV1 for GeneratedOnlyRejectedArgumentsV1 {
+        const OPERATION_V1: RuntimeAtomicOperationV1 = RuntimeAtomicOperationV1::Add;
+        const SCOPE_V1: RuntimeMemoryScopeV1 = RuntimeMemoryScopeV1::Workgroup;
+        const ORDER_V1: RuntimeMemoryOrderV1 = RuntimeMemoryOrderV1::Relaxed;
+    }
+
+    impl crate::RuntimeCollectiveArgumentsV1 for GeneratedOnlyRejectedArgumentsV1 {
+        const OPERATION_V1: crate::RuntimeCollectiveOperationV1 =
+            crate::RuntimeCollectiveOperationV1::ReduceSum;
+        const SCOPE_V1: RuntimeMemoryScopeV1 = RuntimeMemoryScopeV1::Workgroup;
+        const ORDER_V1: RuntimeMemoryOrderV1 = RuntimeMemoryOrderV1::AcquireRelease;
     }
 
     impl crate::RuntimeArgumentsV1 for ThreeBindingContextArgumentsV1 {
@@ -21610,6 +21700,87 @@ mod tests {
         assert!(!capabilities.multi_device);
         assert!(!capabilities.atomics);
         assert!(!capabilities.collectives);
+    }
+
+    #[test]
+    fn worker_v3_generated_only_profile_denies_generic_compute_before_encoding() {
+        let mut backend = KfdRuntimeBackendV1::mock_worker_v3_generated_only_v1();
+        assert!(!backend.description.capabilities.typed_async_launch);
+        assert!(!backend.description.capabilities.atomics);
+        assert!(!backend.description.capabilities.collectives);
+        backend.native_available = true;
+        let execution = backend.execution_capabilities_v1(backend.description.backend_device);
+        assert!(!execution.concurrent_compute);
+        assert!(!execution.compute_copy_overlap);
+        assert!(!execution.atomics);
+        assert!(!execution.collectives);
+        assert!(execution.native_async_copy);
+        assert!(execution.memory_pool);
+        backend.native_available = false;
+
+        let mut context = crate::RuntimeContextV1::open(backend).unwrap();
+        let device = context.devices()[0].id();
+        let stream = context.create_stream(device).unwrap();
+        let module = context
+            .load_module(device, &synthetic_cov6::three_binding_module())
+            .unwrap();
+        let kernel = context
+            .resolve_kernel::<GeneratedOnlyRejectedArgumentsV1>(module, "vecadd")
+            .unwrap();
+        let arguments = GeneratedOnlyRejectedArgumentsV1;
+        let geometry = crate::RuntimeLaunchGeometryV1 {
+            grid: [64, 1, 1],
+            workgroup: [64, 1, 1],
+            dynamic_shared_bytes: 0,
+        };
+
+        assert!(matches!(
+            context.launch(stream, &kernel, &arguments, geometry, &[]),
+            Err(crate::RuntimeErrorV1::Validation(
+                crate::RuntimeValidationErrorV1::Unsupported
+            ))
+        ));
+        assert!(matches!(
+            context.launch_atomic(
+                stream,
+                &kernel,
+                &arguments,
+                RuntimeAtomicLaunchContractV1 {
+                    operation: RuntimeAtomicOperationV1::Add,
+                    scope: RuntimeMemoryScopeV1::Workgroup,
+                    order: RuntimeMemoryOrderV1::Relaxed,
+                    failure_order: None,
+                    weak: false,
+                    geometry,
+                },
+                &[],
+            ),
+            Err(crate::RuntimeErrorV1::Validation(
+                crate::RuntimeValidationErrorV1::Unsupported
+            ))
+        ));
+        assert!(matches!(
+            context.launch_collective(
+                stream,
+                &kernel,
+                &arguments,
+                RuntimeCollectiveLaunchContractV1 {
+                    operation: crate::RuntimeCollectiveOperationV1::ReduceSum,
+                    scope: RuntimeMemoryScopeV1::Workgroup,
+                    order: RuntimeMemoryOrderV1::AcquireRelease,
+                    participants: 64,
+                    geometry,
+                },
+                &[],
+            ),
+            Err(crate::RuntimeErrorV1::Validation(
+                crate::RuntimeValidationErrorV1::Unsupported
+            ))
+        ));
+
+        context.unload_module(module).unwrap();
+        context.destroy_stream(stream).unwrap();
+        let _backend = context.shutdown().unwrap();
     }
 
     #[test]

@@ -1,0 +1,1 @@
+topology_valid=true gpu=4 cpu=48-95 numa=1

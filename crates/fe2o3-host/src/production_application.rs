@@ -16,6 +16,102 @@ use crate::{
     WorkerV3HsaExecutableLoadErrorV1, WorkerV3HsaLoadAuthorizationErrorV1,
 };
 
+/// Failure while consuming and authenticating the inherited Worker V3 application.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ProductionWorkerV3AuthenticationErrorV1<VE> {
+    Handoff(WorkerV3ApplicationDescriptorHandoffErrorV1),
+    Verification(WorkerV3VerificationAuthenticationErrorV1<VE>),
+}
+
+impl<VE: fmt::Display> fmt::Display for ProductionWorkerV3AuthenticationErrorV1<VE> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Handoff(error) => write!(formatter, "application handoff failed: {error}"),
+            Self::Verification(error) => {
+                write!(formatter, "application verification failed: {error}")
+            }
+        }
+    }
+}
+
+impl<VE> Error for ProductionWorkerV3AuthenticationErrorV1<VE>
+where
+    VE: Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Handoff(error) => Some(error),
+            Self::Verification(error) => Some(error),
+        }
+    }
+}
+
+/// Consumes Cargo's inherited Worker V3 handoff into its authenticated linear owner.
+///
+/// This device-independent bootstrap leaves runtime construction, generated argument
+/// reservation, and execution to the caller. It grants neither load nor launch
+/// authority; the returned owner still requires the existing protected generated
+/// preparation and adoption route.
+///
+/// ```no_run
+/// use fe2o3_host::{
+///     AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectationV1,
+///     ProductionWorkerV3AuthenticationErrorV1, WorkerV3VerifierV1,
+///     authenticate_inherited_worker_v3_application_v1,
+/// };
+///
+/// fn authenticate_at_startup<K, V>(
+///     verifier: &mut V,
+/// ) -> Result<
+///     AuthenticatedWorkerV3ExecutableV1<K>,
+///     ProductionWorkerV3AuthenticationErrorV1<V::Error>,
+/// >
+/// where
+///     K: CompilerGeneratedKernelExpectationV1,
+///     V: WorkerV3VerifierV1<K>,
+/// {
+///     // SAFETY: the application calls this before creating threads or exposing
+///     // the inherited environment and descriptors to unrelated code.
+///     unsafe { authenticate_inherited_worker_v3_application_v1::<K, V>(verifier) }
+/// }
+/// ```
+///
+/// # Safety
+///
+/// The caller must invoke this operation before creating threads, installing signal handlers that
+/// can access the environment or descriptor table, spawning descendants, or allowing unrelated
+/// descriptor mutation. A hostile same-process caller violates this cooperative startup contract.
+pub unsafe fn authenticate_inherited_worker_v3_application_v1<K, V>(
+    verifier: &mut V,
+) -> Result<AuthenticatedWorkerV3ExecutableV1<K>, ProductionWorkerV3AuthenticationErrorV1<V::Error>>
+where
+    K: CompilerGeneratedKernelExpectationV1,
+    V: WorkerV3VerifierV1<K>,
+{
+    let kernel_id = KernelId::from_bytes(K::KERNEL_BINDING_ID_V1);
+    // SAFETY: this function has the same cooperative startup contract as the handoff consumer.
+    let admission = unsafe { consume_inherited_worker_v3_application_handoff_v1(kernel_id) }
+        .map_err(ProductionWorkerV3AuthenticationErrorV1::Handoff)?;
+    AuthenticatedWorkerV3ExecutableV1::<K>::authenticate(admission, verifier)
+        .map_err(ProductionWorkerV3AuthenticationErrorV1::Verification)
+}
+
+fn preparation_error_from_authentication_v1<VE>(
+    error: ProductionWorkerV3AuthenticationErrorV1<VE>,
+) -> ProductionWorkerV3KfdApplicationErrorV1<VE> {
+    match error {
+        ProductionWorkerV3AuthenticationErrorV1::Handoff(error) => {
+            ProductionWorkerV3KfdApplicationErrorV1::Handoff(error)
+        }
+        ProductionWorkerV3AuthenticationErrorV1::Verification(error) => {
+            ProductionWorkerV3KfdApplicationErrorV1::Preparation(
+                ProductionWorkerV3KfdPreparationErrorV1::Verification(error),
+            )
+        }
+    }
+}
+
 /// Failure while authenticating and preparing one generated pure-KFD invocation.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -107,20 +203,69 @@ where
     V: WorkerV3VerifierV1<K>,
     Arguments: CompilerGeneratedKfdArguments<'allocation, K>,
 {
-    let kernel_id = KernelId::from_bytes(K::KERNEL_BINDING_ID_V1);
-    // SAFETY: this function has the same cooperative startup contract as the handoff consumer.
-    let admission = unsafe { consume_inherited_worker_v3_application_handoff_v1(kernel_id) }
-        .map_err(ProductionWorkerV3KfdApplicationErrorV1::Handoff)?;
-    prepare_admitted_worker_v3_kfd_application_v1(
-        admission,
-        verifier,
-        arguments,
-        device,
-        geometry,
-        dynamic_group_segment_bytes,
-        timeout_milliseconds,
-    )
-    .map_err(ProductionWorkerV3KfdApplicationErrorV1::Preparation)
+    // SAFETY: this function has the same cooperative startup contract as the bootstrap helper.
+    let authenticated =
+        unsafe { authenticate_inherited_worker_v3_application_v1::<K, V>(verifier) }
+            .map_err(preparation_error_from_authentication_v1)?;
+    authenticated
+        .prepare_generated_kfd_invocation(
+            arguments,
+            device,
+            geometry,
+            dynamic_group_segment_bytes,
+            timeout_milliseconds,
+        )
+        .map_err(|error| {
+            ProductionWorkerV3KfdApplicationErrorV1::Preparation(
+                ProductionWorkerV3KfdPreparationErrorV1::Invocation(error),
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct VerifierErrorV1;
+
+    impl fmt::Display for VerifierErrorV1 {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("verifier error")
+        }
+    }
+
+    impl Error for VerifierErrorV1 {}
+
+    #[test]
+    fn bootstrap_error_mapping_preserves_public_variants() {
+        let handoff = preparation_error_from_authentication_v1::<VerifierErrorV1>(
+            ProductionWorkerV3AuthenticationErrorV1::Handoff(
+                WorkerV3ApplicationDescriptorHandoffErrorV1::AlreadyConsumed,
+            ),
+        );
+        assert!(matches!(
+            handoff,
+            ProductionWorkerV3KfdApplicationErrorV1::Handoff(
+                WorkerV3ApplicationDescriptorHandoffErrorV1::AlreadyConsumed
+            )
+        ));
+
+        let verification =
+            preparation_error_from_authentication_v1(ProductionWorkerV3AuthenticationErrorV1::<
+                VerifierErrorV1,
+            >::Verification(
+                WorkerV3VerificationAuthenticationErrorV1::UnsupportedGeneratedProfile,
+            ));
+        assert!(matches!(
+            verification,
+            ProductionWorkerV3KfdApplicationErrorV1::Preparation(
+                ProductionWorkerV3KfdPreparationErrorV1::Verification(
+                    WorkerV3VerificationAuthenticationErrorV1::UnsupportedGeneratedProfile
+                )
+            )
+        ));
+    }
 }
 
 /// Prepares an already-admitted Worker V3 artifact through the canonical pure-KFD boundary.
