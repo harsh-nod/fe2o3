@@ -12,7 +12,7 @@
 //! participating locals must be active within the assertion block itself.
 //! No general interval, symbolic algebra, name, or workload rule is used.
 
-use std::{error::Error, fmt, mem::size_of};
+use std::{convert::Infallible, error::Error, fmt, mem::size_of};
 
 use crate::semantic_mir_v1::*;
 
@@ -62,6 +62,72 @@ impl Error for SemanticMaskedShiftErrorV1 {}
 
 type R<T> = Result<T, SemanticMaskedShiftErrorV1>;
 
+/// Dependency-neutral live meter for the inert query's work and table capacities.
+///
+/// Calls precede the corresponding work or requested allocation. Capacity excess
+/// is charged immediately after allocation, before initialization. This interface
+/// neither owns reservations nor releases them: a scoped caller must retain them
+/// until every associated index/partial table has been dropped, including errors
+/// and unwinding. It does not authenticate source or confer admission authority.
+pub trait SemanticMaskedShiftMeterV1 {
+    /// The caller's unchanged resource failure type.
+    type Error;
+
+    /// Admits the next logical work units before they are performed.
+    fn charge_work(&mut self, amount: usize) -> Result<(), Self::Error>;
+
+    /// Admits coexisting table-capacity bytes before initialization.
+    fn reserve_storage(&mut self, amount: usize) -> Result<(), Self::Error>;
+}
+
+/// A query-local failure or the exact external meter failure, never a missing fact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SemanticMaskedShiftMeteredErrorV1<E> {
+    /// The existing bounded semantic query rejected its input or local limit.
+    Analysis(SemanticMaskedShiftErrorV1),
+    /// The live caller's resource meter rejected the next operation.
+    Meter(E),
+}
+
+impl<E> From<SemanticMaskedShiftErrorV1> for SemanticMaskedShiftMeteredErrorV1<E> {
+    fn from(error: SemanticMaskedShiftErrorV1) -> Self {
+        Self::Analysis(error)
+    }
+}
+
+impl<E: fmt::Display> fmt::Display for SemanticMaskedShiftMeteredErrorV1<E> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Analysis(error) => error.fmt(formatter),
+            Self::Meter(error) => write!(formatter, "semantic masked-shift meter: {error}"),
+        }
+    }
+}
+
+impl<E: Error + 'static> Error for SemanticMaskedShiftMeteredErrorV1<E> {}
+
+type MR<T, M> =
+    Result<T, SemanticMaskedShiftMeteredErrorV1<<M as SemanticMaskedShiftMeterV1>::Error>>;
+
+struct LocalMeter;
+
+impl SemanticMaskedShiftMeterV1 for LocalMeter {
+    type Error = Infallible;
+    fn charge_work(&mut self, _: usize) -> Result<(), Infallible> {
+        Ok(())
+    }
+    fn reserve_storage(&mut self, _: usize) -> Result<(), Infallible> {
+        Ok(())
+    }
+}
+
+fn local_result<T>(result: MR<T, LocalMeter>) -> R<T> {
+    result.map_err(|error| match error {
+        SemanticMaskedShiftMeteredErrorV1::Analysis(error) => error,
+        SemanticMaskedShiftMeteredErrorV1::Meter(error) => match error {},
+    })
+}
+
 struct Budget {
     limits: SemanticMaskedShiftLimitsV1,
     work: usize,
@@ -69,31 +135,61 @@ struct Budget {
 }
 
 impl Budget {
-    fn charge(&mut self, amount: usize) -> R<()> {
-        let actual = self.work.saturating_add(amount);
-        if actual > self.limits.work_units {
+    fn metered<'budget, 'meter, M: SemanticMaskedShiftMeterV1>(
+        &'budget mut self,
+        meter: &'meter mut M,
+    ) -> MeteredBudget<'budget, 'meter, M> {
+        MeteredBudget { local: self, meter }
+    }
+
+    #[cfg(test)]
+    fn account_capacity<T>(&mut self, requested: usize, actual: usize) -> R<()> {
+        local_result(
+            self.metered(&mut LocalMeter)
+                .account_capacity::<T>(requested, actual),
+        )
+    }
+}
+
+struct MeteredBudget<'budget, 'meter, M> {
+    local: &'budget mut Budget,
+    meter: &'meter mut M,
+}
+
+impl<M: SemanticMaskedShiftMeterV1> MeteredBudget<'_, '_, M> {
+    fn charge(&mut self, amount: usize) -> MR<(), M> {
+        let actual = self.local.work.saturating_add(amount);
+        if actual > self.local.limits.work_units {
             return Err(SemanticMaskedShiftErrorV1::WorkLimit {
                 actual,
-                limit: self.limits.work_units,
-            });
+                limit: self.local.limits.work_units,
+            }
+            .into());
         }
-        self.work = actual;
+        self.meter
+            .charge_work(amount)
+            .map_err(SemanticMaskedShiftMeteredErrorV1::Meter)?;
+        self.local.work = actual;
         Ok(())
     }
 
-    fn reserve_bytes(&mut self, bytes: usize) -> R<()> {
-        let actual = self.storage.saturating_add(bytes);
-        if actual > self.limits.storage_bytes {
+    fn reserve_bytes(&mut self, bytes: usize) -> MR<(), M> {
+        let actual = self.local.storage.saturating_add(bytes);
+        if actual > self.local.limits.storage_bytes {
             return Err(SemanticMaskedShiftErrorV1::StorageLimit {
                 actual,
-                limit: self.limits.storage_bytes,
-            });
+                limit: self.local.limits.storage_bytes,
+            }
+            .into());
         }
-        self.storage = actual;
+        self.meter
+            .reserve_storage(bytes)
+            .map_err(SemanticMaskedShiftMeteredErrorV1::Meter)?;
+        self.local.storage = actual;
         Ok(())
     }
 
-    fn account_capacity<T>(&mut self, requested: usize, actual: usize) -> R<()> {
+    fn account_capacity<T>(&mut self, requested: usize, actual: usize) -> MR<(), M> {
         let excess = actual
             .checked_sub(requested)
             .and_then(|count| count.checked_mul(size_of::<T>()))
@@ -101,7 +197,7 @@ impl Budget {
         self.reserve_bytes(excess)
     }
 
-    fn table<T: Clone>(&mut self, count: usize, value: T) -> R<Vec<T>> {
+    fn table<T: Clone>(&mut self, count: usize, value: T) -> MR<Vec<T>, M> {
         self.charge(count)?;
         let bytes = count
             .checked_mul(size_of::<T>())
@@ -182,10 +278,30 @@ impl<'a> SemanticMaskedShiftIndexV1<'a> {
         function: SemanticFunctionIdV1,
         limits: SemanticMaskedShiftLimitsV1,
     ) -> R<Self> {
+        local_result(Self::analyze_metered(
+            owner,
+            function,
+            limits,
+            &mut LocalMeter,
+        ))
+    }
+
+    /// Builds the index while debiting the supplied live meter at each operation.
+    ///
+    /// The meter's accepted reservations include construction scratch and remain
+    /// the caller's responsibility on every exit. Do not release them while the
+    /// index remains live. This method does not bind future lookups to this meter;
+    /// production users must wrap the index in a scope enforcing that ownership.
+    pub fn analyze_metered<M: SemanticMaskedShiftMeterV1>(
+        owner: &'a AdmittedInertSemanticMirV1,
+        function: SemanticFunctionIdV1,
+        limits: SemanticMaskedShiftLimitsV1,
+        meter: &mut M,
+    ) -> MR<Self, M> {
         if limits.work_units > MAX_SEMANTIC_MASKED_SHIFT_WORK_V1
             || limits.storage_bytes > MAX_SEMANTIC_MASKED_SHIFT_STORAGE_V1
         {
-            return Err(SemanticMaskedShiftErrorV1::InvalidLimits);
+            return Err(SemanticMaskedShiftErrorV1::InvalidLimits.into());
         }
         let source = owner.functions().get(function.index() as usize).ok_or(
             SemanticMaskedShiftErrorV1::InvalidModel("function is outside the admitted owner"),
@@ -195,24 +311,25 @@ impl<'a> SemanticMaskedShiftIndexV1<'a> {
             work: 0,
             storage: 0,
         };
+        let mut active = budget.metered(meter);
         let blocks = source.blocks().len();
         let locals = source.locals().len();
-        let mut assertions = budget.table(blocks, None)?;
-        let mut consumers = budget.table(blocks, None)?;
-        let mut incoming = budget.table(blocks, 0_usize)?;
-        let mut incoming_owner = budget.table(blocks, None)?;
-        let mut reachable = budget.table(blocks, false)?;
-        let mut escaped = budget.table(locals, false)?;
-        let mut explicit_storage = budget.table(locals, false)?;
-        let mut frame_block = budget.table(locals, usize::MAX)?;
-        let mut frame_live = budget.table(locals, false)?;
+        let mut assertions = active.table(blocks, None)?;
+        let mut consumers = active.table(blocks, None)?;
+        let mut incoming = active.table(blocks, 0_usize)?;
+        let mut incoming_owner = active.table(blocks, None)?;
+        let mut reachable = active.table(blocks, false)?;
+        let mut escaped = active.table(locals, false)?;
+        let mut explicit_storage = active.table(locals, false)?;
+        let mut frame_block = active.table(locals, usize::MAX)?;
+        let mut frame_live = active.table(locals, false)?;
         for (block_index, block) in source.blocks().iter().enumerate() {
-            budget.charge(1)?;
+            active.charge(1)?;
             block
                 .terminator()
                 .kind()
-                .try_for_each_edge::<SemanticMaskedShiftErrorV1>(|edge| {
-                    budget.charge(1)?;
+                .try_for_each_edge::<SemanticMaskedShiftMeteredErrorV1<M::Error>>(|edge| {
+                    active.charge(1)?;
                     let target = edge.target().index() as usize;
                     let count = incoming.get_mut(target).ok_or(
                         SemanticMaskedShiftErrorV1::InvalidModel("missing edge target"),
@@ -224,7 +341,7 @@ impl<'a> SemanticMaskedShiftIndexV1<'a> {
                     Ok(())
                 })?;
             for statement in block.statements() {
-                budget.charge(1)?;
+                active.charge(1)?;
                 match statement.kind() {
                     SemanticStatementKindV1::StorageLive(local)
                     | SemanticStatementKindV1::StorageDead(local) => {
@@ -249,12 +366,12 @@ impl<'a> SemanticMaskedShiftIndexV1<'a> {
 
         // A linear Kahn traversal rejects cycles for this first, closed contract.
         // Every actual edge participates, including duplicate/cleanup edges.
-        let mut remaining = budget.table(blocks, 0_usize)?;
+        let mut remaining = active.table(blocks, 0_usize)?;
         remaining.copy_from_slice(&incoming);
-        let mut queue = budget.table(blocks, 0_usize)?;
+        let mut queue = active.table(blocks, 0_usize)?;
         let (mut head, mut tail) = (0, 0);
         for (block, count) in incoming.iter().enumerate() {
-            budget.charge(1)?;
+            active.charge(1)?;
             if *count == 0 {
                 queue[tail] = block;
                 tail += 1;
@@ -267,14 +384,14 @@ impl<'a> SemanticMaskedShiftIndexV1<'a> {
                 "missing entry block",
             ))? = true;
         while head < tail {
-            budget.charge(1)?;
+            active.charge(1)?;
             let block = queue[head];
             head += 1;
             source.blocks()[block]
                 .terminator()
                 .kind()
-                .try_for_each_edge::<SemanticMaskedShiftErrorV1>(|edge| {
-                    budget.charge(1)?;
+                .try_for_each_edge::<SemanticMaskedShiftMeteredErrorV1<M::Error>>(|edge| {
+                    active.charge(1)?;
                     let target = edge.target().index() as usize;
                     let from_reachable = reachable[block];
                     reachable[target] |= from_reachable;
@@ -288,7 +405,7 @@ impl<'a> SemanticMaskedShiftIndexV1<'a> {
         }
         if tail == blocks {
             for (block_index, block) in source.blocks().iter().enumerate() {
-                budget.charge(1)?;
+                active.charge(1)?;
                 if !reachable[block_index]
                     || !matches!(
                         block.terminator().kind(),
@@ -298,7 +415,7 @@ impl<'a> SemanticMaskedShiftIndexV1<'a> {
                     continue;
                 }
                 for statement in block.statements() {
-                    budget.charge(1)?;
+                    active.charge(1)?;
                     let (local, live) = match statement.kind() {
                         SemanticStatementKindV1::StorageLive(local) => (*local, true),
                         SemanticStatementKindV1::StorageDead(local) => (*local, false),
@@ -309,7 +426,7 @@ impl<'a> SemanticMaskedShiftIndexV1<'a> {
                 }
                 // Candidate checking has fixed positional reads, no recursion,
                 // operand-tree search or per-candidate CFG/definition traversal.
-                budget.charge(96)?;
+                active.charge(96)?;
                 let live = |local: SemanticLocalIdV1| {
                     let local = local.index() as usize;
                     !explicit_storage[local]
@@ -356,7 +473,16 @@ impl<'a> SemanticMaskedShiftIndexV1<'a> {
         &mut self,
         block: SemanticBlockIdV1,
     ) -> R<Option<SemanticMaskedShiftFactV1<'a>>> {
-        self.budget.charge(1)?;
+        local_result(self.assertion_metered(block, &mut LocalMeter))
+    }
+
+    /// Looks up an assertion using the index's local limit and supplied live meter.
+    pub fn assertion_metered<M: SemanticMaskedShiftMeterV1>(
+        &mut self,
+        block: SemanticBlockIdV1,
+        meter: &mut M,
+    ) -> MR<Option<SemanticMaskedShiftFactV1<'a>>, M> {
+        self.budget.metered(meter).charge(1)?;
         Ok(self.fact(block))
     }
 
@@ -365,7 +491,17 @@ impl<'a> SemanticMaskedShiftIndexV1<'a> {
         block: SemanticBlockIdV1,
         statement: u32,
     ) -> R<Option<SemanticMaskedShiftFactV1<'a>>> {
-        self.budget.charge(2)?;
+        local_result(self.shift_metered(block, statement, &mut LocalMeter))
+    }
+
+    /// Looks up a shift using the index's local limit and supplied live meter.
+    pub fn shift_metered<M: SemanticMaskedShiftMeterV1>(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: u32,
+        meter: &mut M,
+    ) -> MR<Option<SemanticMaskedShiftFactV1<'a>>, M> {
+        self.budget.metered(meter).charge(2)?;
         if statement != 0 {
             return Ok(None);
         }

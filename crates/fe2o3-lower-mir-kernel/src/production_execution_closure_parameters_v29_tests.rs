@@ -315,7 +315,7 @@ fn run_closure(
                                 },
                                 None,
                                 Some([64, 1, 1]),
-                                BTreeSet::new(),
+                                BTreeSet::new().into(),
                                 1,
                                 false,
                                 1024,

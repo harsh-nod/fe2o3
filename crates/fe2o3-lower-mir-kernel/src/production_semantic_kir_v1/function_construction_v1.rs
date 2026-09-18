@@ -13,7 +13,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         parameters: SemanticParameterBindingsV1<'_>,
         assert_failure_block: Option<BlockId>,
         required_workgroup: Option<[u32; 3]>,
-        infallible_asserts: BTreeSet<u32>,
+        infallible_asserts: InfallibleAssertDecisionsV1<'a>,
         launch_rank: u8,
         authenticated_ranked_control: bool,
         max_operations: usize,
@@ -24,6 +24,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         emission_placement: SemanticEmissionPlacementV1,
         mut execution: Option<ExecutionAvailabilityV29<'a>>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        infallible_asserts.require_parts(
+            types,
+            callables,
+            function,
+            correspondence_owner,
+            semantic_function,
+        )?;
         if let Some(execution) = &execution {
             execution.check_source(function, semantic_ssa)?;
             if !std::ptr::eq(execution.cfg.types, types) {

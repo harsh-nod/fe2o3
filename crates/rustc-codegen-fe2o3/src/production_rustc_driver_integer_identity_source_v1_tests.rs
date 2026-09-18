@@ -281,6 +281,10 @@ fn replay_actual_continuation(stage: &Stage) -> Result<usize, String> {
         .exercise_final_receipt_component_v1(&mut budget)
         .map_err(|e| format!("actual unsigned final-I receipt component: {e:?}"))?;
     assert_eq!(budget.storage(), floor);
+    stage
+        .exercise_original_receipt_component_v1(&mut budget)
+        .map_err(|e| format!("actual unsigned original-N receipt component: {e:?}"))?;
+    assert_eq!(budget.storage(), floor);
     let replay_work = budget.work();
     assert!(replay_work > 0);
     let after = (

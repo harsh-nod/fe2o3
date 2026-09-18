@@ -8,7 +8,7 @@ use fe2o3_kernel_analysis::{
     CheckedCanonicalKirRedundantStoreV1,
 };
 use fe2o3_kernel_ir::{
-    CanonicalKernelIrReplayAdmissionErrorV12,
+    CanonicalKernelIrReplayAdmissionErrorV12, CanonicalKernelIrReplayStorageV12,
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     VerifiedCanonicalKernelIrModuleV12 as Owner,
@@ -51,6 +51,7 @@ impl std::error::Error for Error {}
 /// ```
 pub struct CheckedRedundantStoreOutputV1<'input> {
     output: Owner,
+    output_storage: CanonicalKernelIrReplayStorageV12,
     applied: CanonicalKirAppliedRedundantStoreV1<'input>,
     retained: usize,
 }
@@ -106,10 +107,7 @@ fn optimize<'input>(
     budget: &mut Budget<'_>,
 ) -> Result<CheckedRedundantStoreOutputV1<'input>, Error> {
     budget.charge_work(1)?;
-    let header = size_of::<CheckedRedundantStoreOutputV1<'_>>()
-        .checked_sub(size_of::<Owner>())
-        .and_then(|n| n.checked_sub(size_of::<CanonicalKirAppliedRedundantStoreV1<'_>>()))
-        .ok_or(Resource::Arithmetic)?;
+    let header = borrowed_header_storage()?;
     budget.reserve_storage(header)?;
     let (inventory, is) =
         CanonicalKirInventoryV1::derive(input, budget).map_err(Error::Inventory)?;
@@ -151,10 +149,22 @@ fn optimize<'input>(
     budget.release_storage(is.retained_storage())?;
     Ok(CheckedRedundantStoreOutputV1 {
         output,
+        output_storage: os,
         applied,
         retained,
     })
 }
+
+fn borrowed_header_storage() -> Result<usize, Error> {
+    size_of::<CheckedRedundantStoreOutputV1<'_>>()
+        .checked_sub(size_of::<Owner>())
+        .and_then(|n| n.checked_sub(size_of::<CanonicalKirAppliedRedundantStoreV1<'_>>()))
+        .ok_or_else(|| Resource::Arithmetic.into())
+}
+
+#[path = "owned_redundant_store_v1.rs"]
+mod owned;
+pub use owned::{OwnedRedundantStoreContinuationV1, prepare_owned_redundant_store_continuation_v1};
 
 fn scoped<'work, T>(
     budget: &mut Budget<'work>,
@@ -162,21 +172,30 @@ fn scoped<'work, T>(
 ) -> Result<T, Error> {
     let floor = budget.storage();
     let ledger = budget.work_ledger_identity_v1();
+    let mut deferred_panic = None;
     let result = match catch_unwind(AssertUnwindSafe(|| run(budget))) {
         Ok(result) => result,
         Err(payload) => {
-            drop(payload);
+            deferred_panic = Some(payload);
             Err(Error::Panicked)
         }
     };
     if ledger != budget.work_ledger_identity_v1() || budget.storage() < floor {
-        drop(result);
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(result))) {
+            deferred_panic = Some(payload);
+        }
+        drop(deferred_panic);
         return Err(Resource::Accounting.into());
     }
     if let Err(error) = budget.release_storage(budget.storage() - floor) {
-        drop(result);
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(result))) {
+            deferred_panic = Some(payload);
+        }
+        drop(deferred_panic);
         return Err(error.into());
     }
+    // A custom panic payload can unwind on drop only after permitted cleanup.
+    drop(deferred_panic);
     result
 }
 

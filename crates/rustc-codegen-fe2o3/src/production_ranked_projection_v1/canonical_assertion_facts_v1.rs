@@ -33,6 +33,7 @@ pub(crate) enum CanonicalAssertionErrorV1 {
     Origin(SemanticKirAssertOriginErrorV1),
     PrivateArray(SemanticKirPrivateArrayQueryErrorV1),
     CallEffects(fe2o3_kernel_analysis::CanonicalKirCallEffectErrorV1),
+    MaskedAssertion(fe2o3_lower_mir_kernel::ProductionSemanticMaskedShiftQueryErrorV1),
     Binding(&'static str),
 }
 impl fmt::Display for CanonicalAssertionErrorV1 {
@@ -45,6 +46,7 @@ impl fmt::Display for CanonicalAssertionErrorV1 {
             Self::Origin(error) => error.fmt(f),
             Self::PrivateArray(error) => error.fmt(f),
             Self::CallEffects(error) => error.fmt(f),
+            Self::MaskedAssertion(error) => error.fmt(f),
             Self::Binding(detail) => f.write_str(detail),
         }
     }
@@ -59,6 +61,7 @@ impl Error for CanonicalAssertionErrorV1 {
             Self::Origin(error) => Some(error),
             Self::PrivateArray(error) => Some(error),
             Self::CallEffects(error) => Some(error),
+            Self::MaskedAssertion(error) => Some(error),
             Self::Binding(_) => None,
         }
     }
@@ -102,6 +105,16 @@ pub(super) enum ProjectedAssertionConditionV1 {
 /// origin view and exact borrowed graph report below. Tests must identify any
 /// isolated synthetic decision inputs explicitly.
 pub(super) trait ProjectedAssertionFactsV1 {
+    fn masked_assertion_source_proved_v1(
+        &mut self,
+        _function: &super::SemanticFunctionDeclV1,
+        _block: usize,
+        _expected: bool,
+        _successor: SemanticBlockIdV1,
+    ) -> Result<bool, ProjectionError> {
+        Ok(false)
+    }
+
     fn require_unit_local_call(
         &mut self,
         block: usize,
@@ -240,6 +253,7 @@ impl CanonicalAssertionSessionV1<'_, '_, '_, '_, '_> {
             budget,
             correspondence_owner,
             semantic_function,
+            masked: None,
         }
     }
 
@@ -255,19 +269,42 @@ impl CanonicalAssertionSessionV1<'_, '_, '_, '_, '_> {
             budget: &mut *self.budget,
             correspondence_owner,
             semantic_function,
+            masked: None,
         }
     }
 }
 
-struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
+pub(super) struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
     owner: &'g ProductionPreRankedKirOwnerV1,
     origins: SemanticKirAssertOriginsV1<'g>,
     report: &'r CanonicalKirSparseV1<'i, 'g>,
     budget: &'b mut Budget<'w>,
     correspondence_owner: SemanticFunctionIdV1,
     semantic_function: SemanticFunctionIdV1,
+    masked: Option<&'r MaskedSourceAssertionTableV1<'g>>,
 }
 impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
+    fn masked_assertion_source_proved_v1(
+        &mut self,
+        function: &super::SemanticFunctionDeclV1,
+        block: usize,
+        expected: bool,
+        successor: SemanticBlockIdV1,
+    ) -> Result<bool, ProjectionError> {
+        match self.masked {
+            Some(table) => table.proves(
+                self.owner.semantic_ssa().source_semantic(),
+                self.semantic_function,
+                function,
+                block,
+                expected,
+                successor,
+                self.budget,
+            ),
+            None => Ok(false),
+        }
+    }
+
     fn require_unit_local_call(
         &mut self,
         block: usize,
@@ -479,6 +516,8 @@ impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '
         }
     }
 }
+
+include!("canonical_masked_assertion_facts_v1.rs");
 
 /// The caller reserves the complete borrowed source payload. Only canonical
 /// assertion/inventory/sparse work is on this ledger, not the Rust/projector

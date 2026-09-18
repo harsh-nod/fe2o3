@@ -39,6 +39,9 @@ fn policy6_final_receipt_root_joins_keep_descriptor_permutation_distinct_from_n_
             crate::production_pipeline::native_checked_output_handoff_v1::policy6::final_receipts::tests::exercise_permuted_root_component_v1(
                 artifacts.native_worker_output_v1(), &ranked, profile, &typed, budget,
             ).unwrap();
+            crate::production_pipeline::native_checked_output_handoff_v1::policy6::original_receipts::tests::exercise_unsigned_component_v1(
+                artifacts.native_worker_output_v1(), &ranked, profile, &typed, budget,
+            ).unwrap();
             assert!(!artifacts.grants_artifact_or_launch_authority());
             drop(artifacts);
             budget.release_storage(storage.retained_storage()).unwrap();
@@ -79,6 +82,44 @@ fn policy6_unsigned_final_receipt_component_accepts_real_erased_noop_and_refuses
             budget.release_storage(storage.retained_storage()).unwrap();
             assert_eq!(budget.storage(), floor);
         });
+    }
+}
+
+#[test]
+fn policy6_original_n_receipt_joins_accept_direct_source_and_refuse_hostile_axes() {
+    for profile in [
+        ProductionAmdTargetProfileV1::Gfx942,
+        ProductionAmdTargetProfileV1::Gfx950,
+    ] {
+        crate::production_ranked_projection_v1::with_backend_checked_output_policy6_roster_v1(
+            profile,
+            |owner, ranked, budget| {
+                let wrong_names = typed_roots_for_source(owner.source_semantic_kir());
+                let mut typed = wrong_names.clone();
+                assert_eq!(typed.len(), ranked.root_count());
+                for descriptor in &mut typed {
+                    let mut matches = ranked.roots().iter().filter(|root| {
+                        root.export_symbol() == descriptor.entry_symbol().as_bytes()
+                    });
+                    let root = matches.next().expect("actual ranked source root");
+                    assert!(matches.next().is_none());
+                    assert_eq!(descriptor.kernel_binding_bytes(), *root.kernel_binding());
+                    assert_ne!(descriptor.logical_name(), root.logical_name());
+                    descriptor.logical_name = root.logical_name().to_owned();
+                }
+                let floor = budget.storage();
+                let (artifacts, storage) =
+                    prepare_checked_output_artifacts_v1(owner, profile, &typed, None, budget)
+                        .unwrap();
+                budget.reserve_storage(storage.retained_storage()).unwrap();
+                crate::production_pipeline::native_checked_output_handoff_v1::policy6::original_receipts::tests::exercise_hostile_component_v1(
+                    artifacts.native_worker_output_v1(), &ranked, profile, &typed, &wrong_names, budget,
+                ).unwrap();
+                drop(artifacts);
+                budget.release_storage(storage.retained_storage()).unwrap();
+                assert_eq!(budget.storage(), floor);
+            },
+        );
     }
 }
 
@@ -178,6 +219,9 @@ fn policy6_direct_native_consumer_reemits_actual_i_and_retains_original_source()
             );
             check_output_inputs_v1(artifacts.native_worker_output_v1(), profile, &roots, budget)
                 .unwrap();
+            crate::production_pipeline::native_checked_output_handoff_v1::policy6::original_receipts::tests::exercise_direct_analysis_v1(
+                artifacts.native_worker_output_v1().owner, budget,
+            ).unwrap();
             assert!(!artifacts.grants_artifact_or_launch_authority());
             drop(artifacts);
             budget.release_storage(storage.retained_storage()).unwrap();

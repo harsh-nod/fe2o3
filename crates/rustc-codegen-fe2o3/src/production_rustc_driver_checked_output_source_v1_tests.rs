@@ -281,6 +281,7 @@ impl Callbacks for CheckedOutputCallbacks {
                 })
                 .map_err(|e| SourceFailure::new(SourceStage::NativeHandoff, format!("{e:?}")))?;
             assert!(!descriptor.grants_launch_authority());
+            masked_shift_source::check_descriptor(observation.masked_shift.as_ref(), &descriptor)?;
             let llvm = std::str::from_utf8(handoff.module_bytes())
                 .map_err(|e| SourceFailure::new(SourceStage::NativeHandoff, e))?;
             assert!(llvm.contains("amdgpu_kernel"));

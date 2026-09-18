@@ -1,7 +1,8 @@
 //! Test observations over actual N/O owners, not a source admission rule.
 use super::*;
 use fe2o3_kernel_ir::{
-    BinaryOp, Constant, Function, FunctionRole, Module, Operation, OperationKind, ValueId,
+    BinaryOp, Constant, Function, FunctionRole, LaunchDomain, LaunchExtent, Module, Operation,
+    OperationKind, ValueId, WorkgroupSize,
 };
 
 fn producer(function: &Function, value: ValueId) -> Option<&Operation> {
@@ -105,7 +106,11 @@ fn operation_function<'a>(
         || input != &Type::Scalar(batch.integer.scalar())
         || count != &Type::Scalar(ScalarType::U32)
         || !entry.signature.results.is_empty()
-        || kernel.domain.rank() != 1
+        || kernel.domain
+            != (LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            })
+        || kernel.workgroup_size != Some(WorkgroupSize::new(64, 1, 1))
     {
         return Err(failure("masked shift exact fixed-width/full-U32 ABI"));
     }
@@ -287,13 +292,15 @@ fn masked_shift_graph_preserves_observed_order_and_rejects_wrong_actual_inputs()
             vec![ValueId(0), ValueId(1), ValueId(2)],
             vec![block],
         ));
-        module.kernels.push(Kernel::new(
+        let mut kernel = Kernel::new(
             root,
             entry,
             LaunchDomain::D1 {
-                x: LaunchExtent::Static(64),
+                x: LaunchExtent::Dynamic,
             },
-        ));
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+        module.kernels.push(kernel);
     }
     module.kernels.reverse();
     let actual_order = module
@@ -342,6 +349,30 @@ fn masked_shift_graph_preserves_observed_order_and_rejects_wrong_actual_inputs()
     let mut missing = module.clone();
     missing.kernels.pop();
     assert!(check_graph(&missing, batch).is_err());
+    for mutation in 0..5 {
+        let mut changed = module.clone();
+        match mutation {
+            0 => changed.kernels[0].workgroup_size = None,
+            1 => changed.kernels[0].workgroup_size = Some(WorkgroupSize::new(32, 1, 1)),
+            2 => changed.kernels[0].workgroup_size = Some(WorkgroupSize::new(64, 2, 1)),
+            3 => {
+                changed.kernels[0].domain = LaunchDomain::D1 {
+                    x: LaunchExtent::Static(128),
+                }
+            }
+            4 => {
+                changed.kernels[0].domain = LaunchDomain::D2 {
+                    x: LaunchExtent::Dynamic,
+                    y: LaunchExtent::Dynamic,
+                }
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            check_graph(&changed, batch).is_err(),
+            "launch mutation {mutation}"
+        );
+    }
     module.kernels[0].id = "foreign_root".into();
     assert!(check_graph(&module, batch).is_err());
 }

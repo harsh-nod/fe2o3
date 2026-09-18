@@ -7,6 +7,9 @@ mod discovery;
 pub(super) use discovery::record_child_refusal;
 #[path = "production_rustc_driver_checked_output_masked_shift_fixture_v1_tests.rs"]
 mod fixture_wiring;
+#[path = "production_rustc_driver_checked_output_masked_shift_launch_v1_tests.rs"]
+mod launch_contract;
+pub(super) use launch_contract::check_descriptor;
 
 pub(super) struct Config {
     pub(super) batch: Batch,

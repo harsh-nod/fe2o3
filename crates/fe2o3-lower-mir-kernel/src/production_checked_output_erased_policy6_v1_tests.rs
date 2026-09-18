@@ -1,7 +1,11 @@
 // Child of the genuine erased Policy5 fixtures; no reconstructed original N.
 use super::*;
+#[path = "production_original_unit_local_formal_v1_tests.rs"]
+mod original_unit_local_formal;
 type Final6 = crate::ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1;
 type Error6 = crate::ProductionCheckedOutputAdmissionErrorPolicy6V1;
+#[path = "production_checked_output_redundant_store_erased_v1_tests.rs"]
+mod redundant_store_tests;
 struct Fixture6 {
     source: ProductionUnitLocalErasedSourceOwnerV1,
     bound: fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,

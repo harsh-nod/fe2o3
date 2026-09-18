@@ -14,6 +14,8 @@ mod masked_shifts;
 mod numeric_casts;
 #[path = "production_checked_output_private_memory_policy3_v1.rs"]
 mod private_memory;
+#[path = "production_checked_output_redundant_store_v1.rs"]
+pub(super) mod redundant_store;
 #[path = "production_checked_output_scalar_helpers_v1.rs"]
 mod scalar_helpers;
 #[path = "production_checked_output_source_roles_v1.rs"]

@@ -63,7 +63,7 @@ pub use semantic_logical_arguments::{
 pub use semantic_masked_shift_v1::{
     MAX_SEMANTIC_MASKED_SHIFT_STORAGE_V1, MAX_SEMANTIC_MASKED_SHIFT_WORK_V1,
     SemanticMaskedShiftErrorV1, SemanticMaskedShiftFactV1, SemanticMaskedShiftIndexV1,
-    SemanticMaskedShiftLimitsV1,
+    SemanticMaskedShiftLimitsV1, SemanticMaskedShiftMeterV1, SemanticMaskedShiftMeteredErrorV1,
 };
 pub use semantic_memory::{
     MAX_MEMORY_OPERATION_WIRE_BYTES, MirCopyNonOverlappingContract, MirElementCount,

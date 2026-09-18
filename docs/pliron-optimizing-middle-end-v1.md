@@ -879,10 +879,10 @@ separate requirements. Wrong masks, raw dynamic counts and unsupported
 expression shapes continue to refuse.
 
 This expression-level support is not complete ordinary-Rust masked-shift
-admission. Actual source discovery still encounters Rust's retained shift
-overflow assertion. Transporting its exact mask/comparison/successor relation
-through the backend, source lowering and native provenance checks is a separate
-requirement; recognizing a mask in an expression does not discharge that gate.
+admission. Rust's retained shift-overflow assertion also needs an exact
+mask/comparison/successor relation; recognizing a mask expression alone does
+not discharge it. Source census, retained-helper traversal and final native
+provenance remain separate admission gates.
 
 `fe2o3-mir-model::SemanticMaskedShiftIndexV1` provides an owner-bound query for
 the exact mask, optional same-width signed cast, unsigned comparison, and
@@ -890,6 +890,24 @@ assertion-successor shift pattern. Its initial contract requires an acyclic
 function and adjacent producers/consumer, tracks explicit local lifetimes and
 escapes, and meters construction plus later lookups. It produces inert facts,
 not assertion-elision permission or source/proof authority.
+
+The production query adapter meters construction and lookups on the caller's
+actual ledger and keeps its index inside a scoped borrow. A private lowerer
+table binds facts to the actual source, function and lowering plan. One decision
+feeds failure-block sizing, assertion emission and origin recording. The backend
+independently rebuilds its source table; a contradictory actual graph constant
+overrides the source fact. Legacy assertion contexts receive no such table.
+An elided origin label alone is not proof. These consumers do not replace source
+SSA, initialization, use or source/native correspondence checks, and their
+component tests are not ordinary-source or tutorial qualification.
+
+The checked-output source census queries the same exact assertion-success
+relation once per relevant source function. It retains the literal and adjacent
+mask predicates and scans every original block, including unreachable shifts
+and retained helpers. Each accepted fact names the actual source owner and
+shift coordinates. Query errors preserve their resource or semantic refusal;
+no query or scratch allocation escapes the scope. This does not establish
+retained-helper template or final native correspondence admission.
 
 ## Checked integer continuation
 
@@ -959,10 +977,23 @@ to be the physical kernel order in either N or I; those indices are joined
 independently. An authentic historical O receipt cannot stand in for changed I.
 
 This in-process consumer is not F2NOUT1 wire admission or a proof producer.
-Original-N formal evidence and the serialized heterogeneous transformation chain
-still require separate integration. Its component tests use genuine unsigned
+The serialized heterogeneous transformation chain still requires separate
+integration. Its component tests use genuine unsigned
 source stages without constructing a signed native owner. A positive signed
 end-to-end qualification therefore remains a distinct requirement.
+
+A separate original-N checker derives fresh formal obligations from the actual
+retained V12 N and joins its KernelIr/FormalMemory receipts to source, catalog
+and descriptor roots. It never substitutes optional erased E or final I reports.
+The UnitLocal path discharges a private call only inside complete retained
+source/N/E replay, using the exact original operation and same-root silent-call
+token. The generic formal engine still refuses those calls without this source
+evidence; all other incomplete reasons and conflicts remain errors. Private
+sorted root/call indices bound repeated joins without changing report coordinates.
+Borrowed receipt backing remains in the caller's accounting domain, while new
+decoded scratch and witness headers are charged locally. This borrowed relation
+neither associates the consuming V4 input proof nor serializes the complete
+final-output chain.
 
 The integer continuation's observation goldens live under
 `crates/fe2o3-kernel-opt/tests/integer-continuation-golden/`. They cover an
@@ -986,8 +1017,24 @@ the actual input/output inventories and verifies every deletion and survivor
 without trusting the producer's MemorySSA. Mutation, fresh V12 admission and
 replay share the caller's bounded resource ledger.
 
+`prepare_owned_redundant_store_continuation_v1` moves the actual checked output J
+and copies only prepaid inert deletion/origin rows. Replay against an input
+always checks the complete actual pair, even when its typed identity matches.
+There is no public candidate-attachment or raw-parts constructor.
+
+The separate borrowed source checker composes the actual Policy6 origin maps
+through I into J. It rejects intervening source-only lifetime or Move kills and
+freshly checks J initialization, source lifetimes, traps, helpers and formal
+memory obligations. Its witness borrows both the source prefix and deletion
+owner; fresh J reports are checked, not reused as old I evidence.
+
+The consuming source-owned continuation retains the whole Direct or UnitLocal
+Policy6 prefix once, actual J and its fresh formal reports. Replay rederives
+those reports from J and rejects historical I reports in their place. Its
+storage receipt covers only added J, metadata and report rows; inherited caller
+reservations, including separately reserved B, remain caller-owned on all exits.
+
 This service is not in the fixed production schedule and is not general DSE.
-Source-lifetime and initialization preservation, origin-map composition, final
-effect admission, and ordinary-source native/simulator qualification must be
-completed before a production continuation can use it. Existing ordered-store
-preservation checks are not weakened to admit this standalone relation.
+Fresh J native artifacts/receipts and ordinary-source native/simulator
+qualification remain required. Existing ordered-store preservation checks are
+not weakened to admit this separate relation.

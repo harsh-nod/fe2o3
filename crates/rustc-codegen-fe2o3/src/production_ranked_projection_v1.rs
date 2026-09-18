@@ -31,8 +31,9 @@ pub(crate) use tests::{
     with_backend_checked_output_policy3_roster_v1, with_backend_checked_output_policy3_v1,
     with_backend_checked_output_policy4_owned_v1, with_backend_checked_output_policy4_v1,
     with_backend_checked_output_policy5_owned_v1, with_backend_checked_output_policy6_owned_v1,
-    with_backend_erased_bound_v1, with_backend_erased_output_policy5_owned_v1,
-    with_backend_erased_output_policy6_owned_v1, with_backend_erased_roster_v1,
+    with_backend_checked_output_policy6_roster_v1, with_backend_erased_bound_v1,
+    with_backend_erased_output_policy5_owned_v1, with_backend_erased_output_policy6_owned_v1,
+    with_backend_erased_roster_v1,
 };
 
 use analysis_multi_split_v1::{
@@ -3140,23 +3141,25 @@ fn project_ranked_roots_v1(
                 .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                     "a semantic KernelRoot without one direct body or transparent Result wrapper",
                 ))?;
-            let mut facts = session.for_source(semantic_root, selection.body());
-            let root = project_and_verify_ranked_root_v1(
-                semantic,
-                &callable_effects,
-                selection,
-                input,
-                *source_root,
-                root_references,
-                &mut facts,
-            )
-            .map_err(|error| {
-                error.with_deterministic_root_context(
-                    semantic_root,
-                    selection.body(),
-                    input.logical_name.as_bytes(),
-                )
-            })?;
+            let root = session
+                .with_source_masked_assertions_v1(semantic_root, selection.body(), |facts| {
+                    project_and_verify_ranked_root_v1(
+                        semantic,
+                        &callable_effects,
+                        selection,
+                        input,
+                        *source_root,
+                        root_references,
+                        facts,
+                    )
+                })
+                .map_err(|error| {
+                    error.with_deterministic_root_context(
+                        semantic_root,
+                        selection.body(),
+                        input.logical_name.as_bytes(),
+                    )
+                })?;
             if root.kernel_binding != input.kernel_binding {
                 return Err(ProductionRankedProjectionErrorV1::Unsupported(
                     "a projected ranked root with a substituted kernel binding",
@@ -20096,13 +20099,19 @@ fn projected_cfg_terminator(
             ..
         } => {
             if !matches!(message, SemanticAssertMessageV1::BoundsCheck { .. }) {
+                let masked_source_proof = assertion_facts.masked_assertion_source_proved_v1(
+                    function,
+                    block_index,
+                    *expected,
+                    edge.target(),
+                )?;
                 // A contradictory actual graph constant overrides a source proof.
                 let graph_condition =
                     assertion_facts.condition(block_index, *expected, edge.target())?;
                 if !projected_assertion_is_proved_v1(
                     graph_condition,
                     *expected,
-                    non_bounds_assert_proved,
+                    non_bounds_assert_proved || masked_source_proof,
                 ) {
                     return Err(ProductionRankedProjectionErrorV1::UnprovenAssert {
                         block: block_index,

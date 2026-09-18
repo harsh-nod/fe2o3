@@ -6,7 +6,18 @@ pub(super) fn source_lifetimes_erased(
     proof: &PrivateMemory<'_, '_>,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<()> {
-    let inventory = proof.inventory;
+    let sites = erased_source_statement_sites_v1(source, map, proof.inventory, budget)?;
+    source_lifetimes_from_sites(
+        source.original_source().semantic_ssa.source_semantic(), proof, &sites, budget,
+    )
+}
+
+pub(super) fn erased_source_statement_sites_v1(
+    source: &ProductionUnitLocalErasedSourceOwnerV1,
+    map: &ErasedSourceCoordinateMapV1<'_>,
+    inventory: &CanonicalKirInventoryV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<Vec<Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>>> {
     let mut sites = scratch::<Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>>(
         inventory.operations().len(),
         budget,
@@ -55,11 +66,5 @@ pub(super) fn source_lifetimes_erased(
             }
         }
     }
-    source_lifetimes_from_sites(
-        source.original_source().semantic_ssa.source_semantic(),
-        proof,
-        &sites,
-        budget,
-    )
+    Ok(sites)
 }
-

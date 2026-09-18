@@ -7,6 +7,12 @@ use super::*;
     reason = "fixed typed final-receipt endpoint; protected publication and signed qualification remain separate"
 )]
 pub(crate) mod final_receipts;
+#[path = "production_native_original_receipts_policy6_v1.rs"]
+#[allow(
+    dead_code,
+    reason = "borrowed original-N component; V4 association and signed qualification remain separate"
+)]
+pub(crate) mod original_receipts;
 use crate::production_pipeline::{
     checked_output_policy6_v1::NativeSourceCheckedOutputProductionCompilationV1 as Direct6,
     erased_checked_output_policy6_v1::NativeSourceErasedCheckedOutputProductionCompilationV1 as Erased6,

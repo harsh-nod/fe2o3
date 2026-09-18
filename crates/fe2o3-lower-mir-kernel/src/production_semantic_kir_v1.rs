@@ -85,8 +85,12 @@ pub use checked_output_admission_policy3_v1::*;
 #[path = "production_checked_output_guarded_formal_v1.rs"]
 mod checked_output_guarded_formal_v1;
 pub(crate) use checked_output_guarded_formal_v1::derive_checked_output_guarded_obligations_v1;
+#[path = "production_original_native_formal_v1.rs"]
+mod original_native_formal_v1;
+pub use original_native_formal_v1::*;
 include!("production_retained_arrays_v1.rs");
 include!("production_assert_origins_v1.rs");
+include!("production_masked_assertion_plan_v1.rs");
 #[path = "production_slice_view_v1.rs"]
 mod slice_view_v1;
 #[path = "production_value_origin_v1.rs"]
@@ -838,6 +842,8 @@ pub enum ProductionSemanticKirErrorV1 {
     SemanticSsa(ProductionSemanticSsaErrorV1),
     /// Assertion-origin emission, sealing, query, or resource rejection.
     AssertOrigin(SemanticKirAssertOriginErrorV1),
+    /// Exact source masked-assertion query or live resource failure.
+    MaskedAssertionQuery(crate::ProductionSemanticMaskedShiftQueryErrorV1),
     /// Argument/call correspondence exhausted its independent phase budget.
     ArgumentCorrespondenceResource(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1),
     /// A bounded lowering resource exceeded its limit.
@@ -1016,6 +1022,7 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
             Self::SemanticOwner(error) => write!(formatter, "exact semantic owner failed: {error}"),
             Self::SemanticSsa(error) => write!(formatter, "semantic SSA custody failed: {error}"),
             Self::AssertOrigin(error) => error.fmt(formatter),
+            Self::MaskedAssertionQuery(error) => error.fmt(formatter),
             Self::ArgumentCorrespondenceResource(error) => {
                 write!(formatter, "argument/call correspondence: {error}")
             }
@@ -1192,6 +1199,7 @@ impl Error for ProductionSemanticKirErrorV1 {
             Self::SemanticOwner(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
             Self::AssertOrigin(error) => Some(error),
+            Self::MaskedAssertionQuery(error) => Some(error),
             Self::ArgumentCorrespondenceResource(error) => Some(error),
             Self::InvalidKernelIr(error) => Some(error),
             Self::CanonicalKernelIrV8(error) => Some(error),
@@ -10169,7 +10177,7 @@ fn semantic_reachable_blocks_avoiding_node_v1(
 fn semantic_requires_runtime_assert_failure(
     function: &SemanticFunctionDeclV1,
     callables: &[SemanticCallableDeclV1],
-    infallible_asserts: &BTreeSet<u32>,
+    infallible_asserts: &InfallibleAssertDecisionsV1<'_>,
 ) -> bool {
     function
         .blocks()
@@ -10628,14 +10636,14 @@ fn helper_function_id_v1(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn lower_one_semantic_function_v1(
+fn lower_one_semantic_function_v1<'facts>(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     plan: &LoweredFunctionPlanV1,
     semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
     defined_function_ids: &BTreeMap<SemanticFunctionIdV1, FunctionId>,
     defined_function_signatures: &BTreeMap<SemanticFunctionIdV1, LoweredFunctionSignatureV1>,
     required_workgroup: Option<[u32; 3]>,
-    infallible_asserts: BTreeSet<u32>,
+    infallible_asserts: impl Into<InfallibleAssertDecisionsV1<'facts>>,
     launch_rank: u8,
     authenticated_ranked_control: bool,
     max_operations: usize,
@@ -10668,14 +10676,14 @@ fn lower_one_semantic_function_v1(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn lower_one_semantic_function_with_calls_v29(
+fn lower_one_semantic_function_with_calls_v29<'facts>(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
     plan: &LoweredFunctionPlanV1,
     semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
     defined_function_ids: &BTreeMap<SemanticFunctionIdV1, FunctionId>,
     defined_function_signatures: &BTreeMap<SemanticFunctionIdV1, LoweredFunctionSignatureV1>,
     required_workgroup: Option<[u32; 3]>,
-    infallible_asserts: BTreeSet<u32>,
+    infallible_asserts: impl Into<InfallibleAssertDecisionsV1<'facts>>,
     launch_rank: u8,
     authenticated_ranked_control: bool,
     max_operations: usize,
@@ -10687,6 +10695,8 @@ fn lower_one_semantic_function_with_calls_v29(
     execution: Option<ExecutionAvailabilityV29<'_>>,
     execution_calls: Option<&mut dyn ExecutionDefinedCallConsumerV29>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
+    let infallible_asserts = infallible_asserts.into();
+    infallible_asserts.require_source(semantic, plan)?;
     let source_call_instance = execution.as_ref().map(|cursor| cursor.instance);
     let function = semantic
         .functions()
@@ -12204,273 +12214,280 @@ fn lower_single_root_module(
         )?,
         (None, _) | (_, None) => BTreeSet::new(),
     };
-    let mut total_blocks = 0_usize;
-    let mut total_statements = 0_usize;
-    for (index, plan) in plans.iter().enumerate() {
-        let function = &semantic.functions()[plan.semantic_function.index() as usize];
-        let infallible = if index == 0 {
-            &entry_infallible_asserts
-        } else {
-            &BTreeSet::new()
-        };
-        total_blocks = total_blocks
-            .checked_add(function.blocks().len())
-            .and_then(|count| {
-                count.checked_add(usize::from(semantic_requires_runtime_assert_failure(
-                    function,
-                    semantic.callables(),
-                    infallible,
-                )))
-            })
-            .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
-                resource: ProductionSemanticKirResourceV1::Blocks,
-                actual: usize::MAX,
-                limit: limits.max_blocks,
-            })?;
-        total_statements = function
-            .blocks()
-            .iter()
-            .try_fold(total_statements, |count, block| {
-                count.checked_add(block.statements().len())
-            })
-            .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
-                resource: ProductionSemanticKirResourceV1::Statements,
-                actual: usize::MAX,
-                limit: limits.max_statements,
-            })?;
-    }
-    enforce_limit(
-        ProductionSemanticKirResourceV1::Blocks,
-        total_blocks,
-        limits.max_blocks,
-    )?;
-    enforce_limit(
-        ProductionSemanticKirResourceV1::Statements,
-        total_statements,
-        limits.max_statements,
-    )?;
+    with_masked_assertion_plans_v1(
+        owner,
+        &plans,
+        entry_infallible_asserts,
+        call_budget,
+        |assertions, call_budget| {
+            let mut total_blocks = 0_usize;
+            let mut total_statements = 0_usize;
+            for (index, plan) in plans.iter().enumerate() {
+                let function = &semantic.functions()[plan.semantic_function.index() as usize];
+                let infallible = masked_decisions_for_plan_v1(semantic, plan, &assertions[index])?;
+                total_blocks = total_blocks
+                    .checked_add(function.blocks().len())
+                    .and_then(|count| {
+                        count.checked_add(usize::from(semantic_requires_runtime_assert_failure(
+                            function,
+                            semantic.callables(),
+                            &infallible,
+                        )))
+                    })
+                    .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
+                        resource: ProductionSemanticKirResourceV1::Blocks,
+                        actual: usize::MAX,
+                        limit: limits.max_blocks,
+                    })?;
+                total_statements = function
+                    .blocks()
+                    .iter()
+                    .try_fold(total_statements, |count, block| {
+                        count.checked_add(block.statements().len())
+                    })
+                    .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
+                        resource: ProductionSemanticKirResourceV1::Statements,
+                        actual: usize::MAX,
+                        limit: limits.max_statements,
+                    })?;
+            }
+            enforce_limit(
+                ProductionSemanticKirResourceV1::Blocks,
+                total_blocks,
+                limits.max_blocks,
+            )?;
+            enforce_limit(
+                ProductionSemanticKirResourceV1::Statements,
+                total_statements,
+                limits.max_statements,
+            )?;
 
-    let mut module = Module::new(format!(
-        "fe2o3::semantic::{}",
-        hex_identity(semantic.semantic_sha256().as_bytes())
-    ));
-    let mut lowered_functions = Vec::with_capacity(plans.len());
-    let mut correspondence_blocks = Vec::new();
-    let mut statement_operation_spans = Vec::new();
-    let mut terminator_operation_spans = Vec::new();
-    let mut generated_terminator_values = Vec::new();
-    let mut call_returns = CallReturnBufferV1::empty();
-    let mut synthetic_operation_spans = Vec::new();
-    let mut parameter_bindings = Vec::new();
-    let mut parameter_component_bindings = Vec::new();
-    let mut ignored_parameter_bindings = Vec::new();
-    let mut diagnostic_declarations = BTreeMap::new();
-    let mut float_declarations = BTreeMap::new();
-    let mut remaining_operations = limits.max_operations;
-    let mut private_arrays = PrivateArrayMergeV1::new(limits.max_operations);
-    for (index, plan) in plans.iter().enumerate() {
-        let semantic_ssa = owner
-            .plan_for_function(plan.semantic_function)
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let lowered = lower_one_semantic_function_v1(
-            semantic,
-            plan,
-            semantic_ssa,
-            &defined_function_ids,
-            &defined_function_signatures,
-            (index == 0).then_some(required_workgroup).flatten(),
-            if index == 0 {
-                entry_infallible_asserts.clone()
-            } else {
-                BTreeSet::new()
-            },
-            launch_rank,
-            authenticated_launch.is_some() && index == 0,
-            remaining_operations,
-            assert_origins.as_deref_mut(),
-            private_array_work,
-            Some((&private_arrays, outer_private_arrays)),
-            call_budget,
-            SemanticEmissionPlacementV1::default(),
-            None,
-        )?;
-        remaining_operations = remaining_operations
-            .checked_sub(lowered.emitted_operations)
-            .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
-                resource: ProductionSemanticKirResourceV1::Operations,
-                actual: limits.max_operations.saturating_add(1),
-                limit: limits.max_operations,
-            })?;
-        private_arrays.append_function(
-            plan.correspondence_owner,
-            plan.semantic_function,
-            index,
-            lowered.emitted_operations,
-            lowered.private_arrays,
-            outer_private_arrays,
-            private_array_work,
-        )?;
-        module
-            .required_capabilities
-            .extend(lowered.operation_capabilities.iter().cloned());
-        diagnostic_declarations.extend(lowered.diagnostic_declarations);
-        float_declarations.extend(lowered.float_declarations);
-        correspondence_blocks.extend(lowered.blocks);
-        statement_operation_spans.extend(lowered.statement_operation_spans);
-        terminator_operation_spans.extend(lowered.terminator_operation_spans);
-        generated_terminator_values.extend(lowered.generated_terminator_values);
-        call_returns.append(lowered.call_returns, limits.max_blocks, call_budget)?;
-        synthetic_operation_spans.extend(lowered.synthetic_operation_spans);
-        parameter_bindings.extend(lowered.parameter_bindings);
-        append_correspondence_records_v1(
-            &mut parameter_component_bindings,
-            lowered.parameter_component_bindings,
-            ProductionSemanticKirResourceV1::DebugBindings,
-            limits.max_operations,
-        )?;
-        append_correspondence_records_v1(
-            &mut ignored_parameter_bindings,
-            lowered.ignored_parameter_bindings,
-            ProductionSemanticKirResourceV1::DebugBindings,
-            limits.max_operations,
-        )?;
-        lowered_functions.push(SemanticKirFunctionCorrespondenceV1 {
-            correspondence_owner: plan.correspondence_owner,
-            semantic_function: plan.semantic_function,
-            kernel_ir_function: plan.kernel_ir_function.clone(),
-            role: plan.role,
-        });
-        module.functions.push(lowered.function);
-    }
-    for declaration in diagnostic_declarations
-        .into_values()
-        .chain(float_declarations.into_values())
-    {
-        if module
-            .functions
-            .iter()
-            .any(|function| function.id == declaration.id)
-        {
-            return Err(unsupported(
-                selection.body().index(),
-                None,
-                None,
-                "helper identity collides with a compiler intrinsic declaration",
+            let mut module = Module::new(format!(
+                "fe2o3::semantic::{}",
+                hex_identity(semantic.semantic_sha256().as_bytes())
             ));
-        }
-        module.functions.push(declaration);
-    }
-
-    let dimensions = required_workgroup;
-    let workgroup_extents = dimensions.map(|dimensions| dimensions.map(u64::from));
-    let retained_extent = |axis: usize| {
-        authenticated_launch
-            .filter(|layout| {
-                layout.full_physical_workgroups
-                    && workgroup_extents == Some(layout.workgroup_extents)
-                    && layout.global_extents[axis] == layout.workgroup_extents[axis]
-            })
-            .and_then(|layout| u32::try_from(layout.global_extents[axis]).ok())
-            .filter(|extent| *extent != 0)
-            .map_or(LaunchExtent::Dynamic, LaunchExtent::Static)
-    };
-    let launch = match (launch_rank, dimensions) {
-        (1, Some([_, 1, 1]) | None) => LaunchDomain::D1 {
-            x: retained_extent(0),
-        },
-        (2, Some([_, _, 1]) | None) => LaunchDomain::D2 {
-            x: retained_extent(0),
-            y: retained_extent(1),
-        },
-        (3, Some(_) | None) => LaunchDomain::D3 {
-            x: retained_extent(0),
-            y: retained_extent(1),
-            z: retained_extent(2),
-        },
-        _ => {
-            return Err(unsupported(
-                0,
-                None,
-                None,
-                "authenticated launch rank disagrees with source workgroup axes",
-            ));
-        }
-    };
-    let entry_function_id = FunctionId::new(symbol);
-    let mut kernel = Kernel::new(symbol, entry_function_id.clone(), launch);
-    if let Some([x, y, z]) = required_workgroup {
-        kernel.workgroup_size = Some(WorkgroupSize::new(x, y, z));
-    }
-    let entry_function = module
-        .function(&entry_function_id)
-        .expect("lowered entry function is retained");
-    kernel
-        .required_capabilities
-        .extend(entry_function.required_capabilities.iter().cloned());
-    module.kernels.push(kernel);
-
-    let effects = analyze_interprocedural_effects_v1(&module)
-        .map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
-    for plan in plans.iter().skip(1) {
-        if !effects
-            .function(&plan.kernel_ir_function)
-            .is_some_and(|decision| decision.is_complete_and_pure())
-        {
-            if let HelperLoweringAdmissionV1::PendingUnitLocal { requires_source } = admission {
-                let emission = assert_origins
-                    .as_mut()
+            let mut lowered_functions = Vec::with_capacity(plans.len());
+            let mut correspondence_blocks = Vec::new();
+            let mut statement_operation_spans = Vec::new();
+            let mut terminator_operation_spans = Vec::new();
+            let mut generated_terminator_values = Vec::new();
+            let mut call_returns = CallReturnBufferV1::empty();
+            let mut synthetic_operation_spans = Vec::new();
+            let mut parameter_bindings = Vec::new();
+            let mut parameter_component_bindings = Vec::new();
+            let mut ignored_parameter_bindings = Vec::new();
+            let mut diagnostic_declarations = BTreeMap::new();
+            let mut float_declarations = BTreeMap::new();
+            let mut remaining_operations = limits.max_operations;
+            let mut private_arrays = PrivateArrayMergeV1::new(limits.max_operations);
+            for (index, plan) in plans.iter().enumerate() {
+                let semantic_ssa = owner
+                    .plan_for_function(plan.semantic_function)
                     .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-                if pending_unit_local_candidates_v1(&module, &plans, &effects, emission.budget)? {
-                    *requires_source = true;
-                    break;
+                let lowered = lower_one_semantic_function_v1(
+                    semantic,
+                    plan,
+                    semantic_ssa,
+                    &defined_function_ids,
+                    &defined_function_signatures,
+                    (index == 0).then_some(required_workgroup).flatten(),
+                    masked_decisions_for_plan_v1(semantic, plan, &assertions[index])?,
+                    launch_rank,
+                    authenticated_launch.is_some() && index == 0,
+                    remaining_operations,
+                    assert_origins.as_deref_mut(),
+                    private_array_work,
+                    Some((&private_arrays, outer_private_arrays)),
+                    call_budget,
+                    SemanticEmissionPlacementV1::default(),
+                    None,
+                )?;
+                remaining_operations = remaining_operations
+                    .checked_sub(lowered.emitted_operations)
+                    .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
+                        resource: ProductionSemanticKirResourceV1::Operations,
+                        actual: limits.max_operations.saturating_add(1),
+                        limit: limits.max_operations,
+                    })?;
+                private_arrays.append_function(
+                    plan.correspondence_owner,
+                    plan.semantic_function,
+                    index,
+                    lowered.emitted_operations,
+                    lowered.private_arrays,
+                    outer_private_arrays,
+                    private_array_work,
+                )?;
+                module
+                    .required_capabilities
+                    .extend(lowered.operation_capabilities.iter().cloned());
+                diagnostic_declarations.extend(lowered.diagnostic_declarations);
+                float_declarations.extend(lowered.float_declarations);
+                correspondence_blocks.extend(lowered.blocks);
+                statement_operation_spans.extend(lowered.statement_operation_spans);
+                terminator_operation_spans.extend(lowered.terminator_operation_spans);
+                generated_terminator_values.extend(lowered.generated_terminator_values);
+                call_returns.append(lowered.call_returns, limits.max_blocks, call_budget)?;
+                synthetic_operation_spans.extend(lowered.synthetic_operation_spans);
+                parameter_bindings.extend(lowered.parameter_bindings);
+                append_correspondence_records_v1(
+                    &mut parameter_component_bindings,
+                    lowered.parameter_component_bindings,
+                    ProductionSemanticKirResourceV1::DebugBindings,
+                    limits.max_operations,
+                )?;
+                append_correspondence_records_v1(
+                    &mut ignored_parameter_bindings,
+                    lowered.ignored_parameter_bindings,
+                    ProductionSemanticKirResourceV1::DebugBindings,
+                    limits.max_operations,
+                )?;
+                lowered_functions.push(SemanticKirFunctionCorrespondenceV1 {
+                    correspondence_owner: plan.correspondence_owner,
+                    semantic_function: plan.semantic_function,
+                    kernel_ir_function: plan.kernel_ir_function.clone(),
+                    role: plan.role,
+                });
+                module.functions.push(lowered.function);
+            }
+            for declaration in diagnostic_declarations
+                .into_values()
+                .chain(float_declarations.into_values())
+            {
+                if module
+                    .functions
+                    .iter()
+                    .any(|function| function.id == declaration.id)
+                {
+                    return Err(unsupported(
+                        selection.body().index(),
+                        None,
+                        None,
+                        "helper identity collides with a compiler intrinsic declaration",
+                    ));
+                }
+                module.functions.push(declaration);
+            }
+
+            let dimensions = required_workgroup;
+            let workgroup_extents = dimensions.map(|dimensions| dimensions.map(u64::from));
+            let retained_extent = |axis: usize| {
+                authenticated_launch
+                    .filter(|layout| {
+                        layout.full_physical_workgroups
+                            && workgroup_extents == Some(layout.workgroup_extents)
+                            && layout.global_extents[axis] == layout.workgroup_extents[axis]
+                    })
+                    .and_then(|layout| u32::try_from(layout.global_extents[axis]).ok())
+                    .filter(|extent| *extent != 0)
+                    .map_or(LaunchExtent::Dynamic, LaunchExtent::Static)
+            };
+            let launch = match (launch_rank, dimensions) {
+                (1, Some([_, 1, 1]) | None) => LaunchDomain::D1 {
+                    x: retained_extent(0),
+                },
+                (2, Some([_, _, 1]) | None) => LaunchDomain::D2 {
+                    x: retained_extent(0),
+                    y: retained_extent(1),
+                },
+                (3, Some(_) | None) => LaunchDomain::D3 {
+                    x: retained_extent(0),
+                    y: retained_extent(1),
+                    z: retained_extent(2),
+                },
+                _ => {
+                    return Err(unsupported(
+                        0,
+                        None,
+                        None,
+                        "authenticated launch rank disagrees with source workgroup axes",
+                    ));
+                }
+            };
+            let entry_function_id = FunctionId::new(symbol);
+            let mut kernel = Kernel::new(symbol, entry_function_id.clone(), launch);
+            if let Some([x, y, z]) = required_workgroup {
+                kernel.workgroup_size = Some(WorkgroupSize::new(x, y, z));
+            }
+            let entry_function = module
+                .function(&entry_function_id)
+                .expect("lowered entry function is retained");
+            kernel
+                .required_capabilities
+                .extend(entry_function.required_capabilities.iter().cloned());
+            module.kernels.push(kernel);
+
+            let effects = analyze_interprocedural_effects_v1(&module)
+                .map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
+            for plan in plans.iter().skip(1) {
+                if !effects
+                    .function(&plan.kernel_ir_function)
+                    .is_some_and(|decision| decision.is_complete_and_pure())
+                {
+                    if let HelperLoweringAdmissionV1::PendingUnitLocal { requires_source } =
+                        admission
+                    {
+                        let emission = assert_origins
+                            .as_mut()
+                            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+                        if pending_unit_local_candidates_v1(
+                            &module,
+                            &plans,
+                            &effects,
+                            emission.budget,
+                        )? {
+                            *requires_source = true;
+                            break;
+                        }
+                    }
+                    let declaration_source = semantic
+                        .functions()
+                        .get(plan.semantic_function.index() as usize)
+                        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
+                        .source();
+                    return Err(ProductionSemanticKirErrorV1::HelperEffectsUnavailable {
+                        function: plan.semantic_function.index(),
+                        declaration_source: Box::new(declaration_source),
+                    });
                 }
             }
-            let declaration_source = semantic
-                .functions()
-                .get(plan.semantic_function.index() as usize)
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
-                .source();
-            return Err(ProductionSemanticKirErrorV1::HelperEffectsUnavailable {
-                function: plan.semantic_function.index(),
-                declaration_source: Box::new(declaration_source),
-            });
-        }
-    }
 
-    if private_arrays.active {
-        private_array_work.charge_private_array_work(2)?;
-        if private_arrays.recorded_instance_operations
-            > limits
-                .max_operations
-                .checked_sub(remaining_operations)
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
-        {
-            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
-        }
-    }
-    let (private_arrays, private_payload) =
-        private_arrays.into_correspondence(private_array_work)?;
-    let (call_returns, call_result_components) = call_returns.into_box(call_budget)?;
-    let correspondence = SemanticKirCorrespondenceV1 {
-        private_arrays,
-        semantic_sha256: *semantic.semantic_sha256().as_bytes(),
-        function_count: semantic.functions().len(),
-        lowered_functions: lowered_functions.into_boxed_slice(),
-        blocks: correspondence_blocks.into_boxed_slice(),
-        statement_operation_spans: statement_operation_spans.into_boxed_slice(),
-        terminator_operation_spans: terminator_operation_spans.into_boxed_slice(),
-        generated_terminator_values: generated_terminator_values.into_boxed_slice(),
-        call_returns,
-        call_result_components,
-        synthetic_operation_spans: synthetic_operation_spans.into_boxed_slice(),
-        parameter_bindings: parameter_bindings.into_boxed_slice(),
-        parameter_component_bindings: parameter_component_bindings.into_boxed_slice(),
-        ignored_parameter_bindings: ignored_parameter_bindings.into_boxed_slice(),
-    };
-    if validate_correspondence {
-        correspondence.validate_layout_against(owner, &module, &[selected_root], limits)?;
-    }
-    Ok((module, correspondence, private_payload))
+            if private_arrays.active {
+                private_array_work.charge_private_array_work(2)?;
+                if private_arrays.recorded_instance_operations
+                    > limits
+                        .max_operations
+                        .checked_sub(remaining_operations)
+                        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
+                {
+                    return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                }
+            }
+            let (private_arrays, private_payload) =
+                private_arrays.into_correspondence(private_array_work)?;
+            let (call_returns, call_result_components) = call_returns.into_box(call_budget)?;
+            let correspondence = SemanticKirCorrespondenceV1 {
+                private_arrays,
+                semantic_sha256: *semantic.semantic_sha256().as_bytes(),
+                function_count: semantic.functions().len(),
+                lowered_functions: lowered_functions.into_boxed_slice(),
+                blocks: correspondence_blocks.into_boxed_slice(),
+                statement_operation_spans: statement_operation_spans.into_boxed_slice(),
+                terminator_operation_spans: terminator_operation_spans.into_boxed_slice(),
+                generated_terminator_values: generated_terminator_values.into_boxed_slice(),
+                call_returns,
+                call_result_components,
+                synthetic_operation_spans: synthetic_operation_spans.into_boxed_slice(),
+                parameter_bindings: parameter_bindings.into_boxed_slice(),
+                parameter_component_bindings: parameter_component_bindings.into_boxed_slice(),
+                ignored_parameter_bindings: ignored_parameter_bindings.into_boxed_slice(),
+            };
+            if validate_correspondence {
+                correspondence.validate_layout_against(owner, &module, &[selected_root], limits)?;
+            }
+            Ok((module, correspondence, private_payload))
+        },
+    )
 }
 
 fn semantic_source_argument_for_kir_parameter_v1(
@@ -12574,7 +12591,7 @@ struct SemanticFunctionLoweringV1<'a> {
     execution_calls: Option<&'a mut (dyn ExecutionDefinedCallConsumerV29 + 'a)>,
     assert_failure_block: Option<BlockId>,
     required_workgroup: Option<[u32; 3]>,
-    infallible_asserts: BTreeSet<u32>,
+    infallible_asserts: InfallibleAssertDecisionsV1<'a>,
     launch_rank: u8,
     max_operations: usize,
     emitted_operations: usize,
@@ -12637,7 +12654,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             parameters,
             assert_failure_block,
             required_workgroup,
-            infallible_asserts,
+            infallible_asserts.into(),
             launch_rank,
             authenticated_ranked_control,
             max_operations,

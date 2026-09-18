@@ -10,6 +10,10 @@ pub(super) const NUMERICAL_POLICY: &str =
     "rust-fixed-integer-full-u32-masked-shifts-exact-bytes-v1";
 pub(in super::super) const ROOTS: [&str; 2] = ["masked_shift_left", "masked_shift_right"];
 
+pub(super) fn expected_grid(active: usize) -> [u64; 3] {
+    [(active.max(1) as u64).div_ceil(64) * 64, 1, 1]
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(in super::super) enum Spelling {
@@ -323,4 +327,71 @@ fn masked_shift_roster_joins_exact_ids_in_either_canonical_order() {
     assert!(unique_root_ordinals([ROOTS[0]]).is_err());
     assert!(unique_root_ordinals([ROOTS[0], "foreign"]).is_err());
     assert!(unique_root_ordinals([ROOTS[0], ROOTS[1], ROOTS[0]]).is_err());
+}
+
+#[test]
+fn masked_shift_report_requires_exact_grid_and_workgroup_for_every_batch() {
+    for (active, extent) in [(0, 64), (1, 64), (63, 64), (64, 64), (65, 128)] {
+        assert_eq!(expected_grid(active), [extent, 1, 1]);
+    }
+    for batch in Batch::all() {
+        let case = Case::MaskedShift(batch);
+        // Inert framing rows only; no compiler or execution owner is fabricated.
+        let report = SimulationObservation {
+            case,
+            native_output_digest: [1; 32],
+            simulator_digest: [1; 32],
+            simulator_wire_version: 12,
+            canonical_bytes: 1,
+            numerical_policy: NUMERICAL_POLICY.into(),
+            scenarios: scenarios(batch)
+                .unwrap()
+                .into_iter()
+                .map(|scenario| {
+                    let grid = expected_grid(scenario.active);
+                    ScenarioObservation {
+                        label: scenario.label,
+                        grid,
+                        workgroup: [64, 1, 1],
+                        output_elements: scenario.output_elements,
+                        written_elements: scenario.written_elements,
+                        checked_backing_bytes: scenario
+                            .expected
+                            .iter()
+                            .map(|row| row.buffer.bytes().len())
+                            .sum(),
+                        steps: 1,
+                        invocations: grid[0],
+                        deterministic_replays: 2,
+                        conflicts: Assessment::NoObserved,
+                        races: Assessment::NoObserved,
+                    }
+                })
+                .collect(),
+        };
+        check_report(&report, [1; 32], case).unwrap();
+        let json = serde_json::to_value(&report).unwrap();
+        for mutation in 0..6 {
+            let mut changed = json.clone();
+            let row = &mut changed["scenarios"][0];
+            match mutation {
+                0 => row["workgroup"] = serde_json::json!([32, 1, 1]),
+                1 => row["workgroup"] = serde_json::json!([64, 2, 1]),
+                2 | 3 => {
+                    let extent = if mutation == 2 { 1 } else { 128 };
+                    row["grid"] = serde_json::json!([extent, 1, 1]);
+                    row["invocations"] = serde_json::json!(extent);
+                }
+                4 => row["grid"] = serde_json::json!([64, 2, 1]),
+                5 => row["workgroup"] = serde_json::json!([128, 1, 1]),
+                _ => unreachable!(),
+            }
+            let changed: SimulationObservation = serde_json::from_value(changed).unwrap();
+            assert!(
+                check_report(&changed, [1; 32], case).is_err(),
+                "{} mutation {mutation}",
+                batch.name()
+            );
+        }
+    }
 }

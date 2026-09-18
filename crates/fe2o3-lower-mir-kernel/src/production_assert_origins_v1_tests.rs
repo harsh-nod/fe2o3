@@ -18,6 +18,9 @@ mod optimized_assert_origins_v1_tests;
 #[path = "production_slice_view_v1_tests.rs"]
 mod slice_view_v1_tests;
 
+#[path = "production_masked_assertion_consumers_v1_tests.rs"]
+mod masked_assertion_consumers_v1_tests;
+
 const WORK: usize = 1_000_000_000;
 const STORAGE: usize = 512 * 1024 * 1024;
 const FLOOR: usize = 17;
@@ -475,7 +478,13 @@ fn fixture_with_blocks_symbol_and_slices(
     let roots = if shared { vec![1, 3] } else { vec![0] };
     let mut fixture_types = types();
     if !matches!(kind, Fixture::ElidedBounds) {
-        fixture_types.truncate(2);
+        let required = extra_temporaries
+            .iter()
+            .map(|ty| ty.index() as usize + 1)
+            .max()
+            .unwrap_or(2)
+            .max(2);
+        fixture_types.truncate(required);
     }
     let admitted = InertSemanticMirRequestV1::new(
         SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([250; 32])),

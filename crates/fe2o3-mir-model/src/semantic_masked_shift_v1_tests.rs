@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "semantic_masked_shift_meter_v1_tests.rs"]
+mod metered;
+
 const VALUE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const COUNT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
 const BOOL: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);

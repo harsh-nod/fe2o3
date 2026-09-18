@@ -150,7 +150,7 @@ impl Fixture {
             },
             None,
             None,
-            BTreeSet::new(),
+            BTreeSet::new().into(),
             1,
             false,
             64,

@@ -2,6 +2,11 @@ use super::*;
 
 #[path = "production_checked_output_general_policy3_v1.rs"]
 mod general;
+pub use general::redundant_store::{
+    ProductionOwnedRedundantStoreContinuationV1, ProductionOwnedRedundantStoreStorageV1,
+    ProductionOwnedUnitLocalRedundantStoreContinuationV1, ProductionRedundantStoreAdmissionErrorV1,
+    ProductionRedundantStoreAdmissionStorageV1, ProductionRedundantStoreAdmissionV1,
+};
 
 #[path = "production_checked_output_admission_policy4_v1.rs"]
 mod policy4;

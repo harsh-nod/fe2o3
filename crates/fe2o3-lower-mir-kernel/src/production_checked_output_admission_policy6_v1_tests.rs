@@ -3,6 +3,8 @@ use super::*;
 type Final6 = crate::ProductionCheckedOutputOwnerPolicy6V1;
 type Error6 = crate::ProductionCheckedOutputAdmissionErrorPolicy6V1;
 type Checked6 = fe2o3_kernel_opt::CheckedCanonicalKernelIrOwnerPolicy6V1;
+#[path = "production_checked_output_redundant_store_direct_v1_tests.rs"]
+mod redundant_store_tests;
 
 #[test]
 fn policy6_error_keeps_prefix_identity_without_growing_the_inline_result() {

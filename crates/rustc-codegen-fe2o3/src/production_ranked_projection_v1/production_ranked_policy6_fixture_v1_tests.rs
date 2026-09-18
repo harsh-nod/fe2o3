@@ -7,7 +7,18 @@ pub(crate) fn with_backend_checked_output_policy6_owned_v1(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ),
 ) {
-    with_backend_checked_ranked_bound_v1(profile, |receipt, bound, _, budget| {
+    with_backend_checked_output_policy6_roster_v1(profile, |owner, _, budget| next(owner, budget));
+}
+
+pub(crate) fn with_backend_checked_output_policy6_roster_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
+    with_backend_checked_ranked_bound_v1(profile, |receipt, bound, ranked, budget| {
         let checked =
             fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy5_v1(&bound, budget)
                 .unwrap();
@@ -23,7 +34,7 @@ pub(crate) fn with_backend_checked_output_policy6_owned_v1(
             receipt, bound, checked, budget,
         )
         .unwrap();
-        next(admitted, budget);
+        next(admitted, ranked, budget);
         assert_eq!(budget.storage(), floor);
         budget.release_storage(storage).unwrap();
     });

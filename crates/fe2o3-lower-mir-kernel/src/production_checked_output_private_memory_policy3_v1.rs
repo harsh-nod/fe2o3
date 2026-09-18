@@ -479,7 +479,15 @@ pub(super) fn source_lifetimes(
     proof: &PrivateMemory<'_, '_>,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<()> {
-    let inventory = proof.inventory;
+    let sites = source_statement_sites_v1(source, proof.inventory, budget)?;
+    source_lifetimes_from_sites(source.semantic().semantic(), proof, &sites, budget)
+}
+
+pub(super) fn source_statement_sites_v1(
+    source: &ProductionSemanticKirOwnerV1,
+    inventory: &CanonicalKirInventoryV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<Vec<Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>>> {
     let mut sites = scratch::<Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>>(
         inventory.operations().len(),
         budget,
@@ -529,10 +537,10 @@ pub(super) fn source_lifetimes(
             )?;
         }
     }
-    source_lifetimes_from_sites(source.semantic().semantic(), proof, &sites, budget)
+    Ok(sites)
 }
 
-fn source_lifetimes_from_sites(
+pub(super) fn source_lifetimes_from_sites(
     semantic: &AdmittedInertSemanticMirV1,
     proof: &PrivateMemory<'_, '_>,
     sites: &[Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>],
@@ -647,6 +655,7 @@ fn source_storage_local(
 }
 
 include!("production_checked_output_erased_private_lifetimes_v1.rs");
+include!("production_checked_output_redundant_store_lifetimes_v1.rs");
 
 #[cfg(test)]
 mod tests {

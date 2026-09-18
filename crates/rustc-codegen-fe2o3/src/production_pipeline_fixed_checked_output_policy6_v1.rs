@@ -236,6 +236,20 @@ impl FixedCheckedOutputProductionCompilationPolicy6V1 {
     }
 
     #[cfg(test)]
+    pub(crate) fn exercise_original_receipt_component_v1(
+        &self,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), super::native_checked_output_handoff_v1::policy6::original_receipts::OriginalNativeInputReceiptErrorV1>{
+        if budget.storage() < self.retained_storage_floor {
+            return Err(Resource::Accounting.into());
+        }
+        match &self.stage {
+            Stage::Direct(stage) => stage.exercise_original_receipt_component_v1(budget),
+            Stage::Erased(stage) => stage.exercise_original_receipt_component_v1(budget),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn original_module(&self) -> &fe2o3_kernel_ir::Module {
         match &self.stage {
             Stage::Direct(stage) => direct_native_source(stage.output()).module(),

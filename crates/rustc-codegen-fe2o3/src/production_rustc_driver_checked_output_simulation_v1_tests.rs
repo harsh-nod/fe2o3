@@ -733,6 +733,9 @@ pub(super) fn check_report(
             || (matches!(case, Case::IntegerIdentity(_))
                 && (actual.workgroup != [64, 1, 1]
                     || actual.grid != integer_identity::expected_grid(expected.active)))
+            || (matches!(case, Case::MaskedShift(_))
+                && (actual.workgroup != [64, 1, 1]
+                    || actual.grid != masked_shift::expected_grid(expected.active)))
             || actual.invocations != actual.grid[0]
             || actual.steps == 0
             || actual.deterministic_replays != 2

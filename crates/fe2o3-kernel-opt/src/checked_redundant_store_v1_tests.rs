@@ -7,7 +7,7 @@ use fe2o3_kernel_ir::{
 const WORK: usize = 100_000_000;
 const STORAGE: usize = 64 << 20;
 const FLOOR: usize = 43;
-fn fixture() -> Module {
+pub(super) fn fixture() -> Module {
     let mut block = BasicBlock::new(BlockId(9));
     let store = || {
         Operation::new(
@@ -85,7 +85,7 @@ fn fixture() -> Module {
     ));
     module
 }
-fn with_owner(module: Module, next: impl FnOnce(&Owner, &mut Budget<'_>)) {
+pub(super) fn with_owner(module: Module, next: impl FnOnce(&Owner, &mut Budget<'_>)) {
     let mut work = Work::new(WORK);
     let mut budget = Budget::new(&mut work, STORAGE);
     budget.reserve_storage(FLOOR).unwrap();
@@ -102,7 +102,7 @@ fn with_owner(module: Module, next: impl FnOnce(&Owner, &mut Budget<'_>)) {
 }
 // A deliberately closed test interpreter over the actual Module, independent
 // of the plan/rows. It checks dynamic values and counts real memory operations.
-fn evaluate(module: &Module, x: u32, y: u32) -> (u32, Vec<u32>, usize) {
+pub(super) fn evaluate(module: &Module, x: u32, y: u32) -> (u32, Vec<u32>, usize) {
     let mut values = [0_u32; 16];
     values[0] = x;
     values[1] = y;

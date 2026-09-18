@@ -274,6 +274,19 @@ impl RankedVerifiedProductionCompilation {
 
 impl ErasedCheckedOutputTargetProductionCompilationV1 {
     #[cfg(test)]
+    pub(super) fn exercise_original_receipt_component_v1(
+        &self,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), super::native_checked_output_handoff_v1::policy6::original_receipts::OriginalNativeInputReceiptErrorV1>{
+        super::native_checked_output_handoff_v1::policy6::original_receipts::tests::exercise_unsigned_component_v1(
+            self.artifacts.native_worker_output_v1(),
+            &self.ranked_verification,
+            self.bindings.rustc_target.profile(),
+            &self.bindings.typed_descriptor_roots,
+            budget,
+        )
+    }
+    #[cfg(test)]
     pub(super) fn exercise_final_receipt_component_v1(
         &self,
         budget: &mut Budget<'_>,
