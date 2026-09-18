@@ -2180,6 +2180,22 @@ impl ProductionSemanticKirOwnerV1 {
 
     /// Re-verifies semantic ownership, Kernel IR, and retained correspondence.
     pub fn verify_equivalence(&self) -> Result<(), ProductionSemanticKirErrorV1> {
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+            self.limits.max_argument_correspondence_work,
+        );
+        let mut budget =
+            ArgumentBudgetV1::new(&mut work, self.limits.max_argument_correspondence_storage);
+        self.verify_equivalence_with_budget_v1(&mut budget)
+    }
+
+    /// Replays the same complete source/N and ranked checks while charging new
+    /// helper-value caches and expansion to the caller's live ledger. Helper
+    /// scratch restores the incoming storage floor; historical lowering and
+    /// canonical/index allocations retain their existing separate limits.
+    pub fn verify_equivalence_with_budget_v1(
+        &self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
         self.semantic_ssa
             .verify_replay()
             .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
@@ -2235,7 +2251,7 @@ impl ProductionSemanticKirOwnerV1 {
             {
                 return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
-            let revalidated = validate_mir_pliron_translation_with_semantic_v1(
+            let revalidated = validate_mir_pliron_translation_with_semantic_and_budget_v1(
                 Some(self.semantic_ssa.source_semantic()),
                 &self.module,
                 &self.correspondence,
@@ -2244,6 +2260,7 @@ impl ProductionSemanticKirOwnerV1 {
                 &generic_checks.access_sources,
                 &generic_checks.executable_effect_sources,
                 self.limits.max_operations,
+                budget,
             )
             .map_err(ProductionSemanticKirErrorV1::MirPlironTranslation)?;
             if revalidated != generic_checks.translation_validation {
@@ -4142,6 +4159,18 @@ enum NormalizedScalarExpressionV1 {
 }
 
 include!("production_semantic_kir_v1/scalar_value_correspondence_v1.rs");
+mod native_helper_value_context_v1;
+mod native_helper_value_expansion_v1;
+mod native_helper_value_template_v1;
+mod native_helper_value_templates_v1;
+include!("production_semantic_kir_v1/native_helper_translation_budget_v1.rs");
+#[cfg(test)]
+mod helper_source_fixture_v1 {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/support/defined_helper_semantic_fixture_v1.rs"
+    ));
+}
 
 fn normalize_ranked_expression_v1(
     expression: &ProductionSemanticExpressionV2,
@@ -4293,6 +4322,7 @@ fn normalize_ranked_expression_v1(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn normalize_kir_expression_v1(
     function: &Function,
     kir: &KirCorrelationIndexV1<'_>,
@@ -4301,8 +4331,10 @@ fn normalize_kir_expression_v1(
     depth: usize,
     visiting: &mut BTreeSet<ValueId>,
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
+    helpers: &mut native_helper_value_expansion_v1::NativeValueExpansion<'_, '_>,
 ) -> Option<NormalizedScalarExpressionV1> {
     budget.charge()?;
+    helpers.charge_normalization_node_v1()?;
     if depth > MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 || !visiting.insert(value) {
         return None;
     }
@@ -4314,11 +4346,13 @@ fn normalize_kir_expression_v1(
         depth,
         visiting,
         budget,
+        helpers,
     );
     visiting.remove(&value);
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn normalize_kir_expression_inner_v1(
     function: &Function,
     kir: &KirCorrelationIndexV1<'_>,
@@ -4327,6 +4361,7 @@ fn normalize_kir_expression_inner_v1(
     depth: usize,
     visiting: &mut BTreeSet<ValueId>,
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
+    helpers: &mut native_helper_value_expansion_v1::NativeValueExpansion<'_, '_>,
 ) -> Option<NormalizedScalarExpressionV1> {
     let value = unique_kir_ssa_origin_v1(kir, value, budget)?;
     let body = function.body.as_ref()?;
@@ -4347,9 +4382,22 @@ fn normalize_kir_expression_inner_v1(
         .find(|result| result.id == value)
         .and_then(|result| kir_semantic_scalar_v1(&result.ty))?;
     let next = depth.checked_add(1)?;
-    let recurse = |operand,
-                   visiting: &mut BTreeSet<ValueId>,
-                   budget: &mut UnsupportedIndexCorrelationBudgetV1| {
+    if let OperationKind::Call { arguments, .. } = &operation.kind {
+        return helpers.call(
+            function,
+            kir,
+            semantic_sites,
+            *kir.definition_locations.get(&value)?,
+            operation,
+            arguments,
+            next,
+            visiting,
+            budget,
+        );
+    }
+    let mut recurse = |operand,
+                       visiting: &mut BTreeSet<ValueId>,
+                       budget: &mut UnsupportedIndexCorrelationBudgetV1| {
         normalize_kir_expression_v1(
             function,
             kir,
@@ -4358,6 +4406,7 @@ fn normalize_kir_expression_inner_v1(
             next,
             visiting,
             budget,
+            helpers,
         )
     };
     Some(match &operation.kind {
@@ -6382,7 +6431,7 @@ fn validate_mir_pliron_translation_v1(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn validate_mir_pliron_translation_with_semantic_v1(
+fn validate_mir_pliron_translation_inner_v1(
     semantic: Option<&AdmittedInertSemanticMirV1>,
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
@@ -6391,6 +6440,7 @@ fn validate_mir_pliron_translation_with_semantic_v1(
     sources: &[ProductionRankedAccessSourceV1],
     executable_effect_sources: &[ProductionRankedExecutableEffectSourceV1],
     max_operations: usize,
+    helpers: &mut native_helper_value_expansion_v1::NativeValueExpansion<'_, '_>,
 ) -> Result<ProductionMirPlironTranslationValidationV1, ProductionMirPlironTranslationErrorV1> {
     let Some(kernel) = module
         .kernels
@@ -6717,6 +6767,7 @@ fn validate_mir_pliron_translation_with_semantic_v1(
                 0,
                 &mut BTreeSet::new(),
                 &mut budget,
+                helpers,
             )
             .ok_or(
                 ProductionMirPlironTranslationErrorV1::ValueExpressionMismatch {

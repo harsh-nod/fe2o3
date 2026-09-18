@@ -400,7 +400,7 @@ pub fn attach_replayed_native_source_ranked_v1(
         let receipt = super::ProductionMaterializedRankedModuleReceiptV1::from_unvalidated_projection_roster_candidate(source, roots)
             .map_err(NativeSourceReplayErrorV1::RankedSource)?;
         let source =
-            super::ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(receipt)
+            super::ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks_with_budget_v1(receipt, budget)
                 .map_err(NativeSourceReplayErrorV1::RankedSource)?;
         // The existing attachment creates these strings. Their exact retained
         // capacities, not just the requested payload, transfer with this owner.
@@ -414,7 +414,7 @@ pub fn attach_replayed_native_source_ranked_v1(
             retained = retained.checked_add(surplus).ok_or(Resource::Arithmetic)?;
         }
         source
-            .verify_equivalence()
+            .verify_equivalence_with_budget_v1(budget)
             .map_err(NativeSourceReplayErrorV1::RankedSource)?;
         Ok((
             ReplayedRankedNativeSourceV1 { source, catalog },

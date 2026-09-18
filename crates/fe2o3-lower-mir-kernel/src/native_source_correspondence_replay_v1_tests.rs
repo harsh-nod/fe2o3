@@ -591,10 +591,11 @@ fn native_ranked_attachment_exact_and_one_short_work_storage_restore_floor() {
     let wrapper = std::mem::size_of::<crate::ReplayedRankedNativeSourceV1>();
     let root = std::mem::size_of::<ProductionRankedSemanticProjectionRootV1>();
     let retained_root = std::mem::size_of_val(&original.generic_checks[0]);
-    let peak = wrapper + root + retained_root + 22 + 49;
-    for (work_limit, extra_storage, success) in
-        [(84, peak, true), (83, peak, false), (84, peak - 1, false)]
-    {
+    let copy_peak = wrapper + root + retained_root + 22 + 49;
+    // Transport copying still costs 84, but attachment and final source replay
+    // now charge helper correspondence to this same caller ledger as well.
+    let mut complete = None;
+    for case in 0..6 {
         with_input(|source, catalog, inputs, budget| {
             let (candidates, candidate_storage) = export(&original, budget).unwrap();
             budget
@@ -611,41 +612,116 @@ fn native_ranked_attachment_exact_and_one_short_work_storage_restore_floor() {
             .unwrap();
             let lowerings = freshly_compile_candidates(&candidates);
             let floor = 23 + replay_storage.retained_storage();
-            let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
-            let mut bounded = AssertOriginBudgetV1::new(&mut work, floor + extra_storage);
-            bounded.reserve_storage(floor).unwrap();
-            let result = attach(replayed, &candidates, lowerings, &mut bounded);
-            assert_eq!(bounded.storage(), floor);
-            if success {
-                let (attached, storage) = result.unwrap();
-                assert_eq!(bounded.work(), 84);
-                assert_eq!(bounded.peak_storage(), floor + peak);
-                assert_eq!(
-                    storage.retained_storage(),
-                    wrapper + retained_root + 22 + 49
-                );
-                bounded.reserve_storage(storage.retained_storage()).unwrap();
-                drop(attached);
-                bounded.release_storage(storage.retained_storage()).unwrap();
-            } else if work_limit == 83 {
-                let E::Resource(Resource::Work(error)) = result.err().unwrap() else {
-                    panic!("one-short attachment copy work denial");
-                };
-                assert_eq!((error.actual(), error.limit()), (84, 83));
-                assert_eq!(bounded.work(), 35);
+            let (work_limit, extra_storage) = if case == 0 {
+                (WORK, STORAGE)
             } else {
-                let E::Resource(Resource::Storage(error)) = result.err().unwrap() else {
-                    panic!("one-short attachment string storage denial");
-                };
-                assert_eq!(
-                    (error.actual(), error.limit()),
-                    (floor + peak, floor + peak - 1)
-                );
-                assert_eq!(
-                    bounded.peak_storage(),
-                    floor + wrapper + root + retained_root + 22
-                );
+                let (complete_work, complete_peak) = complete.unwrap();
+                match case {
+                    1 => (complete_work, complete_peak),
+                    2 => (complete_work - 1, complete_peak),
+                    3 => (complete_work, complete_peak - 1),
+                    4 => (83, complete_peak),
+                    5 => (complete_work, copy_peak - 1),
+                    _ => unreachable!(),
+                }
+            };
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+            {
+                let mut bounded = AssertOriginBudgetV1::new(&mut work, floor + extra_storage);
+                bounded.reserve_storage(floor).unwrap();
+                let result = attach(replayed, &candidates, lowerings, &mut bounded);
+                assert_eq!(bounded.storage(), floor);
+                match case {
+                    0 | 1 => {
+                        let (attached, storage) = result.unwrap();
+                        let observed = (bounded.work(), bounded.peak_storage() - floor);
+                        assert!(observed.0 > 84, "full replay must debit the caller ledger");
+                        assert!(observed.1 >= copy_peak, "full peak must include transport");
+                        assert_eq!(bounded.failed_storage(), None);
+                        if case == 0 {
+                            complete = Some(observed);
+                        } else {
+                            assert_eq!(Some(observed), complete);
+                        }
+                        assert_eq!(
+                            storage.retained_storage(),
+                            wrapper + retained_root + 22 + 49
+                        );
+                        bounded.reserve_storage(storage.retained_storage()).unwrap();
+                        drop(attached);
+                        bounded.release_storage(storage.retained_storage()).unwrap();
+                    }
+                    2 | 3 => {
+                        let error = result.err().expect("one-short complete attachment denial");
+                        if case == 3 && complete.unwrap().1 == copy_peak {
+                            // The complete peak can still occur while copying:
+                            // later checked replay reuses released scratch.
+                            let E::Resource(Resource::Storage(limit)) = &error else {
+                                panic!("complete copy-dominated storage denial: {error:?}");
+                            };
+                            assert_eq!(
+                                (limit.actual(), limit.limit()),
+                                (floor + copy_peak, floor + copy_peak - 1)
+                            );
+                            assert_eq!(bounded.work(), 84);
+                            assert_eq!(
+                                bounded.peak_storage(),
+                                floor + wrapper + root + retained_root + 22
+                            );
+                        } else {
+                            assert!(
+                                matches!(
+                                    &error,
+                                    E::RankedSource(crate::ProductionSemanticKirErrorV1::MirPlironTranslation(
+                                        crate::ProductionMirPlironTranslationErrorV1::ResourceLimit
+                                    ))
+                                ),
+                                "complete replay resource denial: {error:?}"
+                            );
+                        }
+                        if case == 2 {
+                            assert!(bounded.work() < complete.unwrap().0);
+                            assert_eq!(bounded.failed_storage(), None);
+                        } else {
+                            assert_eq!(bounded.failed_storage(), Some(floor + complete.unwrap().1));
+                            assert!(bounded.peak_storage() <= floor + extra_storage);
+                        }
+                    }
+                    4 => {
+                        let E::Resource(Resource::Work(error)) = result.err().unwrap() else {
+                            panic!("one-short attachment copy work denial");
+                        };
+                        assert_eq!((error.actual(), error.limit()), (84, 83));
+                        assert_eq!(bounded.work(), 35);
+                        assert_eq!(bounded.failed_storage(), None);
+                    }
+                    5 => {
+                        let E::Resource(Resource::Storage(error)) = result.err().unwrap() else {
+                            panic!("one-short attachment string storage denial");
+                        };
+                        assert_eq!(
+                            (error.actual(), error.limit()),
+                            (floor + copy_peak, floor + copy_peak - 1)
+                        );
+                        assert_eq!(bounded.failed_storage(), Some(floor + copy_peak));
+                        assert_eq!(bounded.work(), 84);
+                        assert_eq!(
+                            bounded.peak_storage(),
+                            floor + wrapper + root + retained_root + 22
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+                assert_eq!(bounded.storage(), floor);
             }
+            assert_eq!(
+                work.failed_work(),
+                match case {
+                    2 => Some(complete.unwrap().0),
+                    4 => Some(84),
+                    _ => None,
+                }
+            );
             drop(candidates);
             budget
                 .release_storage(candidate_storage.retained_storage())

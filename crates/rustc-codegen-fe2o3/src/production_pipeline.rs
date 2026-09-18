@@ -25,11 +25,15 @@ use crate::protected_rustc_invocation::{
 mod checked_output_artifacts_v1;
 #[path = "production_pipeline_checked_output_policy4_v1.rs"]
 pub(crate) mod checked_output_policy4_v1;
+#[path = "production_pipeline_checked_output_policy5_v1.rs"]
+pub(crate) mod checked_output_policy5_v1;
 #[cfg(test)]
 #[path = "production_pipeline_checked_output_progress_v1_tests.rs"]
 pub(crate) mod checked_output_progress_v1;
 #[path = "production_pipeline_erased_checked_output_policy4_v1.rs"]
 pub(crate) mod erased_checked_output_policy4_v1;
+#[path = "production_pipeline_erased_checked_output_policy5_v1.rs"]
+pub(crate) mod erased_checked_output_policy5_v1;
 #[path = "production_native_checked_output_handoff_v1.rs"]
 pub(crate) mod native_checked_output_handoff_v1;
 
@@ -82,6 +86,7 @@ pub(crate) enum ProductionPipelineError {
     TargetOptimization(fe2o3_kernel_opt::KernelIrPlironOptimizationErrorV2),
     TargetOptimizationV3(fe2o3_kernel_opt::KernelIrPlironOptimizationErrorV3),
     CheckedOutputStage(checked_output_policy4_v1::CheckedOutputStageErrorV1),
+    CheckedOutputPolicy5Stage(checked_output_policy5_v1::CheckedOutputPolicy5StageErrorV1),
     TargetKernelIrV8(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV8),
     TargetKernelIrV9(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV9),
     TargetKernelIrV11(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV11),
@@ -113,6 +118,7 @@ impl fmt::Display for ProductionPipelineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CheckedOutputStage(error) => write!(formatter, "checked-output production stage failed: {error}"),
+            Self::CheckedOutputPolicy5Stage(error) => write!(formatter, "checked Policy5 production stage failed: {error}"),
             Self::CustomLlvmConfiguration => formatter.write_str(
                 "production compilation rejects caller-selected LLVM arguments or passes before transaction construction",
             ),
@@ -309,6 +315,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::TargetOptimization(error) => Some(error),
             Self::TargetOptimizationV3(error) => Some(error),
             Self::CheckedOutputStage(error) => Some(error),
+            Self::CheckedOutputPolicy5Stage(error) => Some(error),
             Self::TargetKernelIrV8(error) => Some(error),
             Self::TargetKernelIrV9(error) => Some(error),
             Self::TargetKernelIrV11(error) => Some(error),

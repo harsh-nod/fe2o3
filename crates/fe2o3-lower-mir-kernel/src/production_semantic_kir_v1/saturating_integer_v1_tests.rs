@@ -435,15 +435,20 @@ mod saturating_integer_v1_tests {
         let mut budget = UnsupportedIndexCorrelationBudgetV1 { remaining: 4096 };
         let body = function.body.as_ref().unwrap();
         let index = build_kir_correlation_index(body, 11, &mut budget)?;
-        normalize_kir_expression_v1(
-            &function,
-            &index,
-            &BTreeMap::new(),
-            value,
-            0,
-            &mut BTreeSet::new(),
-            &mut budget,
-        )
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut resources = ArgumentBudgetV1::new(&mut work, 16 * 1024 * 1024);
+        native_helper_value_expansion_v1::with_no_helpers_for_test_v1(&mut resources, |expansion| {
+            normalize_kir_expression_v1(
+                &function,
+                &index,
+                &BTreeMap::new(),
+                value,
+                0,
+                &mut BTreeSet::new(),
+                &mut budget,
+                expansion,
+            )
+        })
     }
 
     fn expected(

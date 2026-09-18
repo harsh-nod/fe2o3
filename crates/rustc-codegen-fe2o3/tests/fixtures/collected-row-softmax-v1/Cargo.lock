@@ -1038,7 +1038,7 @@ dependencies = [
 [[package]]
 name = "pliron"
 version = "0.17.0"
-source = "git+https://github.com/harsh-nod/pliron.git?rev=cc902cc8c669b5de2b292ae8638d9e8311bc735b#cc902cc8c669b5de2b292ae8638d9e8311bc735b"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=7ebf6e6638c2a3bcec179423993b01211a9689b4#7ebf6e6638c2a3bcec179423993b01211a9689b4"
 dependencies = [
  "awint",
  "combine",
@@ -1065,7 +1065,7 @@ dependencies = [
 [[package]]
 name = "pliron-derive"
 version = "0.17.0"
-source = "git+https://github.com/harsh-nod/pliron.git?rev=cc902cc8c669b5de2b292ae8638d9e8311bc735b#cc902cc8c669b5de2b292ae8638d9e8311bc735b"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=7ebf6e6638c2a3bcec179423993b01211a9689b4#7ebf6e6638c2a3bcec179423993b01211a9689b4"
 dependencies = [
  "combine",
  "convert_case",

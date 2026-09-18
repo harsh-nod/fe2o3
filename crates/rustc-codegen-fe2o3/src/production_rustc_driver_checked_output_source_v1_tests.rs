@@ -16,6 +16,9 @@ use std::process::Command;
 #[path = "production_context_source_v29_tests.rs"]
 mod context_source_v29_tests;
 
+#[path = "production_rustc_driver_helper_reference_source_v1_tests.rs"]
+mod helper_reference_source;
+
 const CHILD_ARGS: &str = "FE2O3_TEST_CHECKED_OUTPUT_ARGS_V1";
 const CHILD_RESULT: &str = "FE2O3_TEST_CHECKED_OUTPUT_RESULT_V1";
 const CHILD_PROOF_PROBE: &str = "FE2O3_TEST_CHECKED_OUTPUT_PROOF_PROBE_V1";
@@ -62,6 +65,7 @@ enum SourceStage {
     SourceCollection,
     RankedChecks,
     Policy4,
+    Policy5,
     NativeSourceProof,
     NativeHandoff,
     Simulation,
@@ -428,6 +432,9 @@ fn ordinary_rust_private_unit_helper_reaches_checked_native_output() {
 }
 
 enum OrdinarySourceCase {
+    ScalarBorrowPolicy5,
+    RetainedScalarBorrowPolicy5,
+    ScalarBorrowPolicy5Barrier,
     NumericCast(numeric_cast_source::Config),
     F32Exp,
     RetainedF32Exp,
@@ -508,6 +515,23 @@ fn ordinary_rust_checked_output_cases_for_profile(
             _ => String::new(),
         };
         let (name, package_path, feature, roots, reads, writes, calls) = match case {
+            OrdinarySourceCase::ScalarBorrowPolicy5
+            | OrdinarySourceCase::RetainedScalarBorrowPolicy5
+            | OrdinarySourceCase::ScalarBorrowPolicy5Barrier => (
+                if matches!(case, OrdinarySourceCase::ScalarBorrowPolicy5Barrier) {
+                    "scalar-borrow-policy5-opt0-barrier"
+                } else if matches!(case, OrdinarySourceCase::RetainedScalarBorrowPolicy5) {
+                    "scalar-borrow-policy5-opt0"
+                } else {
+                    "scalar-borrow-policy5"
+                },
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("scalar-borrow-policy5"),
+                &["scalar_borrow_policy5"][..],
+                0,
+                0,
+                0,
+            ),
             OrdinarySourceCase::F32Exp => (
                 "f32-exp",
                 "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
@@ -681,6 +705,16 @@ fn ordinary_rust_checked_output_cases_for_profile(
         if let OrdinarySourceCase::NumericCast(config) = case {
             config.configure(&mut args);
         }
+        if matches!(
+            case,
+            OrdinarySourceCase::RetainedScalarBorrowPolicy5
+                | OrdinarySourceCase::ScalarBorrowPolicy5Barrier
+        ) {
+            args.push("-Zmir-opt-level=0".into());
+        }
+        if matches!(case, OrdinarySourceCase::ScalarBorrowPolicy5Barrier) {
+            args.push("--cfg=feature=\"scalar-borrow-policy5-barrier\"".into());
+        }
         // Qualify both real frontend shapes. This changes only rustc's test
         // invocation, never the fixed fe2o3 optimizer or its admission policy.
         if matches!(case, OrdinarySourceCase::RetainedWrappedFill) {
@@ -718,9 +752,24 @@ fn ordinary_rust_checked_output_cases_for_profile(
         let response = scratch.path().join(format!("{name}-result.json"));
         std::fs::write(&request, serde_json::to_vec(&args).unwrap()).unwrap();
         let mut command = clean_command(env::current_exe().unwrap());
+        let policy5_case = matches!(
+            case,
+            OrdinarySourceCase::ScalarBorrowPolicy5
+                | OrdinarySourceCase::RetainedScalarBorrowPolicy5
+                | OrdinarySourceCase::ScalarBorrowPolicy5Barrier
+        );
+        let child_test = if policy5_case {
+            policy5_source::CHILD_TEST
+        } else {
+            CHILD_TEST
+        };
+        let policy5_report = scratch.path().join(format!("{name}-policy5.json"));
+        if policy5_case {
+            policy5_source::configure_child(&mut command, &policy5_report);
+        }
         command
             .current_dir(&workspace)
-            .args(["--exact", CHILD_TEST, "--ignored", "--nocapture"])
+            .args(["--exact", child_test, "--ignored", "--nocapture"])
             .env(CHILD_ARGS, &request)
             .env(CHILD_RESULT, &response)
             .env("CARGO_MANIFEST_DIR", &package_dir)
@@ -734,6 +783,11 @@ fn ordinary_rust_checked_output_cases_for_profile(
             );
         progress::clear_inherited_jobserver(&mut command);
         let simulation_case = match case {
+            OrdinarySourceCase::ScalarBorrowPolicy5
+            | OrdinarySourceCase::RetainedScalarBorrowPolicy5
+            | OrdinarySourceCase::ScalarBorrowPolicy5Barrier => {
+                Some(simulation::Case::ScalarBorrow)
+            }
             OrdinarySourceCase::F32Exp | OrdinarySourceCase::RetainedF32Exp => None,
             OrdinarySourceCase::NumericCast(config) => {
                 Some(simulation::Case::NumericCast(config.operation))
@@ -818,16 +872,41 @@ fn ordinary_rust_checked_output_cases_for_profile(
                 )
             );
         }
-        assert_eq!((result.reads, result.writes), (reads, writes));
+        if policy5_case {
+            policy5_source::check(
+                &policy5_report,
+                &result,
+                matches!(
+                    case,
+                    OrdinarySourceCase::RetainedScalarBorrowPolicy5
+                        | OrdinarySourceCase::ScalarBorrowPolicy5Barrier
+                ),
+                matches!(case, OrdinarySourceCase::ScalarBorrowPolicy5Barrier),
+            );
+            assert_eq!(
+                (result.global_reads, result.other_reads, result.other_writes),
+                (0, 0, 0)
+            );
+            assert!(result.global_writes > 0);
+        } else {
+            assert_eq!((result.reads, result.writes), (reads, writes));
+        }
         if let OrdinarySourceCase::SaturatingInteger(config) = case {
             config.check(&result);
         }
-        assert_eq!(result.formal_accesses, reads + writes);
+        assert_eq!(
+            result.formal_accesses,
+            if policy5_case {
+                result.global_reads + result.global_writes
+            } else {
+                reads + writes
+            }
+        );
         assert_eq!(
             result.runtime_domains,
             Some(runtime_domains::RuntimeDomainObservation::default())
         );
-        assert_eq!(result.policy, 4);
+        assert_eq!(result.policy, if policy5_case { 5 } else { 4 });
         assert_eq!(result.descriptor_roots, roots.len());
         assert_ne!(result.output_digest, [0; 32]);
         assert!(result.llvm_bytes > 0);
@@ -903,6 +982,8 @@ mod exp_source;
 mod f32_source;
 #[path = "production_rustc_driver_checked_output_numeric_cast_source_v1_tests.rs"]
 mod numeric_cast_source;
+#[path = "production_rustc_driver_checked_output_policy5_source_v1_tests.rs"]
+mod policy5_source;
 #[path = "production_rustc_driver_checked_output_progress_v1_tests.rs"]
 mod progress;
 #[path = "production_rustc_driver_checked_output_runtime_domains_v1_tests.rs"]

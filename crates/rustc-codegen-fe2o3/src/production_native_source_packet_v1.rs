@@ -10,7 +10,9 @@ pub(super) enum NativeSourceRefV1<'a> {
 impl<'a> NativeSourceRefV1<'a> {
     fn verify(self, budget: &mut Budget<'_>) -> Result<(), E> {
         match self {
-            Self::Direct(source) => source.verify_equivalence().map_err(E::Source),
+            Self::Direct(source) => source
+                .verify_equivalence_with_budget_v1(budget)
+                .map_err(E::Source),
             Self::Erased(source) => source.verify_equivalence(budget).map_err(E::Source),
         }
     }

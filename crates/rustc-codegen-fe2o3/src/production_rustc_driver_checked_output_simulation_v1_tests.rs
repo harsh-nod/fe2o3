@@ -21,10 +21,13 @@ mod f32_arithmetic;
 pub(super) mod numeric_cast;
 #[path = "production_rustc_driver_checked_output_saturating_simulation_v1_tests.rs"]
 pub(super) mod saturating_integer;
+#[path = "production_rustc_driver_checked_output_scalar_borrow_simulation_v1_tests.rs"]
+mod scalar_borrow;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum Case {
+    ScalarBorrow,
     NumericCast(numeric_cast::OperationCase),
     SaturatingInteger(saturating_integer::OperationCase),
     Fill,
@@ -37,6 +40,7 @@ pub(super) enum Case {
 impl Case {
     fn name(self) -> &'static str {
         match self {
+            Self::ScalarBorrow => "scalar-borrow-policy5",
             Self::NumericCast(case) => case.name(),
             Self::SaturatingInteger(case) => case.name(),
             Self::Fill => "fill",
@@ -49,6 +53,7 @@ impl Case {
 
     fn numerical_policy(self) -> &'static str {
         match self {
+            Self::ScalarBorrow => scalar_borrow::NUMERICAL_POLICY,
             Self::NumericCast(_) => numeric_cast::NUMERICAL_POLICY,
             Self::SaturatingInteger(_) => saturating_integer::NUMERICAL_POLICY,
             Self::Fill | Self::Vecadd | Self::ScalarGemm => {
@@ -60,6 +65,11 @@ impl Case {
 }
 
 pub(super) fn check_native_arithmetic(case: Case, llvm: &str) -> Result<(), SourceFailure> {
+    if case == Case::ScalarBorrow {
+        // The fixed Policy5 child independently compares native private-load
+        // count with its exact S/O observation; no arithmetic-specific opcode.
+        return Ok(());
+    }
     if let Case::NumericCast(case) = case {
         return numeric_cast::check_native(case, llvm);
     }
@@ -118,6 +128,7 @@ pub(super) fn requested() -> Result<Option<Case>, SourceFailure> {
         return Ok(None);
     };
     match raw.to_str() {
+        Some("scalar-borrow-policy5") => Ok(Some(Case::ScalarBorrow)),
         Some("fill") => Ok(Some(Case::Fill)),
         Some("vecadd") => Ok(Some(Case::Vecadd)),
         Some("scalar-gemm") => Ok(Some(Case::ScalarGemm)),
@@ -235,7 +246,7 @@ fn elementwise(case: Case, out_len: usize, extra_inputs: usize) -> Result<Scenar
             (0..out_len).map(|i| rounded_add(a[i], b[i])).collect()
         }
         Case::ScalarGemm => return Err(failure("GEMM requires its recurrence fixture")),
-        Case::SaturatingInteger(_) | Case::NumericCast(_) => {
+        Case::ScalarBorrow | Case::SaturatingInteger(_) | Case::NumericCast(_) => {
             return Err(failure("integer saturation requires its typed fixture"));
         }
         Case::F32Negate | Case::F32Divide => {
@@ -319,6 +330,7 @@ fn gemm_inputs(
 
 fn scenarios(case: Case) -> Result<Vec<Scenario>, SourceFailure> {
     match case {
+        Case::ScalarBorrow => scalar_borrow::scenarios(),
         Case::NumericCast(case) => numeric_cast::scenarios(case),
         Case::SaturatingInteger(case) => saturating_integer::scenarios(case),
         Case::F32Negate | Case::F32Divide => f32_arithmetic::scenarios(case),
@@ -367,6 +379,9 @@ fn scenarios(case: Case) -> Result<Vec<Scenario>, SourceFailure> {
 }
 
 fn require_abi(module: &AdmittedSimulationModuleV1, case: Case) -> Result<&Kernel, SourceFailure> {
+    if case == Case::ScalarBorrow {
+        return scalar_borrow::require_abi(module);
+    }
     if let Case::NumericCast(case) = case {
         return numeric_cast::require_abi(module, case);
     }
@@ -489,6 +504,7 @@ fn check_execution(
         Case::Fill
         | Case::Vecadd
         | Case::ScalarGemm
+        | Case::ScalarBorrow
         | Case::SaturatingInteger(_)
         | Case::NumericCast(_) => check_backings(execution.shared_buffers(), expected),
     }

@@ -21,6 +21,10 @@ struct QueriedSliceV1 {
 pub(super) struct ProjectedViewsV1<'a> {
     locals: Vec<Option<ProjectedViewV1>>,
     scalar_private_singletons: &'a [u8],
+    scalar_private_borrows: Option<(
+        &'a scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'a>,
+        fe2o3_mir_model::semantic_mir_v1::SemanticTargetDataLayoutV1,
+    )>,
     facts: Option<&'a mut dyn ProjectedAssertionFactsV1>,
     site: Option<ProjectedSemanticAccessSiteV1>,
     source_start: usize,
@@ -53,6 +57,7 @@ impl<'a> ProjectedViewsV1<'a> {
         Self {
             locals: vec![None; locals],
             scalar_private_singletons: &[],
+            scalar_private_borrows: None,
             facts,
             site: None,
             source_start: 0,
@@ -79,6 +84,55 @@ impl<'a> ProjectedViewsV1<'a> {
             self.scalar_private_singletons,
             local,
         ))
+    }
+
+    pub(super) fn with_scalar_private_borrows(
+        mut self,
+        census: Option<&'a scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'a>>,
+        target: fe2o3_mir_model::semantic_mir_v1::SemanticTargetDataLayoutV1,
+    ) -> Self {
+        self.scalar_private_borrows = census.map(|census| (census, target));
+        self
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn scalar_private_borrow(
+        &mut self,
+        types: &[SemanticTypeDeclV1],
+        function: &SemanticFunctionDeclV1,
+        block: usize,
+        place: &SemanticPlaceV1,
+        access: AccessKindAttr,
+        atomic: Option<SemanticAtomicAccessV1>,
+        contracts: &ProjectionLocalContractsV1,
+    ) -> Result<Option<SemanticLocalIdV1>, ProductionRankedProjectionErrorV1> {
+        let Some((census, target)) = self.scalar_private_borrows else {
+            return Ok(None);
+        };
+        let site = self
+            .site
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "scalar-borrow source occurrence",
+            ))?;
+        if site.block != block {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "scalar-borrow source block",
+            ));
+        }
+        let provenance = contracts
+            .allocation_provenance
+            .get(place.local().index() as usize)
+            .copied()
+            .flatten();
+        let facts =
+            self.facts
+                .as_deref_mut()
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "scalar-borrow canonical facts",
+                ))?;
+        census.resolve(
+            function, types, target, site, place, access, atomic, provenance, facts,
+        )
     }
 
     pub(super) fn begin_site(

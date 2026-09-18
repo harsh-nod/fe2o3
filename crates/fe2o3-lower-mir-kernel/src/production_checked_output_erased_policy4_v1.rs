@@ -126,7 +126,7 @@ impl ProductionUnitLocalErasedCheckedOutputOwnerPolicy4V1 {
     }
 }
 
-fn check_erased_policy4_v1(
+pub(super) fn check_erased_policy4_v1(
     source: &ProductionUnitLocalErasedSourceOwnerV1,
     bound: &Owner,
     checked: &Checked,

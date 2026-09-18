@@ -15,6 +15,8 @@ use fe2o3_kernel_ir::{
 pub(super) enum CheckedArtifactsOwnerRefV1<'a> {
     Direct(&'a fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1),
     Erased(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy4V1),
+    Direct5(&'a fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy5V1),
+    Erased5(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy5V1),
 }
 
 impl CheckedArtifactsOwnerRefV1<'_> {
@@ -22,11 +24,25 @@ impl CheckedArtifactsOwnerRefV1<'_> {
         match self {
             Self::Direct(owner) => owner.output(),
             Self::Erased(owner) => owner.output(),
+            Self::Direct5(owner) => owner.output(),
+            Self::Erased5(owner) => owner.output(),
         }
     }
 
     fn semantic_identity(&self) -> [u8; 32] {
         match self {
+            Self::Direct5(owner) => *owner
+                .source_semantic_kir()
+                .semantic()
+                .semantic()
+                .semantic_sha256()
+                .as_bytes(),
+            Self::Erased5(owner) => *owner
+                .original_source()
+                .semantic_ssa()
+                .source_semantic()
+                .semantic_sha256()
+                .as_bytes(),
             Self::Direct(owner) => *owner
                 .source_semantic_kir()
                 .semantic()
@@ -46,6 +62,16 @@ impl CheckedArtifactsOwnerRefV1<'_> {
         let result = match self {
             Self::Direct(owner) => owner.retained_input_storage_floor_v1(),
             Self::Erased(owner) => owner.retained_input_storage_floor_v1(),
+            Self::Direct5(owner) => {
+                return owner
+                    .retained_input_storage_floor_v1()
+                    .map_err(super::checked_output_policy5_v1::admission);
+            }
+            Self::Erased5(owner) => {
+                return owner
+                    .retained_input_storage_floor_v1()
+                    .map_err(super::checked_output_policy5_v1::admission);
+            }
         };
         result.map_err(|error| {
             ProductionPipelineError::CheckedOutputStage(CheckedOutputStageErrorV1::Admission(
@@ -69,6 +95,8 @@ impl CheckedArtifactsOwnerRefV1<'_> {
         let result = match self {
             Self::Direct(owner) => crate::production_worker_handoff::prepare_checked_output_policy4_worker_handoff(owner,catalog,target,llvm_ir,typed_roots,source_envelope,budget),
             Self::Erased(owner) => crate::production_worker_handoff::prepare_erased_checked_output_policy4_worker_handoff(owner,catalog,target,llvm_ir,typed_roots,source_envelope,budget),
+            Self::Direct5(owner) => crate::production_worker_handoff::prepare_checked_output_policy5_worker_handoff(owner,catalog,target,llvm_ir,typed_roots,source_envelope,budget),
+            Self::Erased5(owner) => crate::production_worker_handoff::prepare_erased_checked_output_policy5_worker_handoff(owner,catalog,target,llvm_ir,typed_roots,source_envelope,budget),
         };
         result.map_err(ProductionPipelineError::WorkerHandoff)
     }
@@ -98,8 +126,12 @@ pub(super) fn prepare_checked_artifact_parts_v1(
     #[cfg(test)]
     let phase = timing::begin(
         match &admitted {
-            CheckedArtifactsOwnerRefV1::Direct(_) => timing::Route::Direct,
-            CheckedArtifactsOwnerRefV1::Erased(_) => timing::Route::SilentUnitErased,
+            CheckedArtifactsOwnerRefV1::Direct(_) | CheckedArtifactsOwnerRefV1::Direct5(_) => {
+                timing::Route::Direct
+            }
+            CheckedArtifactsOwnerRefV1::Erased(_) | CheckedArtifactsOwnerRefV1::Erased5(_) => {
+                timing::Route::SilentUnitErased
+            }
         },
         timing::Phase::ArtifactPreparation,
     );

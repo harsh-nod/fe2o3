@@ -1,6 +1,7 @@
 // This is source/ranked/N correspondence, not rustc projection, optimization,
 // protected proof execution, indexed-address qualification, or launch authority.
 mod wrapping_ranked_correspondence_v1_tests {
+    include!("defined_helper_ranked_correspondence_v1_tests.rs");
     use super::*;
     use crate::{
         ProductionMaterializedRankedModuleReceiptV1, ProductionPreRankedKirOwnerV1,
