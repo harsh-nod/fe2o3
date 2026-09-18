@@ -1,0 +1,237 @@
+Uid:	61074	61074	61074	61074
+Gid:	61074	61074	61074	61074
+Groups:	61074
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	0000000000000000
+CapAmb:	0000000000000000
+NoNewPrivs:	1
+Seccomp:	0
+Seccomp_filters:	0
+FE2O3_FUNCTIONAL_REFINEMENT_RUNTIME_V1_INSTALLED_OK manifest_sha256=ffef09bd240c90e72cbff31a82bc5173c796ba7ab9af239245e7ad892c25641c root=/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5
+rustc 1.96.0-nightly (55e86c996 2026-04-02)
+binary: rustc
+commit-hash: 55e86c996809902e8bbad512cfb4d2c18be446d9
+commit-date: 2026-04-02
+host: x86_64-unknown-linux-gnu
+release: 1.96.0-nightly
+LLVM version: 22.1.2
+cargo 1.96.0-nightly (888f67534 2026-03-30)
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling syn v3.0.4
+   Compiling syn v2.0.119
+   Compiling serde_derive v1.0.229
+   Compiling rustix v1.1.4
+   Compiling serde v1.0.229
+   Compiling indexmap v2.14.1
+   Compiling zeroize v1.9.0
+   Compiling fe2o3-kernel-ir v0.1.0 (/source/crates/fe2o3-kernel-ir)
+   Compiling awint_macro_internals v0.19.0
+   Compiling awint_macros v0.19.0
+   Compiling linkme-impl v0.3.37
+   Compiling thiserror-impl v2.0.16
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling pliron-derive v0.17.0 (https://github.com/harsh-nod/pliron.git?rev=cc902cc8c669b5de2b292ae8638d9e8311bc735b#cc902cc8)
+   Compiling curve25519-dalek v4.1.3
+   Compiling thiserror v2.0.16
+   Compiling linkme v0.3.37
+   Compiling awint v0.19.0
+   Compiling pliron v0.17.0 (https://github.com/harsh-nod/pliron.git?rev=cc902cc8c669b5de2b292ae8638d9e8311bc735b#cc902cc8)
+   Compiling ed25519-dalek v2.2.0
+   Compiling fe2o3-artifact-transaction v0.1.0 (/source/crates/fe2o3-artifact-transaction)
+   Compiling typenum v1.20.1
+   Compiling hybrid-array v0.4.14
+   Compiling fe2o3-pliron-owner-core v0.1.0 (/source/crates/fe2o3-pliron-owner-core)
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling fe2o3-mir-model v0.1.0 (/source/crates/fe2o3-mir-model)
+   Compiling digest v0.11.3
+   Compiling dialect-kernel v0.1.0 (/source/crates/dialect-kernel)
+   Compiling cpufeatures v0.3.1
+   Compiling cfg-if v1.0.4
+   Compiling sha2 v0.11.0
+   Compiling fe2o3-functional-proof v0.1.0 (/source/crates/fe2o3-functional-proof)
+   Compiling dialect-proof v0.1.0 (/source/crates/dialect-proof)
+   Compiling dialect-mir v0.1.0 (/source/crates/dialect-mir)
+   Compiling dialect-gpu v0.1.0 (/source/crates/dialect-gpu)
+   Compiling fe2o3-kernel-analysis v0.1.0 (/source/crates/fe2o3-kernel-analysis)
+   Compiling fe2o3-pliron v0.1.0 (/source/crates/fe2o3-pliron)
+   Compiling fe2o3-target-spec v0.1.0 (/source/crates/fe2o3-target-spec)
+   Compiling fe2o3-amd-target v0.1.0 (/source/crates/fe2o3-amd-target)
+   Compiling fe2o3-kernel-opt v0.1.0 (/source/crates/fe2o3-kernel-opt)
+   Compiling libc v0.2.189
+   Compiling fe2o3-amdgcn-model v0.1.0 (/source/crates/fe2o3-amdgcn-model)
+   Compiling fe2o3-build-authority v0.1.0 (/source/crates/fe2o3-build-authority)
+   Compiling fe2o3-external-anchor-protocol v0.1.0 (/source/crates/fe2o3-external-anchor-protocol)
+   Compiling fe2o3-hsaco v0.1.0 (/source/crates/fe2o3-hsaco)
+   Compiling fe2o3-compiler-execution-protocol v0.1.0 (/source/crates/fe2o3-compiler-execution-protocol)
+   Compiling fe2o3-rustc-invocation v0.1.0 (/source/crates/fe2o3-rustc-invocation)
+   Compiling dialect-amdgcn v0.1.0 (/source/crates/dialect-amdgcn)
+   Compiling fe2o3-kernel-descriptor v0.1.0 (/source/crates/fe2o3-kernel-descriptor)
+   Compiling fe2o3-lower-mir-kernel v0.1.0 (/source/crates/fe2o3-lower-mir-kernel)
+   Compiling fe2o3-compiler-lineage v0.1.0 (/source/crates/fe2o3-compiler-lineage)
+   Compiling reserved-fe2o3-symbols v0.1.0 (/source/crates/reserved-fe2o3-symbols)
+   Compiling fe2o3-process-identity v0.1.0 (/source/crates/fe2o3-process-identity)
+   Compiling fe2o3-runtime-model v0.1.0 (/source/crates/fe2o3-runtime-model)
+   Compiling winnow v1.0.4
+   Compiling bitflags v2.13.1
+   Compiling linux-raw-sys v0.12.1
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling fe2o3-compiler-ffi v0.1.0 (/source/crates/fe2o3-compiler-ffi)
+   Compiling fe2o3-compiler-closure-capability v0.1.0 (/source/crates/fe2o3-compiler-closure-capability)
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/source/crates/fe2o3-amdhsa-loader)
+   Compiling fe2o3-artifacts v0.1.0 (/source/crates/fe2o3-artifacts)
+   Compiling fe2o3-kir-sim v0.1.0 (/source/crates/fe2o3-kir-sim)
+   Compiling fe2o3-drm-uapi v0.1.0 (/source/crates/fe2o3-drm-uapi)
+   Compiling fe2o3-kfd-uapi v0.1.0 (/source/crates/fe2o3-kfd-uapi)
+   Compiling fe2o3-aql v0.1.0 (/source/crates/fe2o3-aql)
+   Compiling object v0.39.1
+   Compiling autocfg v1.5.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling toml_edit v0.25.13+spec-1.1.0
+   Compiling num-traits v0.2.19
+   Compiling fe2o3-kfd v0.1.0 (/source/crates/fe2o3-kfd)
+   Compiling fe2o3-verifier v0.1.0 (/source/crates/fe2o3-verifier)
+   Compiling fe2o3-compiler-execution-client v0.1.0 (/source/crates/fe2o3-compiler-execution-client)
+   Compiling fe2o3-host-api v0.1.0 (/source/crates/fe2o3-host-api)
+   Compiling rustc-codegen-fe2o3 v0.1.0 (/source/crates/rustc-codegen-fe2o3)
+   Compiling proc-macro-crate v3.5.0
+   Compiling fe2o3-llvm-text v0.1.0 (/source/crates/fe2o3-llvm-text)
+   Compiling fe2o3-rustc-front v0.1.0 (/source/crates/fe2o3-rustc-front)
+   Compiling fe2o3-source-isa-observation v0.1.0 (/source/crates/fe2o3-source-isa-observation)
+   Compiling fe2o3-profiler-protocol v0.1.0 (/source/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-compiler-api v0.1.0 (/source/crates/fe2o3-compiler-api)
+   Compiling fe2o3-runtime v0.1.0 (/source/crates/fe2o3-runtime)
+   Compiling fe2o3-hsaco-finalize v0.1.0 (/source/crates/fe2o3-hsaco-finalize)
+   Compiling fe2o3-macros v0.1.0 (/source/crates/fe2o3-macros)
+   Compiling fe2o3-service-model v0.1.0 (/source/crates/fe2o3-service-model)
+   Compiling fe2o3-service-host v0.1.0 (/source/crates/fe2o3-service-host)
+   Compiling rmp v0.8.15
+   Compiling fe2o3-device v0.1.0 (/source/crates/fe2o3-device)
+   Compiling fe2o3-runtime-protocol v0.1.0 (/source/crates/fe2o3-runtime-protocol)
+   Compiling fe2o3-virtual-runtime v0.1.0 (/source/crates/fe2o3-virtual-runtime)
+   Compiling fe2o3-kir-sim-cli v0.1.0 (/source/crates/fe2o3-kir-sim-cli)
+   Compiling fe2o3-semantic-trace v0.1.0 (/source/crates/fe2o3-semantic-trace)
+   Compiling fe2o3-differential v0.1.0 (/source/crates/fe2o3-differential)
+   Compiling fe2o3-sim-differential v0.1.0 (/source/crates/fe2o3-sim-differential)
+   Compiling fe2o3-kir-sim-trace v0.1.0 (/source/crates/fe2o3-kir-sim-trace)
+   Compiling fe2o3-sim-runtime v0.1.0 (/source/crates/fe2o3-sim-runtime)
+   Compiling fe2o3-host v0.1.0 (/source/crates/fe2o3-host)
+   Compiling rmpv v1.3.1
+    Finished `release` profile [optimized] target(s) in 6m 22s
+  Executable tests/reference_binding_v1.rs (/work/target/release/deps/reference_binding_v1-7a020982a71f2acd)
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running tests/reference_binding_v1.rs (/work/target/release/deps/reference_binding_v1-7a020982a71f2acd)
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running tests/reference_binding_v1.rs (/work/target/release/deps/reference_binding_v1-7a020982a71f2acd)
+
+running 1 test
+test reviewed_host_tests::protected_rust_reference_positive_reaches_verified_callback ...
+thread 'reviewed_host_tests::protected_rust_reference_positive_reaches_verified_callback' (3414) panicked at crates/rustc-codegen-fe2o3/tests/reference_binding_v1/reviewed_host_tests.rs:27:5:
+assertion `left == right` failed: protected source feature reference-positive had unexpected status exit status: 101:
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+   Compiling typenum v1.20.1
+   Compiling hybrid-array v0.4.14
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling digest v0.11.3
+   Compiling cpufeatures v0.3.1
+   Compiling cfg-if v1.0.4
+   Compiling sha2 v0.11.0
+   Compiling libc v0.2.189
+   Compiling fe2o3-target-spec v0.1.0 (/source/crates/fe2o3-target-spec)
+   Compiling fe2o3-amd-target v0.1.0 (/source/crates/fe2o3-amd-target)
+   Compiling fe2o3-build-authority v0.1.0 (/source/crates/fe2o3-build-authority)
+   Compiling fe2o3-rustc-invocation v0.1.0 (/source/crates/fe2o3-rustc-invocation)
+   Compiling fe2o3-kernel-descriptor v0.1.0 (/source/crates/fe2o3-kernel-descriptor)
+   Compiling rustix v1.1.4
+   Compiling proc-macro2 v1.0.107
+   Compiling fe2o3-compiler-lineage v0.1.0 (/source/crates/fe2o3-compiler-lineage)
+   Compiling reserved-fe2o3-symbols v0.1.0 (/source/crates/reserved-fe2o3-symbols)
+   Compiling equivalent v1.0.2
+   Compiling bitflags v2.13.1
+   Compiling hashbrown v0.17.1
+   Compiling quote v1.0.47
+   Compiling linux-raw-sys v0.12.1
+   Compiling winnow v1.0.4
+   Compiling unicode-ident v1.0.24
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling indexmap v2.14.1
+   Compiling fe2o3-compiler-ffi v0.1.0 (/source/crates/fe2o3-compiler-ffi)
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling toml_edit v0.25.13+spec-1.1.0
+   Compiling fe2o3-artifact-transaction v0.1.0 (/source/crates/fe2o3-artifact-transaction)
+   Compiling compiler_builtins v0.1.160 (/toolchain/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling syn v2.0.119
+   Compiling fe2o3-artifacts v0.1.0 (/source/crates/fe2o3-artifacts)
+   Compiling proc-macro-crate v3.5.0
+   Compiling fe2o3-rustc-front v0.1.0 (/source/crates/fe2o3-rustc-front)
+   Compiling core v0.0.0 (/toolchain/lib/rustlib/src/rust/library/core)
+   Compiling fe2o3-macros v0.1.0 (/source/crates/fe2o3-macros)
+    Checking fe2o3-device v0.1.0 (/source/crates/fe2o3-device)
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `xnack`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: consider filing a feature request
+
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `wavefrontsize64`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: consider filing a feature request
+
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `wavefrontsize32`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: consider filing a feature request
+
+warning: `fe2o3-device` (lib) generated 3 warnings
+    Checking fe2o3-production-extraction-fixture v0.1.0 (/source/crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device)
+fe2o3 rustc extraction: production compilation general kernel verification failed: source-to-proof V2 ranked admission failed: error[FE2O3-OWN-002]: GPU hierarchy ownership is incomplete because guarded invocation tracing failed: launch dimension 0 is dynamic
+help[FE2O3-FIX-OWNERSHIP] (HasPlaceholders): make the lane, subgroup, workgroup, and grid ownership sets disjoint and cover the declared output domain exactly
+warning: `fe2o3-production-extraction-fixture` (lib) generated 3 warnings (3 duplicates)
+error: could not compile `fe2o3-production-extraction-fixture` (lib); 3 warnings emitted
+
+Caused by:
+  process didn't exit successfully: `/work/target/release/fe2o3-rustc-extract /toolchain/bin/rustc --crate-name fe2o3_production_extraction_fixture --edition=2024 crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata -C embed-bitcode=no -C debuginfo=1 --cfg 'feature="reference-positive"' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values("atomic-rmw", "fabs-f32", "is-finite-fabs-f32", "multi-root-ownership", "multi-root-target-lineage", "reference-abi-mismatch", "reference-aggregate", "reference-call", "reference-duplicate", "reference-dynamic-loop", "reference-generic-mismatch", "reference-helper-memory", "reference-helper-recursive", "reference-helper-unsafe", "reference-loop", "reference-loop-overflow", "reference-missing", "reference-mutated", "reference-nested-call", "reference-no-output", "reference-non-function", "reference-orphan", "reference-positive", "reference-slice-read", "reference-two-output-alias", "reference-two-output-positive", "reference-two-output-schedule", "reference-two-output-substitution", "reference-unsafe", "reference-write-only-coordinate-read", "reference-write-only-positive", "scalar-transmute", "three-root-ownership", "volatile-load-f32", "write-only-disjoint-output", "write-only-output"))' -C metadata=6f9e7a95bce44181 -C extra-filename=-1f9d33ebafc99209 --out-dir /work/tmp/fe2o3-reference-binding-3413-1789690098784759461/amdgcn-amd-amdhsa/debug/deps --target amdgcn-amd-amdhsa -L dependency=/work/tmp/fe2o3-reference-binding-3413-1789690098784759461/amdgcn-amd-amdhsa/debug/deps -L dependency=/work/tmp/fe2o3-reference-binding-3413-1789690098784759461/debug/deps --extern 'noprelude,nounused:compiler_builtins=/work/tmp/fe2o3-reference-binding-3413-1789690098784759461/amdgcn-amd-amdhsa/debug/deps/libcompiler_builtins-1344a9ec3eeb0a3b.rlib' --extern 'noprelude,nounused:core=/work/tmp/fe2o3-reference-binding-3413-1789690098784759461/amdgcn-amd-amdhsa/debug/deps/libcore-e512724a2d923172.rlib' --extern fe2o3_device=/work/tmp/fe2o3-reference-binding-3413-1789690098784759461/amdgcn-amd-amdhsa/debug/deps/libfe2o3_device-64ebd1ae493e8386.rmeta -Z unstable-options -Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32` (exit status: 1)
+
+  left: Some(101)
+ right: Some(0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    reviewed_host_tests::protected_rust_reference_positive_reaches_verified_callback
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 34.83s
+
+error: test failed, to rerun pass `-p rustc-codegen-fe2o3 --test reference_binding_v1`
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.08s
+     Running tests/reference_binding_v1.rs (/work/target/release/deps/reference_binding_v1-7a020982a71f2acd)
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running tests/reference_binding_v1.rs (/work/target/release/deps/reference_binding_v1-7a020982a71f2acd)
+
+running 1 test
+test reviewed_host_tests::protected_rust_reference_mutation_fails_functional_proof ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 34.25s

@@ -1,0 +1,135 @@
+COMMAND: cargo test --locked -p fe2o3-verifier --lib
+warning: /dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+   Compiling fe2o3-verifier v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-verifier)
+    Finished `test` profile [unoptimized] target(s) in 39.66s
+     Running unittests src/lib.rs (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/target/debug/deps/fe2o3_verifier-417f576ab8b32cd9)
+
+running 122 tests
+test authenticated_execution::tests::authenticated_result_rejects_malformed_and_substituted_bindings ... ok
+test authenticated_execution::tests::canonical_transcript_has_a_stable_golden_digest ... ok
+test authenticated_execution::tests::every_authenticated_result_truncation_and_trailing_byte_is_rejected ... ok
+test authenticated_execution::tests::result_length_and_field_order_are_canonical ... ok
+test authenticated_execution::tests::stale_result_replay_is_rejected_by_fresh_challenge ... ok
+test authenticated_verus_execution_v2::platform::tests::canonical_filter_bytes_change_when_process_denial_is_weakened ... ok
+test authenticated_verus_execution_v2::platform::tests::canonical_policy_binds_every_child_trampoline_byte ... ok
+test authenticated_verus_execution_v2::platform::tests::canonical_policy_binds_exact_ptrace_checkpoint_bytes ... ok
+test authenticated_verus_execution_v2::platform::tests::clone3_raw_negative_results_preserve_exact_errno ... ok
+test authenticated_verus_execution_v2::platform::tests::controller_status_rejects_every_inherited_seccomp_filter ... ok
+test authenticated_verus_execution_v2::platform::tests::controller_status_rejects_root_unequal_credentials_and_active_capabilities ... ok
+test authenticated_verus_execution_v2::platform::tests::kill_failure_never_enters_a_blocking_wait_or_poll ... ok
+test authenticated_verus_execution_v2::platform::tests::limit_parser_rejects_missing_values_and_preserves_exact_soft_hard_limits ... ok
+test authenticated_verus_execution_v2::platform::tests::pidfd_ptrace_notifications_are_not_terminal_events ... ok
+test authenticated_verus_execution_v2::platform::tests::pre_exec_status_wait_is_bounded_by_the_stage_deadline ... ok
+test authenticated_verus_execution_v2::platform::tests::ptrace_checkpoint_accepts_only_exact_interrupt_event_stop ... ok
+test authenticated_verus_execution_v2::platform::tests::sparse_near_limit_file_hashing_uses_a_fixed_controller_buffer ... ok
+test compiler_multi_root_proof_v1::tests::multi_root_decoder_rejects_ordinary_aggregate_results ... ok
+test compiler_multi_root_proof_v1::tests::multi_root_rejects_rust_call_even_when_expansion_has_no_parameters ... ok
+test compiler_multi_root_proof_v1::tests::nested_formal_consumer_preserves_each_format_and_exact_root_binding ... ok
+test compiler_multi_root_proof_v1::tests::proof_rosters_require_exact_cross_kind_metadata ... ok
+test compiler_multi_root_target_lineage_v1::tests::exact_root_coordinate_join_is_accepted ... ok
+test compiler_multi_root_target_lineage_v1::tests::root_join_rejects_absent_replayed_workgroup ... ok
+test compiler_multi_root_target_lineage_v1::tests::root_join_rejects_each_cross_spliced_axis ... ok
+test compiler_proof_binding_v3::rust_call_parameter_tests::frozen_result_envelope_preserves_exact_wrappers_and_rejects_cross_body_calls ... ok
+test compiler_proof_binding_v3::rust_call_parameter_tests::v4_function_binding_rejects_ordinary_singleton_and_pair_results ... ok
+test compiler_proof_binding_v3::rust_call_parameter_tests::v4_function_binding_requires_an_actual_kernel_entry ... ok
+test compiler_proof_binding_v3::rust_call_parameter_tests::v4_parameter_envelope_rejects_singleton_projection_independently_of_rows ... ok
+test compiler_proof_binding_v3::rust_call_parameter_tests::v4_rejects_rust_call_even_when_expansion_has_no_parameters ... ok
+test functional_refinement_receipt_v2::reviewed_host_tests::generated_effect_binds_coordinates_domains_preconditions_and_value ... ok
+test functional_refinement_receipt_v2::reviewed_host_tests::generated_ieee_operator_congruence_uses_quantified_function_parameter ... ok
+test functional_refinement_receipt_v2::reviewed_host_tests::generated_library_groups_nested_bitwise_not_operands ... ok
+test functional_refinement_receipt_v2::reviewed_host_tests::protected_ieee_operator_congruence_imports_bound_receipt ... ignored, requires the installed root-owned pinned functional-refinement runtime
+test functional_refinement_receipt_v2::reviewed_host_tests::protected_ieee_operator_mutation_rejects_bound_receipt ... ignored, requires the installed root-owned pinned functional-refinement runtime
+test functional_refinement_receipt_v2::reviewed_host_tests::protected_ranked_effect_executes_and_imports_bound_receipt ... ignored, requires the installed root-owned pinned functional-refinement runtime
+test functional_refinement_receipt_v2::reviewed_host_tests::protected_ranked_effect_rejects_coordinate_mismatch ... ignored, requires the installed root-owned pinned functional-refinement runtime
+test functional_refinement_receipt_v2::reviewed_host_tests::protected_ranked_scalar_prepares_bound_receipt ... ignored, requires the installed root-owned pinned functional-refinement runtime
+test functional_refinement_receipt_v2::reviewed_host_tests::protected_ranked_scalar_rejects_semantic_mismatch ... ignored, requires the installed root-owned pinned functional-refinement runtime
+test functional_refinement_receipt_v2::tests::bitvector_generator_interprets_wrapping_arithmetic_instead_of_tagging_it ... ok
+test functional_refinement_receipt_v2::tests::bitvector_renderer_covers_the_closed_integer_and_boolean_operator_set ... ok
+test functional_refinement_receipt_v2::tests::dynamic_checked_overflow_fails_closed_at_ranked_admission ... ok
+test functional_refinement_receipt_v2::tests::numerical_generator_rejects_the_unsound_exact_fallback ... ok
+test functional_refinement_receipt_v2::tests::only_exact_nonzero_verified_success_is_proved ... ok
+test functional_refinement_receipt_v2::tests::overdeep_formula_dag_fails_before_source_construction ... ok
+test functional_refinement_receipt_v2::tests::oversized_semantic_inventory_fails_before_source_construction ... ok
+test functional_refinement_receipt_v2::tests::shared_formula_dag_renders_once_per_node ... ok
+test functional_refinement_receipt_v2::tests::typed_expression_generator_traverses_transcripts_and_binds_mutations ... ok
+test functional_refinement_receipt_v2::tests::typed_generator_derives_source_and_mutation_from_ranked_formula_dag ... ok
+test functional_refinement_receipt_v2::tests::unexpected_proof_diagnostics_are_bounded_and_escape_control_characters ... ok
+test functional_refinement_runtime_v1::tests::protected_public_lease_executes_real_verus ... ignored, requires the installed root-owned pinned functional-refinement runtime
+test functional_refinement_runtime_v1::tests::protected_public_lease_rejects_false_proof ... ignored, requires the installed root-owned pinned functional-refinement runtime
+test generated_verus_proof_input_v3::tests::canonical_source_has_stable_content_identity_without_authority ... ok
+test generated_verus_proof_input_v3::tests::malformed_noncanonical_and_unbounded_sources_fail_closed ... ok
+test mir_pliron_per_compilation_verus_v1::tests::aggregate_formula_replay_has_a_conservative_whole_compilation_output_limit ... ok
+test mir_pliron_per_compilation_verus_v1::tests::exact_output_replays_the_role_bound_ranked_formula_without_relation_premises ... ok
+test mir_pliron_per_compilation_verus_v1::tests::finite_error_never_falls_back_to_exact_integer_or_sequence_equality ... ok
+test mir_pliron_per_compilation_verus_v1::tests::generated_composition_template_is_canonical_and_workload_neutral ... ok
+test mir_pliron_per_compilation_verus_v1::tests::generated_source_identity_changes_for_any_bound_comment_substitution ... ok
+test mir_pliron_per_compilation_verus_v1::tests::generated_two_output_replay_and_output_one_substitution_match_pinned_fixtures ... ok
+test mir_pliron_per_compilation_verus_v1::tests::obligation_binds_every_contract_subject_source_and_receipt_identity ... ok
+test mir_pliron_per_compilation_verus_v1::tests::schedules_without_replayable_formula_roles_fail_closed ... ok
+test mir_pliron_per_compilation_verus_v1::tests::stale_or_swapped_effect_receipt_role_has_no_formula_to_replay ... ok
+test mir_pliron_per_compilation_verus_v1::tests::tensor_component_receipt_never_grants_unreplayed_aggregate_authority ... ok
+test mir_pliron_per_compilation_verus_v1::tests::unavailable_retained_runtime_fails_closed_before_execution ... ok
+test mir_pliron_verus_execution_evidence_v1::tests::every_prefix_trailing_byte_and_unrehashed_mutation_fail_closed ... ok
+test mir_pliron_verus_execution_evidence_v1::tests::rehashed_key_and_signed_wire_substitutions_still_fail_receipt_import ... ok
+test mir_pliron_verus_execution_evidence_v1::tests::signed_execution_evidence_roundtrips_and_retains_no_later_authority ... ok
+test mir_pliron_verus_execution_evidence_v1::tests::zero_report_identity_and_zero_retained_staging_are_rejected ... ok
+test persistent_freshness::linux::tests::crash_recovery_applies_or_finalizes_every_durable_intent ... ok
+test persistent_freshness::linux::tests::cross_process_lock_contention_fails_closed ... ok
+test persistent_freshness::linux::tests::deleted_state_cannot_reinitialize_or_replay ... ok
+test persistent_freshness::linux::tests::fork_inherited_transaction_cannot_unlock_or_consume ... ok
+test persistent_freshness::linux::tests::fresh_transaction_descriptor_detects_lock_name_substitution ... ok
+test persistent_freshness::linux::tests::independently_replayed_transcript_and_result_are_rejected ... ok
+test persistent_freshness::linux::tests::initialization_consumption_and_restart_are_durable ... ok
+test persistent_freshness::linux::tests::interrupted_initial_state_publication_recovers_without_resetting_namespace ... ok
+test persistent_freshness::linux::tests::oversized_malformed_trailing_and_ambiguous_recovery_files_are_rejected ... ok
+test persistent_freshness::linux::tests::recovery_rejects_an_intent_from_another_ledger_namespace ... ok
+test persistent_freshness::linux::tests::subprocess_consume_same_identity ... ignored
+test persistent_freshness::linux::tests::subprocess_hold_lock ... ignored
+test persistent_freshness::linux::tests::subprocess_rejects_fork_inherited_transaction ... ignored
+test persistent_freshness::linux::tests::symlinks_nonregular_files_hardlinks_and_broad_permissions_fail_closed ... ok
+test persistent_freshness::linux::tests::two_processes_cannot_consume_the_same_identity ... ok
+test persistent_freshness::linux::tests::unpublished_intent_is_validated_then_discarded ... ok
+test persistent_freshness::tests::duplicate_zero_and_noncanonical_state_identities_are_rejected ... ok
+test persistent_freshness::tests::every_truncation_trailing_byte_and_single_bit_mutation_is_rejected ... ok
+test persistent_freshness::tests::intent_rejects_zero_unknown_and_discontinuous_fields ... ok
+test persistent_freshness::tests::state_and_intent_have_stable_canonical_shapes ... ok
+test persistent_freshness::tests::unknown_fields_counts_and_generations_fail_closed ... ok
+test production_kir_to_llvm_replay_v1::tests::generic_receipts_independently_replay_exact_target_kir_and_llvm ... ok
+test production_kir_to_llvm_replay_v1::tests::legacy_association_payload_is_not_misreported_as_replay_evidence ... ok
+test production_kir_to_llvm_replay_v1::tests::valid_receipts_from_different_compilations_cannot_be_spliced ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::additional_descendant_is_rejected ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::clone_untraced_escape_flag_fails_closed ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::controller_security_preflight_accepts_the_test_host ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::deadline_kills_and_reaps_the_solver_descendant ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::executable_mapping_admission_accepts_an_exact_host_closure ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::executable_mapping_admission_rejects_non_executable_elf_ranges ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::filter_denies_every_escape_and_keeps_process_creation_traceable ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::limits_cover_cpu_processes_descriptors_and_memory ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::pinned_functional_refinement_runtime_executes_a_real_verus_proof ... ignored, requires a complete pinned functional-refinement runtime test closure
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::sequential_second_descendant_is_rejected ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::session_and_process_group_escape_syscalls_fail_closed ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::terminal_status_decoder_is_exact ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::trace_policy_covers_all_process_creation_and_exit_events ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::transient_unretained_executable_mapping_is_rejected ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::tree_poll_interval_backs_off_caps_and_resets_after_progress ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::unexpected_inherited_descriptor_is_rejected ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::verifier_cannot_leak_a_new_descriptor_to_z3 ... ok
+test retained_functional_refinement_runtime_v1::linux::functional_refinement_process_tree_v1::tests::wrong_solver_exec_is_rejected ... ok
+test retained_functional_refinement_runtime_v1::linux::tests::digest_and_hardlink_substitutions_are_rejected ... ok
+test retained_functional_refinement_runtime_v1::linux::tests::exact_synthetic_closure_is_retained_and_revalidated ... ok
+test retained_functional_refinement_runtime_v1::linux::tests::expected_leaf_symlink_is_rejected ... ok
+test retained_functional_refinement_runtime_v1::linux::tests::extra_and_missing_entries_are_rejected ... ok
+test retained_functional_refinement_runtime_v1::linux::tests::generated_proof_source_is_exactly_sealed_and_immutable ... ok
+test retained_functional_refinement_runtime_v1::linux::tests::object_snapshots_cover_owner_group_links_and_nanosecond_times ... ok
+test retained_functional_refinement_runtime_v1::linux::tests::persistent_and_transient_content_mutation_revoke_the_lease ... ok
+test retained_functional_refinement_runtime_v1::linux::tests::repeated_parallel_setup_is_clean_and_post_lease_same_byte_writes_are_recorded ... ok
+test retained_functional_refinement_runtime_v1::linux::tests::root_symlink_is_rejected_without_following_it ... ok
+test retained_functional_refinement_runtime_v1::linux::tests::same_bytes_leaf_replacement_and_root_replacement_revoke_the_lease ... ok
+test retained_functional_refinement_runtime_v1::tests::manifest_has_no_workload_proof_inventory ... ok
+test retained_functional_refinement_runtime_v1::tests::runtime_root_requires_one_canonical_opt_version ... ok
+
+test result: ok. 110 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 10.09s
+
+1.8G	/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw

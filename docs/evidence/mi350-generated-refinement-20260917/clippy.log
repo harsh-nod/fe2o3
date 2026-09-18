@@ -1,0 +1,391 @@
+COMMAND: cargo clippy --locked -p fe2o3-host -p fe2o3-kernel-analysis -p fe2o3-kfd -p fe2o3-runtime -p fe2o3-verifier --lib --tests
+warning: /dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Checking typenum v1.20.1
+    Checking cfg-if v1.0.4
+    Checking hybrid-array v0.4.14
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking digest v0.11.3
+    Checking cpufeatures v0.3.1
+    Checking sha2 v0.11.0
+    Checking fe2o3-target-spec v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-target-spec)
+    Checking fe2o3-amd-target v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-amd-target)
+    Checking bitflags v2.13.1
+    Checking libc v0.2.189
+    Checking memchr v2.8.3
+    Checking serde_core v1.0.229
+    Checking linux-raw-sys v0.12.1
+    Checking rustix v1.1.4
+    Checking zmij v1.0.23
+    Checking itoa v1.0.18
+    Checking serde_json v1.0.151
+    Checking serde v1.0.229
+    Checking scopeguard v1.2.0
+    Checking lock_api v0.4.14
+    Checking fe2o3-build-authority v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-build-authority)
+    Checking fe2o3-rustc-invocation v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-rustc-invocation)
+    Checking spin v0.12.3
+    Checking zeroize v1.9.0
+    Checking fe2o3-kernel-descriptor v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-kernel-descriptor)
+    Checking smallvec v1.15.2
+    Checking rustc_apfloat v0.2.3+llvm-462a31f5a5ab
+    Checking fe2o3-compiler-lineage v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-compiler-lineage)
+    Checking reserved-fe2o3-symbols v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/reserved-fe2o3-symbols)
+    Checking fe2o3-compiler-ffi v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-compiler-ffi)
+    Checking fe2o3-artifact-transaction v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-artifact-transaction)
+    Checking fe2o3-kernel-ir v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-kernel-ir)
+warning: this `if` statement can be collapsed
+   --> crates/fe2o3-kernel-ir/src/formal_memory_obligations/pointer_derivation.rs:118:5
+    |
+118 | /     if let Some(guarded) = &mut context.guarded {
+119 | |         if let Some(access) =
+120 | |             guarded.access(location, pointer, kind, access, invocations, predicate)?
+...   |
+124 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+    = note: `#[warn(clippy::collapsible_if)]` on by default
+help: collapse nested if block
+    |
+118 ~     if let Some(guarded) = &mut context.guarded
+119 ~         && let Some(access) =
+120 |             guarded.access(location, pointer, kind, access, invocations, predicate)?
+121 |         {
+122 |             return Ok(access);
+123 ~         }
+    |
+
+warning: this function has too many arguments (8/7)
+   --> crates/fe2o3-kernel-ir/src/local_frame_effects_v1/chain_v1.rs:250:1
+    |
+250 | / fn stage_edge(
+251 | |     function: usize,
+252 | |     source: BlockId,
+253 | |     successor: u8,
+...   |
+258 | |     budget: &mut Budget<'_>,
+259 | | ) -> Result<(), LocalFrameErrorV1> {
+    | |__________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+    = note: `#[warn(clippy::too_many_arguments)]` on by default
+
+warning: this boolean expression can be simplified
+   --> crates/fe2o3-kernel-ir/src/local_frame_effects_v1.rs:686:16
+    |
+686 |               if !matches!(result.ty, Type::Scalar(_) | Type::Unit)
+    |  ________________^
+687 | |                 && !(allowed_pointer && matches!(result.ty, Type::Pointer(_)))
+    | |______________________________________________________________________________^ help: try: `!(matches!(result.ty, Type::Scalar(_) | Type::Unit) || allowed_pointer && matches!(result.ty, Type::Pointer(_)))`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#nonminimal_bool
+    = note: `#[warn(clippy::nonminimal_bool)]` on by default
+
+warning: `fe2o3-kernel-ir` (lib) generated 3 warnings (run `cargo clippy --fix --lib -p fe2o3-kernel-ir -- ` to apply 1 suggestion)
+    Checking generic-array v0.14.7
+    Checking unicode-ident v1.0.24
+    Checking proc-macro2 v1.0.107
+    Checking awint_internals v0.19.0
+    Checking awint_core v0.19.0
+    Checking crypto-common v0.1.7
+    Checking block-buffer v0.10.4
+    Checking bytemuck v1.25.2
+    Checking recasting v0.2.3
+    Checking triple_arena v0.15.1
+    Checking safe_arch v1.2.0
+    Checking digest v0.10.7
+    Checking awint_ext v0.19.0
+    Checking fe2o3-kernel-analysis v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-kernel-analysis)
+    Checking aho-corasick v1.1.5
+    Checking equivalent v1.0.2
+    Checking cpufeatures v0.2.17
+    Checking regex-syntax v0.8.11
+    Checking allocator-api2 v0.2.21
+    Checking foldhash v0.2.0
+    Checking hashbrown v0.17.1
+    Checking regex-automata v0.4.18
+    Checking awint_macro_internals v0.19.0
+    Checking wide v1.7.0
+    Checking getrandom v0.2.17
+    Checking arrayvec v0.7.8
+    Checking bytes v1.12.1
+    Checking signature v2.2.0
+    Checking subtle v2.6.1
+    Checking curve25519-dalek v4.1.3
+    Checking ed25519 v2.2.3
+    Checking combine v4.6.8
+    Checking utf8-chars v3.0.7
+    Checking rand_core v0.6.4
+    Checking thiserror v2.0.16
+    Checking linkme v0.3.37
+    Checking hi_sparse_bitset v0.9.0
+    Checking awint v0.19.0
+    Checking slotmap v1.1.1
+    Checking regex v1.13.1
+    Checking indexmap v2.14.1
+    Checking sha2 v0.10.9
+    Checking rustc-hash v2.1.3
+    Checking downcast-rs v2.0.2
+    Checking once_vec v0.4.0
+    Checking log v0.4.34
+    Checking dyn-clone v1.0.20
+    Checking pliron v0.17.0 (https://github.com/harsh-nod/pliron.git?rev=cc902cc8c669b5de2b292ae8638d9e8311bc735b#cc902cc8)
+    Checking ed25519-dalek v2.2.0
+    Checking fe2o3-pliron-owner-core v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-pliron-owner-core)
+    Checking dialect-kernel v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/dialect-kernel)
+    Checking fe2o3-mir-model v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-mir-model)
+    Checking fe2o3-proof-contracts v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-proof-contracts)
+    Checking fe2o3-functional-proof v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-functional-proof)
+    Checking dialect-mir v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/dialect-mir)
+    Checking dialect-proof v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/dialect-proof)
+    Checking dialect-gpu v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/dialect-gpu)
+    Checking fe2o3-pliron v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-pliron)
+    Checking fe2o3-llvm-handoff v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-llvm-handoff)
+    Checking fe2o3-kernel-opt v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-kernel-opt)
+    Checking fe2o3-amdgcn-model v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-amdgcn-model)
+    Checking winnow v1.0.4
+    Checking toml_parser v1.1.3+spec-1.1.0
+    Checking dialect-amdgcn v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/dialect-amdgcn)
+    Checking fe2o3-lower-mir-kernel v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-lower-mir-kernel)
+warning: this function has too many arguments (8/7)
+   --> crates/fe2o3-lower-mir-kernel/src/production_local_helper_values_v1.rs:493:5
+    |
+493 | /     fn resolve_source_place(
+494 | |         &mut self,
+495 | |         site: fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1,
+496 | |         role: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+...   |
+501 | |         budget: &mut ArgumentBudgetV1<'_>,
+502 | |     ) -> Result<usize, ProductionSemanticKirErrorV1> {
+    | |____________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+    = note: `#[warn(clippy::too_many_arguments)]` on by default
+
+warning: this function has too many arguments (14/7)
+   --> crates/fe2o3-lower-mir-kernel/src/production_local_helper_memory_v1.rs:642:5
+    |
+642 | /     fn memory_effect(
+643 | |         &mut self,
+644 | |         site: fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1,
+645 | |         role: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+...   |
+656 | |         budget: &mut ArgumentBudgetV1<'_>,
+657 | |     ) -> Result<([usize; 7], usize), ProductionSemanticKirErrorV1> {
+    | |__________________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+
+warning: this function has too many arguments (8/7)
+   --> crates/fe2o3-lower-mir-kernel/src/production_local_helper_memory_v1.rs:873:5
+    |
+873 | /     fn read_memory_place(
+874 | |         &mut self,
+875 | |         site: fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1,
+876 | |         role: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+...   |
+881 | |         budget: &mut ArgumentBudgetV1<'_>,
+882 | |     ) -> Result<usize, ProductionSemanticKirErrorV1> {
+    | |____________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+
+warning: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/fe2o3-lower-mir-kernel/src/production_pre_ranked_local_frames_v1.rs:345:6
+    |
+345 |   ) -> Result<
+    |  ______^
+346 | |     (
+347 | |         Vec<RetainedLocalAllocationV1>,
+348 | |         Vec<RetainedLocalAccessV1>,
+...   |
+352 | |     ProductionPreRankedKirErrorV1,
+353 | | > {
+    | |_^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#type_complexity
+    = note: `#[warn(clippy::type_complexity)]` on by default
+
+warning: large size difference between variants
+   --> crates/fe2o3-lower-mir-kernel/src/production_pre_ranked_v1.rs:391:1
+    |
+391 | /  enum RetainedProductionKirModuleV1 {
+392 | |      Legacy(Module),
+    | |      -------------- the second-largest variant contains at least 96 bytes
+393 | |/     Connected {
+394 | ||         executable: fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+395 | ||         storage: fe2o3_kernel_ir::CanonicalKernelIrReplayStorageV12,
+396 | ||         assert_origins: SealedAssertOriginsV1,
+397 | ||         source_launch: crate::ProductionSourceLaunchRosterV1,
+398 | ||         helper_memory: SealedHelperMemoryV1,
+399 | ||     },
+    | ||_____- the largest variant contains at least 616 bytes
+400 | |  }
+    | |__^ the entire enum is at least 616 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#large_enum_variant
+    = note: `#[warn(clippy::large_enum_variant)]` on by default
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+398 -         helper_memory: SealedHelperMemoryV1,
+398 +         helper_memory: Box<SealedHelperMemoryV1>,
+    |
+
+warning: this `if` statement can be collapsed
+   --> crates/fe2o3-lower-mir-kernel/src/production_source_output_private_array_census_v1.rs:410:9
+    |
+410 | /         if let Some(previous) = prior {
+411 | |             if previous.key == allocation.key && previous.slot != allocation.slot {
+412 | |                 return Err(Error::Invalid(
+413 | |                     "private output allocation shared by original slots",
+...   |
+416 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
+    = note: `#[warn(clippy::collapsible_if)]` on by default
+help: collapse nested if block
+    |
+410 ~         if let Some(previous) = prior
+411 ~             && previous.key == allocation.key && previous.slot != allocation.slot {
+412 |                 return Err(Error::Invalid(
+413 |                     "private output allocation shared by original slots",
+414 |                 ));
+415 ~             }
+    |
+
+warning: `fe2o3-lower-mir-kernel` (lib) generated 6 warnings (run `cargo clippy --fix --lib -p fe2o3-lower-mir-kernel -- ` to apply 1 suggestion)
+    Checking serde_spanned v1.1.1
+    Checking toml_datetime v1.1.1+spec-1.1.0
+    Checking toml_writer v1.1.2+spec-1.1.0
+    Checking toml v1.1.4+spec-1.1.0
+    Checking quote v1.0.47
+    Checking syn v2.0.119
+    Checking fe2o3-artifacts v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-artifacts)
+    Checking fe2o3-hsaco v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-hsaco)
+    Checking fe2o3-rustc-front v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-rustc-front)
+    Checking fe2o3-contracts v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-contracts)
+    Checking fe2o3-verifier v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-verifier)
+    Checking fe2o3-amdhsa-loader v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-amdhsa-loader)
+    Checking fe2o3-runtime-model v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-runtime-model)
+    Checking fe2o3-aql v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-aql)
+    Checking fe2o3-drm-uapi v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-drm-uapi)
+    Checking fe2o3-kfd-uapi v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-kfd-uapi)
+    Checking fe2o3-kfd v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-kfd)
+    Checking fe2o3-host-api v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-host-api)
+    Checking num-traits v0.2.19
+    Checking fe2o3-profiler-protocol v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-profiler-protocol)
+    Checking rmp v0.8.15
+    Checking fe2o3-external-anchor-protocol v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-external-anchor-protocol)
+    Checking fe2o3-compiler-execution-protocol v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-compiler-execution-protocol)
+    Checking rmpv v1.3.1
+    Checking fe2o3-runtime v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-runtime)
+    Checking object v0.39.1
+    Checking fe2o3-llvm-text v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-llvm-text)
+    Checking fe2o3-source-isa-observation v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-source-isa-observation)
+    Checking fe2o3-process-identity v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-process-identity)
+    Checking fe2o3-hsaco-finalize v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-hsaco-finalize)
+   Compiling fe2o3-macros v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-macros)
+    Checking fe2o3-compiler-closure-capability v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-compiler-closure-capability)
+    Checking fe2o3-service-model v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-service-model)
+    Checking fe2o3-service-host v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-service-host)
+    Checking fe2o3-compiler-execution-client v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-compiler-execution-client)
+    Checking fe2o3-device v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-device)
+    Checking fe2o3-runtime-protocol v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-runtime-protocol)
+    Checking target-triple v1.0.1
+    Checking glob v0.3.4
+    Checking termcolor v1.4.1
+    Checking trybuild v1.0.120
+    Checking fe2o3-host v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-host)
+    Checking fe2o3-debug-protocol v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-debug-protocol)
+warning: variants `WorkgroupCollective` and `Tiled` are never constructed
+   --> crates/fe2o3-verifier/tests/../../../tests/support/compiler_proof_inputs_v3.rs:308:5
+    |
+306 | pub(crate) enum ProductionSourceIsaKernelFamilyV1 {
+    |                 --------------------------------- variants in this enum
+307 |     Elementwise,
+308 |     WorkgroupCollective,
+    |     ^^^^^^^^^^^^^^^^^^^
+309 |     Tiled,
+    |     ^^^^^
+    |
+    = note: `ProductionSourceIsaKernelFamilyV1` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fe2o3-verifier` (test "compiler_proof_binding_v4") generated 1 warning
+warning: the `Err`-variant returned from this function is very large
+  --> crates/fe2o3-verifier/tests/compiler_proof_binding_v3.rs:94:6
+   |
+94 | ) -> Result<fe2o3_verifier::ValidatedCompilerProofInputsV3, CompilerProofInputValidationErrorV3> {
+   |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 128 bytes
+   |
+   = help: try reducing the size of `fe2o3_verifier::CompilerProofInputValidationErrorV3`, for example by boxing large elements or replacing it with `Box<fe2o3_verifier::CompilerProofInputValidationErrorV3>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
+   = note: `#[warn(clippy::result_large_err)]` on by default
+
+warning: `fe2o3-verifier` (test "compiler_proof_binding_v3") generated 2 warnings (1 duplicate)
+warning: creating a new box
+  --> crates/fe2o3-verifier/src/functional_refinement_receipt_v2/reviewed_host_tests.rs:36:5
+   |
+36 |     *rhs = Box::new(Expression::Constant { scalar, bits: 8 });
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace existing content with inner value instead: `**rhs = Expression::Constant { scalar, bits: 8 }`
+   |
+   = note: this creates a needless allocation
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#replace_box
+   = note: `#[warn(clippy::replace_box)]` on by default
+
+warning: called `.err().expect()` on a `Result` value
+   --> crates/fe2o3-verifier/src/functional_refinement_receipt_v2/reviewed_host_tests.rs:467:6
+    |
+467 |       .err()
+    |  ______^
+468 | |     .expect("matching values cannot admit a mismatched effect coordinate");
+    | |___________^ help: try: `expect_err`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#err_expect
+    = note: `#[warn(clippy::err_expect)]` on by default
+
+warning: called `.err().expect()` on a `Result` value
+   --> crates/fe2o3-verifier/src/functional_refinement_receipt_v2/reviewed_host_tests.rs:545:6
+    |
+545 |       .err()
+    |  ______^
+546 | |     .expect("distinct f32 operator trees must not produce an imported congruence receipt");
+    | |___________^ help: try: `expect_err`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#err_expect
+
+warning: this assertion has a constant value
+    --> crates/fe2o3-verifier/src/functional_refinement_process_tree_v1_linux.rs:2080:9
+     |
+2080 |         assert!(CPU_LIMIT_MAX_SECONDS > 0);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#assertions_on_constants
+     = note: `#[warn(clippy::assertions_on_constants)]` on by default
+
+warning: this assertion has a constant value
+    --> crates/fe2o3-verifier/src/functional_refinement_process_tree_v1_linux.rs:2083:9
+     |
+2083 |         assert!(ADDRESS_SPACE_LIMIT_V2 > 0);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#assertions_on_constants
+
+warning: this assertion has a constant value
+    --> crates/fe2o3-verifier/src/functional_refinement_process_tree_v1_linux.rs:2084:9
+     |
+2084 |         assert!(DATA_LIMIT_V2 > 0);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#assertions_on_constants
+
+warning: `fe2o3-verifier` (lib test) generated 6 warnings (run `cargo clippy --fix --lib -p fe2o3-verifier --tests -- ` to apply 3 suggestions)
+    Finished `dev` profile [unoptimized] target(s) in 10m 29s
+2.0G	/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw

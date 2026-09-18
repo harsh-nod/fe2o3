@@ -1,0 +1,153 @@
+Uid:	61074	61074	61074	61074
+Gid:	61074	61074	61074	61074
+Groups:	61074
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	0000000000000000
+CapAmb:	0000000000000000
+NoNewPrivs:	1
+Seccomp:	0
+Seccomp_filters:	0
+FE2O3_FUNCTIONAL_REFINEMENT_RUNTIME_V1_INSTALLED_OK manifest_sha256=ffef09bd240c90e72cbff31a82bc5173c796ba7ab9af239245e7ad892c25641c root=/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5
+rustc 1.96.0-nightly (55e86c996 2026-04-02)
+binary: rustc
+commit-hash: 55e86c996809902e8bbad512cfb4d2c18be446d9
+commit-date: 2026-04-02
+host: x86_64-unknown-linux-gnu
+release: 1.96.0-nightly
+LLVM version: 22.1.2
+cargo 1.96.0-nightly (888f67534 2026-03-30)
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+   Compiling fe2o3-verifier v0.1.0 (/source/crates/fe2o3-verifier)
+    Finished `release` profile [optimized] target(s) in 13.41s
+  Executable unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+
+running 1 test
+test functional_refinement_runtime_v1::tests::protected_public_lease_executes_real_verus ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 121 filtered out; finished in 6.45s
+
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+
+running 1 test
+test functional_refinement_runtime_v1::tests::protected_public_lease_rejects_false_proof ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 121 filtered out; finished in 6.37s
+
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+
+running 1 test
+test functional_refinement_receipt_v2::reviewed_host_tests::protected_ranked_scalar_prepares_bound_receipt ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 121 filtered out; finished in 6.51s
+
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+
+running 1 test
+test functional_refinement_receipt_v2::reviewed_host_tests::protected_ranked_scalar_rejects_semantic_mismatch ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 121 filtered out; finished in 12.47s
+
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+
+running 1 test
+test functional_refinement_receipt_v2::reviewed_host_tests::protected_ranked_effect_executes_and_imports_bound_receipt ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 121 filtered out; finished in 6.70s
+
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+
+running 1 test
+test functional_refinement_receipt_v2::reviewed_host_tests::protected_ranked_effect_rejects_coordinate_mismatch ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 121 filtered out; finished in 12.46s
+
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+
+running 1 test
+test functional_refinement_receipt_v2::reviewed_host_tests::protected_ieee_operator_congruence_imports_bound_receipt ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 121 filtered out; finished in 6.73s
+
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+warning: /source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (/work/target/release/deps/fe2o3_verifier-c23e37d60491912c)
+
+running 1 test
+test functional_refinement_receipt_v2::reviewed_host_tests::protected_ieee_operator_mutation_rejects_bound_receipt ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 121 filtered out; finished in 12.69s

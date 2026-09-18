@@ -1,0 +1,10 @@
+COMMAND: env VERUS=/home/harsh/.cache/fe2o3-verus-0.2026.08.02/verus-x86-linux/verus bash scripts/test-mir-pliron-per-compilation-verus.sh
+/home/harsh/.cache/fe2o3-verus-0.2026.08.02/verus-x86-linux/verus: OK
+/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-verifier/verus/mir_pliron_per_compilation_template_v1.rs: OK
+/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-verifier/verus/mir_pliron_per_compilation_generated_fixture_v1.rs: OK
+/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-verifier/verus/mir_pliron_per_compilation_generated_multi_output_fixture_v1.rs: OK
+/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-verifier/verus/negative/mir_pliron_per_compilation_missing_output_v1.rs: OK
+/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-verifier/verus/negative/mir_pliron_per_compilation_wrong_recurrence_v1.rs: OK
+/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-verifier/verus/negative/mir_pliron_per_compilation_multi_output_substitution_v1.rs: OK
+per-compilation MIR/PLIRON replay: single- and multi-output generated obligations; 3 expected rejections
+1.6G	/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw

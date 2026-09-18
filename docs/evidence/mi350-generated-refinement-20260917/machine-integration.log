@@ -1,0 +1,39 @@
+COMMAND: cargo test --locked -p fe2o3-kernel-analysis --test gfx942_exec_semantics_v1 --test gfx942_scalar_f32_recurrence
+warning: /dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/Cargo.toml: file `/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/rustc-codegen-fe2o3/tests/fixtures/local-marker/src/main.rs` found to be present in multiple build targets:
+  * `lib` target `fe2o3_trusted_item_local_marker`
+  * `bin` target `fe2o3-trusted-item-local-marker`
+   Compiling fe2o3-kernel-analysis v0.1.0 (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/source/crates/fe2o3-kernel-analysis)
+    Finished `test` profile [unoptimized] target(s) in 3.47s
+     Running tests/gfx942_exec_semantics_v1.rs (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/target/debug/deps/gfx942_exec_semantics_v1-1ad024eb66f4e9b0)
+
+running 19 tests
+test address_carry_chains_alias_either_source_and_feed_existing_pair_reads ... ok
+test arithmetic_chains_charge_exact_steps_observations_and_trace_budgets ... ok
+test arithmetic_inline_integers_and_last_sgpr_preserve_other_pair_members ... ok
+test arithmetic_malformed_wire_operands_fail_the_existing_trace_reader ... ok
+test arithmetic_preflight_checks_untaken_paths_and_keeps_opcode_scope_closed ... ok
+test arithmetic_rejects_mismatched_bytes_operands_and_effects ... ok
+test arithmetic_requires_only_its_actual_live_ins ... ok
+test backward_branch_and_exact_one_short_resource_limits ... ok
+test branch_polarity_changes_observable_execution_without_fabricating_equivalence ... ok
+test destination_aliases_the_second_source_and_special_masks ... ok
+test each_mask_operation_obeys_its_own_scc_and_operand_order ... ok
+test encoding_operands_and_implicit_effect_mutations_are_rejected ... ok
+test extended_encodings_and_interior_slice_boundaries_are_rejected ... ok
+test llvm22_sop2_bytes_and_unsigned_boundary_results ... ok
+test missing_live_ins_are_not_zero_and_fail_without_modifying_the_input ... ok
+test multi_step_exact_and_one_short_budgets_never_return_partial_success ... ok
+test save_branch_restore_uses_exact_control_bytes_and_declared_live_ins ... ok
+test saveexec_reads_aliases_before_writing_and_andn2_complements_exec ... ok
+test untaken_unsupported_instructions_and_out_of_slice_targets_fail_preflight ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+     Running tests/gfx942_scalar_f32_recurrence.rs (/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw/target/debug/deps/gfx942_scalar_f32_recurrence-93a1a60314ab773a)
+
+running 1 test
+test authenticated_fixture_cannot_replace_instruction_bytes_or_implicit_effects ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 87.62s
+
+1.8G	/dev/shm/fe2o3-safe-launch230-20260917-QBQoVnWw
