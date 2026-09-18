@@ -1,14 +1,47 @@
 use super::*;
 use crate::production_semantic_kir_v1::*;
 
-const PAIR: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
+const U64: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
+const PAIR: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(5);
 const HELPER: SemanticFunctionIdV1 = SemanticFunctionIdV1::from_index(1);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Shape {
     Tuple,
     Struct,
     RustCall,
+    IndexTuple,
+    IndexRustCall,
+}
+
+impl Shape {
+    fn rust_call(self) -> bool {
+        matches!(self, Self::RustCall | Self::IndexRustCall)
+    }
+
+    fn index(self) -> bool {
+        matches!(self, Self::IndexTuple | Self::IndexRustCall)
+    }
+
+    fn scalar(self) -> SemanticTypeIdV1 {
+        if self.index() { U64 } else { U32 }
+    }
+
+    fn physical(self) -> Type {
+        Type::Scalar(if self.index() {
+            ScalarType::U64
+        } else {
+            ScalarType::U32
+        })
+    }
+
+    fn caller_type(self) -> Type {
+        if self.index() {
+            Type::INDEX
+        } else {
+            self.physical()
+        }
+    }
 }
 
 // Source/SSA fixtures below deliberately use test-only nominal producers.
@@ -19,14 +52,34 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
         .source_semantic()
         .types()
         .to_vec();
-    let fields = SemanticAggregateTypeV1::new(vec![CONTEXT, U32]).unwrap();
+    types.push(SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256([200; 32]),
+        SemanticLayoutIdentityV1::from_sha256([200; 32]),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(8),
+            8,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::integer(false, 64, 8),
+                SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+            )),
+            false,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits: 64,
+        }),
+    ));
+    let scalar_ty = shape.scalar();
+    let bytes = if shape.index() { 8 } else { 4 };
+    let fields = SemanticAggregateTypeV1::new(vec![CONTEXT, scalar_ty]).unwrap();
     types.push(SemanticTypeDeclV1::new(
         SemanticTypeIdentityV1::from_sha256([201; 32]),
         SemanticLayoutIdentityV1::from_sha256([201; 32]),
         SemanticTypeLayoutV1::aggregate_with_backend_repr(
-            Some(4),
-            4,
-            *types[U32.index() as usize].layout().backend_repr(),
+            Some(bytes),
+            bytes,
+            *types[scalar_ty.index() as usize].layout().backend_repr(),
             false,
             SemanticAggregateLayoutV1::new(vec![0, 0], vec![]).unwrap(),
         )
@@ -37,7 +90,7 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
             SemanticTypeShapeV1::Tuple(fields)
         },
     ));
-    let rust_call = matches!(shape, Shape::RustCall);
+    let rust_call = shape.rust_call();
     let call = |input, target| {
         SemanticTerminatorKindV1::Call(
             SemanticDirectCallV1::new_callable(
@@ -54,7 +107,7 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
                     vec![SemanticOperandV1::Move(place(input, PAIR))]
                 },
                 Some(SemanticCallDestinationV1::new(
-                    place(3, U32),
+                    place(3, scalar_ty),
                     SemanticControlFlowEdgeV1::new(
                         SemanticEdgeRoleV1::CallReturn,
                         SemanticBlockIdV1::from_index(target),
@@ -73,7 +126,7 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
             local(210, UNIT, SemanticLocalRoleV1::Return),
             local(211, PAIR, SemanticLocalRoleV1::Argument(0)),
             local(212, PAIR, SemanticLocalRoleV1::Argument(1)),
-            local(213, U32, SemanticLocalRoleV1::Temporary),
+            local(213, scalar_ty, SemanticLocalRoleV1::Temporary),
         ],
         vec![
             block(220, vec![], call(1, 1)),
@@ -96,13 +149,13 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
             false,
             1,
             vec![UNIT, PAIR],
-            U32,
+            scalar_ty,
             vec![
                 SemanticAbiArgumentV1::source(ignored(UNIT)),
                 SemanticAbiArgumentV1::rust_call_tuple_field(0, ignored(CONTEXT)),
-                SemanticAbiArgumentV1::rust_call_tuple_field(1, direct(U32)),
+                SemanticAbiArgumentV1::rust_call_tuple_field(1, direct(scalar_ty)),
             ],
-            direct(U32),
+            direct(scalar_ty),
         )
         .unwrap()
     } else {
@@ -115,7 +168,7 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
             false,
             1,
             vec![SemanticAbiArgumentV1::source(direct(PAIR))],
-            direct(U32),
+            direct(scalar_ty),
         )
         .unwrap()
     };
@@ -130,7 +183,7 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
     let (locals, context, scalar_input, temporary) = if rust_call {
         (
             vec![
-                local(230, U32, SemanticLocalRoleV1::Return),
+                local(230, scalar_ty, SemanticLocalRoleV1::Return),
                 local(231, UNIT, SemanticLocalRoleV1::Argument(0)),
                 local(
                     232,
@@ -142,7 +195,7 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
                 ),
                 local(
                     233,
-                    U32,
+                    scalar_ty,
                     SemanticLocalRoleV1::RustCallTupleField {
                         argument: 1,
                         field: 1,
@@ -151,18 +204,18 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
                 local(234, CONTEXT, SemanticLocalRoleV1::Temporary),
             ],
             place(2, CONTEXT),
-            place(3, U32),
+            place(3, scalar_ty),
             4,
         )
     } else {
         (
             vec![
-                local(230, U32, SemanticLocalRoleV1::Return),
+                local(230, scalar_ty, SemanticLocalRoleV1::Return),
                 local(231, PAIR, SemanticLocalRoleV1::Argument(0)),
                 local(232, CONTEXT, SemanticLocalRoleV1::Temporary),
             ],
             projected(0, CONTEXT),
-            projected(1, U32),
+            projected(1, scalar_ty),
             2,
         )
     };
@@ -179,11 +232,16 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
                     SemanticRvalueKindV1::Use(SemanticOperandV1::Move(context)),
                 ),
                 assign(
-                    place(0, U32),
+                    place(0, scalar_ty),
                     SemanticRvalueKindV1::Binary {
                         operation: SemanticBinaryOpV1::BitXor,
                         left: SemanticOperandV1::Copy(scalar_input),
-                        right: scalar(7),
+                        right: SemanticOperandV1::Constant(SemanticConstantV1::new(
+                            scalar_ty,
+                            SemanticConstantValueV1::Scalar(
+                                SemanticScalarValueV1::new(7, bytes as u8).unwrap(),
+                            ),
+                        )),
                     },
                 ),
             ],
@@ -214,20 +272,20 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
     .unwrap()
 }
 
-fn child_plan() -> LoweredFunctionPlanV1 {
+fn child_plan(shape: Shape) -> LoweredFunctionPlanV1 {
     LoweredFunctionPlanV1 {
         correspondence_owner: ROOT,
         semantic_function: HELPER,
         kernel_ir_function: FunctionId::new("scoped_child"),
         role: SemanticKirFunctionRoleV1::InternalHelper,
         parameter_declarations: vec![],
-        parameter_types: vec![Type::Scalar(ScalarType::U32)],
+        parameter_types: vec![shape.physical()],
         parameter_values: vec![ValueId(300)],
         call_arguments: vec![],
         parameter_local_bindings: vec![],
         parameter_component_bindings: vec![],
         ignored_parameter_bindings: vec![],
-        result_types: vec![Type::Scalar(ScalarType::U32)],
+        result_types: vec![shape.physical()],
     }
 }
 
@@ -243,6 +301,10 @@ enum Fault {
     Moved,
     Alias,
     ConstructorInstance,
+    ForeignBudget,
+    ForeignScope,
+    SecondInstance,
+    DuplicateSeed,
 }
 
 fn run(
@@ -253,14 +315,21 @@ fn run(
 ) -> (
     Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1>,
     usize,
+    usize,
 ) {
     let mut owner = owner(shape);
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
     let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
     let result = (|| {
+        budget.reserve_storage(FLOOR)?;
         let captured = owner
             .try_capture_occurrences_with_budget_v1(&mut budget)
-            .map_err(|_| execution_call_error_v29())?;
+            .map_err(|error| match error {
+                fe2o3_pliron::ProductionSemanticSsaOccurrenceErrorV1::Resource(error) => {
+                    error.into()
+                }
+                _ => execution_call_error_v29(),
+            })?;
         budget.reserve_storage(captured.retained_storage())?;
         with_production_call_instances_v1(&owner, ROOT, &mut budget, |instances, budget| {
             Ok::<_, production_call_instances_v1::ProductionCallInstanceErrorV1>(
@@ -271,36 +340,38 @@ fn run(
                     let second = instances.calls(instances.root()).unwrap()[1]
                         .child()
                         .unwrap();
-                    let prepared = with_execution_availability_v29(
+                    let (prepared, duplicate) = with_execution_availability_v29(
                         instances,
                         instances.root(),
                         budget,
                         |mut cursor, budget| {
                             let semantic = owner.source_semantic();
-                            let seed = SemanticExecutionBindingV29::context(
-                                semantic.types(),
-                                CONTEXT,
-                                ProductionCallOccurrenceV1 {
-                                    caller: instances.root(),
-                                    block: SemanticBlockIdV1::from_index(0),
-                                },
-                                ValueId(90),
-                            )
-                            .unwrap();
-                            let binding = |id| {
+                            let seed = |value| {
+                                SemanticExecutionBindingV29::context(
+                                    semantic.types(),
+                                    CONTEXT,
+                                    ProductionCallOccurrenceV1 {
+                                        caller: instances.root(),
+                                        block: SemanticBlockIdV1::from_index(0),
+                                    },
+                                    ValueId(value),
+                                )
+                                .unwrap()
+                            };
+                            let binding = |id, nominal| {
                                 SemanticValueBindingV1::Aggregate(vec![
                                     if matches!(fault, Fault::Moved) {
                                         SemanticValueBindingV1::MovedExecution
                                     } else {
-                                        SemanticValueBindingV1::Execution(seed.clone())
+                                        SemanticValueBindingV1::Execution(seed(nominal))
                                     },
                                     SemanticValueBindingV1::Value {
                                         id: ValueId(id),
-                                        ty: Type::Scalar(ScalarType::U32),
+                                        ty: shape.caller_type(),
                                     },
                                 ])
                             };
-                            cursor.entry_seeds = vec![(1, binding(20)), (2, binding(21))];
+                            cursor.entry_seeds = vec![(1, binding(20, 90)), (2, binding(21, 91))];
                             let mut parent = SemanticFunctionLoweringV1::new_interprocedural(
                                 semantic.types(),
                                 semantic.callables(),
@@ -314,10 +385,7 @@ fn run(
                                 SemanticParameterBindingsV1 {
                                     declarations: &[],
                                     values: &[ValueId(20), ValueId(21)],
-                                    types: &[
-                                        Type::Scalar(ScalarType::U32),
-                                        Type::Scalar(ScalarType::U32),
-                                    ],
+                                    types: &[shape.caller_type(), shape.caller_type()],
                                     local_bindings: Some(&[]),
                                 },
                                 None,
@@ -341,12 +409,50 @@ fn run(
                             let mut block = BasicBlock::new(BlockId(0));
                             parent.begin_block(SemanticBlockIdV1::from_index(0), &mut block)?;
                             let incoming = instances.incoming(first).unwrap();
-                            let rust_call = matches!(shape, Shape::RustCall);
+                            let rust_call = shape.rust_call();
                             let projections = [HelperCallArgumentV1 {
                                 source_argument: u32::from(rust_call),
                                 tuple_field: rust_call.then_some(1),
                                 component: Some(0),
                             }];
+                            if matches!(fault, Fault::ForeignScope) {
+                                let storage = parent.emission_work.as_deref().unwrap().storage();
+                                let mut foreign_work =
+                                    CanonicalKernelIrWorkBudgetV1::new(10_000_000);
+                                let mut foreign =
+                                    ArgumentBudgetV1::new(&mut foreign_work, 10_000_000);
+                                let rejected =
+                                    with_execution_call_scope_v29(&mut foreign, |token, _| {
+                                        parent
+                                            .prepare_defined_call_arguments_v1(
+                                                SemanticBlockIdV1::from_index(0),
+                                                incoming.source(),
+                                                HELPER,
+                                                DefinedCallArgumentSignatureV1 {
+                                                    projection: DefinedCallProjectionV29::Execution(
+                                                        token,
+                                                    ),
+                                                    semantic_types: semantic.functions()[1]
+                                                        .abi()
+                                                        .source_input_types(),
+                                                    projections: &projections,
+                                                    parameter_types: vec![shape.physical()],
+                                                },
+                                                &mut block.operations,
+                                            )
+                                            .map(|_| ())
+                                    });
+                                assert_eq!(
+                                    parent.emission_work.as_deref().unwrap().storage(),
+                                    storage
+                                );
+                                assert!(block.operations.is_empty());
+                                assert_eq!(foreign.peak_storage(), 0);
+                                drop(foreign);
+                                assert_eq!(foreign_work.work(), 0);
+                                return Err(rejected.expect_err("foreign scope token accepted"));
+                            }
+                            let next_value = ValueId(parent.next_value);
                             let prepared = parent.prepare_defined_call_arguments_v1(
                                 SemanticBlockIdV1::from_index(0),
                                 incoming.source(),
@@ -357,16 +463,77 @@ fn run(
                                         .abi()
                                         .source_input_types(),
                                     projections: &projections,
-                                    parameter_types: vec![Type::Scalar(ScalarType::U32)],
+                                    parameter_types: vec![shape.physical()],
                                 },
                                 &mut block.operations,
                             )?;
-                            assert_eq!(prepared.arguments, [ValueId(20)]);
-                            Ok(prepared)
+                            if shape.index() {
+                                assert_eq!(block.operations.len(), 1);
+                                assert_eq!(
+                                    block.operations[0],
+                                    Operation::effect_free(
+                                        ValueDef::new(next_value, shape.physical()),
+                                        OperationKind::Cast {
+                                            kind: CastKind::Bitcast,
+                                            value: ValueId(20),
+                                            to: shape.physical(),
+                                        },
+                                    )
+                                );
+                                assert_ne!(next_value, ValueId(20));
+                                assert_eq!(prepared.arguments, [next_value]);
+                            } else {
+                                assert!(block.operations.is_empty());
+                                assert_eq!(prepared.arguments, [ValueId(20)]);
+                            }
+                            if matches!(fault, Fault::SecondInstance | Fault::DuplicateSeed) {
+                                assert!(!shape.index());
+                                let arguments = parent.edge_arguments(
+                                    SemanticBlockIdV1::from_index(0),
+                                    0,
+                                    SemanticBlockIdV1::from_index(1),
+                                    &mut block.operations,
+                                )?;
+                                assert!(arguments.contains(&ValueId(21)));
+                                parent.with_emission_budget_v1(|this, budget| {
+                                    this.execution.as_mut().unwrap().finish_block(budget)
+                                })?;
+                                let mut next_block = BasicBlock::new(BlockId(1));
+                                parent.begin_block(
+                                    SemanticBlockIdV1::from_index(1),
+                                    &mut next_block,
+                                )?;
+                                let input = match parent.locals[2].as_ref().unwrap() {
+                                    SemanticValueBindingV1::Aggregate(fields) => {
+                                        fields[1].value().unwrap().0
+                                    }
+                                    _ => panic!("second capture lost aggregate shape"),
+                                };
+                                let second_prepared = parent.prepare_defined_call_arguments_v1(
+                                    SemanticBlockIdV1::from_index(1),
+                                    instances.incoming(second).unwrap().source(),
+                                    HELPER,
+                                    DefinedCallArgumentSignatureV1 {
+                                        projection: DefinedCallProjectionV29::Execution(scope),
+                                        semantic_types: semantic.functions()[1]
+                                            .abi()
+                                            .source_input_types(),
+                                        projections: &projections,
+                                        parameter_types: vec![shape.physical()],
+                                    },
+                                    &mut next_block.operations,
+                                )?;
+                                assert_eq!(second_prepared.arguments, [input]);
+                                if matches!(fault, Fault::SecondInstance) {
+                                    return Ok((second_prepared, None));
+                                }
+                                return Ok((prepared, Some(second_prepared)));
+                            }
+                            Ok((prepared, None))
                         },
                     )?;
                     let mut prepared = prepared;
-                    let mut plan = child_plan();
+                    let mut plan = child_plan(shape);
                     match fault {
                         Fault::WrongType => {
                             prepared.execution.as_mut().unwrap().parameter_types[0] = Type::INDEX
@@ -387,26 +554,61 @@ fn run(
                         Fault::Alias => plan.parameter_values[0] = ValueId(90),
                         _ => {}
                     }
-                    let selected = if matches!(fault, Fault::OtherInstance) {
+                    let selected = if matches!(fault, Fault::OtherInstance | Fault::SecondInstance)
+                    {
                         second
                     } else {
                         first
                     };
+                    if matches!(fault, Fault::ForeignBudget) {
+                        let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(10_000_000);
+                        let mut foreign = ArgumentBudgetV1::new(&mut foreign_work, 10_000_000);
+                        let error = match prepare_execution_parameters_v29(
+                            instances,
+                            selected,
+                            prepared,
+                            &plan,
+                            &mut foreign,
+                        ) {
+                            Err(error) => error,
+                            Ok(_) => panic!("foreign call-parameter ledger accepted"),
+                        };
+                        assert_eq!(foreign.peak_storage(), 0);
+                        drop(foreign);
+                        assert_eq!(foreign_work.work(), 12);
+                        return Err(error);
+                    }
+                    let expected_arguments = prepared.arguments.clone();
                     let (arguments, parameters) = prepare_execution_parameters_v29(
                         instances, selected, prepared, &plan, budget,
                     )?;
-                    assert_eq!(arguments, [ValueId(20)]);
-                    let selected = if matches!(fault, Fault::ConstructorInstance) {
-                        second
-                    } else {
-                        first
-                    };
+                    assert_eq!(arguments, expected_arguments);
+                    let duplicate = duplicate
+                        .map(|prepared| {
+                            prepare_execution_parameters_v29(
+                                instances, second, prepared, &plan, budget,
+                            )
+                            .map(|(_, parameters)| parameters)
+                        })
+                        .transpose()?;
+                    let selected =
+                        if matches!(fault, Fault::ConstructorInstance | Fault::SecondInstance) {
+                            second
+                        } else {
+                            first
+                        };
                     with_execution_availability_v29(
                         instances,
                         selected,
                         budget,
                         |cursor, budget| {
                             let cursor = cursor.with_call_parameters_v29(parameters)?;
+                            if let Some(duplicate) = duplicate {
+                                return match cursor.with_call_parameters_v29(duplicate) {
+                                    Err(error) => Err(error),
+                                    Ok(_) => panic!("duplicate call parameters accepted"),
+                                };
+                            }
                             let mut private = PrivateArrayLazyBudgetV1::new(1, 1024);
                             lower_one_semantic_function_v1(
                                 owner.source_semantic(),
@@ -434,55 +636,88 @@ fn run(
                 }),
             )
         })
-        .map_err(|_| execution_call_error_v29())?
+        .map_err(|error| match error {
+            production_call_instances_v1::ProductionCallInstanceErrorV1::Resource(error) => {
+                error.into()
+            }
+            _ => execution_call_error_v29(),
+        })?
     })();
+    let peak = budget.peak_storage();
     drop(budget);
-    (result, work.work())
+    (result, work.work(), peak)
 }
 
 #[test]
 fn scoped_arguments_reach_shared_constructor_entry_archive_and_scalar_emission() {
-    for shape in [Shape::Tuple, Shape::Struct, Shape::RustCall] {
-        let result = run(shape, Fault::None, 10_000_000, 10_000_000).0.unwrap();
-        assert_eq!(
-            result.function.signature.parameters,
-            [Type::Scalar(ScalarType::U32)]
-        );
-        assert_eq!(
-            result.function.signature.results,
-            [Type::Scalar(ScalarType::U32)]
-        );
+    for shape in [
+        Shape::Tuple,
+        Shape::Struct,
+        Shape::RustCall,
+        Shape::IndexTuple,
+        Shape::IndexRustCall,
+    ] {
+        let result = run(shape, Fault::None, 10_000_000, 10_000_000)
+            .0
+            .unwrap_or_else(|error| panic!("{shape:?}: {error:?}"));
+        assert_eq!(result.function.signature.parameters, [shape.physical()]);
+        assert_eq!(result.function.signature.results, [shape.physical()]);
         let observation = result.execution_observation.unwrap();
-        let nominal = observation.bindings.values().any(|binding| match binding {
-            SemanticValueBindingV1::Execution(value) => value.value() == ValueId(90),
-            SemanticValueBindingV1::Aggregate(fields) => matches!(&fields[0],
-                SemanticValueBindingV1::Execution(value) if value.value() == ValueId(90)),
-            _ => false,
-        });
-        assert!(
-            nominal,
-            "callee archive must preserve the original nominal producer"
+        let expected = SemanticExecutionBindingV29::context(
+            owner(shape).source_semantic().types(),
+            CONTEXT,
+            ProductionCallOccurrenceV1 {
+                caller: ProductionCallInstanceIdV1(0),
+                block: SemanticBlockIdV1::from_index(0),
+            },
+            ValueId(90),
+        )
+        .unwrap();
+        let destination = if shape.rust_call() { 4 } else { 2 };
+        assert!(matches!(
+            &observation.locals[destination],
+            Some(SemanticValueBindingV1::Execution(actual)) if actual == &expected
+        ));
+        if shape.rust_call() {
+            assert!(matches!(
+                observation.locals[2],
+                None | Some(SemanticValueBindingV1::MovedExecution)
+            ));
+        } else {
+            assert!(matches!(&observation.locals[1],
+                Some(SemanticValueBindingV1::Aggregate(fields))
+                    if matches!(fields[0], SemanticValueBindingV1::MovedExecution)));
+        }
+        let blocks = &result.function.body.as_ref().unwrap().blocks;
+        let constants: Vec<_> = blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter(|operation| {
+                matches!(
+                    operation.kind,
+                    OperationKind::Constant(Constant::U32(7) | Constant::U64(7))
+                )
+            })
+            .collect();
+        assert_eq!(constants.len(), 1);
+        let binaries: Vec<_> = blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter(|operation| matches!(operation.kind, OperationKind::Binary { .. }))
+            .collect();
+        assert_eq!(binaries.len(), 1);
+        assert_eq!(
+            binaries[0].kind,
+            OperationKind::Binary {
+                op: BinaryOp::BitXor,
+                lhs: ValueId(300),
+                rhs: constants[0].results[0].id,
+            }
         );
-        assert!(
-            result
-                .function
-                .body
-                .as_ref()
-                .unwrap()
-                .blocks
-                .iter()
-                .flat_map(|block| &block.operations)
-                .any(|op| {
-                    matches!(
-                        op.kind,
-                        OperationKind::Binary {
-                            lhs: ValueId(300),
-                            ..
-                        }
-                    )
-                }),
-            "scalar body must use its own parameter, not caller ValueId(20)"
-        );
+        assert!(blocks.iter().any(|block| block.terminator
+            == Some(Terminator::Return {
+                values: vec![binaries[0].results[0].id],
+            })));
     }
 }
 
@@ -498,6 +733,8 @@ fn scoped_call_rejects_instance_identity_type_projection_and_tombstone_substitut
         Fault::Moved,
         Fault::Alias,
         Fault::ConstructorInstance,
+        Fault::ForeignBudget,
+        Fault::ForeignScope,
     ] {
         assert!(run(Shape::Tuple, fault, 10_000_000, 10_000_000).0.is_err());
     }
@@ -505,7 +742,7 @@ fn scoped_call_rejects_instance_identity_type_projection_and_tombstone_substitut
 
 #[test]
 fn scoped_call_obeys_exact_and_one_short_shared_work_budget() {
-    let (result, exact) = run(Shape::RustCall, Fault::None, 10_000_000, 10_000_000);
+    let (result, exact, _) = run(Shape::RustCall, Fault::None, 10_000_000, 10_000_000);
     result.unwrap();
     assert!(
         run(Shape::RustCall, Fault::None, exact, 10_000_000)
@@ -517,4 +754,70 @@ fn scoped_call_obeys_exact_and_one_short_shared_work_budget() {
             .0
             .is_err()
     );
+}
+
+#[test]
+fn scoped_call_normalizes_index_to_u64_once_before_callee_rebinding() {
+    run(Shape::IndexRustCall, Fault::None, 10_000_000, 10_000_000)
+        .0
+        .unwrap();
+}
+
+#[test]
+fn scoped_call_preserves_second_instance_capture_across_the_real_cfg_edge() {
+    let result = run(
+        Shape::RustCall,
+        Fault::SecondInstance,
+        10_000_000,
+        10_000_000,
+    )
+    .0
+    .unwrap();
+    let observation = result.execution_observation.unwrap();
+    let expected = SemanticExecutionBindingV29::context(
+        owner(Shape::RustCall).source_semantic().types(),
+        CONTEXT,
+        ProductionCallOccurrenceV1 {
+            caller: ProductionCallInstanceIdV1(0),
+            block: SemanticBlockIdV1::from_index(0),
+        },
+        ValueId(91),
+    )
+    .unwrap();
+    assert!(matches!(&observation.locals[4],
+        Some(SemanticValueBindingV1::Execution(actual)) if actual == &expected));
+}
+
+#[test]
+fn scoped_call_rejects_replacing_an_already_attached_parameter_seed() {
+    assert!(
+        run(
+            Shape::RustCall,
+            Fault::DuplicateSeed,
+            10_000_000,
+            10_000_000
+        )
+        .0
+        .is_err()
+    );
+}
+
+#[test]
+fn scoped_call_obeys_exact_and_one_short_storage_with_existing_caller_floor() {
+    let (result, _, peak) = run(Shape::RustCall, Fault::None, 10_000_000, 10_000_000);
+    result.unwrap();
+    assert!(peak > FLOOR);
+    assert!(
+        run(Shape::RustCall, Fault::None, 10_000_000, peak)
+            .0
+            .is_ok()
+    );
+    assert!(matches!(
+        run(Shape::RustCall, Fault::None, 10_000_000, peak - 1).0,
+        Err(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Storage(_)
+            )
+        )
+    ));
 }
