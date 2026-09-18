@@ -11,7 +11,8 @@ pub enum ProductionCheckedOutputAdmissionErrorPolicy6V1 {
     /// Source, resources, or freshly derived final-I safety failed.
     Admission(ProductionCheckedOutputAdmissionErrorPolicy3V1),
     /// The complete unchanged source/B/C/S/O prefix was not qualified.
-    Prefix(ProductionCheckedOutputAdmissionErrorPolicy5V1),
+    /// Diagnostic boxing remains outside canonical-graph ledger accounting.
+    Prefix(Box<ProductionCheckedOutputAdmissionErrorPolicy5V1>),
     /// The independently checked O/I continuation or sealed execution failed.
     Optimization(fe2o3_kernel_opt::CanonicalPolicy6OptimizationErrorV1),
 }
@@ -29,7 +30,7 @@ impl Error for E {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Admission(error) => Some(error),
-            Self::Prefix(error) => Some(error),
+            Self::Prefix(error) => Some(error.as_ref()),
             Self::Optimization(error) => Some(error),
         }
     }
@@ -194,7 +195,7 @@ fn check(
     let result = (|| {
         drop(
             policy5::check(source, bound, checked.intermediate_policy5(), budget)
-                .map_err(E::Prefix)?,
+                .map_err(|error| E::Prefix(Box::new(error)))?,
         );
         checked
             .replay_continuation(bound, budget)

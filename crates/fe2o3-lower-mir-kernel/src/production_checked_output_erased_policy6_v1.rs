@@ -107,7 +107,7 @@ fn check_erased(
     let result = (|| {
         drop(
             policy5::check_erased(source, bound, checked.intermediate_policy5(), budget)
-                .map_err(E::Prefix)?,
+                .map_err(|error| E::Prefix(Box::new(error)))?,
         );
         checked
             .replay_continuation(bound, budget)

@@ -23,6 +23,65 @@ fn independent_native(owner: &Graph, profile: ProductionAmdTargetProfileV1) -> S
     dialect_amdgcn::bind_production_llvm22_worker_layout_v1(&native).unwrap()
 }
 
+#[test]
+fn policy6_final_receipt_root_joins_keep_descriptor_permutation_distinct_from_n_i_order() {
+    for profile in [
+        ProductionAmdTargetProfileV1::Gfx942,
+        ProductionAmdTargetProfileV1::Gfx950,
+    ] {
+        with_backend_erased_output_policy6_owned_v1(true, 2, profile, |owner, ranked, budget| {
+            let typed = erased_typed_roots(owner.erased_source());
+            let floor = budget.storage();
+            let (artifacts, storage) =
+                prepare_erased_checked_output_artifacts_v1(owner, profile, &typed, None, budget)
+                    .unwrap();
+            budget.reserve_storage(storage.retained_storage()).unwrap();
+            crate::production_pipeline::native_checked_output_handoff_v1::policy6::final_receipts::tests::exercise_permuted_root_component_v1(
+                artifacts.native_worker_output_v1(), &ranked, profile, &typed, budget,
+            ).unwrap();
+            assert!(!artifacts.grants_artifact_or_launch_authority());
+            drop(artifacts);
+            budget.release_storage(storage.retained_storage()).unwrap();
+            assert_eq!(budget.storage(), floor);
+        });
+    }
+}
+
+#[test]
+fn policy6_unsigned_final_receipt_component_accepts_real_erased_noop_and_refuses_substitution() {
+    for profile in [
+        ProductionAmdTargetProfileV1::Gfx942,
+        ProductionAmdTargetProfileV1::Gfx950,
+    ] {
+        with_backend_erased_output_policy6_owned_v1(true, 2, profile, |owner, ranked, budget| {
+            assert_eq!(
+                owner
+                    .checked_output()
+                    .intermediate_policy5()
+                    .owner()
+                    .canonical()
+                    .canonical_bytes(),
+                owner.output().canonical().canonical_bytes()
+            );
+            let typed = erased_typed_roots(owner.erased_source());
+            let floor = budget.storage();
+            let (artifacts, storage) =
+                prepare_erased_checked_output_artifacts_v1(owner, profile, &typed, None, budget)
+                    .unwrap();
+            budget.reserve_storage(storage.retained_storage()).unwrap();
+            crate::production_pipeline::native_checked_output_handoff_v1::policy6::final_receipts::tests::exercise_unsigned_component_v1(
+                artifacts.native_worker_output_v1(), &ranked, profile, &typed, budget,
+            ).unwrap();
+            crate::production_pipeline::native_checked_output_handoff_v1::policy6::final_receipts::tests::exercise_join_budget_controls_v1(
+                artifacts.native_worker_output_v1(), &ranked, &typed, budget,
+            );
+            drop(artifacts);
+            budget.release_storage(storage.retained_storage()).unwrap();
+            assert_eq!(budget.storage(), floor);
+        });
+    }
+}
+
 fn bind_expected_descriptor(
     native: String,
     output: &Graph,

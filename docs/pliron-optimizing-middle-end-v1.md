@@ -878,6 +878,19 @@ in range. Source identity, memory, ABI, effects and value correspondence remain
 separate requirements. Wrong masks, raw dynamic counts and unsupported
 expression shapes continue to refuse.
 
+This expression-level support is not complete ordinary-Rust masked-shift
+admission. Actual source discovery still encounters Rust's retained shift
+overflow assertion. Transporting its exact mask/comparison/successor relation
+through the backend, source lowering and native provenance checks is a separate
+requirement; recognizing a mask in an expression does not discharge that gate.
+
+`fe2o3-mir-model::SemanticMaskedShiftIndexV1` provides an owner-bound query for
+the exact mask, optional same-width signed cast, unsigned comparison, and
+assertion-successor shift pattern. Its initial contract requires an acyclic
+function and adjacent producers/consumer, tracks explicit local lifetimes and
+escapes, and meters construction plus later lookups. It produces inert facts,
+not assertion-elision permission or source/proof authority.
+
 ## Checked integer continuation
 
 Policy6 consumes the existing checked Policy5 result rather than rerunning
@@ -928,3 +941,53 @@ The test's existence is not a claim that a particular checkout passed it.
 Policy6 remains a checked extraction route. It does not activate the
 protected default publisher, supply a missing signed source-proof producer,
 qualify every tutorial kernel or establish LLVM/GPU execution equivalence.
+
+### Native continuation and final receipts
+
+The fixed facade has a consuming native-preparation endpoint. It retains the
+source-selected Direct or UnitLocal branch, requires the existing signed source
+lineage, and transfers custody to the existing native worker handoff. Missing
+signed evidence remains an error. The endpoint carries the original storage
+reservation and returns only its additional retained-storage receipt.
+
+The typed native Policy6 consumer can also bind supplied final-I KernelIr and
+FormalMemory receipts to that exact retained owner. It first replays the full
+signed native relation, then checks the actual graph and catalog bytes, source
+root identities, launch geometry, descriptor bindings, and freshly derived
+final-I formal obligations. The descriptor-canonical permutation is not assumed
+to be the physical kernel order in either N or I; those indices are joined
+independently. An authentic historical O receipt cannot stand in for changed I.
+
+This in-process consumer is not F2NOUT1 wire admission or a proof producer.
+Original-N formal evidence and the serialized heterogeneous transformation chain
+still require separate integration. Its component tests use genuine unsigned
+source stages without constructing a signed native owner. A positive signed
+end-to-end qualification therefore remains a distinct requirement.
+
+The integer continuation's observation goldens live under
+`crates/fe2o3-kernel-opt/tests/integer-continuation-golden/`. They cover an
+identity, a live overflow flag, an unchanged neighboring operation, a retained
+trap after earlier deletion, and a legal no-op. Their test harness checks actual
+canonical graphs and records across fresh processes; the readable observations
+are not another IR parser.
+
+### Redundant private-store service
+
+The separate `optimize_checked_redundant_store_v1` service removes later
+identical stores to a direct, nonescaping, aligned private integer allocation.
+It keeps the first store and only crosses a closed set of total scalar
+operations in the same block. Loads, other memory effects, calls, potential
+traps and convergence operations stop the run. A complete pointer-use census
+rejects escapes and derived aliases, including uses after the proposed deletion.
+
+The producer checks the original MemorySSA Def chain and emits complete
+deletion and retained-operation coordinates. An independent checker rebuilds
+the actual input/output inventories and verifies every deletion and survivor
+without trusting the producer's MemorySSA. Mutation, fresh V12 admission and
+replay share the caller's bounded resource ledger.
+
+This service is not in the fixed production schedule and is not general DSE.
+Source-lifetime and initialization preservation, origin-map composition, final
+effect admission, and ordinary-source native/simulator qualification must be
+completed before a production continuation can use it. Existing ordered-store
+preservation checks are not weakened to admit this standalone relation.

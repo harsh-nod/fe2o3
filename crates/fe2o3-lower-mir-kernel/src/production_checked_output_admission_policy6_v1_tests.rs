@@ -4,6 +4,24 @@ type Final6 = crate::ProductionCheckedOutputOwnerPolicy6V1;
 type Error6 = crate::ProductionCheckedOutputAdmissionErrorPolicy6V1;
 type Checked6 = fe2o3_kernel_opt::CheckedCanonicalKernelIrOwnerPolicy6V1;
 
+#[test]
+fn policy6_error_keeps_prefix_identity_without_growing_the_inline_result() {
+    type Prefix = crate::ProductionCheckedOutputAdmissionErrorPolicy5V1;
+    assert!(std::mem::size_of::<Error6>() <= std::mem::size_of::<Prefix>());
+    let prefix = Box::new(Prefix::Admission(
+        crate::ProductionCheckedOutputAdmissionErrorPolicy3V1::PrivateAddressR2,
+    ));
+    let expected = prefix.to_string();
+    let pointer = prefix.as_ref() as *const Prefix;
+    let error = Error6::Prefix(prefix);
+    assert_eq!(error.to_string(), expected);
+    let source = std::error::Error::source(&error)
+        .unwrap()
+        .downcast_ref::<Prefix>()
+        .unwrap();
+    assert!(std::ptr::eq(source, pointer));
+}
+
 struct Fixture6 {
     receipt: ProductionMaterializedRankedModuleReceiptV1,
     bound: fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
@@ -24,11 +42,7 @@ fn fixture6_from_source(profile: Profile, source: ProductionPreRankedKirOwnerV1)
         source_storage,
         bound_storage,
         ..
-    } = prepare(
-        array_output_ranked_receipt_v1(source),
-        profile,
-        None,
-    );
+    } = prepare(array_output_ranked_receipt_v1(source), profile, None);
     drop(output);
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = AssertOriginBudgetV1::new(&mut work, STORAGE);
@@ -239,37 +253,74 @@ fn direct_policy6_genuine_identity_removal_moves_trap_inventory_ordinal_not_sour
             )
             .unwrap();
             budget.reserve_storage(storage.retained_storage()).unwrap();
-            let (new, storage) = CanonicalKirInventoryV1::derive(input.checked.owner(), &mut budget)
-                .unwrap();
+            let (new, storage) =
+                CanonicalKirInventoryV1::derive(input.checked.owner(), &mut budget).unwrap();
             budget.reserve_storage(storage.retained_storage()).unwrap();
-            let is_identity = |operation: &fe2o3_kernel_ir::Operation| matches!(
-                operation.kind,
-                OperationKind::Binary { op: fe2o3_kernel_ir::BinaryOp::BitXor, .. }
+            let is_identity = |operation: &fe2o3_kernel_ir::Operation| {
+                matches!(
+                    operation.kind,
+                    OperationKind::Binary {
+                        op: fe2o3_kernel_ir::BinaryOp::BitXor,
+                        ..
+                    }
+                )
+            };
+            assert_eq!(
+                old.operations()
+                    .iter()
+                    .filter(|row| is_identity(row.operation))
+                    .count(),
+                1
             );
-            assert_eq!(old.operations().iter().filter(|row| is_identity(row.operation)).count(), 1);
-            assert_eq!(new.operations().iter().filter(|row| is_identity(row.operation)).count(), 0);
+            assert_eq!(
+                new.operations()
+                    .iter()
+                    .filter(|row| is_identity(row.operation))
+                    .count(),
+                0
+            );
             assert_ne!(
-                input.checked.intermediate_policy5().owner().canonical().canonical_bytes(),
+                input
+                    .checked
+                    .intermediate_policy5()
+                    .owner()
+                    .canonical()
+                    .canonical_bytes(),
                 input.checked.owner().canonical().canonical_bytes()
             );
             let trap = fe2o3_kernel_ir::AmdGpuDiagnosticOperation::Trap.operation(None);
-            let traps: Vec<_> = new.operations().iter().enumerate()
-                .filter(|(_, row)| row.operation == &trap).collect();
+            let traps: Vec<_> = new
+                .operations()
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row.operation == &trap)
+                .collect();
             assert_eq!(traps.len(), 1, "genuine bounds-assert trap must survive");
             let (ordinal, actual) = traps[0];
-            let row = &input.checked.continuation().occurrences().candidate().operations[ordinal];
+            let row = &input
+                .checked
+                .continuation()
+                .occurrences()
+                .candidate()
+                .operations[ordinal];
             assert_eq!(row.output, actual.coordinate);
             let CanonicalKirOperationOriginV1::Retained(origin) = row.origin else {
                 panic!("trap must have a retained qualified O origin");
             };
-            let old_ordinal = old.operations().iter().position(|row| row.coordinate == origin).unwrap();
+            let old_ordinal = old
+                .operations()
+                .iter()
+                .position(|row| row.coordinate == origin)
+                .unwrap();
             assert_eq!(old.operations()[old_ordinal].operation, actual.operation);
             // The synthetic one-op trap block stays unchanged. Earlier DCE
             // changes its flattened ordinal, so joining by that ordinal is wrong.
             assert_ne!(old_ordinal, ordinal);
             assert_ne!(old.operations()[ordinal].operation, actual.operation);
         }
-        budget.release_storage(budget.storage() - input.floor).unwrap();
+        budget
+            .release_storage(budget.storage() - input.floor)
+            .unwrap();
         let floor = input.floor;
         let owner = admit6(input, WORK, STORAGE).0.unwrap();
         owner.verify_equivalence(&mut budget).unwrap();

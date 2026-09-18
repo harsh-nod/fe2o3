@@ -20,6 +20,7 @@ pub(crate) enum CheckedOutputPolicy6StageErrorV1 {
     Optimization(Box<fe2o3_kernel_opt::CanonicalPolicy6OptimizationErrorV1>),
     Admission(Box<fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy6V1>),
     NativeSource(Box<crate::production_native_source_lineage_v1::NativeSourceLineageErrorV1>),
+    NativeWorker(Box<super::native_checked_output_handoff_v1::NativeOutputHandoffErrorV1>),
     NativePublicationUnavailable,
 }
 
@@ -32,6 +33,7 @@ impl fmt::Display for CheckedOutputPolicy6StageErrorV1 {
             Self::Optimization(e) => e.fmt(f),
             Self::Admission(e) => e.fmt(f),
             Self::NativeSource(e) => e.fmt(f),
+            Self::NativeWorker(e) => e.fmt(f),
             Self::NativePublicationUnavailable => f.write_str(
                 "native checked-output protected lineage is not implemented; no legacy relabeling or unoptimized fallback was attempted",
             ),
@@ -48,6 +50,7 @@ impl std::error::Error for CheckedOutputPolicy6StageErrorV1 {
             Self::Optimization(e) => Some(e.as_ref()),
             Self::Admission(e) => Some(e.as_ref()),
             Self::NativeSource(e) => Some(e.as_ref()),
+            Self::NativeWorker(e) => Some(e.as_ref()),
             Self::NativePublicationUnavailable => None,
         }
     }
@@ -183,6 +186,11 @@ pub(crate) struct NativeSourceCheckedOutputProductionCompilationV1 {
 }
 
 impl NativeSourceCheckedOutputProductionCompilationV1 {
+    pub(super) fn native_final_receipt_ranked_v1(
+        &self,
+    ) -> &crate::production_ranked_projection_v1::AuthenticatedRankedVerificationRosterV1 {
+        self.source_lineage.ranked()
+    }
     pub(super) fn native_worker_inputs_v1(
         &self,
     ) -> super::native_checked_output_handoff_v1::StageInputsV1<'_> {
@@ -302,6 +310,19 @@ impl RankedVerifiedProductionCompilation {
 }
 
 impl CheckedOutputTargetProductionCompilation {
+    #[cfg(test)]
+    pub(super) fn exercise_final_receipt_component_v1(
+        &self,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), super::native_checked_output_handoff_v1::NativeOutputHandoffErrorV1> {
+        super::native_checked_output_handoff_v1::policy6::final_receipts::tests::exercise_unsigned_component_v1(
+            self.artifacts.native_worker_output_v1(),
+            &self.ranked_verification,
+            self.bindings.rustc_target.profile(),
+            &self.bindings.typed_descriptor_roots,
+            budget,
+        )
+    }
     /// Complete transferred canonical source/B/C/S/O/I and native-artifact receipts.
     #[allow(dead_code)]
     pub(crate) const fn retained_storage_floor_v1(&self) -> usize {

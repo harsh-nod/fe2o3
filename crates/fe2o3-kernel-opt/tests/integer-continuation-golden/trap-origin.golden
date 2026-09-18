@@ -1,0 +1,17 @@
+CASE: trap-origin
+CHECK-BEFORE: function f parameters=[u32,bool] results=[u32] trap-declarations=1
+CHECK-BEFORE: f:b0:o0 Constant U32(0) results=[u32]
+CHECK-BEFORE: f:b0:o1 Binary Checked(Add) arg0,b0:o0:r0 results=[u32,bool]
+CHECK-BEFORE: f:b0:o2 Binary BitOr b0:o1:r0,b0:o0:r0 results=[u32]
+CHECK-BEFORE: f:b0:term ConditionalBranch arg1 b1,b2
+CHECK-BEFORE: f:b1:o0 Trap results=[]
+CHECK-BEFORE: f:b1:term Unreachable
+CHECK-BEFORE: f:b2:term Return [b0:o2:r0]
+CHECK-AFTER: function f parameters=[u32,bool] results=[u32] trap-declarations=1
+CHECK-AFTER: f:b0:term ConditionalBranch arg1 b1,b2
+CHECK-AFTER: f:b1:o0 Trap results=[]
+CHECK-AFTER: f:b1:term Unreachable
+CHECK-AFTER: f:b2:term Return [arg0]
+CHECK-REMARK: passes=integer-neutral-canonicalization,dead-code-elimination changed=true,true independently-checked=true authority=false
+CHECK-REMARK: f:b1:o0 retained f:b1:o0
+CHECK-REMARK: trap-flat=3->0 exact-retained-origin=true

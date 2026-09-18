@@ -382,9 +382,9 @@ fn discovery_never_relabels_a_refusal_as_qualification() {
     assert!(config.record_refusal(PROFILES[0], &refusal));
     config.discovery = false;
     assert!(!config.record_refusal(PROFILES[0], &refusal));
-    let error = refusal.unwrap_err();
-    assert_eq!(error.stage, SourceStage::Policy4);
-    assert_eq!(error.detail, "exact retained assertion gate");
+    assert!(matches!(&refusal, Err(error)
+        if error.stage == SourceStage::Policy4
+            && error.detail == "exact retained assertion gate"));
 }
 
 #[test]

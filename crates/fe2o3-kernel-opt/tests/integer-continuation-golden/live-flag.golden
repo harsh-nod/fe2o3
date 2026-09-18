@@ -1,0 +1,11 @@
+CASE: live-flag
+CHECK-BEFORE: function f parameters=[u32] results=[u32,bool] trap-declarations=0
+CHECK-BEFORE: f:b0:o0 Constant U32(0) results=[u32]
+CHECK-BEFORE: f:b0:o1 Binary Checked(Add) arg0,b0:o0:r0 results=[u32,bool]
+CHECK-BEFORE: f:b0:o2 Binary BitOr b0:o1:r0,b0:o0:r0 results=[u32]
+CHECK-BEFORE: f:b0:term Return [b0:o2:r0,b0:o1:r1]
+CHECK-AFTER: function f parameters=[u32] results=[u32,bool] trap-declarations=0
+CHECK-AFTER: f:b0:o0 Constant Bool(false) results=[bool]
+CHECK-AFTER: f:b0:term Return [arg0,b0:o0:r0]
+CHECK-REMARK: passes=integer-neutral-canonicalization,dead-code-elimination changed=true,true independently-checked=true authority=false
+CHECK-REMARK: f:b0:o0 constant-from f:b0:o1:r1

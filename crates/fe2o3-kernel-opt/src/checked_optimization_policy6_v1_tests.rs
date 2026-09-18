@@ -1,4 +1,7 @@
 use super::*;
+#[path = "checked_integer_continuation_golden_v1_tests.rs"]
+mod golden;
+
 use crate::{
     checked_load_forwarding_v1::tests::{STORAGE, WORK, with_owner},
     optimize_checked_canonical_kernel_ir_policy5_v1,
@@ -437,7 +440,6 @@ fn owned_origin_cannot_replace_work_ledger_with_an_equal_storage_floor() {
                 "do not refund someone else's reservation"
             );
             assert!(dropped.load(Ordering::SeqCst));
-            drop(budget);
             assert_eq!(original_work.work(), original_spent.get());
             assert!(original_work.work() > 11);
         }

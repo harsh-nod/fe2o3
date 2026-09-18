@@ -190,7 +190,8 @@ mod masked_shift_ranked_v1_tests {
         heterogeneous: bool,
         changed_operand: bool,
         changed_mask: bool,
-    ) -> Result<ProductionRankedKernelLoweringInputV1, fe2o3_pliron::ProductionRankedKernelErrorV1> {
+    ) -> Result<ProductionRankedKernelLoweringInputV1, fe2o3_pliron::ProductionRankedKernelErrorV1>
+    {
         let old = shifted_lowering(
             source,
             signed,
@@ -235,7 +236,7 @@ mod masked_shift_ranked_v1_tests {
         let ProductionSemanticExpressionV2::Binary { rhs, .. } = expression else {
             panic!("ranked shift")
         };
-        *rhs = Box::new(ProductionSemanticExpressionV2::Binary {
+        **rhs = ProductionSemanticExpressionV2::Binary {
             operation: ProductionSemanticBinaryOpV2::BitAnd,
             scalar: count_scalar,
             overflow: ProductionOverflowContractV2::Wrapping,
@@ -244,7 +245,7 @@ mod masked_shift_ranked_v1_tests {
                 scalar: count_scalar,
                 bits: u64::from(bits) - if changed_mask { 2 } else { 1 },
             }),
-        });
+        };
         *numerical_contract = ProductionNumericalContractV2::exact_for_expression(expression);
         let kernel = ProductionRankedKernelV1::new(
             NAME,
@@ -297,7 +298,8 @@ mod masked_shift_ranked_v1_tests {
                                 heterogeneous,
                                 false,
                                 false,
-                            ).unwrap();
+                            )
+                            .unwrap();
                             let root = ProductionRankedSemanticProjectionRootV1::new(
                                 SemanticFunctionIdV1::from_index(0),
                                 1,
@@ -381,7 +383,8 @@ mod masked_shift_ranked_v1_tests {
                     ));
                     assert_eq!(budget.storage(), 0);
                 }
-                let lowering = masked_lowering(&source, false, bits, true, true, false, false).unwrap();
+                let lowering =
+                    masked_lowering(&source, false, bits, true, true, false, false).unwrap();
                 let mut module = source.executable().module().clone();
                 let count = module.functions.iter_mut().flat_map(|f| f.body.iter_mut())
                     .flat_map(|body| &mut body.blocks).flat_map(|block| &mut block.operations)

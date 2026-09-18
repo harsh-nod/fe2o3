@@ -136,21 +136,25 @@ fn erased_policy6_does_not_skip_original_source_roster_effect_or_assertion_check
             _ => unreachable!(),
         }
         let result = admit6(input, WORK, STORAGE).0;
-        assert!(matches!(
-            result,
-            Err(Error6::Prefix(Error5::Prefix(FinalError::Admission(
-                AdmissionError::Source(_)
-            ))))
-        ), "original-source mutation {mutation}: {result:?}");
+        assert!(
+            matches!(
+                &result,
+                Err(Error6::Prefix(prefix)) if matches!(prefix.as_ref(),
+                    Error5::Prefix(FinalError::Admission(AdmissionError::Source(_))))
+            ),
+            "original-source mutation {mutation}: {result:?}"
+        );
     }
     for mutation in [
         change_root_private_value as fn(&mut Module),
         change_root_global_value,
     ] {
         let result = admit6(continue6(fixture5(true, 1, Some(mutation))), WORK, STORAGE).0;
-        assert!(matches!(result, Err(Error6::Prefix(Error5::Prefix(FinalError::Admission(
-            AdmissionError::Coordinates(_)
-        ))))), "fresh verified B substitution: {result:?}");
+        assert!(
+            matches!(&result, Err(Error6::Prefix(prefix)) if matches!(prefix.as_ref(),
+            Error5::Prefix(FinalError::Admission(AdmissionError::Coordinates(_))))),
+            "fresh verified B substitution: {result:?}"
+        );
     }
 }
 
@@ -167,9 +171,14 @@ fn failed_consuming_policy6_releases_only_the_moved_prefix_after_discard() {
         input.checked,
         &mut budget,
     );
-    assert!(matches!(result, Err(fe2o3_kernel_opt::CanonicalPolicy6OptimizationErrorV1::Resource(
-        fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Work(_)
-    ))));
+    assert!(matches!(
+        result,
+        Err(
+            fe2o3_kernel_opt::CanonicalPolicy6OptimizationErrorV1::Resource(
+                fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Work(_)
+            )
+        )
+    ));
     assert_eq!(budget.storage(), expected);
     assert!(budget.work_ledger_identity_v1() == ledger);
 }
@@ -193,19 +202,33 @@ fn erased_policy6_exact_final_admission_budgets_restore_the_retained_floor() {
 }
 
 fn fixture6_with_live_integer_identity(expected: bool, roots: usize) -> Fixture6 {
-    let FinalFixture { source, bound, checked, bound_storage, .. } = final_fixture_from(
+    let FinalFixture {
+        source,
+        bound,
+        checked,
+        bound_storage,
+        ..
+    } = final_fixture_from(
         erased_effect_fixture_with_integer_identity(expected, roots),
         None,
     );
     drop(checked);
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = ArgumentBudgetV1::new(&mut work, STORAGE);
-    budget.reserve_storage(FLOOR + source.retained_storage_floor_v1() + bound_storage).unwrap();
-    let checked = fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy5_v1(
-        &bound, &mut budget,
-    ).unwrap();
+    budget
+        .reserve_storage(FLOOR + source.retained_storage_floor_v1() + bound_storage)
+        .unwrap();
+    let checked =
+        fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy5_v1(&bound, &mut budget)
+            .unwrap();
     budget.reserve_storage(checked.retained_storage()).unwrap();
-    continue6(Fixture5 { source, bound, checked, floor: budget.storage(), bound_storage })
+    continue6(Fixture5 {
+        source,
+        bound,
+        checked,
+        floor: budget.storage(),
+        bound_storage,
+    })
 }
 
 #[test]
@@ -215,12 +238,30 @@ fn erased_policy6_genuine_integer_rewrite_retains_shifted_trap_origins_for_every
     for expected in [false, true] {
         for roots in [1, 2] {
             let input = fixture6_with_live_integer_identity(expected, roots);
-            assert_eq!(input.checked.intermediate_policy5().load_forwarding_rows().len(), roots);
-            let original = input.source.original_source().executable().canonical().canonical_bytes().to_vec();
+            assert_eq!(
+                input
+                    .checked
+                    .intermediate_policy5()
+                    .load_forwarding_rows()
+                    .len(),
+                roots
+            );
+            let original = input
+                .source
+                .original_source()
+                .executable()
+                .canonical()
+                .canonical_bytes()
+                .to_vec();
             let erased = input.source.erased().canonical().canonical_bytes().to_vec();
             assert_ne!(original, erased);
             assert_ne!(
-                input.checked.intermediate_policy5().owner().canonical().canonical_bytes(),
+                input
+                    .checked
+                    .intermediate_policy5()
+                    .owner()
+                    .canonical()
+                    .canonical_bytes(),
                 input.checked.owner().canonical().canonical_bytes()
             );
             let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
@@ -228,28 +269,61 @@ fn erased_policy6_genuine_integer_rewrite_retains_shifted_trap_origins_for_every
             budget.reserve_storage(input.floor).unwrap();
             {
                 let (old, storage) = CanonicalKirInventoryV1::derive(
-                    input.checked.intermediate_policy5().owner(), &mut budget,
-                ).unwrap();
+                    input.checked.intermediate_policy5().owner(),
+                    &mut budget,
+                )
+                .unwrap();
                 budget.reserve_storage(storage.retained_storage()).unwrap();
-                let (new, storage) = CanonicalKirInventoryV1::derive(input.checked.owner(), &mut budget).unwrap();
+                let (new, storage) =
+                    CanonicalKirInventoryV1::derive(input.checked.owner(), &mut budget).unwrap();
                 budget.reserve_storage(storage.retained_storage()).unwrap();
-                let is_identity = |operation: &fe2o3_kernel_ir::Operation| matches!(
-                    operation.kind,
-                    OperationKind::Binary { op: fe2o3_kernel_ir::BinaryOp::BitXor, .. }
+                let is_identity = |operation: &fe2o3_kernel_ir::Operation| {
+                    matches!(
+                        operation.kind,
+                        OperationKind::Binary {
+                            op: fe2o3_kernel_ir::BinaryOp::BitXor,
+                            ..
+                        }
+                    )
+                };
+                assert_eq!(
+                    old.operations()
+                        .iter()
+                        .filter(|row| is_identity(row.operation))
+                        .count(),
+                    roots
                 );
-                assert_eq!(old.operations().iter().filter(|row| is_identity(row.operation)).count(), roots);
-                assert_eq!(new.operations().iter().filter(|row| is_identity(row.operation)).count(), 0);
+                assert_eq!(
+                    new.operations()
+                        .iter()
+                        .filter(|row| is_identity(row.operation))
+                        .count(),
+                    0
+                );
                 let trap = fe2o3_kernel_ir::AmdGpuDiagnosticOperation::Trap.operation(None);
-                let traps: Vec<_> = new.operations().iter().enumerate()
-                    .filter(|(_, row)| row.operation == &trap).collect();
+                let traps: Vec<_> = new
+                    .operations()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, row)| row.operation == &trap)
+                    .collect();
                 assert_eq!(traps.len(), roots);
                 for (ordinal, actual) in traps {
-                    let row = &input.checked.continuation().occurrences().candidate().operations[ordinal];
+                    let row = &input
+                        .checked
+                        .continuation()
+                        .occurrences()
+                        .candidate()
+                        .operations[ordinal];
                     assert_eq!(row.output, actual.coordinate);
                     let CanonicalKirOperationOriginV1::Retained(origin) = row.origin else {
                         panic!("every actual trap needs its own retained qualified O origin");
                     };
-                    let old_ordinal = old.operations().iter().position(|row| row.coordinate == origin).unwrap();
+                    let old_ordinal = old
+                        .operations()
+                        .iter()
+                        .position(|row| row.coordinate == origin)
+                        .unwrap();
                     assert_eq!(old.operations()[old_ordinal].operation, actual.operation);
                     // Local trap-block coordinates can stay identical while
                     // preceding DCE changes the flattened inventory position.
@@ -257,13 +331,27 @@ fn erased_policy6_genuine_integer_rewrite_retains_shifted_trap_origins_for_every
                     assert_ne!(old.operations()[ordinal].coordinate, origin);
                 }
             }
-            budget.release_storage(budget.storage() - input.floor).unwrap();
+            budget
+                .release_storage(budget.storage() - input.floor)
+                .unwrap();
             let floor = input.floor;
             let owner = admit6(input, WORK, STORAGE).0.unwrap();
-            assert_eq!(owner.original_source().executable().canonical().canonical_bytes(), original);
+            assert_eq!(
+                owner
+                    .original_source()
+                    .executable()
+                    .canonical()
+                    .canonical_bytes(),
+                original
+            );
             assert_eq!(owner.erased().canonical().canonical_bytes(), erased);
             assert_eq!(owner.kernels().len(), roots);
-            assert!(owner.kernels().iter().all(|kernel| !kernel.accesses().is_empty()));
+            assert!(
+                owner
+                    .kernels()
+                    .iter()
+                    .all(|kernel| !kernel.accesses().is_empty())
+            );
             owner.verify_equivalence(&mut budget).unwrap();
             assert_eq!(budget.storage(), floor);
         }
@@ -274,10 +362,15 @@ fn erased_policy6_genuine_integer_rewrite_retains_shifted_trap_origins_for_every
 fn erased_policy6_rejects_a_checked_prefix_from_another_source_at_exact_custody_stage() {
     let mut input = continue6(fixture5(true, 1, None));
     input.checked = continue6(fixture5(false, 1, None)).checked;
-    input.floor = FLOOR + input.source.retained_storage_floor_v1()
-        + input.bound_storage + input.checked.retained_storage();
+    input.floor = FLOOR
+        + input.source.retained_storage_floor_v1()
+        + input.bound_storage
+        + input.checked.retained_storage();
     let result = admit6(input, WORK, STORAGE).0;
-    assert!(matches!(result, Err(Error6::Prefix(Error5::Prefix(FinalError::Admission(
-        AdmissionError::SourceOutput(ProductionSourceOutputErrorV1::InputCustody)
-    ))))), "foreign genuine checked history: {result:?}");
+    assert!(
+        matches!(&result, Err(Error6::Prefix(prefix)) if matches!(prefix.as_ref(),
+        Error5::Prefix(FinalError::Admission(
+            AdmissionError::SourceOutput(ProductionSourceOutputErrorV1::InputCustody))))),
+        "foreign genuine checked history: {result:?}"
+    );
 }

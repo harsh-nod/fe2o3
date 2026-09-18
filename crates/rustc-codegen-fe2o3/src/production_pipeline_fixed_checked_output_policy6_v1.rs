@@ -13,6 +13,9 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1 as SourcePolicy;
 
+#[path = "production_pipeline_fixed_native_checked_output_policy6_v1.rs"]
+pub(crate) mod native_continuation;
+
 #[cfg(test)]
 #[path = "production_pipeline_fixed_checked_output_policy6_v1_tests.rs"]
 mod tests;
@@ -200,6 +203,26 @@ impl FixedCheckedOutputProductionCompilationPolicy6V1 {
         }
     }
 
+    /// Exercises the actual unsigned component only. Signed native preparation
+    /// and its mandatory missing-proof refusal remain separate and unchanged.
+    #[cfg(test)]
+    pub(crate) fn exercise_final_receipt_component_v1(
+        &self,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), super::native_checked_output_handoff_v1::NativeOutputHandoffErrorV1> {
+        if budget.storage() < self.retained_storage_floor {
+            return Err(
+                super::native_checked_output_handoff_v1::NativeOutputHandoffErrorV1::Resource(
+                    Resource::Accounting,
+                ),
+            );
+        }
+        match &self.stage {
+            Stage::Direct(stage) => stage.exercise_final_receipt_component_v1(budget),
+            Stage::Erased(stage) => stage.exercise_final_receipt_component_v1(budget),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn semantic(&self) -> &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1 {
         match &self.stage {
@@ -225,13 +248,7 @@ impl FixedCheckedOutputProductionCompilationPolicy6V1 {
         self,
         budget: &mut Budget<'_>,
     ) -> Result<(), ProductionPipelineError> {
-        if budget.storage() < self.retained_storage_floor {
-            return Err(resource(Resource::Accounting));
-        }
-        match self.stage {
-            Stage::Direct(stage) => stage.prepare_native_source_lineage_v1(budget).map(drop),
-            Stage::Erased(stage) => stage.prepare_native_source_lineage_v1(budget).map(drop),
-        }
+        self.prepare_native_checked_output_v1(budget).map(drop)
     }
 
     /// Delegates every extraction-only, rustc, source, ranked and native check

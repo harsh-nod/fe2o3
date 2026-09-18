@@ -82,7 +82,7 @@ struct Report {
 
 #[derive(Debug, Deserialize, Serialize)]
 enum Outcome {
-    Observed(Observation6),
+    Observed(Box<Observation6>),
     Extracted {
         llvm_sha256: [u8; 32],
         llvm_bytes: usize,
@@ -277,6 +277,10 @@ fn replay_actual_continuation(stage: &Stage) -> Result<usize, String> {
         .map_err(|e| format!("{e:?}"))?;
     result?;
     assert_eq!(budget.storage(), floor);
+    stage
+        .exercise_final_receipt_component_v1(&mut budget)
+        .map_err(|e| format!("actual unsigned final-I receipt component: {e:?}"))?;
+    assert_eq!(budget.storage(), floor);
     let replay_work = budget.work();
     assert!(replay_work > 0);
     let after = (
@@ -447,7 +451,7 @@ fn observe(tcx: TyCtxt<'_>, request: &Request, artifact: &Path) -> Result<Outcom
         .and_then(|mut file| file.write_all(handoff.module_bytes()))
         .map_err(|e| e.to_string())?;
     validate_observation(request.case, &report)?;
-    Ok(Outcome::Observed(report))
+    Ok(Outcome::Observed(Box::new(report)))
 }
 
 struct Callbacks6 {
