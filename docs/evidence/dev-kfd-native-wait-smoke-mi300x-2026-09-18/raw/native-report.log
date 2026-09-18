@@ -1,0 +1,47 @@
+{
+  "source": "fcd5a89a113c6538338598bfcdb6769fb5c06042",
+  "native_smoke_accepted": true,
+  "cells": {
+    "B": {
+      "policy": "native-sleep1ms",
+      "validated_rounds": 13,
+      "native_windows": 52,
+      "cpu_status_counts": {
+        "available": 52
+      },
+      "sleep_ceiling_ns": 1000000,
+      "maximum_requested_sleep_ns": 1000000,
+      "directions": [
+        "d2h",
+        "h2d"
+      ],
+      "packet_counts": [
+        2,
+        63
+      ]
+    },
+    "C": {
+      "policy": "native-sleep25us",
+      "validated_rounds": 13,
+      "native_windows": 52,
+      "cpu_status_counts": {
+        "available": 52
+      },
+      "sleep_ceiling_ns": 25000,
+      "maximum_requested_sleep_ns": 25000,
+      "directions": [
+        "d2h",
+        "h2d"
+      ],
+      "packet_counts": [
+        2,
+        63
+      ]
+    }
+  },
+  "bytes_checked_per_round": 268435456,
+  "full_buffer_validation": true,
+  "explicit_teardown_completed": true,
+  "performance_comparison": null,
+  "scope": "Two native diagnostic success paths on one gfx942 GPU; no performance comparison, fault-path coverage, formal refinement, or HIP/HSA parity claim."
+}

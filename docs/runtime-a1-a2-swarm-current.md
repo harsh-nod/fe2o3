@@ -10,7 +10,16 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest development (2026-09-17): [reader arena invariants](runtime-context-read-invariant-v1.md)
+Latest development (2026-09-18): the opt-in persistent SDMA native-wait
+[diagnostic success paths](evidence/dev-kfd-native-wait-smoke-mi300x-2026-09-18/README.md)
+now run on MI300X with both 1 ms and 25 us requested-sleep ceilings. Each policy
+validates 13 full-buffer round trips, 52 identity-bound window records and
+explicit teardown; all five shared-host endpoint guards pass. This is not a
+matched performance result, native fault campaign, or formal refinement. The
+earlier [interrupted comparison](evidence/dev-kfd-native-wait-mi300x-2026-09-18/README.md)
+remains unaccepted. Accepted checkpoints, A1/A2 and #182 are unchanged.
+
+Earlier development (2026-09-17): [reader arena invariants](runtime-context-read-invariant-v1.md)
 derives free-slot uniqueness and proves constructor/acquire/release preservation,
 exact count/lookup/exclusion consequences, and register/abort reader framing.
 Exact modeled operation traces preserve the invariant and never reissue reader

@@ -8,7 +8,7 @@ acceptance records or new formal/native milestone qualification.
 
 The original four-argument path, copy timer, progress loop, validation, teardown
 and single `fe2o3.async-copy-benchmark.v1` output row remain uninstrumented.
-Diagnostic modes use a separate implementation and distinct
+The two facade-progress diagnostic modes use a separate implementation and distinct
 `fe2o3.kfd-directional-progress-diagnostic.v1` schema. Compare the two diagnostic
 policies to each other, not their instrumentation overhead to the legacy row.
 
@@ -97,6 +97,48 @@ timestamp decomposition, direction/round-distinct output and writer failures.
 The existing scripted native-backend frontier test supplies a separate check
 that a future wait deadline returns Pending without publishing the next window.
 Neither test family proves Linux timing, physical DMA behavior or performance.
+
+## Profiled Native Waits
+
+The `hardware-diagnostic` feature adds two further opt-in modes, restricted to
+the 256 MiB shape with 65 packets and two windows per direction:
+
+```sh
+CARGO_TARGET_DIR="$owned/target" cargo build --locked --release \
+  -p fe2o3-runtime --features hardware-diagnostic \
+  --example gfx942-runtime-directional-window-benchmark
+"$owned/target/release/examples/gfx942-runtime-directional-window-benchmark" \
+  "$unique_id" 268435456 3 10 diagnostic-native-sleep1ms
+"$owned/target/release/examples/gfx942-runtime-directional-window-benchmark" \
+  "$unique_id" 268435456 3 10 diagnostic-native-sleep25us
+```
+
+Both use the full remaining outer deadline and the same instrumented native
+window wait; only the maximum requested sleep changes (1 ms or 25 us). The
+active-spin floor remains 50 us. The separate
+`fe2o3.kfd-directional-native-wait-diagnostic.v1` schema adds four window records
+per round: 63 packets followed by 2, for H2D and D2H. Records bind the original
+submission and byte offsets, scan/observation/pause counters, requested sleeps,
+host scan time, and best-effort thread CPU/context-switch observations. Missing
+or invalid CPU observations remain explicit, never silently zeroed.
+
+Recording is bounded and opt-in. Complete records are extracted only after
+logical and native teardown; truncated, mixed/unprofiled, or inconsistent
+records do not supply a successful diagnostic. Native scan timing includes
+instrumentation overhead and is not physical DMA duration. Comparisons to the
+facade modes also change re-entry and instrumentation, not just sleep policy.
+All shared-host guards and external deadlines above remain required.
+
+The [native success-path qualification](../../docs/evidence/dev-kfd-native-wait-smoke-mi300x-2026-09-18/README.md)
+records 13 validated round trips and 52 native window records for each policy
+on MI300X. All pre/post/final guards passed. It is not a performance comparison,
+continuous isolation guarantee, native fault campaign, or formal refinement.
+The corresponding feature-enabled CPU test command is:
+
+```sh
+cargo test --locked -p fe2o3-runtime --features hardware-diagnostic \
+  --example gfx942-runtime-directional-window-benchmark
+```
 
 ## Native Attempt
 

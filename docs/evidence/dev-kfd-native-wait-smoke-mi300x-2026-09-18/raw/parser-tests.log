@@ -1,0 +1,18 @@
+test_missing_or_reordered_events_rejected (__main__.ReportTests.test_missing_or_reordered_events_rejected) ... ok
+test_prior_interruption_never_becomes_smoke_success (__main__.ReportTests.test_prior_interruption_never_becomes_smoke_success) ... ok
+test_synthetic_two_policy_smoke (__main__.ReportTests.test_synthetic_two_policy_smoke) ... ok
+test_wrong_identity_counters_and_shape_rejected (__main__.ReportTests.test_wrong_identity_counters_and_shape_rejected) ... 
+  test_wrong_identity_counters_and_shape_rejected (__main__.ReportTests.test_wrong_identity_counters_and_shape_rejected) (field='"GPU use (%)": "0"') ... FAIL
+
+======================================================================
+FAIL: test_wrong_identity_counters_and_shape_rejected (__main__.ReportTests.test_wrong_identity_counters_and_shape_rejected) (field='"GPU use (%)": "0"')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-kfd-native-wait-smoke-mi300x-2026-09-18/test_report.py", line 105, in test_wrong_identity_counters_and_shape_rejected
+    with self.subTest(field=old), self.assertRaises(AssertionError):
+AssertionError: AssertionError not raised
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.058s
+
+FAILED (failures=1)

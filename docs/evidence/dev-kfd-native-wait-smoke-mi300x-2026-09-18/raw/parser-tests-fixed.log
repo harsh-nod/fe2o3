@@ -1,0 +1,10 @@
+test_missing_or_reordered_events_rejected (__main__.ReportTests.test_missing_or_reordered_events_rejected) ... ok
+test_occupancy_is_bound_to_selected_gpu (__main__.ReportTests.test_occupancy_is_bound_to_selected_gpu) ... ok
+test_prior_interruption_never_becomes_smoke_success (__main__.ReportTests.test_prior_interruption_never_becomes_smoke_success) ... ok
+test_synthetic_two_policy_smoke (__main__.ReportTests.test_synthetic_two_policy_smoke) ... ok
+test_wrong_identity_counters_and_shape_rejected (__main__.ReportTests.test_wrong_identity_counters_and_shape_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.072s
+
+OK

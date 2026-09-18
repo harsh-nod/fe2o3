@@ -1,0 +1,148 @@
+{
+  "source": "fcd5a89a113c6538338598bfcdb6769fb5c06042",
+  "source_files": 5532,
+  "harness_sha256": {
+    "prepare.sh": "229d79785fabcec6178d871863c154caa47534a083d7eb85e19cf0e10ebc0ba1",
+    "guard.sh": "3c9c1408c8afcd6bdb1a85f208ed9af6a96ba363f9a2f069529fa047d1ebfa89",
+    "run.sh": "1ca32e0b9b8c74eca7634ae6220f069b831ec19be5eace9cf5e3d544aed01426",
+    "cleanup.sh": "9f07ef8707260c0a41dbb8431e1fe1df07240d837304164687518e80fed0659d",
+    "inspect.sh": "bf747ab44721d625ee146cd54a2afce11692993c0902531baefec151ae3b5844"
+  },
+  "binary_sha256": {
+    "/tmp/fe2o3-kfd-native-wait-20260918.UB2Je4Dz/target/release/examples/gfx942-runtime-directional-window-benchmark": "71c30c0ce32932512d19b240039c3695535754de042a997ce3e10119a9a328ca",
+    "/tmp/fe2o3-kfd-native-wait-20260918.UB2Je4Dz/hsa-copy-pool-engine": "5d7e0578ea8078bf10066bbd7f36fe78608449af6fb6d647f2ec4503e86d9e33"
+  },
+  "receipts": {
+    "create": {
+      "exit": 0,
+      "started": "2026-09-18T06:00:29.404286384Z",
+      "finished": "2026-09-18T06:00:30.251468326Z"
+    },
+    "stage-build": {
+      "exit": 0,
+      "started": "2026-09-18T06:00:49.342671979Z",
+      "finished": "2026-09-18T06:00:50.494392430Z"
+    },
+    "prepare": {
+      "exit": 0,
+      "started": "2026-09-18T06:01:02.453854743Z",
+      "finished": "2026-09-18T06:02:03.524378688Z"
+    },
+    "stage-run": {
+      "exit": 0,
+      "started": "2026-09-18T06:01:03.784135488Z",
+      "finished": "2026-09-18T06:01:04.901179197Z"
+    },
+    "shell-lint": {
+      "exit": 0,
+      "started": "2026-09-18T06:02:17.692202824Z",
+      "finished": "2026-09-18T06:02:17.716658779Z"
+    },
+    "inspect-before": {
+      "exit": 0,
+      "started": "2026-09-18T06:02:17.924900497Z",
+      "finished": "2026-09-18T06:02:18.786674125Z"
+    },
+    "occupancy-before": {
+      "exit": 0,
+      "started": "2026-09-18T06:02:18.930454259Z",
+      "finished": "2026-09-18T06:02:21.863930157Z"
+    },
+    "native": {
+      "exit": 0,
+      "started": "2026-09-18T06:02:31.865740185Z",
+      "finished": "2026-09-18T06:03:59.157002493Z"
+    },
+    "parser-tests": {
+      "exit": 1,
+      "started": "2026-09-18T06:04:17.066188975Z",
+      "finished": "2026-09-18T06:04:17.279067372Z"
+    },
+    "native-report": {
+      "exit": 0,
+      "started": "2026-09-18T06:04:24.976047571Z",
+      "finished": "2026-09-18T06:04:25.061915567Z"
+    },
+    "inspect-after": {
+      "exit": 0,
+      "started": "2026-09-18T06:04:25.236419970Z",
+      "finished": "2026-09-18T06:04:26.060341708Z"
+    },
+    "collect-results": {
+      "exit": 0,
+      "started": "2026-09-18T06:04:49.092345366Z",
+      "finished": "2026-09-18T06:04:51.149818932Z"
+    },
+    "parser-tests-fixed": {
+      "exit": 0,
+      "started": "2026-09-18T06:04:50.617253814Z",
+      "finished": "2026-09-18T06:04:50.853094447Z"
+    },
+    "cleanup": {
+      "exit": 0,
+      "started": "2026-09-18T06:05:01.610289781Z",
+      "finished": "2026-09-18T06:05:12.929654520Z"
+    },
+    "python-lint": {
+      "exit": 0,
+      "started": "2026-09-18T06:07:15.322889904Z",
+      "finished": "2026-09-18T06:07:15.357529762Z"
+    },
+    "shell-lint-final": {
+      "exit": 0,
+      "started": "2026-09-18T06:07:15.520525106Z",
+      "finished": "2026-09-18T06:07:15.547946717Z"
+    }
+  },
+  "native_smoke": {
+    "source": "fcd5a89a113c6538338598bfcdb6769fb5c06042",
+    "native_smoke_accepted": true,
+    "cells": {
+      "B": {
+        "policy": "native-sleep1ms",
+        "validated_rounds": 13,
+        "native_windows": 52,
+        "cpu_status_counts": {
+          "available": 52
+        },
+        "sleep_ceiling_ns": 1000000,
+        "maximum_requested_sleep_ns": 1000000,
+        "directions": [
+          "d2h",
+          "h2d"
+        ],
+        "packet_counts": [
+          2,
+          63
+        ]
+      },
+      "C": {
+        "policy": "native-sleep25us",
+        "validated_rounds": 13,
+        "native_windows": 52,
+        "cpu_status_counts": {
+          "available": 52
+        },
+        "sleep_ceiling_ns": 25000,
+        "maximum_requested_sleep_ns": 25000,
+        "directions": [
+          "d2h",
+          "h2d"
+        ],
+        "packet_counts": [
+          2,
+          63
+        ]
+      }
+    },
+    "bytes_checked_per_round": 268435456,
+    "full_buffer_validation": true,
+    "explicit_teardown_completed": true,
+    "performance_comparison": null,
+    "scope": "Two native diagnostic success paths on one gfx942 GPU; no performance comparison, fault-path coverage, formal refinement, or HIP/HSA parity claim."
+  },
+  "parser_tests_passed": 5,
+  "preliminary_failed_fixture_retained": true,
+  "remote_owned_directory_removed": true,
+  "scope": "Two native diagnostic success paths, not fault coverage, a matched performance campaign, or formal refinement."
+}

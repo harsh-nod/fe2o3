@@ -1,0 +1,7 @@
+parsed=cleanup.sh
+parsed=create.sh
+parsed=inspect.sh
+parsed=lint-shell.sh
+parsed=record.sh
+parsed=run.sh
+parsed=seal.sh
