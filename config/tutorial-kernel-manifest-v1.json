@@ -4322,7 +4322,7 @@
         "sourceEntryIds": [
           "gfx950-gpt-oss-120b-megakernel"
         ],
-        "sourceBindingGap": "Displayed pipelined-attention and scalar-attention sources lack selected fixture associations. Shared package membership does not establish their feature/symbol or execution coverage.",
+        "sourceBindingGap": null,
         "variants": [
           {
             "kind": "simt",
@@ -7024,6 +7024,8 @@
               "gfx950-gpt-oss-materialized-attention",
               "gfx950-gpt-oss-materialized-expert",
               "gfx950-gpt-oss-materialized-router",
+              "gfx950-gpt-oss-pipelined-attention",
+              "gfx950-gpt-oss-scalar-attention",
               "gfx950-gpt-oss-serial-router"
             ]
           }
@@ -7758,6 +7760,54 @@
             "lessonId": "gfx950-gpt-oss-120b-megakernel",
             "fixtureIds": [
               "gfx950-gpt-oss-materialized-router"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-pipelined-attention",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-pipelined-attention"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Exact source-to-simulator binding and independent CPU-reference oracle remain pending; this positive candidate has no simulation or qualification receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-pipelined-attention"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-scalar-attention",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-scalar-attention"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Exact source-to-simulator binding and independent CPU-reference oracle remain pending; this positive candidate has no simulation or qualification receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-scalar-attention"
             ]
           }
         ]
@@ -9864,6 +9914,104 @@
       }
     },
     {
+      "fixtureId": "gfx950-gpt-oss-pipelined-attention",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-pipelined-attention",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-pipelined-attention",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode-pipelined-attention.hsaco",
+        "runnerArguments": [
+          "pipelined-attention"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "0a398ffdfe075a195ace31f491ca20b051860b5349ea3813e4213a2b698ed31b",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention.rs"
+        ],
+        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode-pipelined-attention"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "955e9b283051a4bfadb86ea23e3ba112f339dde053a6d57bb25156ad8cd4e056",
+        "contractSha256": "78a425c17c65add33722fc228dcbfe6ef350db9315d7c1d866227fc0ddf1f3ad"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-pipelined-attention.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-pipelined-attention.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-scalar-attention",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-scalar-attention",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-scalar-attention",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode-scalar-attention.hsaco",
+        "runnerArguments": [
+          "scalar-attention"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "0a398ffdfe075a195ace31f491ca20b051860b5349ea3813e4213a2b698ed31b",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_scalar_attention.rs"
+        ],
+        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode-scalar-attention"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "955e9b283051a4bfadb86ea23e3ba112f339dde053a6d57bb25156ad8cd4e056",
+        "contractSha256": "89fb8c21123664b913be838c688f218986864a7c304a9c092bbe86223f393329"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-scalar-attention.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-scalar-attention.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
       "fixtureId": "gfx950-gpt-oss-serial-router",
       "testId": "kernel-compile-matrix/gfx950/gpt-oss-serial-router",
       "testPath": "scripts/tests/kernel-compile-matrix.sh",
@@ -10938,6 +11086,8 @@
         "gfx950-gpt-oss-materialized-attention",
         "gfx950-gpt-oss-materialized-expert",
         "gfx950-gpt-oss-materialized-router",
+        "gfx950-gpt-oss-pipelined-attention",
+        "gfx950-gpt-oss-scalar-attention",
         "gfx950-gpt-oss-serial-router"
       ],
       "requiredGates": [
@@ -12122,6 +12272,70 @@
             "kind": "fixture",
             "fixtureId": "gfx950-gpt-oss-materialized-router",
             "kernelSymbol": "gfx950_gpt_oss_120b_router_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-pipelined-attention:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-pipelined-attention",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-scalar-attention:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-scalar-attention",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
           }
         ],
         "variants": [
@@ -14015,10 +14229,12 @@
         "functionUtf8Offset": 1508,
         "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-gpt-oss-pipelined-attention:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed whole-file attention variant has no selected fixture association; package membership and a shared symbol do not establish feature, source, or execution coverage."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Expected fixture/source contract: exact current whole-file bytes and attributed occurrence under the retained Cargo feature selection; not rustc acceptance, execution, or variant qualification."
       },
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
@@ -14037,10 +14253,12 @@
         "functionUtf8Offset": 3041,
         "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
         "classification": "kernel",
-        "kernelIds": [],
+        "kernelIds": [
+          "fixture:gfx950-gpt-oss-scalar-attention:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "The displayed whole-file attention variant has no selected fixture association; package membership and a shared symbol do not establish feature, source, or execution coverage."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Expected fixture/source contract: exact current whole-file bytes and attributed occurrence under the retained Cargo feature selection; not rustc acceptance, execution, or variant qualification."
       },
       {
         "lessonId": "gfx950-gpt-oss-megakernel-performance-lab",

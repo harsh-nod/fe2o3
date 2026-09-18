@@ -29,9 +29,13 @@ def load_validator():
 
 
 def recovered_scope(manifest):
+    added_fixtures = {
+        "gfx942-scalar-gemm", "gfx950-gpt-oss-pipelined-attention",
+        "gfx950-gpt-oss-scalar-attention",
+    }
     fixtures = []
     for original in manifest["compilerFixtures"]:
-        if original["fixtureId"] == "gfx942-scalar-gemm":
+        if original["fixtureId"] in added_fixtures:
             continue
         fixture = {key: original[key] for key in ("fixtureId", "testId", "testPath", "target", "matrix")}
         fixture["compilerInput"] = {
@@ -46,17 +50,27 @@ def recovered_scope(manifest):
     entries = copy.deepcopy(manifest["entries"])
     for entry in entries:
         entry["compilerFixtureIds"] = [
-            value for value in entry["compilerFixtureIds"] if value != "gfx942-scalar-gemm"
+            value for value in entry["compilerFixtureIds"] if value not in added_fixtures
         ]
+    suites = [
+        copy.deepcopy({key: suite[key] for key in ("suiteId", "gate", "command", "coverage")})
+        for suite in manifest["qualification"]["suites"]
+        if suite["suiteId"] not in {
+            "cpu-reference-scalar-gemm", "semantic-simulation-scalar-gemm",
+            "semantic-simulation-gfx950-gpt-oss-pipelined-attention",
+            "semantic-simulation-gfx950-gpt-oss-scalar-attention",
+        }
+    ]
+    for suite in suites:
+        for coverage in suite["coverage"]:
+            coverage["fixtureIds"] = [
+                value for value in coverage["fixtureIds"] if value not in added_fixtures
+            ]
     return {
         "productionContract": manifest["productionContract"],
         "fixtures": fixtures,
         "entries": entries,
-        "suites": [
-            {key: suite[key] for key in ("suiteId", "gate", "command", "coverage")}
-            for suite in manifest["qualification"]["suites"]
-            if suite["suiteId"] not in {"cpu-reference-scalar-gemm", "semantic-simulation-scalar-gemm"}
-        ],
+        "suites": suites,
     }
 
 
@@ -100,15 +114,16 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             Counter(call.args[1] for call in walk.call_args_list),
             Counter({package: 1 for package in expected_packages}),
         )
-        self.assertEqual(len(fixtures), 48)
+        self.assertEqual(len(fixtures), 50)
         self.assertEqual(sum(f["target"] == "gfx942" for f in fixtures.values()), 11)
-        self.assertEqual(sum(f["target"] == "gfx950" for f in fixtures.values()), 37)
+        self.assertEqual(sum(f["target"] == "gfx950" for f in fixtures.values()), 39)
         self.assertEqual(len(self.manifest["entries"]), 25)
-        self.assertEqual(len(self.manifest["qualification"]["suites"]), 60)
+        self.assertEqual(len(self.manifest["qualification"]["suites"]), 62)
         self.assertTrue(all(e["classification"] == "compiler-produced" for e in self.manifest["entries"]))
         self.assertTrue(all(s["availability"] == "pending" for s in self.manifest["qualification"]["suites"]))
 
     def test_original_47_source_feature_symbol_and_semantic_obligations_are_preserved(self):
+        self.assertEqual(len(recovered_scope(self.manifest)["fixtures"]), 47)
         payload = json.dumps(
             recovered_scope(self.manifest), sort_keys=True, separators=(",", ":"), ensure_ascii=True
         ).encode("ascii")
@@ -125,12 +140,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "5564a3fd4fdf9e71ffba78714cd15f3c66168b06e9524c2f6c74d47fb485f677")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "f533b0b2ff5066bad75b3fc3d6bcb1a04c5705f345f60c13c762ab0ec5407401")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)
         del self.manifest["curriculum"]
-        self.assertEqual(len(self.validator.validate_manifest(ROOT, self.manifest)), 48)
+        self.assertEqual(len(self.validator.validate_manifest(ROOT, self.manifest)), 50)
         with tempfile.TemporaryDirectory(prefix="fe2o3-curriculum-") as temporary:
             path = Path(temporary) / "legacy.json"
             path.write_text(json.dumps(self.manifest), encoding="utf-8")
@@ -251,11 +266,8 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.validator.validate_manifest(ROOT, self.manifest, curriculum_gaps=gaps)
         self.assertEqual(gaps, {
             "gemm-proof-plan": ["examples/tiled_gemm_v1/src/kernel.rs"],
-            "gfx950-gpt-oss-120b-megakernel": [
-                "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention.rs",
-                "examples/gfx950_gpt_oss_decode/src/kernel_scalar_attention.rs",
-            ],
         })
+        self.assertIsNone(self.curriculum_lesson("gfx950-gpt-oss-120b-megakernel")["sourceBindingGap"])
         tab = self.curriculum_lesson("cpu-semantic-simulation")["codeTabs"][0]
         tab.update(sourceItem=None, sourceItemStatus="pending")
         with self.assertRaisesRegex(SystemExit, "sourceBindingGap.*production-ranked-bounds-device"):
@@ -383,7 +395,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
 
 
     def test_matrix_records_are_stable_and_do_not_execute(self):
-        for target, count in (("gfx942", 11), ("gfx950", 37)):
+        for target, count in (("gfx942", 11), ("gfx950", 39)):
             result = subprocess.run(
                 [sys.executable, str(CHECKER), "--emit-matrix", target],
                 check=True, text=True, capture_output=True,
@@ -416,7 +428,8 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(report["schema"], "fe2o3-tutorial-kernel-pair-obligations-v2")
         identities = report["kernelInventory"]
         self.assertIs(identities["runtimeCensusValidated"], False)
-        self.assertEqual(identities["knownKernelIdentityCount"], 58)
+        self.assertEqual(identities["knownKernelIdentityCount"], 60)
+        self.assertEqual(identities["pendingDisplayItemCount"], 56)
         self.assertEqual(identities["negativeCaseCount"], 3)
         self.assertTrue(identities["unresolvedBindings"])
         self.assertIs(report["qualified"], False)
@@ -424,7 +437,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertIsNone(report["requiredPairCount"])
         self.assertEqual(report["qualifiedPairCount"], 0)
         self.assertEqual(report["requiredModes"], ["simt", "tile"])
-        self.assertEqual(len(report["fixtureSelections"]), 48)
+        self.assertEqual(len(report["fixtureSelections"]), 50)
         self.assertEqual(len(report["sourceDriverCases"]), 13)
         self.assertEqual(len(report["displayObservations"]), 53)
         self.assertEqual(sum(row["sourceItemStatus"] == "pending"
@@ -456,12 +469,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "6a42f01eb8ccf9c0efd655b7c58217cc1417a81c24f39d05b94a545890e7f017")
-        self.assertEqual(len(inventory["kernels"]), 58)
+                         "45c8fdfea5b38bae698fcfbadc8d09c0179c4b018145689476f48566b4cd996f")
+        self.assertEqual(len(inventory["kernels"]), 60)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 74, "required-negative": 3, "conceptual": 26, "helper": 18})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 58, "source-driver-contract": 13, "fixture-source-contract": 6,
+                         {"pending": 56, "source-driver-contract": 13, "fixture-source-contract": 8,
                           "not-applicable": 44})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         self.assertTrue(all(variant["status"] == "pending" and variant["source"] is None
@@ -474,18 +487,20 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                 self.assertEqual(row["kernelIds"], [])
 
     def gpt_fixture_document(self):
-        """A six-binding component projection, not the live website census."""
+        """An eight-binding component projection, not the live website census."""
         document = copy.deepcopy(self.original)
         rows = [row for row in document["kernelInventory"]["displayItems"]
                 if row["bindingStatus"] == "fixture-source-contract"]
-        self.assertEqual(len(rows), 6)
+        self.assertEqual(len(rows), 8)
         ids = {identity for row in rows for identity in row["kernelIds"]}
         kernels = [row for row in document["kernelInventory"]["kernels"] if row["kernelId"] in ids]
         fixtures = {ref["fixtureId"] for row in kernels for ref in row["selections"]}
         document["compilerFixtures"] = [row for row in document["compilerFixtures"] if row["fixtureId"] in fixtures]
         lesson = next(row for row in document["curriculum"]["lessons"]
                       if row["lessonId"] == "gfx950-gpt-oss-120b-megakernel")
-        lesson["codeTabs"] = lesson["codeTabs"][1:5]
+        rows.extend(row for row in document["kernelInventory"]["displayItems"]
+                    if row["lessonId"] == lesson["lessonId"] and row["classification"] == "helper")
+        lesson["codeTabs"] = lesson["codeTabs"][1:7]
         for index, tab in enumerate(lesson["codeTabs"]):
             tab["ordinal"] = index
         for row in rows:
@@ -499,25 +514,110 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                             "sourceFragments": None} for tab in lesson["codeTabs"]]}]}
         return document, runtime
 
-    def test_six_real_fixture_sources_bind_exact_display_occurrences(self):
+    def test_eight_real_fixture_sources_bind_exact_display_occurrences(self):
         document, runtime = self.gpt_fixture_document()
         self.validator.validate_site_inventory(document["curriculum"], runtime)
         result = self.validator.validate_kernel_inventory(document, runtime)
         self.assertEqual(result["unresolvedBindings"], [])
-        self.assertEqual(result["displayItemCount"], 6)
+        self.assertEqual(result["displayItemCount"], 9)
+        self.assertEqual(result["knownKernelIdentityCount"], 8)
         self.assertTrue(all(variant["status"] == "pending" and variant["source"] is None
                             for kernel in result["kernelIdentities"] for variant in kernel["variants"]))
         without_runtime = self.validator.validate_kernel_inventory(document, None)
         self.assertFalse(without_runtime["inventoryComplete"])
         self.assertIsNone(without_runtime["requiredPairCount"])
-        self.assertEqual(sum("selection" in row for row in without_runtime["unresolvedBindings"]), 6)
+        self.assertEqual(sum("selection" in row for row in without_runtime["unresolvedBindings"]), 8)
+
+    def test_attention_candidates_retain_exact_inputs_and_pending_obligations(self):
+        lesson_id = "gfx950-gpt-oss-120b-megakernel"
+        lesson = self.curriculum_lesson(lesson_id)
+        entry = next(row for row in self.manifest["entries"] if row["lessonId"] == lesson_id)
+        fixtures = {row["fixtureId"]: row for row in self.manifest["compilerFixtures"]}
+        identities = {row["kernelId"]: row for row in self.manifest["kernelInventory"]["kernels"]}
+        package = "examples/gfx950_gpt_oss_decode"
+        symbol = "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        for name, ordinal, offset in (("pipelined-attention", 5, 1508), ("scalar-attention", 6, 3041)):
+            with self.subTest(candidate=name):
+                fixture_id = f"gfx950-gpt-oss-{name}"
+                fixture = fixtures[fixture_id]
+                source_path = f"{package}/src/kernel_{name.replace('-', '_')}.rs"
+                inputs = fixture["compilerInput"]
+                self.assertEqual(inputs["sourcePaths"], [source_path])
+                self.assertEqual(inputs["packageManifest"], f"{package}/Cargo.toml")
+                self.assertEqual(inputs["cargoTarget"], {
+                    "kind": "lib", "name": "fe2o3_gfx950_gpt_oss_decode", "sourcePath": "src/lib.rs",
+                })
+                self.assertIs(inputs["defaultFeatures"], False)
+                self.assertEqual(inputs["features"], [f"kernel-gpt-oss-decode-{name}"])
+                self.assertEqual(inputs["kernelSymbols"], [symbol])
+                self.assertEqual(inputs["contractSha256"], self.validator.fixture_input_contract_sha256(fixture))
+                self.assertEqual(fixture["target"], "gfx950")
+                self.assertEqual(fixture["testId"], f"kernel-compile-matrix/gfx950/gpt-oss-{name}")
+                self.assertEqual(fixture["matrix"], {
+                    "caseId": f"gpt-oss-{name}", "runnerPath": f"{package}/run-ablation-gfx950.sh",
+                    "artifactName": f"kernel-gpt-oss-decode-{name}.hsaco",
+                    "runnerArguments": [name], "environment": [],
+                })
+                self.assertIn(fixture_id, entry["compilerFixtureIds"])
+                self.assertEqual(fixture["simulation"], {
+                    "status": "pending-design", "bundleVersion": 7, "canonicalKirVersion": 12,
+                    "requestPath": f"config/tutorial-simulation-v1/{fixture_id}.request.json",
+                    "requestSha256": None, "requestBytes": None,
+                    "expectationPath": f"config/tutorial-simulation-v1/{fixture_id}.expectation.json",
+                    "expectationSha256": None, "expectationBytes": None,
+                })
+                suites = [suite for suite in self.manifest["qualification"]["suites"]
+                          if any(coverage["lessonId"] == lesson_id and fixture_id in coverage["fixtureIds"]
+                                 for coverage in suite["coverage"])]
+                self.assertEqual({suite["gate"] for suite in suites}, {"cpu-reference", "semantic-simulation"})
+                self.assertTrue(all(suite["availability"] == "pending" for suite in suites))
+                tab = lesson["codeTabs"][ordinal]
+                source = (ROOT / source_path).read_bytes()
+                self.assertEqual(tab["sourcePath"], source_path)
+                self.assertEqual(tab["sourceDigestScope"], "file")
+                self.assertEqual(tab["displayedUtf8Bytes"], len(source))
+                self.assertEqual(tab["sourceSha256"], hashlib.sha256(source).hexdigest())
+                self.assertEqual(tab["displayedSha256"], tab["sourceSha256"])
+                self.assertEqual(source[offset:offset + len(symbol)], symbol.encode("ascii"))
+                self.assertIn({"kernelSymbol": symbol, "functionUtf8Offset": offset, "attributedKernel": True},
+                              self.validator.ordinary_rust_function_items(source.decode("utf-8")))
+                row = next(row for row in self.manifest["kernelInventory"]["displayItems"]
+                           if (row["lessonId"], row["tabOrdinal"], row["functionUtf8Offset"])
+                           == (lesson_id, ordinal, offset))
+                identity = f"fixture:{fixture_id}:{symbol}"
+                self.assertEqual(row["kernelIds"], [identity])
+                self.assertEqual(row["bindingStatus"], "fixture-source-contract")
+                self.assertEqual(row["classification"], "kernel")
+                self.assertEqual(row["negativeCases"], [])
+                self.assertEqual(identities[identity]["selections"], [
+                    {"kind": "fixture", "fixtureId": fixture_id, "kernelSymbol": symbol},
+                ])
+                self.assertEqual([v["kind"] for v in identities[identity]["variants"]], ["simt", "tile"])
+                self.assertTrue(all(v["status"] == "pending" and v["source"] is None
+                                    for v in identities[identity]["variants"]))
+
+    def test_attention_candidates_reject_swapped_source_or_feature_contracts(self):
+        original, _ = self.gpt_fixture_document()
+        for name, other in (("pipelined-attention", "scalar-attention"), ("scalar-attention", "pipelined-attention")):
+            for field, value, message in (
+                ("sourcePaths", [f"examples/gfx950_gpt_oss_decode/src/kernel_{other.replace('-', '_')}.rs"],
+                 "exact selected source"),
+                ("features", [f"kernel-gpt-oss-decode-{other}"], "exact current source occurrence"),
+            ):
+                document = copy.deepcopy(original)
+                fixture = next(row for row in document["compilerFixtures"]
+                               if row["fixtureId"] == f"gfx950-gpt-oss-{name}")
+                fixture["compilerInput"][field] = value
+                fixture["compilerInput"]["contractSha256"] = self.validator.fixture_input_contract_sha256(fixture)
+                with self.subTest(candidate=name, field=field), self.assertRaisesRegex(SystemExit, message):
+                    self.validator.validate_kernel_inventory(document, None)
 
     def test_real_fixture_same_symbol_file_and_feature_substitutions_reject(self):
         original, _ = self.gpt_fixture_document()
         rows = original["kernelInventory"]["displayItems"]
-        for index in range(3):
+        for index, other in ((0, 1), (1, 2), (2, 0), (6, 7), (7, 6)):
             document = copy.deepcopy(original)
-            document["kernelInventory"]["displayItems"][index]["kernelIds"] = rows[(index + 1) % 3]["kernelIds"]
+            document["kernelInventory"]["displayItems"][index]["kernelIds"] = rows[other]["kernelIds"]
             with self.subTest(index=index), self.assertRaisesRegex(SystemExit, "exact selected source"):
                 self.validator.validate_kernel_inventory(document, None)
         document = copy.deepcopy(original)
@@ -526,7 +626,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         fixture["compilerInput"]["contractSha256"] = self.validator.fixture_input_contract_sha256(fixture)
         with self.assertRaisesRegex(SystemExit, "exact current source occurrence"):
             self.validator.validate_kernel_inventory(document, None)
-        for row_index in range(6):
+        for row_index in range(8):
             document = copy.deepcopy(original)
             document["kernelInventory"]["displayItems"][row_index]["functionUtf8Offset"] += 1
             with self.subTest(row=row_index), self.assertRaisesRegex(SystemExit, "exact current source occurrence"):

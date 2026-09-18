@@ -254,11 +254,24 @@ the fixture inputs, source-driver contracts or curriculum source metadata.
   Qualified attribute paths and name-value forms such as `#[doc = "..."]` are
   unsupported and reject claimed bindings.
 
-Six GPT-OSS occurrences in tabs 1-4 now retain these expected fixture/source
-contracts: serial-router, held-fragments, interleaved-stores, and the three
-materialized components. Their existing source/feature identities remain
-distinct, including the repeated megakernel symbol. This leaves 58 pending
-display bindings; the two named lesson-level source gaps remain unresolved.
+Eight GPT-OSS occurrences in tabs 1-6 now retain these expected fixture/source
+contracts: serial-router, held-fragments, interleaved-stores, the three
+materialized components, pipelined-attention and scalar-attention. The latter
+two bind the existing whole-file sources at function-name UTF-8 offsets 1508
+and 3041 under `kernel-gpt-oss-decode-pipelined-attention` and
+`kernel-gpt-oss-decode-scalar-attention`, respectively. Their source bodies and
+the original 47 fixture obligations are unchanged. These are positive,
+unqualified candidates: the retained compiler-rejected display labels do not
+make them required-negative cases. CPU-reference coverage remains pending;
+their Bundle V7 / KIR V12 simulation requests and independent oracles remain
+`pending-design`, without content pins or execution receipts.
+
+The inventory derives 50 fixtures, 60 known identities and 56 pending display
+bindings. The GPT-OSS lesson-level source gap is cleared; `gemm-proof-plan`'s
+historical `examples/tiled_gemm_v1/src/kernel.rs` gap remains. Distinct feature
+selections retain distinct identities despite sharing the megakernel symbol.
+`requiredPairCount` remains null, `inventoryComplete` false and
+`qualifiedPairCount` zero; the known identities are not a final pair denominator.
 Other source/display joins remain `pending`; a fixture's lesson scope is not
 an exact displayed-source binding.
 
