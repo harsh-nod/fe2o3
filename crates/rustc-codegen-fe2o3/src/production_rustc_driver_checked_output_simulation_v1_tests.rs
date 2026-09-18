@@ -17,12 +17,15 @@ const SENTINEL: f32 = -1234.5;
 const TARGET: SimulationTargetV1 = SimulationTargetV1::amdgpu_64();
 #[path = "production_rustc_driver_checked_output_f32_simulation_v1_tests.rs"]
 mod f32_arithmetic;
+#[path = "production_rustc_driver_checked_output_numeric_cast_simulation_v1_tests.rs"]
+pub(super) mod numeric_cast;
 #[path = "production_rustc_driver_checked_output_saturating_simulation_v1_tests.rs"]
 pub(super) mod saturating_integer;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum Case {
+    NumericCast(numeric_cast::OperationCase),
     SaturatingInteger(saturating_integer::OperationCase),
     Fill,
     Vecadd,
@@ -34,6 +37,7 @@ pub(super) enum Case {
 impl Case {
     fn name(self) -> &'static str {
         match self {
+            Self::NumericCast(case) => case.name(),
             Self::SaturatingInteger(case) => case.name(),
             Self::Fill => "fill",
             Self::Vecadd => "vecadd",
@@ -45,6 +49,7 @@ impl Case {
 
     fn numerical_policy(self) -> &'static str {
         match self {
+            Self::NumericCast(_) => numeric_cast::NUMERICAL_POLICY,
             Self::SaturatingInteger(_) => saturating_integer::NUMERICAL_POLICY,
             Self::Fill | Self::Vecadd | Self::ScalarGemm => {
                 "finite-dyadic-f32-separate-multiply-add-bit-exact-v1"
@@ -55,6 +60,9 @@ impl Case {
 }
 
 pub(super) fn check_native_arithmetic(case: Case, llvm: &str) -> Result<(), SourceFailure> {
+    if let Case::NumericCast(case) = case {
+        return numeric_cast::check_native(case, llvm);
+    }
     if let Case::SaturatingInteger(case) = case {
         return saturating_integer::check_native(case, llvm);
     }
@@ -117,6 +125,7 @@ pub(super) fn requested() -> Result<Option<Case>, SourceFailure> {
         Some("f32-divide") => Ok(Some(Case::F32Divide)),
         Some(name) => saturating_integer::OperationCase::parse(name)
             .map(Case::SaturatingInteger)
+            .or_else(|| numeric_cast::OperationCase::parse(name).map(Case::NumericCast))
             .map(Some)
             .ok_or_else(|| failure("unknown explicit test simulation request")),
         _ => Err(failure("unknown explicit test simulation request")),
@@ -226,7 +235,7 @@ fn elementwise(case: Case, out_len: usize, extra_inputs: usize) -> Result<Scenar
             (0..out_len).map(|i| rounded_add(a[i], b[i])).collect()
         }
         Case::ScalarGemm => return Err(failure("GEMM requires its recurrence fixture")),
-        Case::SaturatingInteger(_) => {
+        Case::SaturatingInteger(_) | Case::NumericCast(_) => {
             return Err(failure("integer saturation requires its typed fixture"));
         }
         Case::F32Negate | Case::F32Divide => {
@@ -310,6 +319,7 @@ fn gemm_inputs(
 
 fn scenarios(case: Case) -> Result<Vec<Scenario>, SourceFailure> {
     match case {
+        Case::NumericCast(case) => numeric_cast::scenarios(case),
         Case::SaturatingInteger(case) => saturating_integer::scenarios(case),
         Case::F32Negate | Case::F32Divide => f32_arithmetic::scenarios(case),
         Case::Fill | Case::Vecadd => {
@@ -357,6 +367,9 @@ fn scenarios(case: Case) -> Result<Vec<Scenario>, SourceFailure> {
 }
 
 fn require_abi(module: &AdmittedSimulationModuleV1, case: Case) -> Result<&Kernel, SourceFailure> {
+    if let Case::NumericCast(case) = case {
+        return numeric_cast::require_abi(module, case);
+    }
     if let Case::SaturatingInteger(case) = case {
         return saturating_integer::require_abi(module, case);
     }
@@ -473,9 +486,11 @@ fn check_execution(
         Case::F32Negate | Case::F32Divide => {
             f32_arithmetic::check_backings(case, execution.shared_buffers(), expected)
         }
-        Case::Fill | Case::Vecadd | Case::ScalarGemm | Case::SaturatingInteger(_) => {
-            check_backings(execution.shared_buffers(), expected)
-        }
+        Case::Fill
+        | Case::Vecadd
+        | Case::ScalarGemm
+        | Case::SaturatingInteger(_)
+        | Case::NumericCast(_) => check_backings(execution.shared_buffers(), expected),
     }
 }
 

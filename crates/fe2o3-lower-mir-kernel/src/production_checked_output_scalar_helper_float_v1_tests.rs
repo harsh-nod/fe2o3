@@ -101,7 +101,7 @@ fn float_constants_compare_and_select_preserve_exact_nan_and_signed_zero_bits() 
 }
 
 #[test]
-fn f64_divide_negation_float_remainder_and_numeric_casts_remain_closed() {
+fn f64_divide_negation_float_remainder_and_unadmitted_casts_remain_closed() {
     for ty in [Type::F32, Type::F64] {
         for op in [BinaryOp::Divide, BinaryOp::Remainder] {
             if ty == Type::F32 && op == BinaryOp::Divide {
@@ -134,11 +134,11 @@ fn f64_divide_negation_float_remainder_and_numeric_casts_remain_closed() {
         (Type::F64, Type::F32, CastKind::FloatTruncate),
         (
             Type::Scalar(ScalarType::U32),
-            Type::F32,
+            Type::F64,
             CastKind::IntegerToFloat,
         ),
         (
-            Type::F32,
+            Type::F64,
             Type::Scalar(ScalarType::U32),
             CastKind::FloatToInteger,
         ),

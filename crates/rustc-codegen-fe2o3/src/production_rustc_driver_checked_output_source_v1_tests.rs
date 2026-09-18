@@ -200,6 +200,7 @@ impl Callbacks for CheckedOutputCallbacks {
                 }
             }
             let simulation_case = simulation::requested()?;
+            let exp_source_identity = exp_source::check_actual_if_requested(&stage)?;
             if let Some(case) = simulation_case {
                 observation.simulation =
                     Some(self.progress.run(SourceStage::Simulation, || {
@@ -263,6 +264,11 @@ impl Callbacks for CheckedOutputCallbacks {
             let llvm = std::str::from_utf8(handoff.module_bytes())
                 .map_err(|e| SourceFailure::new(SourceStage::NativeHandoff, e))?;
             assert!(llvm.contains("amdgpu_kernel"));
+            exp_source::check_handoff_if_requested(
+                &handoff,
+                exp_source_identity,
+                &observation.output_digest,
+            )?;
             if let Some(case) = simulation_case {
                 simulation::check_native_arithmetic(case, llvm)?;
             }
@@ -422,6 +428,9 @@ fn ordinary_rust_private_unit_helper_reaches_checked_native_output() {
 }
 
 enum OrdinarySourceCase {
+    NumericCast(numeric_cast_source::Config),
+    F32Exp,
+    RetainedF32Exp,
     SaturatingInteger(saturating_source::Config),
     Fill,
     Vecadd,
@@ -437,6 +446,16 @@ enum OrdinarySourceCase {
 }
 
 fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
+    ordinary_rust_checked_output_cases_for_profile(
+        cases,
+        fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
+    );
+}
+
+fn ordinary_rust_checked_output_cases_for_profile(
+    cases: &[OrdinarySourceCase],
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+) {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -462,7 +481,7 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
             "--message-format=json-render-diagnostics", "--target-dir"])
         .arg(&target)
         .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
-            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32"));
+            format!("-Zalways-encode-mir -Ctarget-cpu={} -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32", profile.cpu())));
     let messages: Vec<serde_json::Value> = built
         .stdout
         .split(|b| *b == b'\n')
@@ -483,13 +502,41 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         {
             continue;
         }
-        let saturation_name = match case {
+        let configuration_name = match case {
+            OrdinarySourceCase::NumericCast(config) => config.name(),
             OrdinarySourceCase::SaturatingInteger(config) => config.name(),
             _ => String::new(),
         };
         let (name, package_path, feature, roots, reads, writes, calls) = match case {
+            OrdinarySourceCase::F32Exp => (
+                "f32-exp",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("f32-exp"),
+                &["f32_exp"][..],
+                0,
+                1,
+                0,
+            ),
+            OrdinarySourceCase::RetainedF32Exp => (
+                "retained-f32-exp",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("f32-helper-exp"),
+                &["f32_helper_exp"][..],
+                0,
+                1,
+                1,
+            ),
+            OrdinarySourceCase::NumericCast(config) => (
+                configuration_name.as_str(),
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("numeric-cast"),
+                &["numeric_cast"][..],
+                0,
+                1,
+                usize::from(config.retained),
+            ),
             OrdinarySourceCase::SaturatingInteger(config) => (
-                saturation_name.as_str(),
+                configuration_name.as_str(),
                 "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
                 Some("saturating-integer"),
                 &["saturating_integer"][..],
@@ -603,7 +650,7 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
             "--crate-type=lib".into(),
             format!("--edition={}", package["edition"].as_str().unwrap()),
             "--target=amdgcn-amd-amdhsa".into(),
-            "-Ctarget-cpu=gfx942".into(),
+            format!("-Ctarget-cpu={}", profile.cpu()),
             "-Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32".into(),
             "-Copt-level=3".into(),
             "-Cdebug-assertions=off".into(),
@@ -631,6 +678,9 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         if let OrdinarySourceCase::SaturatingInteger(config) = case {
             config.configure(&mut args);
         }
+        if let OrdinarySourceCase::NumericCast(config) = case {
+            config.configure(&mut args);
+        }
         // Qualify both real frontend shapes. This changes only rustc's test
         // invocation, never the fixed fe2o3 optimizer or its admission policy.
         if matches!(case, OrdinarySourceCase::RetainedWrappedFill) {
@@ -638,7 +688,9 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         }
         if matches!(
             case,
-            OrdinarySourceCase::RetainedF32Negate | OrdinarySourceCase::RetainedF32Divide
+            OrdinarySourceCase::RetainedF32Negate
+                | OrdinarySourceCase::RetainedF32Divide
+                | OrdinarySourceCase::RetainedF32Exp
         ) {
             args.push("-Zinline-mir=no".into());
         }
@@ -682,6 +734,10 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
             );
         progress::clear_inherited_jobserver(&mut command);
         let simulation_case = match case {
+            OrdinarySourceCase::F32Exp | OrdinarySourceCase::RetainedF32Exp => None,
+            OrdinarySourceCase::NumericCast(config) => {
+                Some(simulation::Case::NumericCast(config.operation))
+            }
             OrdinarySourceCase::SaturatingInteger(config) => {
                 Some(simulation::Case::SaturatingInteger(config.operation))
             }
@@ -700,7 +756,15 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
             }
         };
         simulation::configure_child(&mut command, simulation_case);
-        snapshots::configure_child(&mut command, name);
+        exp_source::configure_child(
+            &mut command,
+            matches!(
+                case,
+                OrdinarySourceCase::F32Exp | OrdinarySourceCase::RetainedF32Exp
+            ),
+        );
+        let diagnostic_name = format!("{}-{name}", profile.cpu());
+        snapshots::configure_child(&mut command, &diagnostic_name);
         let child = output(&mut command);
         let result: Result<Observation, SourceFailure> =
             serde_json::from_slice(&std::fs::read(&response).unwrap()).unwrap();
@@ -774,7 +838,7 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
             assert!(result.simulation.is_none());
         }
         eprintln!(
-            "actual-source checked native output {name}: {result:?}\n{}",
+            "actual-source checked native output {diagnostic_name}: {result:?}\n{}",
             String::from_utf8_lossy(&child.stdout)
         );
         if matches!(
@@ -793,7 +857,7 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
             let expected_route = result.source_route;
             let proof_response = scratch.path().join(format!("{name}-proof-refusal.json"));
             simulation::configure_child(&mut command, None);
-            snapshots::configure_child(&mut command, &format!("{name}-missing-proof"));
+            snapshots::configure_child(&mut command, &format!("{diagnostic_name}-missing-proof"));
             let probe = output(
                 command
                     .env(CHILD_PROOF_PROBE, "1")
@@ -833,8 +897,12 @@ mod corpus;
 mod corpus_cargo;
 #[path = "production_rustc_driver_checked_output_dispatch_v1_tests.rs"]
 mod dispatch;
+#[path = "production_rustc_driver_checked_output_exp_source_v1_tests.rs"]
+mod exp_source;
 #[path = "production_rustc_driver_checked_output_f32_source_v1_tests.rs"]
 mod f32_source;
+#[path = "production_rustc_driver_checked_output_numeric_cast_source_v1_tests.rs"]
+mod numeric_cast_source;
 #[path = "production_rustc_driver_checked_output_progress_v1_tests.rs"]
 mod progress;
 #[path = "production_rustc_driver_checked_output_runtime_domains_v1_tests.rs"]

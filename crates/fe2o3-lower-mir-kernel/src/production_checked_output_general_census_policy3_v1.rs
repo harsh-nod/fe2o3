@@ -60,6 +60,16 @@ pub(super) fn source_parts(
                             operation: SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_),
                             ..
                         }) => {}
+                        Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                            operation:
+                                SemanticCompilerIntrinsicOperationV1::MathContextCurrent { .. }
+                                | SemanticCompilerIntrinsicOperationV1::MathF32 {
+                                    function:
+                                        fe2o3_mir_model::semantic_mir_v1::SemanticF32MathFunctionV1::Exp,
+                                    ..
+                                },
+                            ..
+                        }) => {}
                         Some(SemanticCallableDeclV1::Defined { function: callee })
                             if source.functions().get(callee.index() as usize).is_some_and(
                                 |callee| callee.role() == SemanticFunctionRoleV1::InternalHelper,
@@ -115,6 +125,15 @@ pub(super) fn source_parts(
                             | SemanticBinaryOpV1::GreaterOrEqual,
                         ..
                     } => {}
+                    SemanticRvalueKindV1::Cast {
+                        kind: SemanticCastKindV1::Float,
+                        operand,
+                    } if numeric_casts::source_integer_to_f32(
+                        source,
+                        operand.ty(),
+                        value.result_type(),
+                        budget,
+                    )? => {}
                     SemanticRvalueKindV1::Unary {
                         operation: SemanticUnaryOpV1::Negate,
                         ..
@@ -281,6 +300,9 @@ pub(super) fn native(
             ) {
                 continue;
             }
+            if exp::declaration(function.function, budget)? {
+                continue;
+            }
             return Err(refused(
                 phase,
                 "only the canonical assertion trap declaration",
@@ -373,6 +395,10 @@ pub(super) fn native(
                 None
             }
             OperationKind::Cast {
+                kind: CastKind::IntegerToFloat | CastKind::FloatToInteger,
+                ..
+            } if numeric_casts::native(inventory, ordinal, budget)? => None,
+            OperationKind::Cast {
                 kind:
                     CastKind::Truncate
                     | CastKind::ZeroExtend
@@ -405,7 +431,8 @@ pub(super) fn native(
                 None
             }
             OperationKind::Call { callee, arguments } => {
-                if !helpers.call(inventory, ordinal, budget)? {
+                if !helpers.call(inventory, ordinal, budget)? && !exp::call(row.operation, budget)?
+                {
                     charge(
                         budget,
                         callee
