@@ -262,7 +262,7 @@ fn build_pending_scoped_root_v29(
         )?,
         None => BTreeSet::new(),
     };
-    let (pending, private_payload) = with_production_call_instances_v1(
+    let (pending, private_payload) = production_call_instances_v1::with_production_call_instances_v1(
         checked.semantic_ssa(),
         checked.root_id(),
         budget,

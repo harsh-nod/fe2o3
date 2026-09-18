@@ -48,7 +48,7 @@ pub(super) fn emit_checked(
             return Err(error);
         }
     };
-    assert_eq!(output.ledger, budget.work_ledger_identity_v1());
+    assert!(output.ledger == budget.work_ledger_identity_v1());
     assert_eq!(budget.storage() - floor, output.retained_emission_storage);
     assert!(output.pending.additional_storage_bytes <= output.retained_emission_storage);
     assert_eq!(output.kernel.entry.as_str(), "lifecycle_fixture");
