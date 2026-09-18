@@ -13,25 +13,57 @@ pub(super) struct SemanticTransparentBorrowSiteV1 {
 }
 
 #[derive(Clone, Copy)]
+enum SemanticBorrowOriginV1 {
+    Statement(SemanticTransparentBorrowSiteV1),
+    Parameter(u32),
+}
+
+#[derive(Clone, Copy)]
 struct SemanticBorrowCandidateV1 {
-    site: SemanticTransparentBorrowSiteV1,
+    origin: SemanticBorrowOriginV1,
     reference_local: u32,
+    reference_type: SemanticTypeIdV1,
     source_local: u32,
     source_type: SemanticTypeIdV1,
     source_reference: Option<u32>,
     parent: Option<usize>,
     valid: bool,
     consumers: u32,
-    intrinsic_consumer: bool,
+    closed_consumer: bool,
 }
 
 pub(super) fn transparent_borrow_sites_v1(
     function: &SemanticFunctionDeclV1,
     callables: &[SemanticCallableDeclV1],
 ) -> BTreeSet<SemanticTransparentBorrowSiteV1> {
+    analyze_borrow_uses_v29(function, callables, &[], None).0
+}
+
+pub(super) fn analyze_borrow_uses_v29(
+    function: &SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    parameters: &[Option<super::nominal_reference_effects_v29::NominalReferenceParameterV29>],
+    effects: Option<&super::nominal_reference_effects_v29::NominalReferenceEffectsV29>,
+) -> (BTreeSet<SemanticTransparentBorrowSiteV1>, BTreeSet<u32>) {
     let mut candidates = Vec::new();
     let mut candidate_by_reference = BTreeMap::<u32, usize>::new();
     let mut duplicate_references = BTreeSet::new();
+    for parameter in parameters.iter().flatten() {
+        candidate_by_reference.insert(parameter.local, candidates.len());
+        candidates.push(SemanticBorrowCandidateV1 {
+            origin: SemanticBorrowOriginV1::Parameter(parameter.ordinal),
+            reference_local: parameter.local,
+            reference_type: parameter.reference_type,
+            source_local: parameter.local,
+            source_type: parameter.pointee,
+            source_reference: None,
+            parent: None,
+            valid: true,
+            consumers: 0,
+            closed_consumer: false,
+        });
+    }
+    let parameter_count = candidates.len();
     for (block_index, block) in function.blocks().iter().enumerate() {
         for (statement_index, statement) in block.statements().iter().enumerate() {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
@@ -52,33 +84,38 @@ pub(super) fn transparent_borrow_sites_v1(
             };
             let reference_local = assignment.destination().local().index();
             let candidate = SemanticBorrowCandidateV1 {
-                site: SemanticTransparentBorrowSiteV1 {
+                origin: SemanticBorrowOriginV1::Statement(SemanticTransparentBorrowSiteV1 {
                     block: block_index as u32,
                     statement: statement_index as u32,
-                },
+                }),
                 reference_local,
+                reference_type: assignment.destination().ty(),
                 source_local: place.local().index(),
                 source_type: place.ty(),
                 source_reference,
                 parent: None,
                 valid: true,
                 consumers: 0,
-                intrinsic_consumer: false,
+                closed_consumer: false,
             };
             let index = candidates.len();
             candidates.push(candidate);
             if !duplicate_references.contains(&reference_local)
-                && candidate_by_reference
-                    .insert(reference_local, index)
-                    .is_some()
+                && let Some(previous) = candidate_by_reference.insert(reference_local, index)
             {
+                if matches!(
+                    candidates[previous].origin,
+                    SemanticBorrowOriginV1::Parameter(_)
+                ) {
+                    candidates[previous].valid = false;
+                }
                 candidate_by_reference.remove(&reference_local);
                 duplicate_references.insert(reference_local);
             }
         }
     }
     if candidates.is_empty() {
-        return BTreeSet::new();
+        return (BTreeSet::new(), BTreeSet::new());
     }
     let return_local = (!matches!(
         function.abi().return_value().mode(),
@@ -93,7 +130,7 @@ pub(super) fn transparent_borrow_sites_v1(
     .flatten();
     let mut unscoped_references = BTreeSet::new();
     let mut events = Vec::new();
-    let mut next_candidate = 0;
+    let mut next_candidate = parameter_count;
     // Repeated MIR temporaries are indexed by their definition occurrence within
     // a block. A use without a local definition disqualifies every occurrence
     // of that temporary; this is not a cross-block reference alias analysis.
@@ -116,7 +153,9 @@ pub(super) fn transparent_borrow_sites_v1(
             }
             let definition = candidates
                 .get(next_candidate)
-                .filter(|candidate| candidate.site == site)
+                .filter(|candidate| {
+                    matches!(candidate.origin, SemanticBorrowOriginV1::Statement(origin) if origin == site)
+                })
                 .map(|candidate| candidate.reference_local);
             if let Some(reference) = definition {
                 if duplicate_references.contains(&reference) {
@@ -155,6 +194,7 @@ pub(super) fn transparent_borrow_sites_v1(
             block.terminator().kind(),
             return_local,
             callables,
+            effects,
             &candidate_by_reference,
             &mut candidates,
         );
@@ -172,7 +212,7 @@ pub(super) fn transparent_borrow_sites_v1(
 
     let mut accepted = BTreeSet::new();
     for terminal in 0..candidates.len() {
-        if !candidates[terminal].intrinsic_consumer {
+        if !candidates[terminal].closed_consumer {
             continue;
         }
         let mut chain = Vec::new();
@@ -194,10 +234,29 @@ pub(super) fn transparent_borrow_sites_v1(
             current = parent;
         }
     }
-    accepted
-        .into_iter()
-        .map(|candidate| candidates[candidate].site)
-        .collect()
+    // Parameter roots describe body effects only. They must never become
+    // fabricated statement sites or SSA entry definitions.
+    let mut sites = BTreeSet::new();
+    let mut closed = BTreeSet::new();
+    for candidate in accepted {
+        match candidates[candidate].origin {
+            SemanticBorrowOriginV1::Statement(site) => {
+                sites.insert(site);
+            }
+            SemanticBorrowOriginV1::Parameter(ordinal) => {
+                closed.insert(ordinal);
+            }
+        }
+    }
+    for candidate in &candidates[..parameter_count] {
+        if candidate.valid
+            && candidate.consumers == 0
+            && let SemanticBorrowOriginV1::Parameter(ordinal) = candidate.origin
+        {
+            closed.insert(ordinal);
+        }
+    }
+    (sites, closed)
 }
 
 fn record_unscoped_reference_uses_v1(
@@ -286,7 +345,9 @@ fn invalidate_reference_uses_in_statement_v1(
             let candidate_definition = candidate_by_reference
                 .get(&assignment.destination().local().index())
                 .copied()
-                .filter(|candidate| candidates[*candidate].site == site);
+                .filter(|candidate| {
+                    matches!(candidates[*candidate].origin, SemanticBorrowOriginV1::Statement(origin) if origin == site)
+                });
             if let Some(candidate) = candidate_by_reference
                 .get(&assignment.destination().local().index())
                 .copied()
@@ -372,6 +433,7 @@ fn validate_reference_uses_in_terminator_v1(
     terminator: &SemanticTerminatorKindV1,
     return_local: Option<usize>,
     callables: &[SemanticCallableDeclV1],
+    effects: Option<&super::nominal_reference_effects_v29::NominalReferenceEffectsV29>,
     candidate_by_reference: &BTreeMap<u32, usize>,
     candidates: &mut [SemanticBorrowCandidateV1],
 ) {
@@ -384,13 +446,7 @@ fn validate_reference_uses_in_terminator_v1(
                     candidates,
                 );
             }
-            let operation = callables
-                .get(call.callee().index() as usize)
-                .and_then(|callable| match callable {
-                    SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } => Some(operation),
-                    SemanticCallableDeclV1::Defined { .. }
-                    | SemanticCallableDeclV1::DeviceFfiImport { .. } => None,
-                });
+            let callable = callables.get(call.callee().index() as usize);
             for (argument_index, argument) in call.arguments().iter().enumerate() {
                 let place = match argument {
                     SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)
@@ -412,17 +468,32 @@ fn validate_reference_uses_in_terminator_v1(
                 else {
                     continue;
                 };
-                let accepted = operation.is_some_and(|operation| {
-                    compiler_intrinsic_accepts_transparent_borrow_v1(
-                        operation,
-                        argument_index,
-                        candidates[candidate_index].source_type,
-                    )
-                });
+                let candidate = candidates[candidate_index];
+                let accepted = match callable {
+                    Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) => {
+                        compiler_intrinsic_accepts_transparent_borrow_v1(
+                            operation,
+                            argument_index,
+                            candidate.source_type,
+                        )
+                    }
+                    Some(SemanticCallableDeclV1::Defined { function }) => {
+                        effects.is_some_and(|effects| {
+                            place.ty() == candidate.reference_type
+                                && effects.accepts(
+                                    *function,
+                                    argument_index,
+                                    candidate.reference_type,
+                                    candidate.source_type,
+                                )
+                        })
+                    }
+                    Some(SemanticCallableDeclV1::DeviceFfiImport { .. }) | None => false,
+                };
                 if accepted {
                     candidates[candidate_index].consumers =
                         candidates[candidate_index].consumers.saturating_add(1);
-                    candidates[candidate_index].intrinsic_consumer = true;
+                    candidates[candidate_index].closed_consumer = true;
                 } else {
                     candidates[candidate_index].valid = false;
                 }

@@ -1,4 +1,7 @@
 use super::*;
+#[path = "production_execution_helper_borrow_v29_tests.rs"]
+mod helper_borrow_tests;
+
 use crate::{
     ProductionContextCallBoundaryV29 as Boundary, ProductionContextRootInputV29 as RootInput,
     ProductionSourceLaunchInputV1, ProductionSourceLaunchRootInputV1,
