@@ -419,6 +419,60 @@ class FixtureDisplayTests(unittest.TestCase):
         with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "ambiguous"):
             self.validate(False)
 
+    def test_fixture_attributes_reject_qualified_benign_names(self):
+        for attribute in ("doc::rewrite", "inline::rewrite", "doc::rewrite(hidden)",
+                          "inline :: rewrite(always)", "allow::rewrite(dead_code)",
+                          "doc /* before */ :: /* after */ rewrite",
+                          "inline /* before */ :: /* after */ rewrite(always)"):
+            for location in ("function", "module"):
+                self.setUp()
+                if location == "function":
+                    self.sources[self.path] = f"#[{attribute}]\n#[kernel] fn same() {{}}\n"
+                else:
+                    self.sources[self.library] = f'#[{attribute}]\n#[cfg(feature = "left")] mod left;\n'
+                source = self.sources[self.path]
+                digest = hashlib.sha256(source.encode()).hexdigest()
+                self.tab.update(sourceSha256=digest, displayedSha256=digest, displayedUtf8Bytes=len(source.encode()))
+                self.row["functionUtf8Offset"] = self.scanner.ordinary_rust_function_items(source)[0]["functionUtf8Offset"]
+                with self.subTest(attribute=attribute, location=location), self.assertRaisesRegex(
+                    IDENTITIES.KernelInventoryError, "unsupported fixture selection attribute",
+                ):
+                    self.validate(False)
+
+    def test_fixture_attributes_require_one_supported_body_form(self):
+        for attribute in ("doc[hidden]", "inline{always}", "inline(sometimes)",
+                          "doc(hidden) (alias)", "allow", "doc", 'doc = "description"'):
+            self.setUp()
+            self.sources[self.path] = f"#[{attribute}]\n#[kernel] fn same() {{}}\n"
+            source = self.sources[self.path]
+            digest = hashlib.sha256(source.encode()).hexdigest()
+            self.tab.update(sourceSha256=digest, displayedSha256=digest, displayedUtf8Bytes=len(source.encode()))
+            self.row["functionUtf8Offset"] = self.scanner.ordinary_rust_function_items(source)[0]["functionUtf8Offset"]
+            with self.subTest(attribute=attribute), self.assertRaisesRegex(
+                IDENTITIES.KernelInventoryError, "unsupported fixture selection attribute",
+            ):
+                self.validate(False)
+
+    def test_fixture_attributes_accept_supported_builtin_forms(self):
+        for attribute in ("allow(dead_code)", "deny(missing_docs)", "forbid(unsafe_code)",
+                          "warn(dead_code)", "doc(hidden)", "inline", "inline(always)",
+                          "inline(never)", "inline /* gap */ (always)"):
+            for location in (("function",) if attribute.startswith("inline") else ("function", "module")):
+                self.setUp()
+                if location == "function":
+                    self.sources[self.path] = f"#[{attribute}]\n#[kernel] fn same() {{}}\n"
+                else:
+                    self.sources[self.library] = f'#[{attribute}]\n#[cfg(feature = "left")] mod left;\n'
+                source = self.sources[self.path]
+                digest = hashlib.sha256(source.encode()).hexdigest()
+                self.tab.update(sourceSha256=digest, displayedSha256=digest, displayedUtf8Bytes=len(source.encode()))
+                self.row["functionUtf8Offset"] = self.scanner.ordinary_rust_function_items(source)[0]["functionUtf8Offset"]
+                self.runtime["lessons"][0]["codeTabs"][0]["displayedCode"] = source
+                with self.subTest(attribute=attribute, location=location):
+                    result = self.validate()
+                    self.assertEqual(result["unresolvedBindings"], [])
+                    self.assertEqual(result["kernelIdentities"][0]["variants"], variants())
+
     def test_duplicate_selected_symbol_and_unknown_cfg_stay_unresolved(self):
         self.fixture["compilerInput"]["features"] = ["left", "right"]
         with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "ambiguous feature-selected"):
