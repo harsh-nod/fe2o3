@@ -188,6 +188,48 @@ fn scope_seal_binds_target_after_fresh_admission() {
 }
 
 #[test]
+fn scope_seal_rejects_fresh_admitted_reachable_external_tables() {
+    let original = fixture(Mutation::None);
+    let allocation = SemanticAllocationDeclV1::new(
+        SemanticAllocationIdentityV1::from_sha256([1; 32]),
+        vec![0; 4],
+        vec![0x0f],
+        4,
+        false,
+        vec![],
+    )
+    .unwrap();
+    let exported = SemanticStaticDeclV1::new(
+        SemanticStaticIdentityV1::from_sha256([1; 32]),
+        SemanticSourceProvenanceV1::unavailable(),
+        U32,
+        false,
+        0,
+        SemanticStaticDefinitionV1::Defined {
+            initializer: SemanticAllocationIdV1::from_index(0),
+        },
+    )
+    .with_export_symbol(SemanticLinkSymbolV1::new(b"scope_custody_external".to_vec()).unwrap());
+    let changed = InertSemanticMirRequestV1::new_with_callables(
+        original.target(),
+        original.types().to_vec(),
+        vec![allocation],
+        vec![exported],
+        vec![],
+        original.functions().to_vec(),
+        original.callables().to_vec(),
+        original.roots().to_vec(),
+    )
+    .unwrap()
+    .admit_exact_v29(SemanticMirLimitsV1::default())
+    .unwrap();
+    assert_eq!(declarations(&original), declarations(&changed));
+    assert_eq!(original.functions(), changed.functions());
+    RetainedContextEntriesV29::seal(entries(&original), &changed, |_| Ok(())).unwrap();
+    assert!(seal(capture(&original, |_, _| {}), &changed).is_err());
+}
+
+#[test]
 fn scope_seal_binds_non_primary_callable_metadata_after_fresh_admission() {
     let original = fixture(Mutation::None);
     for axis in 0..4 {
@@ -425,7 +467,7 @@ fn scope_prepare_drop_or_charge_failure_does_not_publish() {
 }
 
 #[test]
-fn scope_integrated_seal_charges_same_cumulative_ledger_without_refund() {
+fn scope_census_seal_charges_same_cumulative_ledger_without_refund() {
     let semantic = fixture(Mutation::None);
     let mut required = 7usize;
     RetainedContextEntriesV29::seal_with_scopes(
