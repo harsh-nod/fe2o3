@@ -31,11 +31,12 @@ impl NormalizedScalarExpressionV1 {
         }
     }
 
-    fn template_validate(&self) -> Result<Stats, Error> {
+    fn template_validate(&self, meter: &mut dyn Meter) -> Result<Stats, Error> {
         fn walk(
             expression: &NormalizedScalarExpressionV1,
             depth: usize,
             stats: &mut Stats,
+            meter: &mut dyn Meter,
         ) -> Result<(), Error> {
             use NormalizedScalarExpressionV1 as E;
             stats.nodes = stats
@@ -85,27 +86,32 @@ impl NormalizedScalarExpressionV1 {
                     if operand.template_scalar() != *scalar {
                         return Err("native unary template type mismatch");
                     }
-                    walk(operand, next, stats)?;
+                    walk(operand, next, stats, meter)?;
                 }
                 E::Binary {
                     operation,
                     scalar,
+                    overflow,
                     lhs,
                     rhs,
-                    ..
                 } => {
-                    if lhs.template_scalar() != *scalar
-                        || rhs.template_scalar() != *scalar
-                        || matches!(
-                            operation,
-                            ProductionSemanticBinaryOpV2::ShiftLeft
-                                | ProductionSemanticBinaryOpV2::ShiftRight
-                        )
-                    {
+                    if matches!(
+                        operation,
+                        ProductionSemanticBinaryOpV2::ShiftLeft
+                            | ProductionSemanticBinaryOpV2::ShiftRight
+                    ) {
+                        meter.work(8)?;
+                        if *overflow != ProductionOverflowContractV2::Wrapping
+                            || fixed_native_shift_count_v1(rhs, *scalar).is_none()
+                        {
+                            return Err("native shift template is not an exact in-range constant");
+                        }
+                    }
+                    if lhs.template_scalar() != *scalar || rhs.template_scalar() != *scalar {
                         return Err("native binary template type mismatch");
                     }
-                    walk(lhs, next, stats)?;
-                    walk(rhs, next, stats)?;
+                    walk(lhs, next, stats, meter)?;
+                    walk(rhs, next, stats, meter)?;
                 }
                 E::Compare {
                     operand_scalar,
@@ -118,8 +124,8 @@ impl NormalizedScalarExpressionV1 {
                     {
                         return Err("native comparison template type mismatch");
                     }
-                    walk(lhs, next, stats)?;
-                    walk(rhs, next, stats)?;
+                    walk(lhs, next, stats, meter)?;
+                    walk(rhs, next, stats, meter)?;
                 }
                 E::Select {
                     scalar,
@@ -133,9 +139,9 @@ impl NormalizedScalarExpressionV1 {
                     {
                         return Err("native select template type mismatch");
                     }
-                    walk(condition, next, stats)?;
-                    walk(when_true, next, stats)?;
-                    walk(when_false, next, stats)?;
+                    walk(condition, next, stats, meter)?;
+                    walk(when_true, next, stats, meter)?;
+                    walk(when_false, next, stats, meter)?;
                 }
                 E::Cast {
                     source, operand, ..
@@ -143,13 +149,13 @@ impl NormalizedScalarExpressionV1 {
                     if operand.template_scalar() != *source {
                         return Err("native cast template type mismatch");
                     }
-                    walk(operand, next, stats)?;
+                    walk(operand, next, stats, meter)?;
                 }
             }
             Ok(())
         }
         let mut stats = Stats { nodes: 0, depth: 0 };
-        walk(self, 0, &mut stats)?;
+        walk(self, 0, &mut stats, meter)?;
         Ok(stats)
     }
 }
@@ -511,7 +517,7 @@ impl Template {
                 // Existing validation is bounded, but must not be unmetered.
                 meter.work(NODES)?;
                 let metadata = argument
-                    .template_validate()
+                    .template_validate(meter)
                     .map_err(|_| "invalid template argument")?;
                 if argument.template_scalar() != *scalar {
                     return Err("template argument type mismatch");
@@ -540,7 +546,7 @@ impl Template {
         let expression = self.emit(result, arguments);
         match expression {
             Ok(expression) => {
-                if expression.template_validate().is_err() {
+                if expression.template_validate(meter).is_err() {
                     drop(expression);
                     meter.release(storage)?;
                     Err("instantiated template is not a typed expression")

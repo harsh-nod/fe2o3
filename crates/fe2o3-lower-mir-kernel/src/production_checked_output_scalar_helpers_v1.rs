@@ -213,6 +213,14 @@ pub(super) fn check<'i, 'g>(
                     ..
                 }
                 | OperationKind::Call { .. } => {}
+                OperationKind::Binary {
+                    op: BinaryOp::ShiftLeft | BinaryOp::ShiftRight,
+                    ..
+                } if constant_shifts::native(
+                    inventory,
+                    function.operations.start + offset,
+                    budget,
+                )? => {}
                 OperationKind::Unary {
                     op: UnaryOp::Negate,
                     ..

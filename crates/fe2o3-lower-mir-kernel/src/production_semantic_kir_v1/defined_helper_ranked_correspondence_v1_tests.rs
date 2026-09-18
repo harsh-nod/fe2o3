@@ -4,6 +4,7 @@ mod defined_helper_ranked_correspondence_v1_tests {
     use fe2o3_kernel_ir::FunctionRole;
 
     include!("defined_helper_value_route_v1_tests.rs");
+    include!("constant_shift_ranked_v1_tests.rs");
 
     fn source(
         signed: bool,

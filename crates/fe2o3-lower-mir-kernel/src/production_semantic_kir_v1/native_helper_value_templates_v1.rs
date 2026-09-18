@@ -10,8 +10,11 @@ type Scalar = ProductionSemanticScalarTypeV2;
 struct Binding<'a> {
     id: ValueId,
     ty: &'a Type,
+    producer: Option<&'a Operation>,
     value: Option<Value>,
 }
+
+include!("native_helper_constant_shift_v1.rs");
 
 fn lookup_work(length: usize, meter: &mut dyn Meter) -> Result<(), Error> {
     let depth = usize::BITS as usize - length.leading_zeros() as usize;
@@ -130,6 +133,34 @@ fn operation<'a>(
             }
             let operand = read(rows, *operand, meter)?;
             output.push(result_scalar, Kind::Unary(op, operand), meter)?
+        }
+        OperationKind::Binary {
+            op: op @ (BinaryOp::ShiftLeft | BinaryOp::ShiftRight),
+            lhs,
+            rhs,
+        } => {
+            if !matches!(
+                result.ty,
+                Type::Scalar(
+                    ScalarType::I8
+                        | ScalarType::U8
+                        | ScalarType::I16
+                        | ScalarType::U16
+                        | ScalarType::I32
+                        | ScalarType::U32
+                        | ScalarType::I64
+                        | ScalarType::U64
+                )
+            ) || rows[find(rows, *lhs, meter)?].ty != &result.ty
+                || !native_helper_constant_shift_v1(rows, *rhs, &result.ty, meter)?
+            {
+                return Err("native helper shift is not an exact in-range constant");
+            }
+            let (op, overflow) = normalize_kir_binary_v1(*op, operation, result.id)
+                .ok_or("native helper shift value unsupported")?;
+            let lhs = read(rows, *lhs, meter)?;
+            let rhs = read(rows, *rhs, meter)?;
+            output.push(result_scalar, Kind::Binary(op, overflow, lhs, rhs), meter)?
         }
         OperationKind::Binary { op, lhs, rhs } => {
             let allowed = matches!(
@@ -302,6 +333,7 @@ fn derive_inner<'a>(
             rows.push(Binding {
                 id: *id,
                 ty,
+                producer: None,
                 value: None,
             });
         }
@@ -311,6 +343,7 @@ fn derive_inner<'a>(
                 rows.push(Binding {
                     id: parameter.id,
                     ty: &parameter.ty,
+                    producer: None,
                     value: None,
                 });
             }
@@ -319,6 +352,7 @@ fn derive_inner<'a>(
                     rows.push(Binding {
                         id: result.id,
                         ty: &result.ty,
+                        producer: Some(operation),
                         value: None,
                     });
                 }
