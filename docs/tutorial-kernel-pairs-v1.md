@@ -95,6 +95,10 @@ the fixture inputs, source-driver contracts or curriculum source metadata.
   duplicate modules or selected symbols reject a claimed binding. Such sources
   retain `pending` until an exact selection can be established. This bounded
   check does not replace rustc or qualify kernel implementations.
+  Supported non-cfg forms are bare `kernel`/`inline`, parenthesized
+  `allow`/`deny`/`forbid`/`warn`/`doc`/`kernel`, and `inline(always)`/`inline(never)`.
+  Qualified attribute paths and name-value forms such as `#[doc = "..."]` are
+  unsupported and reject claimed bindings.
 
 Six GPT-OSS occurrences in tabs 1-4 now retain these expected fixture/source
 contracts: serial-router, held-fragments, interleaved-stores, and the three

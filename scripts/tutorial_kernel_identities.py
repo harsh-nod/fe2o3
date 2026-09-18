@@ -250,8 +250,16 @@ def _fixture_declarations(
                 enabled = _fixture_cfg(cfg[1], features) and enabled
             elif re.fullmatch(r'cfg_attr\s*\(\s*target_arch\s*=\s*"amdgpu"\s*,\s*no_std\s*\)', body) and match[1]:
                 pass
-            elif re.fullmatch(r"(?:allow|deny|forbid|warn|doc|inline|kernel)\b.*", masked, re.DOTALL) is None:
-                _fail("unsupported fixture selection attribute")
+            else:
+                benign = re.fullmatch(r"(allow|deny|forbid|warn|doc|inline|kernel)(?:\s*(\(.*\)))?", masked, re.DOTALL)
+                if benign is None or (benign[2] is None and benign[1] not in {"inline", "kernel"}):
+                    _fail("unsupported fixture selection attribute")
+                if benign[2] is not None:
+                    arguments = code.find("(", opening + 1, end - 1)
+                    if code[pairs[arguments]:end - 1].strip():
+                        _fail("unsupported fixture selection attribute")
+                    if benign[1] == "inline" and re.fullmatch(r"inline\s*\(\s*(?:always|never)\s*\)", masked) is None:
+                        _fail("unsupported fixture selection attribute")
             if match[1] and not enabled:
                 _fail("conditional fixture crate/module is unsupported")
             cursor = end
