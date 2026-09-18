@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_791_249;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_819_631;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -115,10 +115,11 @@ pub enum SimulationKirWireVersionV1 {
     V9,
     V10,
     V11,
+    V12,
 }
 
 impl SimulationKirWireVersionV1 {
-    const ALL: [Self; 4] = [Self::V7, Self::V9, Self::V10, Self::V11];
+    const ALL: [Self; 5] = [Self::V7, Self::V9, Self::V10, Self::V11, Self::V12];
     const COUNT: usize = Self::ALL.len();
 }
 
@@ -405,7 +406,10 @@ pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
                 operation: "restrict_pointer_access",
                 from_access: "read_write",
                 to_access: "read_only",
-                capability: if kir_wire_version == SimulationKirWireVersionV1::V11 {
+                capability: if matches!(
+                    kir_wire_version,
+                    SimulationKirWireVersionV1::V11 | SimulationKirWireVersionV1::V12
+                ) {
                     SimulationCapabilityDispositionV1::Owned {
                         owner: SimulationSemanticOwnerV1::TypedMemory,
                         typed_rejections: &[

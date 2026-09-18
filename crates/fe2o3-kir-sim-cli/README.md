@@ -4,6 +4,7 @@ fe2o3-kir-sim is the standalone, Linux-only command-line boundary for bounded
 deterministic CPU execution of supported exact verified canonical Kernel IR:
 
     fe2o3-kir-sim --kir-v7 kernel.kir --request request.json
+    fe2o3-kir-sim --kir-v12 kernel-v12.kir --request request.json
     fe2o3-kir-sim --bundle kernel.fe2sim --request request.json
     fe2o3-kir-sim --bundle-v5 kernel.fe2sim --request request.json
     fe2o3-kir-sim --bundle-v6 kernel.fe2sim --request request.json
@@ -24,7 +25,7 @@ observation only. It grants no source-refinement, proof, compiler, artifact,
 load, launch, GPU-equivalence, race-freedom, timing, performance, or performance
 prediction authority.
 
-`--bundle`, `--bundle-v5`, `--bundle-v6`, and `--kir-v7` are mutually
+`--bundle`, `--bundle-v5`, `--bundle-v6`, `--kir-v7`, and `--kir-v12` are mutually
 exclusive. Legacy bundle admission securely
 captures one bounded regular file, strictly decodes and revalidates
 `VerifiedSimulationBundleV1`, maps its exact admitted gfx942/gfx950 target to
@@ -52,6 +53,17 @@ under the bundle's exact target. V11 adds the verified same-pointee,
 same-address-space `ReadWrite` to `ReadOnly` pointer restriction; the CLI does
 not widen access or reinterpret V1/V5 bundle bytes as V6. Bundle V5 remains a
 supported frozen KIR V10 compatibility route.
+
+`--kir-v12` consumes exact current canonical KIR V12 under the AMDGPU 64-bit
+CPU data-layout profile. It uses the same bounded interpreter as the older
+routes without projecting the module to an older wire version. Its scalar and
+memory operations retain the existing supported semantics; reachable V12 vector
+and verification-event carriers fail preflight with `inert_v12_carrier`.
+Recorded schedules use `canonical_kir_v12` and bind the exact V12 identity,
+request, target, and limits; another version, body, or request cannot substitute
+for that context during replay. This raw-input route is not Bundle V7 admission,
+source-to-tile lowering, a GPU execution claim, or evidence that a tutorial pair
+works end to end.
 
 The versioned `tutorial/fill-v1` known-answer fixture is directly runnable:
 
@@ -202,7 +214,7 @@ wire/count/depth caps.
 
 ## Result V1
 
-Success contains status ok, authority observation_only, the exact V7 SHA-256
+Success contains status ok, authority observation_only, the admitted KIR's exact SHA-256
 and canonical byte length, all execution counters including padded scheduled
 slots, the deterministic cooperative workgroup schedule identity, exact
 semantic transcript SHA-256, complete decision/workgroup/barrier-release

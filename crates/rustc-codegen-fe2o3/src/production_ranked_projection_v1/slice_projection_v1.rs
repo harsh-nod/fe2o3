@@ -29,6 +29,25 @@ pub(super) struct ProjectedViewsV1<'a> {
 }
 
 impl<'a> ProjectedViewsV1<'a> {
+    pub(super) fn require_unit_local_call(
+        &mut self,
+        block: usize,
+        call: &SemanticDirectCallV1,
+        source: SemanticSourceProvenanceV1,
+    ) -> Result<(), ProductionRankedProjectionErrorV1> {
+        match self.facts.as_deref_mut() {
+            Some(facts) => facts.require_unit_local_call(block, call, source),
+            None => Err(
+                ProductionRankedProjectionErrorV1::UnresolvedCallableEffect {
+                    block,
+                    source: Box::new(source),
+                    callee: call.callee().index(),
+                    tail: false,
+                },
+            ),
+        }
+    }
+
     pub(super) fn new(locals: usize, facts: Option<&'a mut dyn ProjectedAssertionFactsV1>) -> Self {
         Self {
             locals: vec![None; locals],

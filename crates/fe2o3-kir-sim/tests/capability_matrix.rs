@@ -81,7 +81,7 @@ fn inert_v12_surfaces_keep_stable_ids_and_have_no_simulation_owner() {
             .iter()
             .filter(|row| row.operation == surface)
             .collect();
-        assert_eq!(rows.len(), 16);
+        assert_eq!(rows.len(), 20);
         for row in rows {
             assert!(matches!(&row.capability,
                 SimulationCapabilityDispositionV1::Unsupported { reason }
@@ -92,7 +92,7 @@ fn inert_v12_surfaces_keep_stable_ids_and_have_no_simulation_owner() {
 }
 
 #[test]
-fn pointer_access_restriction_is_typed_memory_owned_only_in_v11() {
+fn pointer_access_restriction_is_typed_memory_owned_from_v11() {
     let matrix = semantic_capability_matrix_v1();
     for profile in matrix
         .pointer_rows
@@ -117,18 +117,20 @@ fn pointer_access_restriction_is_typed_memory_owned_only_in_v11() {
                 }
             ));
         }
-        assert!(matches!(
-            matrix
-                .pointer_rows
-                .iter()
-                .find(|row| {
-                    row.profile == profile
-                        && row.kir_wire_version == SimulationKirWireVersionV1::V11
-                })
-                .unwrap()
-                .capability,
-            SimulationCapabilityDispositionV1::Owned { .. }
-        ));
+        for version in [
+            SimulationKirWireVersionV1::V11,
+            SimulationKirWireVersionV1::V12,
+        ] {
+            assert!(matches!(
+                matrix
+                    .pointer_rows
+                    .iter()
+                    .find(|row| row.profile == profile && row.kir_wire_version == version)
+                    .unwrap()
+                    .capability,
+                SimulationCapabilityDispositionV1::Owned { .. }
+            ));
+        }
     }
 }
 
@@ -141,13 +143,40 @@ fn execution_v15_surface_is_additive_and_has_no_simulation_owner() {
         .iter()
         .filter(|row| row.operation == SimulationOperationSurfaceV1::Execution)
         .collect();
-    assert_eq!(rows.len(), 16);
+    assert_eq!(rows.len(), 20);
     assert!(rows.iter().all(|row| matches!(
         &row.capability,
         SimulationCapabilityDispositionV1::Unsupported {
             reason: SimulationUnsupportedReasonCodeV1::InertExecutionV15,
         }
     )));
+}
+
+#[test]
+fn v12_inherits_every_v11_disposition_without_activating_inert_carriers() {
+    let matrix = semantic_capability_matrix_v1();
+    let inherited = matrix
+        .top_level_rows
+        .iter()
+        .filter(|row| row.kir_wire_version == SimulationKirWireVersionV1::V12)
+        .collect::<Vec<_>>();
+    assert_eq!(inherited.len(), 152);
+    for row in inherited {
+        let previous = matrix
+            .top_level_rows
+            .iter()
+            .find(|previous| {
+                previous.profile == row.profile
+                    && previous.operation == row.operation
+                    && previous.kir_wire_version == SimulationKirWireVersionV1::V11
+            })
+            .unwrap();
+        assert_eq!(row.capability, previous.capability);
+    }
+    assert_eq!(
+        serde_json::to_string(&SimulationKirWireVersionV1::V12).unwrap(),
+        "\"v12\""
+    );
 }
 
 #[test]

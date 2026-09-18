@@ -267,17 +267,19 @@ and final attachment retains its independent 64*M correlation phase. The index
 query adds one fixed work unit before the unchanged boolean-query relation.
 No configured limits, Native gates, formal or launch authority change.
 
-This is a lowerer-only component. The default rustc backend still projects before
-materializing executable KIR and does not yet use these same-owner private-array
-queries. Its materialize-before-project transition and common-projector private
-effect support require separate qualification, including all tutorial compile
-gates; this library change does not activate that route.
+These are correspondence components, not acceptance of the complete optimized
+output pipeline. Default activation of the new checked optimizer policy and
+complete optimized private-effect support require separate qualification,
+including all tutorial compile gates.
 
 ## Checked Output Memory Analysis
 
-`analyze_checked_output_formal_memory_v1` derives fresh memory obligations from
-the actual fixed-rule checked V12 output and returns a report borrowing that
-owner. Every actual kernel must have complete extraction and no inter-invocation
+`analyze_checked_output_formal_memory_v1` and the separately typed
+`analyze_checked_output_formal_memory_policy3_v1` derive fresh memory obligations
+from their actual checked V12 output and return reports borrowing those exact
+owners. The Policy3 report retains the real eight-pass execution owner without
+converting it into the historical owner. Both APIs use one complete-only formal
+analysis implementation. Every actual kernel must have complete extraction and no inter-invocation
 conflict under the existing structural witness: exact static extents, extent two
 for dynamic active axes, and 64-bit indices. No old ranked or compiler discharge
 is accepted, and the executable is not copied.
@@ -309,12 +311,101 @@ serialized final evidence. Old N-only assertion transport keeps its pointer
 contract unchanged. Canonical equality of separately admitted B owners is
 checked using complete bytes, never a digest alone.
 
+`derive_source_output_occurrences_policy3_v1` connects the actual checked
+Policy3 output to the same source/block/assertion/catalog/private-array queries.
+It and the existing `derive_source_output_occurrences_v1` share the exact
+custody and replay checks; neither accepts a receipt in place of a live checked
+owner. The private-array ranked receipt also has an explicitly typed
+`with_checked_private_array_output_policy3_v1` scope. It compares the complete
+closed Store subset with the actual output, including stored-value uses, under
+the original Work identity and storage floor. Scope records cannot escape the
+callback. The actual tagged borrowed-owner headers are included in their
+existing storage accounting.
+
+These occurrence/report APIs do not themselves attach final checks or authorize
+default Policy3 output.
+Unit-local helper source/output replay and unsupported private reads/effects
+remain refused; complete final source/control/memory/refinement validation is
+still required. Target-binding tests use the real binder and exact metadata
+checker for both profiles, but are semantic/ranked component tests, not rustc
+source, protected artifact, or GPU qualification.
+
 New indexes, queries, and temporary payloads share the caller canonical ledger.
 The caller retains N graph/source rows, B, checked O/history, and transfer receipts;
 the constructor checks only the stated N-plus-O floor lower bound. Source replay
 uses its inherited source limits outside that ledger. Row receipts describe
 logical requested payload under the existing allocation convention, not portable
 allocator capacity, RSS, or a whole-compiler memory bound.
+
+## Closed Policy3 Output Admission
+
+`ProductionCheckedOutputOwnerPolicy3V1::try_admit` consumes the materialized
+ranked receipt, exact B and actual checked Policy3 O. Its first admitted subset
+is deliberately closed: root-only modules, unsigned integer/boolean scalar
+inputs and locals, Unit returns, one returning source/KIR block per root, and
+total scalar recipes. The ranked projection may contain a finite unconditional
+chain covering every block, including its synthetic entry block. A bounded
+linear walk checks that chain independently of stored block order. Source/KIR
+branches, assertions, calls, borrowed interfaces, private addresses, memory
+effects and ordered execution are refused, including in unused bodies.
+Source/ranked/N/B/O censuses and exact endpoint checks precede fresh O obligations;
+all allocation/access/bounds/alias/conflict rows must be empty.
+
+The owner retains historical N separately, and `output()` exposes only O. It
+cannot replace the legacy formal owner or be constructed from a borrowed formal
+report. Revalidation reruns the closed checks and fresh obligations. New census
+work uses the shared ledger; existing source reconstruction/ranked attachment,
+formal scratch/results and wrapper bookkeeping remain outside its canonical
+payload accounting. Input reservations are caller-owned and must outlive the
+consuming owner, including failed transfers.
+
+The backend has an inert descriptor consumer joining this owner with exact
+target metadata, typed source ownership/ABI, retained launch fields and O
+geometry. The default backend route and legacy V8/V9/V11 lineage are unchanged.
+General final admission, V12/Policy3 lineage, ordinary-source tutorial coverage,
+protected artifacts and hardware qualification remain separate gates. This is
+an M5/M7 prerequisite, not completion of either milestone or formal verification
+of the compiler.
+
+## Guarded Global Output Admission
+
+`ProductionCheckedOutputOwnerPolicy3V1::try_admit_general_v1` consumes the same
+real materialized source/ranked receipt, target-bound B, and checked Policy3 O.
+It adds a separate, privately tagged admission contract; the older scalar
+constructor keeps its original restrictions. Revalidation dispatches by that
+private tag, not by a caller-supplied mode or a fallback.
+
+The new grammar includes signed/unsigned scalars, booleans, indices, F32/F64,
+global scalar slices/pointers, ordinary global loads/stores and supported guarded
+accesses. It admits branches, switches and source-authorized assertion
+failure traps. Exact source/ranked replay, N/B coordinates, independent B/O
+transition checking and complete source-block/assertion transport are required.
+A retained conditional assertion still executes at runtime; it is not a
+statically discharged bounds check. Existing ranked progress checks still apply;
+this admission adds no blanket acyclic requirement or general loop-carried
+address support. A supported source-loop positive through final admission remains
+to be qualified; an unconditional nonterminating source loop is refused before
+the required ranked receipt can be constructed.
+
+Memory obligations are freshly derived from actual O for every kernel. Only
+the existing structural guarded-access exception can be resolved by checking
+the actual output predicate, address and slice extent. All other incomplete
+reasons fail closed. A full physical-access census matches each output access
+to its fresh formal location, kind, address space and alignment. Runtime bounds
+and alias requirements remain obligations, not authenticated launch values.
+
+Private addresses, helper interfaces, collectives, atomics, volatile or ordered
+effects, unsupported address provenance and unsupported arithmetic remain
+outside this contract. The source/ranked and formal engines retain their
+existing bounded accounting domains; new inventory, transport and census
+scratch uses the shared ledger and restores its incoming floor.
+
+The backend's move-only checked-output stage consumes this owner, lowers actual
+O through native V12 LLVM lowering, constructs its descriptor/handoff and
+independently replays the final LLVM and descriptor relation. It retains the
+authenticated source bindings and ranked roster. Protected native lineage and
+full corpus admission are still required before default activation; this stage
+does not relabel old proof receipts or publish an artifact.
 
 ## Source-Qualified Pipeline Catalogs
 

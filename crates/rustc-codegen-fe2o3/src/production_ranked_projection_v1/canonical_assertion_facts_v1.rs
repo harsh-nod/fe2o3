@@ -29,6 +29,7 @@ pub(crate) enum CanonicalAssertionErrorV1 {
     Resource(Resource),
     Inventory(CanonicalKirInventoryErrorV1),
     Sparse(CanonicalKirSparseErrorV1),
+    MemorySsa(fe2o3_kernel_analysis::CanonicalKirMemorySsaErrorV1),
     Origin(SemanticKirAssertOriginErrorV1),
     PrivateArray(SemanticKirPrivateArrayQueryErrorV1),
     CallEffects(fe2o3_kernel_analysis::CanonicalKirCallEffectErrorV1),
@@ -40,6 +41,7 @@ impl fmt::Display for CanonicalAssertionErrorV1 {
             Self::Resource(error) => error.fmt(f),
             Self::Inventory(error) => error.fmt(f),
             Self::Sparse(error) => error.fmt(f),
+            Self::MemorySsa(error) => error.fmt(f),
             Self::Origin(error) => error.fmt(f),
             Self::PrivateArray(error) => error.fmt(f),
             Self::CallEffects(error) => error.fmt(f),
@@ -53,6 +55,7 @@ impl Error for CanonicalAssertionErrorV1 {
             Self::Resource(error) => Some(error),
             Self::Inventory(error) => Some(error),
             Self::Sparse(error) => Some(error),
+            Self::MemorySsa(error) => Some(error),
             Self::Origin(error) => Some(error),
             Self::PrivateArray(error) => Some(error),
             Self::CallEffects(error) => Some(error),
@@ -79,6 +82,9 @@ impl From<CanonicalAnalysisScopeErrorV1> for ProjectionError {
             CanonicalAnalysisScopeErrorV1::Sparse(error) => {
                 CanonicalAssertionErrorV1::Sparse(error)
             }
+            CanonicalAnalysisScopeErrorV1::MemorySsa(error) => {
+                CanonicalAssertionErrorV1::MemorySsa(error)
+            }
         })
     }
 }
@@ -96,6 +102,20 @@ pub(super) enum ProjectedAssertionConditionV1 {
 /// origin view and exact borrowed graph report below. Tests must identify any
 /// isolated synthetic decision inputs explicitly.
 pub(super) trait ProjectedAssertionFactsV1 {
+    fn require_unit_local_call(
+        &mut self,
+        block: usize,
+        call: &super::SemanticDirectCallV1,
+        source: super::SemanticSourceProvenanceV1,
+    ) -> Result<(), ProjectionError> {
+        Err(ProjectionError::UnresolvedCallableEffect {
+            block,
+            source: Box::new(source),
+            callee: call.callee().index(),
+            tail: false,
+        })
+    }
+
     fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError>;
 
     fn private_array_initializer_count(
@@ -218,6 +238,41 @@ struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
     semantic_function: SemanticFunctionIdV1,
 }
 impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
+    fn require_unit_local_call(
+        &mut self,
+        block: usize,
+        call: &super::SemanticDirectCallV1,
+        source: super::SemanticSourceProvenanceV1,
+    ) -> Result<(), ProjectionError> {
+        self.budget.charge_work(1).map_err(resource)?;
+        let source_block = u32::try_from(block).map_err(|_| resource(Resource::Arithmetic))?;
+        self.owner
+            .with_checked_unit_local_source_v1(
+                self.report.inventory(),
+                self.budget,
+                |view, budget| {
+                    let checked = view.bounds_neutral_call_v1(
+                        self.correspondence_owner,
+                        self.semantic_function,
+                        SemanticBlockIdV1::from_index(source_block),
+                        call,
+                        budget,
+                    )?;
+                    Ok(match checked {
+                        Some(_checked) => Ok(()),
+                        None => Err(()),
+                    })
+                },
+            )
+            .map_err(ProjectionError::StructuralValidation)?
+            .map_err(|()| ProjectionError::UnresolvedCallableEffect {
+                block,
+                source: Box::new(source),
+                callee: call.callee().index(),
+                tail: false,
+            })
+    }
+
     fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError> {
         self.budget.charge_work(amount).map_err(resource)
     }

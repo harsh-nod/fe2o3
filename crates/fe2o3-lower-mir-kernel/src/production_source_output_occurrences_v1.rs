@@ -1,6 +1,8 @@
 // Source-qualified occurrence connection for actual V12 N -> B -> checked O.
 // Included in the production lowerer so source custody and origin fields stay private.
 
+include!("production_source_output_checked_endpoint_v1.rs");
+
 /// Actual original materialization and checked output control remain distinct.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProductionSourceOutputBlockV1 {
@@ -31,7 +33,7 @@ struct SourceOutputBlockRowV1 {
 pub struct ProductionSourceOutputOccurrencesV1<'source, 'output> {
     source: &'source ProductionPreRankedKirOwnerV1,
     bound: &'source fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
-    checked_output: &'output fe2o3_pliron::CheckedNeutralKernelIrOwnerV1,
+    checked_output: SourceOutputCheckedEndpointV1<'output>,
     blocks: Vec<SourceOutputBlockRowV1>,
     private_arrays: Vec<SourceOutputArrayRowV1>,
     storage: ProductionSourceOutputStorageV1,
@@ -275,6 +277,29 @@ pub fn derive_source_output_occurrences_v1<'source, 'output>(
         'source,
     >,
     checked_output: &'output fe2o3_pliron::CheckedNeutralKernelIrOwnerV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<
+    (
+        ProductionSourceOutputOccurrencesV1<'source, 'output>,
+        ProductionSourceOutputStorageV1,
+    ),
+    ProductionSourceOutputErrorV1,
+> {
+    derive_source_output_occurrences_with_endpoint_v1(
+        source,
+        coordinates,
+        SourceOutputCheckedEndpointV1::Optimizer(checked_output),
+        budget,
+    )
+}
+
+fn derive_source_output_occurrences_with_endpoint_v1<'source, 'output>(
+    source: &'source ProductionPreRankedKirOwnerV1,
+    coordinates: &fe2o3_kernel_analysis::CheckedCanonicalKirCoordinatePreservationV1<
+        'source,
+        'source,
+    >,
+    checked_output: SourceOutputCheckedEndpointV1<'output>,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> Result<
     (

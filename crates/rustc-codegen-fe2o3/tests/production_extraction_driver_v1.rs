@@ -88,6 +88,115 @@ path = "src/lib.rs"
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_memory_free_kernel_reaches_ranked_verification() {
+    let target = ScratchTarget::new();
+    let fixture = materialize_source_safety_fixture(
+        &target,
+        r#"#![no_std]
+use fe2o3_device::kernel;
+
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn memory_free(_unused: u32) {}
+"#,
+    );
+    let mut command = Command::new(env!("CARGO"));
+    command
+        .current_dir(fixture)
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_source_safety_fixture",
+        )
+        .env("FE2O3_EXTRACT_RANKED_MEMORY_V1", "1")
+        .env(
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+        );
+    for variable in [
+        "RUSTFLAGS",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "RUSTC_WRAPPER",
+        "CARGO_BUILD_RUSTC_WRAPPER",
+        "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+        "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
+        "FE2O3_CRATE_BINDING_ID_V1",
+        "FE2O3_EXTRACT_CRATE_BINDING_PATH_V1",
+        "FE2O3_EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX",
+        "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1",
+        "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1",
+        "FE2O3_EXTRACT_AMDGPU_COMPILER_HANDOFF_PATH_V1",
+        "FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V2",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V3",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V4",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V5",
+        "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V6",
+    ] {
+        command.env_remove(variable);
+    }
+    let output = command
+        .args([
+            "check",
+            "--release",
+            "--offline",
+            "-Zbuild-std=core",
+            "--lib",
+            "--target",
+            "amdgcn-amd-amdhsa",
+            "--target-dir",
+        ])
+        .arg(target.path().join("cargo"))
+        .output()
+        .expect("run ordinary memory-free AMD ranked extraction");
+    let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
+    assert!(
+        output.status.success(),
+        "ordinary memory-free ranked extraction failed:\n{stderr}",
+    );
+    assert_eq!(
+        stderr
+            .matches("safety-verified lowering input for `memory_free`")
+            .count(),
+        1,
+        "expected one actual source-ranked root:\n{stderr}",
+    );
+    for required in [
+        "Rust -> semantic MIR -> ranked PLIRON",
+        "all mandatory kernel checks clean true",
+        "bounds clean true",
+        "artifact/launch authority false",
+        "gpu.execution_layout",
+        "workgroup=[64, 1, 1]",
+        "subgroup=64",
+    ] {
+        assert!(
+            stderr.contains(required),
+            "memory-free ranked extraction omitted {required:?}:\n{stderr}",
+        );
+    }
+    for forbidden in [
+        "kernel.invocation_index",
+        "kernel.access ",
+        "kernel.atomic_access ",
+        "kernel.allocation_effect ",
+        "artifact/launch authority true",
+        "target-KIR optimizer",
+        "compiler-bound inert handoff",
+        " LLVM;",
+    ] {
+        assert!(
+            !stderr.contains(forbidden),
+            "memory-free ranked extraction included {forbidden:?}:\n{stderr}",
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn production_collector_rejects_reachable_unsafe_rust_with_rooted_diagnostics() {
     for (case, source, expected) in [
         (

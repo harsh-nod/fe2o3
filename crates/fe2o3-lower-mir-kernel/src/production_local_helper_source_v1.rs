@@ -889,6 +889,7 @@ impl<'a, 'r> SourceLocalCursorV1<'a, 'r> {
 /// These relations do not approve ranked, output, artifact or launch consumers.
 pub struct ProductionUnitLocalSourceV1<'a> {
     rows: &'a SealedUnitLocalSourceV1,
+    semantic_ssa: &'a ProductionSemanticSsaOwnerV1,
     inventory: &'a CanonicalKirInventoryV1<'a>,
     ledger: usize,
     work_ledger: ArgumentLedgerV1,
@@ -1003,10 +1004,7 @@ impl ProductionPreRankedKirOwnerV1 {
             budget.charge_work(8)?;
             let entry = budget.storage();
             let work_ledger = budget.work_ledger_identity_v1();
-            let minimum = argument_sum_v1(&[
-                self.retained_analysis_storage_v1(),
-                self.helper_memory.capture.preexisting_storage(),
-            ])?;
+            let minimum = self.unit_local_source_storage_floor_v1()?;
             if entry < minimum {
                 return Err(ArgumentResourceV1::Accounting.into());
             }
@@ -1014,6 +1012,7 @@ impl ProductionPreRankedKirOwnerV1 {
             let floor = budget.storage();
             let view = ProductionUnitLocalSourceV1 {
                 rows: &self.helper_memory.unit_source,
+                semantic_ssa: &self.semantic_ssa,
                 inventory,
                 ledger: budget as *const ArgumentBudgetV1<'_> as usize,
                 work_ledger,

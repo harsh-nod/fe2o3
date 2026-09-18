@@ -112,7 +112,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         payload = json.dumps(
             recovered_scope(self.manifest), sort_keys=True, separators=(",", ":"), ensure_ascii=True
         ).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "1df009c40fff2d9e667fecfb4081cde24ce6aba228f44c8d0b05a3f645655e9f")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "db1d9a0d5c5aca3b9c76a4713ddd3b22417e41ee24667efae11773dfccdc4215")
 
     def test_full_runtime_curriculum_snapshot_preserves_pending_obligations(self):
         curriculum = self.manifest["curriculum"]
@@ -125,7 +125,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "9562224ca3217fad03c3e1987da2de4e4c060b6bc223f76753855912d2433357")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "f351554d0ff980ec905493f3cff283c235ad7e87eaedbf29f1b08bb0d9b13729")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         del self.manifest["curriculum"]
@@ -404,6 +404,200 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("qualification receipts and policy/final-graph evidence are not implemented", result.stderr)
+
+    def test_kernel_pair_cli_emits_only_incomplete_obligations(self):
+        result = subprocess.run(
+            [sys.executable, str(CHECKER), "--emit-kernel-pairs"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["schema"], "fe2o3-tutorial-kernel-pair-obligations-v1")
+        self.assertIs(report["qualified"], False)
+        self.assertIs(report["inventoryComplete"], False)
+        self.assertIsNone(report["requiredPairCount"])
+        self.assertEqual(report["qualifiedPairCount"], 0)
+        self.assertEqual(report["requiredModes"], ["simt", "tile"])
+        self.assertEqual(len(report["fixtureSelections"]), 48)
+        self.assertEqual(len(report["sourceDriverCases"]), 13)
+        self.assertEqual(len(report["displayObservations"]), 53)
+        self.assertEqual(sum(row["sourceItemStatus"] == "pending"
+                             for row in report["displayObservations"]), 52)
+        self.assertTrue(all(row["lexicalKernelNames"] is None
+                            for row in report["displayObservations"]))
+        self.assertEqual(report["stageStatus"], "not-evaluated")
+        self.assertEqual(report["variantBindingStatus"], "pending")
+        self.assertEqual(report["productionContract"], self.original["productionContract"])
+
+    def kernel_pair_report(self, inventory=None):
+        gaps = {}
+        fixtures = self.validator.validate_manifest(ROOT, self.manifest, curriculum_gaps=gaps)
+        if inventory is not None:
+            self.validator.validate_site_inventory(self.manifest["curriculum"], inventory)
+        return self.validator._kernel_pair_report(self.manifest, fixtures, gaps, inventory)
+
+    def test_kernel_pair_report_preserves_selections_and_negative_cases(self):
+        before = copy.deepcopy(self.manifest)
+        report = self.kernel_pair_report()
+        self.assertEqual(self.manifest, before)
+        rows = report["fixtureSelections"]
+        expected = [(fixture["fixtureId"], symbol)
+                    for fixture in sorted(self.original["compilerFixtures"], key=lambda row: row["fixtureId"])
+                    for symbol in fixture["compilerInput"]["kernelSymbols"]]
+        self.assertEqual([(row["fixtureId"], row["selection"]["kernelSymbol"]) for row in rows], expected)
+        ablations = [row for row in rows if row["selection"]["kernelSymbol"] == "gfx950_attnres_aggregate"]
+        self.assertEqual(len(ablations), 2)
+        self.assertNotEqual(ablations[0]["selection"]["features"], ablations[1]["selection"]["features"])
+        self.assertNotEqual(ablations[0]["compilerInputContractSha256"], ablations[1]["compilerInputContractSha256"])
+        fp4 = next(row for row in rows if row["fixtureId"] == "gfx950-fp4-gemm")
+        self.assertIn("gfx950-fp4-gemm-performance-lab", fp4["scopeLessonIds"])
+        display = next(row for row in report["displayObservations"]
+                       if row["lessonId"] == "gfx950-fp4-gemm-performance-lab")
+        self.assertEqual(display["sourceItemStatus"], "pending")
+        self.assertIsNone(display["lexicalKernelNames"])
+        cases = report["sourceDriverCases"]
+        self.assertEqual([row["caseOrdinal"] for row in cases], list(range(13)))
+        self.assertEqual(Counter(row["expectation"]["kind"] for row in cases),
+                         {"verified-bundle-export": 10, "rejected": 3})
+        self.assertTrue(all(row["expectation"]["outputArtifact"] == "absent"
+                            for row in cases if row["expectation"]["kind"] == "rejected"))
+        self.assertEqual(report["qualifiedPairCount"], 0)
+        self.assertIsNone(report["requiredPairCount"])
+        self.assertEqual(sum(len(row["modes"]) for row in report["lessonRequirements"]), 95)
+
+    def test_kernel_pair_runtime_observations_are_lexical_not_compiler_evidence(self):
+        curriculum, inventory = self.site_inventory_fixture()
+        lesson = next(row for row in curriculum["lessons"] if row["lessonId"] == "first-fill")
+        projected = next(row for row in inventory["lessons"] if row["id"] == "first-fill")
+        code = ('// #[kernel] fn comment() {}\n'
+                'const TEXT: &str = "#[kernel] fn string() {}";\n'
+                'macro_rules! template { () => { #[kernel] fn hidden() {} }; }\n'
+                '#[cfg(feature = "a")] #[kernel] fn selected() {}\n'
+                '#[cfg(feature = "b")] #[kernel] fn selected() {}\n')
+        fields = {"displayedUtf8Bytes": len(code.encode()),
+                  "displayedSha256": hashlib.sha256(code.encode()).hexdigest()}
+        lesson["codeTabs"][0].update(fields)
+        projected["codeTabs"][0].update(fields, displayedCode=code)
+        self.manifest["curriculum"] = curriculum
+        report = self.kernel_pair_report(inventory)
+        observed = next(row for row in report["displayObservations"] if row["lessonId"] == "first-fill")
+        self.assertEqual(observed["lexicalKernelNames"], ["selected", "selected"])
+        self.assertEqual(observed["sourceItemStatus"], "pending")
+        self.assertIs(report["inventoryComplete"], False)
+        self.assertEqual(report["qualifiedPairCount"], 0)
+        projected["codeTabs"][0]["displayedCode"] += "changed"
+        with self.assertRaisesRegex(SystemExit, "displayed bytes do not match"):
+            self.kernel_pair_report(inventory)
+
+    def test_kernel_pair_cli_rejects_stale_duplicate_missing_and_legacy_inputs(self):
+        def legacy():
+            self.manifest["curriculum"]["schema"] = self.validator.CURRICULUM_SCHEMA
+            lesson = self.curriculum_lesson("cpu-semantic-simulation")
+            lesson["codeTabs"][0].update(sourceItem=None, sourceItemStatus="pending")
+            lesson["sourceBindingGap"] = "Legacy source driver is not yet contract-bound."
+
+        for mutate, pattern in (
+            (lambda: self.manifest.pop("curriculum"), "exhaustive curriculum"),
+            (legacy, "V2 source-item curriculum"),
+            (lambda: self.manifest["compilerFixtures"][0]["compilerInput"].update(contractSha256="0" * 64), "stale"),
+            (lambda: self.manifest["compilerFixtures"].append(copy.deepcopy(self.manifest["compilerFixtures"][0])), "duplicate"),
+            (lambda: self.curriculum_lesson()["variants"].pop(), "ordered SIMT/tile"),
+        ):
+            self.manifest = copy.deepcopy(self.original)
+            mutate()
+            with tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "manifest.json"
+                path.write_text(json.dumps(self.manifest), encoding="utf-8")
+                result = subprocess.run(
+                    [sys.executable, str(CHECKER), "--manifest", str(path), "--emit-kernel-pairs"],
+                    text=True, capture_output=True, check=False,
+                )
+            with self.subTest(pattern=pattern):
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+                self.assertIn(pattern, result.stderr)
+
+    def test_kernel_pair_cli_cannot_mix_matrix_output_or_qualification(self):
+        for flags, pattern in (
+            (["--emit-matrix", "gfx942"], "not allowed with argument"),
+            (["--require-qualified"], "qualification receipts"),
+        ):
+            result = subprocess.run(
+                [sys.executable, str(CHECKER), "--emit-kernel-pairs", *flags],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "")
+            self.assertIn(pattern, result.stderr)
+
+    def test_kernel_pair_projection_preserves_cross_target_origins(self):
+        fixture = copy.deepcopy(self.original["compilerFixtures"][0])
+        other = copy.deepcopy(fixture)
+        other.update(fixtureId="second-target", target="gfx950")
+        manifest = copy.deepcopy(self.original)
+        manifest["entries"] = [{"lessonId": "first-fill", "compilerFixtureIds": [fixture["fixtureId"], other["fixtureId"]]}]
+        # Exercise projection identity alone; this synthetic pair is not a validated contract.
+        rows = self.validator._kernel_pair_report(
+            manifest, {row["fixtureId"]: row for row in (fixture, other)}, {}, None,
+        )["fixtureSelections"]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([row["selection"]["target"] for row in rows], ["gfx942", "gfx950"])
+        for key in ("packageManifest", "cargoTarget", "defaultFeatures", "features", "sourcePaths", "kernelSymbol"):
+            self.assertEqual(rows[0]["selection"][key], rows[1]["selection"][key])
+
+    def test_kernel_pair_runtime_cli_is_bounded_and_rejects_before_output(self):
+        curriculum, inventory = self.site_inventory_fixture()
+        lesson = next(row for row in curriculum["lessons"] if row["lessonId"] == "first-fill")
+        projected = next(row for row in inventory["lessons"] if row["id"] == "first-fill")
+        code = "#[kernel] fn observed() {}\n" * 200
+        fields = {"displayedUtf8Bytes": len(code.encode()), "displayedSha256": hashlib.sha256(code.encode()).hexdigest()}
+        lesson["codeTabs"][0].update(fields)
+        projected["codeTabs"][0].update(fields, displayedCode=code)
+        inventory["site"]["unvalidatedExtra"] = "must not be copied into the report"
+        self.manifest["curriculum"] = curriculum
+        fixtures = self.validator.validate_manifest(ROOT, self.manifest)
+        self.validator.validate_site_inventory(curriculum, inventory)
+        with mock.patch.object(self.validator, "MAX_KERNEL_PAIR_RECORDS", 200):
+            report = self.validator._kernel_pair_report(self.manifest, fixtures, {}, inventory)
+            self.assertNotIn("unvalidatedExtra", report["runtimeProjectionSite"])
+        with mock.patch.object(self.validator, "MAX_KERNEL_PAIR_RECORDS", 199):
+            with self.assertRaisesRegex(SystemExit, "lexical declaration bound"):
+                self.validator._kernel_pair_report(self.manifest, fixtures, {}, inventory)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "manifest.json"
+            runtime = Path(temporary) / "runtime.json"
+            path.write_text(json.dumps(self.manifest), encoding="utf-8")
+            command = [sys.executable, str(CHECKER), "--manifest", str(path),
+                       "--emit-kernel-pairs", "--site-inventory", str(runtime)]
+            runtime.write_text(json.dumps(inventory), encoding="utf-8")
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIs(json.loads(result.stdout)["inventoryComplete"], False)
+            projected["codeTabs"][0]["displayedCode"] += "changed"
+            runtime.write_text(json.dumps(inventory), encoding="utf-8")
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "")
+            self.assertIn("displayed bytes do not match", result.stderr)
+
+    def test_kernel_pair_projection_is_deterministic_and_bounded(self):
+        report = self.kernel_pair_report()
+        encoded = self.validator._encode_kernel_pair_report(report)
+        self.assertEqual(encoded, self.validator._encode_kernel_pair_report(self.kernel_pair_report()))
+        expected = json.dumps(self.manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        self.assertEqual(report["sourceContractSha256"], hashlib.sha256(expected).hexdigest())
+        with mock.patch.object(self.validator, "MAX_SITE_INVENTORY_BYTES", len(encoded)):
+            self.assertEqual(self.validator._encode_kernel_pair_report(report), encoded)
+        with mock.patch.object(self.validator, "MAX_SITE_INVENTORY_BYTES", len(encoded) - 1):
+            with self.assertRaisesRegex(SystemExit, "output byte bound"):
+                self.validator._encode_kernel_pair_report(report)
+        fixtures = {row["fixtureId"]: row for row in self.manifest["compilerFixtures"]}
+        count = sum(len(report[key]) for key in ("fixtureSelections", "sourceDriverCases", "displayObservations"))
+        with mock.patch.object(self.validator, "MAX_KERNEL_PAIR_RECORDS", count):
+            self.assertEqual(self.validator._kernel_pair_report(self.manifest, fixtures, report["sourceBindingGaps"], None), report)
+        with mock.patch.object(self.validator, "MAX_KERNEL_PAIR_RECORDS", count - 1):
+            with self.assertRaisesRegex(SystemExit, "record bound"):
+                self.validator._kernel_pair_report(self.manifest, fixtures, {}, None)
 
     def test_release_schema_and_accepted_baseline_are_rejected(self):
         self.manifest["schema"] = "fe2o3-tutorial-kernel-manifest-v1"

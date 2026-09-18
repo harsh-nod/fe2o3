@@ -76,6 +76,12 @@ use fe2o3_pliron::{
 use sha2::{Digest as _, Sha256};
 
 include!("production_pre_ranked_v1.rs");
+#[path = "production_checked_output_admission_policy3_v1.rs"]
+mod checked_output_admission_policy3_v1;
+pub use checked_output_admission_policy3_v1::*;
+#[path = "production_checked_output_guarded_formal_v1.rs"]
+mod checked_output_guarded_formal_v1;
+pub(crate) use checked_output_guarded_formal_v1::derive_checked_output_guarded_obligations_v1;
 include!("production_retained_arrays_v1.rs");
 include!("production_assert_origins_v1.rs");
 #[path = "production_slice_view_v1.rs"]
@@ -30608,6 +30614,7 @@ mod resource_tests {
     }
 
     include!("production_semantic_kir_v1/guarded_formal_consumer_tests.rs");
+    include!("production_semantic_kir_v1/checked_output_guarded_formal_v1_tests.rs");
 
     fn ranked_correlation_input_for_accesses(
         accesses: &[AccessKindAttr],

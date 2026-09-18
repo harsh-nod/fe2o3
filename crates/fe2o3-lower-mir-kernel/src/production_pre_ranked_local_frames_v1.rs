@@ -1,5 +1,6 @@
 include!("production_local_helper_relations_v1.rs");
 include!("production_local_helper_source_v1.rs");
+include!("production_local_helper_ranked_v1.rs");
 include!("production_local_helper_values_v1.rs");
 include!("production_local_helper_statements_v1.rs");
 include!("production_local_helper_memory_v1.rs");

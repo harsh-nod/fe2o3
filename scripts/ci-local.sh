@@ -1229,6 +1229,8 @@ run_generic_core() {
   run_format
   run_check
   run_backend_build
+  run_step simulation-expectation-tests \
+    python3 -I -B scripts/tests/simulation_expectation.py
   run_step quickstart-shell-tests bash scripts/tests/quickstart.sh
   run_step kernel-compile-matrix-shell-tests \
     bash scripts/tests/kernel-compile-matrix.sh
@@ -1284,6 +1286,12 @@ run_rocm_compile() {
       cargo test --locked -p rustc-codegen-fe2o3 \
         --test production_extraction_driver_v1 \
         attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph -- \
+        --ignored --exact
+  run_step rocm-production-extraction-memory-free-kernel \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_extraction_driver_v1 \
+        ordinary_memory_free_kernel_reaches_ranked_verification -- \
         --ignored --exact
   run_step rocm-production-extraction-unsafe-rejection \
     env "${loader_environment_removals[@]}" \

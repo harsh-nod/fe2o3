@@ -12,6 +12,11 @@ mod ranked_projection_source_v1;
 mod slice_projection_v1;
 use slice_projection_v1::ProjectedViewsV1;
 
+#[cfg(test)]
+pub(crate) use tests::{
+    with_backend_checked_output_policy3_owned_v1, with_backend_checked_output_policy3_v1,
+};
+
 use analysis_multi_split_v1::{
     append_analysis_multi_split_blocks, append_analysis_multi_split_blocks_with_arguments,
 };
@@ -1520,6 +1525,13 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
 }
 
 impl ProductionRankedSemanticProgramV1 {
+    /// Borrows the exact retained N before consuming its authenticated roster.
+    pub(crate) fn materialized(&self) -> &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1 {
+        &self.materialized
+    }
+}
+
+impl ProductionRankedSemanticProgramV1 {
     pub(crate) fn roots(&self) -> &[ProductionRankedRootProgramV1] {
         &self.roots
     }
@@ -2011,6 +2023,8 @@ enum DefinedCallableEmptyEffectDecisionV1 {
     Unknown,
     ExactEmptyDeterministicScalar,
     ExactEmptyOnly,
+    // Negative-only state: every use still requires its root/call-local join.
+    LocalMemoryRequiresCall,
     Rejected,
 }
 
@@ -2995,7 +3009,7 @@ pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
     let roots = {
-        let source = RankedProjectionSourceV1::from_legacy(&materialized)?;
+        let source = RankedProjectionSourceV1::from_materialized_checked(&materialized)?;
         with_projection_source_budget_v1(&source, |budget| {
             project_ranked_roots_v1(&source, root_inputs, reference_bindings, budget)
         })?
@@ -3504,11 +3518,8 @@ fn project_and_verify_ranked_root_v1(
         if let Some(error) = incomplete.take() {
             return Err(error);
         }
-        return Err(ProductionRankedProjectionErrorV1::Unsupported(
-            "a kernel without a statically ranked indexed memory access",
-        ));
     }
-    // The launch layout defines the domain even when source never reads a coordinate.
+    // The launch layout defines the domain, including complete memory-free kernels.
     if entry_operations.first() != Some(&ranked_execution_layout_v1(source_root.layout())) {
         incomplete.get_or_insert(ProductionRankedProjectionErrorV1::Incomplete(
             "ranked execution domain differs from the authenticated source launch",
@@ -22983,14 +22994,22 @@ fn project_direct_call_accesses(
     ) {
         return Ok(());
     }
-    require_bounds_neutral_callable(
-        callables,
-        callable_effects,
-        call.callee(),
-        block_index,
-        source,
-        false,
-    )?;
+    if matches!(
+        callables.get(call.callee().index() as usize),
+        Some(SemanticCallableDeclV1::Defined { function })
+            if !callable_effects.is_exact_empty(*function)
+    ) {
+        projected_views.require_unit_local_call(block_index, call, source)?;
+    } else {
+        require_bounds_neutral_callable(
+            callables,
+            callable_effects,
+            call.callee(),
+            block_index,
+            source,
+            false,
+        )?;
+    }
     for argument in call.arguments() {
         project_operand_read(
             types,
@@ -24407,6 +24426,7 @@ mod cold_compile_error_tests;
 #[cfg(test)]
 mod tests {
     include!("production_ranked_projection_v1/projection_01_tests.rs");
+    include!("production_ranked_projection_v1/checked_output_admission_policy3_v1_fixture.rs");
 
     #[test]
     fn pipeline_scalar_rejection_trace_has_exact_bounded_numeric_fields() {

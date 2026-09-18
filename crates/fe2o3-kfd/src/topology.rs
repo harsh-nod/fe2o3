@@ -2595,6 +2595,9 @@ mod tests {
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
+    #[cfg(feature = "engineering-gfx950")]
+    include!("topology_gfx950_asrock_tests.rs");
+
     #[test]
     fn sdma_topology_capability_manifest_is_frozen() {
         let digest = Sha256::digest(GFX942_SDMA_TOPOLOGY_CAPABILITY_MANIFEST_V1);

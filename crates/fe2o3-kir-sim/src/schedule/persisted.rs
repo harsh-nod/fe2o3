@@ -33,6 +33,8 @@ pub enum PersistedSimulationScheduleArtifactV1 {
     CanonicalKirV10,
     /// Exact canonical Kernel IR V11 was supplied directly.
     CanonicalKirV11,
+    /// Exact canonical Kernel IR V12 was supplied directly.
+    CanonicalKirV12,
     /// An authority-free simulation bundle supplied the exact canonical KIR.
     SimulationBundleV1 {
         bundle_sha256: [u8; 32],
@@ -353,6 +355,10 @@ enum ArtifactWireV1 {
         kir_sha256: HexIdentityV1,
         kir_canonical_bytes: u64,
     },
+    CanonicalKirV12 {
+        kir_sha256: HexIdentityV1,
+        kir_canonical_bytes: u64,
+    },
     SimulationBundleV1 {
         bundle_sha256: HexIdentityV1,
         subject_sha256: HexIdentityV1,
@@ -594,6 +600,14 @@ impl TryFrom<ScheduleDocumentWireV1> for PersistedSimulationScheduleDocumentV1 {
                 kir_sha256.0,
                 kir_canonical_bytes,
             ),
+            ArtifactWireV1::CanonicalKirV12 {
+                kir_sha256,
+                kir_canonical_bytes,
+            } => (
+                PersistedSimulationScheduleArtifactV1::CanonicalKirV12,
+                kir_sha256.0,
+                kir_canonical_bytes,
+            ),
             ArtifactWireV1::SimulationBundleV1 {
                 bundle_sha256,
                 subject_sha256,
@@ -673,6 +687,7 @@ impl TryFrom<ScheduleDocumentWireV1> for PersistedSimulationScheduleDocumentV1 {
                 | PersistedSimulationScheduleArtifactV1::SimulationBundleV5 { .. } => 10,
                 PersistedSimulationScheduleArtifactV1::CanonicalKirV11
                 | PersistedSimulationScheduleArtifactV1::SimulationBundleV6 { .. } => 11,
+                PersistedSimulationScheduleArtifactV1::CanonicalKirV12 => 12,
             },
             kir_sha256,
             kir_canonical_bytes,
@@ -714,6 +729,7 @@ fn validate_binding(
         | PersistedSimulationScheduleArtifactV1::SimulationBundleV5 { .. } => 10,
         PersistedSimulationScheduleArtifactV1::CanonicalKirV11
         | PersistedSimulationScheduleArtifactV1::SimulationBundleV6 { .. } => 11,
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV12 => 12,
     };
     if binding.kir_wire_version != expected_wire_version
         || binding.kir_canonical_bytes == 0
@@ -765,6 +781,10 @@ fn wire_from_parts<'a>(
             kir_canonical_bytes: binding.kir_canonical_bytes,
         },
         PersistedSimulationScheduleArtifactV1::CanonicalKirV11 => ArtifactWireV1::CanonicalKirV11 {
+            kir_sha256: HexIdentityV1(binding.kir_sha256),
+            kir_canonical_bytes: binding.kir_canonical_bytes,
+        },
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV12 => ArtifactWireV1::CanonicalKirV12 {
             kir_sha256: HexIdentityV1(binding.kir_sha256),
             kir_canonical_bytes: binding.kir_canonical_bytes,
         },

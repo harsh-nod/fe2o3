@@ -4,6 +4,58 @@
 not grant source authenticity, formal verification, safe-launch or hardware
 execution authority.
 
+## Canonical MemorySSA
+
+`CanonicalKirMemorySsaV1` borrows an exact immutable inventory and builds one
+conservative all-memory version graph in linear structural work. Each defined
+function has a LiveOnEntry node; every block has an unpruned phi with all incoming
+edge occurrences, and the entry block also retains its synthetic entry input.
+Block exits are built before predecessor links, so backedges, duplicate edges,
+irreducible regions and disconnected components require no iterative guess.
+
+Ordinary reads use the current version. Writes, allocations, volatile effects,
+atomics, synchronization, calls, assembly, execution operations and compiler
+ordering conservatively define a new version. A Def is a possible clobber or
+ordering barrier, not proof that a physical write occurs. This report proves
+neither aliasing nor initialization, reachability, absence of traps, race freedom
+or legal instruction motion. It does not authorize optimization rewrites.
+
+The report charges construction work, actual vector capacities and its header;
+queries charge fixed work. Its immutable borrow supplies graph custody, not a
+hash-based cache key. Node IDs are local numeric locators, not transferable
+identity. `with_canonical_analysis_scope_v1` in `fe2o3-pliron` lazily retains the
+report beside sparse analysis on the same ledger. This adds an M4 analysis
+prerequisite, not LICM, load forwarding or a new production pass policy.
+
+## Checked Store Forwarding
+
+`CanonicalKirStoreForwardingPlanV1` uses an exact inventory and MemorySSA report
+to find ordinary private-memory integer loads with an earlier store to the same
+pointer SSA value in the same block. The access attributes and integer widths
+must match. An intervening write, allocation, call, ordering effect, volatile
+access, convergence operation or potentially trapping arithmetic stops the rule.
+Only a closed set of total scalar operations and matching loads may intervene.
+The store supplies initialization; a repeated read alone does not.
+
+The rewrite keeps the store and all operation coordinates, replacing the load
+with `BitOr(stored_value, stored_value)` of the same fixed-width integer type.
+`check_canonical_kir_store_forwarding_v1` independently checks the store, interval,
+types and complete before/after module without trusting the MemorySSA report or
+the proposed rewrite rows. Work for candidate mutation is paid before any edit.
+Block-local rewrites work within arbitrary CFGs, including loops, but no
+cross-block, alias-based, floating-point or global-memory forwarding is claimed.
+
+`fe2o3-kernel-opt::optimize_checked_store_forwarding_v1` composes the analysis,
+budgeted V12 candidate copy, rewrite, fresh canonical admission and independent
+check. Its result retains the input borrow, actual output and checked rows; it
+cannot stand in for a Policy3 owner or final source/private-address admission.
+This service is not appended to the frozen production pass schedule.
+
+The plan reserves at most one row per operation and scans linearly. Candidate
+copying, application and replay have separately metered work/storage receipts.
+Result exits restore the incoming floor, retaining work, peak and denial data;
+these are logical payload bounds, not whole-process or allocator RSS limits.
+
 ## Canonical Physical Occurrences
 
 [`CanonicalKirPhysicalOccurrencesV1`](src/canonical_kir_physical_occurrences_v1.rs)
@@ -55,6 +107,10 @@ These are logical payload bounds, not allocator RSS or standalone unwind guarant
 ## Tests
 
 ```sh
+cargo test --locked -p fe2o3-kernel-analysis --lib memory_ssa
+cargo test --locked -p fe2o3-kernel-analysis --no-default-features --lib memory_ssa
+cargo test --locked -p fe2o3-pliron --lib memory_ssa
+cargo test --locked -p fe2o3-kernel-analysis -p fe2o3-kernel-opt --lib store_forwarding
 cargo test --locked -p fe2o3-kernel-analysis --lib canonical_kir_physical_occurrences_v1
 cargo test --locked -p fe2o3-kernel-analysis --no-default-features --lib canonical_kir_physical_occurrences_v1
 cargo test --locked -p fe2o3-kernel-analysis --doc CanonicalKirPhysicalOccurrencesV1
