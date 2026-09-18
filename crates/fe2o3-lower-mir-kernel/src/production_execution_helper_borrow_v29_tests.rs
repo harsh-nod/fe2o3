@@ -42,7 +42,24 @@ fn helper_source(case: Case, ignored_prefix: usize) -> AdmittedInertSemanticMirV
                 .iter()
                 .map(|ty| SemanticAbiArgumentV1::source(value_abi(semantic.types(), *ty)))
                 .collect(),
-            value_abi(semantic.types(), output),
+            if output == reference_type {
+                SemanticAbiValueV1::new(
+                    output,
+                    SemanticAbiPassModeV1::Direct(
+                        SemanticAbiValueAttributesV1::new(
+                            SemanticAbiRegularAttributesV1::new(
+                                false, None, true, false, false, true,
+                            ),
+                            SemanticAbiExtensionV1::None,
+                            0,
+                            None,
+                        )
+                        .unwrap(),
+                    ),
+                )
+            } else {
+                value_abi(semantic.types(), output)
+            },
         )
         .unwrap()
         .with_source_argument_ownership(ownership)
@@ -292,7 +309,7 @@ fn helper_source(case: Case, ignored_prefix: usize) -> AdmittedInertSemanticMirV
     )
     .unwrap()
     .admit_exact_v29(SemanticMirLimitsV1::default())
-    .unwrap()
+    .unwrap_or_else(|error| panic!("{case:?} prefix={ignored_prefix}: {error:?}"))
 }
 
 fn owner_with_limits(
