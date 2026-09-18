@@ -88,6 +88,10 @@ pub enum NativeCompilerSourceProofErrorV1 {
     Source(fe2o3_lower_mir_kernel::NativeSourceReplayErrorV1),
     Middle(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV5),
     Signed(crate::ProductionMirPlironVerusExecutionEvidenceErrorV1),
+    EffectReceipt(fe2o3_functional_proof::FunctionalRefinementImportErrorV2),
+    RankedRecipe(fe2o3_pliron::ProductionRankedKernelErrorV1),
+    RankedCompile(Box<fe2o3_pliron::ProductionRankedCompileErrorV2>),
+    Aggregate(Box<crate::ProductionMirPlironPerCompilationVerusErrorV1>),
     Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     InductionWire(fe2o3_mir_model::SemanticU32InductionEvidenceErrorV1),
     Mismatch(&'static str),
@@ -566,3 +570,7 @@ pub fn validate_native_compiler_source_proof_v1(
 #[cfg(test)]
 #[path = "compiler_native_source_proof_v1_tests.rs"]
 mod tests;
+
+#[path = "compiler_native_ranked_source_proof_v1.rs"]
+mod ranked_source;
+pub use ranked_source::*;

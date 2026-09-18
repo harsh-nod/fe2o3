@@ -6,6 +6,12 @@ use fe2o3_kernel_ir::{CanonicalKirOperationCoordinateV1, CanonicalKirOperationOr
 mod census;
 #[path = "production_checked_output_private_memory_policy3_v1.rs"]
 mod private_memory;
+#[path = "production_checked_output_unsigned_division_v1.rs"]
+mod unsigned_division;
+
+#[cfg(test)]
+#[path = "production_checked_output_general_arithmetic_census_v1_tests.rs"]
+mod arithmetic_census_tests;
 
 type E = ProductionCheckedOutputAdmissionErrorPolicy3V1;
 type R<T> = Result<T, E>;
@@ -188,9 +194,13 @@ fn check_inner(
     let private_input = private_memory::check(&input, source.limits.max_operations, budget)?;
     private_memory::source_lifetimes(source, &private_input, budget)?;
     let private_output = private_memory::check(&output, source.limits.max_operations, budget)?;
+    let target = source.semantic().semantic().target();
+    let input_division = unsigned_division::check(&input, target, budget)?;
+    let output_division = unsigned_division::check(&output, target, budget)?;
     census::native(
         &input,
         &private_input,
+        &input_division,
         "B",
         |ordinal, _| Ok(traps[ordinal] == 1),
         budget,
@@ -198,6 +208,7 @@ fn check_inner(
     census::native(
         &output,
         &private_output,
+        &output_division,
         "O",
         |ordinal, coordinate| {
             let row = candidate
@@ -275,9 +286,12 @@ pub(crate) fn check_forwarded_output_v1(
             .reserve_storage(storage.retained_storage())
             .map_err(E::Resource)?;
         let private = private_memory::check(&actual, source.limits.max_operations, budget)?;
+        let division =
+            unsigned_division::check(&actual, source.semantic().semantic().target(), budget)?;
         census::native(
             &actual,
             &private,
+            &division,
             "forwarded O",
             |_, coordinate| {
                 let old = &input.operations()[operation_ordinal(&input, coordinate)?];

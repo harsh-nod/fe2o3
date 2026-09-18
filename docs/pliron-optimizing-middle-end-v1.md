@@ -217,6 +217,70 @@ native protected provenance, complete admission and tutorial qualification pass.
 This composition does not complete #271's expanded scalar, loop, memory or GPU
 optimization milestones.
 
+Its native source handoff retains full signed per-effect receipts, not just
+staging hashes. Independent replay reconstructs semantic MIR/SSA/N, recompiles
+the complete typed ranked roster, recreates exact V5 evidence, derives both
+contracts and the aggregate generated source, and consumes the fresh ranked
+results into the reconstructed source owner. The original and reconstructed
+owners remain distinct custody objects. Embedded keys establish consistency
+only; indexed-address/whole-operational equivalence, protected compiler origin,
+final-output provenance and default activation are still separate requirements.
+The in-process typed handoff is not a serialized artifact recipe format.
+
+### Ordinary-source corpus gate
+
+The ignored `ordinary_tutorial_corpus_requires_every_checked_policy4_output`
+test reads every configuration in the tutorial manifest, preserving target,
+Cargo features, lockfile/source hashes and the exact expected kernel roster.
+Cargo builds dependencies with `--offline --locked`; the captured root rustc
+arguments, environment and working directory then drive the real compiler
+callback. Each case must reach checked Policy4 output with LLVM and a matching
+descriptor. A dependency failure or compiler refusal fails the all-case gate;
+neither is counted as a pass or silently removed from coverage.
+
+With the pinned nightly and its required rustc components installed, run:
+
+```sh
+cargo test --offline --locked --no-default-features \
+  -p rustc-codegen-fe2o3 --lib \
+  ordinary_tutorial_corpus_requires_every_checked_policy4_output \
+  -- --ignored --nocapture
+```
+
+Set `FE2O3_TEST_CHECKED_OUTPUT_CORPUS_REPORT_V1` to an absolute output filename
+to retain the structured per-case report, including all refusals. The harness
+cleans its temporary dependency and subprocess directories. This gate checks
+the nondefault source-to-LLVM route; it does not execute Verus or kernels,
+publish compiler artifacts, or establish simulator, numerical or GPU results.
+The separate `ordinary_rust_fill_and_vecadd_reach_checked_native_output` parent
+also exercises the missing signed-proof refusal without releasing output.
+
+The corpus prints an external `callback-progress.json` path before each child
+invocation. Its atomically replaced snapshot identifies the active compiler
+phase and records monotonic durations for completed calls; the final report
+retains these timings before temporary files are removed. Policy4 is one opaque
+timed call containing B/C/O checks, so its refusal alone does not identify the
+failed endpoint. Instrumentation I/O failures are diagnostic-only and cannot
+change the compiler result or the all-case acceptance gate. Captured jobserver
+variables are removed only when replaying the standalone child, whose inherited
+file descriptors are no longer valid.
+
+For a focused diagnostic run, set `FE2O3_TEST_CHECKED_OUTPUT_ENDPOINTS_V1` to an
+existing fresh directory outside the checkout. The test harness retains actual
+B/C/O canonical bytes, full graph dumps and identity metadata there before
+admission. Each case is capped at 30 MiB plus 16 KiB of metadata; incomplete
+endpoints are marked unavailable, not emitted as truncated complete graphs.
+Graph capture is off by default and adds I/O to Policy4 timing when enabled.
+These snapshots are diagnostics, not proof receipts or artifact authority, and
+do not by themselves identify which endpoint's formal check failed.
+
+Ranked read projection groups source occurrences once, preserving exact source
+ordinals, duplicate rows and per-statement cardinality. Matching costs
+`O(S + R log R)` for `S` source rows and `R` eligible reads instead of repeated
+whole-roster scans. The index retains `O(R)` storage and can have a higher peak
+than one old per-statement temporary vector. This is an algorithmic bound, not
+a measured end-to-end speedup or a new canonical resource-accounting claim.
+
 ## Admission tests
 
 The production admission is maintained by the following regression gates:

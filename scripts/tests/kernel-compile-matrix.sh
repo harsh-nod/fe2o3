@@ -8,6 +8,8 @@ readonly SCRIPT_DIR
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 readonly REPO_ROOT
 python3 "${REPO_ROOT}/scripts/tests/tutorial_kernel_manifest.py"
+python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_kernel_occurrences.py"
+python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_kernel_identities.py"
 
 readonly MATRIX_SCRIPT="${REPO_ROOT}/scripts/kernel-compile-matrix.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-kernel-compile-matrix-test.XXXXXXXX")"
