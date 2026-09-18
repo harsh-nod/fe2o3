@@ -86,7 +86,7 @@ fn integer(bits: u16, maximum: u128) -> SemanticBackendScalarV1 {
     )
 }
 
-fn request(lanes: u16, elements: u16) -> InertSemanticMirRequestV1 {
+pub(super) fn request(lanes: u16, elements: u16) -> InertSemanticMirRequestV1 {
     let mut request = minimal_request();
     let mut types = request.types.into_vec();
     types.push(aggregate(&types, &[], false));

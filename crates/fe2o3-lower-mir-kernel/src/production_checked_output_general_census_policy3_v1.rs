@@ -56,6 +56,10 @@ pub(super) fn source_parts(
                     charge(budget, 1)?;
                     match source.callables().get(call.callee().index() as usize) {
                         Some(SemanticCallableDeclV1::CompilerIntrinsic { .. }) if !helper => {}
+                        Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                            operation: SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_),
+                            ..
+                        }) => {}
                         Some(SemanticCallableDeclV1::Defined { function: callee })
                             if source.functions().get(callee.index() as usize).is_some_and(
                                 |callee| callee.role() == SemanticFunctionRoleV1::InternalHelper,
@@ -111,6 +115,17 @@ pub(super) fn source_parts(
                             | SemanticBinaryOpV1::GreaterOrEqual,
                         ..
                     } => {}
+                    SemanticRvalueKindV1::Unary {
+                        operation: SemanticUnaryOpV1::Negate,
+                        ..
+                    }
+                    | SemanticRvalueKindV1::Binary {
+                        operation: SemanticBinaryOpV1::Divide,
+                        ..
+                    } if matches!(
+                        source.types()[value.result_type().index() as usize].shape(),
+                        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float { bits: 32 })
+                    ) => {}
                     SemanticRvalueKindV1::Binary {
                         operation:
                             SemanticBinaryOpV1::Add
@@ -343,6 +358,18 @@ pub(super) fn native(
                 op: BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply,
                 ..
             } if matches!(row.operation.results.as_slice(), [value] if matches!(value.ty, Type::F32 | Type::F64)) => {
+                None
+            }
+            OperationKind::Unary {
+                op: UnaryOp::Negate,
+                ..
+            }
+            | OperationKind::Binary {
+                op: BinaryOp::Divide,
+                ..
+            } if matches!(row.operation.results.as_slice(), [value] if value.ty == Type::F32) => {
+                // Exact IEEE F32 recipes, not the integer nonzero/overflow
+                // rule below. No reciprocal rewrite or fast-math permission.
                 None
             }
             OperationKind::Cast {

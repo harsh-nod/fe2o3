@@ -212,7 +212,7 @@ const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
 )];
 // The complete workspace tree includes nested fixture lockfiles.
 const TRUSTED_FE2O3_MACROS_TREE: &str =
-    "88670bdda10e989add10a6b8dd64940036738f33ef894ea3e2456377a1ba69b4";
+    "5649530d5cd9e04e4ef9a31b117d7af5c9b206f62421f9e165884f223b9571c8";
 // This digest belongs to TRUSTED_FE2O3_EXTERNAL_SOURCE and is intentionally
 // independent of the workspace-local macros tree.
 const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =

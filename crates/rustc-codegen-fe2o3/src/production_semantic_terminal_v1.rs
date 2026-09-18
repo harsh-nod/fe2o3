@@ -75,6 +75,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     MathF32(F32MathFunction),
     /// The exact rustc `core::intrinsics::fabs::<f32>` compiler intrinsic.
     RustcFabsF32,
+    RustcSaturatingInteger(fe2o3_mir_model::semantic_mir_v1::SemanticSaturatingIntegerOpV1),
     /// The exact checked `fe2o3_device::memory::volatile_load` provider.
     MemoryVolatileLoad,
     Bf16Conversion(ProductionBf16ConversionV1),
@@ -841,7 +842,8 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(
                 ProductionTerminalExpansionV1::ColdPath
-                | ProductionTerminalExpansionV1::RustcFabsF32,
+                | ProductionTerminalExpansionV1::RustcFabsF32
+                | ProductionTerminalExpansionV1::RustcSaturatingInteger(_),
             ) => {
                 panic!("core compiler intrinsics are not trusted device items")
             }

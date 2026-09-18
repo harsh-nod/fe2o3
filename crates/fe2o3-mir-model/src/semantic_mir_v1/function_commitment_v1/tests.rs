@@ -134,6 +134,7 @@ fn function_commitment_matches_legacy_encoder_and_is_version_bound() {
         SemanticMirWireVersionV1::V15,
         SemanticMirWireVersionV1::V28,
         SemanticMirWireVersionV1::V29,
+        SemanticMirWireVersionV1::V30,
     ];
     let mut seen = BTreeSet::new();
     for version in versions {

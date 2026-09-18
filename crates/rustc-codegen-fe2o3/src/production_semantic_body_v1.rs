@@ -2053,7 +2053,12 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 {
                     Some(ProductionTerminalExpansionV1::RustcFabsF32)
                 }
-                Ok(Some(_)) => return Err(table("normalized intrinsic call binding")),
+                Ok(Some(classification)) => match classification.operation {
+                    ProductionRustcIntrinsicOperationV1::SaturatingInteger(operation) => Some(
+                        ProductionTerminalExpansionV1::RustcSaturatingInteger(operation),
+                    ),
+                    _ => return Err(table("normalized intrinsic call binding")),
+                },
                 Ok(None) => None,
                 Err(error) => {
                     return Err(unsupported(
@@ -2575,6 +2580,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32
         | ProductionTerminalExpansionV1::DisjointBlockComponentIndex
         | ProductionTerminalExpansionV1::MemoryVolatileLoad
+        | ProductionTerminalExpansionV1::RustcSaturatingInteger(_)
         | ProductionTerminalExpansionV1::WorkgroupPipelineStage
         | ProductionTerminalExpansionV1::WorkgroupPipelineCommit
         | ProductionTerminalExpansionV1::WorkgroupPipelineWait

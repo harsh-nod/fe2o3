@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 mod canonical_decode;
 mod capability_v29;
 mod function_commitment_v1;
+mod saturating_integer_v30;
 mod target_properties;
 
 pub use canonical_decode::SemanticMirDecodeErrorV1;
@@ -27,6 +28,7 @@ use function_commitment_v1::CanonicalCommitmentSinkV1;
 pub use function_commitment_v1::{
     SemanticFunctionCanonicalCommitmentV1, canonical_function_commitment_v1,
 };
+pub use saturating_integer_v30::SemanticSaturatingIntegerOpV1;
 use target_properties::{
     target_object_size_bound_in, target_pointer_profile, target_vector_alignment,
     validate_target_primitive,
@@ -51,6 +53,7 @@ pub const INERT_SEMANTIC_MIR_VERSION_V15: u16 = 15;
 // for the independently coordinated numerical-relation contract.
 pub const INERT_SEMANTIC_MIR_VERSION_V28: u16 = 28;
 pub const INERT_SEMANTIC_MIR_VERSION_V29: u16 = 29;
+pub const INERT_SEMANTIC_MIR_VERSION_V30: u16 = 30;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -75,6 +78,7 @@ pub enum SemanticMirWireVersionV1 {
     V15,
     V28,
     V29,
+    V30,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -96,6 +100,7 @@ impl SemanticMirWireVersionV1 {
             Self::V15 => INERT_SEMANTIC_MIR_VERSION_V15,
             Self::V28 => INERT_SEMANTIC_MIR_VERSION_V28,
             Self::V29 => INERT_SEMANTIC_MIR_VERSION_V29,
+            Self::V30 => INERT_SEMANTIC_MIR_VERSION_V30,
         }
     }
 
@@ -117,6 +122,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V15 => Some(Self::V15),
             INERT_SEMANTIC_MIR_VERSION_V28 => Some(Self::V28),
             INERT_SEMANTIC_MIR_VERSION_V29 => Some(Self::V29),
+            INERT_SEMANTIC_MIR_VERSION_V30 => Some(Self::V30),
             _ => None,
         }
     }
@@ -5404,6 +5410,8 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     WorkgroupBarrier,
     WaveBarrier,
     FabsF32,
+    /// Defined, non-unwinding integer saturation with an exact `(T, T) -> T` ABI.
+    SaturatingInteger(SemanticSaturatingIntegerOpV1),
     /// Performs one bounds-checked volatile read from an immutable Rust slice.
     MemoryVolatileLoad {
         element: SemanticTypeIdV1,
@@ -6275,6 +6283,15 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V29, limits)
     }
 
+    /// Admits V30 integer saturation; the separate inert V29 capability
+    /// grammar is not part of this schema.
+    pub fn admit_exact_v30(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V30, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
@@ -6283,18 +6300,14 @@ impl InertSemanticMirRequestV1 {
     /// volatile loads, V13 for compiler-owned workgroup LDS scope acquisition,
     /// V14 for checked disjoint-block component projection, and V15 for checked
     /// column-major BF16 B operands. V28 retains RustCall tuple-field locals
-    /// and the unit spelling of an empty RustCall source tuple.
+    /// and the unit spelling of an empty RustCall source tuple. V30 adds typed
+    /// integer saturation. Inert capability content remains independently refused.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        saturating_integer_v30::check_current_production_content(&self)?;
         let version = minimum_wire_version(&self).max(SemanticMirWireVersionV1::V5);
-        if version == SemanticMirWireVersionV1::V29 {
-            return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
-                requested: SemanticMirWireVersionV1::V28,
-                required: version,
-            });
-        }
         self.admit_for_wire_version(version, limits)
     }
 
@@ -7928,6 +7941,7 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
         | SemanticCompilerIntrinsicOperationV1::FabsF32
+        | SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_)
         | SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { .. }
         | SemanticCompilerIntrinsicOperationV1::MathContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::MathF32 { .. }
@@ -8183,6 +8197,9 @@ fn compiler_intrinsic_signature_matches(
                     scalar_type(request, output),
                     Some(SemanticScalarTypeV1::Float { bits: 32 })
                 )
+        }
+        SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_) => {
+            saturating_integer_v30::signature_matches(request, abi)
         }
         SemanticCompilerIntrinsicOperationV1::MemoryVolatileLoad { element } => {
             inputs.len() == 2
@@ -15841,7 +15858,8 @@ fn enqueue_compiler_intrinsic_type_references(
         | SemanticCompilerIntrinsicOperationV1::ColdPath
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
-        | SemanticCompilerIntrinsicOperationV1::FabsF32 => {}
+        | SemanticCompilerIntrinsicOperationV1::FabsF32
+        | SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_) => {}
         SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {
             pending.push_back(scope);
         }
@@ -16696,20 +16714,10 @@ fn uses_bf16_conversion(request: &InertSemanticMirRequestV1) -> bool {
 }
 
 fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
-    if request
-        .types
-        .iter()
-        .any(|ty| matches!(ty.rust_type_kind, SemanticRustTypeKindV1::Execution(_)))
-        || request.callables.iter().any(|callable| {
-            matches!(
-                callable,
-                SemanticCallableDeclV1::CompilerIntrinsic {
-                    operation: SemanticCompilerIntrinsicOperationV1::Execution(_),
-                    ..
-                }
-            )
-        })
-    {
+    if saturating_integer_v30::uses_saturating_integer(request) {
+        return SemanticMirWireVersionV1::V30;
+    }
+    if saturating_integer_v30::contains_inert_execution(request) {
         return SemanticMirWireVersionV1::V29;
     }
     let uses_pipeline = uses_workgroup_pipeline(request);
@@ -17808,6 +17816,16 @@ fn encode_compiler_intrinsic_operation(
 ) -> Result<(), SemanticMirErrorV1> {
     if matches!(
         operation,
+        SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_)
+    ) && wire_version != SemanticMirWireVersionV1::V30
+    {
+        return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+            requested: wire_version,
+            required: SemanticMirWireVersionV1::V30,
+        });
+    }
+    if matches!(
+        operation,
         SemanticCompilerIntrinsicOperationV1::Execution(_)
     ) && wire_version != SemanticMirWireVersionV1::V29
     {
@@ -17816,10 +17834,12 @@ fn encode_compiler_intrinsic_operation(
             required: SemanticMirWireVersionV1::V29,
         });
     }
-    // Both versions inherit the frozen legacy intrinsic grammar unchanged.
+    // Each extension retains the frozen legacy intrinsic grammar unchanged.
     let wire_version = if matches!(
         wire_version,
-        SemanticMirWireVersionV1::V28 | SemanticMirWireVersionV1::V29
+        SemanticMirWireVersionV1::V28
+            | SemanticMirWireVersionV1::V29
+            | SemanticMirWireVersionV1::V30
     ) {
         SemanticMirWireVersionV1::V15
     } else {
@@ -17827,6 +17847,13 @@ fn encode_compiler_intrinsic_operation(
     };
     match operation {
         SemanticCompilerIntrinsicOperationV1::Execution(operation) => operation.encode(writer),
+        SemanticCompilerIntrinsicOperationV1::SaturatingInteger(operation) => {
+            writer.u8(87)?;
+            writer.u8(match operation {
+                SemanticSaturatingIntegerOpV1::Add => 0,
+                SemanticSaturatingIntegerOpV1::Subtract => 1,
+            })
+        }
         SemanticCompilerIntrinsicOperationV1::ThreadIndex(axis) => {
             writer.u8(0)?;
             encode_axis(writer, axis)

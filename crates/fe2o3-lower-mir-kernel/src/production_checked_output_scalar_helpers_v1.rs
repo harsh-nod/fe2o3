@@ -210,6 +210,13 @@ pub(super) fn check<'i, 'g>(
                     ..
                 }
                 | OperationKind::Call { .. } => {}
+                OperationKind::Unary {
+                    op: UnaryOp::Negate,
+                    ..
+                } if matches!(row.operation.results.as_slice(), [result] if result.ty == Type::F32) =>
+                {
+                    charge(budget, 2)?;
+                }
                 OperationKind::Binary {
                     op: BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply,
                     ..
@@ -225,12 +232,14 @@ pub(super) fn check<'i, 'g>(
                     }
                 }
                 OperationKind::Binary {
-                    op: BinaryOp::Divide | BinaryOp::Remainder,
+                    op: op @ (BinaryOp::Divide | BinaryOp::Remainder),
                     ..
                 } => {
                     charge(budget, 2)?;
                     if matches!(row.operation.results.as_slice(), [result]
                         if matches!(result.ty, Type::F32 | Type::F64))
+                        && !(op == BinaryOp::Divide
+                            && matches!(row.operation.results.as_slice(), [result] if result.ty == Type::F32))
                     {
                         return Err(refused("scalar helpers", "closed scalar helper opcode"));
                     }

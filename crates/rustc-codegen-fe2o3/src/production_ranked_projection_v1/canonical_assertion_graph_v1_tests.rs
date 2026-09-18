@@ -1,4 +1,6 @@
-pub(crate) use canonical_assertion_graph_tests::with_backend_erased_bound_v1;
+pub(crate) use canonical_assertion_graph_tests::{
+    with_backend_erased_bound_v1, with_backend_erased_roster_v1,
+};
 
 mod canonical_assertion_graph_tests {
     use super::super::canonical_assertion_facts_v1::*;

@@ -23,6 +23,8 @@ use fe2o3_pliron::{
     ProductionSemanticSsaLimitsV1, ProductionSemanticSsaOwnerV1,
 };
 
+include!("native_erased_source_staging_v1.rs");
+
 /// Failure of normal source replay or an exact retained ranked-subject join.
 #[derive(Debug)]
 pub enum NativeSourceReplayErrorV1 {
@@ -565,49 +567,7 @@ pub fn native_source_ranked_staging_commitments_v1(
         let receipts = retained
             .lowering
             .retained_policy_checked_refinement_staging();
-        budget.charge_work(3)?;
-        let header = std::mem::size_of::<Vec<NativeRankedStagingCommitmentV1>>();
-        let requested = receipts
-            .len()
-            .checked_mul(std::mem::size_of::<NativeRankedStagingCommitmentV1>())
-            .ok_or(Resource::Arithmetic)?;
-        budget.reserve_storage(header.checked_add(requested).ok_or(Resource::Arithmetic)?)?;
-        let mut rows = Vec::new();
-        rows.try_reserve_exact(receipts.len())
-            .map_err(|_| Resource::Allocation)?;
-        let capacity = rows
-            .capacity()
-            .checked_mul(std::mem::size_of::<NativeRankedStagingCommitmentV1>())
-            .ok_or(Resource::Arithmetic)?;
-        budget.reserve_storage(
-            capacity
-                .checked_sub(requested)
-                .ok_or(Resource::Accounting)?,
-        )?;
-        for receipt in receipts {
-            budget.charge_work(289)?;
-            let toolchain = receipt.toolchain();
-            rows.push(NativeRankedStagingCommitmentV1 {
-                digests: [
-                    *receipt.receipt_identity().digest().as_bytes(),
-                    *receipt
-                        .binding()
-                        .normalized_obligation_effect_ir_hash()
-                        .as_bytes(),
-                    *receipt.signer_identity().as_bytes(),
-                    *receipt.execution_identity().as_bytes(),
-                    *toolchain.verus_executable().as_bytes(),
-                    *toolchain.verus_configuration().as_bytes(),
-                    *toolchain.solver_executable().as_bytes(),
-                    *toolchain.solver_configuration().as_bytes(),
-                    *toolchain.runtime_closure().as_bytes(),
-                ],
-            });
-        }
-        Ok((
-            rows,
-            NativeRankedStagingStorageV1(header.checked_add(capacity).ok_or(Resource::Arithmetic)?),
-        ))
+        copy_native_ranked_staging_commitments_v1(receipts, budget)
     }));
     if token != budget.work_ledger_identity_v1() || slot != budget as *const Budget<'_> as usize {
         drop(result);
