@@ -3822,6 +3822,8 @@ fn semantic_rvalue_read_places_v2<'a>(
     }
 }
 
+include!("production_ranked_projection_v1/read_source_index_v1.rs");
+
 impl<'a> GpuSemanticExpressionResolverV2<'a> {
     fn new(
         types: &'a [SemanticTypeDeclV1],
@@ -3885,7 +3887,12 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                 }
             }
         }
-        for source in sources.iter().filter(|source| source.access.reads_memory()) {
+        let read_sources = RankedReadSourceIndexV1::new(sources)?;
+        for (source_index, source) in sources
+            .iter()
+            .enumerate()
+            .filter(|(_, source)| source.access.reads_memory())
+        {
             if source.access != AccessKindAttr::Read
                 || source.memory_space != MemorySpaceAttr::Global
             {
@@ -3907,21 +3914,10 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             };
             let mut read_places = Vec::new();
             semantic_rvalue_read_places_v2(assignment.value(), &mut read_places);
-            let matching_sources = sources
-                .iter()
-                .filter(|candidate| {
-                    candidate.access == AccessKindAttr::Read
-                        && candidate.memory_space == MemorySpaceAttr::Global
-                        && candidate.semantic_site == source.semantic_site
-                })
-                .collect::<Vec<_>>();
-            let Some(ordinal) = matching_sources
-                .iter()
-                .position(|candidate| std::ptr::eq(*candidate, source))
-            else {
+            let Some((ordinal, count)) = read_sources.get(source_index) else {
                 continue;
             };
-            if read_places.len() != matching_sources.len() {
+            if read_places.len() != count {
                 continue;
             }
             let Some(read_place) = read_places.get(ordinal).copied() else {
@@ -24718,6 +24714,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_02_tests.rs");
     include!("production_ranked_projection_v1/projection_03_tests.rs");
     include!("production_ranked_projection_v1/aggregate_value_projection_v2_tests.rs");
+    include!("production_ranked_projection_v1/read_source_index_v1_tests.rs");
     include!("production_ranked_projection_v1/write_only_value_projection_v2_tests.rs");
     include!("production_ranked_projection_v1/projection_04_tests.rs");
     include!("production_ranked_projection_v1/dynamic_local_array_tests.rs");
