@@ -34,6 +34,11 @@ fn lifecycle_owner(branches: bool) -> ProductionSemanticSsaOwnerV1 {
             value_abi(&types, output),
         )
         .unwrap()
+        .with_source_argument_ownership(vec![
+            SemanticSourceArgumentOwnershipV1::ByValue;
+            inputs.len()
+        ])
+        .unwrap()
     };
     let invoke = |callee, arguments, destination, target| {
         SemanticTerminatorKindV1::Call(
