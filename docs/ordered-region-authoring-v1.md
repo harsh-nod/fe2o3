@@ -109,7 +109,10 @@ retained observations, not source authentication or protected artifact authority
 The [logical debugger exercise](ordered-region-debugger-v1.md) separates ordinary
 raw-file debugging from the optional same-live-source-owner qualification. Both
 distinguish the authored register plan from logical before/after values. Neither
-exposes physical scratch or EXEC contents.
+exposes physical scratch or EXEC contents. The checked-in
+[bounded debugger exercise](ordered-region-debugger-v1.md#reproduce-the-bounded-debugger-exercise)
+automates current-owner inspection, independent expected values, stepping and
+complete output-memory checks after the source export below.
 
 ## Use the ordinary diagnostic tools
 

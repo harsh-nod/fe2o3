@@ -80,6 +80,80 @@ does not add a V16 file-descriptor selector. Diagnosis V2 returns
 `unsupported_schema` because that frozen evidence type describes canonical V7;
 it never relabels V16 or disables the separate resource-query protocol.
 
+## Reproduce the bounded debugger exercise
+
+The checked-in [smoke driver](../scripts/ordered-region-debugger-smoke.mjs) and
+[JSONL client](../scripts/ordered-region-debugger-client.mjs) automate the ordinary
+debugger checks above. Use Linux and Node.js 22 with lossless JSON support. First
+complete the normal combined build, source export and exact request in the
+[source walkthrough](ordered-region-authoring-v1.md#use-the-ordinary-diagnostic-tools).
+If Rust tests run afterward, repeat that normal combined build before another
+source export; test-feature builds can replace the backend shared library.
+
+With the walkthrough's variables still set, run:
+
+```sh
+node "$ordered_repo/scripts/ordered-region-debugger-smoke.mjs" \
+  --debugger "$(realpath "$ordered_bin/fe2o3-debug")" \
+  --inspector "$(realpath "$ordered_bin/examples/inspect_diagnostic_ordered_region_v16")" \
+  --kir "$ordered_cli_run/used.kir" \
+  --request "$ordered_cli_run/request.json" \
+  --output "$ordered_cli_run/debugger-smoke" \
+  --result-mode used \
+  --operand-order 0,1,2 \
+  --register-plan 32,33,34,35,36
+```
+
+All eight options are mandatory. Input paths must be absolute regular files
+without redirection. The output directory must be new beneath an existing real
+parent; reserve 40 GiB free disk plus 10 MiB output headroom. The driver does not
+export source or build tools. It runs the inspector afresh, deriving current
+SSA IDs and roster coordinates from the admitted immutable owner rather than
+copying identifiers from a historical example.
+
+`--operand-order` is a permutation of the three scalar argument positions, not
+SSA IDs; the three inspected input IDs must be distinct. Register order is
+`scratch,output,input0,input1,input2`. After re-exporting the operand-swap example,
+use `--operand-order 2,1,0`; after the register-plan edit use
+`--register-plan 40,41,42,43,44`. For the unused-result source variant, supply its
+new KIR and use `--result-mode unused`: memory must contain the first original
+scalar argument, while the region's logical result remains observable. These
+are explicit caller expectations, not source authentication or equivalence proof.
+
+The closed request profile is exactly the walkthrough's one 64-invocation
+workgroup, output slice followed by three scalar `u32` arguments, and one
+264-byte `a5` backing with 33 zero initialization bytes. Other initial states,
+layouts or memory behavior refuse. A separate BigInt oracle calculates wrapping
+results, all 64 output words, canaries and initialization without learning any
+expected value from debugger responses.
+
+Each successful session checks lane 0's before/after values, the whole-region
+breakpoint, result absence before definition, reverse/repeat revisions, explicit
+unavailable source/physical state, diagnosis-V2 refusal, stale-revision and
+stale-event rejection, resource paging and consumed-token rejection. It checks
+all 64 final writes and backing bytes, not every lane's SSA values, foreign-session
+tokens or machine microsteps.
+
+The new directory retains exact inspector stdout/stderr and execution metadata,
+`smoke.json`, and `session/` requests, responses, stderr and observation. File pins
+bind scripts, tools, KIR, request and retained outputs before/after the exercise;
+canonical domain identity remains distinct from a plain file hash. Failures keep
+their evidence and existing output is never overwritten. Both process transports
+copy into fixed-capacity owned buffers; bounded final snapshots have independent
+storage. Timeouts, truncation and forced pipe-drain are failures, not partial passes.
+These are output-storage limits, not a whole-process memory guarantee. Report
+labels are inert observations, not additional backend protocol schemas.
+
+Run the separate pure controls without executing a debugger or compiler:
+
+```sh
+node --test "$ordered_repo/scripts/ordered-region-debugger-client.test.mjs" \
+  "$ordered_repo/scripts/ordered-region-debugger-smoke.test.mjs"
+```
+
+Those controls retain small synthetic precondition files in the OS temporary
+directory. They do not generate captured backend responses or qualify source.
+
 ## Run the optional retained-source-owner qualification
 
 Run the source ladder command in the [source walkthrough](ordered-region-authoring-v1.md#reproduce-the-six-actual-source-callbacks).

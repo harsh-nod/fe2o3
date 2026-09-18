@@ -26,6 +26,10 @@ E22/E23 subsequently expose the same closed source profile through ordinary
 diagnostic export, simulation, typed inspection and JSONL debugging. These raw
 observations do not carry the private source owner's custody into consumers.
 
+The portable E25 exercise now reproduces the ordinary debugger checks using
+checked-in scripts. The longer instruction-program contract remains a separate
+development task, not a widening of the frozen two-instruction profile.
+
 ## Exercised evidence and implementation anchors
 
 | ID | Delivered portion and reproducible checks |
@@ -54,6 +58,21 @@ observations do not carry the private source owner's custody into consumers.
 | E22: ordinary diagnostic source/edit workflow | The [ordinary-tool walkthrough](ordered-region-authoring-v1.md#use-the-ordinary-diagnostic-tools), [release-active private construction](../crates/rustc-codegen-fe2o3/src/production_pipeline/ordered_region_diagnostic_v31.rs), [export driver](../crates/rustc-codegen-fe2o3/src/production_rustc_driver_v1/ordered_region_diagnostic_export_v16.rs), and [shared bounded loader](../crates/fe2o3-kir-sim-cli/src/linux/diagnostic_kir_v16.rs) support explicit `--diagnostic-kir-v16` source export and CPU execution. Five real exports, four exact source refusals, thirty full 64-lane output/canary/initialization checks and fifteen CLI negative controls pass. Fresh operand/register edits produce independent 46/80/46 cases without editing canonical files or original source. All persisted schedules reject for this input; existing routes are preserved. Raw bytes are not a bundle, source-authentication, protected artifact or compiler-resume capability. |
 | E23: current-owner ordinary JSONL debugger | The [bounded inspection example](../crates/fe2o3-kir-sim-cli/examples/inspect_diagnostic_ordered_region_v16.rs) derives current canonical identity, roster coordinates, SSA IDs and declared register roles from the admitted immutable owner. The [diagnostic debugger route](../crates/fe2o3-debug-cli/src/diagnostic_kir_v16.rs) binds exact module/request/configuration under a separate domain, rejects incompatible maps/replay/wave32 and returns explicit unsupported diagnosis-V2 rather than false V7 evidence. Thirty real sessions check lane0 logical values, atomic before/after, reverse/repeat, stale state, all output memory and 64 write occurrences, with distinct session identities. Physical values, source maps, machine microsteps, lifetimes and protected authority remain unavailable. |
 | E24: recorded ordered-region browser | Companion-site commit `1673cf8d1128aac885a5fb9b1bd460cfa4746ee2` displays the exact retained E21 r5 sidecars with authored roles, selected logical inputs/results, variant/request/lane selection and explicit unavailable/truncated states. All 379 unit and 64 desktop/mobile tests plus lint/types/build/evidence gates pass on that site checkpoint. This is a development-only viewer of historical retained observations, not a live E23 connection, new lesson route, source map, physical state or publication-pin advance. |
+
+E25: The [portable debugger exercise](ordered-region-debugger-v1.md#reproduce-the-bounded-debugger-exercise)
+and its two checked-in script-control suites pass 24 pure controls. The actual
+`phase8-public-debugger-r1` run invokes the public driver for all five source-r4
+exports and six requests each: 30 fresh typed-owner inspections, 30 distinct
+configuration identities and 1,020 real JSONL request/response pairs. Every
+session independently checks lane 0's values and all 64 output-memory/write
+occurrences. Receipt SHA-256 is
+`4397add5cbe8084385ac3c40840352adf964e6f9b8cf4f6e842d44d1f0c24fe2`.
+This reuses immutable source exports and existing normal binaries; it does not
+claim another source export, Rust build, protected proof, native or GPU run.
+The public client uses fixed-capacity copied stream storage, with explicit
+aliasing, exact-cap and post-cap controls; historical private-client receipts
+remain unchanged. Site lint/type-check, 379 unit tests and build pass on the
+tutorial-only update. Previous browser/evidence results remain separate runs.
 
 E2's actual captured successes were `assembly-v30-smoke-r1`,
 `assembly-source-roundtrip-r2`, and `ordinary-bitwise-promotion-r1`; E4 was
