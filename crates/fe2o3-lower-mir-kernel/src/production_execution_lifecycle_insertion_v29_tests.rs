@@ -29,6 +29,93 @@ fn check_inserted_lifecycle(
     assert_eq!(foreign_work.work(), 0);
     assert_eq!(donor.as_ref().unwrap().pending.function, before);
 
+    let reject = |donor: &mut Option<OwnedPendingScopedRootV29>,
+                  budget: &mut ArgumentBudgetV1<'_>| {
+        assert!(insert_pending_lifecycle_v29(donor, limits, budget).is_err());
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(donor.as_ref().unwrap().pending.function, before);
+    };
+    // An End census must be independent of the producer's stored row count.
+    let events = donor.as_mut().unwrap().pending.sidecars.rows[1]
+        .lifecycle_events
+        .as_mut()
+        .unwrap();
+    let end = events.rows.pop().unwrap();
+    assert!(matches!(end.kind, DeferredLifecycleKindV29::End { .. }));
+    events.expected_rows -= 1;
+    reject(&mut donor, budget);
+    let events = donor.as_mut().unwrap().pending.sidecars.rows[1]
+        .lifecycle_events
+        .as_mut()
+        .unwrap();
+    events.expected_rows += 1;
+    events.rows.push(end);
+
+    let issuance = donor.as_ref().unwrap().pending.sidecars.rows[0]
+        .lifecycle_events
+        .as_ref()
+        .unwrap()
+        .rows[0];
+    donor.as_mut().unwrap().pending.sidecars.rows[0]
+        .lifecycle_events
+        .as_mut()
+        .unwrap()
+        .rows[0]
+        .original_gap = u32::MAX;
+    reject(&mut donor, budget);
+    donor.as_mut().unwrap().pending.sidecars.rows[0]
+        .lifecycle_events
+        .as_mut()
+        .unwrap()
+        .rows[0] = issuance;
+
+    let header = donor.as_ref().unwrap().pending.coordinates.semantic_sha256;
+    donor.as_mut().unwrap().pending.coordinates.semantic_sha256[0] ^= 1;
+    reject(&mut donor, budget);
+    donor.as_mut().unwrap().pending.coordinates.semantic_sha256 = header;
+
+    let root_instance = donor.as_ref().unwrap().pending.sidecars.rows[0]
+        .source_call_instance
+        .unwrap();
+    let span_index = donor.as_ref().unwrap().pending.coordinates.spans.rows.iter().position(|row| {
+        row.instance == root_instance && matches!(row.source, InstanceSpanSourceV1::Terminator(span) if span.semantic_block == issuance.block)
+    }).unwrap();
+    let original_span = donor.as_ref().unwrap().pending.coordinates.spans.rows[span_index];
+    let other_block = before
+        .body
+        .as_ref()
+        .unwrap()
+        .blocks
+        .iter()
+        .find(|block| block.id != issuance.original_block)
+        .unwrap()
+        .id;
+    donor.as_mut().unwrap().pending.coordinates.spans.rows[span_index].segments[0]
+        .as_mut()
+        .unwrap()
+        .block = other_block;
+    reject(&mut donor, budget);
+    donor.as_mut().unwrap().pending.coordinates.spans.rows[span_index] = original_span;
+
+    if let Some(parameter) = before.body.as_ref().unwrap().parameters.first() {
+        if let DeferredLifecycleKindV29::Issue { result } =
+            &mut donor.as_mut().unwrap().pending.sidecars.rows[0]
+                .lifecycle_events
+                .as_mut()
+                .unwrap()
+                .rows[0]
+                .kind
+        {
+            result.value = *parameter;
+        }
+        reject(&mut donor, budget);
+        donor.as_mut().unwrap().pending.sidecars.rows[0]
+            .lifecycle_events
+            .as_mut()
+            .unwrap()
+            .rows[0] = issuance;
+    }
+
     let inserted = match insert_pending_lifecycle_v29(&mut donor, limits, budget) {
         Ok(inserted) => inserted,
         Err(error) => {
