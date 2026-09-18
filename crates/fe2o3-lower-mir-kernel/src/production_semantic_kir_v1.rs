@@ -40,8 +40,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticCallableDeclV1, SemanticCanonAbiV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
     SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
     SemanticDisjointIndexSpaceV1, SemanticEdgeRoleV1, SemanticEnumEncodingV1,
-    SemanticEnumVariantV1, SemanticF32MathFunctionV1, SemanticFieldsShapeV1,
-    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionRoleV1,
+    SemanticEnumVariantV1, SemanticExecutionOperationV29, SemanticF32MathFunctionV1,
+    SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionRoleV1,
     SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1, SemanticLocalRoleV1,
     SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1,
     SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1,
@@ -10656,6 +10656,7 @@ fn lower_one_semantic_function_v1(
         placement,
         execution,
         None,
+        None,
     )
 }
 
@@ -10678,6 +10679,7 @@ fn lower_one_semantic_function_with_calls_v29(
     placement: SemanticEmissionPlacementV1,
     execution: Option<ExecutionAvailabilityV29<'_>>,
     execution_calls: Option<&mut dyn ExecutionDefinedCallConsumerV29>,
+    lifecycle: Option<&mut dyn ExecutionLifecycleConsumerV29>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     let source_call_instance = execution.as_ref().map(|cursor| cursor.instance);
     if source_call_instance.is_some() && assert_origins.is_some() {
@@ -10769,6 +10771,7 @@ fn lower_one_semantic_function_with_calls_v29(
         Some(call_budget),
         placement,
         execution,
+        lifecycle,
     )?;
     lowering.execution_calls = match execution_calls {
         Some(consumer) => Some(&mut *consumer as &mut (dyn ExecutionDefinedCallConsumerV29 + '_)),
@@ -12552,6 +12555,7 @@ include!("production_emission_budget_v1.rs");
 include!("production_execution_availability_v29.rs");
 include!("production_execution_call_parameters_v29.rs");
 include!("production_execution_call_sink_v29.rs");
+include!("production_execution_lifecycle_consumer_v29.rs");
 include!("production_execution_instance_plan_v29.rs");
 include!("production_execution_scalar_operands_v29.rs");
 include!("production_execution_events_v29.rs");
@@ -12597,6 +12601,7 @@ struct SemanticFunctionLoweringV1<'a> {
     emission_placement: SemanticEmissionPlacementV1,
     execution: Option<ExecutionAvailabilityV29<'a>>,
     execution_calls: Option<&'a mut (dyn ExecutionDefinedCallConsumerV29 + 'a)>,
+    lifecycle: Option<&'a mut (dyn ExecutionLifecycleConsumerV29 + 'a)>,
     assert_failure_block: Option<BlockId>,
     required_workgroup: Option<[u32; 3]>,
     infallible_asserts: BTreeSet<u32>,
@@ -12677,6 +12682,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             )?,
             None,
             SemanticEmissionPlacementV1::default(),
+            None,
             None,
         )
     }
@@ -16024,6 +16030,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } => operation,
         };
+        if let SemanticCompilerIntrinsicOperationV1::Execution(operation) = operation {
+            return self.lower_execution_lifecycle_call_v29(block, call, *operation, operations);
+        }
         require_current_production_intrinsic_v1(operation)?;
         if matches!(operation, SemanticCompilerIntrinsicOperationV1::Trap) {
             self.require_call_argument_count(block, call, 0)?;

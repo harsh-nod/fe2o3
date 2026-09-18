@@ -153,6 +153,7 @@ fn run_sink(
                                 } else {
                                     Some(&mut sink)
                                 },
+                                None,
                             )
                         },
                     )?;
@@ -235,6 +236,7 @@ fn run_sink(
                                     },
                                     Some(cursor.with_call_parameters_v29(parameters)?),
                                     Some(&mut sink),
+                                    None,
                                 )
                             },
                         )?;

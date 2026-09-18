@@ -23,12 +23,25 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         mut emission_work: Option<&'a mut dyn SemanticEmissionBudgetV1>,
         emission_placement: SemanticEmissionPlacementV1,
         mut execution: Option<ExecutionAvailabilityV29<'a>>,
+        lifecycle: Option<&'a mut (dyn ExecutionLifecycleConsumerV29 + 'a)>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         if let Some(execution) = &execution {
             execution.check_source(function, semantic_ssa)?;
             if !std::ptr::eq(execution.cfg.types, types) {
                 return Err(execution_cfg_error_v29());
             }
+        }
+        if let Some(consumer) = lifecycle.as_deref() {
+            let cursor = execution
+                .as_ref()
+                .ok_or_else(execution_availability_error_v29)?;
+            let budget = emission_work
+                .as_deref_mut()
+                .ok_or(ArgumentResourceV1::Accounting)?;
+            cursor.check_ledger(budget)?;
+            let result = consumer.check_instance(cursor, budget);
+            cursor.check_ledger(budget)?;
+            result?;
         }
         let mut locals = vec![None; function.locals().len()];
         let option_producers = semantic_option_producers_v1(function, callables)
@@ -127,6 +140,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             max_operations,
             emission_work.as_deref_mut(),
             execution.as_ref(),
+            lifecycle.as_deref(),
         )?;
         let workgroup_pipeline_contracts = workgroup_pipeline_type_contracts_v1(
             types,
@@ -277,6 +291,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             emission_work,
             execution,
             execution_calls: None,
+            lifecycle,
             assert_failure_block,
             required_workgroup,
             infallible_asserts,

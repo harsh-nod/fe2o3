@@ -18,6 +18,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         operations: &mut Vec<Operation>,
     ) -> Result<Terminator, ProductionSemanticKirErrorV1> {
         let (values, components) = self.prepare_return_values_v1(block, operations)?;
+        self.finish_execution_lifecycle_return_v29(block, operations)?;
         self.record_call_return_v1(block, SemanticKirCallReturnKindV1::Return { components })?;
         Ok(Terminator::Return { values })
     }
