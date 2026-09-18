@@ -263,8 +263,10 @@ fn empty_filtered_pages_continue_and_each_query_has_an_independent_raw_scan_budg
     }
     assert_eq!(total_scanned, session.transcript().records().len());
     assert_eq!(observed.len(), 4);
-    let mut filtered = ResourceAccessFilterV1::default();
-    filtered.address_space = Some(AddressSpace::Workgroup);
+    let filtered = ResourceAccessFilterV1 {
+        address_space: Some(AddressSpace::Workgroup),
+        ..Default::default()
+    };
     let empty = view
         .accesses(&view.selection(), filtered, small_request())
         .unwrap();
