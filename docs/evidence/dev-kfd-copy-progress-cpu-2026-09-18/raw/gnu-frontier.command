@@ -1,0 +1,1 @@
+env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_TERM_COLOR=never cargo test --frozen -p fe2o3-runtime --all-features --lib scripted_sdma_wait_completion_leaves_continuation_for_explicit_flush 

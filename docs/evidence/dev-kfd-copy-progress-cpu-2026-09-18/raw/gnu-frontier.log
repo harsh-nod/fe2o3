@@ -1,0 +1,9 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 46.48s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-6c92d220710fa6fb)
+
+running 1 test
+test kfd_backend::tests::scripted_sdma_wait_completion_leaves_continuation_for_explicit_flush ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1073 filtered out; finished in 0.00s
+

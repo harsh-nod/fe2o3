@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-kfd-copy-progress-cpu-2026-09-18/verify.py", line 116, in <module>
+    runtime_roster = roster("gnu-runtime", 1057, 17)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-kfd-copy-progress-cpu-2026-09-18/verify.py", line 108, in roster
+    assert len(rows) == passed + ignored and len(dict(rows)) == len(rows)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

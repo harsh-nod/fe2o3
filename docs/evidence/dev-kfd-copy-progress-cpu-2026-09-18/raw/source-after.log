@@ -1,0 +1,11 @@
+crates/fe2o3-runtime/examples/gfx942-runtime-directional-window-benchmark.rs: OK
+crates/fe2o3-runtime/examples/support/directional_copy_diagnostic.rs: OK
+crates/fe2o3-runtime/examples/support/directional_copy_diagnostic_tests.rs: OK
+crates/fe2o3-runtime/src/context.rs: OK
+crates/fe2o3-runtime/src/kfd_backend.rs: OK
+crates/fe2o3-kfd/src/queue_live.rs: OK
+crates/fe2o3-kfd/src/sdma.rs: OK
+crates/fe2o3-kfd/src/wait.rs: OK
+Cargo.lock: OK
+Cargo.toml: OK
+rust-toolchain.toml: OK

@@ -1,0 +1,108 @@
+{
+  "scope": "CPU qualification only; no native timing or new formal proof",
+  "source_files": {
+    "crates/fe2o3-runtime/examples/gfx942-runtime-directional-window-benchmark.rs": "2e55a93cbd0b02c6246b388166cdcb64a649e13baad422e797bded4c665300b3",
+    "crates/fe2o3-runtime/examples/support/directional_copy_diagnostic.rs": "4c8b353dd500650abf17a43fdd5132ed867b6e2f32067c337dc747148f95c0e5",
+    "crates/fe2o3-runtime/examples/support/directional_copy_diagnostic_tests.rs": "42ddc8b187c33bd0d1ea4678c3a77473f4525b2c8a44e0e57dfa49cc811e304b",
+    "crates/fe2o3-runtime/src/context.rs": "94cc09cb09fb8f263d6434751bb94c58cc0ee1bec76a611e8909c6e616d04bde",
+    "crates/fe2o3-runtime/src/kfd_backend.rs": "10c667fa7739e22672ef46c01630d6e0b4373b7e6e765cd54529d9f44dee19b2",
+    "crates/fe2o3-kfd/src/queue_live.rs": "3ec7ed029aba4af7759dfc5278f35f5bf30277666f24120598f7a1281e89b36e",
+    "crates/fe2o3-kfd/src/sdma.rs": "951d51dceefc71ffa7fb7b89d8f8c3f449a19a06cddd78e5d8d555e509d0597a",
+    "crates/fe2o3-kfd/src/wait.rs": "2e869b7c0f0fcd5de5984f797452de4d8eb8a35e6cddc28dc77807913d34ca39",
+    "Cargo.lock": "e9baff1d32db39fa0a719202f51ed05af99bae93869ee078848987de0a6f3a07",
+    "Cargo.toml": "3dcd7fbf4323450c8154a4d2f78f34e0caa38cd55ea10e38a57b09a9cd374e96",
+    "rust-toolchain.toml": "49eeb550dd57841add3be3442177e78f6f0668ffc4f31739ce78d75f8129b154"
+  },
+  "binary_hash_observations": {
+    "target/debug/examples/gfx942_runtime_directional_window_benchmark-cfa0bf330958b982": "9c41afc0b0a062b71059ee16f576a598c4538a1c3423038e57a01f769ff759d4",
+    "target/x86_64-unknown-linux-musl/debug/examples/gfx942_runtime_directional_window_benchmark-7235971694ccaaa0": "1541f3056cc9213c5177388b956d0ace4b216241fa581c32c631e993504d46e1",
+    "target/debug/deps/fe2o3_runtime-6c92d220710fa6fb": "42bce5aee4a5d26f12fd3a7f7c59285a1f0fa522ef9bac9919417cd00c3495e3",
+    "target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-bfd8edede521c1cd": "34a72e2a125fd41ef2f319b43ed1cc002b3eec41ec2596d2d5a5068371f95a59"
+  },
+  "example_passed_per_target": 13,
+  "runtime_passed_per_target": 1057,
+  "runtime_ignored_per_target": 17,
+  "parser_regressions": "inline, ignored, child banners, missing/failed/interleaved parent status",
+  "records": {
+    "gnu-example": {
+      "started": "2026-09-18T01:30:57.565171063Z",
+      "finished": "2026-09-18T01:31:42.035101735Z",
+      "command": "env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_TERM_COLOR=never cargo test --frozen -p fe2o3-runtime --example gfx942-runtime-directional-window-benchmark"
+    },
+    "source-before": {
+      "started": "2026-09-18T01:33:39.551264467Z",
+      "finished": "2026-09-18T01:33:39.568459680Z",
+      "command": "sha256sum crates/fe2o3-runtime/examples/gfx942-runtime-directional-window-benchmark.rs crates/fe2o3-runtime/examples/support/directional_copy_diagnostic.rs crates/fe2o3-runtime/examples/support/directional_copy_diagnostic_tests.rs crates/fe2o3-runtime/src/context.rs crates/fe2o3-runtime/src/kfd_backend.rs crates/fe2o3-kfd/src/queue_live.rs crates/fe2o3-kfd/src/sdma.rs crates/fe2o3-kfd/src/wait.rs Cargo.lock Cargo.toml rust-toolchain.toml"
+    },
+    "gnu-example-final": {
+      "started": "2026-09-18T01:33:40.053188782Z",
+      "finished": "2026-09-18T01:33:44.159742903Z",
+      "command": "env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_TERM_COLOR=never cargo test --frozen -p fe2o3-runtime --example gfx942-runtime-directional-window-benchmark"
+    },
+    "musl-example": {
+      "started": "2026-09-18T01:34:43.059485311Z",
+      "finished": "2026-09-18T01:35:42.478510853Z",
+      "command": "env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_TERM_COLOR=never FE2O3_HIP_SYS_DISABLE=1 cargo test --frozen -p fe2o3-runtime --example gfx942-runtime-directional-window-benchmark --target x86_64-unknown-linux-musl"
+    },
+    "rustc-version": {
+      "started": "2026-09-18T01:37:09.324168879Z",
+      "finished": "2026-09-18T01:37:09.426351619Z",
+      "command": "rustc --version --verbose"
+    },
+    "cargo-version": {
+      "started": "2026-09-18T01:37:10.121774199Z",
+      "finished": "2026-09-18T01:37:10.219350848Z",
+      "command": "cargo --version --verbose"
+    },
+    "gnu-frontier": {
+      "started": "2026-09-18T01:36:44.857065383Z",
+      "finished": "2026-09-18T01:37:31.461795829Z",
+      "command": "env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_TERM_COLOR=never cargo test --frozen -p fe2o3-runtime --all-features --lib scripted_sdma_wait_completion_leaves_continuation_for_explicit_flush"
+    },
+    "gnu-runtime": {
+      "started": "2026-09-18T01:38:27.236799871Z",
+      "finished": "2026-09-18T01:39:30.039121424Z",
+      "command": "env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_TERM_COLOR=never cargo test --frozen -p fe2o3-runtime --all-features --lib -- --test-threads=1"
+    },
+    "musl-runtime": {
+      "started": "2026-09-18T01:40:15.673175947Z",
+      "finished": "2026-09-18T01:42:01.148193571Z",
+      "command": "env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_TERM_COLOR=never FE2O3_HIP_SYS_DISABLE=1 cargo test --frozen -p fe2o3-runtime --all-features --lib --target x86_64-unknown-linux-musl -- --test-threads=1"
+    },
+    "clippy": {
+      "started": "2026-09-18T01:42:16.364429085Z",
+      "finished": "2026-09-18T01:42:54.217258555Z",
+      "command": "env CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_TERM_COLOR=never cargo clippy --frozen -p fe2o3-runtime --example gfx942-runtime-directional-window-benchmark -- -D warnings"
+    },
+    "legacy-isolation": {
+      "started": "2026-09-18T01:40:48.685145471Z",
+      "finished": "2026-09-18T01:40:48.784845541Z",
+      "command": "python3 -I docs/evidence/dev-kfd-copy-progress-cpu-2026-09-18/legacy-isolation.py"
+    },
+    "fmt": {
+      "started": "2026-09-18T01:41:18.557256598Z",
+      "finished": "2026-09-18T01:41:22.276890215Z",
+      "command": "cargo fmt --package fe2o3-runtime -- --check"
+    },
+    "python-lint": {
+      "started": "2026-09-18T01:41:22.726965376Z",
+      "finished": "2026-09-18T01:41:22.844923439Z",
+      "command": "ruff check docs/evidence/dev-kfd-copy-progress-cpu-2026-09-18/legacy-isolation.py"
+    },
+    "source-after": {
+      "started": "2026-09-18T01:43:37.521256143Z",
+      "finished": "2026-09-18T01:43:37.529427857Z",
+      "command": "sha256sum --check docs/evidence/dev-kfd-copy-progress-cpu-2026-09-18/raw/source-before.log"
+    },
+    "binaries": {
+      "started": "2026-09-18T01:43:38.054571354Z",
+      "finished": "2026-09-18T01:43:38.261286248Z",
+      "command": "sha256sum target/debug/examples/gfx942_runtime_directional_window_benchmark-cfa0bf330958b982 target/x86_64-unknown-linux-musl/debug/examples/gfx942_runtime_directional_window_benchmark-7235971694ccaaa0 target/debug/deps/fe2o3_runtime-6c92d220710fa6fb target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-bfd8edede521c1cd"
+    },
+    "source-base": {
+      "started": "2026-09-18T01:43:38.673609771Z",
+      "finished": "2026-09-18T01:43:38.679324392Z",
+      "command": "git rev-parse HEAD"
+    }
+  }
+}
