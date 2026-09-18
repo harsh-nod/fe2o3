@@ -403,22 +403,29 @@ fn source_abi_admitted_non_by_value_ownership_is_not_erased_by_direct_physical_m
 }
 
 #[test]
-fn source_abi_admitted_float_argument_and_return_refuse_at_distinct_checked_sites() {
-    let semantic = admitted(AbiCase {
-        argument: F32,
-        returned: F32,
-        ..AbiCase::default()
-    });
-    let (result, work, failed) = query(&semantic, 1, 23);
-    abi_refusal(result, "direct by-value scalar helper arguments");
-    assert_eq!((work, failed), (23, None));
-    let semantic = admitted(AbiCase {
-        returned: F32,
-        ..AbiCase::default()
-    });
-    let (result, work, failed) = query(&semantic, 1, 29);
-    abi_refusal(result, "direct scalar or exact Unit source return");
-    assert_eq!((work, failed), (29, None));
+fn source_abi_float_argument_and_return_keep_exact_direct_contract_and_budget() {
+    for argument in [U32, F32] {
+        let semantic = admitted(AbiCase {
+            argument,
+            returned: F32,
+            ..AbiCase::default()
+        });
+        let (result, work, failed) = query(&semantic, 1, 33);
+        assert!(matches!(result, Ok(true)));
+        assert_eq!((work, failed), (33, None));
+        let (result, work, failed) = query(&semantic, 1, 32);
+        assert!(matches!(result, Err(E::Resource(Resource::Work(_)))));
+        assert_eq!((work, failed), (31, Some(33)));
+        let semantic = admitted(AbiCase {
+            argument,
+            returned: F32,
+            ownership: SemanticSourceArgumentOwnershipV1::SharedBorrow,
+            ..AbiCase::default()
+        });
+        let (result, work, failed) = query(&semantic, 1, 23);
+        abi_refusal(result, "direct by-value scalar helper arguments");
+        assert_eq!((work, failed), (23, None));
+    }
 }
 
 #[test]
@@ -459,6 +466,18 @@ fn source_abi_unwind_and_invalid_scalar_attributes_are_earlier_mir_refusals() {
             ..AbiCase::default()
         },
         AbiCase {
+            extension: SemanticAbiExtensionV1::ZeroExtend,
+            ..AbiCase::default()
+        },
+        AbiCase {
+            argument: F32,
+            returned: F32,
+            no_undef: false,
+            ..AbiCase::default()
+        },
+        AbiCase {
+            argument: F32,
+            returned: F32,
             extension: SemanticAbiExtensionV1::ZeroExtend,
             ..AbiCase::default()
         },

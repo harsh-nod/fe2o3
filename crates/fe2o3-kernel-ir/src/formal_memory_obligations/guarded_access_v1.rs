@@ -7,6 +7,9 @@ use crate::{
 };
 use std::mem::size_of;
 
+#[path = "runtime_slice_read_v1.rs"]
+mod runtime_slice_read_v1;
+
 impl FormalAliasRegionV1 {
     pub(super) fn union(self, other: Self) -> Self {
         match (self, other) {
@@ -211,7 +214,9 @@ impl GuardedControlV1 {
             ledger.charge(2)?;
             for operation in &block.operations {
                 ledger.charge(2)?;
-                selected |= matches!(operation.kind, OperationKind::Select { .. });
+                selected |= matches!(operation.kind, OperationKind::Select { .. })
+                    || matches!(operation.kind, OperationKind::Load { access, .. }
+                        if access.address_space == AddressSpace::Global && !access.volatile);
             }
         }
         if !selected {
@@ -299,6 +304,7 @@ pub(super) struct GuardedAnalysisV1<'module> {
     parameters: Vec<ParameterRow<'module>>,
     truths: Vec<TrueRow>,
     recipes: Vec<Recipe>,
+    runtime_reads: runtime_slice_read_v1::RuntimeReadState<'module>,
     rank_one: bool,
 }
 
@@ -321,6 +327,7 @@ impl<'module> GuardedAnalysisV1<'module> {
             parameters: Vec::new(),
             truths: Vec::new(),
             recipes: Vec::new(),
+            runtime_reads: runtime_slice_read_v1::RuntimeReadState::default(),
             rank_one,
         };
         result
@@ -450,6 +457,7 @@ impl<'module> GuardedAnalysisV1<'module> {
                 result.truths[i].ambiguous = true;
             }
         }
+        result.collect_runtime_reads(definitions, function)?;
         result
             .ledger
             .reserve(&mut result.recipes, result.definitions.len())?;

@@ -248,6 +248,7 @@ fn artifacts(directory: &Path) -> Result<Vec<String>, SourceFailure> {
 }
 
 fn check_observation(fixture: &Fixture, observed: &Observation) -> Result<(), SourceFailure> {
+    runtime_domains::check_observation(observed)?;
     let actual: BTreeSet<_> = observed.roots.iter().collect();
     let expected: BTreeSet<_> = fixture.compiler_input.kernel_symbols.iter().collect();
     if actual != expected
@@ -460,6 +461,17 @@ fn ordinary_scalar_gemm_requires_checked_policy4_output() {
         serde_json::to_string_pretty(&report).unwrap()
     );
     assert!(report.passed(), "ordinary scalar GEMM remains unqualified");
+    let runtime = report
+        .observation
+        .as_ref()
+        .unwrap()
+        .runtime_domains
+        .as_ref()
+        .expect("actual-O runtime-domain observation");
+    assert!(runtime.reads >= 1, "{runtime:?}");
+    assert_eq!(runtime.writes, 0);
+    assert!(runtime.kernels >= 1);
+    assert_eq!(runtime.v4_policy3_receipts, runtime.kernels);
 }
 
 #[test]
@@ -515,6 +527,7 @@ fn private_memory_is_not_counted_as_global_formal_evidence() {
         other_reads: 0,
         other_writes: 0,
         formal_accesses: 2,
+        runtime_domains: Some(runtime_domains::RuntimeDomainObservation::default()),
         policy: 4,
         output_digest: [1; 32],
         llvm_bytes: 100,
