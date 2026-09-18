@@ -23,9 +23,11 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
     types.push(SemanticTypeDeclV1::new(
         SemanticTypeIdentityV1::from_sha256([201; 32]),
         SemanticLayoutIdentityV1::from_sha256([201; 32]),
-        SemanticTypeLayoutV1::aggregate(
+        SemanticTypeLayoutV1::aggregate_with_backend_repr(
             Some(4),
             4,
+            *types[U32.index() as usize].layout().backend_repr(),
+            false,
             SemanticAggregateLayoutV1::new(vec![0, 0], vec![]).unwrap(),
         )
         .unwrap(),
@@ -404,7 +406,7 @@ fn run(
                         selected,
                         budget,
                         |cursor, budget| {
-                            let cursor = cursor.with_call_parameters_v29(parameters);
+                            let cursor = cursor.with_call_parameters_v29(parameters)?;
                             let mut private = PrivateArrayLazyBudgetV1::new(1, 1024);
                             lower_one_semantic_function_v1(
                                 owner.source_semantic(),

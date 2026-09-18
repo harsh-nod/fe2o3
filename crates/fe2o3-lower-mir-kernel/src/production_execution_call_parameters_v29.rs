@@ -350,13 +350,16 @@ impl<'a> ExecutionAvailabilityV29<'a> {
     fn with_call_parameters_v29<'scope>(
         self,
         parameters: PreparedExecutionParametersV29<'scope>,
-    ) -> ExecutionAvailabilityV29<'scope>
+    ) -> Result<ExecutionAvailabilityV29<'scope>, ProductionSemanticKirErrorV1>
     where
         'a: 'scope,
     {
+        if self.parameters.is_some() {
+            return Err(execution_call_error_v29());
+        }
         let mut cursor: ExecutionAvailabilityV29<'scope> = self;
         cursor.parameters = Some(parameters);
-        cursor
+        Ok(cursor)
     }
 
     fn install_call_parameters_v29<'work>(
