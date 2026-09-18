@@ -16,6 +16,8 @@ The next implementation batch adds the public ISA metadata catalog, an actual
 pinned-worker ordered-region experiment, checked local ordering, protected
 generated-proof execution, and two-workgroup LDS observations. These are
 separately scoped below; none silently broadens source or artifact admission.
+Actual reference-bound assembly source has also now exercised the normal
+protected functional-proof path (E15); final ownership remains a separate gate.
 
 ## Exercised evidence and implementation anchors
 
@@ -35,6 +37,7 @@ separately scoped below; none silently broadens source or artifact admission.
 | E12: checked local ordering | [Actual immutable-owner scheduling and replay](checked-u32-local-order-v1.md) implements two fixed dependency-preserving preferences over contiguous u32 AND/OR/XOR operations. Full-module inverse-permutation comparison and independently checked transition receipts preserve all unselected state. Nineteen focused tests, 56 optimizer-library tests, 15 documentation tests and CPU execution of both schedules for five independent inputs pass. Per-invocation coordinates are not persisted source anchors; fixed Policy3 and production composition remain unchanged. |
 | E13: real protected generated proofs | Reviewed generator fixes use shared universally quantified specification functions and preserve normal runtime policy and exact closure pins. The [public-lease tests](../crates/fe2o3-verifier/src/functional_refinement_runtime_v1.rs) and [generated receipt tests](../crates/fe2o3-verifier/src/functional_refinement_receipt_v2/reviewed_host_tests.rs) run through the actual protected runtime: bootstrap true/false, wrapping scalar, effect-coordinate and floating-operator congruence pairs. All eight proof cases pass; false cases require genuine assertion failures. A separate installed-closure audit passes. These are generated fixtures, not yet proof of the actual assembly/reference source or artifact admission. |
 | E14: two-workgroup stopped-state isolation | The [two-workgroup query smoke](../scripts/resource-query-lds-multi-workgroup-v5-smoke.mjs) and [seven script controls](../scripts/resource-query-lds-multi-workgroup-v5-smoke.test.mjs) consume E9's unchanged real V5 source export. The actual run checks 128 output words of 128 and canaries, WG0 LDS present, the global-only transition, a distinct WG1 LDS allocation, exact reverse/forward restoration, complete scoped access paging and stale controls. Historical WG0 accesses remain separate from current allocation presence. Generation remains zero; no allocation lifetime, release event, physical reuse, source loop or source helper qualification is inferred. |
+| E15: actual source-reference proof | The [reference-bound Rust fixture](../crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/assembly_reference_v30.rs), [actual callback harness](../crates/rustc-codegen-fe2o3/src/production_rustc_driver_v1/gfx942_inline_reference_qualification_v30_tests.rs), and [bounded isolated runner](../scripts/assembly-reference-source-v30-smoke.mjs) exercise the real frontend and protected proof path. The correct seven-marker wrapping expression reaches the later unchanged dynamic TotalView ownership refusal. Wrong XOR-to-AND and OR-constant mutations fail genuine Verus assertions before ownership. The runner's seven controls separately reject setup failures and synthetic/zero-test success. No complete source admission, artifact or launch is claimed. |
 
 E2's actual captured successes were `assembly-v30-smoke-r1`,
 `assembly-source-roundtrip-r2`, and `ordinary-bitwise-promotion-r1`; E4 was
@@ -147,12 +150,28 @@ and the last-operation snapshot still contains LDS: neither observation is a
 release-event or lifetime trace. This extends CPU acceptance, not the compiler's
 source collective profile or hardware qualification.
 
+E15 passed all three exact callback cases in `assembly-reference-protected-r2`,
+using actual Cargo metadata/device/core artifacts prepared by the ignored
+`prepare_actual_source_reference_inputs` test. The frozen backend harness hash
+is `01c301a454c4a01a77140b6e0835cdaa167240ccab3f54ffa67a75a4c59ce580`.
+The normal pipeline executes protected proof and imports its receipt before
+the positive case's `FE2O3-OWN-002` diagnostic, so completion of that proof stage
+is inferred from this exact later failure; this API exposes no separate receipt.
+Each mutation instead reports `2 verified, 1 errors` and an assertion failure.
+The wrong working directory in the earlier retained r1 correctly failed provider
+source authentication; mounting the repository as the container working directory
+fixed the environment without changing authentication or proof predicates.
+Source/manifest bytes and all three independently derived invocation identities
+are retained in the observation. The full backend suite passes 742 tests with
+five explicit ignores. Strict Clippy retains 40 existing backend findings; none
+are in the new reference harness or generalized test helper.
+
 ## #280: direct assembly
 
 | Milestone | Delivered portion | Required remaining work |
 | --- | --- | --- |
 | M0: contracts and ownership | E1/E3 freeze a bounded marker/observation profile; E10 supplies the reproducible two-architecture metadata inventory; E11 qualifies a closed inline-unit worker mechanism and observes whole-body export rejection. | Complete source/region/resource/ABI contracts, operand/effect/encoding overlays and two-target executable coverage matrix; integrate the chosen emission mechanism and qualify whole-body support with the existing owners. |
-| M1: real-source instruction slice | E1/E2 exercise source, canonical instructions, CPU results and negative operands; E7 adds the closed checked scalar relation; E8 exercises the normal production target route. | Actual reference-bound value/proof qualification, broader applicable correspondence/admission and final encoding inspection remain. LLVM text is not final-code evidence. |
+| M1: real-source instruction slice | E1/E2 exercise source, canonical instructions, CPU results and negative operands; E7 adds the closed checked scalar relation; E8 exercises the normal production target route; E15 qualifies actual source functional proof with opcode/constant counterexamples. | Broader applicable correspondence, complete ownership/admission and final encoding inspection remain. A functional proof followed by ownership refusal is not source admission; LLVM text is not final-code evidence. |
 | M2: complete basic assembly kernels | Actual generated helpers and explicit concrete source variants re-enter the frontend (E2/E3). | Ordered regions, physical register ownership, labels/branches, full ABI metadata, broader helpers/specialization, whole bounded assembly kernels, and intended machine-contract roundtrips. Six independent SSA expressions do not implement an exact physical-register region. |
 | M3: memory and synchronization | Existing ordinary-KIR checks remain in force around the marker slice. | Authored ISA memory/LDS/atomic/wave operations, address provenance, wait/scoreboard hazards, barrier/convergence/race obligations, descriptors, and applicable hardware checks. Ordinary surrounding loads/stores do not satisfy this milestone. |
 | M4: matrix and second architecture | No new matrix or gfx950 authoring qualification in this slice. | Reviewed matrix/low-precision semantics/layouts, exact gfx950 profile/catalog/lowering and independently qualified target cases. gfx942 integer success does not narrow the original target matrix. |
@@ -176,7 +195,7 @@ source collective profile or hardware qualification.
 | --- | --- | --- |
 | U0: editing and ownership contract | Bounded exact selectors, stale-source checks, private proposals, explicit new-file publication and no snapshot-resume authority (E3). | Complete per-level capability matrix, semantic extraction/insertion ownership, specialization/resource boundaries, recipe semantics and shared acceptance/budget agreement. A source-map file identity is not a source-byte hash. |
 | U1: inspect and select | Actual source-produced V6/KIR V11 operations, contiguous single-block regions, live-ins/outs, scalar detail/source references and immutable comparison (E2/E3/E6). | Genuinely available additional stage/transform lineage and resource contracts, checked cross-level navigation, remaining stale/ambiguous cases. Missing stages are not synthesized. |
-| U2: promote, edit and recompile | Supported u32 bitwise/typed-marker drafts, actual ordinary-source promotion, fresh unchanged/edited helper exports and CPU cases (E2–E4); closed direct-root checked relations and actual normal target lowering are separate E7/E8 progress. | General supported source-boundary integration, actual reference-bound value qualification, applicable exact instruction/resource contract preservation and final-code inspection, invalid-resource/hidden-clobber cases, fresh final analyses/admission. EOF helper insertion alone is not semantic source replacement or proof of valid Rust. |
+| U2: promote, edit and recompile | Supported u32 bitwise/typed-marker drafts, actual ordinary-source promotion, fresh unchanged/edited helper exports and CPU cases (E2–E4); closed direct-root checked relations and actual normal target lowering are separate E7/E8 progress; E15 adds actual source-reference functional proof and mutation rejection. | General supported source-boundary integration, complete ownership/admission, applicable exact instruction/resource contract preservation and final-code inspection, invalid-resource/hidden-clobber cases, fresh final analyses/admission. EOF helper insertion alone is not semantic source replacement or proof of valid Rust. |
 | U3: replayable schedule recipes | E12 executes and independently checks two local-order preferences on actual immutable owners; existing fixed policy is unchanged. | Integrate two legal schedules of one actual source algorithm with compiler-owned applicability/anchors, pre-owner resolution and fixed composition, source-edit success and stale/ambiguous rejection, explicit rebind, fresh transformation/analysis records. Local owner coordinates and CPU interleavings are not persisted compiler recipes. |
 | U4: end-to-end qualification | Exercised small-kernel source cases, exact retained comparisons, scripts and draft lessons. | Qualified U1–U3 including tiled compute, original target/operation matrix, final artifact/resource comparisons, clean-source full gates, inspection/materialization/recipe cost measurements and normal compiler/site pinning. Resource-query timing alone does not satisfy all authoring budgets. |
 
@@ -193,8 +212,9 @@ source collective profile or hardware qualification.
    is not relabelled wrapping. Production extraction keeps its fixed overflow
    checks; do not introduce a source-profile bypass.
    The [private-array output census](../crates/fe2o3-lower-mir-kernel/src/production_source_output_private_array_census_v1.rs)
-   still refuses assembly. Next handoffs are actual source expression/reference
-   qualification, separately owned broader value transport and final proof
+   still refuses assembly. E15 now qualifies the actual direct-root expression
+   against its reference; next handoffs are separately owned broader value
+   transport, complete ownership admission and final proof
    composition, without replacing authored instructions with ordinary arithmetic
    to evade the boundary. The E7 formal rule proves only absence of the admitted
    instruction's memory effects, not pointer bounds, source authentication,

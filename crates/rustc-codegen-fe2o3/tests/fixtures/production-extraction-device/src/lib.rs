@@ -16,6 +16,13 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
 ))]
 mod write_only_reference;
 
+#[cfg(any(
+    feature = "assembly-reference-positive",
+    feature = "assembly-reference-wrong-opcode",
+    feature = "assembly-reference-wrong-constant",
+))]
+mod assembly_reference_v30;
+
 #[cfg(not(any(
     feature = "atomic-rmw",
     feature = "multi-root-ownership",
@@ -49,6 +56,9 @@ mod write_only_reference;
     feature = "reference-two-output-substitution",
     feature = "reference-two-output-alias",
     feature = "reference-two-output-schedule",
+    feature = "assembly-reference-positive",
+    feature = "assembly-reference-wrong-opcode",
+    feature = "assembly-reference-wrong-constant",
     feature = "scalar-transmute",
     feature = "fabs-f32",
     feature = "is-finite-fabs-f32",

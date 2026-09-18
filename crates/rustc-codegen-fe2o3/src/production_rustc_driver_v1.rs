@@ -948,6 +948,9 @@ fn require_canonical_overflow_checks_v1(args: &[String]) -> Result<(), String> {
 #[cfg(target_os = "linux")]
 mod gfx942_inline_value_qualification_v30_tests;
 
+#[cfg(all(test, target_os = "linux"))]
+mod gfx942_inline_reference_qualification_v30_tests;
+
 #[cfg(test)]
 mod tests {
     #[test]

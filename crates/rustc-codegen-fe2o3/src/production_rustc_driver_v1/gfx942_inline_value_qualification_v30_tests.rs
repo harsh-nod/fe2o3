@@ -46,7 +46,7 @@ fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/assembly-authoring-v30")
 }
 
-fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
+pub(super) fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
     let mut file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -67,7 +67,7 @@ fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn sanitized(command: &mut Command) -> &mut Command {
+pub(super) fn sanitized(command: &mut Command) -> &mut Command {
     for (name, _) in std::env::vars_os() {
         let text = name.to_string_lossy();
         if text.starts_with("FE2O3_")
@@ -246,7 +246,12 @@ fn run_bounded(
     })
 }
 
-fn checked(command: &mut Command, directory: &Path, name: &str, target: Option<&Path>) -> Vec<u8> {
+pub(super) fn checked(
+    command: &mut Command,
+    directory: &Path,
+    name: &str,
+    target: Option<&Path>,
+) -> Vec<u8> {
     let capture =
         run_bounded(command, Duration::from_secs(300), CAP, target).unwrap_or_else(|error| {
             panic!(
@@ -267,7 +272,11 @@ fn checked(command: &mut Command, directory: &Path, name: &str, target: Option<&
     capture.stdout
 }
 
-fn select_artifact(bytes: &[u8], name: &str, manifest: &Path) -> Result<PathBuf, String> {
+pub(super) fn select_artifact(
+    bytes: &[u8],
+    name: &str,
+    manifest: &Path,
+) -> Result<PathBuf, String> {
     if bytes.len() > CAP {
         return Err("artifact JSON exceeds bound".into());
     }
@@ -313,7 +322,12 @@ fn select_artifact(bytes: &[u8], name: &str, manifest: &Path) -> Result<PathBuf,
     selected.ok_or_else(|| format!("missing artifact for {name}"))
 }
 
-fn artifact_in_target(bytes: &[u8], name: &str, manifest: &Path, target: &Path) -> PathBuf {
+pub(super) fn artifact_in_target(
+    bytes: &[u8],
+    name: &str,
+    manifest: &Path,
+    target: &Path,
+) -> PathBuf {
     let path = select_artifact(bytes, name, manifest)
         .unwrap()
         .canonicalize()
@@ -325,7 +339,23 @@ fn artifact_in_target(bytes: &[u8], name: &str, manifest: &Path, target: &Path) 
 }
 
 fn invocation(directory: &Path) -> (Vec<String>, String, String) {
-    let fixture = fixture().canonicalize().unwrap();
+    invocation_for_fixture(
+        directory,
+        &fixture(),
+        "fe2o3-assembly-authoring-v30-fixture",
+        CRATE_NAME,
+        None,
+    )
+}
+
+pub(super) fn invocation_for_fixture(
+    directory: &Path,
+    fixture: &Path,
+    package_name: &str,
+    crate_name: &str,
+    feature: Option<&str>,
+) -> (Vec<String>, String, String) {
+    let fixture = fixture.canonicalize().unwrap();
     let manifest = fixture.join("Cargo.toml");
     let metadata: Value =
         serde_json::from_slice(&read_bounded(&directory.join("metadata.stdout"), CAP).unwrap())
@@ -341,7 +371,7 @@ fn invocation(directory: &Path) -> (Vec<String>, String, String) {
     let [package] = packages.as_slice() else {
         panic!("expected exactly one fixture package");
     };
-    assert_eq!(package["name"], "fe2o3-assembly-authoring-v30-fixture");
+    assert_eq!(package["name"], package_name);
     let identity = PortablePackageIdentityV1::new(
         package["name"].as_str().unwrap(),
         package["version"].as_str().unwrap(),
@@ -376,7 +406,7 @@ fn invocation(directory: &Path) -> (Vec<String>, String, String) {
     let mut args = vec![
         sysroot.join("bin/rustc").to_str().unwrap().to_owned(),
         "--crate-name".into(),
-        CRATE_NAME.into(),
+        crate_name.into(),
         fixture.join("src/lib.rs").to_str().unwrap().into(),
         "--edition=2024".into(),
         "--crate-type=lib".into(),
@@ -404,6 +434,9 @@ fn invocation(directory: &Path) -> (Vec<String>, String, String) {
         "--extern".into(),
         format!("noprelude:core={}", core.display()),
     ];
+    if let Some(feature) = feature {
+        args.extend(["--cfg".to_owned(), format!("feature=\"{feature}\"")]);
+    }
     let os = args.iter().map(OsString::from).collect::<Vec<_>>();
     let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&os).unwrap() else {
         panic!("not compile");
@@ -419,7 +452,7 @@ fn invocation(directory: &Path) -> (Vec<String>, String, String) {
     // Observe this actual direct test invocation, not an invented original
     // Cargo metadata salt and not a compiler-closure attestation.
     let observation = derive_cargo_metadata_build_observation_v2(&ordered).to_hex();
-    let binding = derive_crate_binding_id_v1(CRATE_NAME, [portable.as_str()]).to_hex();
+    let binding = derive_crate_binding_id_v1(crate_name, [portable.as_str()]).to_hex();
     super::require_canonical_overflow_checks_v1(&args).unwrap();
     (args, binding, observation)
 }
