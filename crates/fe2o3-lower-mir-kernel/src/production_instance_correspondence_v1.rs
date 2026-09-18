@@ -290,6 +290,7 @@ impl<T> InstanceRowsV1<T> {
 
 struct ProductionInstanceCorrespondenceV1<'p, 's> {
     plan: &'p ProductionCallInstancePlanV1<'s>,
+    ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     owner: Option<SemanticFunctionIdV1>,
     seeds: InstanceRowsV1<InstanceSeedV1>,
     spans: InstanceRowsV1<InstanceMappedSpanV1>,
@@ -300,6 +301,7 @@ struct ProductionInstanceCorrespondenceV1<'p, 's> {
     values: InstanceRowsV1<ValueId>,
     storage: usize,
     failed: bool,
+    transferred: bool,
 }
 
 fn with_production_instance_correspondence_v1<'p, 's, 'work, R, E>(
@@ -315,6 +317,7 @@ where
 {
     let mut map = ProductionInstanceCorrespondenceV1 {
         plan,
+        ledger: budget.work_ledger_identity_v1(),
         owner: None,
         seeds: InstanceRowsV1::new(),
         spans: InstanceRowsV1::new(),
@@ -325,6 +328,7 @@ where
         values: InstanceRowsV1::new(),
         storage: 0,
         failed: false,
+        transferred: false,
     };
     let result = consume(&mut map, budget);
     let storage = map.storage;
@@ -375,9 +379,7 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
         lowered: &LoweredFunctionResultV1,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> InstanceMapResultV1<()> {
-        if self.failed {
-            return Err(InstanceCorrespondenceErrorV1::Source);
-        }
+        self.check_live_ledger_v1(budget)?;
         let result = self.append_lowered_inner(instance, lowered, budget);
         self.failed = result.is_err();
         result
@@ -726,9 +728,7 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
         continuation: BlockId,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> InstanceMapResultV1<SplicedCallInstanceV1> {
-        if self.failed {
-            return Err(InstanceCorrespondenceErrorV1::Source);
-        }
+        self.check_live_ledger_v1(budget)?;
         let result = self.splice_inner(call, caller, callee, entry, continuation, budget);
         self.failed = result.is_err();
         result
@@ -1009,9 +1009,7 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
         function: &Function,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> InstanceMapResultV1<()> {
-        if self.failed {
-            return Err(InstanceCorrespondenceErrorV1::Source);
-        }
+        self.check_live_ledger_v1(budget)?;
         let seed = self.seed_index(container, budget)?;
         budget.charge_work(function.id.as_str().len())?;
         if self.seeds.rows[seed].container != container
@@ -1045,7 +1043,10 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
                 instance_check_branch_v1(
                     block,
                     *target,
-                    &self.values.rows[arguments.clone()],
+                    self.values
+                        .rows
+                        .get(arguments.clone())
+                        .ok_or(InstanceCorrespondenceErrorV1::Control)?,
                     budget,
                 )?;
             }
@@ -1121,3 +1122,5 @@ fn instance_check_parameters_v1(
 #[cfg(test)]
 #[path = "production_instance_correspondence_v1_tests.rs"]
 mod instance_correspondence_tests;
+
+include!("production_instance_coordinates_owner_v1.rs");

@@ -4,6 +4,9 @@ use production_call_instances_v1::{
     ProductionCallInstanceErrorV1, with_production_call_instances_v1,
 };
 
+#[path = "production_instance_coordinates_owner_v1_tests.rs"]
+mod coordinates_owner_tests;
+
 fn with_plan(test: impl FnOnce(&ProductionCallInstancePlanV1<'_>, &mut ArgumentBudgetV1<'_>)) {
     with_plan_owner(resource_tests::helper_closure_semantic_owner(), test);
 }
