@@ -231,7 +231,7 @@ pub(in crate::production_semantic_kir_v1) fn exercise_call_joins_v1(
                     )
                     .unwrap()
                 else {
-                    panic!("real original private-call gap")
+                    return Err(E::CallRelation("real original private-call gap"));
                 };
                 let (location, callee) = reasons
                     .iter()
