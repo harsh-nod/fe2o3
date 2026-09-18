@@ -1,5 +1,7 @@
 use super::*;
 
+#[path = "production_instance_assert_origins_v1_tests.rs"]
+mod instance_assert_tests;
 #[path = "production_pending_scope_root_v29_tests.rs"]
 mod pending_tests;
 use fe2o3_mir_model::semantic_mir_v1::*;

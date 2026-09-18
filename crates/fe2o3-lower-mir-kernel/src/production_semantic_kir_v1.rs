@@ -10244,6 +10244,7 @@ struct LoweredFunctionResultV1 {
     #[cfg(test)]
     execution_observation: Option<ExecutionTestObservationV29>,
     source_call_instance: Option<ProductionCallInstanceIdV1>,
+    instance_assert_origins: Option<InstanceAssertCaptureV1>,
     private_arrays: PrivateArrayFunctionRowsV1,
     function: Function,
     operation_capabilities: BTreeSet<fe2o3_kernel_ir::TargetCapability>,
@@ -10679,6 +10680,12 @@ fn lower_one_semantic_function_with_calls_v29(
     execution_calls: Option<&mut dyn ExecutionDefinedCallConsumerV29>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     let source_call_instance = execution.as_ref().map(|cursor| cursor.instance);
+    if source_call_instance.is_some() && assert_origins.is_some() {
+        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+    }
+    let mut instance_assert_origins = execution
+        .as_ref()
+        .map(|cursor| InstanceAssertCaptureV1::new(cursor, placement));
     let function = semantic
         .functions()
         .get(plan.semantic_function.index() as usize)
@@ -10947,9 +10954,35 @@ fn lower_one_semantic_function_with_calls_v29(
             bindings: std::mem::take(&mut lowering.semantic_ssa_bindings),
         });
     drop(lowering.emission_work.take());
+    let infallible_asserts = lowering.infallible_asserts;
     let generated_terminator_values = lowering.generated_terminator_values;
     let mut call_returns = lowering.call_returns;
     let private_arrays = lowering.private_arrays.into_rows()?;
+    // The shared emitter's final blocks are still untouched. Capture with the
+    // same now-reborrowable ledger, before any helper expansion changes placement.
+    if let Some(origins) = &mut instance_assert_origins {
+        call_budget.charge_work(terminator_operation_spans.len())?;
+        for (span, target) in terminator_operation_spans.iter().zip(&target_blocks) {
+            let source = function
+                .blocks()
+                .get(span.semantic_block.index() as usize)
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            if target.id != span.kernel_ir_block {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            }
+            origins.record(
+                *span,
+                &plan.kernel_ir_function,
+                source.terminator().kind(),
+                target
+                    .terminator
+                    .as_ref()
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                infallible_asserts.contains(&span.semantic_block.index()),
+                call_budget,
+            )?;
+        }
+    }
     call_returns.order_blocks(call_budget)?;
     let operation_capabilities = target_blocks
         .iter()
@@ -11011,6 +11044,7 @@ fn lower_one_semantic_function_with_calls_v29(
         #[cfg(test)]
         execution_observation,
         source_call_instance,
+        instance_assert_origins,
         private_arrays,
         function: lowered,
         operation_capabilities,

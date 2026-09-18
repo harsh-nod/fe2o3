@@ -1203,6 +1203,7 @@ fn occurrence_sealer_distinguishes_same_typed_argument_values_and_definition_kin
             operation_count: u32::from(kind == "checked-result"),
             expected: true,
             semantic_success: SemanticBlockIdV1::from_index(success_id.0),
+            physical_success: success_id,
             argument_start: 0,
             argument_count: 1,
             outcome: PendingAssertOutcomeV1::Emitted {

@@ -257,6 +257,7 @@ struct PendingAssertOriginV1 {
     operation_count: u32,
     expected: bool,
     semantic_success: SemanticBlockIdV1,
+    physical_success: BlockId,
     argument_start: usize,
     argument_count: usize,
     outcome: PendingAssertOutcomeV1,
@@ -283,90 +284,17 @@ impl<'a, 'work> AssertOriginEmissionV1<'a, 'work> {
         emitted: &Terminator,
         elided_by_existing_rule: bool,
     ) -> AssertOriginResultV1<()> {
-        let SemanticTerminatorKindV1::Assert {
-            expected, target, ..
-        } = source
-        else {
-            return Ok(());
-        };
-        self.budget.charge_work(1)?;
-        let site = SemanticKirAssertSiteV1::new(
-            span.correspondence_owner,
-            span.semantic_function,
-            span.semantic_block,
-        );
-        let bad =
-            || assert_origin_invalid_v1(Some(site), "assert emission does not match its rule");
-        let (success, arguments, outcome) = match (elided_by_existing_rule, emitted) {
-            (true, Terminator::Branch { target, arguments }) => (
-                *target,
-                arguments.as_slice(),
-                PendingAssertOutcomeV1::ElidedByExistingRule,
-            ),
-            (
-                false,
-                Terminator::ConditionalBranch {
-                    condition,
-                    then_target,
-                    then_arguments,
-                    else_target,
-                    else_arguments,
-                },
-            ) => {
-                let (success, arguments, failure, failure_arguments) = if *expected {
-                    (*then_target, then_arguments, *else_target, else_arguments)
-                } else {
-                    (*else_target, else_arguments, *then_target, then_arguments)
-                };
-                if !failure_arguments.is_empty() {
-                    return Err(bad());
-                }
-                (
-                    success,
-                    arguments.as_slice(),
-                    PendingAssertOutcomeV1::Emitted {
-                        condition: *condition,
-                        failure,
-                    },
-                )
-            }
-            _ => return Err(bad()),
-        };
-        if success != BlockId(target.target().index()) {
-            return Err(bad());
-        }
-        let argument_start = self.arguments.len();
-        let required_arguments = argument_start
-            .checked_add(arguments.len())
-            .ok_or(AssertOriginResourceV1::Arithmetic)?;
-        let required_records = self
-            .records
-            .len()
-            .checked_add(1)
-            .ok_or(AssertOriginResourceV1::Arithmetic)?;
-        assert_origin_reserve_v1(&mut self.arguments, required_arguments, self.budget)?;
-        assert_origin_reserve_v1(&mut self.records, required_records, self.budget)?;
-        self.budget.charge_work(
-            arguments
-                .len()
-                .checked_add(1)
-                .ok_or(AssertOriginResourceV1::Arithmetic)?,
-        )?;
-        let emitted_function = assert_origin_copy_name_v1(emitted_function.as_str(), self.budget)?;
-        self.arguments.extend_from_slice(arguments);
-        self.records.push(PendingAssertOriginV1 {
-            site,
+        record_assert_origin_at_v1(
+            &mut self.records,
+            &mut self.arguments,
+            span,
             emitted_function,
-            block: span.kernel_ir_block,
-            first_operation: span.first_operation_ordinal,
-            operation_count: span.operation_count,
-            expected: *expected,
-            semantic_success: target.target(),
-            argument_start,
-            argument_count: arguments.len(),
-            outcome,
-        });
-        Ok(())
+            source,
+            emitted,
+            elided_by_existing_rule,
+            SemanticEmissionPlacementV1::default(),
+            self.budget,
+        )
     }
 }
 
@@ -585,12 +513,20 @@ impl<'a> AssertGraphIndexV1<'a> {
         include_definitions: bool,
         budget: &mut AssertOriginBudgetV1<'_>,
     ) -> AssertOriginResultV1<Self> {
+        Self::build_functions(&module.functions, include_definitions, budget)
+    }
+
+    fn build_functions(
+        functions: &'a [Function],
+        include_definitions: bool,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> AssertOriginResultV1<Self> {
         let mut result = Self {
             functions: Vec::new(),
             blocks: Vec::new(),
             definitions: Vec::new(),
         };
-        for (function_ordinal, function) in module.functions.iter().enumerate() {
+        for (function_ordinal, function) in functions.iter().enumerate() {
             budget.charge_work(1)?;
             let coordinate = fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(
                 u32::try_from(function_ordinal).map_err(|_| AssertOriginResourceV1::Arithmetic)?,
@@ -797,8 +733,14 @@ fn assert_origin_block_v1(
     module: &Module,
     coordinate: AssertBlockCoordinateV1,
 ) -> AssertOriginResultV1<&BasicBlock> {
-    module
-        .functions
+    assert_origin_function_block_v1(&module.functions, coordinate)
+}
+
+fn assert_origin_function_block_v1(
+    functions: &[Function],
+    coordinate: AssertBlockCoordinateV1,
+) -> AssertOriginResultV1<&BasicBlock> {
+    functions
         .get(coordinate.function.0 as usize)
         .and_then(|function| function.body.as_ref())
         .and_then(|body| body.blocks.get(coordinate.block as usize))
@@ -1002,6 +944,7 @@ impl AssertOriginEmissionV1<'_, '_> {
             let pending = &self.records[pending_index];
             if pending.expected != *expected
                 || pending.semantic_success != target.target()
+                || pending.physical_success != BlockId(target.target().index())
                 || pending.block != span.kernel_ir_block
                 || pending.first_operation != span.first_operation_ordinal
                 || pending.operation_count != span.operation_count
@@ -1152,9 +1095,32 @@ fn seal_assert_occurrence_v1(
     source_block_count: usize,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> AssertOriginResultV1<SemanticKirAssertConditionBindingV1> {
+    let failure =
+        BlockId(u32::try_from(source_block_count).map_err(|_| AssertOriginResourceV1::Arithmetic)?);
+    seal_assert_occurrence_in_functions_v1(
+        pending,
+        arguments,
+        coordinate,
+        graph,
+        &module.functions,
+        failure,
+        budget,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seal_assert_occurrence_in_functions_v1(
+    pending: &PendingAssertOriginV1,
+    arguments: &[ValueId],
+    coordinate: AssertBlockCoordinateV1,
+    graph: &AssertGraphIndexV1<'_>,
+    functions: &[Function],
+    expected_failure: BlockId,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> AssertOriginResultV1<SemanticKirAssertConditionBindingV1> {
     let bad = |detail| assert_origin_invalid_v1(Some(pending.site), detail);
     budget.charge_work(1)?;
-    let block = assert_origin_block_v1(module, coordinate)?;
+    let block = assert_origin_function_block_v1(functions, coordinate)?;
     let end = pending
         .first_operation
         .checked_add(pending.operation_count)
@@ -1173,7 +1139,7 @@ fn seal_assert_occurrence_v1(
         .terminator
         .as_ref()
         .ok_or_else(|| bad("missing emitted terminator"))?;
-    let success_id = BlockId(pending.semantic_success.index());
+    let success_id = pending.physical_success;
     // Resolve the exact target as well as the occurrence. SSA verification already
     // checked edge argument types and dominance; compare the captured slice here.
     graph.block(coordinate.function, success_id, budget)?;
@@ -1240,7 +1206,7 @@ fn seal_assert_occurrence_v1(
                 || success_arguments.as_slice() != expected_arguments
                 || !failure_arguments.is_empty()
                 || actual_failure != failure
-                || failure.0 as usize != source_block_count
+                || failure != expected_failure
             {
                 return Err(bad("assertion condition or successor occurrence differs"));
             }
@@ -1250,7 +1216,7 @@ fn seal_assert_occurrence_v1(
             }
             let failure_coordinate = graph.block(coordinate.function, failure, budget)?;
             budget.charge_work(1)?;
-            let failure_block = assert_origin_block_v1(module, failure_coordinate)?;
+            let failure_block = assert_origin_function_block_v1(functions, failure_coordinate)?;
             if !failure_block.parameters.is_empty()
                 || !matches!(failure_block.terminator, Some(Terminator::Unreachable))
                 || failure_block.operations.len() != 1
@@ -1303,3 +1269,5 @@ fn seal_assert_occurrence_v1(
 #[cfg(test)]
 #[path = "production_assert_origins_v1_tests.rs"]
 mod assert_origins_v1_tests;
+
+include!("production_instance_assert_origins_v1.rs");

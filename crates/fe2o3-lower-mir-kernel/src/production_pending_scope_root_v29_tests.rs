@@ -311,6 +311,9 @@ fn pending_root_work_and_storage_failures_restore_the_preexisting_floor() {
                 }
                 Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
                     ArgumentResourceV1::Work(_),
+                ))
+                | Err(ProductionSemanticKirErrorV1::AssertOrigin(
+                    SemanticKirAssertOriginErrorV1::Resource(AssertOriginResourceV1::Work(_)),
                 )) => {
                     assert!(allowed < exact_work);
                     saw_destructive_refusal |= slots.iter().any(Option::is_none);

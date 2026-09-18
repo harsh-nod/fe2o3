@@ -9,6 +9,7 @@ struct PendingInstanceSidecarsV29 {
     #[cfg(test)]
     execution_observation: Option<ExecutionTestObservationV29>,
     source_call_instance: Option<ProductionCallInstanceIdV1>,
+    instance_assert_origins: Option<InstanceAssertCaptureV1>,
     private_arrays: PrivateArrayFunctionRowsV1,
     operation_capabilities: BTreeSet<fe2o3_kernel_ir::TargetCapability>,
     diagnostic_declarations: BTreeMap<FunctionId, Function>,
@@ -34,6 +35,7 @@ impl PendingInstanceSidecarsV29 {
             #[cfg(test)]
             execution_observation,
             source_call_instance,
+            instance_assert_origins,
             private_arrays,
             function,
             operation_capabilities,
@@ -57,6 +59,7 @@ impl PendingInstanceSidecarsV29 {
                 #[cfg(test)]
                 execution_observation,
                 source_call_instance,
+                instance_assert_origins,
                 private_arrays,
                 operation_capabilities,
                 diagnostic_declarations,
@@ -124,6 +127,16 @@ fn pending_scope_preflight_v29(
         if row.source_call_instance != instances.id_at(index) {
             return Err(execution_call_error_v29());
         }
+        row.instance_assert_origins
+            .as_ref()
+            .ok_or_else(execution_call_error_v29)?
+            .check_identity(
+                instances,
+                instances
+                    .id_at(index)
+                    .ok_or_else(execution_call_error_v29)?,
+                budget,
+            )?;
         let source = instances
             .instance(
                 instances
@@ -212,8 +225,8 @@ fn merge_pending_scope_capabilities_v29(
 /// live. The receipt covers only new retained storage. After roster preflight,
 /// failure can consume slots: the enclosing emitter must discard that attempt,
 /// drop remaining payloads, and release its own original reservation once.
-/// Assertion origins live in the external emission owner, not these sidecars;
-/// placement-aware assertion replay and scope/lifecycle admission remain gated.
+/// Instance assertion captures move with their prepaid sidecars. Coordinate
+/// replay checks attachment, not source equivalence or scope/lifecycle admission.
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "Scoped source materialization remains gated")
@@ -302,7 +315,18 @@ fn assemble_pending_scoped_root_v29(
         })
     });
     match result {
-        Ok(pending) => Ok(pending),
+        Ok(pending) => {
+            if let Err(error) = replay_pending_instance_asserts_v1(&pending, instances, budget) {
+                drop(pending);
+                let extra = budget
+                    .storage()
+                    .checked_sub(floor)
+                    .ok_or(ArgumentResourceV1::Accounting)?;
+                budget.release_storage(extra)?;
+                return Err(error);
+            }
+            Ok(pending)
+        }
         Err(error) => {
             // Map cleanup and all failed payload drops precede this refund.
             let extra = budget
