@@ -2228,6 +2228,16 @@ pub(crate) fn authenticate_reviewed_safe_core_fabs_f32_helper_v1<'tcx>(
         && matches!(signature.output().kind(), TyKind::Float(FloatTy::F32))
 }
 
+#[path = "trusted_device_items/core_saturating_integer_v1.rs"]
+mod core_saturating_integer_v1;
+
+pub(crate) fn authenticate_reviewed_safe_core_saturating_integer_helper_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> bool {
+    core_saturating_integer_v1::authenticate_v1(tcx, instance)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReviewedSafeCoreWrappingIntegerContractV1<'a> {
     item_instance: bool,

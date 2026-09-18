@@ -419,6 +419,7 @@ fn ordinary_rust_private_unit_helper_reaches_checked_native_output() {
 }
 
 enum OrdinarySourceCase {
+    SaturatingInteger(saturating_source::Config),
     Fill,
     Vecadd,
     WrappedFill,
@@ -479,7 +480,20 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         {
             continue;
         }
+        let saturation_name = match case {
+            OrdinarySourceCase::SaturatingInteger(config) => config.name(),
+            _ => String::new(),
+        };
         let (name, package_path, feature, roots, reads, writes, calls) = match case {
+            OrdinarySourceCase::SaturatingInteger(config) => (
+                saturation_name.as_str(),
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("saturating-integer"),
+                &["saturating_integer"][..],
+                0,
+                1,
+                usize::from(config.retained),
+            ),
             OrdinarySourceCase::Fill => ("fill", "examples/fill", None, &["fill"][..], 0, 1, 0),
             OrdinarySourceCase::Vecadd => {
                 ("vecadd", "examples/vecadd", None, &["vecadd"][..], 2, 1, 0)
@@ -611,6 +625,9 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         if let Some(feature) = feature {
             args.push(format!("--cfg=feature=\"{feature}\""));
         }
+        if let OrdinarySourceCase::SaturatingInteger(config) = case {
+            config.configure(&mut args);
+        }
         // Qualify both real frontend shapes. This changes only rustc's test
         // invocation, never the fixed fe2o3 optimizer or its admission policy.
         if matches!(case, OrdinarySourceCase::RetainedWrappedFill) {
@@ -662,6 +679,9 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
             );
         progress::clear_inherited_jobserver(&mut command);
         let simulation_case = match case {
+            OrdinarySourceCase::SaturatingInteger(config) => {
+                Some(simulation::Case::SaturatingInteger(config.operation))
+            }
             OrdinarySourceCase::Fill
             | OrdinarySourceCase::WrappedFill
             | OrdinarySourceCase::RetainedWrappedFill
@@ -732,6 +752,9 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
             );
         }
         assert_eq!((result.reads, result.writes), (reads, writes));
+        if let OrdinarySourceCase::SaturatingInteger(config) = case {
+            config.check(&result);
+        }
         assert_eq!(result.formal_accesses, reads + writes);
         assert_eq!(
             result.runtime_domains,
@@ -813,5 +836,7 @@ mod f32_source;
 mod progress;
 #[path = "production_rustc_driver_checked_output_runtime_domains_v1_tests.rs"]
 mod runtime_domains;
+#[path = "production_rustc_driver_checked_output_saturating_source_v1_tests.rs"]
+mod saturating_source;
 #[path = "production_rustc_driver_checked_output_simulation_v1_tests.rs"]
 mod simulation;

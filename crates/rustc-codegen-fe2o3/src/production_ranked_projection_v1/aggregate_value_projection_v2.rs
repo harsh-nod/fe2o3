@@ -100,8 +100,13 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         let definition = self
             .definitions
             .exact_reaching_assignment_v1(local as usize, site)
-            .map_err(|_| "GPU semantic reaching-definition analysis is incomplete")?
-            .ok_or("GPU semantic local has no exact reaching assignment")?;
+            .map_err(|_| "GPU semantic reaching-definition analysis is incomplete")?;
+        let Some(definition) = definition else {
+            if projections.is_empty() {
+                return self.resolve_saturating_call_local_v2(local as usize, site, depth);
+            }
+            return Err("GPU semantic local has no exact reaching assignment");
+        };
         let SemanticStatementKindV1::Assign(assignment) =
             self.function.blocks()[definition.block].statements()[definition.statement].kind()
         else {

@@ -17,10 +17,13 @@ const SENTINEL: f32 = -1234.5;
 const TARGET: SimulationTargetV1 = SimulationTargetV1::amdgpu_64();
 #[path = "production_rustc_driver_checked_output_f32_simulation_v1_tests.rs"]
 mod f32_arithmetic;
+#[path = "production_rustc_driver_checked_output_saturating_simulation_v1_tests.rs"]
+pub(super) mod saturating_integer;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum Case {
+    SaturatingInteger(saturating_integer::OperationCase),
     Fill,
     Vecadd,
     ScalarGemm,
@@ -31,6 +34,7 @@ pub(super) enum Case {
 impl Case {
     fn name(self) -> &'static str {
         match self {
+            Self::SaturatingInteger(case) => case.name(),
             Self::Fill => "fill",
             Self::Vecadd => "vecadd",
             Self::ScalarGemm => "scalar-gemm",
@@ -41,6 +45,7 @@ impl Case {
 
     fn numerical_policy(self) -> &'static str {
         match self {
+            Self::SaturatingInteger(_) => saturating_integer::NUMERICAL_POLICY,
             Self::Fill | Self::Vecadd | Self::ScalarGemm => {
                 "finite-dyadic-f32-separate-multiply-add-bit-exact-v1"
             }
@@ -50,6 +55,9 @@ impl Case {
 }
 
 pub(super) fn check_native_arithmetic(case: Case, llvm: &str) -> Result<(), SourceFailure> {
+    if let Case::SaturatingInteger(case) = case {
+        return saturating_integer::check_native(case, llvm);
+    }
     f32_arithmetic::check_native(case, llvm)
 }
 
@@ -107,6 +115,10 @@ pub(super) fn requested() -> Result<Option<Case>, SourceFailure> {
         Some("scalar-gemm") => Ok(Some(Case::ScalarGemm)),
         Some("f32-negate") => Ok(Some(Case::F32Negate)),
         Some("f32-divide") => Ok(Some(Case::F32Divide)),
+        Some(name) => saturating_integer::OperationCase::parse(name)
+            .map(Case::SaturatingInteger)
+            .map(Some)
+            .ok_or_else(|| failure("unknown explicit test simulation request")),
         _ => Err(failure("unknown explicit test simulation request")),
     }
 }
@@ -214,6 +226,9 @@ fn elementwise(case: Case, out_len: usize, extra_inputs: usize) -> Result<Scenar
             (0..out_len).map(|i| rounded_add(a[i], b[i])).collect()
         }
         Case::ScalarGemm => return Err(failure("GEMM requires its recurrence fixture")),
+        Case::SaturatingInteger(_) => {
+            return Err(failure("integer saturation requires its typed fixture"));
+        }
         Case::F32Negate | Case::F32Divide => {
             return Err(failure("F32 arithmetic requires scalar bit-vector inputs"));
         }
@@ -295,6 +310,7 @@ fn gemm_inputs(
 
 fn scenarios(case: Case) -> Result<Vec<Scenario>, SourceFailure> {
     match case {
+        Case::SaturatingInteger(case) => saturating_integer::scenarios(case),
         Case::F32Negate | Case::F32Divide => f32_arithmetic::scenarios(case),
         Case::Fill | Case::Vecadd => {
             let mut cases = [0, 1, 63, 64, 65, 255, 256, 257]
@@ -341,6 +357,9 @@ fn scenarios(case: Case) -> Result<Vec<Scenario>, SourceFailure> {
 }
 
 fn require_abi(module: &AdmittedSimulationModuleV1, case: Case) -> Result<&Kernel, SourceFailure> {
+    if let Case::SaturatingInteger(case) = case {
+        return saturating_integer::require_abi(module, case);
+    }
     if matches!(case, Case::F32Negate | Case::F32Divide) {
         return f32_arithmetic::require_abi(module, case);
     }
@@ -454,7 +473,7 @@ fn check_execution(
         Case::F32Negate | Case::F32Divide => {
             f32_arithmetic::check_backings(case, execution.shared_buffers(), expected)
         }
-        Case::Fill | Case::Vecadd | Case::ScalarGemm => {
+        Case::Fill | Case::Vecadd | Case::ScalarGemm | Case::SaturatingInteger(_) => {
             check_backings(execution.shared_buffers(), expected)
         }
     }

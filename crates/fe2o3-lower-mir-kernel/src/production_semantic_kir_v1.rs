@@ -12379,6 +12379,7 @@ include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 include!("production_execution_bindings_v1.rs");
 include!("production_execution_transport_v1.rs");
 include!("production_call_destination_v1.rs");
+include!("production_saturating_integer_v1.rs");
 include!("production_semantic_kir_v1/dynamic_local_array_v1.rs");
 
 struct SemanticFunctionLoweringV1<'a> {
@@ -17918,6 +17919,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             SemanticCompilerIntrinsicOperationV1::ColdPath => {
                 self.require_call_argument_count(block, call, 0)?;
                 SemanticValueBindingV1::Unit
+            }
+            SemanticCompilerIntrinsicOperationV1::SaturatingInteger(operation) => {
+                self.lower_saturating_integer_v1(block, call, *operation, operations)?
             }
             SemanticCompilerIntrinsicOperationV1::FabsF32 => {
                 self.require_call_argument_count(block, call, 1)?;
@@ -26189,6 +26193,7 @@ mod resource_tests {
     include!("production_semantic_kir_v1/semantic_ssa_01_tests.rs");
     include!("production_semantic_kir_v1/workgroup_sum_wrapping_tests.rs");
     include!("production_semantic_kir_v1/wrapping_arithmetic_v1_tests.rs");
+    include!("production_semantic_kir_v1/saturating_integer_v1_tests.rs");
     include!("production_semantic_kir_v1/wrapping_correspondence_v1_tests.rs");
     include!("production_semantic_kir_v1/wrapping_ranked_correspondence_v1_tests.rs");
     include!("production_semantic_kir_v1/tests/production_enum_downcast_v1_tests.rs");

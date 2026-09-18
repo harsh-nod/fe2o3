@@ -56,6 +56,10 @@ pub(super) fn source_parts(
                     charge(budget, 1)?;
                     match source.callables().get(call.callee().index() as usize) {
                         Some(SemanticCallableDeclV1::CompilerIntrinsic { .. }) if !helper => {}
+                        Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                            operation: SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_),
+                            ..
+                        }) => {}
                         Some(SemanticCallableDeclV1::Defined { function: callee })
                             if source.functions().get(callee.index() as usize).is_some_and(
                                 |callee| callee.role() == SemanticFunctionRoleV1::InternalHelper,

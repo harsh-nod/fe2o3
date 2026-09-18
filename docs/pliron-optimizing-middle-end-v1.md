@@ -587,3 +587,30 @@ The historical V2 optimizer report proves deterministic structural replay,
 not semantic equivalence. The canonical migration adds independent checks for
 specific scalar/CFG transformations; those checks do not establish universal
 compiler correctness or replace final source, memory and refinement admission.
+
+## Typed integer saturation
+
+Semantic MIR V30 adds exact signed/unsigned 8/16/32/64-bit saturating Add and
+Subtract. It inherits the ordinary V28 grammar, not the inert V29 Execution
+grammar. Content-based production checks and closed codec tags keep Execution
+unavailable even when a request also contains saturation. Old wire bytes remain
+unchanged; 128-bit, mixed-sign, floating-point and pointer operations are refused.
+
+The rustc adapter requires actual intrinsic metadata, an exact safe Rust
+`(T, T) -> T` signature and nounwind metadata. Retained primitive core wrappers
+are authenticated separately and their bodies still traverse collection. KIR
+lowering evaluates each operand once and uses the existing checked arithmetic
+result zero, an explicit overflow predicate and a clamp select. It neither
+introduces partial plain integer arithmetic nor assumes the unused overflow
+result proves source correspondence. Source expression reconstruction requires
+a unique unescaped call destination and bounded all-path lifetime checks.
+
+The ordinary-source regression enumerates ten integer body types, Add/Sub and
+normal/retained-wrapper MIR. The typed launch macro requires literal primitive
+spellings; pointer-sized body cases use explicit i64/u64 launch arguments on
+the AMD64 test lane. This does not add usize/isize launch-argument support.
+Actual optimized output is checked against an independent widened-integer
+clamping oracle, including backing bytes, initialization and canaries. Retained
+helper transport and exact source/N/B/C/O replay are not functional reference
+proofs through arbitrary Defined-helper results; that separate relation remains
+required and fail-closed. No protected/default or hardware authority is added.

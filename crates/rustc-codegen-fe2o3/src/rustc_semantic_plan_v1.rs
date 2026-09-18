@@ -805,6 +805,29 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
                                         });
                                         continue;
                                     }
+                                    if let ProductionRustcIntrinsicOperationV1::SaturatingInteger(
+                                        operation,
+                                    ) = classification.operation
+                                    {
+                                        if args.len() != 2 {
+                                            remember_rejection(
+                                                &mut first_rejection,
+                                                "saturating integer intrinsic with unexpected call arity",
+                                                site,
+                                            );
+                                            continue;
+                                        }
+                                        terminal_expansions.push(TerminalExpansionRecipeV1 {
+                                            caller: function_id,
+                                            block: block.index() as u32,
+                                            expansion: ProductionTerminalExpansionV1::RustcSaturatingInteger(operation),
+                                            arguments: 2,
+                                            instance: resolved,
+                                            identities: canonical_function_identities_v1(tcx, resolved),
+                                            terminal: u32::MAX,
+                                        });
+                                        continue;
+                                    }
                                     if args.len() != 2 {
                                         remember_rejection(
                                             &mut first_rejection,
@@ -3467,7 +3490,7 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         let (operation, access) = recipe
             .operation
             .atomic_rmw()
-            .expect("preflight retains only normalized atomic intrinsics");
+            .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
         section.field(&[atomic_rmw_operation_tag_v1(operation)])?;
         section.field(&[atomic_ordering_tag_v1(access.ordering())])?;
         section.field(&[atomic_scope_tag_v1(access.scope())])?;
@@ -3699,6 +3722,10 @@ const fn terminal_expansion_tag_for_schema_v1(
             TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 112,
         },
         ProductionTerminalExpansionV1::RustcFabsF32 => 113,
+        ProductionTerminalExpansionV1::RustcSaturatingInteger(operation) => match operation {
+            fe2o3_mir_model::semantic_mir_v1::SemanticSaturatingIntegerOpV1::Add => 127,
+            fe2o3_mir_model::semantic_mir_v1::SemanticSaturatingIntegerOpV1::Subtract => 128,
+        },
         ProductionTerminalExpansionV1::MemoryVolatileLoad => 115,
         ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum => match schema {
             #[cfg(test)]

@@ -59,6 +59,9 @@ use crate::rustc_semantic_plan_v1::{
 };
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 
+#[path = "production_saturating_terminal_v1.rs"]
+mod saturating_terminal;
+
 const IDENTITY_INVENTORY_DOMAIN_V2: &[u8] = b"fe2o3/semantic-mir/rustc-identity-inventory/v2";
 #[cfg(test)]
 const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V1: &[u8] =
@@ -1214,6 +1217,20 @@ fn terminal_operation_v1<'tcx>(
                 && matches!(rust_output.kind(), TyKind::Float(FloatTy::F32)) =>
         {
             Ok(SemanticCompilerIntrinsicOperationV1::FabsF32)
+        }
+        ProductionTerminalExpansionV1::RustcSaturatingInteger(operation)
+            if saturating_terminal::matches_v1(
+                tcx,
+                types,
+                inputs,
+                output,
+                rust_inputs,
+                rust_output,
+            ) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::SaturatingInteger(
+                operation,
+            ))
         }
         ProductionTerminalExpansionV1::MemoryVolatileLoad
             if inputs.len() == 2
@@ -2767,6 +2784,7 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::MathContextCurrent
         | ProductionTerminalExpansionV1::MathF32(_)
         | ProductionTerminalExpansionV1::RustcFabsF32
+        | ProductionTerminalExpansionV1::RustcSaturatingInteger(_)
         | ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent
         | ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum
         | ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum
@@ -4179,6 +4197,10 @@ const fn terminal_operation_tag_for_schema_v1(
             TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 112,
         },
         ProductionTerminalExpansionV1::RustcFabsF32 => 113,
+        ProductionTerminalExpansionV1::RustcSaturatingInteger(operation) => match operation {
+            fe2o3_mir_model::semantic_mir_v1::SemanticSaturatingIntegerOpV1::Add => 127,
+            fe2o3_mir_model::semantic_mir_v1::SemanticSaturatingIntegerOpV1::Subtract => 128,
+        },
         ProductionTerminalExpansionV1::MemoryVolatileLoad => 115,
         ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum => match schema {
             #[cfg(test)]
