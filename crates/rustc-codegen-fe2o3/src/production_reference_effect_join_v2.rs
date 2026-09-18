@@ -132,7 +132,13 @@ struct PreparedReferenceOutputV2 {
 impl CompilerOwnedReferenceEffectRequestV2 {
     pub(crate) fn prove_and_compile(
         self,
-    ) -> Result<ProductionRankedKernelLoweringInputV1, ProductionReferenceEffectJoinErrorV2> {
+    ) -> Result<
+        (
+            ProductionRankedKernelLoweringInputV1,
+            Vec<fe2o3_verifier::InertFunctionalRefinementReceiptSignatureV2>,
+        ),
+        ProductionReferenceEffectJoinErrorV2,
+    > {
         let runtime = fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1::open(
             RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
         )
@@ -142,13 +148,18 @@ impl CompilerOwnedReferenceEffectRequestV2 {
                 detail: error.to_string(),
             }
         })?;
-        let mut imported_proofs = Vec::with_capacity(self.requests.len());
-        let mut bindings = Vec::with_capacity(self.requests.len());
-        let mut signers = Vec::with_capacity(self.requests.len());
+        // Staging retains requests in block/operation order, which can differ
+        // from reference-output order for a multi-block or multi-output source.
+        let mut requests = self.requests;
+        requests.sort_unstable_by_key(|request| (request.block, request.operation));
+        let mut imported_proofs = Vec::with_capacity(requests.len());
+        let mut signed_receipts = Vec::with_capacity(requests.len());
+        let mut bindings = Vec::with_capacity(requests.len());
+        let mut signers = Vec::with_capacity(requests.len());
         let mut toolchain = None;
-        for request in &self.requests {
-            let (binding, imported, _single_receipt_policy) =
-                fe2o3_verifier::execute_and_import_ranked_functional_refinement_locally_v2(
+        for request in &requests {
+            let (binding, retained, _single_receipt_policy) =
+                fe2o3_verifier::execute_and_retain_ranked_functional_refinement_locally_v2(
                     &runtime,
                     &self.kernel,
                     request.block,
@@ -159,6 +170,7 @@ impl CompilerOwnedReferenceEffectRequestV2 {
                 .map_err(|error| {
                     ProductionReferenceEffectJoinErrorV2::ProofExecution(error.to_string())
                 })?;
+            let (imported, signed) = retained.into_parts();
             if toolchain.is_some_and(|expected| expected != imported.toolchain()) {
                 return Err(ProductionReferenceEffectJoinErrorV2::ProofExecution(
                     "per-output receipts were imported under different Verus toolchains".to_owned(),
@@ -172,6 +184,7 @@ impl CompilerOwnedReferenceEffectRequestV2 {
                 ProductionReferenceProofV2::request_exact(imported.receipt_identity(), binding),
             ));
             imported_proofs.push(imported);
+            signed_receipts.push(signed);
         }
         let toolchain = toolchain.ok_or_else(|| {
             ProductionReferenceEffectJoinErrorV2::ProofExecution(
@@ -190,13 +203,14 @@ impl CompilerOwnedReferenceEffectRequestV2 {
             ProductionConstructionV1::ranked_kernel(ROOT_NAME_V2, bound).map_err(|error| {
                 ProductionReferenceEffectJoinErrorV2::Construction(format!("{error:?}"))
             })?;
-        compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
+        let lowering = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
             construction,
             ProductionSessionLimitsV1::default(),
             imported_proofs,
             policy,
         )
-        .map_err(|error| ProductionReferenceEffectJoinErrorV2::Compile(Box::new(error)))
+        .map_err(|error| ProductionReferenceEffectJoinErrorV2::Compile(Box::new(error)))?;
+        Ok((lowering, signed_receipts))
     }
 }
 

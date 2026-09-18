@@ -736,6 +736,7 @@ pub(crate) struct ProductionRankedRootProgramV1 {
     source_rank: u8,
     semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
     lowering: ProductionRankedKernelLoweringInputV1,
+    effect_receipts: Vec<fe2o3_verifier::InertFunctionalRefinementReceiptSignatureV2>,
     ranked_ir: String,
     access_sources: Vec<ProductionRankedAccessSourceV1>,
     executable_effect_sources: Vec<ProductionRankedExecutableEffectSourceV1>,
@@ -867,6 +868,7 @@ pub(crate) struct AuthenticatedRankedVerificationV5 {
     middle_end_evidence: fe2o3_pliron::ProductionMiddleEndEvidenceV5,
     functional: Option<AuthenticatedFunctionalVerificationV1>,
     semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
+    effect_receipts: Vec<fe2o3_verifier::InertFunctionalRefinementReceiptSignatureV2>,
 }
 
 /// One canonically ordered ranked-verification owner bound to its exact root
@@ -977,6 +979,12 @@ struct AuthenticatedFunctionalVerificationV1 {
 }
 
 impl AuthenticatedRankedVerificationV5 {
+    pub(crate) fn effect_receipts(
+        &self,
+    ) -> &[fe2o3_verifier::InertFunctionalRefinementReceiptSignatureV2] {
+        &self.effect_receipts
+    }
+
     pub(crate) const fn middle_end_evidence(&self) -> &fe2o3_pliron::ProductionMiddleEndEvidenceV5 {
         &self.middle_end_evidence
     }
@@ -1280,7 +1288,13 @@ fn authenticate_ranked_root_v5(
     lowering: &ProductionRankedKernelLoweringInputV1,
     ranked_ir: &str,
     semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
+    effect_receipts: Vec<fe2o3_verifier::InertFunctionalRefinementReceiptSignatureV2>,
 ) -> Result<AuthenticatedRankedVerificationV5, ProductionRankedVerificationErrorV1> {
+    if effect_receipts.len() != lowering.retained_policy_checked_refinement_staging().len() {
+        return Err(ProductionRankedVerificationErrorV1::RosterMetadata(
+            "incomplete retained per-effect signed receipt roster",
+        ));
+    }
     let middle_end_evidence =
         fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(semantic_owner, lowering, ranked_ir)
             .map_err(ProductionRankedVerificationErrorV1::MiddleEndEvidence)?;
@@ -1321,6 +1335,7 @@ fn authenticate_ranked_root_v5(
         middle_end_evidence,
         functional,
         semantic_u32_induction,
+        effect_receipts,
     })
 }
 
@@ -1614,6 +1629,7 @@ impl ProductionRankedSemanticProgramV1 {
                 source_rank,
                 semantic_u32_induction,
                 lowering,
+                effect_receipts,
                 ranked_ir,
                 access_sources,
                 executable_effect_sources,
@@ -1623,6 +1639,7 @@ impl ProductionRankedSemanticProgramV1 {
                 &lowering,
                 &ranked_ir,
                 semantic_u32_induction,
+                effect_receipts,
             )?;
             verified_roots.push(ProductionRankedVerifiedRootCandidateV1 {
                 logical_name,
@@ -3569,11 +3586,11 @@ fn project_and_verify_ranked_root_v1(
     if let Some(error) = incomplete {
         return Err(error);
     }
-    let lowering = if reference_bindings.as_slice().is_empty() {
+    let (lowering, effect_receipts) = if reference_bindings.as_slice().is_empty() {
         let ranked_ir = format_ranked_cfg(function_name(root_function)?, kernel.blocks())?;
         let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, kernel)
             .map_err(ProductionRankedProjectionErrorV1::Construction)?;
-        compile_ranked_kernel_for_gfx942_lowering_v1(
+        let lowering = compile_ranked_kernel_for_gfx942_lowering_v1(
             construction,
             ProductionSessionLimitsV1::default(),
             system_coherent_allocations,
@@ -3582,7 +3599,8 @@ fn project_and_verify_ranked_root_v1(
             error: Box::new(error),
             ranked_ir,
             access_sources: sources,
-        })?
+        })?;
+        (lowering, Vec::new())
     } else {
         let reserved_reference_values =
             reserved_reference_values.ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -3616,6 +3634,7 @@ fn project_and_verify_ranked_root_v1(
         source_rank: source_launch.rank(),
         semantic_u32_induction,
         lowering,
+        effect_receipts,
         ranked_ir,
         access_sources,
         executable_effect_sources,

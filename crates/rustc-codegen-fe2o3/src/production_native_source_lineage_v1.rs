@@ -13,13 +13,15 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_lower_mir_kernel::{
     ProductionSemanticKirOwnerV1, ProductionSourceLaunchRootInputV1,
-    check_native_source_ranked_roster_v1, native_source_ranked_staging_commitments_v1,
+    check_native_source_ranked_roster_v1, native_source_ranked_candidates_v1,
+    native_source_ranked_staging_commitments_v1,
 };
 use fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1 as Induction;
 use fe2o3_verifier::{
-    CanonicalProductionMirPlironVerusExecutionEvidenceV1 as Signed, NativeCompilerRootStagingV1,
+    CanonicalProductionMirPlironVerusExecutionEvidenceV1 as Signed, NativeCompilerRankedRootV1,
+    NativeCompilerRankedSourceProofInputsV1, NativeCompilerRootStagingV1,
     NativeCompilerSourceProofInputsV1, NativeCompilerStagingCommitmentV1,
-    ValidatedNativeCompilerSourceProofV1, validate_native_compiler_source_proof_v1,
+    ValidatedNativeCompilerRankedSourceProofV1, validate_native_compiler_ranked_source_proof_v1,
 };
 
 #[derive(Debug)]
@@ -89,7 +91,7 @@ type E = NativeSourceLineageErrorV1;
 )]
 pub(crate) struct PreparedNativeSourceLineageV1 {
     ranked: AuthenticatedRankedVerificationRosterV1,
-    proof: ValidatedNativeCompilerSourceProofV1,
+    proof: ValidatedNativeCompilerRankedSourceProofV1,
     native_module: Vec<u8>,
 }
 #[allow(
@@ -100,7 +102,7 @@ impl PreparedNativeSourceLineageV1 {
     pub(crate) fn ranked(&self) -> &AuthenticatedRankedVerificationRosterV1 {
         &self.ranked
     }
-    pub(crate) fn proof(&self) -> &ValidatedNativeCompilerSourceProofV1 {
+    pub(crate) fn proof(&self) -> &ValidatedNativeCompilerRankedSourceProofV1 {
         &self.proof
     }
     pub(crate) fn native_module(&self) -> &[u8] {
@@ -392,22 +394,41 @@ pub(crate) fn try_prepare_native_source_lineage_v1(
                 commitments: staging,
             });
         }
-        let (proof, receipt) = validate_native_compiler_source_proof_v1(
-            NativeCompilerSourceProofInputsV1 {
-                semantic_mir: semantic.canonical_encoding(),
-                native_module: &native_module,
-                middle_end_roster: middle.canonical_bytes(),
-                correspondence_roster: correspondence.canonical_bytes(),
-                verus_roster: verus.canonical_bytes(),
-                launch_inputs: &launches,
-                staging_roots: &staging_roots,
+        let (candidates, candidate_storage) =
+            native_source_ranked_candidates_v1(source, budget).map_err(E::SourceJoin)?;
+        budget.reserve_storage(candidate_storage.retained_storage())?;
+        let mut ranked_roots = reserved_vec(count, budget)?;
+        if candidates.len() != count {
+            return Err(E::Mismatch("complete typed ranked candidate roster"));
+        }
+        for (candidate, root) in candidates.iter().zip(ranked.roots()) {
+            budget.charge_work(2)?;
+            ranked_roots.push(NativeCompilerRankedRootV1 {
+                candidate: *candidate,
+                effect_receipts: root.verification().effect_receipts(),
+            });
+        }
+        let (proof, receipt) = validate_native_compiler_ranked_source_proof_v1(
+            NativeCompilerRankedSourceProofInputsV1 {
+                source: NativeCompilerSourceProofInputsV1 {
+                    semantic_mir: semantic.canonical_encoding(),
+                    native_module: &native_module,
+                    middle_end_roster: middle.canonical_bytes(),
+                    correspondence_roster: correspondence.canonical_bytes(),
+                    verus_roster: verus.canonical_bytes(),
+                    launch_inputs: &launches,
+                    staging_roots: &staging_roots,
+                },
+                ranked_roots: &ranked_roots,
             },
             budget,
         )
         .map_err(E::Replay)?;
         budget.reserve_storage(receipt.retained_storage())?;
         let header = std::mem::size_of::<PreparedNativeSourceLineageV1>()
-            .checked_sub(std::mem::size_of::<ValidatedNativeCompilerSourceProofV1>())
+            .checked_sub(std::mem::size_of::<
+                ValidatedNativeCompilerRankedSourceProofV1,
+            >())
             .and_then(|n| {
                 n.checked_sub(std::mem::size_of::<AuthenticatedRankedVerificationRosterV1>())
             })
@@ -421,6 +442,8 @@ pub(crate) fn try_prepare_native_source_lineage_v1(
         drop(staging_roots);
         drop(launches);
         drop(joins);
+        drop(ranked_roots);
+        drop(candidates);
         Ok((
             PreparedNativeSourceLineageV1 {
                 ranked,
