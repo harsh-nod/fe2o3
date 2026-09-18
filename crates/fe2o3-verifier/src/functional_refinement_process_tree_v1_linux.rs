@@ -11,6 +11,9 @@ use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[path = "functional_refinement_process_tree_poll_v1.rs"]
+mod poll;
+
 #[cfg(test)]
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -706,6 +709,7 @@ fn supervise(
         let mut auxiliary_started = false;
         let mut solver_started = false;
         let expected_process_descendants = if require_auxiliary_verifier { 2 } else { 1 };
+        let mut idle_poll = poll::ActivePoll::default();
         while !tracees.is_empty() {
             drain(&mut stdout, &mut stdout_capture, output_limit)?;
             drain(&mut stderr, &mut stderr_capture, output_limit)?;
@@ -898,8 +902,8 @@ fn supervise(
                     }
                 }
             }
-            if !progressed {
-                thread::sleep(POLL_INTERVAL);
+            if let Some(delay) = idle_poll.after_scan(progressed) {
+                thread::sleep(delay);
             }
         }
         let verifier_terminal = verifier_terminal

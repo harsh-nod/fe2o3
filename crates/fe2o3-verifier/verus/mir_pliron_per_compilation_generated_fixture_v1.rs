@@ -108,11 +108,6 @@ verus! {
         }
     }
 
-    // This symbol models congruence of identical compiler-side operator DAG
-    // applications only. It grants no IEEE real-value, lowering, or target
-    // instruction semantics.
-    uninterp spec fn fe2o3_ieee_operator_congruence_v2(tag: int, a: int, b: int, c: int) -> int;
-
     proof fn fe2o3_output_0_effect_formula_v1() {
         let v5: int = fe2o3_bv_norm_v2(0, 64);
         let v4: int = fe2o3_bv_norm_v2(1, 1);

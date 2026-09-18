@@ -744,9 +744,11 @@ fn append_contract_instantiations_v1(
     source.push_str(
         crate::functional_refinement_receipt_v2::ranked_effect_formula_replay_prelude_v2(),
     );
-    source.push_str(
-        crate::functional_refinement_receipt_v2::ranked_effect_ieee_congruence_declaration_v2(),
-    );
+    if replays.iter().any(|replay| replay.uses_ieee_congruence()) {
+        source.push_str(
+            crate::functional_refinement_receipt_v2::ranked_effect_ieee_congruence_declaration_v2(),
+        );
+    }
     source.push('\n');
     let mut all_symbols = std::collections::BTreeSet::new();
     for replay in &replays {
@@ -1599,7 +1601,7 @@ mod tests {
         .unwrap();
         let text = std::str::from_utf8(source.source()).unwrap();
         assert!(text.contains("caller-provided relation premises"));
-        for forbidden in ["requires", "assume(", "admit(", "external_body"] {
+        for forbidden in ["requires", "assume(", "admit(", "external_body", "uninterp"] {
             assert!(!text.contains(forbidden));
         }
         for workload in ["gemm", "softmax", "attention", "moe"] {

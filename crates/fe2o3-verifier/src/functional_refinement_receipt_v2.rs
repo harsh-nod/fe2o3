@@ -60,6 +60,10 @@ const VERUS_CONFIGURATION_DOMAIN: &[u8] =
 const SOLVER_CONFIGURATION_DOMAIN: &[u8] = b"FE2O3/FUNCTIONAL-REFINEMENT/RETAINED-Z3-CONFIG/V2\0";
 const EXECUTION_IDENTITY_DOMAIN: &[u8] = b"FE2O3/FUNCTIONAL-REFINEMENT/VERUS-EXECUTION/V2\0";
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "functional_refinement_protected_replay_v2_tests.rs"]
+mod protected_replay_tests;
+
 /// Returns the exact toolchain identity enforced by the retained runtime lease.
 pub fn functional_refinement_verus_toolchain_identity_v2(
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
@@ -481,6 +485,7 @@ fn generate_ranked_functional_refinement_proof_v2(
 pub(crate) struct RankedEffectFormulaReplayV2 {
     lemma: String,
     symbols: Vec<u32>,
+    uses_ieee_congruence: bool,
 }
 
 impl RankedEffectFormulaReplayV2 {
@@ -490,6 +495,10 @@ impl RankedEffectFormulaReplayV2 {
 
     pub(crate) fn symbols(&self) -> &[u32] {
         &self.symbols
+    }
+
+    pub(crate) fn uses_ieee_congruence(&self) -> bool {
+        self.uses_ieee_congruence
     }
 }
 
@@ -539,6 +548,7 @@ pub(crate) fn generate_ranked_effect_formula_replay_v2(
     Ok(RankedEffectFormulaReplayV2 {
         lemma: program.render_lemma(&pairs, lemma_name)?,
         symbols: program.symbols.iter().copied().collect(),
+        uses_ieee_congruence: program.uses_ieee_congruence(),
     })
 }
 
@@ -752,14 +762,31 @@ impl SemanticFormulaProgramV2 {
         })
     }
 
+    fn uses_ieee_congruence(&self) -> bool {
+        self.order.iter().any(|identity| {
+            matches!(
+                self.definitions.get(identity),
+                Some(SemanticDefinitionV2::TypedExpression(
+                    _,
+                    fe2o3_pliron::ProductionNumericalContractV2::ExactIeee754OperatorCongruence { .. },
+                ))
+            )
+        })
+    }
+
     fn render(
         &self,
         pairs: &[(ProductionRankedValueV1, ProductionRankedValueV1)],
     ) -> Result<String, FunctionalRefinementVerusExecutionErrorV2> {
         let mut source = BoundedVerusSourceV2::default();
+        let ieee_declaration = if self.uses_ieee_congruence() {
+            IEEE_CONGRUENCE_DECLARATION_V2
+        } else {
+            ""
+        };
         write!(
             source,
-            "use vstd::prelude::*;\n\nverus! {{\n{BITVECTOR_SEMANTICS_V2}\n{IEEE_CONGRUENCE_DECLARATION_V2}\n"
+            "use vstd::prelude::*;\n\nverus! {{\n{BITVECTOR_SEMANTICS_V2}\n{ieee_declaration}\n"
         )
         .map_err(|_| generated_source_limit())?;
         self.write_lemma(&mut source, pairs, "fe2o3_functional_refinement_v2")?;
@@ -1351,11 +1378,32 @@ fn validate_proved_output(
         || !observed.stderr.is_empty()
         || !valid_count
     {
-        return Err(FunctionalRefinementVerusExecutionErrorV2::new(
-            FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult,
-        ));
+        return Err(FunctionalRefinementVerusExecutionErrorV2 {
+            kind: FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult,
+            detail: Some(format!(
+                "exit={:?} signal={:?}; stdout={}; stderr={}",
+                observed.exit_code,
+                observed.signal,
+                proof_output_excerpt(&observed.stdout),
+                proof_output_excerpt(&observed.stderr),
+            )),
+        });
     }
     Ok(())
+}
+
+fn proof_output_excerpt(bytes: &[u8]) -> String {
+    const LIMIT: usize = 1024;
+    format!(
+        "\"{}\" ({} bytes{})",
+        bytes[..bytes.len().min(LIMIT)].escape_ascii(),
+        bytes.len(),
+        if bytes.len() > LIMIT {
+            ", truncated"
+        } else {
+            ""
+        },
+    )
 }
 
 fn execution_identity(
@@ -1772,6 +1820,45 @@ mod tests {
     }
 
     #[test]
+    fn refused_proof_preserves_bounded_process_diagnostics() {
+        let observed = output(1, b"verification failed\n", b"error: assertion failed\n");
+        let error = validate_proved_output(&observed).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult,
+        );
+        let detail = error.to_string();
+        assert!(detail.contains("exit=Some(1) signal=None"));
+        assert!(detail.contains("verification failed\\n"));
+        assert!(detail.contains("error: assertion failed\\n"));
+        assert!(!detail.contains('\n'));
+
+        let mut observed = output(0, b"verification results:: 1 verified, 0 errors\n", b"");
+        observed.signal = Some(9);
+        assert!(
+            validate_proved_output(&observed)
+                .unwrap_err()
+                .to_string()
+                .contains("signal=Some(9)"),
+        );
+    }
+
+    #[test]
+    fn proof_output_diagnostics_escape_bytes_and_report_truncation() {
+        assert_eq!(proof_output_excerpt(b""), "\"\" (0 bytes)");
+        assert_eq!(
+            proof_output_excerpt(b"\x1b\x00\xff\n\"\\"),
+            "\"\\x1b\\x00\\xff\\n\\\"\\\\\" (6 bytes)",
+        );
+        let exact = proof_output_excerpt(&[b'x'; 1024]);
+        assert!(!exact.contains("truncated"));
+        let oversized = proof_output_excerpt(&[0xff; 2048]);
+        assert!(oversized.ends_with("(2048 bytes, truncated)"));
+        assert_eq!(oversized.matches("\\xff").count(), 1024);
+        assert!(oversized.len() < 4200);
+    }
+
+    #[test]
     fn typed_generator_derives_source_and_mutation_from_ranked_formula_dag() {
         let positive = formula_kernel(SemanticBinaryKindAttr::Add);
         let (positive_binding, positive_source) =
@@ -1814,7 +1901,7 @@ mod tests {
             generate_ranked_functional_refinement_proof_v2(&positive, 0, 2, subjects()).unwrap();
         let source = std::str::from_utf8(positive_source.source()).unwrap();
         assert!(source.contains("open spec fn fe2o3_bv_norm_v2"));
-        assert!(source.contains("uninterp spec fn fe2o3_ieee_operator_congruence_v2"));
+        assert!(!source.contains("uninterp spec fn fe2o3_ieee_operator_congruence_v2"));
         assert!(!source.contains("fe2o3_semantic_op_v2"));
         assert!(source.contains("s7: int"));
         assert!(source.contains("fe2o3_bv_norm_v2"));
@@ -1828,6 +1915,43 @@ mod tests {
             positive_binding.normalized_obligation_effect_ir_hash(),
             mutated_binding.normalized_obligation_effect_ir_hash(),
         );
+    }
+
+    #[test]
+    fn ieee_declaration_depends_only_on_reachable_formula_definitions() {
+        let integer = typed_expression_kernel(ProductionSemanticBinaryOpV2::Add);
+        let scalar = ProductionSemanticScalarTypeV2::Float { bits: 32 };
+        let ieee = |result| ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(result),
+            expression: ProductionSemanticExpressionV2::Symbol { symbol: 9, scalar },
+            numerical_contract: ProductionNumericalContractV2::exact_for(scalar),
+        };
+        let mut operations = integer.blocks()[0].operations().to_vec();
+        let request = operations.pop().unwrap();
+        operations.push(ieee(2));
+        operations.push(request);
+        for reachable in [false, true] {
+            if reachable {
+                operations[0] = ieee(0);
+                operations[1] = ieee(1);
+            }
+            let kernel = ProductionRankedKernelV1::new(
+                "reachable_ieee_declaration",
+                0,
+                vec![ProductionRankedBlockV1::new(
+                    operations.clone(),
+                    ProductionRankedTerminatorV1::Return,
+                )],
+            )
+            .unwrap();
+            let (_, generated) =
+                generate_ranked_functional_refinement_proof_v2(&kernel, 0, 3, subjects()).unwrap();
+            let source = std::str::from_utf8(generated.source()).unwrap();
+            assert_eq!(
+                source.contains("uninterp spec fn fe2o3_ieee_operator_congruence_v2"),
+                reachable,
+            );
+        }
     }
 
     #[test]
