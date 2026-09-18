@@ -96,6 +96,8 @@ struct PendingScopedRootEmissionV29 {
 fn pending_scope_correspondence_error_v29(
     error: InstanceCorrespondenceErrorV1,
 ) -> ProductionSemanticKirErrorV1 {
+    #[cfg(test)]
+    eprintln!("pending scope correspondence error: {error:?}");
     match error {
         InstanceCorrespondenceErrorV1::Resource(error)
         | InstanceCorrespondenceErrorV1::Emission(CallInstanceEmissionErrorV1::Resource(error)) => {
