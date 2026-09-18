@@ -2,7 +2,7 @@
 
 use super::{BoundCallV29, BoundContextEntryV29};
 use crate::collector::workgroup_scope_custody_v29::{
-    PendingWorkgroupScopesV29, RetainedWorkgroupScopesV29,
+    PendingWorkgroupScopesV29, RetainedWorkgroupScopesV29, ScopeCallableV29, ScopeEventV29,
 };
 use crate::production_semantic_body_v1::ProductionSemanticBodyErrorV1 as Error;
 use fe2o3_kernel_ir::{
@@ -354,17 +354,85 @@ pub(crate) struct RetainedContextEntriesV29 {
     scopes: Option<RetainedWorkgroupScopesV29>,
 }
 
+/// Borrowed constructor data, not a lifecycle proof or executable authority.
+/// Its lifetime belongs only to the receipt, so an owning consumer can move SSA.
+pub(crate) struct RetainedExecutionSourceV29<'receipt> {
+    semantic_sha256: &'receipt [u8; 32],
+    roots: &'receipt [RetainedContextEntryV29],
+    scopes: &'receipt RetainedWorkgroupScopesV29,
+}
+
+impl<'receipt> RetainedExecutionSourceV29<'receipt> {
+    pub(crate) fn semantic_sha256(&self) -> &'receipt [u8; 32] {
+        self.semantic_sha256
+    }
+
+    pub(crate) fn roots(&self) -> &'receipt [RetainedContextEntryV29] {
+        self.roots
+    }
+
+    pub(crate) fn classes(&self) -> &'receipt [ScopeCallableV29] {
+        self.scopes.classes()
+    }
+
+    pub(crate) fn events(&self) -> &'receipt [ScopeEventV29] {
+        self.scopes.events()
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum ContextRootVisitErrorV29<E> {
     Source(Error),
     Resource(VisitResource),
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "The production view has no callback")
+    )]
     Consumer(E),
 }
 
 impl RetainedContextEntriesV29 {
+    /// Validate source custody and prepay the complete borrowed roster before use.
+    /// No source or ledger borrow escapes, and no storage is allocated or refunded.
+    pub(crate) fn materialization_source_v29<'receipt>(
+        &'receipt self,
+        semantic: &AdmittedInertSemanticMirV1,
+        budget: &mut VisitBudget<'_>,
+    ) -> Result<
+        Option<RetainedExecutionSourceV29<'receipt>>,
+        ContextRootVisitErrorV29<std::convert::Infallible>,
+    > {
+        budget
+            .charge_work(1)
+            .map_err(ContextRootVisitErrorV29::Resource)?;
+        self.validate_source(semantic)
+            .map_err(ContextRootVisitErrorV29::Source)?;
+        let scopes = match (self.entries.is_empty(), self.scopes.as_ref()) {
+            (true, None) => return Ok(None),
+            (false, Some(scopes)) => scopes,
+            _ => return Err(ContextRootVisitErrorV29::Source(mismatch())),
+        };
+        let source = RetainedExecutionSourceV29 {
+            semantic_sha256: &self.semantic_sha256,
+            roots: &self.entries,
+            scopes,
+        };
+        for count in [
+            source.roots().len(),
+            source.classes().len(),
+            source.events().len(),
+        ] {
+            budget
+                .charge_work(count)
+                .map_err(ContextRootVisitErrorV29::Resource)?;
+        }
+        Ok(Some(source))
+    }
+
     /// Borrows authenticated anchors in canonical root order, never cloned authority.
     /// Source identity and enumeration work are checked before the first callback.
     /// Consumers share this budget and must discard partial plans on any error.
+    #[cfg(test)]
     pub(crate) fn visit_root_anchors_v29<'w, E>(
         &self,
         semantic: &AdmittedInertSemanticMirV1,
