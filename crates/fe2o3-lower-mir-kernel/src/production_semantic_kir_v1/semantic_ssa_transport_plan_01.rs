@@ -127,6 +127,7 @@ impl SemanticControlFlowSsaPlanV1 {
             max_analysis_storage,
             &BTreeSet::new(),
             None,
+            None,
         )
     }
 
@@ -140,6 +141,7 @@ impl SemanticControlFlowSsaPlanV1 {
         max_analysis_storage: usize,
         borrowed_locals: &BTreeSet<u32>,
         mut borrowed_budget: Option<&mut (dyn BorrowedAggregateBudgetV1 + 'work)>,
+        execution: Option<&ExecutionAvailabilityV29<'_>>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let SemanticSsaTransportInputV1 {
             types,
@@ -331,17 +333,34 @@ impl SemanticControlFlowSsaPlanV1 {
                 .locals()
                 .get(local as usize)
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-            let (transport_semantic_type, binding) = promoted_transport_descriptor_v1(
-                types,
-                function,
-                local,
-                &compiler_issued_bindings,
-                &shared_promoted,
-                &mut capability_origins,
-                direct_parameters,
-            )?;
-            let kernel_types =
-                binding.transport_types(types, transport_semantic_type, direct_parameters)?;
+            let nominal =
+                execution.is_some_and(|cursor| cursor.cfg.nominal_locals[local as usize] != 0);
+            let (transport_semantic_type, binding) = if nominal {
+                (declaration.ty(), SemanticPromotedTransportV1::Execution)
+            } else {
+                promoted_transport_descriptor_v1(
+                    types,
+                    function,
+                    local,
+                    &compiler_issued_bindings,
+                    &shared_promoted,
+                    &mut capability_origins,
+                    direct_parameters,
+                )?
+            };
+            let kernel_types = if nominal {
+                let budget = borrowed_budget
+                    .as_deref_mut()
+                    .ok_or(ArgumentResourceV1::Accounting)?;
+                execution.unwrap().check_ledger(budget)?;
+                reserve_execution_cfg_map_entry_v29::<u32, SemanticPromotedLocalV1>(
+                    promoted.len(),
+                    budget,
+                )?;
+                execution_cfg_types_v29(types, transport_semantic_type, budget)?
+            } else {
+                binding.transport_types(types, transport_semantic_type, direct_parameters)?
+            };
             let ordinary_empty = kernel_types.is_empty()
                 && matches!(
                     binding,
@@ -356,6 +375,7 @@ impl SemanticControlFlowSsaPlanV1 {
                     .map_err(|detail| unsupported(semantic_function.index(), None, None, detail))?
                     .is_empty();
             if kernel_types.is_empty()
+                && !nominal
                 && !ordinary_empty
                 && !matches!(
                     binding,

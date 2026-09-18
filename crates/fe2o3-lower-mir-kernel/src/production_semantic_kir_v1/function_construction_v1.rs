@@ -136,6 +136,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         if let Some(execution) = &execution {
             execution.check_source(function, semantic_ssa)?;
+            if !std::ptr::eq(execution.cfg.types, types) {
+                return Err(execution_cfg_error_v29());
+            }
         }
         let mut locals = vec![None; function.locals().len()];
         let mut borrowed_aggregate_views = Vec::new();
@@ -221,6 +224,23 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 });
             }
         }
+        #[cfg(test)]
+        if let Some(cursor) = &execution {
+            // Inert fixture inputs only; no producer is constructed in production.
+            for (local, binding) in &cursor.entry_seeds {
+                let local = *local as usize;
+                if !function
+                    .locals()
+                    .get(local)
+                    .is_some_and(|local| local.role().is_entry_argument())
+                    || cursor.cfg.nominal_locals[local] == 0
+                    || locals[local].is_some()
+                {
+                    return Err(execution_cfg_error_v29());
+                }
+                locals[local] = Some(binding.clone());
+            }
+        }
         let parameter_floor = emission_placement.value_floor(parameters.values)?;
         let mut direct_parameters = BTreeMap::new();
         if let Some(parameter_local_bindings) = parameters.local_bindings {
@@ -252,6 +272,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             max_operations,
             &borrowed_aggregate_preparation.locals,
             emission_work.as_deref_mut(),
+            execution.as_ref(),
         )?;
         let workgroup_pipeline_contracts = workgroup_pipeline_type_contracts_v1(
             types,
@@ -299,8 +320,34 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     .promoted
                     .get(local)
                     .expect("live-in local must be promoted");
-                let mut components = Vec::with_capacity(promoted.kernel_types.len());
-                for ty in promoted.kernel_types.iter().cloned() {
+                let nominal = promoted.transport == SemanticPromotedTransportV1::Execution;
+                let mut components = if nominal {
+                    let budget = emission_work
+                        .as_deref_mut()
+                        .ok_or(ArgumentResourceV1::Accounting)?;
+                    reserve_execution_cfg_map_entry_v29::<u32, Vec<ValueDef>>(
+                        parameters.len(),
+                        budget,
+                    )?;
+                    reserve_execution_cfg_map_entry_v29::<u32, BTreeMap<u32, Vec<ValueDef>>>(
+                        block_parameters.len(),
+                        budget,
+                    )?;
+                    borrowed_aggregate_vec_v1(promoted.kernel_types.len(), budget)?
+                } else {
+                    Vec::with_capacity(promoted.kernel_types.len())
+                };
+                for ty in &promoted.kernel_types {
+                    let ty = if nominal {
+                        execution_cfg_clone_type_v29(
+                            ty,
+                            emission_work
+                                .as_deref_mut()
+                                .ok_or(ArgumentResourceV1::Accounting)?,
+                        )?
+                    } else {
+                        ty.clone()
+                    };
                     components.push(ValueDef::new(ValueId(next_value), ty));
                     next_value = next_value.checked_add(1).ok_or_else(|| {
                         unsupported(0, Some(block), None, "block-parameter identity overflow")

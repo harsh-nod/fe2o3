@@ -10,6 +10,7 @@ struct SemanticPromotedLocalV1 {
 enum SemanticPromotedTransportV1 {
     Semantic(SemanticPromotedBindingV1),
     DirectParameter { parameter_local: u32 },
+    Execution,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -765,6 +766,7 @@ impl SemanticPromotedTransportV1 {
     ) -> Result<Vec<Type>, ProductionSemanticKirErrorV1> {
         match self {
             Self::Semantic(binding) => binding.transport_types(types, semantic_type),
+            Self::Execution => Err(execution_cfg_error_v29()),
             Self::DirectParameter { parameter_local } => direct_parameters
                 .get(&parameter_local)
                 .cloned()
@@ -780,6 +782,7 @@ impl SemanticPromotedTransportV1 {
     ) -> Result<Vec<(ValueId, Type)>, &'static str> {
         match self {
             Self::Semantic(semantic) => semantic.transport_values(binding),
+            Self::Execution => Err("execution transport requires its captured CFG state"),
             Self::DirectParameter { .. } => match (binding, expected) {
                 (SemanticValueBindingV1::Value { id, ty }, [expected]) if ty == expected => {
                     Ok(vec![(*id, ty.clone())])
@@ -800,6 +803,7 @@ impl SemanticPromotedTransportV1 {
             Self::Semantic(semantic) => {
                 semantic.binding_from_transport(types, semantic_type, values)
             }
+            Self::Execution => Err(execution_cfg_error_v29()),
             Self::DirectParameter { .. }
                 if values.len() == 1
                     && expected.len() == 1

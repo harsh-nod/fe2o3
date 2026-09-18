@@ -710,10 +710,6 @@ enum SemanticValueBindingV1 {
         view: usize,
     },
     Unmaterialized,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Producer issuance remains gated on source custody")
-    )]
     Execution(SemanticExecutionBindingV29),
     ExecutionBorrow(SemanticExecutionBorrowBindingV29),
     #[cfg_attr(

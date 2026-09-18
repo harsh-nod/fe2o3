@@ -20,6 +20,9 @@ struct ExecutionAvailabilityV29<'a> {
     seen: Vec<bool>,
     visited: Vec<bool>,
     block: Option<SsaBlockIdV1>,
+    cfg: ExecutionCfgV29<'a>,
+    #[cfg(test)]
+    entry_seeds: Vec<(u32, SemanticValueBindingV1)>,
 }
 
 fn execution_availability_error_v29() -> ProductionSemanticKirErrorV1 {
@@ -109,6 +112,13 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         current.resize(row.declaration().locals().len(), None);
         seen.resize(current.len(), false);
         visited.resize(row.declaration().blocks().len(), false);
+        let cfg = ExecutionCfgV29::new(
+            instances.owner().source_semantic().types(),
+            row.declaration(),
+            row.ssa(),
+            &occurrences,
+            budget,
+        )?;
         Ok(Self {
             ledger: budget.work_ledger_identity_v1(),
             instance,
@@ -121,6 +131,9 @@ impl<'a> ExecutionAvailabilityV29<'a> {
             seen,
             visited,
             block: None,
+            cfg,
+            #[cfg(test)]
+            entry_seeds: Vec::new(),
         })
     }
 
@@ -165,6 +178,12 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         }
         self.current.fill(None);
         self.seen.fill(false);
+        if block.get() == self.function.entry().index() {
+            for definition in self.ssa.plan().entry_definitions() {
+                budget.charge_work(1)?;
+                self.current[definition.variable().get() as usize] = Some(definition.value());
+            }
+        }
         // First resolved use/kill selects the incoming definition. A first
         // definition needs no incoming value. This is a view, not a CFG replay.
         for (_, event) in self

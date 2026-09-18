@@ -10220,6 +10220,8 @@ enum PlannedParameterLocalBindingV1 {
 }
 
 struct LoweredFunctionResultV1 {
+    #[cfg(test)]
+    execution_observation: Option<ExecutionTestObservationV29>,
     #[cfg_attr(
         not(test),
         expect(
@@ -10880,6 +10882,14 @@ fn lower_one_semantic_function_v1(
         target_blocks.push(block);
     }
     let emitted_operations = lowering.emitted_operations;
+    #[cfg(test)]
+    let execution_observation = lowering
+        .execution
+        .as_ref()
+        .map(|_| ExecutionTestObservationV29 {
+            locals: std::mem::take(&mut lowering.locals),
+            bindings: std::mem::take(&mut lowering.semantic_ssa_bindings),
+        });
     let borrowed_aggregate_fields = lowering.borrowed_aggregate_fields;
     let borrowed_aggregate_calls = lowering.borrowed_aggregate_calls;
     drop(lowering.emission_work.take());
@@ -10943,6 +10953,8 @@ fn lower_one_semantic_function_v1(
         .required_capabilities
         .extend(operation_capabilities.iter().cloned());
     Ok(LoweredFunctionResultV1 {
+        #[cfg(test)]
+        execution_observation,
         source_call_instance,
         private_arrays,
         function: lowered,
@@ -12601,6 +12613,8 @@ include!("production_semantic_kir_v1/semantic_ssa_plan_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 include!("production_execution_bindings_v1.rs");
 include!("production_execution_availability_v29.rs");
+include!("production_execution_cfg_shape_v29.rs");
+include!("production_execution_cfg_transport_v29.rs");
 include!("production_execution_transport_v1.rs");
 include!("production_call_destination_v1.rs");
 include!("production_semantic_kir_v1/dynamic_local_array_v1.rs");
@@ -12677,7 +12691,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     ) -> Result<SemanticBlockPrologueSpansV1, ProductionSemanticKirErrorV1> {
         if self.execution.is_some() {
             self.with_emission_budget_v1(|this, budget| {
-                this.execution.as_mut().unwrap().begin_block(block, budget)
+                let cursor = this.execution.as_mut().unwrap();
+                cursor.begin_block(block, budget)?;
+                cursor.enter_cfg(block, budget)
             })?;
         }
         self.private_arrays.begin_block(block, target.id)?;
@@ -12717,13 +12733,23 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     .locals
                     .get(*local as usize)
                     .and_then(Option::as_ref)
-                    .cloned()
                     .ok_or(ProductionSemanticKirErrorV1::MissingLocalDefinition {
                         function: self.semantic_function.index(),
                         block: block.index(),
                         statement: None,
                         local: *local,
                     })?;
+                let binding = if self.execution_cfg_local_v29(*local as usize) {
+                    let budget = self
+                        .emission_work
+                        .as_deref_mut()
+                        .ok_or(ArgumentResourceV1::Accounting)?;
+                    let binding = clone_execution_cfg_binding_v29(binding, &mut 0, budget)?;
+                    reserve_execution_cfg_archive_v29(self.semantic_ssa_bindings.len(), budget)?;
+                    binding
+                } else {
+                    binding.clone()
+                };
                 insert_semantic_ssa_binding_v1(
                     &mut self.semantic_ssa_bindings,
                     self.semantic_function.index(),
@@ -12746,16 +12772,48 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 enum_payload_storage,
             });
         }
-        let parameters = self
-            .block_parameters
-            .get(&block.index())
-            .cloned()
-            .ok_or_else(|| {
-                unsupported(0, Some(block.index()), None, "block parameters are missing")
+        let nominal_cfg = self
+            .execution
+            .as_ref()
+            .is_some_and(|cursor| cursor.cfg.has_nominal);
+        if nominal_cfg {
+            self.with_emission_budget_v1(|this, budget| {
+                charge_execution_cfg_lookup_v29(this.block_parameters.len(), budget)
             })?;
-        let mut entry_locals = parameters.keys().copied().collect::<BTreeSet<_>>();
+        }
+        let parameters = self.block_parameters.get(&block.index()).ok_or_else(|| {
+            unsupported(0, Some(block.index()), None, "block parameters are missing")
+        })?;
+        let parameters = if nominal_cfg {
+            let budget = self
+                .emission_work
+                .as_deref_mut()
+                .ok_or(ArgumentResourceV1::Accounting)?;
+            clone_execution_cfg_parameters_v29(parameters, budget)?
+        } else {
+            parameters.clone()
+        };
+        let mut entry_locals = BTreeSet::new();
+        for local in parameters.keys() {
+            if nominal_cfg {
+                self.with_emission_budget_v1(|this, budget| {
+                    reserve_execution_cfg_map_entry_v29::<u32, ()>(entry_locals.len(), budget)?;
+                    charge_execution_cfg_lookup_v29(this.control_flow_ssa.promoted.len(), budget)
+                })?;
+            }
+            entry_locals.insert(*local);
+        }
         for (local, parameters) in parameters {
             let promoted = &self.control_flow_ssa.promoted[&local];
+            if promoted.transport == SemanticPromotedTransportV1::Execution {
+                self.with_emission_budget_v1(|_, budget| {
+                    for value in parameters {
+                        borrowed_aggregate_push_shared_v1(&mut target.parameters, value, budget)?;
+                    }
+                    Ok(())
+                })?;
+                continue;
+            }
             let binding = promoted.transport.binding_from_transport(
                 self.types,
                 promoted.transport_semantic_type,
@@ -12794,10 +12852,26 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     .expect("block argument was just bound")
                     .clone(),
             )?;
-            target.parameters.extend(parameters);
+            if nominal_cfg {
+                self.with_emission_budget_v1(|_, budget| {
+                    for value in parameters {
+                        borrowed_aggregate_push_shared_v1(&mut target.parameters, value, budget)?;
+                    }
+                    Ok(())
+                })?;
+            } else {
+                target.parameters.extend(parameters);
+            }
         }
         for ((entry_block, local), value) in &self.control_flow_ssa.block_entry_values {
             if *entry_block != block.index() {
+                continue;
+            }
+            if self
+                .execution
+                .as_ref()
+                .is_some_and(|cursor| cursor.cfg.nominal_locals[*local as usize] != 0)
+            {
                 continue;
             }
             let binding = self
@@ -12813,8 +12887,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     )
                 })?;
             self.locals[*local as usize] = Some(binding);
+            if nominal_cfg {
+                let budget = self
+                    .emission_work
+                    .as_deref_mut()
+                    .ok_or(ArgumentResourceV1::Accounting)?;
+                reserve_execution_cfg_map_entry_v29::<u32, ()>(entry_locals.len(), budget)?;
+            }
             entry_locals.insert(*local);
         }
+        self.restore_execution_cfg_v29(block)?;
         let enum_first = target.operations.len();
         for local in entry_locals {
             self.refine_enum_payload_at_block_v1(block, local, target)?;
@@ -13191,25 +13273,64 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         watch: Option<(SemanticLocalIdV1, &[ValueDef])>,
     ) -> Result<(Vec<ValueId>, CallComponentSpanV1), ProductionSemanticKirErrorV1> {
         let mut arguments = Vec::new();
+        let nominal_cfg = self
+            .execution
+            .as_ref()
+            .is_some_and(|cursor| cursor.cfg.has_nominal);
+        if nominal_cfg {
+            self.with_emission_budget_v1(|this, budget| {
+                charge_execution_cfg_lookup_v29(
+                    this.control_flow_ssa.edge_arguments.len(),
+                    budget,
+                )?;
+                charge_execution_cfg_lookup_v29(
+                    this.control_flow_ssa.edge_definitions.len(),
+                    budget,
+                )?;
+                charge_execution_cfg_lookup_v29(this.control_flow_ssa.live_in.len(), budget)
+            })?;
+        }
         let planned = self
             .control_flow_ssa
             .edge_arguments
             .get(&(block.index(), edge_ordinal))
-            .cloned()
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let planned_locals = planned
+        let planned = if nominal_cfg {
+            clone_execution_cfg_arguments_v29(
+                planned,
+                self.emission_work
+                    .as_deref_mut()
+                    .ok_or(ArgumentResourceV1::Accounting)?,
+            )?
+        } else {
+            planned.clone()
+        };
+        if !planned
             .iter()
             .map(|argument| argument.variable().get())
-            .collect::<Vec<_>>();
-        if planned_locals.as_slice() != self.control_flow_ssa.live_in(target.index()) {
+            .eq(self
+                .control_flow_ssa
+                .live_in(target.index())
+                .iter()
+                .copied())
+        {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
         let definitions = self
             .control_flow_ssa
             .edge_definitions
             .get(&(block.index(), edge_ordinal))
-            .cloned()
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+        let definitions = if nominal_cfg {
+            clone_execution_cfg_arguments_v29(
+                definitions,
+                self.emission_work
+                    .as_deref_mut()
+                    .ok_or(ArgumentResourceV1::Accounting)?,
+            )?
+        } else {
+            definitions.clone()
+        };
         let watched = watch.and_then(|(local, result)| {
             definitions
                 .iter()
@@ -13217,6 +13338,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 .find(|definition| definition.variable().get() == local.index())
                 .map(|definition| (definition, result))
         });
+        if self.execution.is_some() {
+            self.with_emission_budget_v1(|this, budget| {
+                this.execution.as_ref().unwrap().check_cfg_edge_plan(
+                    block,
+                    edge_ordinal,
+                    target,
+                    &planned,
+                    &definitions,
+                    budget,
+                )
+            })?;
+        }
         let first = self.call_returns.components.rows.len();
         let mut captured = false;
         for definition in definitions {
@@ -13225,13 +13358,23 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 .locals
                 .get(local as usize)
                 .and_then(Option::as_ref)
-                .cloned()
                 .ok_or(ProductionSemanticKirErrorV1::MissingLocalDefinition {
                     function: self.semantic_function.index(),
                     block: block.index(),
                     statement: None,
                     local,
                 })?;
+            let binding = if self.execution_cfg_local_v29(local as usize) {
+                let budget = self
+                    .emission_work
+                    .as_deref_mut()
+                    .ok_or(ArgumentResourceV1::Accounting)?;
+                let binding = clone_execution_cfg_binding_v29(binding, &mut 0, budget)?;
+                reserve_execution_cfg_archive_v29(self.semantic_ssa_bindings.len(), budget)?;
+                binding
+            } else {
+                binding.clone()
+            };
             insert_semantic_ssa_binding_v1(
                 &mut self.semantic_ssa_bindings,
                 self.semantic_function.index(),
@@ -13241,9 +13384,57 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 binding,
             )?;
         }
+        if self.execution.is_some() {
+            self.with_emission_budget_v1(|this, budget| {
+                this.execution.as_mut().unwrap().transport_edge(
+                    block,
+                    edge_ordinal,
+                    target,
+                    &this.locals,
+                    &this.semantic_ssa_bindings,
+                    budget,
+                )
+            })?;
+        }
         for argument in planned {
             let local = argument.variable().get();
-            let (values, expected_count) = {
+            if nominal_cfg {
+                self.with_emission_budget_v1(|this, budget| {
+                    // Prepay repeated descriptor lookups, including each component.
+                    let size = this.control_flow_ssa.promoted.len();
+                    charge_execution_cfg_lookup_v29(size, budget)?;
+                    let count = argument_sum_v1(&[
+                        this.control_flow_ssa.promoted[&local].kernel_types.len(),
+                        4,
+                    ])?;
+                    budget.charge_work(argument_product_v1(
+                        count,
+                        argument_product_v1(size.checked_ilog2().unwrap_or(0) as usize + 2, 16)?,
+                    )?)
+                })?;
+            }
+            let nominal = self.control_flow_ssa.promoted[&local].transport
+                == SemanticPromotedTransportV1::Execution;
+            let (values, expected_count) = if nominal {
+                self.with_emission_budget_v1(|this, budget| {
+                    charge_execution_cfg_lookup_v29(this.semantic_ssa_bindings.len(), budget)?;
+                    let binding = this
+                        .semantic_ssa_bindings
+                        .get(&argument.value())
+                        .ok_or_else(execution_cfg_error_v29)?;
+                    with_execution_cfg_values_v29(binding, budget, |components, budget| {
+                        let mut values = borrowed_aggregate_vec_v1(components.len(), budget)?;
+                        for value in components {
+                            values
+                                .push((value.id, execution_cfg_clone_type_v29(&value.ty, budget)?));
+                        }
+                        Ok((
+                            values,
+                            this.control_flow_ssa.promoted[&local].kernel_types.len(),
+                        ))
+                    })
+                })?
+            } else {
                 let binding = self
                     .semantic_ssa_bindings
                     .get(&argument.value())
@@ -13279,8 +13470,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 captured = true;
             }
             for (component, (value, actual)) in values.into_iter().enumerate() {
-                let expected =
-                    self.control_flow_ssa.promoted[&local].kernel_types[component].clone();
+                let expected = if nominal {
+                    self.with_emission_budget_v1(|this, budget| {
+                        execution_cfg_clone_type_v29(
+                            &this.control_flow_ssa.promoted[&local].kernel_types[component],
+                            budget,
+                        )
+                    })?
+                } else {
+                    self.control_flow_ssa.promoted[&local].kernel_types[component].clone()
+                };
                 let anchor = if let Some((_, results)) = selected {
                     if value != results[component].id || actual != results[component].ty {
                         return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
@@ -13309,7 +13508,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 if let Some(anchor) = anchor {
                     self.call_returns.components.push(anchor)?;
                 }
-                arguments.push(value);
+                if nominal_cfg {
+                    self.with_emission_budget_v1(|_, budget| {
+                        borrowed_aggregate_push_shared_v1(&mut arguments, value, budget)
+                    })?;
+                } else {
+                    arguments.push(value);
+                }
             }
         }
         Ok((arguments, self.call_returns.component_span(first)?))
@@ -21887,7 +22092,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             ));
         }
         let index = self.require_local(block, statement, destination.local().index())?;
-        self.locals[index] = Some(value.clone());
+        self.locals[index] = Some(if self.execution_cfg_local_v29(index) {
+            self.with_emission_budget_v1(|_, budget| {
+                clone_execution_cfg_binding_v29(&value, &mut 0, budget)
+            })?
+        } else {
+            value.clone()
+        });
         if statement.is_some()
             && self
                 .control_flow_ssa
@@ -21901,6 +22112,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
             if self.execution.is_some() {
                 self.with_emission_budget_v1(|this, budget| {
+                    if this.execution_cfg_local_v29(index) {
+                        reserve_execution_cfg_archive_v29(
+                            this.semantic_ssa_bindings.len(),
+                            budget,
+                        )?;
+                    }
                     this.execution.as_mut().unwrap().define(
                         execution_site_v29(block, statement),
                         destination.local(),
@@ -21937,6 +22154,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             .contains_key(&place.local().index())
         {
             self.load_retained_local_v1(block, statement, place.local(), operations)?
+        } else if self.execution_cfg_local_v29(index) {
+            self.with_emission_budget_v1(|this, budget| {
+                let binding = this.locals[index]
+                    .as_ref()
+                    .ok_or_else(execution_cfg_error_v29)?;
+                clone_execution_cfg_binding_v29(binding, &mut 0, budget)
+            })?
         } else {
             self.locals[index].clone().ok_or(
                 ProductionSemanticKirErrorV1::MissingLocalDefinition {
@@ -22098,16 +22322,19 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     binding
                 }
                 (
-                    SemanticValueBindingV1::Aggregate(fields),
+                    SemanticValueBindingV1::Aggregate(mut fields),
                     SemanticProjectionKindV1::Field(field),
-                ) => fields.get(field as usize).cloned().ok_or_else(|| {
-                    unsupported(
-                        0,
-                        Some(block.index()),
-                        statement,
-                        "aggregate field projection is out of range",
-                    )
-                })?,
+                ) => {
+                    if field as usize >= fields.len() {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "aggregate field projection is out of range",
+                        ));
+                    }
+                    fields.swap_remove(field as usize)
+                }
                 (
                     SemanticValueBindingV1::Enum {
                         discriminant,
@@ -22190,7 +22417,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     SemanticProjectionKindV1::OpaqueCast | SemanticProjectionKindV1::Subtype,
                 ) => binding,
                 (
-                    SemanticValueBindingV1::Aggregate(fields),
+                    SemanticValueBindingV1::Aggregate(mut fields),
                     SemanticProjectionKindV1::ConstantIndex {
                         offset, from_end, ..
                     },
@@ -22208,17 +22435,15 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     } else {
                         Some(offset)
                     };
-                    index
-                        .and_then(|index| fields.get(index))
-                        .cloned()
-                        .ok_or_else(|| {
-                            unsupported(
-                                0,
-                                Some(block.index()),
-                                statement,
-                                "aggregate constant index is out of range",
-                            )
-                        })?
+                    let index = index.filter(|index| *index < fields.len()).ok_or_else(|| {
+                        unsupported(
+                            0,
+                            Some(block.index()),
+                            statement,
+                            "aggregate constant index is out of range",
+                        )
+                    })?;
+                    fields.swap_remove(index)
                 }
                 (
                     binding @ SemanticValueBindingV1::Aggregate(_),
