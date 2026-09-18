@@ -15,6 +15,11 @@ enum CallInstanceEmissionErrorV1 {
     MissingTerminator,
     ForeignBlock,
     ExecutionTransport,
+    CalleeFrameAllocation,
+    CalleeWorkgroupAllocation,
+    CalleeCollective,
+    CalleeOrderedContract,
+    CalleeInlineAssembly,
 }
 
 impl From<fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1>
@@ -228,6 +233,51 @@ fn call_splice_index_v1<'a>(
     Ok(CallSpliceIndexV1 { blocks, values })
 }
 
+// Allocation lifetimes, declaration identity and collective participation need
+// a checked source-instance relation before these callee occurrences can move.
+fn call_splice_check_callee_operation_v1(
+    kind: &OperationKind,
+) -> Result<(), CallInstanceEmissionErrorV1> {
+    use CallInstanceEmissionErrorV1 as Error;
+    use OperationKind as Op;
+    match kind {
+        Op::Execution(_) => Err(Error::ExecutionTransport),
+        Op::Alloca { .. } => Err(Error::CalleeFrameAllocation),
+        Op::WorkgroupMemory(_) => Err(Error::CalleeWorkgroupAllocation),
+        Op::Barrier(_)
+        | Op::WorkgroupBarrier(_)
+        | Op::Wave(_)
+        | Op::Matrix(_)
+        | Op::Gfx950LdsTranspose(_) => Err(Error::CalleeCollective),
+        Op::VerificationContract(_) => Err(Error::CalleeOrderedContract),
+        Op::InlineAssembly(_) => Err(Error::CalleeInlineAssembly),
+        Op::Intrinsic(intrinsic) => match intrinsic.kind {
+            fe2o3_kernel_ir::IntrinsicKind::InvocationIndex { .. }
+            | fe2o3_kernel_ir::IntrinsicKind::LaunchExtent { .. } => Ok(()),
+        },
+        Op::Constant(_)
+        | Op::MemoryIntrinsic(_)
+        | Op::Unary { .. }
+        | Op::Binary { .. }
+        | Op::Compare { .. }
+        | Op::Cast { .. }
+        | Op::Select { .. }
+        | Op::Call { .. }
+        | Op::SliceLength { .. }
+        | Op::SliceData { .. }
+        | Op::GetElementPointer { .. }
+        | Op::Load { .. }
+        | Op::GuardedLoad { .. }
+        | Op::GuardedStore { .. }
+        | Op::Store { .. }
+        | Op::Atomic(_)
+        | Op::Fence(_)
+        | Op::VectorLoad(_)
+        | Op::VectorStore(_)
+        | Op::VectorLayoutConvert(_) => Ok(()),
+    }
+}
+
 fn call_splice_check_body_v1(
     function: &Function,
     index: &CallSpliceIndexV1<'_>,
@@ -246,6 +296,9 @@ fn call_splice_check_body_v1(
     for block in &body.blocks {
         budget.charge_work(block.operations.len())?;
         for operation in &block.operations {
+            if callee {
+                call_splice_check_callee_operation_v1(&operation.kind)?;
+            }
             if let OperationKind::InlineAssembly(assembly) = &operation.kind {
                 budget.charge_work(assembly.operands.len())?;
             }
@@ -879,10 +932,10 @@ mod call_instance_emission_tests {
             let mut source = Module::new("frame_allocation");
             source.functions = vec![caller.clone(), callee.clone()];
             verify_module(&source).unwrap();
-            assert!(
-                run(caller, callee, site, continuation).is_err(),
-                "callee frame allocation cannot outlive its original call"
-            );
+            assert!(matches!(
+                run(caller, callee, site, continuation),
+                Err(CallInstanceEmissionErrorV1::CalleeFrameAllocation)
+            ));
         }
     }
 
@@ -939,16 +992,113 @@ mod call_instance_emission_tests {
             verify_module(&source).unwrap();
             let result = run(caller, callee, site, continuation);
             if in_callee {
-                assert!(
-                    result.is_err(),
-                    "callee workgroup allocation requires its original declaration identity"
-                );
+                assert!(matches!(
+                    result,
+                    Err(CallInstanceEmissionErrorV1::CalleeWorkgroupAllocation)
+                ));
             } else {
                 let mut module = Module::new("caller_workgroup_allocation");
                 module.functions.push(result.unwrap().caller);
                 verify_module(&module).unwrap();
             }
         }
+    }
+
+    #[test]
+    fn splice_requires_collective_occurrence_proof_but_preserves_local_effects() {
+        use fe2o3_kernel_ir::{
+            Barrier, BarrierSemantics, Convergence, Fence, IntrinsicOperation, MemoryOrdering,
+            SynchronizationScope, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
+        };
+        let scope = SynchronizationScope::Workgroup;
+        let semantics =
+            BarrierSemantics::new(MemoryOrdering::AcquireRelease, [AddressSpace::Workgroup]);
+        for (kind, ty, collective) in [
+            (
+                OperationKind::Barrier(Barrier {
+                    execution_scope: scope,
+                    memory_scope: scope,
+                    semantics: semantics.clone(),
+                }),
+                None,
+                true,
+            ),
+            (
+                OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+                    memory_scope: scope,
+                    semantics: semantics.clone(),
+                    convergence: Convergence::uniform(scope),
+                }),
+                None,
+                true,
+            ),
+            (
+                OperationKind::Wave(WaveOperation::full(
+                    WaveOperationKind::LaneId,
+                    WaveWidth::Wave64,
+                )),
+                Some(Type::Scalar(ScalarType::U32)),
+                true,
+            ),
+            (
+                OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+                Some(Type::INDEX),
+                false,
+            ),
+            (
+                OperationKind::Fence(Fence {
+                    memory_scope: scope,
+                    semantics,
+                }),
+                None,
+                false,
+            ),
+        ] {
+            let (caller, mut callee, site, continuation) = fixture();
+            let results = ty
+                .map(|ty| vec![ValueDef::new(ValueId(103), ty)])
+                .unwrap_or_default();
+            callee.body.as_mut().unwrap().blocks[0]
+                .operations
+                .push(Operation::new(results, kind));
+            let mut source = Module::new("call_effects");
+            source.functions = vec![caller.clone(), callee.clone()];
+            verify_module(&source).unwrap();
+            let result = run(caller, callee, site, continuation);
+            if collective {
+                assert!(matches!(
+                    result,
+                    Err(CallInstanceEmissionErrorV1::CalleeCollective)
+                ));
+            } else {
+                let mut module = Module::new("local_effects");
+                module.functions.push(result.unwrap().caller);
+                verify_module(&module).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn splice_preserves_nested_retained_calls() {
+        let (caller, mut callee, site, continuation) = fixture();
+        let mut nested = callee.clone();
+        nested.id = FunctionId::new("nested");
+        callee.body.as_mut().unwrap().blocks[0]
+            .operations
+            .push(Operation::effect_free(
+                ValueDef::new(ValueId(103), Type::Scalar(ScalarType::U32)),
+                OperationKind::Call {
+                    callee: nested.id.clone(),
+                    arguments: vec![ValueId(100), ValueId(101)],
+                },
+            ));
+        let mut source = Module::new("nested_source");
+        source.functions = vec![caller.clone(), callee.clone(), nested.clone()];
+        verify_module(&source).unwrap();
+        let result = run(caller, callee, site, continuation).unwrap();
+        let mut module = Module::new("nested_result");
+        module.functions = vec![result.caller, nested];
+        verify_module(&module).unwrap();
     }
 
     #[test]
