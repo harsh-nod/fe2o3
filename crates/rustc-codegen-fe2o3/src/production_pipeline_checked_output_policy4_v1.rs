@@ -1,5 +1,7 @@
 //! Native checked-output custody. Not the legacy default or a publication path.
 
+#[cfg(test)]
+use super::checked_output_progress_v1 as timing;
 use super::*;
 use fe2o3_amd_target::ProductionAmdTargetProfileV1 as Profile;
 use fe2o3_kernel_ir::{
@@ -129,94 +131,26 @@ pub(crate) fn prepare_checked_output_artifacts_v1(
     ),
     ProductionPipelineError,
 > {
-    budget.charge_work(4).map_err(resource)?;
-    let floor = budget.storage();
-    let ledger = budget.work_ledger_identity_v1();
-    let slot = budget as *const Budget<'_> as usize;
-    if floor
-        < admitted
-            .retained_input_storage_floor_v1()
-            .map_err(admission)?
-    {
-        return Err(resource(Resource::Accounting));
-    }
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let semantic = *admitted
-            .source_semantic_kir()
-            .semantic()
-            .semantic()
-            .semantic_sha256()
-            .as_bytes();
-        // General admission currently excludes every Execution/catalog operation.
-        // Native replay independently rejects an unmatched actual O marker.
-        let (catalog, catalog_storage) = Catalog::from_rows_with_budget(semantic, &[], &[], budget)
-            .map_err(|e| {
-                ProductionPipelineError::CheckedOutputStage(CheckedOutputStageErrorV1::Catalog(e))
-            })?;
-        budget
-            .reserve_storage(catalog_storage.retained_storage())
-            .map_err(resource)?;
-        let text = dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES;
-        let descriptor = fe2o3_kernel_descriptor::MAX_DESCRIPTOR_TABLE_BYTES;
-        let prepaid = text
-            .checked_mul(3)
-            .and_then(|n| descriptor.checked_mul(2).and_then(|d| n.checked_add(d)))
-            .and_then(|n| n.checked_add(std::mem::size_of::<PreparedCheckedOutputArtifactsV1>()))
-            .ok_or_else(|| resource(Resource::Arithmetic))?;
-        budget.reserve_storage(prepaid).map_err(resource)?;
-        let native = match profile {
-            Profile::Gfx942 => dialect_amdgcn::lower_canonical_v12_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(admitted.output()),
-            Profile::Gfx950 => dialect_amdgcn::lower_canonical_v12_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(admitted.output()),
-        }.map_err(ProductionPipelineError::TargetLowering)?;
-        let llvm_ir = dialect_amdgcn::bind_production_llvm22_worker_layout_v1(&native)
-            .map_err(ProductionPipelineError::UpstreamLlvmLayoutBinding)?;
-        drop(native);
-        let target = fe2o3_compiler_ffi::DeviceTargetV1::parse(profile.device_target())
-            .expect("closed production profile");
-        let prepared =
-            crate::production_worker_handoff::prepare_checked_output_policy4_worker_handoff(
-                &admitted,
-                &catalog,
-                target,
-                llvm_ir,
-                typed_roots,
-                source_envelope,
-                budget,
-            )
-            .map_err(ProductionPipelineError::WorkerHandoff)?;
-        let workgroups = exact_target_workgroup_roster_v1(admitted.output().module())?;
-        let retained = catalog_storage
-            .retained_storage()
-            .checked_add(text)
-            .and_then(|n| n.checked_add(descriptor))
-            .and_then(|n| n.checked_add(std::mem::size_of::<PreparedCheckedOutputArtifactsV1>()))
-            .ok_or_else(|| resource(Resource::Arithmetic))?;
-        Ok((
-            PreparedCheckedOutputArtifactsV1 {
-                admitted,
-                catalog,
-                prepared,
-                workgroups,
-            },
-            CheckedOutputArtifactsStorageV1(retained),
-        ))
-    }));
-    if ledger != budget.work_ledger_identity_v1() || slot != budget as *const Budget<'_> as usize {
-        drop(result);
-        return Err(resource(Resource::Accounting));
-    }
-    let Some(extra) = budget.storage().checked_sub(floor) else {
-        drop(result);
-        return Err(resource(Resource::Accounting));
+    use super::checked_output_artifacts_v1::{
+        CheckedArtifactsOwnerRefV1, prepare_checked_artifact_parts_v1,
     };
-    if let Err(error) = budget.release_storage(extra) {
-        drop(result);
-        return Err(resource(error));
-    }
-    match result {
-        Ok(result) => result,
-        Err(payload) => std::panic::resume_unwind(payload),
-    }
+    let (parts, retained) = prepare_checked_artifact_parts_v1(
+        CheckedArtifactsOwnerRefV1::Direct(&admitted),
+        profile,
+        typed_roots,
+        source_envelope,
+        std::mem::size_of::<PreparedCheckedOutputArtifactsV1>(),
+        budget,
+    )?;
+    Ok((
+        PreparedCheckedOutputArtifactsV1 {
+            admitted,
+            catalog: parts.catalog,
+            prepared: parts.prepared,
+            workgroups: parts.workgroups,
+        },
+        CheckedOutputArtifactsStorageV1(retained),
+    ))
 }
 
 /// Private pipeline stage retaining the authenticated roster and collector
@@ -262,6 +196,8 @@ impl RankedVerifiedProductionCompilation {
             .unit_local_source_storage_floor_v1()
             .map_err(ProductionPipelineError::TargetNeutralLowering)?;
         budget.reserve_storage(retained).map_err(resource)?;
+        #[cfg(test)]
+        let phase = timing::begin(timing::Route::Direct, timing::Phase::TargetBindAndAdmit);
         let binding = dialect_amdgcn::bind_production_target_v1(
             ranked.materialized().executable().module(),
             profile,
@@ -278,6 +214,10 @@ impl RankedVerifiedProductionCompilation {
             .reserve_storage(bound_storage.retained_storage())
             .map_err(resource)?;
         drop(binding);
+        #[cfg(test)]
+        phase.complete();
+        #[cfg(test)]
+        let phase = timing::begin(timing::Route::Direct, timing::Phase::Optimizer);
         let checked =
             fe2o3_kernel_opt::optimize_checked_canonical_kernel_ir_policy4_v1(&bound, &mut budget)
                 .map_err(|e| {
@@ -289,18 +229,28 @@ impl RankedVerifiedProductionCompilation {
             .reserve_storage(checked.retained_storage())
             .map_err(resource)?;
         #[cfg(test)]
+        phase.complete();
+        #[cfg(test)]
         snapshots::observe(
             &bound,
             checked.intermediate_policy3().owner(),
             checked.owner(),
         );
+        #[cfg(test)]
+        let phase = timing::begin(timing::Route::Direct, timing::Phase::RankedSourceReplay);
         let (receipt, ranked_verification) = ranked
             .into_verified_roster_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?
             .into_module_verified_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?;
+        #[cfg(test)]
+        phase.complete();
+        #[cfg(test)]
+        let phase = timing::begin(timing::Route::Direct, timing::Phase::FinalAdmission);
         let admitted =
             Admitted::try_admit_v1(receipt, bound, checked, &mut budget).map_err(admission)?;
+        #[cfg(test)]
+        phase.complete();
         let (artifacts, storage) = prepare_checked_output_artifacts_v1(
             admitted,
             profile,

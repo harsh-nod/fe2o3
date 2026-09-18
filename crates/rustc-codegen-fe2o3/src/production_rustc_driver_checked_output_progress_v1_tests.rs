@@ -1,8 +1,11 @@
 //! Test-only callback timings. No phase observation is admission authority.
 use super::SourceStage;
+use crate::production_pipeline::checked_output_progress_v1 as subphases;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::Instant;
 
 pub(super) const CHILD_PROGRESS: &str = "FE2O3_TEST_CHECKED_OUTPUT_PROGRESS_V1";
@@ -20,12 +23,38 @@ struct PhaseTiming {
     stage: SourceStage,
     outcome: Outcome,
     elapsed_millis: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    policy4: Option<Policy4Progress>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct ActivePhase {
     stage: SourceStage,
     started_millis: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    policy4: Option<Policy4Progress>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Policy4Progress {
+    route: subphases::Route,
+    active: Option<ActiveSubphase>,
+    phases: Vec<SubphaseTiming>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    unavailable: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ActiveSubphase {
+    phase: subphases::Phase,
+    started_millis: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct SubphaseTiming {
+    phase: subphases::Phase,
+    outcome: subphases::PhaseOutcome,
+    elapsed_millis: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -38,6 +67,10 @@ pub(super) struct Snapshot {
 }
 
 pub(super) struct CallbackProgress {
+    state: Arc<Mutex<ProgressState>>,
+}
+
+struct ProgressState {
     started: Instant,
     active_started: Option<Instant>,
     path: Option<PathBuf>,
@@ -68,16 +101,18 @@ fn external_path(path: &Path, workspace: &Path) -> Result<PathBuf, String> {
 impl CallbackProgress {
     fn new(path: Option<PathBuf>) -> Self {
         Self {
-            started: Instant::now(),
-            active_started: None,
-            path,
-            snapshot: Snapshot {
-                schema: "fe2o3-test-callback-progress-v1".to_owned(),
-                elapsed_millis: 0,
-                outcome: None,
-                active: None,
-                phases: Vec::new(),
-            },
+            state: Arc::new(Mutex::new(ProgressState {
+                started: Instant::now(),
+                active_started: None,
+                path,
+                snapshot: Snapshot {
+                    schema: "fe2o3-test-callback-progress-v1".to_owned(),
+                    elapsed_millis: 0,
+                    outcome: None,
+                    active: None,
+                    phases: Vec::new(),
+                },
+            })),
         }
     }
 
@@ -96,11 +131,69 @@ impl CallbackProgress {
     }
 
     pub(super) fn begin(&mut self, stage: SourceStage) {
+        self.state().begin(stage);
+    }
+
+    pub(super) fn end(&mut self, outcome: Outcome) {
+        self.state().end(outcome);
+    }
+
+    pub(super) fn finish(&mut self, outcome: Outcome) {
+        self.state().finish(outcome);
+    }
+
+    fn state(&self) -> MutexGuard<'_, ProgressState> {
+        self.state.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    pub(super) fn run<T, E>(
+        &mut self,
+        stage: SourceStage,
+        action: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, E> {
+        self.begin(stage);
+        let state = self.state.clone();
+        let observed = || {
+            if stage == SourceStage::Policy4 {
+                subphases::with_sink(
+                    Rc::new(move |event| match state.try_lock() {
+                        Ok(mut state) => state.policy4_event(event),
+                        Err(TryLockError::Poisoned(error)) => {
+                            error.into_inner().policy4_event(event)
+                        }
+                        Err(TryLockError::WouldBlock) => {}
+                    }),
+                    action,
+                )
+            } else {
+                action()
+            }
+        };
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(observed)) {
+            Ok(result) => {
+                self.end(if result.is_ok() {
+                    Outcome::Complete
+                } else {
+                    Outcome::Refused
+                });
+                result
+            }
+            Err(panic) => {
+                self.end(Outcome::Panicked);
+                std::panic::resume_unwind(panic)
+            }
+        }
+    }
+}
+
+impl ProgressState {
+    fn begin(&mut self, stage: SourceStage) {
         debug_assert!(self.snapshot.active.is_none());
         self.snapshot.elapsed_millis = elapsed_millis(self.started);
         self.snapshot.active = Some(ActivePhase {
             stage,
             started_millis: self.snapshot.elapsed_millis,
+            policy4: None,
         });
         self.snapshot.outcome = None;
         self.persist();
@@ -117,36 +210,70 @@ impl CallbackProgress {
             stage: active.stage,
             outcome,
             elapsed_millis: elapsed,
+            policy4: active.policy4,
         });
         self.snapshot.elapsed_millis = elapsed_millis(self.started);
         self.persist();
     }
 
-    pub(super) fn run<T, E>(
-        &mut self,
-        stage: SourceStage,
-        action: impl FnOnce() -> Result<T, E>,
-    ) -> Result<T, E> {
-        self.begin(stage);
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(action)) {
-            Ok(result) => {
-                self.end(if result.is_ok() {
-                    Outcome::Complete
-                } else {
-                    Outcome::Refused
-                });
-                result
-            }
-            Err(panic) => {
-                self.end(Outcome::Panicked);
-                std::panic::resume_unwind(panic)
-            }
-        }
-    }
-
     pub(super) fn finish(&mut self, outcome: Outcome) {
         self.end(outcome);
         self.snapshot.outcome = Some(outcome);
+        self.snapshot.elapsed_millis = elapsed_millis(self.started);
+        self.persist();
+    }
+
+    fn policy4_event(&mut self, event: subphases::Event) {
+        let Some(active) = self.snapshot.active.as_mut() else {
+            return;
+        };
+        if active.stage != SourceStage::Policy4 {
+            return;
+        }
+        let (route, phase) = match event {
+            subphases::Event::Started { route, phase }
+            | subphases::Event::Finished { route, phase, .. } => (route, phase),
+        };
+        let detail = active.policy4.get_or_insert_with(|| Policy4Progress {
+            route,
+            active: None,
+            phases: Vec::new(),
+            unavailable: None,
+        });
+        if detail.unavailable.is_some() {
+            return;
+        }
+        let ordered =
+            detail.route == route && route.phases().get(detail.phases.len()) == Some(&phase);
+        match event {
+            subphases::Event::Started { .. } if ordered && detail.active.is_none() => {
+                detail.active = Some(ActiveSubphase {
+                    phase,
+                    started_millis: elapsed_millis(self.started),
+                });
+            }
+            subphases::Event::Finished {
+                outcome,
+                elapsed_millis,
+                ..
+            } if ordered
+                && detail
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.phase == phase) =>
+            {
+                detail.active = None;
+                detail.phases.push(SubphaseTiming {
+                    phase,
+                    outcome,
+                    elapsed_millis,
+                });
+            }
+            _ => {
+                // Closed per-parent sequence: never grow beyond its five rows.
+                detail.unavailable = Some("unexpected Policy4 diagnostic sequence".to_owned());
+            }
+        }
         self.snapshot.elapsed_millis = elapsed_millis(self.started);
         self.persist();
     }
@@ -197,22 +324,32 @@ fn callback_progress_records_success_refusal_and_preserves_results() {
         Err(23)
     );
     progress.finish(Outcome::Refused);
-    assert_eq!(progress.snapshot.phases.len(), 2);
+    assert_eq!(progress.state().snapshot.phases.len(), 2);
     assert_eq!(
-        progress.snapshot.phases[0].stage,
+        progress.state().snapshot.phases[0].stage,
         SourceStage::SourceCollection
     );
-    assert_eq!(progress.snapshot.phases[0].outcome, Outcome::Complete);
-    assert_eq!(progress.snapshot.phases[1].stage, SourceStage::RankedChecks);
-    assert_eq!(progress.snapshot.phases[1].outcome, Outcome::Refused);
-    assert!(progress.snapshot.active.is_none());
-    assert_eq!(progress.snapshot.outcome, Some(Outcome::Refused));
+    assert_eq!(
+        progress.state().snapshot.phases[0].outcome,
+        Outcome::Complete
+    );
+    assert_eq!(
+        progress.state().snapshot.phases[1].stage,
+        SourceStage::RankedChecks
+    );
+    assert_eq!(
+        progress.state().snapshot.phases[1].outcome,
+        Outcome::Refused
+    );
+    assert!(progress.state().snapshot.active.is_none());
+    assert_eq!(progress.state().snapshot.outcome, Some(Outcome::Refused));
+    let state = progress.state();
     assert!(
-        progress
+        state
             .snapshot
             .phases
             .iter()
-            .all(|p| p.elapsed_millis <= progress.snapshot.elapsed_millis)
+            .all(|p| { p.elapsed_millis <= state.snapshot.elapsed_millis })
     );
 }
 
@@ -225,10 +362,16 @@ fn callback_progress_keeps_original_panic_and_exact_active_phase() {
     .unwrap_err();
     assert_eq!(panic.downcast_ref::<&str>(), Some(&"original phase panic"));
     progress.finish(Outcome::Panicked);
-    assert_eq!(progress.snapshot.phases.len(), 1);
-    assert_eq!(progress.snapshot.phases[0].stage, SourceStage::Policy4);
-    assert_eq!(progress.snapshot.phases[0].outcome, Outcome::Panicked);
-    assert!(progress.snapshot.active.is_none());
+    assert_eq!(progress.state().snapshot.phases.len(), 1);
+    assert_eq!(
+        progress.state().snapshot.phases[0].stage,
+        SourceStage::Policy4
+    );
+    assert_eq!(
+        progress.state().snapshot.phases[0].outcome,
+        Outcome::Panicked
+    );
+    assert!(progress.state().snapshot.active.is_none());
 }
 
 #[test]
@@ -268,7 +411,10 @@ fn callback_progress_io_failure_does_not_change_the_compiler_result() {
         progress.run(SourceStage::Policy4, || Err::<(), _>(41)),
         Err(41)
     );
-    assert_eq!(progress.snapshot.phases[0].outcome, Outcome::Refused);
+    assert_eq!(
+        progress.state().snapshot.phases[0].outcome,
+        Outcome::Refused
+    );
 }
 
 #[test]
@@ -310,3 +456,6 @@ fn standalone_callback_drops_only_jobserver_variables() {
         ]
     );
 }
+
+#[path = "production_rustc_driver_checked_output_subphase_progress_v1_tests.rs"]
+mod subphase_tests;

@@ -9,6 +9,7 @@ mod analysis_multi_split_v1;
 mod canonical_assertion_facts_v1;
 mod materialized_callable_effect_v1;
 mod ranked_projection_source_v1;
+mod scalar_singleton_projection_v1;
 mod slice_projection_v1;
 use slice_projection_v1::ProjectedViewsV1;
 
@@ -16,6 +17,7 @@ use slice_projection_v1::ProjectedViewsV1;
 pub(crate) use tests::{
     with_backend_checked_output_policy3_roster_v1, with_backend_checked_output_policy3_v1,
     with_backend_checked_output_policy4_owned_v1, with_backend_checked_output_policy4_v1,
+    with_backend_erased_bound_v1,
 };
 
 use analysis_multi_split_v1::{
@@ -106,6 +108,9 @@ use fe2o3_pliron::{
 
 #[path = "production_ranked_projection_v1/exclusive_owner_carrier_v1.rs"]
 mod exclusive_owner_carrier_v1;
+
+#[path = "production_ranked_unit_local_source_v1.rs"]
+mod unit_local_source_v1;
 
 const ROOT_NAME_V1: &str = "semantic_safety_module";
 // Leave one operation for the ranked function terminator.
@@ -1030,6 +1035,7 @@ pub(crate) enum ProductionRankedVerificationErrorV1 {
     SemanticSsa(ProductionSemanticSsaErrorV1),
     SemanticU32Induction(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     Custody(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
+    ErasedSource(fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1),
     MiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV5),
     SemanticContract(fe2o3_pliron::ProductionMirPlironSemanticContractDerivationErrorV1),
     ParallelContract(fe2o3_pliron::ProductionParallelReferenceContractErrorV1),
@@ -1056,6 +1062,7 @@ impl fmt::Display for ProductionRankedVerificationErrorV1 {
                 write!(formatter, "ranked roster induction custody failed: {error}")
             }
             Self::Custody(error) => write!(formatter, "ranked proof custody failed: {error}"),
+            Self::ErasedSource(error) => write!(formatter, "erased source custody failed: {error}"),
             Self::MiddleEndEvidence(error) => error.fmt(formatter),
             Self::SemanticContract(error) => {
                 write!(
@@ -1084,6 +1091,7 @@ impl std::error::Error for ProductionRankedVerificationErrorV1 {
             Self::SemanticSsa(error) => Some(error),
             Self::SemanticU32Induction(error) => Some(error),
             Self::Custody(error) => Some(error),
+            Self::ErasedSource(error) => Some(error),
             Self::MiddleEndEvidence(error) => Some(error),
             Self::SemanticContract(error) => Some(error),
             Self::ParallelContract(error) => Some(error),
@@ -1522,38 +1530,9 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
         let mut lowering_roots = Vec::with_capacity(source_order_roots.len());
         let mut verification_roots = Vec::with_capacity(source_order_roots.len());
         for root in source_order_roots.into_vec() {
-            let ProductionRankedVerifiedRootCandidateV1 {
-                logical_name,
-                export_symbol,
-                semantic_root,
-                semantic_root_identity,
-                kernel_binding,
-                source_rank,
-                lowering,
-                ranked_ir,
-                access_sources,
-                executable_effect_sources,
-                verification,
-            } = root;
-            lowering_roots.push(
-                fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionRootV1::new(
-                    semantic_root,
-                    source_rank,
-                    lowering,
-                    ranked_ir,
-                    access_sources,
-                    executable_effect_sources,
-                ),
-            );
-            verification_roots.push(AuthenticatedRankedVerificationRootV1 {
-                logical_name,
-                export_symbol,
-                semantic_root,
-                semantic_root_identity,
-                kernel_binding,
-                source_rank,
-                verification,
-            });
+            let (source, verified) = root.into_source_and_verification_v1();
+            lowering_roots.push(source);
+            verification_roots.push(verified);
         }
         validate_unit_local_ranked_stage_v1(&materialized, &lowering_roots)?;
         let receipt = ProductionMaterializedRankedModuleReceiptV1::from_unvalidated_projection_roster_candidate(
@@ -3204,6 +3183,42 @@ fn project_and_verify_ranked_root_v1(
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
+    let function = semantic
+        .functions()
+        .get(selection.body().index() as usize)
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "an out-of-range semantic kernel body",
+        ))?;
+    scalar_singleton_projection_v1::with_scalar_private_singletons_v1(
+        semantic.types(),
+        function,
+        assertion_facts,
+        |singletons, facts| {
+            project_and_verify_ranked_root_with_singletons_v1(
+                semantic,
+                callable_effects,
+                selection,
+                input,
+                source_root,
+                reference_bindings,
+                facts,
+                singletons,
+            )
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_and_verify_ranked_root_with_singletons_v1(
+    semantic: &AdmittedInertSemanticMirV1,
+    callable_effects: &DefinedCallableEmptyEffectSummariesV1,
+    selection: SemanticKernelBodySelectionV1,
+    input: &ProductionRankedRootInputV1,
+    source_root: ProductionSourceLaunchRootV1,
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    assertion_facts: &mut impl ProjectedAssertionFactsV1,
+    singletons: &[u8],
+) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     let logical_name = input.logical_name.as_str();
     let source_launch = &input.source_launch;
     let semantic_u32_induction =
@@ -3280,7 +3295,8 @@ fn project_and_verify_ranked_root_v1(
         Some(values)
     };
     let mut incomplete = None;
-    let mut projected_views = ProjectedViewsV1::new(function.locals().len(), Some(assertion_facts));
+    let mut projected_views = ProjectedViewsV1::new(function.locals().len(), Some(assertion_facts))
+        .with_scalar_private_singletons(singletons);
     let mut discarded_ir = String::new();
     let intrinsic = project_intrinsic_contracts(
         semantic.callables(),
@@ -24085,6 +24101,17 @@ fn project_place_access_with_atomic(
                 "a dereferenced memory access without a ranked index projection",
             ));
         }
+        shape.push(1);
+        indices.push(ProjectedIndexV1::Constant(0));
+    }
+    if indices.is_empty()
+        && requirement == PlaceAccessRequirementV1::ExplicitMemory
+        && atomic.is_none()
+        && place.projections().is_empty()
+        && place.ty() == local.ty()
+        && !local.role().is_entry_argument()
+        && projected_views.scalar_private_singleton(place.local())?
+    {
         shape.push(1);
         indices.push(ProjectedIndexV1::Constant(0));
     }

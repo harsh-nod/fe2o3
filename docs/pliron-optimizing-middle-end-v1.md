@@ -261,9 +261,15 @@ optional observation stay unobserved, not retroactively counted as zero.
 The corpus prints an external `callback-progress.json` path before each child
 invocation. Its atomically replaced snapshot identifies the active compiler
 phase and records monotonic durations for completed calls; the final report
-retains these timings before temporary files are removed. Policy4 is one opaque
-timed call containing B/C/O checks, so its refusal alone does not identify the
-failed endpoint. Instrumentation I/O failures are diagnostic-only and cannot
+retains these timings before temporary files are removed. Policy4 additionally
+records bounded nested phases for target binding/B admission, the fixed optimizer,
+ranked/source replay, final admission and actual-O artifact preparation. The
+Direct and silent-Unit Erased routes retain their actual phase orders; the
+Erased ranked/source phase includes E production and checked N/E replay.
+Active subphases are published before work, with completed, refused or panicked
+outcomes afterward. Historical JSON without these optional rows stays
+unobserved. This locates the running API boundary, not a proof of which internal
+B/C/O assertion failed. Instrumentation I/O failures are diagnostic-only and cannot
 change the compiler result or the all-case acceptance gate. Captured jobserver
 variables are removed only when replaying the standalone child, whose inherited
 file descriptors are no longer valid.
@@ -274,6 +280,10 @@ B/C/O canonical bytes, full graph dumps and identity metadata there before
 admission. Each case is capped at 30 MiB plus 16 KiB of metadata; incomplete
 endpoints are marked unavailable, not emitted as truncated complete graphs.
 Graph capture is off by default and adds I/O to Policy4 timing when enabled.
+Nested optimizer timing ends before snapshot I/O. Setup, receipt adoption and
+diagnostic overhead remain in the enclosing Policy4 duration, so nested times
+need not sum to that duration. Observation is test-only and does not select a
+pass policy or change canonical work/storage limits.
 These snapshots are diagnostics, not proof receipts or artifact authority, and
 do not by themselves identify which endpoint's formal check failed.
 
@@ -335,11 +345,79 @@ effects.
 
 The backend invokes this scoped check after authenticated ranked-roster replay,
 before the existing materialized-receipt constructor. The callback retains no
-approval token or executable owner. The RawEmpty route is unchanged; UnitLocal
-still encounters `LocalHelperSourceConsumerUnavailable` at the materialized
-ranked-receipt boundary until the downstream private-effect consumers exist.
-This stage does not establish helper termination, call purity, optimized B/C/O
-private-memory safety, or executable support for local-memory helpers.
+approval token or executable owner. The historical RawEmpty route is unchanged;
+UnitLocal still encounters `LocalHelperSourceConsumerUnavailable` at that
+materialized ranked-receipt boundary. This stage alone does not establish helper
+termination, call purity, or optimized B/C/O private-memory safety.
+
+A separate checked silent-Unit route retains original source/N and constructs a
+distinct erased graph E before target-bound B, checked Policy3 C and Policy4 O:
+
+```text
+original source -> N -- exact silent-Unit deletion --> E -> B -> C -> O
+                  |                                  |         |
+                  +-- retained source/ranked custody -+---------+
+```
+
+The deletion rule requires a no-argument, non-unwinding direct Rust helper with
+an actual Unit return. It freshly checks the same-owner source relation and
+initialized, bounded private-memory chain, a closed total operation grammar,
+acyclic selected control and exactly one Unit return. Assertions must have an
+independently known successful outcome; only their exact inactive trap sinks
+may remain outside that path. The admitted source values are Unit and the
+existing Bool/unsigned 8/16/32/64-bit scalar recipes, with the corresponding
+64-bit Index representation. Nested or external calls, recursion, floating-point
+or partial arithmetic, volatile/atomic effects, escaping memory and arbitrary
+zero-sized return types do not satisfy this rule. It is not a target stack-frame
+feasibility theorem or general local-helper termination analysis.
+
+N retains all original private allocations, loads, stores and call occurrences.
+The exact N/E checker permits deletion only of the certified zero-operand,
+zero-result calls and their certified local helper bodies after checking every
+remaining reference. Other functions, operation order, CFG edges and arguments,
+kernel metadata and root effects must survive unchanged. Shared physical helpers
+are removed once while their source-root associations remain distinct. Calls are
+not reclassified as pure or `CompleteEmpty`, and retained RawEmpty helpers are
+not deleted by this rule.
+
+`ProductionUnitLocalErasedSourceOwnerV1` keeps original source/N, the complete
+ranked roots, actual E and their receipts together. Its consuming boundaries
+freshly reconstruct original N and assertion origins, then replay ranked
+correspondence, silence and exact deletion. A separate typed native validator
+recompiles the complete ordered original-N ranked candidates with their effect
+receipts and rederives aggregate subjects. It independently admits and checks
+the supplied E candidate; neither serialized coordinates nor the producer's
+filter provide deletion authority.
+
+`ProductionUnitLocalErasedCheckedOutputOwnerPolicy4V1` additionally checks actual
+E/B coordinates, B/C history and independent C/O replay. All original source
+functions still pass source-role and grammar checks. Fresh scoped N/E maps
+classify each original operation, block and assertion as retained or explicitly
+deleted; retained private lifetime sites and assertion polarity/success edges
+continue through the existing B/C checks. Deleted helper assertions grant no
+surviving trap permission. Actual B/C/O retain their required native,
+private-memory, division and retained-helper censuses; C and O use freshly
+extracted formal-memory obligations.
+
+The explicit backend method `lower_silent_unit_checked_output_policy4_v1`
+consumes the authenticated original ranked roster, preserves collector bindings,
+binds E to the target and prepares LLVM and descriptors from actual O. Original
+semantic and launch identities remain the source evidence. Descriptor and native
+text replay check the exact actual-O obligations, target and workgroup roster.
+This is not default activation or protected publication: the historical direct
+constructor still refuses UnitLocal, extraction still requires extraction-only
+custody, and the typed N/E proof-to-protected-native consuming join remains open.
+
+The ranked projector also represents eligible whole scalar-private root loads
+and stores as one-element private views at index zero. A paid per-function
+census excludes arguments, nonscalar storage, every projected use, borrows,
+address-taking, volatile/atomic accesses and deinitialization. The original
+loads and stores remain in N/E; the existing retained-slot translation and
+final-output checks still establish their source relation and initialization.
+This bounds representation does not supply memory values or reference-effect
+proofs. Private writes in the reference-effect lane retain their existing
+unmodeled-write refusal. Tests cover one/two roots, both assertion polarities,
+actual-O forwarding/native replay, hostile eligibility and exact resource limits.
 
 New call indexes, coverage buffers and actual capacities are charged to the
 existing work/storage ledger; borrowed ranked graphs and legacy translation
@@ -349,6 +427,31 @@ and layout mutations, entry synchronization mismatch, foreign inventories,
 callback accounting and exact/one-short resource limits. These component and
 normal-projector prefix tests do not replace execution of the authenticated
 ranked roster with the approved Verus runtime.
+
+The erased route separately meters candidate/E overlap, retained maps and actual
+container capacities; its returned additional receipts do not replace the
+caller's original source/ranked/B/C/O reservations. Existing translation,
+formal, descriptor and native engine allocation domains keep their stated
+limits; these are not whole-compiler heap/RSS receipts. Semantic-source and
+normal-projector component tests cover shared roots, exact deletion, live root
+assertions, nonidentity private-load forwarding, hostile source/graph/history
+changes and resource cleanup.
+
+The ignored `ordinary_rust_private_unit_helper_reaches_checked_native_output`
+test compiles an ordinary attributed Rust kernel whose no-argument helper uses
+initialized private array storage. Its test-only dispatch selects the owning
+route from the authenticated helper policy, never from a kernel name or a failed
+admission. The observed normal rustc configuration retains one helper and four
+private accesses in N; checked deletion produces distinct E, and actual O has
+no helper calls or private effects. Native text and descriptor replay use O.
+The actual-O simulator checks eight Fill boundary-size scenarios twice against
+the independent reference, including backing bytes and canaries. A test-only
+retained-MIR configuration is available when rustc erases a helper first; such
+frontend erasure does not count as fe2o3 helper-deletion coverage.
+
+This is bounded ordinary-source and CPU-model evidence, not whole-corpus,
+approved-runtime, external LLVM execution or GPU qualification. No runtime
+bypass is provided.
 
 ## Admission tests
 
