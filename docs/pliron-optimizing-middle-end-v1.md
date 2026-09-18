@@ -323,6 +323,33 @@ complete conflict-free extraction and exact graph/root/witness binding. These
 changes do not activate the candidate optimizer as the default pipeline or
 establish full-corpus, protected-proof, artifact or hardware qualification.
 
+## Local helper call coverage
+
+`ProductionPreRankedKirOwnerV1::with_checked_unit_local_ranked_stage_v1`
+checks the complete original-N ranked root roster and every retained local-helper
+call. It joins the same-owner source relation, actual canonical call occurrence,
+root-qualified helper association and unchanged entry translation. Repeated calls
+and shared helper bodies keep distinct source-root/call coordinates. Private
+allocations, loads and stores remain in the graph and are not classified as empty
+effects.
+
+The backend invokes this scoped check after authenticated ranked-roster replay,
+before the existing materialized-receipt constructor. The callback retains no
+approval token or executable owner. The RawEmpty route is unchanged; UnitLocal
+still encounters `LocalHelperSourceConsumerUnavailable` at the materialized
+ranked-receipt boundary until the downstream private-effect consumers exist.
+This stage does not establish helper termination, call purity, optimized B/C/O
+private-memory safety, or executable support for local-memory helpers.
+
+New call indexes, coverage buffers and actual capacities are charged to the
+existing work/storage ledger; borrowed ranked graphs and legacy translation
+engines retain their separate limits. Scope exit restores the incoming storage
+floor on success, error and unwind. Tests exercise exact call coverage, source
+and layout mutations, entry synchronization mismatch, foreign inventories,
+callback accounting and exact/one-short resource limits. These component and
+normal-projector prefix tests do not replace execution of the authenticated
+ranked roster with the approved Verus runtime.
+
 ## Admission tests
 
 General checked-output admission also censuses scalar helper closures from each

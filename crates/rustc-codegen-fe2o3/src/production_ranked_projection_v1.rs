@@ -1400,6 +1400,39 @@ fn validate_ranked_root_induction_custody_v1(
     Ok(())
 }
 
+fn validate_unit_local_ranked_stage_v1(
+    materialized: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    roots: &[fe2o3_lower_mir_kernel::ProductionRankedSemanticProjectionRootV1],
+) -> Result<(), ProductionRankedVerificationErrorV1> {
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+        CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+        CanonicalKernelIrWorkBudgetV1 as Work,
+    };
+    use fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1;
+
+    if materialized.helper_source_policy_v1() == ProductionHelperSourcePolicyV1::RawEmpty {
+        return Ok(());
+    }
+    let resource = |error: Resource| ProductionRankedVerificationErrorV1::Custody(error.into());
+    let work_limit = usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT)
+        .map_err(|_| resource(Resource::Arithmetic))?;
+    let mut work = Work::new(work_limit);
+    let mut budget = Budget::new(
+        &mut work,
+        crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+    );
+    let floor = materialized
+        .unit_local_source_storage_floor_v1()
+        .map_err(ProductionRankedVerificationErrorV1::Custody)?;
+    budget.reserve_storage(floor).map_err(resource)?;
+    // This consumes original-N root/call coverage only. No stage token escapes
+    // and the next legacy receipt consumer still refuses local helper effects.
+    materialized
+        .with_checked_unit_local_ranked_stage_v1(roots, &mut budget, |_, _| Ok(()))
+        .map_err(ProductionRankedVerificationErrorV1::Custody)
+}
+
 impl ProductionRankedSemanticProjectionRosterReceiptV1 {
     pub(crate) const fn canonical_roster_identity(&self) -> ProductionRankedKernelRosterIdentityV1 {
         self.canonical_roster_identity
@@ -1519,6 +1552,7 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                 verification,
             });
         }
+        validate_unit_local_ranked_stage_v1(&materialized, &lowering_roots)?;
         let receipt = ProductionMaterializedRankedModuleReceiptV1::from_unvalidated_projection_roster_candidate(
             materialized,
             lowering_roots,
