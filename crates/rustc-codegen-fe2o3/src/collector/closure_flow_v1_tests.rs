@@ -492,10 +492,9 @@ fn constant_observation_and_import_use_exact_cumulative_work() {
                         remaining == cost,
                         "{name}: {remaining}/{cost}"
                     );
-                    if result.is_ok() {
-                        assert!(work.charge(1).is_err());
-                    } else {
-                        assert!(result.unwrap_err().to_string().contains("ValidationWork"));
+                    match result {
+                        Ok(_) => assert!(work.charge(1).is_err()),
+                        Err(error) => assert!(error.to_string().contains("ValidationWork")),
                     }
                 }
                 let before = flow.work.validation_work_for_test();

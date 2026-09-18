@@ -430,8 +430,8 @@ impl RetainedContextEntriesV29 {
                     continue;
                 }
                 if tail
-                    || !entry
-                        .is_some_and(|entry| entry.source.issuance.block.index() as usize == block)
+                    || entry
+                        .is_none_or(|entry| entry.source.issuance.block.index() as usize != block)
                 {
                     return Err(mismatch());
                 }
