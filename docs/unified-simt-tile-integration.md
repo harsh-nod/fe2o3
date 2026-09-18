@@ -188,10 +188,12 @@ rejected. Existing V12 ownership is not widened or relabeled.
 
 The metered verifier checks local signatures and geometry, recursive
 non-storability, one context issuance per kernel entry, exclusive context
-borrowing, affine consumption, exact scope-discard rosters and matching acyclic
-joins. It rejects cycles in capability-bearing functions, retained calls during
-an open scope, escaping roles and incomplete scope discharge. Ordinary functions
-retain their existing exact work budgets. Physical memory effects and compiler
+borrowing, affine consumption, exact scope-discard rosters and matching incoming
+ownership states on every CFG edge, including backedges. It rejects repeated
+context issuance, incompatible loop states, retained calls during an open scope,
+escaping roles and incomplete scope discharge at exits. It does not prove
+termination or eventual disposal on infinite paths. Ordinary functions retain
+their existing exact work budgets. Physical memory effects and compiler
 ordering are separate: only masked load reads global memory, but every execution
 operation remains ordered. ScopeEnd is not a barrier.
 
