@@ -67,9 +67,114 @@ reports.
 
 This census is not a compiler-execution receipt, proof, executable artifact or
 qualification. `diagnosticOnly` is true; `qualified` and
-`authenticatesCompilerExecution` are false. It does not yet join the tutorial's
-Cargo/lock/source-closure/default-feature contracts or generated-source maps.
-Consequently it does not change any pending display binding or kernel count.
+`authenticatesCompilerExecution` are false. The optional consumer below compares
+existing fixture contracts; it establishes neither compile-time Cargo/dependency
+custody nor generated-source mapping. It does not change any pending display
+binding or kernel count.
+
+### Optional Diagnostic Comparison
+
+```sh
+python3 scripts/validate-tutorial-kernel-manifest.py --emit-kernel-pairs \
+  --source-census /absolute/path/census.json \
+  --source-census-request /absolute/path/independent-request.json
+```
+
+The two options require each other and `--emit-kernel-pairs`. Existing manifest,
+lock, physical package source closure, fixture selection and display contracts
+are validated first. Only existing `fixture-source-contract` display bindings
+are supported. The consumer reuses that selection and its exact source member,
+hash, byte length and scanner-established occurrence; it does not parse another
+Rust selection or search for a replacement identifier.
+
+Supply the request independently of the census, retaining expectations before
+the invocation. Its exact fields are:
+
+```json
+{
+  "schema": "fe2o3-tutorial-source-census-request-v1",
+  "fixtureId": "<existing fixture ID>",
+  "contractSha256": "<existing compilerInput.contractSha256>",
+  "runId": "<fresh caller-generated 64 lowercase hexadecimal digits>",
+  "arguments": ["<driver argv[0]>", "<every subsequent driver argument in order>"],
+  "workingDirectory": "<absolute driver working directory>",
+  "extractionMode": {
+    "kind": "compiler-handoff",
+    "version": 3,
+    "expected_target": "gfx950:xnack-"
+  },
+  "cargoIntent": {
+    "packageManifest": "<existing repository-relative Cargo.toml>",
+    "packageName": "<Cargo package.name>",
+    "cargoTarget": {"kind": "lib", "name": "<library name>", "sourcePath": "<package-relative library source>"},
+    "features": ["<sorted direct feature selection>"],
+    "defaultFeatures": false
+  }
+}
+```
+
+`arguments` is the exact driver argv, not the Cargo command. Full extraction
+mode objects match the producer: `semantic-mir` and `ranked-memory` have only
+`kind`; `llvm` also requires nullable `expected_target`; `compiler-handoff`
+requires `version` (1 or 3) and nullable `expected_target`; `simulation-bundle`
+requires `version` (1 through 6). Field names inside the mode and coordinate
+objects preserve the producer's snake case. A non-null expected target and an
+available selection target must match the fixture's production target
+(`gfx942:xnack-` or `gfx950:xnack-`). Unknown versions require a reviewed update.
+
+Cargo intent stays explicitly caller-supplied. Package/library selection,
+direct features and `defaultFeatures` must equal the existing fixture contract.
+The existing `cargo_feature_closure` computes the expected feature cfgs, which
+must match the driver `--cfg feature="..."`/`--cfg=feature="..."` values exactly.
+Response-file arguments and duplicate or malformed feature cfgs reject.
+Absence of `feature="default"` never establishes `--no-default-features`: a
+package with no default feature can produce the same cfgs for either intent.
+Neither these comparisons nor a matching nonce authenticate the invocation or
+prove which Cargo/dependency inputs the compiler consumed. Nonce freshness and
+the independence of the expected request remain caller responsibilities.
+
+On success the otherwise unchanged pair report gains `sourceCensusComparison`,
+schema `fe2o3-tutorial-source-census-comparison-v1`. It retains the invocation,
+`callerCargoIntent`, enabled features, fixture/contract identity, extraction
+outcome and complete validated selection observations. Each `comparisons` row
+contains the exact `expected` display/source/token coordinates, `status`
+(`matched` or `unresolved`), nullable `functionIdentity` and nullable `reason`.
+The diagnostic section fixes `diagnosticOnly=true`, `qualified=false` and
+`authenticatesCompilerExecution=false` independently of input claims.
+
+A match requires one `kernel-entry` with an available identifier whose expansion
+anchor identifies the exact original file bytes and complete token, including
+`r#` where present. Normalized coordinates are checked separately and never
+substituted for original offsets. Callsite and definition anchors remain
+separate observations. Logical/export names, helpers and available definition
+anchors cannot fill an unavailable generated identifier. Such entries remain
+unresolved even when their names look identical. Available entries with wrong
+files or ranges, duplicate candidates and inconsistent source metadata reject.
+Original/normalized endpoint checks use sorted, deduplicated coordinates and
+disjoint source slices, scanning each known file at most once for that check.
+Paths outside the expected source members are retained diagnostic labels; the
+consumer does not open arbitrary census-named files or validate dependency
+source custody. `compiledSourceHash` and compiler identities remain diagnostic
+metadata; original SHA-256 and lengths are compared to the physical binding.
+
+`extractionSucceeded=false` is preserved with `extractionStatus="failed"`, even
+if an identifier matches. A structurally valid failed or unavailable extraction
+can be inspected in complete JSON; command success means validation of this
+diagnostic comparison only. It does not mean extraction succeeded.
+
+Both inputs require strict UTF-8 JSON, unique keys, exact fields and types,
+finite numbers and at most 4 MiB each. Producer argument/function/file/span
+bounds apply, including byte-based string limits and integer offsets (booleans
+are not integers). Invalid inputs or an over-budget final report reject before
+stdout. Without the options the output is unchanged. With them, qualification,
+pending bindings, inventory/counts and `runtimeCensusValidated` are unchanged;
+the latter still depends solely on the separate site runtime projection.
+
+Focused consumer tests run without Cargo:
+
+```sh
+python3 -I -B scripts/tests/tutorial_kernel_manifest.py TutorialSourceCensusTests
+```
 
 ### Inventory Projection
 

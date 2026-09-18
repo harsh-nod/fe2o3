@@ -2043,6 +2043,26 @@ def _encode_kernel_pair_report(report: dict[str, Any]) -> str:
     return "".join(chunks)
 
 
+def source_census_comparison(
+    root: Path, manifest: dict[str, Any], fixtures: dict[str, Any],
+    report: dict[str, Any], census_path: Path, request_path: Path,
+) -> dict[str, Any]:
+    """Compare diagnostics only after the ordinary report has validated its inputs."""
+    path = Path(__file__).with_name("tutorial_source_census.py")
+    specification = importlib.util.spec_from_file_location("tutorial_source_census", path)
+    assert specification is not None and specification.loader is not None
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    try:
+        return module.compare(
+            root, manifest, fixtures, report.get("kernelInventory"), census_path, request_path,
+            validate_compiler_input=validate_compiler_input,
+            cargo_feature_closure=cargo_feature_closure,
+        )
+    except module.SourceCensusError as error:
+        fail(f"source census: {error}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
@@ -2053,7 +2073,12 @@ def main() -> None:
     parser.add_argument("--require-qualified", action="store_true")
     parser.add_argument("--require-curriculum", action="store_true")
     parser.add_argument("--site-inventory", type=Path)
+    parser.add_argument("--source-census", type=Path)
+    parser.add_argument("--source-census-request", type=Path)
     arguments = parser.parse_args()
+    if arguments.source_census or arguments.source_census_request:
+        if not (arguments.emit_kernel_pairs and arguments.source_census and arguments.source_census_request):
+            parser.error("--source-census and --source-census-request require each other and --emit-kernel-pairs")
     root = arguments.repo_root.resolve()
     manifest = load_manifest(arguments.manifest or root / "config/tutorial-kernel-manifest-v1.json")
     curriculum_gaps: dict[str, list[str]] = {}
@@ -2070,7 +2095,12 @@ def main() -> None:
     if arguments.require_qualified:
         fail("qualification receipts and policy/final-graph evidence are not implemented by source contracts")
     if arguments.emit_kernel_pairs:
-        print(_encode_kernel_pair_report(_kernel_pair_report(manifest, fixtures, curriculum_gaps, inventory, repo_root=root)))
+        report = _kernel_pair_report(manifest, fixtures, curriculum_gaps, inventory, repo_root=root)
+        if arguments.source_census:
+            report["sourceCensusComparison"] = source_census_comparison(
+                root, manifest, fixtures, report, arguments.source_census, arguments.source_census_request,
+            )
+        print(_encode_kernel_pair_report(report))
     elif arguments.emit_matrix:
         records = [fixture for fixture in fixtures.values() if fixture["target"] == arguments.emit_matrix]
         if not records:

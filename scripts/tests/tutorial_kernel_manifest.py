@@ -1330,5 +1330,474 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                 self.validator.validate_source_item(root, "whole-file", tab, {})
 
 
+class TutorialSourceCensusTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.validator = load_validator()
+        cls.manifest = cls.validator.load_manifest(MANIFEST)
+        gaps = {}
+        cls.fixtures = cls.validator.validate_manifest(ROOT, cls.manifest, curriculum_gaps=gaps)
+        cls.baseline = cls.validator._kernel_pair_report(cls.manifest, cls.fixtures, gaps, None)
+        specification = importlib.util.spec_from_file_location(
+            "tutorial_source_census_test", ROOT / "scripts/tutorial_source_census.py")
+        cls.consumer = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(cls.consumer)
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="fe2o3-census-consumer-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.report_path = self.root / "census.json"
+        self.request_path = self.root / "request.json"
+        self.fixture = self.fixtures["gfx950-gpt-oss-serial-router"]
+        inputs = self.fixture["compilerInput"]
+        cache = {}
+        checked = self.validator.validate_compiler_input(ROOT, self.fixture, "test", cache)
+        self.cargo = cache[inputs["packageManifest"]]["cargo"]
+        self.request = {
+            "schema": "fe2o3-tutorial-source-census-request-v1",
+            "fixtureId": self.fixture["fixtureId"], "contractSha256": inputs["contractSha256"],
+            "runId": "0123456789abcdef" * 4,
+            "arguments": ["rustc", "--crate-name", inputs["cargoTarget"]["name"],
+                          "--crate-type=lib", inputs["cargoTarget"]["sourcePath"],
+                          "--target", "amdgcn-amd-amdhsa"],
+            "workingDirectory": str((ROOT / inputs["packageManifest"]).parent),
+            "extractionMode": {"kind": "compiler-handoff", "version": 3, "expected_target": "gfx950:xnack-"},
+            "cargoIntent": {"packageName": checked["packageName"], **{
+                key: copy.deepcopy(inputs[key]) for key in
+                ("packageManifest", "cargoTarget", "features", "defaultFeatures")}},
+        }
+        for feature in checked["enabledFeatures"]:
+            self.request["arguments"].extend(["--cfg", f'feature="{feature}"'])
+        symbol = inputs["kernelSymbols"][0]
+        row = next(row for row in self.baseline["kernelInventory"]["displayItems"]
+                   if row["bindingStatus"] == "fixture-source-contract" and row["kernelSymbol"] == symbol)
+        tab = next(tab for lesson in self.manifest["curriculum"]["lessons"]
+                   if lesson["lessonId"] == row["lessonId"] for tab in lesson["codeTabs"]
+                   if tab["ordinal"] == row["tabOrdinal"])
+        self.source_path = ROOT / tab["sourcePath"]
+        self.source = self.source_path.read_bytes()
+        start = row["functionUtf8Offset"]
+        end = start + len(symbol.encode())
+        origin = {"file": 0, "coordinates": {
+            "normalized_start": start, "normalized_end": end, "original_start": start, "original_end": end}}
+        span = {"expansion": origin, "callSite": copy.deepcopy(origin),
+                "expansionChainSha256": "a" * 64, "expansionDepth": 0}
+        self.census = {
+            "schema": "fe2o3-diagnostic-source-census-v1", "diagnosticOnly": True,
+            "qualified": False, "authenticatesCompilerExecution": False, "extractionSucceeded": True,
+            **{key: copy.deepcopy(self.request[key]) for key in self.consumer.INVOCATION_KEYS},
+            "selection": {"status": "available", "value": {
+                "target": "gfx950:xnack-", "files": [{
+                    "identity": "b" * 64, "displayPath": str(self.source_path),
+                    "compiledSourceHash": "sha256=" + hashlib.sha256(self.source).hexdigest(),
+                    "originalSha256": hashlib.sha256(self.source).hexdigest(),
+                    "originalBytes": len(self.source), "normalizedBytes": len(self.source),
+                }], "functions": [{
+                    "functionIdentity": "c" * 64, "definitionIdentity": "d" * 64,
+                    "monomorphizationIdentity": "e" * 64, "role": "kernel-entry",
+                    "exportName": symbol, "logicalName": symbol,
+                    "definition": {"status": "available", "value": copy.deepcopy(span)},
+                    "identifier": {"status": "available", "value": span},
+                }],
+            }},
+        }
+
+    def documents(self):
+        self.report_path.write_text(json.dumps(self.census), encoding="utf-8")
+        self.request_path.write_text(json.dumps(self.request), encoding="utf-8")
+
+    def compare(self, *, root=ROOT, manifest=None, fixtures=None, baseline=None):
+        self.documents()
+        return self.validator.source_census_comparison(
+            root, self.manifest if manifest is None else manifest,
+            self.fixtures if fixtures is None else fixtures,
+            self.baseline if baseline is None else baseline, self.report_path, self.request_path)
+
+    def cli(self, *flags):
+        return subprocess.run(
+            [sys.executable, "-I", "-B", str(CHECKER), "--emit-kernel-pairs",
+             "--source-census", str(self.report_path), "--source-census-request", str(self.request_path), *flags],
+            text=True, capture_output=True, check=False)
+
+    def test_exact_available_identifier_preserves_baseline_and_provenance(self):
+        baseline = copy.deepcopy(self.baseline)
+        # The callsite is deliberately different; only expansion identifies the token.
+        identifier = self.census["selection"]["value"]["functions"][0]["identifier"]["value"]
+        identifier["callSite"]["coordinates"] = dict.fromkeys(identifier["callSite"]["coordinates"], 0)
+        identifier["expansionDepth"] = 1
+        comparison = self.compare()
+        self.assertEqual(comparison["comparisons"][0]["status"], "matched")
+        self.assertEqual(comparison["selection"], self.census["selection"])
+        self.assertEqual(comparison["callerCargoIntent"], self.request["cargoIntent"])
+        self.assertFalse(comparison["qualified"])
+        self.assertFalse(comparison["authenticatesCompilerExecution"])
+        self.assertEqual(self.baseline, baseline)
+        result = self.cli()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        actual = json.loads(result.stdout)
+        self.assertEqual(actual.pop("sourceCensusComparison"), comparison)
+        self.assertEqual(actual, baseline)
+        with mock.patch.object(self.validator, "MAX_SITE_INVENTORY_BYTES",
+                               len(self.validator._encode_kernel_pair_report(baseline))):
+            with self.assertRaisesRegex(SystemExit, "output byte bound"):
+                self.validator._encode_kernel_pair_report({**baseline, "sourceCensusComparison": comparison})
+        plain = subprocess.run([sys.executable, "-I", "-B", str(CHECKER), "--emit-kernel-pairs"],
+                               text=True, capture_output=True, check=False)
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertEqual(plain.stdout, self.validator._encode_kernel_pair_report(baseline) + "\n")
+
+    def test_generated_identifier_and_failed_extraction_remain_inspectable(self):
+        selection = self.census["selection"]["value"]
+        entry = selection["functions"][0]
+        helper = copy.deepcopy(entry)
+        helper.update(functionIdentity="f" * 64, role="internal-helper")
+        selection["functions"].append(helper)
+        entry["identifier"] = {"status": "unavailable", "value": "identifier token does not match compiled definition"}
+        self.census["extractionSucceeded"] = False
+        comparison = self.compare()
+        self.assertEqual(comparison["comparisons"][0]["status"], "unresolved")
+        self.assertIsNone(comparison["comparisons"][0]["functionIdentity"])
+        self.assertFalse(comparison["extractionSucceeded"])
+        self.assertEqual(comparison["extractionStatus"], "failed")
+        self.assertEqual(comparison["selection"], self.census["selection"])
+        result = self.cli()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["sourceCensusComparison"]["extractionStatus"], "failed")
+        self.census["selection"] = {"status": "unavailable", "value": "collection not reached"}
+        self.assertEqual(self.compare()["comparisons"][0]["status"], "unresolved")
+
+    def test_failed_extraction_with_available_identifier_is_still_failed(self):
+        self.census["extractionSucceeded"] = False
+        comparison = self.compare()
+        self.assertEqual(comparison["comparisons"][0]["status"], "matched")
+        self.assertEqual(comparison["extractionStatus"], "failed")
+
+    def test_independent_invocation_contract_and_cargo_intent_mismatches(self):
+        original_request, original_census = copy.deepcopy(self.request), copy.deepcopy(self.census)
+        changes = [
+            ("nonce", lambda: self.census.update(runId="f" * 64)),
+            ("argv", lambda: self.census["arguments"].append("--extra")),
+            ("cwd", lambda: self.census.update(workingDirectory="/wrong")),
+            ("mode", lambda: self.census.update(extractionMode={"kind": "ranked-memory"})),
+            ("version", lambda: self.census["extractionMode"].update(version=1)),
+            ("mode target", lambda: self.census["extractionMode"].update(expected_target=None)),
+            ("target", lambda: self.census["selection"]["value"].update(target="gfx942:xnack-")),
+            ("contract", lambda: self.request.update(contractSha256="0" * 64)),
+            ("fixture", lambda: self.request.update(fixtureId="missing")),
+            ("default intent", lambda: self.request["cargoIntent"].update(defaultFeatures=True)),
+            ("default bool", lambda: self.request["cargoIntent"].update(defaultFeatures=0)),
+            ("features", lambda: self.request["cargoIntent"].update(features=[])),
+            ("package", lambda: self.request["cargoIntent"].update(packageName="wrong")),
+            ("manifest", lambda: self.request["cargoIntent"].update(packageManifest="wrong/Cargo.toml")),
+            ("library", lambda: self.request["cargoIntent"]["cargoTarget"].update(name="wrong")),
+        ]
+        for label, change in changes:
+            self.request, self.census = copy.deepcopy(original_request), copy.deepcopy(original_census)
+            change()
+            with self.subTest(label=label), self.assertRaises(SystemExit):
+                self.compare()
+
+    def test_feature_cfgs_reuse_closure_and_never_infer_default_intent(self):
+        original = copy.deepcopy(self.request["arguments"])
+        for extra in (["--cfg", 'feature="default"'], ["--cfg=feature=\"unselected\""],
+                      ["@hidden-arguments"], ["--cfg", "feature=unquoted"],
+                      ["--cfg", f'feature="{self.request["cargoIntent"]["features"][0]}"']):
+            self.request["arguments"] = original + extra
+            self.census["arguments"] = copy.deepcopy(self.request["arguments"])
+            with self.subTest(extra=extra), self.assertRaises(SystemExit):
+                self.compare()
+        self.request["arguments"] = original[:-2]
+        self.census["arguments"] = copy.deepcopy(self.request["arguments"])
+        with self.assertRaisesRegex(SystemExit, "feature cfgs"):
+            self.compare()
+        # No default table exists in this package. Both intents yield the same
+        # rustc features, but only the explicitly contracted intent is accepted.
+        self.assertNotIn("default", self.cargo.get("features", {}))
+        features = self.request["cargoIntent"]["features"]
+        self.assertEqual(self.validator.cargo_feature_closure(self.cargo, features, True, "test"),
+                         self.validator.cargo_feature_closure(self.cargo, features, False, "test"))
+        self.request["arguments"] = original
+        self.census["arguments"] = copy.deepcopy(original)
+        self.request["cargoIntent"]["defaultFeatures"] = True
+        with self.assertRaisesRegex(SystemExit, "Cargo intent"):
+            self.compare()
+
+    def test_response_file_in_consumed_cfg_value_rejects_before_stdout(self):
+        self.request["arguments"].extend(["--cfg", "@unopened"])
+        self.census["arguments"] = copy.deepcopy(self.request["arguments"])
+        self.documents()
+        result = self.cli()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("response-file arguments", result.stderr)
+
+    def test_normalization_scans_disjoint_source_slices_once(self):
+        class CountedBytes(bytes):
+            scanned = 0
+            slices = 0
+
+            def __getitem__(self, index):
+                result = super().__getitem__(index)
+                if isinstance(index, slice):
+                    self.scanned += len(result)
+                    self.slices += 1
+                return result
+
+        chunk = b"ab\xc3\xa9\r\n" * 1024
+        source = CountedBytes(b"\xef\xbb\xbf" + chunk * 512)
+        endpoints = {3 + len(chunk) * count: (len(chunk) - 1024) * count
+                     for count in range(513)}
+        self.consumer._check_original_coordinates(source, endpoints)
+        self.assertEqual(source.scanned, len(source) - 3)
+        self.assertEqual(source.slices, len(endpoints))
+        for position, normalized in [(0, 0), (6, 3), (8, 5)]:
+            with self.subTest(position=position), self.assertRaises(self.consumer.SourceCensusError):
+                self.consumer._check_original_coordinates(source, {position: normalized})
+
+    def test_wrong_file_hash_range_role_and_ambiguous_candidates(self):
+        original = copy.deepcopy(self.census)
+        for label in ("file", "hash", "length", "file index", "original start", "original end",
+                      "normalized start", "normalized end", "reversed", "boolean", "helper", "duplicate",
+                      "duplicate identity", "duplicate file", "callsite substitution"):
+            self.census = copy.deepcopy(original)
+            selection = self.census["selection"]["value"]
+            entry = selection["functions"][0]
+            origin = entry["identifier"]["value"]["expansion"]
+            coordinates = origin["coordinates"]
+            if label == "file":
+                selection["files"][0]["displayPath"] = str(self.source_path.with_name("other.rs"))
+            elif label == "hash":
+                selection["files"][0]["originalSha256"] = "0" * 64
+            elif label == "length":
+                selection["files"][0]["originalBytes"] += 1
+            elif label == "file index":
+                origin["file"] = 1
+            elif label in ("original start", "original end", "normalized start", "normalized end"):
+                coordinates[label.replace(" ", "_")] += 1
+            elif label == "reversed":
+                coordinates["original_end"] = 0
+            elif label == "boolean":
+                origin["file"] = False
+            elif label == "helper":
+                entry["role"] = "internal-helper"
+            elif label in ("duplicate", "duplicate identity"):
+                second = copy.deepcopy(entry)
+                if label == "duplicate":
+                    second["functionIdentity"] = "f" * 64
+                selection["functions"].append(second)
+            elif label == "duplicate file":
+                selection["files"].append(copy.deepcopy(selection["files"][0]))
+            elif label == "callsite substitution":
+                origin["coordinates"] = dict.fromkeys(coordinates, 0)
+            with self.subTest(label=label), self.assertRaises(SystemExit):
+                self.compare()
+
+    def test_strict_fields_types_utf8_and_bounds(self):
+        original = copy.deepcopy(self.census)
+        changes = [
+            lambda: self.census.update(extra=False),
+            lambda: self.census.update(qualified=0),
+            lambda: self.census.update(extractionSucceeded=1),
+            lambda: self.census.update(runId="A" * 64),
+            lambda: self.census.update(arguments=["rustc"] * (self.consumer.MAX_ARGUMENTS + 1)),
+            lambda: self.census.update(arguments=["x" * (self.consumer.MAX_ARGUMENT_BYTES + 1)]),
+            lambda: self.census.update(workingDirectory="x" * (self.consumer.MAX_TEXT_BYTES + 1)),
+            lambda: self.census.update(workingDirectory="/\ud800"),
+            lambda: self.census["extractionMode"].update(version=True),
+            lambda: self.census["extractionMode"].pop("expected_target"),
+            lambda: self.census["selection"].update(value=None),
+            lambda: self.census["selection"]["value"].update(extra=None),
+            lambda: self.census["selection"]["value"].update(files=[{}] * (self.consumer.MAX_FILES + 1)),
+            lambda: self.census["selection"]["value"].update(functions=[{}] * (self.consumer.MAX_FUNCTIONS + 1)),
+            lambda: self.census["selection"]["value"]["files"][0].update(originalBytes=self.consumer.MAX_FILE_BYTES + 1),
+            lambda: self.census["selection"]["value"]["functions"][0]["identifier"]["value"].update(expansionDepth=65),
+            lambda: self.census["selection"]["value"]["functions"][0]["identifier"]["value"]["expansion"]["coordinates"].update(original_end=len(self.source) + 1),
+        ]
+        for change in changes:
+            self.census = copy.deepcopy(original)
+            change()
+            with self.subTest(census=str(self.census)[:120]), self.assertRaises(SystemExit):
+                self.compare()
+
+    def test_exact_modes_and_feature_closure_adapter(self):
+        for mode in ({"kind": "semantic-mir"}, {"kind": "ranked-memory"},
+                     {"kind": "llvm", "expected_target": None},
+                     {"kind": "compiler-handoff", "version": 1, "expected_target": "gfx950:xnack-"},
+                     {"kind": "simulation-bundle", "version": 6}):
+            self.request["extractionMode"] = self.census["extractionMode"] = mode
+            with mock.patch.object(self.validator, "cargo_feature_closure", wraps=self.validator.cargo_feature_closure) as closure:
+                self.assertEqual(self.compare()["extractionMode"], mode)
+                self.assertTrue(any(call.args[0] == self.cargo for call in closure.call_args_list))
+
+    def test_json_and_cli_rejections_never_emit_partial_stdout(self):
+        self.documents()
+        for path in (self.report_path, self.request_path):
+            original = path.read_bytes()
+            for payload in (b'{"schema":"x","schema":"y"}', b'{"x":{"a":1,"a":2}}',
+                            b'\xff', b'{', b'{"x":NaN}', b'[' * 2000 + b']' * 2000,
+                            b' ' * (self.consumer.MAX_DOCUMENT_BYTES + 1)):
+                path.write_bytes(payload)
+                with self.subTest(path=path.name, payload=payload[:50]):
+                    result = self.cli()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, "")
+                    self.assertNotIn("Traceback", result.stderr)
+            path.write_bytes(original)
+        for flags in (["--source-census", str(self.report_path)],
+                      ["--source-census-request", str(self.request_path)],
+                      ["--source-census", str(self.report_path), "--source-census-request", str(self.request_path)],
+                      ["--emit-kernel-pairs", "--source-census", str(self.report_path)]):
+            result = subprocess.run([sys.executable, "-I", "-B", str(CHECKER), *flags],
+                                    text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "")
+
+    def test_cli_rejects_mismatch_and_prior_stale_contract_before_stdout(self):
+        self.census["runId"] = "f" * 64
+        self.documents()
+        result = self.cli()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("runId differs", result.stderr)
+        manifest = copy.deepcopy(self.manifest)
+        manifest["compilerFixtures"][0]["compilerInput"]["cargoLockSha256"] = "0" * 64
+        manifest_path = self.root / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        self.report_path.write_bytes(b"not json")
+        result = self.cli("--manifest", str(manifest_path))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("cargoLockSha256 is stale", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_input_regular_file_and_aggregate_bounds(self):
+        self.documents()
+        with self.assertRaises(self.consumer.SourceCensusError):
+            self.consumer.load_document(self.root)
+        link = self.root / "link.json"
+        link.symlink_to(self.report_path)
+        with self.assertRaises(self.consumer.SourceCensusError):
+            self.consumer.load_document(link)
+        files = self.census["selection"]["value"]["files"]
+        template = copy.deepcopy(files[0])
+        for index in range(4):
+            files.append({**template, "identity": f"{index:064x}", "displayPath": f"/unopened/file-{index}.rs",
+                          "originalBytes": self.consumer.MAX_FILE_BYTES, "normalizedBytes": self.consumer.MAX_FILE_BYTES})
+        with self.assertRaisesRegex(SystemExit, "aggregate source byte bound"):
+            self.compare()
+
+    def test_raw_identifier_original_bytes_and_utf8_boundaries(self):
+        # Use the existing scanner for expected coordinates. This isolated
+        # coordinate test does not assert that synthetic input is a live census.
+        source = '\ufeff// \u00e9\r\n#[kernel] fn r#selected() {}\r\n'.encode("utf-8")
+        function = self.validator.ordinary_rust_function_items(source.decode())[0]
+        start = function["functionUtf8Offset"]
+        end = start + len(b"r#selected")
+        self.assertEqual(source[start:end], b"r#selected")
+        selection = self.census["selection"]
+        file = selection["value"]["files"][0]
+        normalized = source.decode().removeprefix("\ufeff").replace("\r\n", "\n").encode()
+        file.update(originalBytes=len(source), normalizedBytes=len(normalized), originalSha256=hashlib.sha256(source).hexdigest())
+        entry = selection["value"]["functions"][0]
+        for field in ("definition", "identifier"):
+            for anchor in ("expansion", "callSite"):
+                coordinates = entry[field]["value"][anchor]["coordinates"]
+                coordinates.update(original_start=start, original_end=end,
+                                   normalized_start=len(source[:start].decode().removeprefix("\ufeff").replace("\r\n", "\n").encode()),
+                                   normalized_end=len(source[:end].decode().removeprefix("\ufeff").replace("\r\n", "\n").encode()))
+        self.consumer._selection(selection, {str(self.source_path): source}, str(ROOT), "gfx950:xnack-")
+        coordinates = entry["identifier"]["value"]["expansion"]["coordinates"]
+        for offset in (source.index('\u00e9'.encode()) + 1, source.index(b"\r\n") + 1, 0):
+            changed = copy.deepcopy(selection)
+            changed["value"]["functions"][0]["identifier"]["value"]["expansion"]["coordinates"]["original_start"] = offset
+            with self.subTest(offset=offset), self.assertRaises(self.consumer.SourceCensusError):
+                self.consumer._selection(changed, {str(self.source_path): source}, str(ROOT), "gfx950:xnack-")
+        coordinates["original_start"] = coordinates["normalized_start"]
+        with self.assertRaises(self.consumer.SourceCensusError):
+            self.consumer._selection(selection, {str(self.source_path): source}, str(ROOT), "gfx950:xnack-")
+
+    def test_stale_physical_closure_and_lock_are_revalidated(self):
+        inputs = self.fixture["compilerInput"]
+        package = inputs["packageManifest"]
+        paths = [path for path, _ in self.validator.package_rust_sources(ROOT, package, "test")]
+        paths.extend([ROOT / package, ROOT / inputs["cargoLockPath"]])
+        for path in paths:
+            target = self.root / path.relative_to(ROOT)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(path.read_bytes())
+        for member, pattern in ((Path(package).parent / "src/reference.rs", "sourceClosureSha256 is stale"),
+                                (Path(inputs["cargoLockPath"]), "cargoLockSha256 is stale")):
+            path = self.root / member
+            before = path.read_bytes()
+            path.write_bytes(before + b"\n# changed inactive input\n")
+            with self.subTest(member=member), self.assertRaisesRegex(SystemExit, pattern):
+                self.compare(root=self.root)
+            path.write_bytes(before)
+
+
+    def test_full_raw_token_match_uses_existing_fixture_inventory_scanner(self):
+        inputs = self.fixture["compilerInput"]
+        package = inputs["packageManifest"]
+        for path in [ROOT / package, ROOT / inputs["cargoLockPath"], *[
+                path for path, _ in self.validator.package_rust_sources(ROOT, package, "test")]]:
+            target = self.root / path.relative_to(ROOT)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(path.read_bytes())
+        document = copy.deepcopy(self.manifest)
+        fixture = copy.deepcopy(self.fixture)
+        document["compilerFixtures"] = [fixture]
+        kernel = next(row for row in document["kernelInventory"]["kernels"]
+                      if any(ref.get("fixtureId") == fixture["fixtureId"] for ref in row["selections"]))
+        row = next(row for row in document["kernelInventory"]["displayItems"]
+                   if kernel["kernelId"] in row["kernelIds"])
+        lesson = next(lesson for lesson in document["curriculum"]["lessons"] if lesson["lessonId"] == row["lessonId"])
+        tab = lesson["codeTabs"][row["tabOrdinal"]]
+        lesson["codeTabs"] = [tab]
+        tab["ordinal"] = row["tabOrdinal"] = 0
+        document["curriculum"]["lessons"] = [lesson]
+        document["kernelInventory"].update(kernels=[kernel], displayItems=[row], negativeCases=[])
+        start = row["functionUtf8Offset"]
+        prefix = '// UTF-8: \u00e9\n'.encode()
+        symbol = row["kernelSymbol"]
+        # The older attribution inventory also needs its ordinary spelling;
+        # the existing feature-aware selector excludes this inactive item.
+        source = prefix + self.source[:start] + b"r#" + self.source[start:]
+        source += f'\n#[cfg(any())] #[kernel] fn {symbol}() {{}}\n'.encode()
+        path = self.root / tab["sourcePath"]
+        path.write_bytes(source)
+        digest = hashlib.sha256(source).hexdigest()
+        tab.update(sourceSha256=digest, displayedSha256=digest, displayedUtf8Bytes=len(source))
+        items = self.validator.ordinary_rust_function_items(source.decode())
+        row["functionUtf8Offset"] = next(item["functionUtf8Offset"] for item in items
+                                         if item["kernelSymbol"] == symbol)
+        fixture["compilerInput"]["sourceClosureSha256"] = self.validator.package_source_closure_sha256(
+            self.root, self.validator.package_rust_sources(self.root, package, "test"))
+        fixture["compilerInput"]["contractSha256"] = self.validator.fixture_input_contract_sha256(fixture)
+        inventory = self.validator.validate_kernel_inventory(document, None, repo_root=self.root)
+        self.request["contractSha256"] = fixture["compilerInput"]["contractSha256"]
+        self.request["workingDirectory"] = self.census["workingDirectory"] = str((self.root / package).parent)
+        selection = self.census["selection"]["value"]
+        selection["files"][0].update(displayPath=str(path), originalSha256=digest,
+                                     originalBytes=len(source), normalizedBytes=len(source))
+        start = row["functionUtf8Offset"]
+        end = start + len(f"r#{symbol}".encode())
+        for field in ("definition", "identifier"):
+            for anchor in ("expansion", "callSite"):
+                selection["functions"][0][field]["value"][anchor]["coordinates"].update(
+                    original_start=start, original_end=end, normalized_start=start, normalized_end=end)
+        kwargs = dict(root=self.root, manifest=document, fixtures={fixture["fixtureId"]: fixture},
+                      baseline={"kernelInventory": inventory})
+        comparison = self.compare(**kwargs)
+        expected = comparison["comparisons"][0]["expected"]
+        self.assertEqual(expected["identifierToken"], "r#" + symbol)
+        self.assertEqual(comparison["comparisons"][0]["status"], "matched")
+        coordinates = selection["functions"][0]["identifier"]["value"]["expansion"]["coordinates"]
+        coordinates["original_start"] += 2
+        coordinates["normalized_start"] += 2
+        with self.assertRaisesRegex(SystemExit, "identifier differs"):
+            self.compare(**kwargs)
+
+
 if __name__ == "__main__":
     unittest.main()
