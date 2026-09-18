@@ -1,0 +1,10 @@
+test_both_real_transcripts (test_verify.HarnessTests.test_both_real_transcripts) ... ok
+test_final_source_and_commands (test_verify.HarnessTests.test_final_source_and_commands) ... ok
+test_rejects_twelve_malformed_harnesses (test_verify.HarnessTests.test_rejects_twelve_malformed_harnesses) ... ok
+test_seal_modes (test_verify.HarnessTests.test_seal_modes) ... ok
+test_exact_membership (__main__.ManifestTests.test_exact_membership) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.134s
+
+OK

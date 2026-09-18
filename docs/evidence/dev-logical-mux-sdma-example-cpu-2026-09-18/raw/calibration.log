@@ -1,0 +1,9 @@
+test_both_real_transcripts (__main__.HarnessTests.test_both_real_transcripts) ... ok
+test_final_source_and_commands (__main__.HarnessTests.test_final_source_and_commands) ... ok
+test_rejects_twelve_malformed_harnesses (__main__.HarnessTests.test_rejects_twelve_malformed_harnesses) ... ok
+test_seal_modes (__main__.HarnessTests.test_seal_modes) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.047s
+
+OK

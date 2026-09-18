@@ -14,7 +14,7 @@ use fe2o3_kfd::{
 };
 
 const CHILD_ENV: &str = "FE2O3_KFD_COMPUTE_AQL_QUEUE_CHILD";
-const USAGE: &str = "usage: kfd-compute-aql-queue [--retained-release] (--all|<selected-unique-id>) | --retained-release-sdma (generic|0|1) <selected-unique-id> | --retained-release-striped-sdma (2|4|6|8|10|12|14|16) <selected-unique-id> | --retained-release-combined-sdma (2|4|6|8|10|12|14) <selected-unique-id>";
+const USAGE: &str = "usage: kfd-compute-aql-queue [--retained-release] (--all|<selected-unique-id>) | --retained-release-sdma (generic|0|1) <selected-unique-id> | --retained-release-striped-sdma (2|4|6|8|10|12|14|16) <selected-unique-id> | --retained-release-combined-sdma (2|4|6|8|10|12|14) <selected-unique-id> | --retained-release-logical-mux-sdma (2|4|8|14|16) <selected-unique-id>";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Options {
@@ -29,6 +29,7 @@ enum ReleaseMode {
     SingleSdma(Option<u32>),
     StripedSdma(u32),
     CombinedSdma(u32),
+    LogicalMuxSdma(u32),
 }
 
 impl ReleaseMode {
@@ -38,6 +39,7 @@ impl ReleaseMode {
             Self::SingleSdma(_) => 1,
             Self::StripedSdma(count) => count as usize,
             Self::CombinedSdma(count) => count as usize + 2,
+            Self::LogicalMuxSdma(_) => 2,
         }
     }
 
@@ -107,6 +109,18 @@ fn parse_selection(args: impl IntoIterator<Item = String>) -> Result<Options, St
                 args.next().ok_or_else(|| USAGE.to_owned())?,
             )
         }
+        "--retained-release-logical-mux-sdma" => {
+            let count = match args.next().as_deref() {
+                Some(count @ ("2" | "4" | "8" | "14" | "16")) => {
+                    count.parse().expect("closed logical-lane count roster")
+                }
+                _ => return Err(USAGE.to_owned()),
+            };
+            (
+                ReleaseMode::LogicalMuxSdma(count),
+                args.next().ok_or_else(|| USAGE.to_owned())?,
+            )
+        }
         _ => (ReleaseMode::Legacy, selected),
     };
     let selection = if selected == "--all" {
@@ -148,7 +162,9 @@ fn validate_sdma_observations(
     for (index, observation) in observations.iter().enumerate() {
         let expected_engine = match release {
             ReleaseMode::SingleSdma(engine) => engine,
-            ReleaseMode::StripedSdma(_) => Some((index % 2) as u32),
+            ReleaseMode::StripedSdma(_) | ReleaseMode::LogicalMuxSdma(_) => {
+                Some((index % 2) as u32)
+            }
             ReleaseMode::CombinedSdma(_) => Some(match index {
                 0 => 1,
                 1 => 0,
@@ -187,6 +203,21 @@ fn combined_observations(
     observations.extend_from_slice(striped);
     validate_sdma_observations(&observations, primary_id, ReleaseMode::CombinedSdma(count));
     observations
+}
+
+fn validate_logical_mux_observations(
+    logical_lane_count: usize,
+    native_queues: &[Gfx942SdmaQueueObservationV1],
+    requested_lanes: u32,
+    primary_id: u32,
+) {
+    assert!(matches!(requested_lanes, 2 | 4 | 8 | 14 | 16));
+    assert_eq!(logical_lane_count, requested_lanes as usize);
+    validate_sdma_observations(
+        native_queues,
+        primary_id,
+        ReleaseMode::LogicalMuxSdma(requested_lanes),
+    );
 }
 
 fn release_sdma(
@@ -245,6 +276,17 @@ fn release_sdma(
                 primary_id,
             );
             (observations, Some(capacity))
+        }
+        ReleaseMode::LogicalMuxSdma(count) => {
+            let observation = queue.enable_gfx942_two_native_sdma_logical_mux_v2(count)?;
+            let native_queues = observation.native_queues();
+            validate_logical_mux_observations(
+                observation.logical_lane_count(),
+                &native_queues,
+                count,
+                primary_id,
+            );
+            (native_queues.to_vec(), None)
         }
         _ => unreachable!("SDMA release requires an SDMA release mode"),
     };
@@ -338,6 +380,26 @@ fn release_sdma(
                 capacity.admitted_engine_count(),
                 capacity.admitted_queues_per_engine(),
                 capacity.maximum_striped_queue_count(),
+                4096 * sdma.len() as u64,
+                sdma.len(),
+                destroyed.released_resources()
+            );
+        }
+        ReleaseMode::LogicalMuxSdma(count) => {
+            let ids = sdma
+                .iter()
+                .map(|queue| queue.queue_id.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let engines = sdma
+                .iter()
+                .map(|queue| queue.engine_index.unwrap().to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            // The private cursor is not observed; this probe never publishes work.
+            println!(
+                "retained_logical_mux_sdma_release=complete logical_lane_count={count} native_queue_count={} cursor=initial-0-no-advance-source-qualified primary_queue_id={primary_id} sdma_queue_ids={ids} engine_placement={engines} host_delta_bytes={} host_delta_records={} resources_returned={} device_backing=refunded host_backing=refunded retry=rejected public_root_drop=completed packets=0 mmio_stores=0",
+                sdma.len(),
                 4096 * sdma.len() as u64,
                 sdma.len(),
                 destroyed.released_resources()
@@ -437,6 +499,11 @@ fn run_isolated_child(
                 .arg("--retained-release-combined-sdma")
                 .arg(count.to_string());
         }
+        ReleaseMode::LogicalMuxSdma(count) => {
+            command
+                .arg("--retained-release-logical-mux-sdma")
+                .arg(count.to_string());
+        }
     }
     let status = command
         .arg(unique_id.to_string())
@@ -488,7 +555,8 @@ mod tests {
         GFX942_SDMA_MAX_IN_FLIGHT_V1, Gfx942DirectionalSdmaQueueObservationV1,
         Gfx942HostVisibleBackingBudgetV1, Gfx942HostVisibleBackingUsageV1,
         Gfx942SdmaQueueObservationV1, GpuSelection, Options, ReleaseMode, combined_observations,
-        parse_selection, retained_host_usage, validate_sdma_observations,
+        parse_selection, retained_host_usage, validate_logical_mux_observations,
+        validate_sdma_observations,
     };
 
     fn args(values: &[&str]) -> Vec<String> {
@@ -708,6 +776,138 @@ mod tests {
         assert!(parse_selection(args(&["--retained-release-combined-sdma"])).is_err());
     }
 
+    #[test]
+    fn logical_mux_accepts_every_admitted_lane_count_and_explicit_device() {
+        for count in [2, 4, 8, 14, 16] {
+            for id in ["42", "0x2a"] {
+                assert_eq!(
+                    parse_selection(args(&[
+                        "--retained-release-logical-mux-sdma",
+                        &count.to_string(),
+                        id
+                    ]))
+                    .unwrap(),
+                    Options {
+                        selection: GpuSelection::UniqueId(42),
+                        release: ReleaseMode::LogicalMuxSdma(count)
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn logical_mux_rejects_unsupported_or_ambiguous_arguments() {
+        for count in [
+            "0",
+            "1",
+            "3",
+            "6",
+            "10",
+            "12",
+            "15",
+            "17",
+            "18",
+            "-2",
+            "+2",
+            "02",
+            "0x2",
+            "generic",
+            "4294967296",
+        ] {
+            assert!(
+                parse_selection(args(&["--retained-release-logical-mux-sdma", count, "42"]))
+                    .is_err()
+            );
+        }
+        for count in ["2", "4", "8", "14", "16"] {
+            for suffix in [
+                vec![],
+                vec!["--all"],
+                vec!["42", "extra"],
+                vec!["not-an-id"],
+            ] {
+                let mut values = vec!["--retained-release-logical-mux-sdma", count];
+                values.extend(suffix);
+                assert!(parse_selection(args(&values)).is_err());
+            }
+        }
+        assert!(parse_selection(args(&["--retained-release-logical-mux-sdma"])).is_err());
+    }
+
+    #[test]
+    fn logical_mux_oracle_accepts_two_sparse_native_ids_for_every_lane_count() {
+        for count in [2, 4, 8, 14, 16] {
+            validate_logical_mux_observations(count as usize, &striped_observations(2), count, 0);
+        }
+    }
+
+    #[test]
+    fn logical_mux_oracle_rejects_each_owner_field_roster_and_lane_mutation() {
+        for count in [2, 4, 8, 14, 16] {
+            for index in 0..2 {
+                for fault in 0..6 {
+                    let mut observations = striped_observations(2);
+                    let duplicate = observations[1 - index].queue_id;
+                    let owner = &mut observations[index];
+                    match fault {
+                        0 => owner.queue_id = 0,
+                        1 => owner.queue_id = duplicate,
+                        2 => owner.ring_bytes = 8192,
+                        3 => owner.maximum_in_flight -= 1,
+                        4 => owner.engine_index = None,
+                        5 => owner.engine_index = Some(1 - owner.engine_index.unwrap()),
+                        _ => unreachable!(),
+                    }
+                    assert!(
+                        std::panic::catch_unwind(|| validate_logical_mux_observations(
+                            count as usize,
+                            &observations,
+                            count,
+                            0
+                        ))
+                        .is_err()
+                    );
+                }
+            }
+            for fault in 0..6 {
+                let mut observations = striped_observations(2);
+                let mut lanes = count as usize;
+                match fault {
+                    0 => observations.clear(),
+                    1 => {
+                        observations.pop();
+                    }
+                    2 => observations.push(striped_observations(3)[2]),
+                    3 => observations.swap(0, 1),
+                    4 => lanes += 1,
+                    5 => lanes = if count == 2 { 4 } else { 2 },
+                    _ => unreachable!(),
+                }
+                assert!(
+                    std::panic::catch_unwind(|| validate_logical_mux_observations(
+                        lanes,
+                        &observations,
+                        count,
+                        0
+                    ))
+                    .is_err()
+                );
+            }
+        }
+        for count in [0, 1, 3, 6, 10, 12, 15, 17, 18] {
+            assert!(
+                std::panic::catch_unwind(|| validate_logical_mux_observations(
+                    count as usize,
+                    &striped_observations(2),
+                    count,
+                    0
+                ))
+                .is_err()
+            );
+        }
+    }
+
     fn striped_observations(count: u32) -> Vec<Gfx942SdmaQueueObservationV1> {
         (0..count)
             .map(|index| Gfx942SdmaQueueObservationV1 {
@@ -884,6 +1084,11 @@ mod tests {
 
     #[test]
     fn resource_oracle_counts_primary_and_all_sdma_owners() {
+        for count in [2, 4, 8, 14, 16] {
+            let release = ReleaseMode::LogicalMuxSdma(count);
+            assert_eq!(release.sdma_queue_count(), 2);
+            assert_eq!(release.released_resources(), 11);
+        }
         for release in [ReleaseMode::Legacy, ReleaseMode::Primary] {
             assert_eq!(release.sdma_queue_count(), 0);
             assert_eq!(release.released_resources(), 5);
