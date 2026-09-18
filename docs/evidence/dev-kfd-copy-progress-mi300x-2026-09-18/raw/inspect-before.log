@@ -1,0 +1,17 @@
+2026-09-18T01:52:35.414742366Z
+2beecd6160ee9a7f47cb3b0fc69a32eec5cc87f5820d3753cde06f19373f7c0e  prepare.sh
+7fc70667368f9aff6dddd615f127e3b55146c8c390693a7a81f56b019025cf77  guard.sh
+d82fc6be93fccf3722f4f74048ef77d8f99acd63e5378abe615420098c26faf7  run.sh
+f2786124d44aff3ffd85e32fddc2bcb7d2a2186b508fb8732044389c5a81359f  cleanup.sh
+c7ecdb50f2b4994009921cf7c33a3daa201ab750298e519b68958f85a4a22278  owner
+Filesystem         1B-blocks          Used   Available Use% Mounted on
+/dev/nvme2n1p2 3778190245888 3509513453568 76678701056  98% /
+407M	/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N
+inherited_environment HSA_XNACK=<unset>
+inherited_environment HSA_ENABLE_SDMA=<unset>
+inherited_environment HSA_ENABLE_PEER_SDMA=<unset>
+inherited_environment HSA_OVERRIDE_GFX_VERSION=<unset>
+inherited_environment HSA_TOOLS_LIB=<unset>
+inherited_environment LD_PRELOAD=<unset>
+inherited_environment LD_LIBRARY_PATH=<unset>
+2026-09-18T01:52:35.451356611Z

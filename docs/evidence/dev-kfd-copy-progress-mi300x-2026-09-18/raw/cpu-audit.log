@@ -1,0 +1,14 @@
+{
+  "scope": "strict supplemental CPU receipt audit, no test rerun",
+  "sealed_manifest_sha256": "044d073bd0bd4ad51e19f9f267e2c14f22cdab5d24e9ea8b5c6fe1d6ef58e87a",
+  "sealed_members": 100,
+  "logs_consumed": 6,
+  "rejected_harness_mutations": 13,
+  "example_passed_per_target": 13,
+  "runtime_passed_per_target": 1057,
+  "runtime_ignored_per_target": 17,
+  "abort_parent_child_banners": {
+    "kfd_backend::tests::runtime_compute_pipeline_drop_aborts_for_every_live_logical_phase": 5,
+    "kfd_backend::tests::scripted_sdma_drop_still_aborts_with_live_or_terminal_custody": 2
+  }
+}

@@ -1,0 +1,9 @@
+syntax_ok=create.sh
+syntax_ok=prepare.sh
+syntax_ok=guard.sh
+syntax_ok=run.sh
+syntax_ok=inspect.sh
+syntax_ok=cleanup.sh
+syntax_ok=record.sh
+syntax_ok=seal.sh
+syntax_ok=lint-shell.sh

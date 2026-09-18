@@ -1,0 +1,1 @@
+ssh -o BatchMode=yes -o ConnectTimeout=10 mi300x sha256sum /tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/target/release/examples/gfx942-runtime-directional-window-benchmark /tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/hsa-copy-pool-engine 

@@ -1,0 +1,1 @@
+scp -o BatchMode=yes -o ConnectTimeout=10 docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/prepare.sh docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/cleanup.sh docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/inspect.sh mi300x:/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/ 

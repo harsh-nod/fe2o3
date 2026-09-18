@@ -1,0 +1,17 @@
+test_counts (__main__.InterruptedTests.test_counts) ... ok
+test_event_order_and_exits (__main__.InterruptedTests.test_event_order_and_exits) ... ok
+test_exact_incomplete_roster (__main__.InterruptedTests.test_exact_incomplete_roster) ... ok
+test_failed_guard_must_retain_evidence (__main__.InterruptedTests.test_failed_guard_must_retain_evidence) ... ok
+test_full_campaign_refuses_actual_receipt (__main__.InterruptedTests.test_full_campaign_refuses_actual_receipt) ... ok
+test_nearest_cpu (__main__.InterruptedTests.test_nearest_cpu) ... ok
+test_policy_and_geometry (__main__.InterruptedTests.test_policy_and_geometry) ... ok
+test_pool_access (__main__.InterruptedTests.test_pool_access) ... ok
+test_rounds_and_totals (__main__.InterruptedTests.test_rounds_and_totals) ... ok
+test_successful_guard_corruption (__main__.InterruptedTests.test_successful_guard_corruption) ... ok
+test_terminal_cleanup_and_truncation (__main__.InterruptedTests.test_terminal_cleanup_and_truncation) ... ok
+test_warmup_exclusion_and_nearest_rank (__main__.InterruptedTests.test_warmup_exclusion_and_nearest_rank) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 0.239s
+
+OK

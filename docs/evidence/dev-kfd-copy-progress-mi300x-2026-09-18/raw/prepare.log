@@ -1,0 +1,110 @@
+2026-09-18T01:50:42.004470044Z
+Cloning into '/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source'...
+done.
+From https://github.com/harsh-nod/fe2o3
+ * branch                  3e12ef82bbb41fb116afbb7ddf7cffdad735ec7d -> FETCH_HEAD
+HEAD is now at 3e12ef82bb benchmarks: add qualified KFD copy progress diagnostics
+3e12ef82bbb41fb116afbb7ddf7cffdad735ec7d
+rustc 1.96.0-nightly (55e86c996 2026-04-02)
+binary: rustc
+commit-hash: 55e86c996809902e8bbad512cfb4d2c18be446d9
+commit-date: 2026-04-02
+host: x86_64-unknown-linux-gnu
+release: 1.96.0-nightly
+LLVM version: 22.1.2
+cargo 1.96.0-nightly (888f67534 2026-03-30)
+release: 1.96.0-nightly
+commit-hash: 888f675344eb1cf2308fd53183e667bdd2c58e51
+commit-date: 2026-03-30
+host: x86_64-unknown-linux-gnu
+libgit2: 1.9.2 (sys:0.20.4 vendored)
+libcurl: 8.19.0-DEV (sys:0.4.87+curl-8.19.0 vendored ssl:OpenSSL/3.5.4)
+ssl: OpenSSL 3.5.4 30 Sep 2025
+os: Ubuntu 24.4.0 (noble) [64-bit]
+g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+Copyright (C) 2023 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+Linux sharkmi300x-1 6.8.0-124-generic #124-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 13:00:45 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+/opt/rocm-7.2.4
+Filesystem         1B-blocks          Used   Available Use% Mounted on
+/dev/nvme2n1p2 3778190245888 3509185896448 77006258176  98% /
+   Compiling typenum v1.20.1
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.24
+   Compiling cpufeatures v0.3.1
+   Compiling serde_core v1.0.229
+   Compiling cfg-if v1.0.4
+   Compiling zmij v1.0.23
+   Compiling serde v1.0.229
+   Compiling hybrid-array v0.4.14
+   Compiling syn v3.0.4
+   Compiling rustix v1.1.4
+   Compiling autocfg v1.5.1
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling fe2o3-target-spec v0.1.0 (/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source/crates/fe2o3-target-spec)
+   Compiling serde_json v1.0.151
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling fe2o3-amd-target v0.1.0 (/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source/crates/fe2o3-amd-target)
+   Compiling num-traits v0.2.19
+   Compiling serde_derive v1.0.229
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.3
+   Compiling bitflags v2.13.1
+   Compiling libc v0.2.189
+   Compiling spin v0.12.3
+   Compiling linux-raw-sys v0.12.1
+   Compiling fe2o3-runtime-model v0.1.0 (/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source/crates/fe2o3-runtime-model)
+   Compiling fe2o3-hsaco v0.1.0 (/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source/crates/fe2o3-hsaco)
+   Compiling pin-project-lite v0.2.17
+   Compiling fe2o3-amdhsa-loader v0.1.0 (/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source/crates/fe2o3-amdhsa-loader)
+   Compiling futures-task v0.3.34
+   Compiling zeroize v1.9.0
+   Compiling fe2o3-drm-uapi v0.1.0 (/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source/crates/fe2o3-drm-uapi)
+   Compiling arrayvec v0.7.8
+   Compiling fe2o3-aql v0.1.0 (/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source/crates/fe2o3-aql)
+   Compiling fe2o3-kfd-uapi v0.1.0 (/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source/crates/fe2o3-kfd-uapi)
+   Compiling futures-core v0.3.34
+   Compiling slab v0.4.12
+   Compiling fe2o3-profiler-protocol v0.1.0 (/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source/crates/fe2o3-profiler-protocol)
+   Compiling fe2o3-resource-accounting v0.1.0 (/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source/crates/fe2o3-resource-accounting)
+   Compiling fe2o3-kfd v0.1.0 (/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source/crates/fe2o3-kfd)
+   Compiling futures-util v0.3.34
+   Compiling rmp v0.8.15
+   Compiling fe2o3-completion v0.1.0 (/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source/crates/fe2o3-completion)
+   Compiling fe2o3-host-api v0.1.0 (/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source/crates/fe2o3-host-api)
+   Compiling fe2o3-runtime v0.1.0 (/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source/crates/fe2o3-runtime)
+   Compiling rmpv v1.3.1
+   Compiling futures-executor v0.3.34
+   Compiling tokio v1.47.1
+   Compiling fe2o3-debug-protocol v0.1.0 (/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/source/crates/fe2o3-debug-protocol)
+    Finished `release` profile [optimized] target(s) in 55.30s
+	linux-vdso.so.1 (0x00007ffc6b0c7000)
+	libhsa-runtime64.so.1 => /opt/rocm/lib/libhsa-runtime64.so.1 (0x00007adc8c000000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007adc8bc00000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007adc8bfbe000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007adc8b800000)
+	libelf.so.1 => /lib/x86_64-linux-gnu/libelf.so.1 (0x00007adc8bf9f000)
+	librocprofiler-register.so.0 => /opt/rocm/lib/librocprofiler-register.so.0 (0x00007adc8bf10000)
+	libdrm.so.2 => /opt/amdgpu/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007adc8bef7000)
+	libdrm_amdgpu.so.1 => /opt/amdgpu/lib/x86_64-linux-gnu/libdrm_amdgpu.so.1 (0x00007adc8bee8000)
+	libnuma.so.1 => /lib/x86_64-linux-gnu/libnuma.so.1 (0x00007adc8beda000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007adc8bb17000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007adc8c428000)
+	libz.so.1 => /lib/x86_64-linux-gnu/libz.so.1 (0x00007adc8bebe000)
+	libzstd.so.1 => /lib/x86_64-linux-gnu/libzstd.so.1 (0x00007adc8ba5d000)
+	linux-vdso.so.1 (0x00007ffde5bfd000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x0000722255ac2000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x0000722255200000)
+	/lib64/ld-linux-x86-64.so.2 (0x0000722255b06000)
+b8cdfe93d343649a35c1daf73a0a3a6840f09379ebeee9be65670461ffea43f4  /opt/rocm/lib/libhsa-runtime64.so
+1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769  /usr/bin/g++
+51ea864cc3e83a9ce824c294dd98a5724eeec87b76fafded1a01d406206ce0f5  /opt/rocm/include/hsa/hsa.h
+a59a80700f9fa697f6067b6f5442aca5bdc494eaf20a2da639fd46038a7462b6  /opt/rocm/include/hsa/hsa_ext_amd.h
+f3944bcd7848d64424f8daf27f350b03d7f3281b2fb9be5eaaba0ddd0e72efb8  /usr/bin/numactl
+5a64729944c9bcd7eccd647ddc39cca1a942b3a51cf234fa1cb59a7b20591f46  /opt/rocm/bin/rocm-smi
+2026-09-18T01:51:41.311913581Z

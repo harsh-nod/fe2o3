@@ -97,3 +97,12 @@ timestamp decomposition, direction/round-distinct output and writer failures.
 The existing scripted native-backend frontier test supplies a separate check
 that a future wait deadline returns Pending without publishing the next window.
 Neither test family proves Linux timing, physical DMA behavior or performance.
+
+## Native Attempt
+
+The [2026-09-18 MI300X attempt](../../docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/README.md)
+completed eight of sixteen planned processes, then stopped before launching
+block three when the shared-host occupancy guard failed. Its completed prefix
+is retained only as individual observations; the complete-campaign checker
+rejects it. The owned remote build directory was removed. No production wait
+default or parity milestone changed on the basis of that interrupted experiment.

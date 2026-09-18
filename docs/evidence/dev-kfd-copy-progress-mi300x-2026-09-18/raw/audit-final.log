@@ -1,0 +1,131 @@
+{
+  "scope": "archived interrupted diagnostic, no accepted performance or parity result",
+  "accepted_campaign": false,
+  "source_commit": "3e12ef82bbb41fb116afbb7ddf7cffdad735ec7d",
+  "source_files": 5527,
+  "binary_hashes": {
+    "/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/target/release/examples/gfx942-runtime-directional-window-benchmark": "87ce04401dc5a7fb71adfffe76c31806d0c4009c4008b9719d32332eb4016e05",
+    "/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/hsa-copy-pool-engine": "5d7e0578ea8078bf10066bbd7f36fe78608449af6fb6d647f2ec4503e86d9e33"
+  },
+  "harness_hashes": {
+    "prepare.sh": "2beecd6160ee9a7f47cb3b0fc69a32eec5cc87f5820d3753cde06f19373f7c0e",
+    "guard.sh": "7fc70667368f9aff6dddd615f127e3b55146c8c390693a7a81f56b019025cf77",
+    "run.sh": "d82fc6be93fccf3722f4f74048ef77d8f99acd63e5378abe615420098c26faf7",
+    "cleanup.sh": "f2786124d44aff3ffd85e32fddc2bcb7d2a2186b508fb8732044389c5a81359f"
+  },
+  "records": {
+    "create": {
+      "exit": 0,
+      "started": "2026-09-18T01:50:11.900794587Z",
+      "finished": "2026-09-18T01:50:17.347415384Z",
+      "command": "ssh -o BatchMode=yes -o ConnectTimeout=10 mi300x bash -s"
+    },
+    "prepare": {
+      "exit": 0,
+      "started": "2026-09-18T01:50:41.076606706Z",
+      "finished": "2026-09-18T01:51:41.366105233Z",
+      "command": "ssh -o BatchMode=yes -o ConnectTimeout=10 mi300x timeout --signal=TERM --kill-after=30s 900s bash -s -- /tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N"
+    },
+    "stage-scripts": {
+      "exit": 0,
+      "started": "2026-09-18T01:50:42.686510126Z",
+      "finished": "2026-09-18T01:50:43.869624338Z",
+      "command": "scp -o BatchMode=yes -o ConnectTimeout=10 docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/guard.sh docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/run.sh mi300x:/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/"
+    },
+    "stage-audit": {
+      "exit": 0,
+      "started": "2026-09-18T01:52:31.396028073Z",
+      "finished": "2026-09-18T01:52:32.995240466Z",
+      "command": "scp -o BatchMode=yes -o ConnectTimeout=10 docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/prepare.sh docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/cleanup.sh docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/inspect.sh mi300x:/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/"
+    },
+    "inspect-before": {
+      "exit": 0,
+      "started": "2026-09-18T01:52:34.306571533Z",
+      "finished": "2026-09-18T01:52:35.508081223Z",
+      "command": "ssh -o BatchMode=yes -o ConnectTimeout=10 mi300x bash /tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/inspect.sh /tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N"
+    },
+    "benchmark": {
+      "exit": 1,
+      "started": "2026-09-18T01:52:49.522275177Z",
+      "finished": "2026-09-18T01:57:26.851188636Z",
+      "command": "ssh -o BatchMode=yes -o ConnectTimeout=10 mi300x /usr/bin/timeout --signal=TERM --kill-after=10s 1800s bash /tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/run.sh /tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N"
+    },
+    "cpu-audit": {
+      "exit": 0,
+      "started": "2026-09-18T01:53:38.229679023Z",
+      "finished": "2026-09-18T01:53:39.040149884Z",
+      "command": "python3 -I docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/audit-cpu.py"
+    },
+    "inspect-after": {
+      "exit": 0,
+      "started": "2026-09-18T01:58:32.027594711Z",
+      "finished": "2026-09-18T01:58:32.976014287Z",
+      "command": "ssh -o BatchMode=yes -o ConnectTimeout=10 mi300x bash /tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/inspect.sh /tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N"
+    },
+    "hash-binaries": {
+      "exit": 0,
+      "started": "2026-09-18T01:58:42.351550150Z",
+      "finished": "2026-09-18T01:58:43.876464528Z",
+      "command": "ssh -o BatchMode=yes -o ConnectTimeout=10 mi300x sha256sum /tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/target/release/examples/gfx942-runtime-directional-window-benchmark /tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/hsa-copy-pool-engine"
+    },
+    "collect": {
+      "exit": 0,
+      "started": "2026-09-18T01:58:43.961507702Z",
+      "finished": "2026-09-18T01:58:45.895709555Z",
+      "command": "scp -q -r -o BatchMode=yes mi300x:/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/results docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/"
+    },
+    "cleanup": {
+      "exit": 0,
+      "started": "2026-09-18T01:59:01.273165920Z",
+      "finished": "2026-09-18T01:59:12.750638796Z",
+      "command": "ssh -o BatchMode=yes -o ConnectTimeout=10 mi300x bash /tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N/cleanup.sh /tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N"
+    },
+    "occupancy-after-cleanup": {
+      "exit": 0,
+      "started": "2026-09-18T01:59:23.789813969Z",
+      "finished": "2026-09-18T01:59:26.776839057Z",
+      "command": "ssh -o BatchMode=yes -o ConnectTimeout=10 mi300x bash -c \\\"source\\ /dev/stdin\\;\\ admit\\\""
+    },
+    "partial-observations": {
+      "exit": 0,
+      "started": "2026-09-18T02:00:59.003382956Z",
+      "finished": "2026-09-18T02:00:59.133540015Z",
+      "command": "python3 -I docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/interrupted.py"
+    },
+    "summary-refusal": {
+      "exit": 1,
+      "started": "2026-09-18T02:00:59.706596149Z",
+      "finished": "2026-09-18T02:01:00.083231483Z",
+      "command": "python3 -I docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/summarize.py"
+    },
+    "interrupted-tests": {
+      "exit": 0,
+      "started": "2026-09-18T02:03:30.327005242Z",
+      "finished": "2026-09-18T02:03:30.766847632Z",
+      "command": "python3 -I docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/test-interrupted.py -v"
+    },
+    "python-lint": {
+      "exit": 0,
+      "started": "2026-09-18T02:04:11.610867139Z",
+      "finished": "2026-09-18T02:04:11.680109393Z",
+      "command": "ruff check docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18"
+    },
+    "shell-lint": {
+      "exit": 0,
+      "started": "2026-09-18T01:58:05.004099845Z",
+      "finished": "2026-09-18T01:58:05.010636223Z",
+      "command": "bash -n docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/create.sh docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/prepare.sh docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/guard.sh docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/run.sh docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/inspect.sh docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/cleanup.sh docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/record.sh docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/seal.sh"
+    },
+    "shell-lint-final": {
+      "exit": 0,
+      "started": "2026-09-18T02:07:52.458879911Z",
+      "finished": "2026-09-18T02:07:52.501677324Z",
+      "command": "bash docs/evidence/dev-kfd-copy-progress-mi300x-2026-09-18/lint-shell.sh"
+    }
+  },
+  "completed_processes": 8,
+  "planned_processes": 16,
+  "successful_prefix_guard_observations": 16,
+  "failed_guard_observations": 2,
+  "owned_remote_directory_removed": "/tmp/fe2o3-kfd-copy-progress-20260918.rrF6He9N"
+}
