@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "scalar-borrow-policy5")]
+mod scalar_borrow_policy5;
+
 #[cfg(feature = "defined-helper-reference")]
 mod defined_helper_reference;
 
@@ -37,6 +40,7 @@ mod saturating_integer;
 mod write_only_reference;
 
 #[cfg(not(any(
+    feature = "scalar-borrow-policy5",
     feature = "defined-helper-reference",
     feature = "f32-exp",
     feature = "f32-helper-exp",

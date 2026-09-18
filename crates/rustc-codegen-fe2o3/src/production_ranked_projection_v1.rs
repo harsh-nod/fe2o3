@@ -21,6 +21,7 @@ mod canonical_assertion_facts_v1;
 mod materialized_callable_effect_v1;
 mod ranked_projection_source_v1;
 mod saturating_integer_expression_v2;
+mod scalar_borrow_projection_v1;
 mod scalar_singleton_projection_v1;
 mod slice_projection_v1;
 use slice_projection_v1::ProjectedViewsV1;
@@ -3212,15 +3213,24 @@ fn project_and_verify_ranked_root_v1(
         function,
         assertion_facts,
         |singletons, facts| {
-            project_and_verify_ranked_root_with_singletons_v1(
-                semantic,
-                callable_effects,
-                selection,
-                input,
-                source_root,
-                reference_bindings,
+            scalar_borrow_projection_v1::with_scalar_private_borrows_v1(
+                semantic.types(),
+                function,
+                semantic.target(),
                 facts,
-                singletons,
+                |borrows, facts| {
+                    project_and_verify_ranked_root_with_singletons_v1(
+                        semantic,
+                        callable_effects,
+                        selection,
+                        input,
+                        source_root,
+                        reference_bindings,
+                        facts,
+                        singletons,
+                        borrows,
+                    )
+                },
             )
         },
     )
@@ -3236,6 +3246,7 @@ fn project_and_verify_ranked_root_with_singletons_v1(
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     assertion_facts: &mut impl ProjectedAssertionFactsV1,
     singletons: &[u8],
+    borrows: Option<&scalar_borrow_projection_v1::ScalarPrivateBorrowsV1<'_>>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     let logical_name = input.logical_name.as_str();
     let source_launch = &input.source_launch;
@@ -3314,7 +3325,8 @@ fn project_and_verify_ranked_root_with_singletons_v1(
     };
     let mut incomplete = None;
     let mut projected_views = ProjectedViewsV1::new(function.locals().len(), Some(assertion_facts))
-        .with_scalar_private_singletons(singletons);
+        .with_scalar_private_singletons(singletons)
+        .with_scalar_private_borrows(borrows, semantic.target());
     let mut discarded_ir = String::new();
     let intrinsic = project_intrinsic_contracts(
         semantic.callables(),
@@ -23964,7 +23976,17 @@ fn project_place_access_with_atomic(
             }
         }
     }
-    let Some(local) = function.locals().get(place.local().index() as usize) else {
+    let private_borrow = projected_views.scalar_private_borrow(
+        types,
+        function,
+        block_index,
+        place,
+        access,
+        atomic,
+        local_contracts,
+    )?;
+    let allocation_local = private_borrow.unwrap_or_else(|| place.local());
+    let Some(local) = function.locals().get(allocation_local.index() as usize) else {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
             "an indexed place with an out-of-range local",
         ));
@@ -23977,7 +23999,14 @@ fn project_place_access_with_atomic(
     let mut crosses_memory_boundary = false;
     let mut dereferenced_memory_space = None;
     let mut canonical_slice = None;
-    for projection in place.projections() {
+    // Only a freshly checked source occurrence can use its original private
+    // scalar allocation here. The access's source site remains unchanged.
+    let projections = if private_borrow.is_some() {
+        &[][..]
+    } else {
+        place.projections()
+    };
+    for projection in projections {
         match projection.kind() {
             SemanticProjectionKindV1::Dereference => {
                 crosses_memory_boundary = true;
@@ -24168,12 +24197,13 @@ fn project_place_access_with_atomic(
         indices.push(ProjectedIndexV1::Constant(0));
     }
     if indices.is_empty()
-        && requirement == PlaceAccessRequirementV1::ExplicitMemory
         && atomic.is_none()
-        && place.projections().is_empty()
-        && place.ty() == local.ty()
-        && !local.role().is_entry_argument()
-        && projected_views.scalar_private_singleton(place.local())?
+        && (private_borrow.is_some()
+            || (requirement == PlaceAccessRequirementV1::ExplicitMemory
+                && place.projections().is_empty()
+                && place.ty() == local.ty()
+                && !local.role().is_entry_argument()
+                && projected_views.scalar_private_singleton(place.local())?))
     {
         shape.push(1);
         indices.push(ProjectedIndexV1::Constant(0));
@@ -24236,7 +24266,7 @@ fn project_place_access_with_atomic(
                     "an indexed global allocation lacks authenticated Rust pointer provenance",
                 ))?,
             MemorySpaceAttr::Private => {
-                let identity = u64::from(place.local().index()).checked_add(1).ok_or(
+                let identity = u64::from(allocation_local.index()).checked_add(1).ok_or(
                     ProductionRankedProjectionErrorV1::Unsupported(
                         "a private allocation identity overflowed",
                     ),
@@ -24268,7 +24298,7 @@ fn project_place_access_with_atomic(
         &mut fresh_view
     } else {
         projected_views
-            .get_mut(place.local().index() as usize)
+            .get_mut(allocation_local.index() as usize)
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
                 "an indexed place outside the ranked view table",
             ))?

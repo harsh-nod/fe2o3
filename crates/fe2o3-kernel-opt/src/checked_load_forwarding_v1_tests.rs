@@ -9,6 +9,9 @@ pub(crate) const WORK: usize = 1_000_000_000;
 pub(crate) const STORAGE: usize = 256 * 1024 * 1024;
 const FLOOR: usize = 41;
 
+#[path = "checked_load_forwarding_golden_v1_tests.rs"]
+mod observation_goldens;
+
 pub(crate) fn fixture() -> Module {
     let scalar = Type::Scalar(ScalarType::U32);
     let mut block = BasicBlock::new(BlockId(73));
