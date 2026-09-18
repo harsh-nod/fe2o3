@@ -10836,8 +10836,8 @@ fn lower_one_semantic_function_v1(
     drop(lowering.emission_work.take());
     let generated_terminator_values = lowering.generated_terminator_values;
     let mut call_returns = lowering.call_returns;
-    call_returns.order_blocks(call_budget)?;
     let private_arrays = lowering.private_arrays.into_rows()?;
+    call_returns.order_blocks(call_budget)?;
     let operation_capabilities = target_blocks
         .iter()
         .flat_map(|block| block.operations.iter())
