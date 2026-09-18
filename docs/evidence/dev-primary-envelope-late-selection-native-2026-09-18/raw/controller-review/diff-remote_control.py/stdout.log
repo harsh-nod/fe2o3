@@ -1,0 +1,22 @@
+--- /home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-control-fresh-20260918/remote_control.py	2026-09-18 03:50:01.640116150 -0700
++++ /home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-control-20260918/remote_control.py	2026-09-18 04:21:09.154381154 -0700
+@@ -12,8 +12,8 @@
+ import sys
+ import time
+ 
+-COMMIT = "8b0021ba740c337b2641ecd26ed6c9375613ed32"
+-PAYLOAD = "b69190c2182feb82476d6be2ecd6e30e11d58c3b804e686d7ec338814d1ac4f6"
++COMMIT = "a0db73625c421e26922a1bb8cab4dec49012417c"
++PAYLOAD = "9f798dc90a24dc950beca265be80060f7588eff49a681dbd19e8fe8d27208201"
+ 
+ 
+ def need(condition, message):
+@@ -268,7 +268,7 @@
+     mode, owned = sys.argv[1], Path(sys.argv[2])
+     need(
+         re.fullmatch(
+-            r"/tmp/fe2o3-r126-primary-8b0021ba-20260918\.[A-Za-z0-9]{8}", str(owned)
++            r"/tmp/fe2o3-r126-primary-a0db7362-20260918\.[A-Za-z0-9]{8}", str(owned)
+         ),
+         "exact approved path shape",
+     )

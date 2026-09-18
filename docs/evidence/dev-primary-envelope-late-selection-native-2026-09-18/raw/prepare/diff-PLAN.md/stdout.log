@@ -1,0 +1,44 @@
+--- /home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-8b0021ba-20260918/PLAN.md	2026-09-18 03:31:44.612580498 -0700
++++ /home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-plan-20260918/PLAN.md	2026-09-18 04:18:54.012566723 -0700
+@@ -8,12 +8,12 @@
+ 
+ ## Bound Inputs
+ 
+-- Signed containing commit: `8b0021ba740c337b2641ecd26ed6c9375613ed32`.
++- Signed containing commit: `a0db73625c421e26922a1bb8cab4dec49012417c`.
+ - Final scoped-musl runtime test binary:
+   `target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-afaad0775e07e3e7`.
+ - Binary SHA-256:
+-  `7e75d4a11011cf63705020d3b814aa25a610fe56371c1b8c5d3b5671357376f8`.
+-- CPU packet: `docs/evidence/dev-primary-envelope-cpu-2026-09-18`.
++  `001b9abd5e257098da8a27091ca81d62601805d7ca5b4ae86f81d6e69317ade2`.
++- CPU packet: `docs/evidence/dev-primary-envelope-late-selection-cpu-2026-09-18`.
+   Compare every one of its 5,553 final before/after source hashes to the signed
+   commit, ignoring only the older recorded `base` field. No Cargo rebuild.
+ - GPU 4, UID `0x54f88318ca05093d`, PCI `0000:85:00.0`, CPU 48-95, NUMA 1.
+@@ -25,9 +25,11 @@
+ complete 5,553-entry cohort is checked against Git blobs, not inferred from a
+ clean worktree or a few selected files. It hashes every exported payload.
+ It performs no SSH, device observation or native execution.
++The exporter creates and checks local directory mode 0700 before copying files;
++SCP must not propagate a less-private local directory mode to remote staging.
+ 
+ Only after preparation/review may root create one fresh remote directory with
+-`mktemp -d /tmp/fe2o3-r126-primary-8b0021ba-20260918.XXXXXXXX`, record its exact
++`mktemp -d /tmp/fe2o3-r126-primary-a0db7362-20260918.XXXXXXXX`, record its exact
+ returned path, and bind the root-approval document to that path and payload
+ manifest hash. No pre-existing directory may be adopted or overwritten.
+ Directory ownership and a commit/path-bound `owner.json` marker are required.
+@@ -123,7 +125,8 @@
+ 
+ ## Current State
+ 
+-Signed source identity received. CPU cohort and final binary identity received.
+-No SSH, GPU admission, remote export, native launch or cleanup has been performed
+-for this plan. Runner/checker freeze, local preparation, root READY review,
+-HIP handoff, fresh remote path and root authorization remain prerequisites.
++Signed source identity, final CPU cohort and final binary identity received.
++The local export receipt must independently bind all of them. No SSH, GPU
++admission, remote export, native launch or cleanup has been performed for this
++plan. Root READY review, a closed previous GPU handoff, a fresh marked remote
++path and explicit root execution authorization remain prerequisites.

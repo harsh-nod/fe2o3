@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/usr/bin/diff",
+    "-u",
+    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-8b0021ba-20260918/PLAN.md",
+    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-plan-20260918/PLAN.md"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-plan-20260918",
+  "started_ns": 1789730370173025701,
+  "bound_seconds": 30,
+  "expected_status": 1,
+  "error": null,
+  "process_group": 1493905,
+  "status": 1,
+  "group_absent": true,
+  "finished_ns": 1789730370178205080,
+  "stdout_sha256": "02be64937ec7f19d2e67c67a2e062f57eb5f666ec90c1f9e645d62d9ecae3aa4",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

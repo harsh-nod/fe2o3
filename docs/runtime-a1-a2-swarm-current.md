@@ -10,7 +10,18 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-A later [HIP smoke on newly free GPU 4](evidence/dev-hip-native-copy-smoke-free-gpu4-2026-09-18/README.md)
+The corrected [primary teardown native run](evidence/dev-primary-envelope-late-selection-native-2026-09-18/README.md)
+executes all three test commands successfully from signed `a0db73625`: ordinary
+shutdown, installed-root error retention and original-payload panic retention.
+The strict campaign still rejects: the panic case's immediate observer records
+`sysfs-before-busy` at 1%, although subsequent direct samples and SMI report zero,
+no selected PID is observed, and the fixed delayed endpoint passes. The original
+refusal is preserved, without retry or causal attribution. All three native
+transcripts, collection, exact-owned cleanup and separate absence checks are
+retained. This is native assertion evidence, not complete strict-campaign, R126,
+formal-correspondence or matched-performance acceptance.
+
+A separate [HIP smoke on newly free GPU 4](evidence/dev-hip-native-copy-smoke-free-gpu4-2026-09-18/README.md)
 passes thirteen fully validated 256 MiB round trips and explicit allocation/stream
 cleanup from the exact committed comparator. Fresh preflight passed. The
 immediate observer retained its original refusal for busy-only telemetry at
@@ -21,7 +32,7 @@ directory was removed and recorded-process/path absence independently checked.
 This is one-process copy correctness and protocol qualification, not a matched
 HIP/HSA ratio, physical-engine equivalence or performance-parity claim.
 
-The subsequent [primary teardown native campaign](evidence/dev-r126-primary-envelope-native-2026-09-18/README.md)
+The earlier [primary teardown native campaign](evidence/dev-r126-primary-envelope-native-2026-09-18/README.md)
 passes the normal-shutdown regression on GPU 4, including complete readback,
 backing refund and queue-profile checks. Its error fixture then fails before
 fault injection because it checks retained-primary eligibility before public
@@ -34,8 +45,8 @@ after shutdown preparation and requires terminal retry to leave that observer
 untouched. Its [fresh CPU campaign](evidence/dev-primary-envelope-late-selection-cpu-2026-09-18/README.md)
 passes 1,102 runtime tests with twenty ignored on both GNU and scoped musl; all
 46 doctests and static checks pass on the final source. Production shutdown code
-is unchanged. Corrected native error/panic qualification remains pending; the
-old failed run is not upgraded.
+is unchanged. The subsequent native results above do not upgrade the old failed
+run or close strict campaign qualification.
 
 The preceding [primary teardown CPU campaign](evidence/dev-primary-envelope-cpu-2026-09-18/README.md)
 passes 1,102 runtime tests on both GNU and scoped musl, with twenty ignored,

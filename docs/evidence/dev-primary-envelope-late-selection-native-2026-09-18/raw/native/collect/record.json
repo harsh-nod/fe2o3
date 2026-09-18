@@ -1,0 +1,27 @@
+{
+  "command": [
+    "scp",
+    "-r",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x:/tmp/fe2o3-r126-primary-a0db7362-20260918.mmfeMgC8",
+    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-a0db7362-20260918",
+  "started_ns": 1789730638385978554,
+  "bound_seconds": 180,
+  "process_group": 1506239,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789730653067999942,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

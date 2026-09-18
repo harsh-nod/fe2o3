@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/usr/bin/diff",
+    "-u",
+    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-8b0021ba-20260918/protocol.py",
+    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-plan-20260918/protocol.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-plan-20260918",
+  "started_ns": 1789730370193127405,
+  "bound_seconds": 30,
+  "expected_status": 1,
+  "error": null,
+  "process_group": 1493924,
+  "status": 1,
+  "group_absent": true,
+  "finished_ns": 1789730370197900906,
+  "stdout_sha256": "336ab14e094d4f1998668bcf522e14857e6decc452d410ab63e3cf9c2a1a9825",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

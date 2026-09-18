@@ -1,0 +1,10 @@
+{
+  "gnu-runtime": {
+    "path": "target/debug/deps/fe2o3_runtime-47b18d551c529e90",
+    "sha256": "68b3566760bbeeab35b4a8c781280a277b3a1870915a4f54b75a0c1aef0d18bd"
+  },
+  "musl-runtime": {
+    "path": "target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-afaad0775e07e3e7",
+    "sha256": "001b9abd5e257098da8a27091ca81d62601805d7ca5b4ae86f81d6e69317ade2"
+  }
+}

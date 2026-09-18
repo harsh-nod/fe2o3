@@ -1,0 +1,11 @@
+--- /home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-8b0021ba-20260918/run.py	2026-09-18 03:31:44.612580498 -0700
++++ /home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-plan-20260918/run.py	2026-09-18 04:18:54.012566723 -0700
+@@ -192,7 +192,7 @@
+     P.need(args.parent_ready_approved, "root authorization required")
+     P.need(
+         re.fullmatch(
+-            r"/tmp/fe2o3-r126-primary-8b0021ba-20260918\.[A-Za-z0-9]{8}", str(root)
++            r"/tmp/fe2o3-r126-primary-a0db7362-20260918\.[A-Za-z0-9]{8}", str(root)
+         ),
+         "exact fresh remote path shape",
+     )

@@ -1,0 +1,21 @@
+{
+  "command": [
+    "/home/harsh/.local/bin/ruff",
+    "check",
+    "--no-cache",
+    "controller.py",
+    "remote_control.py",
+    "test_controller.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-control-20260918",
+  "started_ns": 1789730488869249249,
+  "bound_seconds": 120,
+  "expected_status": 0,
+  "error": null,
+  "process_group": 1498968,
+  "status": 0,
+  "group_absent": true,
+  "finished_ns": 1789730488901908424,
+  "stdout_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "-c",
+    "import json,pathlib,protocol; root=pathlib.Path.cwd(); manifest=protocol.payload(root); print(json.dumps({'payload_sha256':protocol.sha(root/'payload.json'),'files':len(manifest),'verified':True},sort_keys=True))"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-a0db7362-20260918",
+  "started_ns": 1789730489149554227,
+  "bound_seconds": 30,
+  "process_group": 1499034,
+  "status": 0,
+  "error": null,
+  "group_absent": true,
+  "stdin_sha256": null,
+  "finished_ns": 1789730489317767153,
+  "stdout_sha256": "c3d0b8868a4b0e58c6709fd799b5b5d2d1bd6563278a475adcbf4a62ef515799",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

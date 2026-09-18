@@ -1,0 +1,683 @@
+{
+  "omitted": {
+    "raw/native/collected/runtime-tests": {
+      "bytes": 58484448,
+      "retained_elsewhere": null,
+      "sha256": "001b9abd5e257098da8a27091ca81d62601805d7ca5b4ae86f81d6e69317ade2"
+    }
+  },
+  "retained": {
+    "control/CONTROL.md": {
+      "sha256": "c4f83cc5e3fd4f955116c6089fec1cfcee66a3dc8ff5f801e566df6246db0268",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-control-20260918/CONTROL.md"
+    },
+    "control/controller.py": {
+      "sha256": "97d2e881cdd08535be8b6697aa923ddffcd33a7ef875058d55141725c0607148",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-control-20260918/controller.py"
+    },
+    "control/remote_control.py": {
+      "sha256": "faf0d5f870fca158bf1046108ef3382600faa408651eae59a769484dde9c93dc",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-control-20260918/remote_control.py"
+    },
+    "control/test_controller.py": {
+      "sha256": "0cd5c384257bdc9cdf19e82417903ace703b27c2639204b23387520b86674c99",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-control-20260918/test_controller.py"
+    },
+    "raw/controller-local/controller.json": {
+      "sha256": "df10a340c9f4eed30611c1f773c87a697f05d01bd1e0936df443d5fca9c14eae",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-local-20260918/controller.json"
+    },
+    "raw/controller-local/local-controller-wiring-tests/record.json": {
+      "sha256": "fe8b91b2e45f3ce877206367b9bf41f9804fa48cae55beff10f3a60a684d375d",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-local-20260918/local-controller-wiring-tests/record.json"
+    },
+    "raw/controller-local/local-controller-wiring-tests/stderr.log": {
+      "sha256": "e9a6da3b312287bc1c2fd103bec714d87abff867869587d09fecbe270afe8a84",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-local-20260918/local-controller-wiring-tests/stderr.log"
+    },
+    "raw/controller-local/local-controller-wiring-tests/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-local-20260918/local-controller-wiring-tests/stdout.log"
+    },
+    "raw/controller-local/local-payload-verify/record.json": {
+      "sha256": "77fdfe387ea04356a09231ca3ffac680b11458ad832d01ce686eff27684b6be5",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-local-20260918/local-payload-verify/record.json"
+    },
+    "raw/controller-local/local-payload-verify/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-local-20260918/local-payload-verify/stderr.log"
+    },
+    "raw/controller-local/local-payload-verify/stdout.log": {
+      "sha256": "c3d0b8868a4b0e58c6709fd799b5b5d2d1bd6563278a475adcbf4a62ef515799",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-local-20260918/local-payload-verify/stdout.log"
+    },
+    "raw/controller-local/local-protocol-tests/record.json": {
+      "sha256": "5db0a83e4faf830c49729f2ad75029d5189a8721f40450b63f268ce6ab2eb9ec",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-local-20260918/local-protocol-tests/record.json"
+    },
+    "raw/controller-local/local-protocol-tests/stderr.log": {
+      "sha256": "b8d8dd745be7e5cd95b108a0cafb704b45f27efdf22fda341a3ddef9b39e755d",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-local-20260918/local-protocol-tests/stderr.log"
+    },
+    "raw/controller-local/local-protocol-tests/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-local-20260918/local-protocol-tests/stdout.log"
+    },
+    "raw/controller-review/diff-controller.py/record.json": {
+      "sha256": "cb75dbb86e57cbc6240db698e6606f8af3aa6b1abe65f495a798c471ab149e0e",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/diff-controller.py/record.json"
+    },
+    "raw/controller-review/diff-controller.py/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/diff-controller.py/stderr.log"
+    },
+    "raw/controller-review/diff-controller.py/stdout.log": {
+      "sha256": "8fbdd02103f54de357acef945792655dc766bab998ee0143a0f05c0158484d33",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/diff-controller.py/stdout.log"
+    },
+    "raw/controller-review/diff-remote_control.py/record.json": {
+      "sha256": "bdd2985ad99f96cdfcbd3617ed00b363a2ca81aa5f87118fc832b8f126f195a3",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/diff-remote_control.py/record.json"
+    },
+    "raw/controller-review/diff-remote_control.py/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/diff-remote_control.py/stderr.log"
+    },
+    "raw/controller-review/diff-remote_control.py/stdout.log": {
+      "sha256": "0301cd3cf86ca06e33ae1894221342bb2f83afd1c2ff99900fd3cd9493a35a05",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/diff-remote_control.py/stdout.log"
+    },
+    "raw/controller-review/diff-test_controller.py/record.json": {
+      "sha256": "4fcdec70365f526512a8207572736a2dbd5e1ac86157676482c13c1140c1c393",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/diff-test_controller.py/record.json"
+    },
+    "raw/controller-review/diff-test_controller.py/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/diff-test_controller.py/stderr.log"
+    },
+    "raw/controller-review/diff-test_controller.py/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/diff-test_controller.py/stdout.log"
+    },
+    "raw/controller-review/format/record.json": {
+      "sha256": "7d1407d902f796b19ed884f38474f55953ba847f92cbd56408b881024adef630",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/format/record.json"
+    },
+    "raw/controller-review/format/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/format/stderr.log"
+    },
+    "raw/controller-review/format/stdout.log": {
+      "sha256": "eee76f865de5a9f2456950f710ae5d5f9b5bd0ea02aa54f614c5eed6642a0bfd",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/format/stdout.log"
+    },
+    "raw/controller-review/lint/record.json": {
+      "sha256": "278334d480a76e5c8784ef2a8eeb4d94bf18a84c64577c16985ab7403b0ebcb5",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/lint/record.json"
+    },
+    "raw/controller-review/lint/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/lint/stderr.log"
+    },
+    "raw/controller-review/lint/stdout.log": {
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/lint/stdout.log"
+    },
+    "raw/controller-review/local-qualification/record.json": {
+      "sha256": "489179fdc7e8f5cd80adf480ba59de03ae45cac9811e55a06ed5ed736338e8cc",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/local-qualification/record.json"
+    },
+    "raw/controller-review/local-qualification/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/local-qualification/stderr.log"
+    },
+    "raw/controller-review/local-qualification/stdout.log": {
+      "sha256": "7abcddcc86a6c956755642d980ba87b3d691080a56e0750cd56dffc5e7fa77c5",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/local-qualification/stdout.log"
+    },
+    "raw/controller-review/source-identities.json": {
+      "sha256": "f171832d5a07d76f235a43165755a3d6f858fc6dc6697210a00044292494a19f",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-controller-review-20260918/source-identities.json"
+    },
+    "raw/native/collect/record.json": {
+      "sha256": "cbe265db1c2e6f1d2bac2c2a10606905ac398136d1ec528459485b2ce03a0c93",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collect/record.json"
+    },
+    "raw/native/collect/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collect/stderr.log"
+    },
+    "raw/native/collect/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collect/stdout.log"
+    },
+    "raw/native/collected/PLAN.md": {
+      "sha256": "52e3ab2feefed9240a44ed4b1420bcd9966ed910b11a307ccc2dbc948ba23c0a",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/PLAN.md"
+    },
+    "raw/native/collected/approval.json": {
+      "sha256": "6b028c60d5ad3f2abe0d6bd95281fd426e680186fceadaf0a2abca0e13d19bec",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/approval.json"
+    },
+    "raw/native/collected/binding.json": {
+      "sha256": "9352b29f97f6773fc8f825b2aa07d8ef89844a05e4104be9c91df9698fb96871",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/binding.json"
+    },
+    "raw/native/collected/commit-signature.stderr": {
+      "sha256": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/commit-signature.stderr"
+    },
+    "raw/native/collected/commit-signature.stdout": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/commit-signature.stdout"
+    },
+    "raw/native/collected/cpu/SHA256SUMS": {
+      "sha256": "fe10e9f138029f7374a3e07d7046ca6a7bd23ca3d5c60b8876b5096a082c04d9",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/cpu/SHA256SUMS"
+    },
+    "raw/native/collected/cpu/binaries-after-final.log": {
+      "sha256": "4a4bf746527f0c6916dcdd2c23e8aa0d2d69b0df62e26fd26ffd34a700798e35",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/cpu/binaries-after-final.log"
+    },
+    "raw/native/collected/cpu/binaries-before-final.log": {
+      "sha256": "4a4bf746527f0c6916dcdd2c23e8aa0d2d69b0df62e26fd26ffd34a700798e35",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/cpu/binaries-before-final.log"
+    },
+    "raw/native/collected/cpu/source-after-final.log": {
+      "sha256": "6eff59a1d19ae0e0a761b8a7013ff8a9a192a1f44f912baf2713fd1d2dda2ca0",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/cpu/source-after-final.log"
+    },
+    "raw/native/collected/cpu/source-before-final.log": {
+      "sha256": "6eff59a1d19ae0e0a761b8a7013ff8a9a192a1f44f912baf2713fd1d2dda2ca0",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/cpu/source-before-final.log"
+    },
+    "raw/native/collected/owner.json": {
+      "sha256": "59c5521a9c83d8aec44aaeb6585c4ab34a67eb1f706608226bc676ba90e3583e",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/owner.json"
+    },
+    "raw/native/collected/payload.json": {
+      "sha256": "9f798dc90a24dc950beca265be80060f7588eff49a681dbd19e8fe8d27208201",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/payload.json"
+    },
+    "raw/native/collected/prepare.py": {
+      "sha256": "fff1d5b6ecf5bbd011294080314eb6936e14839796b6e3ce99c1eefea26c0a96",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/prepare.py"
+    },
+    "raw/native/collected/protocol.py": {
+      "sha256": "8243d88e4033574cdb26e90226c9c5ac36aa3501031c405e3a932990591edd29",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/protocol.py"
+    },
+    "raw/native/collected/results/campaign.json": {
+      "sha256": "32d014a2c9d5c8e0e128e706c1fa991da22335ab53b046629de682f645a80d6c",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/campaign.json"
+    },
+    "raw/native/collected/results/controller-launch.json": {
+      "sha256": "56f7b08c42917d01696d493ca40a08eca60fcea80ed5975ef1f1d8c2a2e9e4e0",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/controller-launch.json"
+    },
+    "raw/native/collected/results/error-delayed/record.json": {
+      "sha256": "4a6e96a2fcade2f85af2a696319bed12bacd46d4bfd39f0f6645179b6128e1fc",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/error-delayed/record.json"
+    },
+    "raw/native/collected/results/error-delayed/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/error-delayed/stderr.log"
+    },
+    "raw/native/collected/results/error-delayed/stdout.log": {
+      "sha256": "8bd04dc574be9e9d7c9f6cb4df78db281a0a108ddf42ccb7eddc4b522b225bb1",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/error-delayed/stdout.log"
+    },
+    "raw/native/collected/results/error-immediate/record.json": {
+      "sha256": "d11fb6d08403a61d799efb830dedd58adc032e6d2fc619e5611925368f6140df",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/error-immediate/record.json"
+    },
+    "raw/native/collected/results/error-immediate/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/error-immediate/stderr.log"
+    },
+    "raw/native/collected/results/error-immediate/stdout.log": {
+      "sha256": "c5ad1d44ff06bfffc5519966efc0ace41f80793c9342e288927229ce2a71a6a8",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/error-immediate/stdout.log"
+    },
+    "raw/native/collected/results/error-preflight/record.json": {
+      "sha256": "5d75a8c1ffed76cd720a5d9f533c873f86a3b9ea9146a79490798edb13102625",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/error-preflight/record.json"
+    },
+    "raw/native/collected/results/error-preflight/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/error-preflight/stderr.log"
+    },
+    "raw/native/collected/results/error-preflight/stdout.log": {
+      "sha256": "89ab5e0acae2a7817b0fc027fd8d7fc375546d8016a266ec5d98fef5850903f5",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/error-preflight/stdout.log"
+    },
+    "raw/native/collected/results/error-test/record.json": {
+      "sha256": "9ad3f6d74f8f759ea8099684d705051a5156ea520f7c375a3edaf9a3b430dfa2",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/error-test/record.json"
+    },
+    "raw/native/collected/results/error-test/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/error-test/stderr.log"
+    },
+    "raw/native/collected/results/error-test/stdout.log": {
+      "sha256": "b8e75fe8062fc02a177dca4f80204d3bd95bda339ea1b91523a418f22fadf14c",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/error-test/stdout.log"
+    },
+    "raw/native/collected/results/panic-delayed/record.json": {
+      "sha256": "cfaebf4057c32b45278a1351a90628a2b9e4cce4aecc6042ca1afea602048d6b",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/panic-delayed/record.json"
+    },
+    "raw/native/collected/results/panic-delayed/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/panic-delayed/stderr.log"
+    },
+    "raw/native/collected/results/panic-delayed/stdout.log": {
+      "sha256": "d4668bdd4d122c253e640b87d279b9bc445d26f4ca7076caaeb80c9768a65ceb",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/panic-delayed/stdout.log"
+    },
+    "raw/native/collected/results/panic-immediate/record.json": {
+      "sha256": "ae3b5ce4de6ccb9799f56e396722a05d4e2780ee2bbb2eb7b2336d16c4418bc0",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/panic-immediate/record.json"
+    },
+    "raw/native/collected/results/panic-immediate/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/panic-immediate/stderr.log"
+    },
+    "raw/native/collected/results/panic-immediate/stdout.log": {
+      "sha256": "87e0dc6c6b8334eb37cabdef07c8346ff640fd3c19e76c4e319ae988dc643e85",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/panic-immediate/stdout.log"
+    },
+    "raw/native/collected/results/panic-preflight/record.json": {
+      "sha256": "aea4b18081129f69b7f597ef6c91c63449fe9afaccc80d3184a5cd726fc7e41c",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/panic-preflight/record.json"
+    },
+    "raw/native/collected/results/panic-preflight/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/panic-preflight/stderr.log"
+    },
+    "raw/native/collected/results/panic-preflight/stdout.log": {
+      "sha256": "1d83d186b7108f3703c09a13964cac79470a0c4f5bbfd1d4410b3eb4427764b7",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/panic-preflight/stdout.log"
+    },
+    "raw/native/collected/results/panic-test/record.json": {
+      "sha256": "c777fb5c5082adfd96d0bdac087a0a3c0a428191c90f0bf4a550c167bd4a5dfd",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/panic-test/record.json"
+    },
+    "raw/native/collected/results/panic-test/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/panic-test/stderr.log"
+    },
+    "raw/native/collected/results/panic-test/stdout.log": {
+      "sha256": "3bb699d7ce1e049401899594a1265bc37824cf92d5926dfe4d2855732ee76d87",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/panic-test/stdout.log"
+    },
+    "raw/native/collected/results/placement/record.json": {
+      "sha256": "04c54a9537cf23db434042669397b10f9006f12f59012b015a41e5a810639fa8",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/placement/record.json"
+    },
+    "raw/native/collected/results/placement/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/placement/stderr.log"
+    },
+    "raw/native/collected/results/placement/stdout.log": {
+      "sha256": "23d6010acf0e31aa5be42d14c633c510d8202cf16d1025afe6cd7c8f32378d10",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/placement/stdout.log"
+    },
+    "raw/native/collected/results/positive-delayed/record.json": {
+      "sha256": "576fe130ce91ee18b182421a23128efa8bc9e2b2d3d4aad7d72e9f2a4eb4d62d",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/positive-delayed/record.json"
+    },
+    "raw/native/collected/results/positive-delayed/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/positive-delayed/stderr.log"
+    },
+    "raw/native/collected/results/positive-delayed/stdout.log": {
+      "sha256": "fa2fdef18c4b3d7c1efe9c606f41eff0ec5f408bbef4fcdb18715b94e3b4c7ef",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/positive-delayed/stdout.log"
+    },
+    "raw/native/collected/results/positive-immediate/record.json": {
+      "sha256": "b712fe09bbcbdc0ad8841baa6980583f2c7b08d2b47302ca2dc291eaba0ce082",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/positive-immediate/record.json"
+    },
+    "raw/native/collected/results/positive-immediate/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/positive-immediate/stderr.log"
+    },
+    "raw/native/collected/results/positive-immediate/stdout.log": {
+      "sha256": "90bbaada443c4c67de31fb552981a7f048431271be860c76d7d82ee9c4857575",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/positive-immediate/stdout.log"
+    },
+    "raw/native/collected/results/positive-preflight/record.json": {
+      "sha256": "6f78b96e0c475fa70642ba68e9e96df12778aa79feb2df0227fe7868c38866e8",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/positive-preflight/record.json"
+    },
+    "raw/native/collected/results/positive-preflight/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/positive-preflight/stderr.log"
+    },
+    "raw/native/collected/results/positive-preflight/stdout.log": {
+      "sha256": "bfed6313bf60cde1fcb7ae172787a7013911303b1bc26e156faf849289b217e2",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/positive-preflight/stdout.log"
+    },
+    "raw/native/collected/results/positive-test/record.json": {
+      "sha256": "76f80dd00e78e209271450ea09ac7a06bbbc8f0981aab368f11abdfa891f960c",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/positive-test/record.json"
+    },
+    "raw/native/collected/results/positive-test/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/positive-test/stderr.log"
+    },
+    "raw/native/collected/results/positive-test/stdout.log": {
+      "sha256": "883af2e74d8f3d7c7bb6ac51b36b932169ff179e7cfec1993e4517bdeffbe590",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/positive-test/stdout.log"
+    },
+    "raw/native/collected/results/topology/record.json": {
+      "sha256": "7a255453d3564fd4f448d6decc13ee6c307ca1a72147fe977cf8f87050ea591d",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/topology/record.json"
+    },
+    "raw/native/collected/results/topology/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/topology/stderr.log"
+    },
+    "raw/native/collected/results/topology/stdout.log": {
+      "sha256": "8329d765fd34397fbc7c2536a13d566e0e49471cea498af3f44d038e09de0e86",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/results/topology/stdout.log"
+    },
+    "raw/native/collected/run.py": {
+      "sha256": "3960b587fb80c45af05f8c906ef7067ccc8b3a28d4ad161e8ff7a10ccd4f354c",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/run.py"
+    },
+    "raw/native/collected/source/compute_dispatch.rs": {
+      "sha256": "4966cd8b76cfbdb4edbd39a8c1117df44d3c3d70d2178b61799090b403758f26",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/source/compute_dispatch.rs"
+    },
+    "raw/native/collected/source/copy-host-observe.py": {
+      "sha256": "5d37b09bf0823854c6a45b914d866c042c1e65486cd96c6301285a0147ae6c51",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/source/copy-host-observe.py"
+    },
+    "raw/native/collected/source/primary_envelope.rs": {
+      "sha256": "2b5adf15ec70a5c039c5a531efb6609386b126909a711fdf81e2a9808c1d7a4e",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/source/primary_envelope.rs"
+    },
+    "raw/native/collected/source/r26-host-guard.py": {
+      "sha256": "669a25592e8ba72743bed9c0a3ced39ad392f104746c2ca04a7f2867ed8d7ca3",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/source/r26-host-guard.py"
+    },
+    "raw/native/collected/source/retained_release_tests.rs": {
+      "sha256": "7c0d7fceac0a66e57af238e6e1d19dc1ba94e8c9a7f1d58fb99b853c3b6f004d",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/source/retained_release_tests.rs"
+    },
+    "raw/native/collected/source/runtime-primary-queue-release-v1.md": {
+      "sha256": "add69f4760de9ce61c9c4c630a8dbce95e2e37499d924af644dc16a66f38f773",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/source/runtime-primary-queue-release-v1.md"
+    },
+    "raw/native/collected/test_protocol.py": {
+      "sha256": "aaa2064768e0df8db5bf16a4a2957eb5c15d6755ade38c730050a0d3b2dfed02",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collected/test_protocol.py"
+    },
+    "raw/native/collection-verified.json": {
+      "sha256": "8edc86e7917b9d859c77f6a58a2ab664ce7af5c74421f24fc73664e878dcdedf",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/collection-verified.json"
+    },
+    "raw/native/controller.json": {
+      "sha256": "ca878a24f5fee175b3679a8881652335cd7b516ca7ea214ab6681df2cc472057",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/controller.json"
+    },
+    "raw/native/local-controller-wiring-tests/record.json": {
+      "sha256": "dc4f1179d3da93af139a288a47b22b36b156467cce3cc70137b582464009eb66",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/local-controller-wiring-tests/record.json"
+    },
+    "raw/native/local-controller-wiring-tests/stderr.log": {
+      "sha256": "5648c25863e1afc140b1459692115719d3b1a81edd510eb4d2bc12d0ac8a8538",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/local-controller-wiring-tests/stderr.log"
+    },
+    "raw/native/local-controller-wiring-tests/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/local-controller-wiring-tests/stdout.log"
+    },
+    "raw/native/local-payload-verify/record.json": {
+      "sha256": "215ad7b849cba6d2ff39566ad40c84b013e396d2f8edf397d889c26c1c62964f",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/local-payload-verify/record.json"
+    },
+    "raw/native/local-payload-verify/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/local-payload-verify/stderr.log"
+    },
+    "raw/native/local-payload-verify/stdout.log": {
+      "sha256": "c3d0b8868a4b0e58c6709fd799b5b5d2d1bd6563278a475adcbf4a62ef515799",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/local-payload-verify/stdout.log"
+    },
+    "raw/native/local-protocol-tests/record.json": {
+      "sha256": "54596d412ec9a0233a63b4e0e648f9144775c82e6d318cc6224d7cb776421fda",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/local-protocol-tests/record.json"
+    },
+    "raw/native/local-protocol-tests/stderr.log": {
+      "sha256": "419e63a97118f3f81eabeb7c13f2c3b1fb5bb390e9f6bad92d2ab8ff945f9c2c",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/local-protocol-tests/stderr.log"
+    },
+    "raw/native/local-protocol-tests/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/local-protocol-tests/stdout.log"
+    },
+    "raw/native/native-outer/record.json": {
+      "sha256": "987a2ed99da39ee8aafcc5e2b91a07e639dc1f959ee7ed189104177f8825ef95",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/native-outer/record.json"
+    },
+    "raw/native/native-outer/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/native-outer/stderr.log"
+    },
+    "raw/native/native-outer/stdout.log": {
+      "sha256": "40aa90ef0b86bf1174bdfb0ddeab348fd430f4b066db68e46196ce042d98711a",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/native-outer/stdout.log"
+    },
+    "raw/native/remote-approve/record.json": {
+      "sha256": "20f6536f4784d6b35a70cb5c5c835a9bc4414e293e4899fd31ae202b3cae8a8a",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/remote-approve/record.json"
+    },
+    "raw/native/remote-approve/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/remote-approve/stderr.log"
+    },
+    "raw/native/remote-approve/stdout.log": {
+      "sha256": "3f18065893a92924048bcff8d1e163f997d5e1fa1a16d124215297e0d9453663",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/remote-approve/stdout.log"
+    },
+    "raw/native/remote-cleanup/record.json": {
+      "sha256": "591b9191ce960f8a6e379803ebe863ed0ce2f2adfbba95a58ad93a147ec9d32c",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/remote-cleanup/record.json"
+    },
+    "raw/native/remote-cleanup/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/remote-cleanup/stderr.log"
+    },
+    "raw/native/remote-cleanup/stdout.log": {
+      "sha256": "eed64b62c7ef168c234640627b99dfbc873fa7f7458feb8c63665d8bf8339c92",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/remote-cleanup/stdout.log"
+    },
+    "raw/native/remote-empty/record.json": {
+      "sha256": "aae7440636f7d62fd22d362a07b206585ea00f7d6a5105589ecd600b44760a94",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/remote-empty/record.json"
+    },
+    "raw/native/remote-empty/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/remote-empty/stderr.log"
+    },
+    "raw/native/remote-empty/stdout.log": {
+      "sha256": "a5bf1a395337ebbd1176445942b7f3b6bfcb3bf29ca2c4347014b67f8b2c790e",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/remote-empty/stdout.log"
+    },
+    "raw/native/remote-independent-absence/record.json": {
+      "sha256": "ba7b73b291c77f803a01208e15db029bbdedac7355502a283e68502ca2c691ec",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/remote-independent-absence/record.json"
+    },
+    "raw/native/remote-independent-absence/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/remote-independent-absence/stderr.log"
+    },
+    "raw/native/remote-independent-absence/stdout.log": {
+      "sha256": "d0d63195cd77850524324ad401275ed330577676b0d2910804c7470c0b512a03",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/remote-independent-absence/stdout.log"
+    },
+    "raw/native/remote-inventory/record.json": {
+      "sha256": "02bdbda3586f17fb59a00df992e1750b54ddf369ccc386222e760c2c3deaba2b",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/remote-inventory/record.json"
+    },
+    "raw/native/remote-inventory/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/remote-inventory/stderr.log"
+    },
+    "raw/native/remote-inventory/stdout.log": {
+      "sha256": "099a5414d8bb5fcc6ef8f61b510b2e644d2f1d2f9cd51ce3da40840ccb01fe07",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/remote-inventory/stdout.log"
+    },
+    "raw/native/upload/record.json": {
+      "sha256": "31da438b27306184d81313bbd5bfe712a461aa1846844ea6c625403f14767723",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/upload/record.json"
+    },
+    "raw/native/upload/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/upload/stderr.log"
+    },
+    "raw/native/upload/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918/upload/stdout.log"
+    },
+    "raw/outer/record.json": {
+      "sha256": "2c432b49e321e02c6f201370da35b74d77a73aec5ec832b96a9a83a1060114d0",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-outer-20260918/record.json"
+    },
+    "raw/outer/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-outer-20260918/stderr.log"
+    },
+    "raw/outer/stdout.log": {
+      "sha256": "b8c7fabdca05836bac450e1b5c74a5e1fd066905bbb2c88ea69a543268c171da",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-outer-20260918/stdout.log"
+    },
+    "raw/prepare/diff-PLAN.md/record.json": {
+      "sha256": "6cb481a62f54c6a8d52d66ce8f31c6e98b4ebd064cedba11cd90dda088380683",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/diff-PLAN.md/record.json"
+    },
+    "raw/prepare/diff-PLAN.md/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/diff-PLAN.md/stderr.log"
+    },
+    "raw/prepare/diff-PLAN.md/stdout.log": {
+      "sha256": "02be64937ec7f19d2e67c67a2e062f57eb5f666ec90c1f9e645d62d9ecae3aa4",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/diff-PLAN.md/stdout.log"
+    },
+    "raw/prepare/diff-prepare.py/record.json": {
+      "sha256": "056d72d82b645a29ada833939c752914cb6aa762273df80bef07a56cbf40cd6a",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/diff-prepare.py/record.json"
+    },
+    "raw/prepare/diff-prepare.py/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/diff-prepare.py/stderr.log"
+    },
+    "raw/prepare/diff-prepare.py/stdout.log": {
+      "sha256": "0935804674f32b70cd41a8b19e1d39011024627de776f7f8308762921325c681",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/diff-prepare.py/stdout.log"
+    },
+    "raw/prepare/diff-protocol.py/record.json": {
+      "sha256": "79124b30b2842e3f892f7c6b853652c73d0befe1f9e524b1712516c9ecf78705",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/diff-protocol.py/record.json"
+    },
+    "raw/prepare/diff-protocol.py/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/diff-protocol.py/stderr.log"
+    },
+    "raw/prepare/diff-protocol.py/stdout.log": {
+      "sha256": "336ab14e094d4f1998668bcf522e14857e6decc452d410ab63e3cf9c2a1a9825",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/diff-protocol.py/stdout.log"
+    },
+    "raw/prepare/diff-run.py/record.json": {
+      "sha256": "e1a9ad4167a43df2212c8ac7db2c4312d3d04deb968864ce86dd42d9cf47e6a7",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/diff-run.py/record.json"
+    },
+    "raw/prepare/diff-run.py/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/diff-run.py/stderr.log"
+    },
+    "raw/prepare/diff-run.py/stdout.log": {
+      "sha256": "04a0c1e8f5a4b481d0755ba8a714bedb8bfe88a4985451212f98c4ed73a767f1",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/diff-run.py/stdout.log"
+    },
+    "raw/prepare/diff-test_protocol.py/record.json": {
+      "sha256": "d81995ff1d6b18e40f6ee6217b34f05ff5aec8d82fb80eced317eebcd874c459",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/diff-test_protocol.py/record.json"
+    },
+    "raw/prepare/diff-test_protocol.py/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/diff-test_protocol.py/stderr.log"
+    },
+    "raw/prepare/diff-test_protocol.py/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/diff-test_protocol.py/stdout.log"
+    },
+    "raw/prepare/export/record.json": {
+      "sha256": "42cd6047bba7c914b4af5d89f453a144a07952a79a3669f193d8530643998c5c",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/export/record.json"
+    },
+    "raw/prepare/export/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/export/stderr.log"
+    },
+    "raw/prepare/export/stdout.log": {
+      "sha256": "6fe6f6727dfa0d9ce8f7e99305435bfc4713979280b5a15ad1446263411d4f45",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/export/stdout.log"
+    },
+    "raw/prepare/format/record.json": {
+      "sha256": "ce1246f8bea37c06c185ef362156068e3882ad064dc260443a38445d09a8eb81",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/format/record.json"
+    },
+    "raw/prepare/format/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/format/stderr.log"
+    },
+    "raw/prepare/format/stdout.log": {
+      "sha256": "177f260a5645724013185e4b140c7045cc39e56c0c97b120f5cb23599f85f0de",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/format/stdout.log"
+    },
+    "raw/prepare/lint/record.json": {
+      "sha256": "39aa8b123d9a30d25c9914b31f3893cb7ce9e42e7ae3ab9341fe58247d3c2ced",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/lint/record.json"
+    },
+    "raw/prepare/lint/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/lint/stderr.log"
+    },
+    "raw/prepare/lint/stdout.log": {
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/lint/stdout.log"
+    },
+    "raw/prepare/payload/record.json": {
+      "sha256": "8b3b122382602301da24cc29d79bba07535b0c53be3d6f732a236fe8ed842dee",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/payload/record.json"
+    },
+    "raw/prepare/payload/stderr.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/payload/stderr.log"
+    },
+    "raw/prepare/payload/stdout.log": {
+      "sha256": "faa901eee6fc3946b1eab2e98f59af59eb99e05e612582c15f5de31269319c9e",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/payload/stdout.log"
+    },
+    "raw/prepare/protocol-tests/record.json": {
+      "sha256": "d42625bb8245bb4e20b5524fceac0b8ab0c7d1f37b9ed574ec4dfe7bd0c6655f",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/protocol-tests/record.json"
+    },
+    "raw/prepare/protocol-tests/stderr.log": {
+      "sha256": "cc577156ba6ad29985140ab7cafdb6bb4f07c4cae01f6429d149ed0a8c444b42",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/protocol-tests/stderr.log"
+    },
+    "raw/prepare/protocol-tests/stdout.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/protocol-tests/stdout.log"
+    },
+    "raw/prepare/source-identities.json": {
+      "sha256": "53a32a18860e7e0da0f977ad9e24cfdc7982b0fe2f1fc9f5e968880de3fa143a",
+      "source": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-local-prepare-20260918/source-identities.json"
+    }
+  }
+}

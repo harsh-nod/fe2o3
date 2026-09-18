@@ -1,0 +1,17 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-control-20260918/controller.py",
+    "--root-ready-approved",
+    "--remote-directory",
+    "/tmp/fe2o3-r126-primary-a0db7362-20260918.mmfeMgC8",
+    "--output",
+    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-run-20260918"
+  ],
+  "started_ns": 1789730535415435857,
+  "status": 1,
+  "finished_ns": 1789730655225479281,
+  "stdout_sha256": "b8c7fabdca05836bac450e1b5c74a5e1fd066905bbb2c88ea69a543268c171da",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

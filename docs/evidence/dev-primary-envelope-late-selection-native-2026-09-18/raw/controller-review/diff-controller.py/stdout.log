@@ -1,0 +1,16 @@
+--- /home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-control-fresh-20260918/controller.py	2026-09-18 03:50:19.755984243 -0700
++++ /home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-control-20260918/controller.py	2026-09-18 04:21:09.150381464 -0700
+@@ -14,10 +14,10 @@
+ 
+ HERE = Path(__file__).resolve().parent
+ BUNDLE = Path(
+-    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-8b0021ba-20260918"
++    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-a0db7362-20260918"
+ )
+-OWNED = "/tmp/fe2o3-r126-primary-8b0021ba-20260918.z3L69nX6"
+-PAYLOAD = "b69190c2182feb82476d6be2ecd6e30e11d58c3b804e686d7ec338814d1ac4f6"
++OWNED = "/tmp/fe2o3-r126-primary-a0db7362-20260918.mmfeMgC8"
++PAYLOAD = "9f798dc90a24dc950beca265be80060f7588eff49a681dbd19e8fe8d27208201"
+ SSH_OPTIONS = [
+     "-o",
+     "BatchMode=yes",

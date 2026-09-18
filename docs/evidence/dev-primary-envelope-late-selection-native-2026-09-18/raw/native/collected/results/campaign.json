@@ -1,0 +1,61 @@
+{
+  "commit": "a0db73625c421e26922a1bb8cab4dec49012417c",
+  "started": {
+    "realtime_ns": 1789730551903427786,
+    "monotonic_ns": 7229449325100820
+  },
+  "cases": [
+    {
+      "case": "positive",
+      "test_record": "positive-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "positive",
+        "harness_passes": 1,
+        "marker_count": 1
+      }
+    },
+    {
+      "case": "error",
+      "test_record": "error-test/record.json",
+      "failures": [],
+      "post_observations": {
+        "immediate": "strict_pass",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "error",
+        "harness_passes": 2,
+        "marker_count": 1
+      }
+    },
+    {
+      "case": "panic",
+      "test_record": "panic-test/record.json",
+      "failures": [
+        "immediate: ValueError: post-observation command passed"
+      ],
+      "post_observations": {
+        "immediate": "attempted",
+        "delayed": "strict_pass"
+      },
+      "transcript": {
+        "case": "panic",
+        "harness_passes": 2,
+        "marker_count": 1
+      }
+    }
+  ],
+  "failure": "ValueError: case rejected; no later case may run",
+  "native_ioctl_failure_claim": false,
+  "performance_claim": false,
+  "payload_after": "matched",
+  "finished": {
+    "realtime_ns": 1789730637075471659,
+    "monotonic_ns": 7229534497144092
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r126-late-archive-relocation-nmq0dozj/packet/verify.py",
+    "--allow-unsealed"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r126-late-archive-relocation-nmq0dozj",
+  "started_ns": 1789731016847313867,
+  "bound_seconds": 30,
+  "owned_directory": "/home/harsh/.codex-tmp/fe2o3-r126-late-archive-relocation-nmq0dozj",
+  "verify_sha256": "962b8f0d5f0d8085a11c99f0b88bc368712d81e88c40c2ce2bd0d9ce5c725128",
+  "error": null,
+  "process_group": 1527698,
+  "status": 0,
+  "group_absent": true,
+  "owned_directory_absent": true,
+  "finished_ns": 1789731017121228094,
+  "stdout_sha256": "83ecc388a14f54821765460a044d05d14b07b981385559f7a64345fe53a10b9c",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

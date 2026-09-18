@@ -1,0 +1,29 @@
+--- /home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-8b0021ba-20260918/prepare.py	2026-09-18 03:31:44.612580498 -0700
++++ /home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-plan-20260918/prepare.py	2026-09-18 04:06:54.982281264 -0700
+@@ -10,7 +10,7 @@
+ 
+ import protocol as P
+ 
+-CPU = Path("docs/evidence/dev-primary-envelope-cpu-2026-09-18")
++CPU = Path("docs/evidence/dev-primary-envelope-late-selection-cpu-2026-09-18")
+ SELECTED = {
+     "benchmarks/runtime_gfx942/copy-host-observe.py": "source/copy-host-observe.py",
+     "benchmarks/runtime_gfx942/r26-host-guard.py": "source/r26-host-guard.py",
+@@ -137,7 +137,8 @@
+         / "target/x86_64-unknown-linux-musl/debug/deps/fe2o3_runtime-afaad0775e07e3e7"
+     )
+     P.need(P.sha(binary) == P.BINARY_SHA, "qualified final musl binary still matches")
+-    output.mkdir()
++    output.mkdir(mode=0o700)
++    P.need(output.stat().st_mode & 0o777 == 0o700, "private local staging directory")
+     (output / "source").mkdir()
+     (output / "cpu").mkdir()
+     for path, data in selected.items():
+@@ -185,6 +186,7 @@
+         json.dumps(
+             {
+                 "local_staging": str(output),
++                "directory_mode": oct(output.stat().st_mode & 0o777),
+                 "source_files_matched": matched,
+                 "binary_sha256": P.BINARY_SHA,
+                 "payload_sha256": P.sha(output / "payload.json"),

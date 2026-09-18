@@ -1,0 +1,22 @@
+{
+  "PLAN.md": "52e3ab2feefed9240a44ed4b1420bcd9966ed910b11a307ccc2dbc948ba23c0a",
+  "binding.json": "9352b29f97f6773fc8f825b2aa07d8ef89844a05e4104be9c91df9698fb96871",
+  "commit-signature.stderr": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22",
+  "commit-signature.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "cpu/SHA256SUMS": "fe10e9f138029f7374a3e07d7046ca6a7bd23ca3d5c60b8876b5096a082c04d9",
+  "cpu/binaries-after-final.log": "4a4bf746527f0c6916dcdd2c23e8aa0d2d69b0df62e26fd26ffd34a700798e35",
+  "cpu/binaries-before-final.log": "4a4bf746527f0c6916dcdd2c23e8aa0d2d69b0df62e26fd26ffd34a700798e35",
+  "cpu/source-after-final.log": "6eff59a1d19ae0e0a761b8a7013ff8a9a192a1f44f912baf2713fd1d2dda2ca0",
+  "cpu/source-before-final.log": "6eff59a1d19ae0e0a761b8a7013ff8a9a192a1f44f912baf2713fd1d2dda2ca0",
+  "prepare.py": "fff1d5b6ecf5bbd011294080314eb6936e14839796b6e3ce99c1eefea26c0a96",
+  "protocol.py": "8243d88e4033574cdb26e90226c9c5ac36aa3501031c405e3a932990591edd29",
+  "run.py": "3960b587fb80c45af05f8c906ef7067ccc8b3a28d4ad161e8ff7a10ccd4f354c",
+  "runtime-tests": "001b9abd5e257098da8a27091ca81d62601805d7ca5b4ae86f81d6e69317ade2",
+  "source/compute_dispatch.rs": "4966cd8b76cfbdb4edbd39a8c1117df44d3c3d70d2178b61799090b403758f26",
+  "source/copy-host-observe.py": "5d37b09bf0823854c6a45b914d866c042c1e65486cd96c6301285a0147ae6c51",
+  "source/primary_envelope.rs": "2b5adf15ec70a5c039c5a531efb6609386b126909a711fdf81e2a9808c1d7a4e",
+  "source/r26-host-guard.py": "669a25592e8ba72743bed9c0a3ced39ad392f104746c2ca04a7f2867ed8d7ca3",
+  "source/retained_release_tests.rs": "7c0d7fceac0a66e57af238e6e1d19dc1ba94e8c9a7f1d58fb99b853c3b6f004d",
+  "source/runtime-primary-queue-release-v1.md": "add69f4760de9ce61c9c4c630a8dbce95e2e37499d924af644dc16a66f38f773",
+  "test_protocol.py": "aaa2064768e0df8db5bf16a4a2957eb5c15d6755ade38c730050a0d3b2dfed02"
+}

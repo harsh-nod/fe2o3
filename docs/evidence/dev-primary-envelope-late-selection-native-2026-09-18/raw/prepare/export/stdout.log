@@ -1,0 +1,8 @@
+{
+  "local_staging": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-a0db7362-20260918",
+  "directory_mode": "0o700",
+  "source_files_matched": 5553,
+  "binary_sha256": "001b9abd5e257098da8a27091ca81d62601805d7ca5b4ae86f81d6e69317ade2",
+  "payload_sha256": "9f798dc90a24dc950beca265be80060f7588eff49a681dbd19e8fe8d27208201",
+  "native_authorized": false
+}

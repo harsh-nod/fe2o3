@@ -1,0 +1,20 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "test_verify.py",
+    "-v"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-primary-envelope-late-selection-native-2026-09-18",
+  "started_ns": 1789730976794099447,
+  "bound_seconds": 30,
+  "verify_sha256": "962b8f0d5f0d8085a11c99f0b88bc368712d81e88c40c2ce2bd0d9ce5c725128",
+  "test_verify_sha256": "55bb6bb1908d87a997d518a9a32c4ff0c521be904372cda3d46a20e034d55149",
+  "error": null,
+  "process_group": 1524995,
+  "status": 0,
+  "group_absent": true,
+  "finished_ns": 1789730977160574543,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "22d2b5d154b41105fba6814254b61391252dffdefa9e32f2a8648d894a720ce6"
+}

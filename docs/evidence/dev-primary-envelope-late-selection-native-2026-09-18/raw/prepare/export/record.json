@@ -1,0 +1,22 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-plan-20260918/prepare.py",
+    "--repository",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+    "--output",
+    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-a0db7362-20260918"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-plan-20260918",
+  "started_ns": 1789730370205423325,
+  "bound_seconds": 120,
+  "expected_status": 0,
+  "error": null,
+  "process_group": 1493926,
+  "status": 0,
+  "group_absent": true,
+  "finished_ns": 1789730374237174475,
+  "stdout_sha256": "6fe6f6727dfa0d9ce8f7e99305435bfc4713979280b5a15ad1446263411d4f45",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

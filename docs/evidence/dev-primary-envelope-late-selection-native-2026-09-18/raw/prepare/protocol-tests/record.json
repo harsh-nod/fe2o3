@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-a0db7362-20260918/test_protocol.py",
+    "-v"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-bundle-a0db7362-20260918",
+  "started_ns": 1789730374238631481,
+  "bound_seconds": 30,
+  "expected_status": 0,
+  "error": null,
+  "process_group": 1494073,
+  "status": 0,
+  "group_absent": true,
+  "finished_ns": 1789730374404513455,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "cc577156ba6ad29985140ab7cafdb6bb4f07c4cae01f6429d149ed0a8c444b42"
+}

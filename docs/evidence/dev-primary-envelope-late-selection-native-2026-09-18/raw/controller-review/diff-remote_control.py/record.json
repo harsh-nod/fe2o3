@@ -1,0 +1,19 @@
+{
+  "command": [
+    "/usr/bin/diff",
+    "-u",
+    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-native-control-fresh-20260918/remote_control.py",
+    "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-control-20260918/remote_control.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-r126-primary-envelope-late-selection-native-control-20260918",
+  "started_ns": 1789730488907775996,
+  "bound_seconds": 120,
+  "expected_status": 1,
+  "error": null,
+  "process_group": 1499014,
+  "status": 1,
+  "group_absent": true,
+  "finished_ns": 1789730488911566316,
+  "stdout_sha256": "0301cd3cf86ca06e33ae1894221342bb2f83afd1c2ff99900fd3cd9493a35a05",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}
