@@ -84,6 +84,8 @@ fn scalar_calls_owner(nested: bool) -> ProductionSemanticMirOwnerV1 {
             vec![SemanticAbiArgumentV1::source(direct())],
             direct(),
         )
+        .unwrap()
+        .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ByValue])
         .unwrap();
         let local = |offset, role| {
             SemanticLocalDeclV1::new(
@@ -321,7 +323,12 @@ fn scalar_repeated_and_nested_instances_transfer_nonempty_coordinates() {
             assert_eq!(map.components.rows.len(), count - 1);
             assert!(!map.values.rows.is_empty());
             let before = snapshot(map);
+            let capacities = (map.components.capacity, map.values.capacity);
             let owned = map.take_owned_coordinates_v1(function, budget).unwrap();
+            assert_eq!(
+                (owned.components.capacity, owned.values.capacity),
+                capacities
+            );
             assert_eq!(owned.components.rows.as_ptr() as usize, before[13]);
             assert_eq!(owned.values.rows.as_ptr() as usize, before[15]);
             assert_eq!(owned.sources.rows.len(), count);

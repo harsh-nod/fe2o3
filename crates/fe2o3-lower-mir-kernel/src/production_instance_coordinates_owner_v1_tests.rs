@@ -230,10 +230,15 @@ fn owned_coordinates_refuse_incomplete_or_changed_expansion_without_moving_rows(
                 }
                 map.check_coordinates(plan.root(), &caller.function, budget)?;
                 let before = snapshot(map);
-                assert!(matches!(
-                    map.take_owned_coordinates_v1(&caller.function, budget),
-                    Err(InstanceCorrespondenceErrorV1::Source)
-                ));
+                assert_eq!(
+                    map.take_owned_coordinates_v1(&caller.function, budget)
+                        .err(),
+                    Some(if append_child {
+                        InstanceCorrespondenceErrorV1::CallAnchor
+                    } else {
+                        InstanceCorrespondenceErrorV1::Source
+                    })
+                );
                 assert_eq!(snapshot(map), before);
                 Ok::<_, InstanceCorrespondenceErrorV1>(())
             })
