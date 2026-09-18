@@ -81,6 +81,8 @@ struct PendingLifecycleEventsV29 {
     instance: ProductionCallInstanceIdV1,
     function: SemanticFunctionIdV1,
     placement: SemanticEmissionPlacementV1,
+    provider: bool,
+    expected_rows: usize,
     rows: Vec<DeferredLifecycleEventV29>,
     retained_storage: usize,
 }
@@ -189,6 +191,8 @@ impl<'a> ExecutionLifecycleProducerV29<'a> {
                 instance,
                 function: row.function(),
                 placement,
+                provider,
+                expected_rows: 0,
                 rows: Vec::new(),
                 retained_storage: 0,
             },
@@ -656,6 +660,8 @@ impl ExecutionLifecycleConsumerV29 for ExecutionLifecycleProducerV29<'_> {
             instance: self.pending.instance,
             function: self.pending.function,
             placement: self.pending.placement,
+            provider: self.provider,
+            expected_rows: self.expected_rows,
             rows: std::mem::take(&mut self.pending.rows),
             retained_storage: std::mem::take(&mut self.pending.retained_storage),
         })

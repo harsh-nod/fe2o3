@@ -12393,6 +12393,7 @@ include!("production_execution_lifecycle_consumer_v29.rs");
 include!("production_execution_lifecycle_producer_v29.rs");
 include!("production_execution_instance_plan_v29.rs");
 include!("production_scoped_root_emission_v29.rs");
+include!("production_execution_lifecycle_insertion_v29.rs");
 include!("production_kernel_metadata_v1.rs");
 include!("production_execution_scalar_operands_v29.rs");
 include!("production_execution_events_v29.rs");

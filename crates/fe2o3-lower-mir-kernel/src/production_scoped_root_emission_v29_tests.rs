@@ -1,6 +1,7 @@
 use super::*;
 
 include!("production_scoped_array_v29_tests.rs");
+include!("production_execution_lifecycle_insertion_v29_tests.rs");
 
 pub(super) mod fixtures {
     use super::*;
@@ -363,9 +364,7 @@ pub(super) fn emit_checked(
             assert!(work.active.is_none());
         }
     }
-    let retained = output.retained_emission_storage;
-    drop(output);
-    budget.release_storage(retained)?;
+    check_inserted_lifecycle(output, limits, fixture, budget)?;
     assert_eq!(budget.storage(), floor);
     Ok(observations)
 }
