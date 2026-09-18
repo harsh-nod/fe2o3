@@ -10,6 +10,10 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1 as Admitted;
 
+#[cfg(test)]
+#[path = "production_pipeline_checked_output_snapshots_v1_tests.rs"]
+pub(crate) mod snapshots;
+
 #[derive(Debug)]
 pub(crate) enum CheckedOutputStageErrorV1 {
     Resource(Resource),
@@ -284,6 +288,12 @@ impl RankedVerifiedProductionCompilation {
         budget
             .reserve_storage(checked.retained_storage())
             .map_err(resource)?;
+        #[cfg(test)]
+        snapshots::observe(
+            &bound,
+            checked.intermediate_policy3().owner(),
+            checked.owner(),
+        );
         let (receipt, ranked_verification) = ranked
             .into_verified_roster_receipt()
             .map_err(ProductionPipelineError::RankedVerification)?

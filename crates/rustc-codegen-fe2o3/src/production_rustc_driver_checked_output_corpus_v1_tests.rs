@@ -51,6 +51,9 @@ struct CaseReport {
     actual_cfg: Vec<String>,
     cargo_diagnostics: String,
     rustc_diagnostics: String,
+    case_elapsed_millis: u64,
+    callback_progress: Option<progress::Snapshot>,
+    callback_progress_error: Option<String>,
 }
 
 impl CaseReport {
@@ -64,6 +67,9 @@ impl CaseReport {
             actual_cfg: Vec::new(),
             cargo_diagnostics: String::new(),
             rustc_diagnostics: String::new(),
+            case_elapsed_millis: 0,
+            callback_progress: None,
+            callback_progress_error: None,
         }
     }
 
@@ -267,6 +273,7 @@ fn check_observation(fixture: &Fixture, observed: &Observation) -> Result<(), So
 }
 
 fn run_case(workspace: &Path, fixture: &Fixture, case: &Path, target: &Path) -> CaseReport {
+    let started = std::time::Instant::now();
     let prepared = (|| {
         check_input_files(workspace, fixture)?;
         std::fs::create_dir_all(case).map_err(|e| fail(SourceStage::Invocation, e))?;
@@ -274,12 +281,17 @@ fn run_case(workspace: &Path, fixture: &Fixture, case: &Path, target: &Path) -> 
     })();
     let captured = match prepared {
         Ok(captured) => captured,
-        Err(error) => return CaseReport::blocked(fixture, error),
+        Err(error) => {
+            let mut report = CaseReport::blocked(fixture, error);
+            report.case_elapsed_millis = progress::elapsed_millis(started);
+            return report;
+        }
     };
     let mut report =
         CaseReport::blocked(fixture, fail(SourceStage::Invocation, "child not invoked"));
     report.actual_cfg = captured.cfg;
     report.cargo_diagnostics = captured.cargo_diagnostics;
+    let callback_progress = case.join("callback-progress.json");
     let run = (|| {
         let request = case.join("callback-args.json");
         let response = case.join("callback-result.json");
@@ -299,7 +311,15 @@ fn run_case(workspace: &Path, fixture: &Fixture, case: &Path, target: &Path) -> 
             .env_remove(CHILD_PROOF_PROBE)
             .env(CHILD_ARGS, request)
             .env(CHILD_RESULT, &response)
+            .env(progress::CHILD_PROGRESS, &callback_progress)
             .args(["--exact", CHILD_TEST, "--ignored", "--nocapture"]);
+        progress::clear_inherited_jobserver(&mut command);
+        snapshots::configure_child(&mut command, &fixture.fixture_id);
+        eprintln!(
+            "P4 CORPUS {} callback-progress={}",
+            fixture.fixture_id,
+            callback_progress.display()
+        );
         let output = command.output().map_err(|e| fail(SourceStage::Rustc, e))?;
         report.rustc_diagnostics = corpus_cargo::diagnostics(&output);
         let bytes = std::fs::read(response).map_err(|e| {
@@ -334,6 +354,13 @@ fn run_case(workspace: &Path, fixture: &Fixture, case: &Path, target: &Path) -> 
         }
         Err(error) => report.refusal = Some(error),
     }
+    match std::fs::read(&callback_progress)
+        .map_err(|e| e.to_string())
+        .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))
+    {
+        Ok(snapshot) => report.callback_progress = Some(snapshot),
+        Err(error) => report.callback_progress_error = Some(error),
+    }
     match artifacts(&case.join("compiler-output")) {
         Ok(paths) => {
             report.compiler_artifacts = paths;
@@ -356,6 +383,7 @@ fn run_case(workspace: &Path, fixture: &Fixture, case: &Path, target: &Path) -> 
     {
         report.status = "checked-output-pass";
     }
+    report.case_elapsed_millis = progress::elapsed_millis(started);
     report
 }
 

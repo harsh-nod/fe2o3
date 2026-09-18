@@ -255,6 +255,32 @@ publish compiler artifacts, or establish simulator, numerical or GPU results.
 The separate `ordinary_rust_fill_and_vecadd_reach_checked_native_output` parent
 also exercises the missing signed-proof refusal without releasing output.
 
+The corpus prints an external `callback-progress.json` path before each child
+invocation. Its atomically replaced snapshot identifies the active compiler
+phase and records monotonic durations for completed calls; the final report
+retains these timings before temporary files are removed. Policy4 is one opaque
+timed call containing B/C/O checks, so its refusal alone does not identify the
+failed endpoint. Instrumentation I/O failures are diagnostic-only and cannot
+change the compiler result or the all-case acceptance gate. Captured jobserver
+variables are removed only when replaying the standalone child, whose inherited
+file descriptors are no longer valid.
+
+For a focused diagnostic run, set `FE2O3_TEST_CHECKED_OUTPUT_ENDPOINTS_V1` to an
+existing fresh directory outside the checkout. The test harness retains actual
+B/C/O canonical bytes, full graph dumps and identity metadata there before
+admission. Each case is capped at 30 MiB plus 16 KiB of metadata; incomplete
+endpoints are marked unavailable, not emitted as truncated complete graphs.
+Graph capture is off by default and adds I/O to Policy4 timing when enabled.
+These snapshots are diagnostics, not proof receipts or artifact authority, and
+do not by themselves identify which endpoint's formal check failed.
+
+Ranked read projection groups source occurrences once, preserving exact source
+ordinals, duplicate rows and per-statement cardinality. Matching costs
+`O(S + R log R)` for `S` source rows and `R` eligible reads instead of repeated
+whole-roster scans. The index retains `O(R)` storage and can have a higher peak
+than one old per-statement temporary vector. This is an algorithmic bound, not
+a measured end-to-end speedup or a new canonical resource-accounting claim.
+
 ## Admission tests
 
 The production admission is maintained by the following regression gates:
