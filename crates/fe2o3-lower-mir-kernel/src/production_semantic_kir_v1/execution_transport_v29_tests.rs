@@ -513,6 +513,68 @@ fn execution_borrow_requires_the_retained_assignment_not_an_equal_clone() {
 }
 
 #[test]
+fn ordinary_operands_without_a_cursor_still_require_the_exact_shared_work_budget() {
+    let types = types();
+    let scalar = |id| SemanticValueBindingV1::Value {
+        id: ValueId(id),
+        ty: Type::Scalar(ScalarType::U32),
+    };
+    for (input, binding, exact) in [
+        (SemanticTypeIdV1::from_index(2), scalar(77), 4),
+        (
+            SemanticTypeIdV1::from_index(8),
+            SemanticValueBindingV1::Aggregate(vec![scalar(77), scalar(78)]),
+            12,
+        ),
+    ] {
+        let function = function(input, vec![]);
+        let expected = binding.values().unwrap();
+        for limit in [0, exact - 1, exact] {
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(limit);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 0);
+            let ledger = budget.work_ledger_identity_v1();
+            let mut lowering = lowering(&types, &function);
+            lowering.locals[1] = Some(binding.clone());
+            lowering.emission_work = Some(&mut budget);
+            assert!(lowering.execution.is_none());
+            let next_value = lowering.next_value;
+            let mut operations = Vec::new();
+            let result = lowering.lower_source_operand_v29(
+                BLOCK,
+                Some(0),
+                None,
+                &SemanticOperandV1::Copy(place(1, input)),
+                &mut operations,
+            );
+            assert_eq!(result.is_ok(), limit == exact);
+            if limit == exact {
+                assert_eq!(result.unwrap().values().unwrap(), expected);
+            }
+            assert_eq!(
+                lowering.locals[1].as_ref().unwrap().values().unwrap(),
+                expected
+            );
+            assert_eq!(lowering.next_value, next_value);
+            assert!(operations.is_empty());
+            assert!(
+                lowering
+                    .emission_work
+                    .as_deref()
+                    .unwrap()
+                    .work_ledger_identity_v1()
+                    == ledger
+            );
+            drop(lowering);
+            assert_eq!(budget.storage(), 0);
+            assert!(budget.work() <= limit);
+            if limit == exact {
+                assert_eq!(budget.work(), exact);
+            }
+        }
+    }
+}
+
+#[test]
 fn emission_ledger_is_restored_after_consumer_unwind() {
     let types = types();
     let function = function(CONTEXT, vec![]);
