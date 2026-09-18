@@ -45,7 +45,7 @@ pub struct PrimaryQueueReleaseCustodyV1 {
 }
 
 impl ComputeAqlQueueSessionV1 {
-    /// Selects ordinary primary with optional single/directional SDMA; errors never authorize fallback.
+    /// Selects ordinary primary with optional standalone SDMA; errors never authorize fallback.
     pub fn supports_retained_primary_release_v1(
         &self,
     ) -> Result<bool, ComputeAqlQueueSessionErrorV1> {

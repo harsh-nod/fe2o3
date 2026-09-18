@@ -27,6 +27,8 @@ mod sdma_allocation_cases;
 mod sdma_cases;
 #[path = "integration_sdma_creation_tests.rs"]
 mod sdma_creation_cases;
+#[path = "integration_release_striped_sdma_tests.rs"]
+mod striped_sdma_cases;
 
 struct Parent {
     engine: NativeQueueEngineV1<PrimaryQueueBackendV1<Memory>>,
@@ -169,6 +171,8 @@ impl crate::sdma::retained_release::SdmaReleaseMemoryV1 for Memory {
         &mut self,
         args: &mut fe2o3_kfd_uapi::KfdIoctlDestroyQueueArgs,
     ) -> Result<(), rustix::io::Errno> {
+        trace().borrow_mut().sdma_destroy_ids.push(args.queue_id);
+        step("sdma-destroy").map_err(|_| rustix::io::Errno::IO)?;
         if let Some((id, panic)) = trace().borrow().sdma_destroy_mutation
             && id == args.queue_id
         {
@@ -188,6 +192,10 @@ impl crate::sdma::retained_release::SdmaReleaseMemoryV1 for Memory {
         &mut self,
         resources: &mut crate::shared_memory::SdmaResourceCleanupCustodyV1,
     ) -> Result<(), MemorySessionError> {
+        trace()
+            .borrow_mut()
+            .sdma_resource_ids
+            .push(resources.observation().controls[0].identity);
         memory_step("sdma-release-resources")?;
         let t = trace();
         let mut t = t.borrow_mut();

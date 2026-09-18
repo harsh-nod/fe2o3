@@ -1,0 +1,2 @@
+raw/*.log whitespace=-blank-at-eof
+prelint/*.log whitespace=-blank-at-eof

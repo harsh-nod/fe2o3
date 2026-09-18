@@ -1,0 +1,17 @@
+   Compiling fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kfd)
+    Finished `test` profile [unoptimized] target(s) in 54.05s
+     Running unittests src/lib.rs (target/x86_64-unknown-linux-musl/debug/deps/fe2o3_kfd-651f18105a2bee25)
+queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_failures_keep_original_owner_and_completed_prefix: test
+queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_late_native_resource_failure_keeps_real_prefix: test
+queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_orders_original_owner_and_refunds_all_backing: test
+queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_rejects_malformed_or_pending_owner_without_effects: test
+queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_retains_mutated_destroy_argument_and_raw_outcome: test
+queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_checks_every_last_owner_field_before_effects: test
+queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_keeps_real_late_cleanup_prefix_for_every_owner: test
+queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_orders_all_balanced_counts_and_refunds_backing: test
+queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_rejects_malformed_rosters_without_effects: test
+queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_retains_every_callback_failure_prefix: test
+queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_retains_mutated_destroy_inputs: test
+queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::retained_striped_release_custody_has_bounded_inline_size: test
+
+12 tests, 0 benchmarks

@@ -27,6 +27,18 @@ pub(crate) fn generic(
     Gfx942SdmaQueueSetV1::Generic(owners)
 }
 
+pub(crate) fn striped(
+    memory: &mut PreparationMemoryFixtureV1,
+    key: QueueKeyV1,
+    count: u32,
+    next_owner: usize,
+) -> Gfx942SdmaQueueSetV1 {
+    Gfx942SdmaQueueSetV1::Striped {
+        owners: creation_owners(memory, key, 100, count),
+        next_owner,
+    }
+}
+
 pub(crate) fn directional_with_ids(
     memory: &mut PreparationMemoryFixtureV1,
     key: QueueKeyV1,
@@ -104,12 +116,14 @@ pub(crate) struct Observation {
     pub(crate) owners: Vec<OwnerObservation>,
     roster_address: usize,
     profile: Option<RetainedSdmaReleaseProfileV1>,
+    cursor: Option<usize>,
     pub(crate) state: (bool, bool, bool, usize, usize),
 }
 
 impl Observation {
     pub(crate) fn assert_original_owners(&self, before: &Self) {
         assert_eq!(self.roster_address, before.roster_address);
+        assert_eq!(self.cursor, before.cursor);
         assert_eq!(self.owners.len(), before.owners.len());
         for (owner, original) in self.owners.iter().zip(&before.owners) {
             assert_eq!(
@@ -147,7 +161,7 @@ impl RetainedSdmaReleaseCustodyV1 {
         occurrence: usize,
         panic: bool,
     ) {
-        let indices = self.profile.unwrap().owner_indices();
+        let indices: Vec<_> = self.profile.unwrap().resource_indices().collect();
         let index = indices[occurrence - 1];
         before.assert_sdma_late_cleanup_v1(
             memory,
@@ -191,17 +205,23 @@ impl RetainedSdmaReleaseCustodyV1 {
 
 fn observe(
     set: &Gfx942SdmaQueueSetV1,
-    progress: &[OwnerProgressV1; 2],
+    progress: &[OwnerProgressV1; GFX942_SDMA_MAX_STRIPED_QUEUES_V1],
     profile: Option<RetainedSdmaReleaseProfileV1>,
     state: (bool, bool, bool, usize, usize),
 ) -> Observation {
-    let (Gfx942SdmaQueueSetV1::Generic(owners) | Gfx942SdmaQueueSetV1::Directional(owners)) = set
+    let (Gfx942SdmaQueueSetV1::Generic(owners)
+    | Gfx942SdmaQueueSetV1::Directional(owners)
+    | Gfx942SdmaQueueSetV1::Striped { owners, .. }) = set
     else {
         panic!("fixture profile")
     };
     Observation {
         roster_address: owners.as_ptr() as usize,
         profile,
+        cursor: match set {
+            Gfx942SdmaQueueSetV1::Striped { next_owner, .. } => Some(*next_owner),
+            _ => None,
+        },
         owners: owners
             .iter()
             .enumerate()
@@ -238,7 +258,9 @@ fn observe(
 }
 
 pub(crate) fn cleanup_set(set: &mut Gfx942SdmaQueueSetV1) {
-    let (Gfx942SdmaQueueSetV1::Generic(owners) | Gfx942SdmaQueueSetV1::Directional(owners)) = set
+    let (Gfx942SdmaQueueSetV1::Generic(owners)
+    | Gfx942SdmaQueueSetV1::Directional(owners)
+    | Gfx942SdmaQueueSetV1::Striped { owners, .. }) = set
     else {
         panic!("fixture profile")
     };

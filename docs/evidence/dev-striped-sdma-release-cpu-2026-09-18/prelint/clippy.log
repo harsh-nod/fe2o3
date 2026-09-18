@@ -1,0 +1,16 @@
+    Checking fe2o3-kfd v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-kfd)
+error: replacing an `Option` with `None`
+   --> crates/fe2o3-kfd/src/sdma/retained_release/generic_fixture.rs:132:38
+    |
+132 |             scoped!(@restore $field, std::mem::replace(&mut owners(&mut set)[index].$field, $replacement));
+    |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider `Option::take()` instead: `owners(&mut set)[index].$field.take()`
+...
+232 |         20 => scoped!(engine_index, None),
+    |               --------------------------- in this macro invocation
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#mem_replace_option_with_none
+    = note: `-D clippy::mem-replace-option-with-none` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::mem_replace_option_with_none)]`
+    = note: this error originates in the macro `scoped` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: could not compile `fe2o3-kfd` (lib test) due to 1 previous error

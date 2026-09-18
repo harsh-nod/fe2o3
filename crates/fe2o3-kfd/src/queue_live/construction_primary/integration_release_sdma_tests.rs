@@ -12,6 +12,16 @@ pub(super) fn with_sdma_profile(
     dispatch: bool,
     create: impl FnOnce(&mut Memory, QueueKeyV1) -> Gfx942SdmaQueueSetV1,
 ) -> (Parent, Rc<RefCell<Trace>>, LocalGateV1) {
+    let (parent, t, gate) = with_unchecked_sdma_profile(dispatch, create);
+    parent.preflight_release().unwrap();
+    t.borrow_mut().calls.clear();
+    (parent, t, gate)
+}
+
+pub(super) fn with_unchecked_sdma_profile(
+    dispatch: bool,
+    create: impl FnOnce(&mut Memory, QueueKeyV1) -> Gfx942SdmaQueueSetV1,
+) -> (Parent, Rc<RefCell<Trace>>, LocalGateV1) {
     let (mut parent, t, gate) = constructed(dispatch);
     let engine = &mut parent.engine;
     let loan = engine
@@ -25,7 +35,6 @@ pub(super) fn with_sdma_profile(
         .session
         .primary_reclaim(&mut engine.foundation, loan)
         .unwrap();
-    parent.preflight_release().unwrap();
     t.borrow_mut().calls.clear();
     (parent, t, gate)
 }

@@ -44,6 +44,8 @@ struct Trace {
     destroy: Option<u8>,
     destroy_target: Option<u32>,
     sdma_destroy_mutation: Option<(u32, bool)>,
+    sdma_destroy_ids: Vec<u32>,
+    sdma_resource_ids: Vec<crate::shared_memory::SharedGttAllocationIdentityV1>,
     sdma_resource_native_fault: Option<(usize, bool)>,
     sdma_resource_snapshot: Option<crate::shared_memory::ControlReleaseMemorySnapshotV1>,
     restore_foreign_vm: bool,

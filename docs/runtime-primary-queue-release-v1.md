@@ -1048,8 +1048,9 @@ after permanent restoration), inert retries, native completed Drop, and actual
 public runtime allocate/release/shutdown selection with accounting
 and profiler events. ID-only fixtures cannot establish successful cleanup.
 The initial directional handoff did not implement Generic, Striped, LogicalMux
-or terminal-creation profiles. Generic is now implemented at the development
-CPU boundary below; the other profiles remain explicit later requirements.
+or terminal-creation profiles. Generic and standalone Striped are now implemented
+at the boundaries below; combined, LogicalMux and terminal-creation profiles
+remain explicit later requirements.
 
 ## Single SDMA Release Development
 
@@ -1081,10 +1082,12 @@ ordinary, XGMI or window work. Existing lower SDMA cleanup tests cover all nativ
 calls, currentness boundaries and projection/commit boundaries; the new parent
 integration tests do not repeat every one of those lower boundaries.
 
-This remains R126 development. Native success/failure qualification of the three
-single-queue profiles, formal implementation correspondence and matched HIP/HSA
-performance remain unclaimed. Earlier sealed native receipts describe their
-exact historical source, not this extension.
+This remains R126 development. Bounded packetless native success for the three
+single-queue profiles is recorded in
+[`dev-generic-sdma-release-native-2026-09-18`](evidence/dev-generic-sdma-release-native-2026-09-18/README.md).
+Native failures, formal implementation correspondence and matched HIP/HSA
+performance remain unclaimed. Sealed native receipts describe their exact
+historical source, not subsequent extensions.
 The `kfd-compute-aql-queue` example now exposes a bounded public success probe:
 `--retained-release-sdma (generic|0|1) <selected-unique-id>`. It rejects `--all`
 for these profiles, creates the primary and one SDMA queue in an isolated child,
@@ -1095,3 +1098,40 @@ packets or MMIO stores. The ordinary coherent host account excludes intrinsic
 ring/control and other non-accounted profiles; its refund is not an aggregate
 process residency claim. Native execution evidence is separate from CPU CLI
 tests and does not cover submitted work, native faults or throughput.
+
+## Standalone Striped Release Development
+
+The same retained driver now admits standalone `Striped` sets in the primary
+`sdma` slot: an even owner count from 2 through 16, alternating engine 0/1,
+distinct non-primary queue IDs, and an in-range scheduling cursor. The entire
+roster is checked before effects, including live owner identity, exact record
+vector shapes, empty ordinary/XGMI/persistent/uncertain pending state, and all
+resource and doorbell owners. Malformed admitted profiles are hard errors, not
+permission for consuming fallback.
+
+Destruction follows original slot order 0 through N-1; resource release follows
+N-1 through 0, matching legacy destruction and resource disposal respectively.
+The scheduling cursor never determines teardown order. Opening/closing topology
+and per-owner currentness checks remain mandatory. The original vector, cursor,
+owners, mutable destroy arguments, raw outcomes and completed prefixes stay
+rooted through errors and unwinding. Sixteen inline progress slots need no
+allocation during teardown. Duplicate-ID preflight uses at most 120 comparisons
+without temporary storage. Resource accounting is exactly `5 + 3*N` (11 through
+53); ordinary host backing grows by one completion page/record per queue and is
+fully refunded on successful release, not an aggregate residency claim.
+
+Constructed-parent tests cover every admitted count with and without dispatch,
+nonzero cursors, exact original-token identity and disposal ordering, every
+topology/currentness/destroy/doorbell/resource callback error/panic prefix on a
+16-owner set, first/middle/last mutated
+destroy arguments, and late native cleanup failure for each resource owner.
+Rejected rosters include zero, undersized, odd, oversized and invalid-cursor
+sets. Every structural/pending field is corrupted on the last owner before
+zero-effect rejection. Pending payloads are metadata fixtures, not submitted
+work. A size regression bounds the inline SDMA custody at 32 KiB and the public
+primary release root at 128 KiB; it does not certify total call-stack consumption.
+
+This is CPU development qualification only. Native striped public-workflow
+success and failures, submitted work, formal implementation correspondence and
+matched performance are not established by these tests. Combined secondary
+`striped_sdma`, LogicalMux, and terminal-creation sets remain excluded.
