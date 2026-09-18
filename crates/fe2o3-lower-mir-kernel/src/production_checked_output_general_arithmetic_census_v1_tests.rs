@@ -63,10 +63,12 @@ fn census_component(scalar: ScalarType, op: BinaryOp, admitted: bool) {
             &mut budget,
         )
         .unwrap();
+        let helpers = scalar_helpers::check(&inventory, &mut budget).unwrap();
         let result = census::native(
             &inventory,
             &private,
             &division,
+            &helpers,
             "test native grammar",
             |_, _| Ok(false),
             &mut budget,

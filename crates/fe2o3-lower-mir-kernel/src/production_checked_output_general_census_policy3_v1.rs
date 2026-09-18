@@ -5,29 +5,30 @@ use fe2o3_kernel_ir::{
 };
 
 pub(super) fn source(
-    source: &AdmittedInertSemanticMirV1,
+    owner: &ProductionSemanticKirOwnerV1,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<()> {
+    let source = owner.semantic().semantic();
     charge(budget, 4)?;
-    if source.roots().is_empty()
-        || source.functions().len() != source.roots().len()
-        || !source.statics().is_empty()
-        || !source.allocations().is_empty()
+    if source.roots().is_empty() || !source.statics().is_empty() || !source.allocations().is_empty()
     {
         return Err(refused("source", "root-only global interface"));
     }
+    scalar_helpers::check_source(owner, budget)?;
     for function in source.functions() {
         charge(budget, 7)?;
+        let helper = function.role() == SemanticFunctionRoleV1::InternalHelper;
         let abi = function.abi();
-        if function.role() != SemanticFunctionRoleV1::KernelRoot
-            || abi.can_unwind()
-            || abi.c_variadic()
-            || !abi.hidden_arguments().is_empty()
-            || !matches!(abi.return_value().mode(), SemanticAbiPassModeV1::Ignore)
-            || !matches!(
-                source.types()[abi.return_type().index() as usize].shape(),
-                SemanticTypeShapeV1::Unit
-            )
+        if !helper
+            && (function.role() != SemanticFunctionRoleV1::KernelRoot
+                || abi.can_unwind()
+                || abi.c_variadic()
+                || !abi.hidden_arguments().is_empty()
+                || !matches!(abi.return_value().mode(), SemanticAbiPassModeV1::Ignore)
+                || !matches!(
+                    source.types()[abi.return_type().index() as usize].shape(),
+                    SemanticTypeShapeV1::Unit
+                ))
         {
             return Err(refused("source", "Unit root ABI"));
         }
@@ -44,11 +45,13 @@ pub(super) fn source(
                 | SemanticTerminatorKindV1::Unreachable => {}
                 SemanticTerminatorKindV1::Call(call) => {
                     charge(budget, 1)?;
-                    if !matches!(
-                        source.callables().get(call.callee().index() as usize),
-                        Some(SemanticCallableDeclV1::CompilerIntrinsic { .. })
-                    ) {
-                        return Err(refused("source", "no ordinary helper calls"));
+                    match source.callables().get(call.callee().index() as usize) {
+                        Some(SemanticCallableDeclV1::CompilerIntrinsic { .. }) if !helper => {}
+                        Some(SemanticCallableDeclV1::Defined { function: callee })
+                            if source.functions().get(callee.index() as usize).is_some_and(
+                                |callee| callee.role() == SemanticFunctionRoleV1::InternalHelper,
+                            ) => {}
+                        _ => return Err(refused("source", "closed direct scalar helper calls")),
                     }
                 }
                 _ => return Err(refused("source", "closed control and assertion grammar")),
@@ -209,10 +212,12 @@ fn ty(ty: &Type) -> bool {
         }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn native(
     inventory: &CanonicalKirInventoryV1<'_>,
     private: &private_memory::PrivateMemory<'_, '_>,
     division: &unsigned_division::UnsignedDivision<'_, '_>,
+    helpers: &scalar_helpers::RawEmptyScalarHelpers<'_, '_>,
     phase: &'static str,
     mut authorized_trap: impl FnMut(usize, CanonicalKirOperationCoordinateV1) -> R<bool>,
     budget: &mut AssertOriginBudgetV1<'_>,
@@ -227,6 +232,7 @@ pub(super) fn native(
     let mut roots = 0usize;
     for function in inventory.functions() {
         charge(budget, 3)?;
+        let helper = helpers.function(inventory, function.coordinate, budget)?;
         if function.function.role == FunctionRole::ExternalImport {
             charge(
                 budget,
@@ -255,6 +261,9 @@ pub(super) fn native(
                 phase,
                 "only the canonical assertion trap declaration",
             ));
+        }
+        if helper {
+            continue;
         }
         if function.function.role != FunctionRole::KernelEntry
             || function.function.body.is_none()
@@ -285,7 +294,9 @@ pub(super) fn native(
             | Terminator::Switch { .. }
             | Terminator::IntegerSwitch { .. }
             | Terminator::Unreachable => {}
-            Terminator::Return { values } if values.is_empty() => {}
+            Terminator::Return { values }
+                if values.is_empty()
+                    || helpers.function(inventory, block.coordinate.function, budget)? => {}
             _ => return Err(refused(phase, "closed native control")),
         }
     }
@@ -358,36 +369,38 @@ pub(super) fn native(
                 None
             }
             OperationKind::Call { callee, arguments } => {
-                charge(
-                    budget,
-                    callee
-                        .as_str()
-                        .len()
-                        .checked_add(2)
-                        .and_then(|n| n.checked_mul(8))
-                        .ok_or_else(arithmetic)?,
-                )?;
-                if !arguments.is_empty()
-                    || !row.operation.results.is_empty()
-                    || !authorized_trap(ordinal, row.coordinate)?
-                {
-                    return Err(refused(phase, "source-authorized trap only"));
-                }
-                if !matches!(
-                    fe2o3_kernel_ir::AmdGpuDiagnosticOperation::from_intrinsic_call(
-                        callee, arguments
-                    ),
-                    Some(fe2o3_kernel_ir::AmdGpuDiagnosticOperation::Trap)
-                ) {
-                    return Err(refused(phase, "exact reserved trap descriptor"));
-                }
-                let function = &inventory.functions()[row.coordinate.block.function.0 as usize];
-                let block = &inventory.blocks()
-                    [function.blocks.start + row.coordinate.block.block as usize];
-                if ordinal + 1 != block.operations.end
-                    || !matches!(block.terminator, Terminator::Unreachable)
-                {
-                    return Err(refused(phase, "terminating trap control"));
+                if !helpers.call(inventory, ordinal, budget)? {
+                    charge(
+                        budget,
+                        callee
+                            .as_str()
+                            .len()
+                            .checked_add(2)
+                            .and_then(|n| n.checked_mul(8))
+                            .ok_or_else(arithmetic)?,
+                    )?;
+                    if !arguments.is_empty()
+                        || !row.operation.results.is_empty()
+                        || !authorized_trap(ordinal, row.coordinate)?
+                    {
+                        return Err(refused(phase, "source-authorized trap only"));
+                    }
+                    if !matches!(
+                        fe2o3_kernel_ir::AmdGpuDiagnosticOperation::from_intrinsic_call(
+                            callee, arguments
+                        ),
+                        Some(fe2o3_kernel_ir::AmdGpuDiagnosticOperation::Trap)
+                    ) {
+                        return Err(refused(phase, "exact reserved trap descriptor"));
+                    }
+                    let function = &inventory.functions()[row.coordinate.block.function.0 as usize];
+                    let block = &inventory.blocks()
+                        [function.blocks.start + row.coordinate.block.block as usize];
+                    if ordinal + 1 != block.operations.end
+                        || !matches!(block.terminator, Terminator::Unreachable)
+                    {
+                        return Err(refused(phase, "terminating trap control"));
+                    }
                 }
                 None
             }
