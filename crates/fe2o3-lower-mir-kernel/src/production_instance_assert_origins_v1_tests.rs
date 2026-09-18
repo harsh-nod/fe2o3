@@ -29,7 +29,7 @@ fn assertion_calls_owner(expected: bool, diamond: bool) -> ProductionSemanticMir
     let operand = |local| SemanticOperandV1::Copy(place(local));
     let edge =
         |role, block| SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(block));
-    let block = |index, statements, terminator| {
+    let block = |index: u8, statements, terminator| {
         SemanticBasicBlockV1::new(
             SemanticBlockIdentityV1::from_sha256([219 + index; 32]),
             source,
