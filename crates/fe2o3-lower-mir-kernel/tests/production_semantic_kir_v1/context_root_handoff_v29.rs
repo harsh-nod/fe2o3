@@ -230,23 +230,26 @@ fn fixture(transport: Transport, binding: u8) -> ProductionSemanticSsaOwnerV1 {
         ],
         vec![block(83, vec![], SemanticTerminatorKindV1::Return)],
     );
+    let mut types = vec![
+        unit_type(),
+        zst(10, vec![]),
+        zst(11, vec![MARKER; 5]).with_rust_type_kind(SemanticRustTypeKindV1::Execution(
+            SemanticExecutionRoleV29::KernelContext,
+        )),
+        scalar_type(
+            12,
+            SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 32,
+            },
+        ),
+    ];
+    if matches!(transport, Transport::Projected) {
+        types.push(zst(13, vec![UNIT]));
+    }
     let admitted = InertSemanticMirRequestV1::new_with_callables(
         SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
-        vec![
-            unit_type(),
-            zst(10, vec![]),
-            zst(11, vec![MARKER; 5]).with_rust_type_kind(SemanticRustTypeKindV1::Execution(
-                SemanticExecutionRoleV29::KernelContext,
-            )),
-            scalar_type(
-                12,
-                SemanticScalarTypeV1::Integer {
-                    signed: false,
-                    bits: 32,
-                },
-            ),
-            zst(13, vec![UNIT]),
-        ],
+        types,
         vec![],
         vec![],
         vec![],
