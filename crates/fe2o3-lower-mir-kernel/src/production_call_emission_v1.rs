@@ -339,18 +339,26 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "defined scalar call does not have an unreachable unwind edge",
             ));
         }
-        let callee_id = self
-            .defined_function_ids
-            .get(&callee)
-            .cloned()
-            .ok_or_else(|| {
-                unsupported(
-                    self.semantic_function.index(),
-                    Some(block.index()),
-                    None,
-                    "defined call target is outside the lowered helper closure",
-                )
-            })?;
+        if self.execution.is_some() != self.execution_calls.is_some() {
+            return Err(execution_call_error_v29());
+        }
+        let ordinary_target = if self.execution.is_some() {
+            None
+        } else {
+            Some(
+                self.defined_function_ids
+                    .get(&callee)
+                    .cloned()
+                    .ok_or_else(|| {
+                        unsupported(
+                            self.semantic_function.index(),
+                            Some(block.index()),
+                            None,
+                            "defined call target is outside the lowered helper closure",
+                        )
+                    })?,
+            )
+        };
         let signature = self
             .defined_function_signatures
             .get(&callee)
@@ -428,22 +436,34 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
         };
         let arguments_first = call_operation_ordinal_v1(operations, block)?;
-        let PreparedDefinedCallArgumentsV1 {
-            source_bindings: _source_bindings,
-            arguments,
-            execution: _,
-        } = self.prepare_defined_call_arguments_v1(
-            block,
-            call,
-            callee,
-            DefinedCallArgumentSignatureV1 {
-                projection: DefinedCallProjectionV29::Ordinary,
-                semantic_types: &signature.parameter_semantic_types,
-                projections: &signature.call_arguments,
-                parameter_types: signature.parameter_types,
-            },
-            operations,
-        )?;
+        let (callee_id, arguments) = if self.execution.is_some() {
+            self.prepare_execution_defined_call_v29(
+                block,
+                call,
+                callee,
+                &signature.parameter_semantic_types,
+                &signature.call_arguments,
+                signature.parameter_types,
+                operations,
+            )?
+        } else {
+            let callee_id =
+                ordinary_target.expect("ordinary target checked before call preparation");
+            let PreparedDefinedCallArgumentsV1 { arguments, .. } = self
+                .prepare_defined_call_arguments_v1(
+                    block,
+                    call,
+                    callee,
+                    DefinedCallArgumentSignatureV1 {
+                        projection: DefinedCallProjectionV29::Ordinary,
+                        semantic_types: &signature.parameter_semantic_types,
+                        projections: &signature.call_arguments,
+                        parameter_types: signature.parameter_types,
+                    },
+                    operations,
+                )?;
+            (callee_id, arguments)
+        };
         let call_operation = call_operation_ordinal_v1(operations, block)?;
         let results = self.emit_results(
             operations,

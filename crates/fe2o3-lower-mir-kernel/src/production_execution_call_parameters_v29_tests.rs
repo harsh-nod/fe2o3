@@ -5,6 +5,10 @@ mod instance_plan_tests {
     include!("production_execution_instance_plan_v29_tests.rs");
 }
 
+mod call_sink_tests {
+    include!("production_execution_call_sink_v29_tests.rs");
+}
+
 const PAIR: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
 const HELPER: SemanticFunctionIdV1 = SemanticFunctionIdV1::from_index(1);
 

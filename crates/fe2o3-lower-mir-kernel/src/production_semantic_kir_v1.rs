@@ -10238,6 +10238,11 @@ enum PlannedParameterLocalBindingV1 {
 }
 
 struct LoweredFunctionResultV1 {
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "Scoped expansion placement remains gated")
+    )]
+    next_value: u32,
     #[cfg(test)]
     execution_observation: Option<ExecutionTestObservationV29>,
     #[cfg_attr(
@@ -10634,12 +10639,53 @@ fn lower_one_semantic_function_v1(
     launch_rank: u8,
     authenticated_ranked_control: bool,
     max_operations: usize,
+    assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
+    private_array_work: &mut PrivateArrayLazyBudgetV1,
+    private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
+    call_budget: &mut ArgumentBudgetV1<'_>,
+    placement: SemanticEmissionPlacementV1,
+    execution: Option<ExecutionAvailabilityV29<'_>>,
+) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
+    lower_one_semantic_function_with_calls_v29(
+        semantic,
+        plan,
+        semantic_ssa,
+        defined_function_ids,
+        defined_function_signatures,
+        required_workgroup,
+        infallible_asserts,
+        launch_rank,
+        authenticated_ranked_control,
+        max_operations,
+        assert_origins,
+        private_array_work,
+        private_array_sources,
+        call_budget,
+        placement,
+        execution,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_one_semantic_function_with_calls_v29(
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    plan: &LoweredFunctionPlanV1,
+    semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
+    defined_function_ids: &BTreeMap<SemanticFunctionIdV1, FunctionId>,
+    defined_function_signatures: &BTreeMap<SemanticFunctionIdV1, LoweredFunctionSignatureV1>,
+    required_workgroup: Option<[u32; 3]>,
+    infallible_asserts: BTreeSet<u32>,
+    launch_rank: u8,
+    authenticated_ranked_control: bool,
+    max_operations: usize,
     mut assert_origins: Option<&mut AssertOriginEmissionV1<'_, '_>>,
     private_array_work: &mut PrivateArrayLazyBudgetV1,
     private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
     call_budget: &mut ArgumentBudgetV1<'_>,
     placement: SemanticEmissionPlacementV1,
     execution: Option<ExecutionAvailabilityV29<'_>>,
+    execution_calls: Option<&mut dyn ExecutionDefinedCallConsumerV29>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     let source_call_instance = execution.as_ref().map(|cursor| cursor.instance);
     let function = semantic
@@ -10726,6 +10772,7 @@ fn lower_one_semantic_function_v1(
         placement,
         execution,
     )?;
+    lowering.execution_calls = execution_calls;
 
     let order = semantic_ssa
         .plan()
@@ -10896,6 +10943,7 @@ fn lower_one_semantic_function_v1(
         target_blocks.push(block);
     }
     let emitted_operations = lowering.emitted_operations;
+    let next_value = lowering.next_value;
     #[cfg(test)]
     let execution_observation = lowering
         .execution
@@ -10965,6 +11013,7 @@ fn lower_one_semantic_function_v1(
         .required_capabilities
         .extend(operation_capabilities.iter().cloned());
     Ok(LoweredFunctionResultV1 {
+        next_value,
         #[cfg(test)]
         execution_observation,
         source_call_instance,
@@ -12474,6 +12523,7 @@ include!("production_execution_bindings_v1.rs");
 include!("production_emission_budget_v1.rs");
 include!("production_execution_availability_v29.rs");
 include!("production_execution_call_parameters_v29.rs");
+include!("production_execution_call_sink_v29.rs");
 include!("production_execution_instance_plan_v29.rs");
 include!("production_execution_scalar_operands_v29.rs");
 include!("production_execution_events_v29.rs");
@@ -12518,6 +12568,7 @@ struct SemanticFunctionLoweringV1<'a> {
     next_value: u32,
     emission_placement: SemanticEmissionPlacementV1,
     execution: Option<ExecutionAvailabilityV29<'a>>,
+    execution_calls: Option<&'a mut (dyn ExecutionDefinedCallConsumerV29 + 'a)>,
     assert_failure_block: Option<BlockId>,
     required_workgroup: Option<[u32; 3]>,
     infallible_asserts: BTreeSet<u32>,

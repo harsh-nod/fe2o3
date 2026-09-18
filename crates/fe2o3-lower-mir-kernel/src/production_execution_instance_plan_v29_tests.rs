@@ -1,5 +1,9 @@
 use super::*;
 
+mod closure_parameter_tests {
+    include!("production_execution_closure_parameters_v29_tests.rs");
+}
+
 fn plan_case(
     mut owner: ProductionSemanticSsaOwnerV1,
     first_value: u32,

@@ -276,6 +276,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             emission_placement,
             emission_work,
             execution,
+            execution_calls: None,
             assert_failure_block,
             required_workgroup,
             infallible_asserts,
