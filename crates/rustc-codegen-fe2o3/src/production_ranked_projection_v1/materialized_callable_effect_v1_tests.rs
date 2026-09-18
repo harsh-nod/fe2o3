@@ -1,6 +1,7 @@
 // Reuse the genuine semantic owner fixtures, not a fabricated purity flag.
 
 include!("unit_local_ranked_projection_v1_tests.rs");
+include!("unit_local_ranked_stage_backend_v1_tests.rs");
 
 fn materialized_aggregate_helper_v1() -> fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1 {
     materialized_helper_v1(true)
