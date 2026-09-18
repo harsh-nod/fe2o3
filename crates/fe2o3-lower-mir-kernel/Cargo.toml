@@ -15,6 +15,8 @@ dialect-kernel.workspace = true
 dialect-mir = { workspace = true, features = ["pliron"] }
 fe2o3-kernel-analysis = { workspace = true, default-features = false }
 fe2o3-kernel-ir.workspace = true
+# Final output admission consumes the sealed fixed-policy owner, not pass algorithms.
+fe2o3-kernel-opt.workspace = true
 fe2o3-mir-model.workspace = true
 fe2o3-pliron.workspace = true
 pliron.workspace = true
@@ -23,6 +25,5 @@ sha2.workspace = true
 [dev-dependencies]
 dialect-amdgcn.workspace = true
 fe2o3-amd-target.workspace = true
-fe2o3-kernel-opt.workspace = true
 # Differential execution of lowered test programs; never a production dependency.
 fe2o3-kir-sim.workspace = true

@@ -15,6 +15,10 @@ use rustc_middle::ty::TyCtxt;
 const EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1: &str =
     "FE2O3_EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX";
 
+#[cfg(test)]
+#[path = "production_rustc_driver_checked_output_source_v1_tests.rs"]
+mod checked_output_source_v1_tests;
+
 #[derive(Default)]
 struct ProductionExtractionCallbacksV1 {
     ranked_memory: bool,

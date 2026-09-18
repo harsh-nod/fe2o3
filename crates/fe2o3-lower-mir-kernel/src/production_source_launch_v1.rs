@@ -35,6 +35,21 @@ impl ProductionSourceLaunchInputV1 {
             max_grid,
         }
     }
+
+    /// Retained rank, not independent authentication of its source origin.
+    pub const fn rank(self) -> u8 {
+        self.rank
+    }
+
+    /// Retained workgroup input, not independent source-origin authentication.
+    pub const fn exact_workgroup(self) -> Option<[u32; 3]> {
+        self.exact_workgroup
+    }
+
+    /// Retained grid ceiling; semantic MIR does not authenticate this field.
+    pub const fn max_grid(self) -> [u32; 3] {
+        self.max_grid
+    }
 }
 
 /// One borrowed logical root and its detached source launch input.

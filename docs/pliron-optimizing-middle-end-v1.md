@@ -188,6 +188,35 @@ failure. Integer-identity rewrites are not in this schedule. This API supplies
 neither final source/memory/refinement admission nor artifact/launch authority;
 it is not an alternate selectable production backend or a fallback route.
 
+## Canonical policy-4 composition
+
+[`optimize_checked_canonical_kernel_ir_policy4_v1`](../crates/fe2o3-kernel-opt/src/checked_optimization_policy4_v1.rs)
+adds a new fixed composition without changing policy-3:
+
+```text
+B -> unchanged policy-3 -> C -> checked private store forwarding -> O
+```
+
+Its move-only owner retains C's execution/occurrence history, final O and the
+independently checked C/O rows. The B/C occurrence map cannot describe a replaced
+load in O: its operand structure has changed. The two exact relations are
+composed instead. The separate policy-4 execution record binds B/C/O and the
+forwarding count. Published semantic replay still cannot mint execution custody.
+
+The forwarding rule uses same-block ordinary private integer stores/loads with
+identical pointer SSA values and memory attributes. It neither removes stores
+nor treats numeric address equality as provenance. Volatile, unknown, trapping,
+ordered and convergent boundaries are not crossed. This is not general MemorySSA,
+alias-driven load CSE or dead-store elimination.
+
+The [nondefault checked-output backend stage](../crates/rustc-codegen-fe2o3/src/production_pipeline_checked_output_policy4_v1.rs)
+consumes the real source/ranked receipt, admits B/C, replays C/O, derives fresh O
+memory facts and lowers actual O to native LLVM. It retains full source bindings
+and the ranked roster. The default seven-step pipeline remains unchanged until
+native protected provenance, complete admission and tutorial qualification pass.
+This composition does not complete #271's expanded scalar, loop, memory or GPU
+optimization milestones.
+
 ## Admission tests
 
 The production admission is maintained by the following regression gates:

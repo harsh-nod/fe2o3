@@ -3,6 +3,10 @@ use super::*;
 #[path = "production_checked_output_general_policy3_v1.rs"]
 mod general;
 
+#[path = "production_checked_output_admission_policy4_v1.rs"]
+mod policy4;
+pub use policy4::*;
+
 #[derive(Clone, Copy)]
 enum OutputAdmissionKindV1 {
     ClosedScalar,
@@ -132,8 +136,9 @@ impl ProductionCheckedOutputOwnerPolicy3V1 {
     /// Consumes source/ranked custody for the checked guarded-global grammar.
     ///
     /// This accepts scalar roots and ordinary nonvolatile global scalar accesses,
-    /// with exact checked runtime assertion success/failure control. Private
-    /// addresses, local helpers, collective/ordered operations and
+    /// with exact checked runtime assertion success/failure control. Fixed-cell
+    /// private scalar memory requires a separate complete source/address and
+    /// initialization census. Local helpers, collective/ordered operations and
     /// unsupported scalar recipes remain refused. Bounds and alias requirements
     /// are retained obligations, not authenticated runtime bindings or launches.
     ///
