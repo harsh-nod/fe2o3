@@ -7,6 +7,10 @@ use fe2o3_mir_model::{SsaResolvedEventV1, SsaValueV1};
 
 const CONTEXT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(3);
 
+mod cfg_tests {
+    include!("production_execution_cfg_transport_v29_tests.rs");
+}
+
 #[derive(Clone, Copy)]
 enum Flow {
     Linear,
@@ -418,6 +422,7 @@ fn sibling_branches_consume_the_same_incoming_role_independently() {
                     definition,
                     budget,
                 )?;
+                cursor.finish_block(budget)?;
             }
             Ok(())
         })

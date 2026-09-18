@@ -707,15 +707,14 @@ enum SemanticCapabilityAvailabilityV1 {
 enum SemanticValueBindingV1 {
     Unit,
     Unmaterialized,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Producer issuance remains gated on source custody")
-    )]
     Execution(SemanticExecutionBindingV29),
     ExecutionBorrow(SemanticExecutionBorrowBindingV29),
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "Checked borrowed-role consumers remain gated on source custody")
+        expect(
+            dead_code,
+            reason = "Checked borrowed-role consumers remain gated on source custody"
+        )
     )]
     ExecutionReferent(SemanticExecutionBorrowBindingV29),
     MovedExecution,
