@@ -1,8 +1,7 @@
 use super::*;
 use crate::production_semantic_kir_v1::*;
 
-const U64: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
-const PAIR: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(5);
+const PAIR: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
 const HELPER: SemanticFunctionIdV1 = SemanticFunctionIdV1::from_index(1);
 
 #[derive(Clone, Copy, Debug)]
@@ -21,10 +20,6 @@ impl Shape {
 
     fn index(self) -> bool {
         matches!(self, Self::IndexTuple | Self::IndexRustCall)
-    }
-
-    fn scalar(self) -> SemanticTypeIdV1 {
-        if self.index() { U64 } else { U32 }
     }
 
     fn physical(self) -> Type {
@@ -52,25 +47,28 @@ fn owner(shape: Shape) -> ProductionSemanticSsaOwnerV1 {
         .source_semantic()
         .types()
         .to_vec();
-    types.push(SemanticTypeDeclV1::new(
-        SemanticTypeIdentityV1::from_sha256([200; 32]),
-        SemanticLayoutIdentityV1::from_sha256([200; 32]),
-        SemanticTypeLayoutV1::new_with_backend_repr(
-            Some(8),
-            8,
-            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
-                SemanticBackendPrimitiveV1::integer(false, 64, 8),
-                SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
-            )),
-            false,
-        )
-        .unwrap(),
-        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
-            signed: false,
-            bits: 64,
-        }),
-    ));
-    let scalar_ty = shape.scalar();
+    if shape.index() {
+        // Keep the fixture's type table closed over the selected scalar width.
+        types[U32.index() as usize] = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([200; 32]),
+            SemanticLayoutIdentityV1::from_sha256([200; 32]),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(8),
+                8,
+                SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                    SemanticBackendPrimitiveV1::integer(false, 64, 8),
+                    SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+                )),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 64,
+            }),
+        );
+    }
+    let scalar_ty = U32;
     let bytes = if shape.index() { 8 } else { 4 };
     let fields = SemanticAggregateTypeV1::new(vec![CONTEXT, scalar_ty]).unwrap();
     types.push(SemanticTypeDeclV1::new(
@@ -488,6 +486,30 @@ fn run(
                             }
                             if matches!(fault, Fault::SecondInstance | Fault::DuplicateSeed) {
                                 assert!(!shape.index());
+                                let destination = incoming.source().destination().unwrap();
+                                let prepared_destination = parent.prepare_call_destination_v1(
+                                    SemanticBlockIdV1::from_index(0),
+                                    destination.place(),
+                                    &mut block.operations,
+                                )?;
+                                let results = parent.emit_results(
+                                    &mut block.operations,
+                                    vec![shape.physical()],
+                                    OperationKind::Call {
+                                        callee: child_plan(shape).kernel_ir_function,
+                                        arguments: prepared.arguments.clone(),
+                                    },
+                                )?;
+                                let result_binding =
+                                    binding_from_value_defs(semantic.types(), U32, &results)?;
+                                parent.finish_call_destination_v1(
+                                    SemanticBlockIdV1::from_index(0),
+                                    destination.place(),
+                                    prepared_destination,
+                                    result_binding,
+                                    None,
+                                    &mut block.operations,
+                                )?;
                                 let arguments = parent.edge_arguments(
                                     SemanticBlockIdV1::from_index(0),
                                     0,
