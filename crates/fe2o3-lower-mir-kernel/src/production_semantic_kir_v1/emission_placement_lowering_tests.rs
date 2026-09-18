@@ -17,7 +17,7 @@ fn lower_placed_root(
     )
 }
 
-fn lower_placed_function(
+pub(in super::super) fn lower_placed_function(
     ssa: &ProductionSemanticSsaOwnerV1,
     selected: SemanticFunctionIdV1,
     placement: SemanticEmissionPlacementV1,

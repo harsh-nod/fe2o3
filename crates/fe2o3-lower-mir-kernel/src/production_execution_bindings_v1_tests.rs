@@ -188,8 +188,7 @@ fn occurrence(instance: usize, block: u32) -> ProductionCallOccurrenceV1 {
 }
 
 fn context(types: &[SemanticTypeDeclV1]) -> SemanticExecutionBindingV29 {
-    SemanticExecutionBindingV29::context(types, CONTEXT, occurrence(0, 1), ValueId::new(10))
-        .unwrap()
+    SemanticExecutionBindingV29::context(types, CONTEXT, occurrence(0, 1), ValueId(10)).unwrap()
 }
 
 fn place(local: u32, ty: SemanticTypeIdV1) -> SemanticPlaceV1 {
@@ -226,18 +225,18 @@ fn execution_chain_preserves_exact_producer_and_parent_identities() {
         &types,
         WORKGROUP,
         occurrence(1, 0),
-        ValueId::new(11),
+        ValueId(11),
         &context,
     )
     .unwrap();
     let tile =
-        SemanticExecutionBindingV29::tile(&types, TILE, occurrence(1, 1), ValueId::new(12), &group)
+        SemanticExecutionBindingV29::tile(&types, TILE, occurrence(1, 1), ValueId(12), &group)
             .unwrap();
     let fragment = SemanticExecutionBindingV29::fragment(
         &types,
         FRAGMENT,
         occurrence(1, 2),
-        ValueId::new(13),
+        ValueId(13),
         &tile,
     )
     .unwrap();
@@ -279,7 +278,7 @@ fn execution_chain_preserves_exact_producer_and_parent_identities() {
     ] {
         assert_eq!(binding.semantic_type(), ty);
         assert_eq!(binding.role(), role);
-        assert_eq!(binding.value(), ValueId::new(value));
+        assert_eq!(binding.value(), ValueId(value));
         assert_eq!(binding.producer(), producer);
         assert_eq!(binding.context_identity(), context.identity);
         assert_eq!(
@@ -296,7 +295,7 @@ fn execution_chain_preserves_exact_producer_and_parent_identities() {
         &types,
         WORKGROUP,
         occurrence(2, 0),
-        ValueId::new(11),
+        ValueId(11),
         &context,
     )
     .unwrap();
@@ -311,16 +310,16 @@ fn execution_binding_rejects_role_geometry_and_nominal_substitution() {
         &types,
         WORKGROUP,
         occurrence(1, 0),
-        ValueId::new(11),
+        ValueId(11),
         &context,
     )
     .unwrap();
     let tile =
-        SemanticExecutionBindingV29::tile(&types, TILE, occurrence(1, 1), ValueId::new(12), &group)
+        SemanticExecutionBindingV29::tile(&types, TILE, occurrence(1, 1), ValueId(12), &group)
             .unwrap();
     assert!(context.check_type(&types, OTHER_CONTEXT).is_err());
     assert!(
-        SemanticExecutionBindingV29::context(&types, WORKGROUP, occurrence(0, 0), ValueId::new(1))
+        SemanticExecutionBindingV29::context(&types, WORKGROUP, occurrence(0, 0), ValueId(1))
             .is_err()
     );
     assert!(
@@ -328,7 +327,7 @@ fn execution_binding_rejects_role_geometry_and_nominal_substitution() {
             &types,
             SemanticTypeIdV1::from_index(13),
             occurrence(0, 0),
-            ValueId::new(1)
+            ValueId(1)
         )
         .is_err()
     );
@@ -337,7 +336,7 @@ fn execution_binding_rejects_role_geometry_and_nominal_substitution() {
             &types,
             SemanticTypeIdV1::from_index(u32::MAX),
             occurrence(0, 0),
-            ValueId::new(1)
+            ValueId(1)
         )
         .is_err()
     );
@@ -346,27 +345,21 @@ fn execution_binding_rejects_role_geometry_and_nominal_substitution() {
             &types,
             WORKGROUP,
             occurrence(1, 0),
-            ValueId::new(2),
+            ValueId(2),
             &group
         )
         .is_err()
     );
     assert!(
-        SemanticExecutionBindingV29::tile(
-            &types,
-            TILE,
-            occurrence(1, 1),
-            ValueId::new(3),
-            &context
-        )
-        .is_err()
+        SemanticExecutionBindingV29::tile(&types, TILE, occurrence(1, 1), ValueId(3), &context)
+            .is_err()
     );
     assert!(
         SemanticExecutionBindingV29::fragment(
             &types,
             OTHER_FRAGMENT,
             occurrence(1, 2),
-            ValueId::new(4),
+            ValueId(4),
             &tile
         )
         .is_err()
@@ -378,7 +371,7 @@ fn execution_binding_rejects_role_geometry_and_nominal_substitution() {
         }),
     );
     assert!(
-        SemanticExecutionBindingV29::tile(&types, TILE, occurrence(1, 1), ValueId::new(3), &group)
+        SemanticExecutionBindingV29::tile(&types, TILE, occurrence(1, 1), ValueId(3), &group)
             .is_err()
     );
     types[CONTEXT.index() as usize] = types[OTHER_CONTEXT.index() as usize].clone();
@@ -388,7 +381,7 @@ fn execution_binding_rejects_role_geometry_and_nominal_substitution() {
             &types,
             WORKGROUP,
             occurrence(1, 0),
-            ValueId::new(2),
+            ValueId(2),
             &context
         )
         .is_err()
@@ -492,7 +485,7 @@ fn execution_bindings_cannot_flatten_or_resurrect_through_enums() {
         SemanticValueBindingV1::Execution(context),
         SemanticValueBindingV1::ExecutionBorrow(borrowed),
         SemanticValueBindingV1::Value {
-            id: ValueId::new(40),
+            id: ValueId(40),
             ty: Type::Execution(ExecutionRoleV15::Context),
         },
     ] {
@@ -511,7 +504,7 @@ fn execution_bindings_cannot_flatten_or_resurrect_through_enums() {
         let payloads = BTreeMap::from([(0, vec![nested])]);
         assert!(project_enum_payload_field(0, &payloads, 0).is_err());
         let mut enum_binding = SemanticValueBindingV1::Enum {
-            discriminant: ValueId::new(20),
+            discriminant: ValueId(20),
             discriminant_ty: Type::Scalar(ScalarType::U32),
             semantic_type: SemanticTypeIdV1::from_index(18),
             variant: None,
@@ -530,13 +523,13 @@ fn execution_bindings_cannot_flatten_or_resurrect_through_enums() {
     let ordinary = SemanticValueBindingV1::Aggregate(vec![
         SemanticValueBindingV1::Unit,
         SemanticValueBindingV1::Value {
-            id: ValueId::new(30),
+            id: ValueId(30),
             ty: Type::Scalar(ScalarType::U32),
         },
     ]);
     assert_eq!(
         ordinary.values().unwrap(),
-        vec![(ValueId::new(30), Type::Scalar(ScalarType::U32))]
+        vec![(ValueId(30), Type::Scalar(ScalarType::U32))]
     );
     assert!(semantic_binding_can_restore_from_unique_source_v1(
         &ordinary
@@ -567,7 +560,7 @@ fn moved_execution_tombstone_remains_nominal_after_last_role_moves() {
         assert!(project_enum_payload_field(variant, &payloads, 0).is_err());
     }
     let mut binding = SemanticValueBindingV1::Enum {
-        discriminant: ValueId::new(21),
+        discriminant: ValueId(21),
         discriminant_ty: Type::Scalar(ScalarType::U32),
         semantic_type: SemanticTypeIdV1::from_index(18),
         variant: Some(1),
@@ -583,4 +576,99 @@ fn moved_execution_tombstone_remains_nominal_after_last_role_moves() {
         .is_err()
     );
     assert!(semantic_binding_contains_execution_v29(&binding));
+}
+
+fn ordinary_types() -> Vec<SemanticTypeDeclV1> {
+    types()
+        .into_iter()
+        .map(|ty| ty.with_rust_type_kind(SemanticRustTypeKindV1::Ordinary))
+        .collect()
+}
+
+#[test]
+fn ordinary_type_preflight_requires_exact_work_and_no_scratch() {
+    let types = ordinary_types();
+    let count = types.len();
+    for floor in [0, 23] {
+        for limit in [count, count - 1] {
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(limit);
+            let mut budget = ArgumentBudgetV1::new(&mut work, floor);
+            budget.reserve_storage(floor).unwrap();
+            let result = require_execution_free_types_v29(&types, &mut budget);
+            if limit == count {
+                result.unwrap();
+                assert_eq!(budget.work(), count);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(
+                        ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                            ArgumentResourceV1::Work(_),
+                        )
+                    )
+                ));
+            }
+            assert_eq!(budget.storage(), floor);
+            assert_eq!(budget.peak_storage(), floor);
+            assert_eq!(budget.failed_storage(), None);
+        }
+    }
+}
+
+#[test]
+fn ordinary_type_preflight_rejects_nominal_roles_even_in_unused_rows() {
+    let nominal = types();
+    let ordinary = ordinary_types();
+    for (index, declaration) in nominal
+        .iter()
+        .enumerate()
+        .filter(|(_, ty)| matches!(ty.rust_type_kind(), SemanticRustTypeKindV1::Execution(_)))
+    {
+        for unused in [false, true] {
+            let mut types = ordinary.clone();
+            if unused {
+                // No type or source root in the fixture names this appended row.
+                types.push(declaration.clone());
+            } else {
+                types[index] = declaration.clone();
+            }
+            for floor in [0, 23] {
+                let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(types.len());
+                let mut budget = ArgumentBudgetV1::new(&mut work, floor);
+                budget.reserve_storage(floor).unwrap();
+                assert!(matches!(
+                    require_execution_free_types_v29(&types, &mut budget),
+                    Err(ProductionSemanticKirErrorV1::Unsupported {
+                        detail: "execution roles require occurrence-bound transport, not an ordinary Rust representation",
+                        ..
+                    })
+                ));
+                assert_eq!(budget.work(), types.len());
+                assert_eq!(budget.storage(), floor);
+                assert_eq!(budget.peak_storage(), floor);
+            }
+        }
+    }
+}
+
+#[test]
+fn ordinary_type_preflight_charges_before_nominal_refusal_and_accepts_empty_table() {
+    let types = types();
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(types.len() - 1);
+    let mut budget = ArgumentBudgetV1::new(&mut work, 0);
+    assert!(matches!(
+        require_execution_free_types_v29(&types, &mut budget),
+        Err(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Work(
+                _
+            ),)
+        )
+    ));
+    assert_eq!(budget.storage(), 0);
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(0);
+    let mut budget = ArgumentBudgetV1::new(&mut work, 0);
+    require_execution_free_types_v29(&[], &mut budget).unwrap();
+    assert_eq!(budget.work(), 0);
+    assert_eq!(budget.storage(), 0);
+    assert_eq!(budget.peak_storage(), 0);
 }

@@ -8257,6 +8257,7 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
         &mut argument_work,
         limits.max_argument_correspondence_storage,
     );
+    require_execution_free_types_v29(semantic.types(), &mut argument_budget)?;
     argument_budget.reserve_storage(CallReturnBufferV1::bytes(
         correspondence.call_returns.len(),
         correspondence.call_result_components.len(),
@@ -11104,6 +11105,7 @@ fn lower_module_with_call_budget_inner_v1(
             "execution capabilities require checked canonical KIR materialization",
         ));
     }
+    require_execution_free_types_v29(semantic.types(), call_budget)?;
     let Some(authenticated_launch_roots) = authenticated_launch_roots else {
         let selection = semantic.select_kernel_body_v1().ok_or_else(|| {
             unsupported(
@@ -14835,9 +14837,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         structural_nodes: &mut usize,
         operations: &mut Vec<Operation>,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
-        if *structural_nodes == 0 {
-            require_ordinary_execution_type_tree_v29(self.types, ty)?;
-        }
         *structural_nodes = structural_nodes.checked_add(1).ok_or_else(|| {
             unsupported(
                 0,
@@ -24277,7 +24276,6 @@ fn lower_ssa_value_components_v1(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Result<Vec<(SemanticTypeIdV1, Type)>, ProductionSemanticKirErrorV1> {
-    require_ordinary_execution_type_tree_v29(types, ty)?;
     fn append(
         types: &[SemanticTypeDeclV1],
         ty: SemanticTypeIdV1,
@@ -24880,7 +24878,6 @@ fn binding_from_value_defs_with_validation(
     values: &[ValueDef],
     validate_scalar_types: bool,
 ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
-    require_ordinary_execution_type_tree_v29(types, ty)?;
     fn build(
         types: &[SemanticTypeDeclV1],
         ty: SemanticTypeIdV1,
@@ -26194,11 +26191,14 @@ mod resource_tests {
     include!("production_semantic_kir_v1/wrapping_correspondence_v1_tests.rs");
     include!("production_semantic_kir_v1/wrapping_ranked_correspondence_v1_tests.rs");
     include!("production_semantic_kir_v1/tests/production_enum_downcast_v1_tests.rs");
-    mod emission_placement_lowering_tests {
+    pub(super) mod emission_placement_lowering_tests {
         include!("production_semantic_kir_v1/emission_placement_lowering_tests.rs");
     }
     mod execution_representation_v29_tests {
         include!("production_semantic_kir_v1/execution_representation_v29_tests.rs");
+    }
+    mod execution_transport_v29_tests {
+        include!("production_semantic_kir_v1/execution_transport_v29_tests.rs");
     }
 
     #[test]

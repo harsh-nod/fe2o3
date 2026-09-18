@@ -24,6 +24,221 @@ fn with_plan(test: impl FnOnce(&ProductionCallInstancePlanV1<'_>, &mut ArgumentB
     assert_eq!(budget.storage(), capture.retained_storage());
 }
 
+fn lower_pair(
+    plan: &ProductionCallInstancePlanV1<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> (LoweredFunctionResultV1, LoweredFunctionResultV1, usize) {
+    use resource_tests::emission_placement_lowering_tests::lower_placed_function;
+    let root = plan.instance(plan.root()).unwrap().function();
+    let child = plan.calls(plan.root()).unwrap()[0].child().unwrap();
+    let caller = lower_placed_function(
+        plan.owner(),
+        root,
+        SemanticEmissionPlacementV1::default(),
+        budget,
+    )
+    .unwrap();
+    let callee = lower_placed_function(
+        plan.owner(),
+        plan.instance(child).unwrap().function(),
+        SemanticEmissionPlacementV1 {
+            first_block: 17,
+            first_value: 100,
+        },
+        budget,
+    )
+    .unwrap();
+    let storage = CallReturnBufferV1::bytes(
+        caller.call_returns.sites.rows.len() + callee.call_returns.sites.rows.len(),
+        caller.call_returns.components.rows.len() + callee.call_returns.components.rows.len(),
+    )
+    .unwrap();
+    (caller, callee, storage)
+}
+
+#[test]
+fn instance_wrapper_rejects_owner_relabel_and_invalid_source_census() {
+    with_plan(|plan, budget| {
+        for mutation in 0..9 {
+            let floor = budget.storage();
+            let (mut caller, callee, storage) = lower_pair(plan, budget);
+            let foreign = plan
+                .instance(plan.calls(plan.root()).unwrap()[0].child().unwrap())
+                .unwrap()
+                .function();
+            match mutation {
+                0 => {
+                    for row in &mut caller.blocks {
+                        row.correspondence_owner = foreign;
+                    }
+                    for row in &mut caller.statement_operation_spans {
+                        row.correspondence_owner = foreign;
+                    }
+                    for row in &mut caller.terminator_operation_spans {
+                        row.correspondence_owner = foreign;
+                    }
+                    for row in &mut caller.synthetic_operation_spans {
+                        row.correspondence_owner = foreign;
+                    }
+                    for row in &mut caller.call_returns.sites.rows {
+                        row.correspondence_owner = foreign;
+                    }
+                }
+                1 => {
+                    caller.terminator_operation_spans[1].semantic_block =
+                        SemanticBlockIdV1::from_index(u32::MAX)
+                }
+                2 => {
+                    caller.terminator_operation_spans[1].kernel_ir_block =
+                        caller.blocks[0].kernel_ir_block
+                }
+                3 => {
+                    caller.terminator_operation_spans.pop();
+                }
+                4 => {
+                    caller
+                        .terminator_operation_spans
+                        .push(caller.terminator_operation_spans[1]);
+                }
+                5 => {
+                    caller.blocks.pop();
+                }
+                6 => caller.blocks[1].source_statement_count = 1,
+                7 => caller
+                    .statement_operation_spans
+                    .push(SemanticKirStatementOperationSpanV1 {
+                        correspondence_owner: caller.blocks[0].correspondence_owner,
+                        semantic_function: caller.blocks[0].semantic_function,
+                        semantic_block: caller.blocks[0].semantic_block,
+                        statement_ordinal: u32::MAX,
+                        kernel_ir_block: caller.blocks[0].kernel_ir_block,
+                        first_operation_ordinal: 0,
+                        operation_count: 0,
+                    }),
+                8 => caller
+                    .synthetic_operation_spans
+                    .push(SemanticKirSyntheticOperationSpanV1 {
+                        correspondence_owner: caller.blocks[0].correspondence_owner,
+                        semantic_function: caller.blocks[0].semantic_function,
+                        rule: SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap,
+                        kernel_ir_block: caller.blocks[1].kernel_ir_block,
+                        first_operation_ordinal: 0,
+                        operation_count: 1,
+                    }),
+                _ => unreachable!(),
+            }
+            let result = with_production_instance_correspondence_v1(plan, budget, |map, budget| {
+                map.append_lowered(plan.root(), &caller, budget)
+            });
+            assert_eq!(
+                result,
+                Err(InstanceCorrespondenceErrorV1::Source),
+                "mutation {mutation}"
+            );
+            drop(caller);
+            drop(callee);
+            budget.release_storage(storage).unwrap();
+            assert_eq!(budget.storage(), floor);
+        }
+    });
+}
+
+#[test]
+fn instance_wrapper_checks_generated_edges_and_preserves_original_return_anchors() {
+    with_plan(|plan, budget| {
+        let floor = budget.storage();
+        let (caller, callee, storage) = lower_pair(plan, budget);
+        let call = &plan.calls(plan.root()).unwrap()[0];
+        let child = call.child().unwrap();
+        with_production_instance_correspondence_v1(plan, budget, |map, budget| {
+            map.append_lowered(plan.root(), &caller, budget)?;
+            map.append_lowered(child, &callee, budget)?;
+            let mut expanded = map.splice(call, caller.function, callee.function, BlockId(18), BlockId(19), budget)?;
+            assert!(map.returns.rows.iter().any(|row| row.instance == child));
+            assert_eq!(map.spans().iter().filter(|row| row.removed_call.is_some()).count(), 1);
+            assert!(map.controls().iter().any(|row| matches!(
+                row.origin,
+                InstanceControlOriginV1::ExpandedReturn { call: actual } if actual == call.occurrence()
+            )));
+            map.check_coordinates(plan.root(), &expanded.caller, budget)?;
+            let prefix = expanded.caller.body.as_mut().unwrap().blocks.iter_mut()
+                .find(|block| block.id == expanded.split.call.block).unwrap();
+            let Some(Terminator::Branch { target, .. }) = &mut prefix.terminator else { panic!("generated branch"); };
+            *target = expanded.split.continuation;
+            assert_eq!(map.check_coordinates(plan.root(), &expanded.caller, budget), Err(InstanceCorrespondenceErrorV1::Control));
+            let retained = expanded.additional_storage_bytes;
+            drop(expanded);
+            budget.release_storage(retained)?;
+            Ok::<_, InstanceCorrespondenceErrorV1>(())
+        }).unwrap();
+        budget.release_storage(storage).unwrap();
+        assert_eq!(budget.storage(), floor);
+    });
+}
+
+#[test]
+fn instance_wrapper_budget_failure_after_splice_releases_output_not_owner_floor() {
+    with_plan(|plan, source_budget| {
+        let source_floor = source_budget.storage();
+        let mut run = |limit| {
+            let (caller, callee, storage) = lower_pair(plan, source_budget);
+            let floor = source_budget.storage();
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(limit);
+            let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000);
+            // Retained source/plan/lowering payload remains charged independently.
+            budget.reserve_storage(floor).unwrap();
+            let mut committed = false;
+            let result =
+                with_production_instance_correspondence_v1(plan, &mut budget, |map, budget| {
+                    let call = &plan.calls(plan.root()).unwrap()[0];
+                    map.append_lowered(plan.root(), &caller, budget)?;
+                    map.append_lowered(call.child().unwrap(), &callee, budget)?;
+                    let result = map.splice(
+                        call,
+                        caller.function,
+                        callee.function,
+                        BlockId(18),
+                        BlockId(19),
+                        budget,
+                    );
+                    // This flag is set only after the underlying splicer returned Ok
+                    // and its generated-edge check completed, before final bounds checking.
+                    committed = map.anchors.rows.iter().any(|row| row.removed);
+                    match result {
+                        Ok(expanded) => {
+                            let retained = expanded.additional_storage_bytes;
+                            drop(expanded);
+                            budget.release_storage(retained)?;
+                            Ok(())
+                        }
+                        Err(error) => Err(error),
+                    }
+                });
+            assert_eq!(budget.storage(), floor);
+            source_budget.release_storage(storage).unwrap();
+            assert_eq!(source_budget.storage(), source_floor);
+            (result, budget.work(), committed)
+        };
+        let (result, exact, committed) = run(1_000_000);
+        result.unwrap();
+        assert!(committed);
+        let (result, _, committed) = run(exact);
+        result.unwrap();
+        assert!(committed);
+        let (result, _, committed) = run(exact - 1);
+        assert!(matches!(
+            result,
+            Err(InstanceCorrespondenceErrorV1::Resource(
+                ArgumentResourceV1::Work(_)
+            ))
+        ));
+        assert!(
+            committed,
+            "failure must occur after a successful underlying splice"
+        );
+    });
+}
+
 fn span(
     instance: ProductionCallInstanceIdV1,
     function: SemanticFunctionIdV1,

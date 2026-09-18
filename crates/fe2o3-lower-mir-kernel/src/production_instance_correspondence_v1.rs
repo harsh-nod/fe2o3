@@ -45,6 +45,8 @@ fn instance_anchor_error_v1(error: ProductionSemanticKirErrorV1) -> InstanceCorr
 
 type InstanceMapResultV1<T> = Result<T, InstanceCorrespondenceErrorV1>;
 
+include!("production_instance_correspondence_source_v1.rs");
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct InstancePhysicalSpanV1 {
     block: BlockId,
@@ -404,14 +406,14 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
             .body
             .as_ref()
             .ok_or(InstanceCorrespondenceErrorV1::Source)?;
-        let owner = lowered
-            .blocks
-            .first()
+        let owner = plan
+            .instance(plan.root())
             .ok_or(InstanceCorrespondenceErrorV1::Source)?
-            .correspondence_owner;
+            .function();
         if self.owner.is_some_and(|expected| expected != owner) {
             return Err(InstanceCorrespondenceErrorV1::Source);
         }
+        instance_check_source_rows_v1(source, owner, lowered, budget)?;
         let span_count = lowered
             .statement_operation_spans
             .len()

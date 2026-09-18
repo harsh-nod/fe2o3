@@ -1,64 +1,13 @@
-// A type-only preflight also checks erased fields: an empty array or an inactive
-// enum payload must not hide a nominal role from ordinary representation code.
-fn require_ordinary_execution_type_tree_v29(
+// Ordinary-owner preflight, not a mixed-V29 classifier or issuance authority.
+// Checking every declaration once also covers roles hidden by empty arrays,
+// inactive enum variants, or unused type rows. The existing V29 gate remains.
+fn require_execution_free_types_v29(
     types: &[SemanticTypeDeclV1],
-    root: SemanticTypeIdV1,
+    budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
-    let missing = || unsupported(0, None, None, "execution transport type is unavailable");
-    let declaration = types.get(root.index() as usize).ok_or_else(missing)?;
-    require_ordinary_execution_representation_v29(declaration)?;
-    if matches!(
-        declaration.shape(),
-        SemanticTypeShapeV1::Unit
-            | SemanticTypeShapeV1::Scalar(_)
-            | SemanticTypeShapeV1::ValidityScalar(_)
-            | SemanticTypeShapeV1::Pointer(_)
-    ) {
-        return Ok(());
-    }
-    let allocation = |_| {
-        ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
-            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Allocation,
-        )
-    };
-    let mut visited = Vec::new();
-    visited.try_reserve_exact(types.len()).map_err(allocation)?;
-    visited.resize(types.len(), false);
-    let mut pending = Vec::new();
-    pending.try_reserve_exact(types.len()).map_err(allocation)?;
-    visited[root.index() as usize] = true;
-    pending.push(root);
-    while let Some(ty) = pending.pop() {
-        let declaration = &types[ty.index() as usize];
+    budget.charge_work(types.len())?;
+    for declaration in types {
         require_ordinary_execution_representation_v29(declaration)?;
-        let mut push = |ty: SemanticTypeIdV1| -> Result<(), ProductionSemanticKirErrorV1> {
-            let seen = visited.get_mut(ty.index() as usize).ok_or_else(missing)?;
-            if !*seen {
-                *seen = true;
-                pending.push(ty);
-            }
-            Ok(())
-        };
-        match declaration.shape() {
-            SemanticTypeShapeV1::Array { element, .. } | SemanticTypeShapeV1::Slice { element } => {
-                push(*element)?
-            }
-            SemanticTypeShapeV1::Tuple(fields)
-            | SemanticTypeShapeV1::Aggregate(fields)
-            | SemanticTypeShapeV1::Union(fields) => {
-                for field in fields.fields() {
-                    push(*field)?;
-                }
-            }
-            SemanticTypeShapeV1::Enum { variants, .. } => {
-                for variant in variants {
-                    for field in variant.fields().fields() {
-                        push(*field)?;
-                    }
-                }
-            }
-            _ => {}
-        }
     }
     Ok(())
 }

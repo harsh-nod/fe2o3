@@ -204,6 +204,7 @@ impl SemanticExecutionBindingV29 {
     const fn value(&self) -> ValueId {
         self.identity.value
     }
+    #[cfg(test)]
     const fn producer(&self) -> ProductionCallOccurrenceV1 {
         self.identity.producer
     }
@@ -341,6 +342,7 @@ impl SemanticExecutionBorrowBindingV29 {
         Ok(&self.borrowed)
     }
 
+    #[cfg(test)]
     const fn reference_type(&self) -> SemanticTypeIdV1 {
         self.reference_type
     }
@@ -359,6 +361,7 @@ impl SemanticExecutionBorrowBindingV29 {
     const fn occurrence(&self) -> SemanticExecutionBorrowOccurrenceV29 {
         self.occurrence
     }
+    #[cfg(test)]
     const fn borrowed(&self) -> &SemanticExecutionBindingV29 {
         &self.borrowed
     }
