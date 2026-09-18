@@ -1,0 +1,14 @@
+{
+  "portable_audit": "PASS",
+  "original_files": 200,
+  "local_receipts": 20,
+  "remote_records": 13,
+  "cpu_test_groups": 13,
+  "source_files": 3,
+  "dependency_files": 350,
+  "native_launched": true,
+  "smoke_accepted": true,
+  "performance_accepted": false,
+  "cleanup_absent": true,
+  "scope": "one-process fixed-deadline HIP smoke, no reservation or causal attribution"
+}

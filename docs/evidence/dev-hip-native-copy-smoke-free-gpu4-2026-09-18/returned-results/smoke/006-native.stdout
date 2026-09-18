@@ -1,0 +1,15 @@
+schema=fe2o3.hip-directional-copy-diagnostic.v1 record=config device_index=0 unique_id=54f88318ca05093d target=gfx942:sramecc+:xnack- xnack=disabled bytes=268435456 depth=1 warmups=3 samples=10 host_allocation=hipHostMallocDefault stream=nonblocking engine=runtime_selected allocator_benchmark=disabled
+schema=fe2o3.hip-directional-copy-diagnostic.v1 record=round index=0 phase=warmup pattern=2 checked_bytes=268435456 h2d_total_ns=372241715 d2h_total_ns=33893184
+schema=fe2o3.hip-directional-copy-diagnostic.v1 record=round index=1 phase=warmup pattern=69 checked_bytes=268435456 h2d_total_ns=4706450 d2h_total_ns=4761211
+schema=fe2o3.hip-directional-copy-diagnostic.v1 record=round index=2 phase=warmup pattern=136 checked_bytes=268435456 h2d_total_ns=4713961 d2h_total_ns=4757316
+schema=fe2o3.hip-directional-copy-diagnostic.v1 record=round index=3 phase=sample pattern=203 checked_bytes=268435456 h2d_total_ns=4759679 d2h_total_ns=4752068
+schema=fe2o3.hip-directional-copy-diagnostic.v1 record=round index=4 phase=sample pattern=19 checked_bytes=268435456 h2d_total_ns=4695063 d2h_total_ns=4751987
+schema=fe2o3.hip-directional-copy-diagnostic.v1 record=round index=5 phase=sample pattern=86 checked_bytes=268435456 h2d_total_ns=4696465 d2h_total_ns=4753880
+schema=fe2o3.hip-directional-copy-diagnostic.v1 record=round index=6 phase=sample pattern=153 checked_bytes=268435456 h2d_total_ns=4760681 d2h_total_ns=4752368
+schema=fe2o3.hip-directional-copy-diagnostic.v1 record=round index=7 phase=sample pattern=220 checked_bytes=268435456 h2d_total_ns=4905707 d2h_total_ns=4754582
+schema=fe2o3.hip-directional-copy-diagnostic.v1 record=round index=8 phase=sample pattern=36 checked_bytes=268435456 h2d_total_ns=4838317 d2h_total_ns=4753870
+schema=fe2o3.hip-directional-copy-diagnostic.v1 record=round index=9 phase=sample pattern=103 checked_bytes=268435456 h2d_total_ns=4880550 d2h_total_ns=4750996
+schema=fe2o3.hip-directional-copy-diagnostic.v1 record=round index=10 phase=sample pattern=170 checked_bytes=268435456 h2d_total_ns=4892758 d2h_total_ns=4750786
+schema=fe2o3.hip-directional-copy-diagnostic.v1 record=round index=11 phase=sample pattern=237 checked_bytes=268435456 h2d_total_ns=4894140 d2h_total_ns=4750125
+schema=fe2o3.hip-directional-copy-diagnostic.v1 record=round index=12 phase=sample pattern=53 checked_bytes=268435456 h2d_total_ns=4901652 d2h_total_ns=4752168
+schema=fe2o3.hip-directional-copy-diagnostic.v1 record=complete validated_rounds=13 measured_rounds=10 allocations_released=3 streams_destroyed=1

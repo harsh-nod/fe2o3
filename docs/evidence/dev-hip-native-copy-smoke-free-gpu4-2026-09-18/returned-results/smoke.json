@@ -1,0 +1,81 @@
+{
+  "schema": "fe2o3.hip-smoke-fixed-deadline.v1",
+  "source_commit": "1890a64e1911a2a346c5a9e70a8ff5ad45b19231",
+  "started": {
+    "utc": "2026-09-18T10:23:43.755690708Z",
+    "monotonic_ns": 7225921177373326
+  },
+  "native_launched": true,
+  "native_reaped": {
+    "utc": "2026-09-18T10:23:56.628290216Z",
+    "monotonic_ns": 7225934050045762
+  },
+  "observations": {
+    "pre": {
+      "started": {
+        "monotonic_ns": 7225921563437274,
+        "utc": "2026-09-18T10:23:44.141755197Z"
+      },
+      "finished": {
+        "monotonic_ns": 7225923642956899,
+        "utc": "2026-09-18T10:23:46.221277465Z"
+      },
+      "reasons": [],
+      "selected_pids": [],
+      "original_admitted": true,
+      "protocol_phase_accepted": true
+    },
+    "immediate": {
+      "started": {
+        "monotonic_ns": 7225934083572749,
+        "utc": "2026-09-18T10:23:56.661887287Z"
+      },
+      "finished": {
+        "monotonic_ns": 7225936156156848,
+        "utc": "2026-09-18T10:23:58.734476975Z"
+      },
+      "reasons": [
+        "sysfs-before-busy"
+      ],
+      "selected_pids": [],
+      "original_admitted": false,
+      "protocol_phase_accepted": true
+    },
+    "delayed": {
+      "started": {
+        "monotonic_ns": 7225954080516058,
+        "utc": "2026-09-18T10:24:16.658834712Z"
+      },
+      "finished": {
+        "monotonic_ns": 7225956159219940,
+        "utc": "2026-09-18T10:24:18.737539976Z"
+      },
+      "reasons": [],
+      "selected_pids": [],
+      "original_admitted": true,
+      "protocol_phase_accepted": true
+    }
+  },
+  "failures": [],
+  "performance_accepted": false,
+  "smoke_accepted": true,
+  "records": [
+    "000-source-before",
+    "001-binary-before",
+    "002-platform-before",
+    "003-scripts-before",
+    "004-topology",
+    "005-pre",
+    "006-native",
+    "007-immediate",
+    "008-delayed",
+    "009-source-after",
+    "010-binary-after",
+    "011-platform-after",
+    "012-scripts-after"
+  ],
+  "finished": {
+    "utc": "2026-09-18T10:24:19.045048799Z",
+    "monotonic_ns": 7225956466730595
+  }
+}

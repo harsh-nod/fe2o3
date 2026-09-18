@@ -1,0 +1,75 @@
+--- sealed/check.py
++++ fresh/check.py
+@@ -395,7 +395,7 @@
+     )
+     need(
+         digest(results / "platform.sha256")
+-        == "ee22799c58bc45efddc94ed79de486bb35e396f5f014fe9fbba137297eb79d9b",
++        == "5911229d3fce10aceef828b65f4d5b21066d2fb173759bd2a178dc7acb024d2a",
+         "platform manifest pin",
+     )
+     manifests = {
+--- sealed/protocol.py
++++ fresh/protocol.py
+@@ -2,7 +2,7 @@
+ 
+ from pathlib import Path
+ 
+-OWNED = Path("/tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS")
++OWNED = Path("/tmp/fe2o3-hip-smoke-1890a64e1-new-20260918.EvupxcTh")
+ COMMIT = "1890a64e1911a2a346c5a9e70a8ff5ad45b19231"
+ UID, BDF = "0x54f88318ca05093d", "0000:85:00.0"
+ SOURCE = OWNED / "source"
+@@ -64,7 +64,7 @@
+     ("platform", ["/usr/bin/sha256sum", "-c", str(RESULTS / "platform.sha256")]),
+     ("scripts", ["/usr/bin/sha256sum", "-c", str(OWNED / "scripts.sha256")]),
+ ]
+-BINARY_SHA = "d2c012774e2321266d2708d7d7f40745d332ebbebf9d26c9c5f61c4bc57ad976"
++BINARY_SHA = "207c65b8c540e28fc0c960bd962e23e6e30802132f4a68be058d22912af076e1"
+ OBSERVER_SHA = "5d37b09bf0823854c6a45b914d866c042c1e65486cd96c6301285a0147ae6c51"
+ PAYLOAD_SHA = "d5a2ad3dc7c00e58e7666973f2fd14d1343d7dc13edb96e738c6710eb690c561"
+ IMMEDIATE_WINDOW_NS = (0, 1_000_000_000)
+--- sealed/cleanup.py
++++ fresh/cleanup.py
+@@ -8,7 +8,7 @@
+ import sys
+ import time
+ 
+-OWNED = Path("/tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS")
++OWNED = Path("/tmp/fe2o3-hip-smoke-1890a64e1-new-20260918.EvupxcTh")
+ MARKER = "fe2o3-hip-smoke-1890a64e1911a2a346c5a9e70a8ff5ad45b19231\n"
+ 
+ 
+--- sealed/prepare.sh
++++ fresh/prepare.sh
+@@ -1,6 +1,6 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+-owned=/tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS
++owned=/tmp/fe2o3-hip-smoke-1890a64e1-new-20260918.EvupxcTh
+ [[ -d "$owned" && -O "$owned" && ! -L "$owned" ]]
+ [[ $(realpath -e "$owned") == "$owned" ]]
+ [[ $(cat "$owned/owner") == fe2o3-hip-smoke-1890a64e1911a2a346c5a9e70a8ff5ad45b19231 ]]
+--- sealed/create.sh
++++ fresh/create.sh
+@@ -5,7 +5,7 @@
+ printf 'disk_available_bytes=%s\n' "$available"
+ [[ $available -ge 2147483648 ]]
+ awk '/^MemAvailable:/ {print; exit !($2 >= 4194304)}' /proc/meminfo
+-owned=$(mktemp -d /tmp/fe2o3-hip-smoke-1890a64e1-20260918.XXXXXXXX)
++owned=$(mktemp -d /tmp/fe2o3-hip-smoke-1890a64e1-new-20260918.XXXXXXXX)
+ printf 'fe2o3-hip-smoke-1890a64e1911a2a346c5a9e70a8ff5ad45b19231\n' > "$owned/owner"
+ printf 'owned_directory=%s\n' "$owned"
+ date -u +%FT%T.%NZ
+--- sealed/freeze-scripts.py
++++ fresh/freeze-scripts.py
+@@ -5,7 +5,7 @@
+ from pathlib import Path
+ 
+ HERE = Path(__file__).resolve().parent
+-OWNED = "/tmp/fe2o3-hip-smoke-1890a64e1-20260918.JA7uyMoS"
++OWNED = "/tmp/fe2o3-hip-smoke-1890a64e1-new-20260918.EvupxcTh"
+ NAMES = [
+     "check.py",
+     "cleanup.py",
+{"changed_only_path_or_build_identity": ["check.py", "protocol.py", "cleanup.py", "prepare.sh", "create.sh", "freeze-scripts.py"], "committed_export_equal": true, "old_results_reused": false, "reviewed_scripts": 13}

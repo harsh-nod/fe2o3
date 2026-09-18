@@ -1,0 +1,54 @@
+{
+  "schema": "fe2o3.hip-smoke-command.v1",
+  "name": "006-native",
+  "argv": [
+    "/usr/bin/timeout",
+    "--signal=TERM",
+    "--kill-after=5s",
+    "180s",
+    "/usr/bin/prlimit",
+    "--core=0:0",
+    "--",
+    "/usr/bin/numactl",
+    "--physcpubind=48-95",
+    "--membind=1",
+    "/tmp/fe2o3-hip-smoke-1890a64e1-new-20260918.EvupxcTh/async-copy-hip",
+    "0",
+    "268435456",
+    "1",
+    "3",
+    "10",
+    "0x54f88318ca05093d",
+    "diagnostic-copy-only"
+  ],
+  "cwd": "/tmp/fe2o3-hip-smoke-1890a64e1-new-20260918.EvupxcTh/source",
+  "environment_override": {
+    "ROCR_VISIBLE_DEVICES": "4",
+    "HSA_XNACK": "0"
+  },
+  "visibility_unset": [
+    "HIP_VISIBLE_DEVICES",
+    "ROCR_VISIBLE_DEVICES",
+    "CUDA_VISIBLE_DEVICES",
+    "GPU_DEVICE_ORDINAL"
+  ],
+  "started": {
+    "utc": "2026-09-18T10:23:46.236168096Z",
+    "monotonic_ns": 7225923657854339
+  },
+  "reaped": {
+    "utc": "2026-09-18T10:23:56.628290216Z",
+    "monotonic_ns": 7225934050045762
+  },
+  "pid": 1850153,
+  "exit": 0,
+  "error": null,
+  "group_absent": true,
+  "outer_bound_seconds": 200,
+  "finished": {
+    "utc": "2026-09-18T10:23:56.628457486Z",
+    "monotonic_ns": 7225934050135797
+  },
+  "stdout_sha256": "f6673f619ff1f34436b0f11141503c546b8a645e9344d6e6200af7ca18ad873a",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

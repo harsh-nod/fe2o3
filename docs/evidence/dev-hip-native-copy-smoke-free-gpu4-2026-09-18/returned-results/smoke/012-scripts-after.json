@@ -1,0 +1,36 @@
+{
+  "schema": "fe2o3.hip-smoke-command.v1",
+  "name": "012-scripts-after",
+  "argv": [
+    "/usr/bin/sha256sum",
+    "-c",
+    "/tmp/fe2o3-hip-smoke-1890a64e1-new-20260918.EvupxcTh/scripts.sha256"
+  ],
+  "cwd": "/tmp/fe2o3-hip-smoke-1890a64e1-new-20260918.EvupxcTh/source",
+  "environment_override": {},
+  "visibility_unset": [
+    "HIP_VISIBLE_DEVICES",
+    "ROCR_VISIBLE_DEVICES",
+    "CUDA_VISIBLE_DEVICES",
+    "GPU_DEVICE_ORDINAL"
+  ],
+  "started": {
+    "utc": "2026-09-18T10:24:19.036843373Z",
+    "monotonic_ns": 7225956458524578
+  },
+  "reaped": {
+    "utc": "2026-09-18T10:24:19.043954134Z",
+    "monotonic_ns": 7225956465663812
+  },
+  "pid": 1853452,
+  "exit": 0,
+  "error": null,
+  "group_absent": true,
+  "outer_bound_seconds": 70,
+  "finished": {
+    "utc": "2026-09-18T10:24:19.044056917Z",
+    "monotonic_ns": 7225956465734568
+  },
+  "stdout_sha256": "9e1828c747afba686660c274e4a34187a28af90c809bd5c659666e3c34055619",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

@@ -10,6 +10,17 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
+A later [HIP smoke on newly free GPU 4](evidence/dev-hip-native-copy-smoke-free-gpu4-2026-09-18/README.md)
+passes thirteen fully validated 256 MiB round trips and explicit allocation/stream
+cleanup from the exact committed comparator. Fresh preflight passed. The
+immediate observer retained its original refusal for busy-only telemetry at
+T0+0.034 seconds, as permitted by this prospectively declared smoke protocol;
+the single fixed delayed endpoint at T0+20.030 seconds passed strictly. The
+earlier preflight-refused attempt below remains refused. The new owned remote
+directory was removed and recorded-process/path absence independently checked.
+This is one-process copy correctness and protocol qualification, not a matched
+HIP/HSA ratio, physical-engine equivalence or performance-parity claim.
+
 The latest [primary teardown CPU campaign](evidence/dev-primary-envelope-cpu-2026-09-18/README.md)
 passes 1,102 runtime tests on both GNU and scoped musl, with twenty ignored,
 plus 46 runtime doctests and the static checks. Two newly compiled hardware-only

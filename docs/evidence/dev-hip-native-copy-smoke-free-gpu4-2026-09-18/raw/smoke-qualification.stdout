@@ -1,0 +1,50 @@
+{
+  "records": 13,
+  "native_launched": true,
+  "smoke_accepted": true,
+  "observations": {
+    "pre": {
+      "started": {
+        "monotonic_ns": 7225921563437274,
+        "utc": "2026-09-18T10:23:44.141755197Z"
+      },
+      "finished": {
+        "monotonic_ns": 7225923642956899,
+        "utc": "2026-09-18T10:23:46.221277465Z"
+      },
+      "reasons": [],
+      "selected_pids": [],
+      "original_admitted": true
+    },
+    "immediate": {
+      "started": {
+        "monotonic_ns": 7225934083572749,
+        "utc": "2026-09-18T10:23:56.661887287Z"
+      },
+      "finished": {
+        "monotonic_ns": 7225936156156848,
+        "utc": "2026-09-18T10:23:58.734476975Z"
+      },
+      "reasons": [
+        "sysfs-before-busy"
+      ],
+      "selected_pids": [],
+      "original_admitted": false
+    },
+    "delayed": {
+      "started": {
+        "monotonic_ns": 7225954080516058,
+        "utc": "2026-09-18T10:24:16.658834712Z"
+      },
+      "finished": {
+        "monotonic_ns": 7225956159219940,
+        "utc": "2026-09-18T10:24:18.737539976Z"
+      },
+      "reasons": [],
+      "selected_pids": [],
+      "original_admitted": true
+    }
+  },
+  "performance_accepted": false,
+  "scope": "one-process prospective fixed-deadline protocol; not reservation or causal attribution"
+}

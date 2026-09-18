@@ -1,0 +1,1 @@
+ssh -o BatchMode=yes -o ConnectTimeout=10 mi300x /usr/bin/python3 -B /tmp/fe2o3-hip-smoke-1890a64e1-new-20260918.EvupxcTh/run.py --parent-ready-confirmed 

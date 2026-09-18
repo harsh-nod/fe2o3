@@ -1,0 +1,39 @@
+{
+  "schema": "fe2o3.hip-smoke-command.v1",
+  "name": "004-topology",
+  "argv": [
+    "/usr/bin/numactl",
+    "--physcpubind=48-95",
+    "--membind=1",
+    "/usr/bin/python3",
+    "-B",
+    "/tmp/fe2o3-hip-smoke-1890a64e1-new-20260918.EvupxcTh/topology.py"
+  ],
+  "cwd": "/tmp/fe2o3-hip-smoke-1890a64e1-new-20260918.EvupxcTh/source",
+  "environment_override": {},
+  "visibility_unset": [
+    "HIP_VISIBLE_DEVICES",
+    "ROCR_VISIBLE_DEVICES",
+    "CUDA_VISIBLE_DEVICES",
+    "GPU_DEVICE_ORDINAL"
+  ],
+  "started": {
+    "utc": "2026-09-18T10:23:44.043264050Z",
+    "monotonic_ns": 7225921464944384
+  },
+  "reaped": {
+    "utc": "2026-09-18T10:23:44.109125781Z",
+    "monotonic_ns": 7225921530852074
+  },
+  "pid": 1849990,
+  "exit": 0,
+  "error": null,
+  "group_absent": true,
+  "outer_bound_seconds": 70,
+  "finished": {
+    "utc": "2026-09-18T10:23:44.109271278Z",
+    "monotonic_ns": 7225921530948558
+  },
+  "stdout_sha256": "8092883c56954c7e1e641c371657b763927080717010bc77f97ddd93873e1203",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}
