@@ -8,6 +8,7 @@
 //! linking, loading, or execution authority. The gfx950 surface adds only
 //! target-checked low-precision scaled MFMA and LDS transpose-load fragments.
 
+mod amd_isa_spec_catalog_v1;
 mod device_math;
 mod gfx950;
 mod lowering;
@@ -18,6 +19,7 @@ mod production_refinement_v1;
 mod production_target_coordinates_v1;
 mod scalar_v2;
 
+pub use amd_isa_spec_catalog_v1::*;
 pub use device_math::*;
 pub use gfx950::*;
 pub use lowering::*;

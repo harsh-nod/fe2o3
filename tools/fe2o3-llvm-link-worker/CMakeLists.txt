@@ -353,4 +353,25 @@ if(BUILD_TESTING)
     fe2o3_worker_pipeline ${FE2O3_LLVM_TEST_LIBS})
   add_test(NAME fe2o3-worker-device-library-policy-tests
     COMMAND fe2o3-worker-device-library-policy-tests)
+
+  add_executable(fe2o3-worker-ordered-inline-region-prototype-tests
+    tests/OrderedInlineRegionPrototypeTests.cpp)
+  target_include_directories(
+    fe2o3-worker-ordered-inline-region-prototype-tests SYSTEM PRIVATE
+    ${LLVM_INCLUDE_DIRS} ${LLD_INCLUDE_DIRS})
+  target_compile_definitions(
+    fe2o3-worker-ordered-inline-region-prototype-tests PRIVATE
+    FE2O3_LLVM_BUILD_ID="${FE2O3_MEASURED_LLVM_BUILD_ID}"
+    FE2O3_WORKER_BUILD_ID="${FE2O3_WORKER_MEASUREMENT}")
+  target_compile_options(
+    fe2o3-worker-ordered-inline-region-prototype-tests PRIVATE
+    -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter
+    -fno-exceptions -fno-rtti)
+  target_link_libraries(
+    fe2o3-worker-ordered-inline-region-prototype-tests PRIVATE
+    fe2o3_worker_pipeline ${FE2O3_LLVM_TEST_LIBS})
+  add_test(NAME fe2o3-worker-ordered-inline-region-prototype-tests
+    COMMAND fe2o3-worker-ordered-inline-region-prototype-tests)
+  set_tests_properties(fe2o3-worker-ordered-inline-region-prototype-tests
+    PROPERTIES TIMEOUT 120)
 endif()

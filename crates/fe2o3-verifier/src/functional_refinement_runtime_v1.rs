@@ -123,10 +123,100 @@ impl Error for FunctionalRefinementRuntimeErrorV1 {}
 fn runtime_error_from_backend(
     error: RetainedFunctionalRefinementRuntimeErrorV1,
 ) -> FunctionalRefinementRuntimeErrorV1 {
+    #[cfg(test)]
+    {
+        // Preserve the production error contract while exposing a bounded,
+        // escaped controller refusal for actual protected-runtime test failures.
+        let diagnostic = error.to_string();
+        let bytes = diagnostic.as_bytes();
+        eprintln!(
+            "retained runtime test diagnostic: {:?}{}",
+            String::from_utf8_lossy(&bytes[..bytes.len().min(2048)]),
+            if bytes.len() > 2048 { " (truncated)" } else { "" },
+        );
+    }
     FunctionalRefinementRuntimeErrorV1 {
         detail: format!(
             "retained generated-proof runtime failed: {:?}",
             error.kind()
         ),
+    }
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    const PROTECTED_RUNTIME_ROOT: &str =
+        "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5";
+
+    fn execute_protected_proof(assertion: &str) -> FunctionalRefinementRuntimeProcessOutputV1 {
+        let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(PROTECTED_RUNTIME_ROOT)
+            .expect("the public lease must admit the installed protected runtime");
+        runtime
+            .revalidate()
+            .expect("revalidate before proof execution");
+        let source = CanonicalGeneratedVerusProofInputV3::new(
+            format!(
+                "use vstd::prelude::*;\nverus! {{\n    pub proof fn protected_runtime_sample(value: int) {{\n        assert({assertion});\n    }}\n}}\n"
+            )
+            .into_bytes(),
+        )
+        .expect("admit canonical generated proof source");
+        let output = runtime
+            .execute_generated_rust_verify(
+                &source,
+                Instant::now() + Duration::from_secs(120),
+                64 * 1024,
+            )
+            .expect("execute the proof through the retained sealed-source path");
+        runtime
+            .revalidate()
+            .expect("revalidate after proof execution");
+        output
+    }
+
+    #[test]
+    #[ignore = "requires the installed root-owned pinned functional-refinement runtime"]
+    fn protected_public_lease_audits_installed_closure() {
+        let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(PROTECTED_RUNTIME_ROOT)
+            .expect("the public lease must admit the installed protected runtime");
+        runtime.revalidate().expect("revalidate the installed closure");
+        eprintln!("protected runtime audit identity={:?}", runtime.identity().as_bytes());
+        // Deliberately no execute call: an installed-closure audit is not a proof.
+    }
+
+    #[test]
+    #[ignore = "requires the installed root-owned pinned functional-refinement runtime"]
+    fn protected_public_lease_executes_real_verus() {
+        let output = execute_protected_proof("value + 1 > value");
+        assert_eq!((output.exit_code, output.signal), (Some(0), None));
+        assert_eq!(
+            output.stdout.as_slice(),
+            b"verification results:: 1 verified, 0 errors\n",
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "unexpected Verus stderr: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the installed root-owned pinned functional-refinement runtime"]
+    fn protected_public_lease_rejects_false_proof() {
+        let output = execute_protected_proof("value + 1 > value + 1");
+        assert_eq!((output.exit_code, output.signal), (Some(1), None));
+        assert_eq!(
+            output.stdout.as_slice(),
+            b"verification results:: 0 verified, 1 errors\n",
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("assertion failed"),
+            "expected a Verus assertion failure, got: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
     }
 }

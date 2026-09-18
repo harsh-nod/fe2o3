@@ -1,0 +1,47 @@
+{
+  "schema": "fe2o3-amd-isa-catalog-inputs-v1",
+  "archive": {
+    "url": "https://gpuopen.com/download/AMD_GPU_MR_ISA_XML_2026_08_06.zip",
+    "bytes": 2294639,
+    "sha256": "82404f1126761b7877595b622afa7e1f311f2f41e89a3abe9aaf8ad045c082e2",
+    "member_count": 10
+  },
+  "schema_documentation": "https://github.com/GPUOpen-Tools/isa_spec_manager/blob/452645535ac05f466b06a13e5eafeb5a86d3ad11/documentation/spec_documentation.md",
+  "members": [
+    {
+      "architecture": "cdna3",
+      "architecture_name": "AMD CDNA 3",
+      "member": "amdgpu_isa_cdna3.xml",
+      "bytes": 7986028,
+      "sha256": "af24feb95c9230a87f694c814b0035e7448a57f8503b059f0282dba1e5f20d9c",
+      "instructions": 1150,
+      "encodings": 32,
+      "operand_types": 35,
+      "data_formats": 83,
+      "missing_default_condition_references": 86
+    },
+    {
+      "architecture": "cdna4",
+      "architecture_name": "AMD CDNA 4",
+      "member": "amdgpu_isa_cdna4.xml",
+      "bytes": 8679327,
+      "sha256": "bb2a96f3db5c67d7c9b90e34559045c272f3536acdb03d16bc455f2f5b0a1597",
+      "instructions": 1240,
+      "encodings": 33,
+      "operand_types": 35,
+      "data_formats": 98,
+      "missing_default_condition_references": 88
+    }
+  ],
+  "document": {
+    "Copyright": "Copyright (c) 2026 Advanced Micro Devices, Inc., or its affiliates.",
+    "Sensitivity": "AMD Public Use.",
+    "License": "MIT",
+    "ReleaseDate": "2026-02-20",
+    "SchemaVersion": "1.1.1"
+  },
+  "reviewed_missing_conditions": [["ENC_FLAT_GLBL", "default"], ["ENC_FLAT_SCRATCH", "default"]],
+  "reviewed_duplicate_condition": {"encoding": "ENC_FLAT", "condition": "default", "count": 3},
+  "metadata_profile_targets": {"gfx942": "cdna3", "gfx950": "cdna4"},
+  "authority": "metadata_only_no_legality_or_execution_authority"
+}

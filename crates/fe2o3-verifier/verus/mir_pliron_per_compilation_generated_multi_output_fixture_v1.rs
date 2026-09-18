@@ -108,12 +108,7 @@ verus! {
         }
     }
 
-    // This symbol models congruence of identical compiler-side operator DAG
-    // applications only. It grants no IEEE real-value, lowering, or target
-    // instruction semantics.
-    uninterp spec fn fe2o3_ieee_operator_congruence_v2(tag: int, a: int, b: int, c: int) -> int;
-
-    proof fn fe2o3_output_0_effect_formula_v1() {
+    proof fn fe2o3_output_0_effect_formula_v1(fe2o3_ieee_operator_congruence_v2: spec_fn(int, int, int, int) -> int) {
         let v8: int = fe2o3_bv_norm_v2(0, 64);
         let v7: int = fe2o3_bv_norm_v2(1, 1);
         let v3: int = fe2o3_bv_norm_v2(7, 32);
@@ -124,7 +119,7 @@ verus! {
         assert(v3 == v4);
     }
 
-    proof fn fe2o3_output_1_effect_formula_v1() {
+    proof fn fe2o3_output_1_effect_formula_v1(fe2o3_ieee_operator_congruence_v2: spec_fn(int, int, int, int) -> int) {
         let v8: int = fe2o3_bv_norm_v2(0, 64);
         let v7: int = fe2o3_bv_norm_v2(1, 1);
         let v5: int = fe2o3_bv_norm_v2(9, 32);
@@ -135,10 +130,8 @@ verus! {
         assert(v5 == v6);
     }
 
-    proof fn fe2o3_replay_all_output_effect_formulas_v1() {
-        fe2o3_output_0_effect_formula_v1();
-        fe2o3_output_1_effect_formula_v1();
+    proof fn fe2o3_replay_all_output_effect_formulas_v1(fe2o3_ieee_operator_congruence_v2: spec_fn(int, int, int, int) -> int) {
+        fe2o3_output_0_effect_formula_v1(fe2o3_ieee_operator_congruence_v2);
+        fe2o3_output_1_effect_formula_v1(fe2o3_ieee_operator_congruence_v2);
     }
 }
-
-fn fe2o3_contract_instantiations_v1() {}

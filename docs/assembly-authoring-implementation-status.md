@@ -12,6 +12,11 @@ resource, scheduling, and curriculum requirements, remains unchanged.
 describe reproduction. The implementation below makes useful progress; no
 umbrella milestone is declared complete by this document or by test counts.
 
+The next implementation batch adds the public ISA metadata catalog, an actual
+pinned-worker ordered-region experiment, checked local ordering, protected
+generated-proof execution, and two-workgroup LDS observations. These are
+separately scoped below; none silently broadens source or artifact admission.
+
 ## Exercised evidence and implementation anchors
 
 | ID | Delivered portion and reproducible checks |
@@ -25,6 +30,11 @@ umbrella milestone is declared complete by this document or by test counts.
 | E7: checked direct-root scalar relation | [Source projection](../crates/rustc-codegen-fe2o3/src/production_ranked_projection_v1/gfx942_inline_value_projection_v30.rs) and [14 tests](../crates/rustc-codegen-fe2o3/src/production_ranked_projection_v1/gfx942_inline_value_projection_v30_tests.rs) cover exact u32 calls, call-return-edge dominance, operand values at the call, escapes/duplicate writes, seven dependent occurrences and cumulative depth/work limits. [Lowerer correspondence](../crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/gfx942_inline_scalar_correspondence_v30.rs) and [seven tests](../crates/fe2o3-lower-mir-kernel/src/production_semantic_kir_v1/gfx942_inline_scalar_correspondence_v30_tests.rs) exercise the normal checked owner, immutable pre-ranked attachment and exact replay while retaining original ISA. These are model-level owner tests, not actual-source functional-proof qualification. The [formal memory rule](../crates/fe2o3-kernel-ir/src/formal_memory_obligations/gfx942_inline_u32_v30.rs) and [seven tests](../crates/fe2o3-kernel-ir/tests/formal_memory_gfx942_inline_u32_v30.rs) close only memory-effect uncertainty for the six exact NoMemory u32 markers; surrounding memory obligations remain. |
 | E8: actual production-target route | [Source-ranked smoke](../scripts/assembly-source-ranked-smoke.mjs) passes fresh rustc callbacks for unchanged E2 source: mandatory ranked checks, then the normal production KIR V8/seven-pass target route and LLVM text with all seven assembly calls, six templates and exact VGPR constraints. This is not the E4 V6/KIR V11 diagnostic route. The receipt does not expose semantic/KIR identities or attest the compiler closure. It emits no machine code, protected proof or artifact. |
 | E9: actual source LDS observations | [Portable source export](../scripts/resource-query-lds-source-export.mjs) and [eight negative controls](../scripts/resource-query-lds-source-export.test.mjs), followed by the [V5 LDS query smoke](../scripts/resource-query-lds-v5-smoke.mjs) and [eight script-control tests](../scripts/resource-query-lds-v5-smoke.test.mjs), use the unchanged `workgroup_reduce_u32` feature of the [existing source fixture](../crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs). A separate actual V5 export, CPU execution and debugger capture check one 64-invocation workgroup, 256 LDS bytes, initialization, 1,280 workgroup accesses, 64 output words of 128 and canaries, plus reverse/no-future/stale checks. Wave32 is only the logical display grouping. Generation 0, owning scope, lifetime and physical placement gain no new meaning. |
+| E10: public ISA inventory | [Pinned offline generator and immutable queries](amd-isa-spec-catalog-v1.md) retain CDNA3/CDNA4 instruction, encoding, operand and machine-format metadata from AMD's public MIT specification. The 1,150/1,240 instruction inventories have content-bound identities and a separately hashed six-marker coverage overlay. Exact upstream missing/duplicate condition declarations remain visible, never repaired into invented legality. Fifteen Python controls, seven focused Rust tests, all 51 model-library tests and strict model Clippy pass. Catalogued does not mean authorable, simulated or hardware-qualified. |
+| E11: ordered-region worker mechanism | The [fresh pinned-worker prototype](ordered-inline-region-prototype-v1.md) emits one closed XOR/ADD inline-assembly unit with fixed VGPR live-ins/out and scratch, then links and independently decodes it. All four O0/O3 and used/unused-result cases preserve the exact two e32 words and registers. Closed-contract negatives, decoded-observation mutations, actual payload mutations and wide-encoding rejection pass. This is a native test fixture, not yet an authenticated source region, physical-lifetime proof or protected finalizer input. Module-only assembly export remains rejected. |
+| E12: checked local ordering | [Actual immutable-owner scheduling and replay](checked-u32-local-order-v1.md) implements two fixed dependency-preserving preferences over contiguous u32 AND/OR/XOR operations. Full-module inverse-permutation comparison and independently checked transition receipts preserve all unselected state. Nineteen focused tests, 56 optimizer-library tests, 15 documentation tests and CPU execution of both schedules for five independent inputs pass. Per-invocation coordinates are not persisted source anchors; fixed Policy3 and production composition remain unchanged. |
+| E13: real protected generated proofs | Reviewed generator fixes use shared universally quantified specification functions and preserve normal runtime policy and exact closure pins. The [public-lease tests](../crates/fe2o3-verifier/src/functional_refinement_runtime_v1.rs) and [generated receipt tests](../crates/fe2o3-verifier/src/functional_refinement_receipt_v2/reviewed_host_tests.rs) run through the actual protected runtime: bootstrap true/false, wrapping scalar, effect-coordinate and floating-operator congruence pairs. All eight proof cases pass; false cases require genuine assertion failures. A separate installed-closure audit passes. These are generated fixtures, not yet proof of the actual assembly/reference source or artifact admission. |
+| E14: two-workgroup stopped-state isolation | The [two-workgroup query smoke](../scripts/resource-query-lds-multi-workgroup-v5-smoke.mjs) and [seven script controls](../scripts/resource-query-lds-multi-workgroup-v5-smoke.test.mjs) consume E9's unchanged real V5 source export. The actual run checks 128 output words of 128 and canaries, WG0 LDS present, the global-only transition, a distinct WG1 LDS allocation, exact reverse/forward restoration, complete scoped access paging and stale controls. Historical WG0 accesses remain separate from current allocation presence. Generation remains zero; no allocation lifetime, release event, physical reuse, source loop or source helper qualification is inferred. |
 
 E2's actual captured successes were `assembly-v30-smoke-r1`,
 `assembly-source-roundtrip-r2`, and `ordinary-bitwise-promotion-r1`; E4 was
@@ -94,11 +104,54 @@ in the earlier marker test was removed. Ignored tests and runtime/hardware gates
 are not converted into passes. These results do not attest a compiler closure,
 admit a protected artifact, or close the original milestone matrix below.
 
+### Next-batch working-build observations
+
+The combined affected model, optimizer and verifier library run passed 217 tests
+(51 + 56 + 110), with zero failures and 13 explicitly ignored cases, in
+`phase5-foundation-libs-r1.log`. The 17 worker/multi-workgroup Node controls and
+15 catalog Python controls pass independently; offline regeneration compares
+all 12 generated files exactly. The actual protected proof and native-worker
+runs below remain distinct from these ordinary library/control tests.
+
+E11's shipped runner passed at `assembly-region-worker-prototype-observation-r1`.
+Its 13,940-byte observation has SHA-256
+`16fbc20b344f37da9ef8687a45d0f17254dcb74b449b8b11acdb7db8ca5ee087`.
+The exact region words are `0x2a404722` and `0x68424920`; LLVM-owned boundary
+moves are reported separately. Ten Node controls pass. Source/tool/binary hashes
+are recorded before and after the run; this is not runtime-closure attestation.
+
+E13 passed as `protected-runtime-proof-r6`, using the frozen test harness digest
+`48d8f2921bb21fc716dc88817424fbad0527bfdc94673cf795a917c7aa7d4f51`
+inside task-owned immutable image
+`sha256:fd5370f370708f6a02cec6d44818a4295609e5bc68aa42455e53f141168a9d5f`.
+The unchanged audited runtime and loader closure were mounted read-only from a
+native task-owned volume. Earlier overlay filesystem device-identity and
+cross-mount failures are retained; no runtime allowlist or identity check was
+relaxed. The installed-closure audit ran under the default container filter;
+proof containers used a container-local unconfined filter so the existing proof
+controller could install its required child filter. No host security or `/opt`
+installation was changed. The final ordinary verifier suite passed 110 tests
+with 13 explicitly ignored installed-runtime/hostile tests; ignored cases are
+not counted as successful proofs.
+
+E14 passed as `resource-query-lds-multi-workgroup-v5-r1`, consuming unchanged
+`lds-source-export-r3`. Its receipt SHA-256 is
+`7eaebc7d7c20a3c8d03567195189b1e0d6ac72dee673fc8f68b303074ae85260`.
+The 930 requests retained 4,162,581 response bytes. WG0 allocation `2g0` is
+present at event 16078; event 16079 has only the global allocation; WG1 allocation
+`3g0` is present at 16080. Reverse/forward revisits restore the corresponding
+inventory with fresh revisions. Each workgroup has 1,280 LDS accesses at its
+reduction checkpoint (448 writes, 832 reads). A historical scoped access page can
+name an allocation absent from current memory. Terminal memory is unavailable,
+and the last-operation snapshot still contains LDS: neither observation is a
+release-event or lifetime trace. This extends CPU acceptance, not the compiler's
+source collective profile or hardware qualification.
+
 ## #280: direct assembly
 
 | Milestone | Delivered portion | Required remaining work |
 | --- | --- | --- |
-| M0: contracts and ownership | E1/E3 freeze a bounded marker, observation, and diagnostic materialization profile with disjoint owners. | Agree complete source/region/resource/ABI contracts, catalog and two-target coverage matrix, generation budgets, and pinned-worker inline-region versus whole-body prototype with all owners. |
+| M0: contracts and ownership | E1/E3 freeze a bounded marker/observation profile; E10 supplies the reproducible two-architecture metadata inventory; E11 qualifies a closed inline-unit worker mechanism and observes whole-body export rejection. | Complete source/region/resource/ABI contracts, operand/effect/encoding overlays and two-target executable coverage matrix; integrate the chosen emission mechanism and qualify whole-body support with the existing owners. |
 | M1: real-source instruction slice | E1/E2 exercise source, canonical instructions, CPU results and negative operands; E7 adds the closed checked scalar relation; E8 exercises the normal production target route. | Actual reference-bound value/proof qualification, broader applicable correspondence/admission and final encoding inspection remain. LLVM text is not final-code evidence. |
 | M2: complete basic assembly kernels | Actual generated helpers and explicit concrete source variants re-enter the frontend (E2/E3). | Ordered regions, physical register ownership, labels/branches, full ABI metadata, broader helpers/specialization, whole bounded assembly kernels, and intended machine-contract roundtrips. Six independent SSA expressions do not implement an exact physical-register region. |
 | M3: memory and synchronization | Existing ordinary-KIR checks remain in force around the marker slice. | Authored ISA memory/LDS/atomic/wave operations, address provenance, wait/scoreboard hazards, barrier/convergence/race obligations, descriptors, and applicable hardware checks. Ordinary surrounding loads/stores do not satisfy this milestone. |
@@ -112,7 +165,7 @@ admit a protected artifact, or close the original milestone matrix below.
 | --- | --- | --- |
 | V0: contract and inventory | Exact stopped-state/query bindings, bounded pages, availability labels and measured CPU/browser budgets (E5/E6). | Complete backend/capture capability matrix and shared compiler/physical-resource handoff; these are not inferred from a rendered page. |
 | V1: recorded memory visualization | Real source-produced global and LDS allocation/access pages, bytes/initialization, captured-page logical-scope filtering (E5/E6/E9). | Broader allocation/access overlays and supported event/lane navigation, with end-to-end UI qualification for each new capture. Producer generation 0 is not allocation-lifetime reconstruction. |
-| V2: debugger integration | First-write watchpoint, forward/reverse stopped queries, no-future-access and stale cursor/token checks; separate interactive raw-KIR capture remains available. | Same-source loops/helpers/reuse lifecycle qualification, faults, linked source/SSA navigation and UI watchpoint/breakpoint editing/live query transport. The generated-helper CPU smoke is not a resource-history test. |
+| V2: debugger integration | First-write watchpoint, forward/reverse stopped queries, no-future-access and stale cursor/token checks; E14 adds exact two-workgroup inventory isolation and historical-access separation. Separate interactive raw-KIR capture remains available. | Same-source loops/helpers/reuse lifecycle qualification, faults, linked source/SSA navigation and UI watchpoint/breakpoint editing/live query transport. Workgroup inventory restoration is not a lifecycle trace; the generated-helper CPU smoke is not a resource-history test. |
 | V3: compiler resource views | Exact original/edited source comparisons and independently retained logical observations (E2/E6). | Compiler allocation lifetimes, plan-versus-final resources, physical registers and checked cross-level lineage. Call rows currently lack a callee target; the viewer does not infer call edges or cross-variant SSA correspondence. |
 | V4: target analysis and live adapters | No new hardware-session or bank-conflict model qualification. | Target-bound bank/transaction models, independent references and actual same-stop hardware adapters; unavailable physical state remains unavailable. |
 | V5: tutorials and qualification | Draft tutorials, source/variant-bound observations, focused UI tests and separated actual/synthetic scale measurements. | All planned lessons, complete linked-selection/accessibility/scale coverage, import/export/service documentation, aggregate desktop/mobile and evidence gates, and publication. Browser responsiveness is not GPU performance or capture-overhead qualification. |
@@ -124,7 +177,7 @@ admit a protected artifact, or close the original milestone matrix below.
 | U0: editing and ownership contract | Bounded exact selectors, stale-source checks, private proposals, explicit new-file publication and no snapshot-resume authority (E3). | Complete per-level capability matrix, semantic extraction/insertion ownership, specialization/resource boundaries, recipe semantics and shared acceptance/budget agreement. A source-map file identity is not a source-byte hash. |
 | U1: inspect and select | Actual source-produced V6/KIR V11 operations, contiguous single-block regions, live-ins/outs, scalar detail/source references and immutable comparison (E2/E3/E6). | Genuinely available additional stage/transform lineage and resource contracts, checked cross-level navigation, remaining stale/ambiguous cases. Missing stages are not synthesized. |
 | U2: promote, edit and recompile | Supported u32 bitwise/typed-marker drafts, actual ordinary-source promotion, fresh unchanged/edited helper exports and CPU cases (E2–E4); closed direct-root checked relations and actual normal target lowering are separate E7/E8 progress. | General supported source-boundary integration, actual reference-bound value qualification, applicable exact instruction/resource contract preservation and final-code inspection, invalid-resource/hidden-clobber cases, fresh final analyses/admission. EOF helper insertion alone is not semantic source replacement or proof of valid Rust. |
-| U3: replayable schedule recipes | Existing fixed-policy optimizer and non-executable schedule shell are prerequisites, not delivered recipes. | Two legal schedules of one source algorithm, compiler-owned applicability/anchors, deterministic checked replay, source-edit success and stale/ambiguous rejection, explicit rebind, fresh transformation/analysis records. CPU interleaving schedules are not compiler recipes. |
+| U3: replayable schedule recipes | E12 executes and independently checks two local-order preferences on actual immutable owners; existing fixed policy is unchanged. | Integrate two legal schedules of one actual source algorithm with compiler-owned applicability/anchors, pre-owner resolution and fixed composition, source-edit success and stale/ambiguous rejection, explicit rebind, fresh transformation/analysis records. Local owner coordinates and CPU interleavings are not persisted compiler recipes. |
 | U4: end-to-end qualification | Exercised small-kernel source cases, exact retained comparisons, scripts and draft lessons. | Qualified U1–U3 including tiled compute, original target/operation matrix, final artifact/resource comparisons, clean-source full gates, inspection/materialization/recipe cost measurements and normal compiler/site pinning. Resource-query timing alone does not satisfy all authoring budgets. |
 
 ## Concrete dependencies and next owner handoffs
@@ -157,7 +210,10 @@ admit a protected artifact, or close the original milestone matrix below.
    passes ordinary functional proof and then refuses dynamic-launch total-output
    ownership. That requires a symbolic TotalView coverage theorem and an
    authenticated extent premise, not weaker ownership checking. Those owner
-   changes/results are not claimed as merged or qualified by this authoring slice.
+   complete source/ownership changes are not merged by this authoring slice.
+   E13 selectively integrates the released generator/runtime-polling corrections
+   and qualifies their generated fixtures; it does not supply the missing extent
+   premise or claim the other owner's actual source result as its own.
 
 2. **Checked scheduling — #134/#271/#272 owners.** The
    [#134 acceptance addendum](https://github.com/harsh-nod/fe2o3/issues/134#issuecomment-5720288650)
@@ -169,6 +225,12 @@ admit a protected artifact, or close the original milestone matrix below.
    and [published relation replay](../crates/fe2o3-kernel-opt/src/checked_optimization_policy3_receipt_v1.rs)
    must retain their real execution-versus-relation distinction. An inert recipe
    DTO would not close the gap.
+
+   E12 now provides an independently replayed actual local permutation, not just
+   a DTO. Its exact-input region selector remains invocation-local, and its
+   output is deliberately not convertible into fixed Policy3 authority. Source
+   anchors, rebind and normal production composition still need that owner's
+   checked pre-owner handoff.
 
    The [exact pre-owner handoff](https://github.com/harsh-nod/fe2o3/issues/272#issuecomment-5720236118)
    requires authenticated callback/capture/exit regions and immutable schedule
