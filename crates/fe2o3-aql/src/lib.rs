@@ -9,6 +9,9 @@
 
 extern crate alloc;
 
+mod dependency_barrier;
+pub use dependency_barrier::*;
+
 use alloc::boxed::Box;
 use core::{
     mem::{align_of, offset_of, size_of},
