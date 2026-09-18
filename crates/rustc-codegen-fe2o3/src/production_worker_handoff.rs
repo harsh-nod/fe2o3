@@ -44,6 +44,19 @@ pub(crate) struct PreparedProductionWorkerHandoff {
 }
 
 impl PreparedProductionWorkerHandoff {
+    pub(crate) fn native_output_parts_v1(
+        &self,
+    ) -> (
+        &CompilerModuleHandoffV2,
+        &CompilerDescriptorSourceV1,
+        &[u8; 32],
+    ) {
+        (
+            &self.handoff,
+            &self.compiler_descriptor_source,
+            &self.llvm_ir_sha256,
+        )
+    }
     #[cfg(test)]
     pub(crate) fn llvm_ir(&self) -> &str {
         std::str::from_utf8(self.handoff.module_bytes())

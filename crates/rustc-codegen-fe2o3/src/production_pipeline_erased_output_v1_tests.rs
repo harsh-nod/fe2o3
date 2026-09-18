@@ -20,7 +20,7 @@ use fe2o3_lower_mir_kernel::{
     ProductionUnitLocalErasedSourceOwnerV1 as Erased,
 };
 
-fn erased_typed_roots(source: &Erased) -> Vec<TypedDescriptorRootV1> {
+pub(super) fn erased_typed_roots(source: &Erased) -> Vec<TypedDescriptorRootV1> {
     let semantic = source.original_source().semantic_ssa().source_semantic();
     semantic
         .roots()

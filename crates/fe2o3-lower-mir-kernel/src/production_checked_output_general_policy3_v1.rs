@@ -4,6 +4,8 @@ use fe2o3_kernel_ir::{CanonicalKirOperationCoordinateV1, CanonicalKirOperationOr
 
 #[path = "production_checked_output_general_census_policy3_v1.rs"]
 mod census;
+#[path = "production_checked_output_numeric_casts_v1.rs"]
+mod numeric_casts;
 #[path = "production_checked_output_private_memory_policy3_v1.rs"]
 mod private_memory;
 #[path = "production_checked_output_scalar_helpers_v1.rs"]

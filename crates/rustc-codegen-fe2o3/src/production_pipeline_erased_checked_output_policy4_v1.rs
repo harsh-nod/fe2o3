@@ -37,6 +37,16 @@ pub(crate) struct PreparedErasedCheckedOutputArtifactsV1 {
 }
 
 impl PreparedErasedCheckedOutputArtifactsV1 {
+    pub(crate) fn native_worker_output_v1(
+        &self,
+    ) -> super::native_checked_output_handoff_v1::OutputInputsV1<'_> {
+        super::native_checked_output_handoff_v1::OutputInputsV1 {
+            owner: super::native_checked_output_handoff_v1::OutputOwnerV1::Erased(&self.admitted),
+            catalog: &self.catalog,
+            prepared: &self.prepared,
+            workgroups: &self.workgroups,
+        }
+    }
     pub(crate) fn admitted(&self) -> &Admitted {
         &self.admitted
     }
@@ -125,6 +135,21 @@ pub(crate) struct NativeSourceErasedCheckedOutputProductionCompilationV1 {
     source_lineage: crate::production_native_source_lineage_v1::PreparedErasedNativeSourceLineageV1,
     bindings: AuthenticatedProductionBindings,
     retained_storage_floor: usize,
+}
+
+impl NativeSourceErasedCheckedOutputProductionCompilationV1 {
+    pub(super) fn native_worker_inputs_v1(
+        &self,
+    ) -> super::native_checked_output_handoff_v1::StageInputsV1<'_> {
+        super::native_checked_output_handoff_v1::StageInputsV1 {
+            output: self.artifacts.native_worker_output_v1(),
+            proof: super::native_checked_output_handoff_v1::SourceProofV1::Erased(
+                self.source_lineage.proof(),
+            ),
+            bindings: &self.bindings,
+            retained_floor: self.retained_storage_floor,
+        }
+    }
 }
 
 impl RankedVerifiedProductionCompilation {
