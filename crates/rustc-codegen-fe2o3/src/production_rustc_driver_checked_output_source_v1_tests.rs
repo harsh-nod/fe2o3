@@ -25,6 +25,8 @@ const CHILD_TEST: &str =
 #[derive(Debug, Serialize, Deserialize)]
 struct Observation {
     roots: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transparent_result_wrappers: Option<usize>,
     internal_helpers: usize,
     helper_calls: usize,
     reads: usize,
@@ -38,6 +40,8 @@ struct Observation {
     formal_accesses: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     runtime_domains: Option<runtime_domains::RuntimeDomainObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    simulation: Option<simulation::SimulationObservation>,
     policy: u16,
     output_digest: [u8; 32],
     llvm_bytes: usize,
@@ -58,6 +62,7 @@ enum SourceStage {
     Policy4,
     NativeSourceProof,
     NativeHandoff,
+    Simulation,
     Observation,
 }
 
@@ -120,6 +125,18 @@ impl Callbacks for CheckedOutputCallbacks {
                 admitted.checked_output().owner()
             ));
             let module = admitted.output().module();
+            let semantic = admitted.source_semantic_kir().semantic().semantic();
+            let mut transparent_result_wrappers = 0;
+            for root in semantic.roots() {
+                let selection = semantic
+                    .select_kernel_body_for_root_v1(*root)
+                    .filter(|selection| selection.root() == *root)
+                    .ok_or_else(|| {
+                        SourceFailure::new(SourceStage::Observation, "exact source body selection")
+                    })?;
+                transparent_result_wrappers +=
+                    usize::from(selection.has_transparent_result_wrapper());
+            }
             let helpers = module
                 .functions
                 .iter()
@@ -132,6 +149,7 @@ impl Callbacks for CheckedOutputCallbacks {
                     .iter()
                     .map(|k| k.id.as_str().to_owned())
                     .collect(),
+                transparent_result_wrappers: Some(transparent_result_wrappers),
                 internal_helpers: helpers.len(),
                 helper_calls: 0,
                 reads: 0,
@@ -144,6 +162,7 @@ impl Callbacks for CheckedOutputCallbacks {
                 other_writes: 0,
                 formal_accesses: admitted.kernels().iter().map(|k| k.accesses().len()).sum(),
                 runtime_domains: Some(runtime_domains::observe(admitted.kernels())?),
+                simulation: None,
                 policy: admitted.checked_output().execution().policy_version(),
                 output_digest: *admitted.output().canonical().identity().digest(),
                 llvm_bytes: 0,
@@ -182,6 +201,12 @@ impl Callbacks for CheckedOutputCallbacks {
                 } else {
                     observation.reads += 1;
                 }
+            }
+            if let Some(case) = simulation::requested()? {
+                observation.simulation =
+                    Some(self.progress.run(SourceStage::Simulation, || {
+                        simulation::observe(admitted.output().canonical(), case)
+                    })?);
             }
             if self.probe_missing_proof {
                 use crate::production_native_source_lineage_v1::NativeSourceLineageErrorV1;
@@ -372,6 +397,15 @@ fn ordinary_rust_fill_and_vecadd_reach_checked_native_output() {
 }
 
 #[test]
+#[ignore = "requires pinned nightly rust-src, AMD dependencies, and ordinary-source compilation"]
+fn ordinary_rust_result_wrapped_fill_reaches_checked_native_output() {
+    ordinary_rust_checked_output_cases(&[
+        OrdinarySourceCase::RetainedWrappedFill,
+        OrdinarySourceCase::WrappedFill,
+    ]);
+}
+
+#[test]
 #[ignore = "requires pinned nightly rust-src and admitted Verus runtime for the actual-source helper effect join"]
 fn ordinary_rust_shared_unit_helper_reaches_checked_native_output() {
     ordinary_rust_checked_output_cases(&[OrdinarySourceCase::SharedUnitHelper]);
@@ -380,6 +414,8 @@ fn ordinary_rust_shared_unit_helper_reaches_checked_native_output() {
 enum OrdinarySourceCase {
     Fill,
     Vecadd,
+    WrappedFill,
+    RetainedWrappedFill,
     SharedUnitHelper,
 }
 
@@ -429,6 +465,24 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
             OrdinarySourceCase::Vecadd => {
                 ("vecadd", "examples/vecadd", None, &["vecadd"][..], 2, 1, 0)
             }
+            OrdinarySourceCase::WrappedFill => (
+                "wrapped-fill",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("wrapped-fill"),
+                &["wrapped_fill"][..],
+                0,
+                1,
+                0,
+            ),
+            OrdinarySourceCase::RetainedWrappedFill => (
+                "retained-wrapped-fill",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("wrapped-fill"),
+                &["wrapped_fill"][..],
+                0,
+                1,
+                0,
+            ),
             OrdinarySourceCase::SharedUnitHelper => (
                 "shared-unit-helper",
                 "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
@@ -488,6 +542,11 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         if let Some(feature) = feature {
             args.push(format!("--cfg=feature=\"{feature}\""));
         }
+        // Qualify both real frontend shapes. This changes only rustc's test
+        // invocation, never the fixed fe2o3 optimizer or its admission policy.
+        if matches!(case, OrdinarySourceCase::RetainedWrappedFill) {
+            args.push("-Zinline-mir=no".into());
+        }
         let original: Vec<OsString> = args.iter().map(OsString::from).collect();
         let RustcInvocationV2::Compile(compile) = classify_rustc_invocation_v2(&original).unwrap()
         else {
@@ -523,12 +582,27 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
                 observation.to_hex(),
             );
         progress::clear_inherited_jobserver(&mut command);
+        let simulation_case = match case {
+            OrdinarySourceCase::Fill
+            | OrdinarySourceCase::WrappedFill
+            | OrdinarySourceCase::RetainedWrappedFill => Some(simulation::Case::Fill),
+            OrdinarySourceCase::Vecadd => Some(simulation::Case::Vecadd),
+            OrdinarySourceCase::SharedUnitHelper => None,
+        };
+        simulation::configure_child(&mut command, simulation_case);
         snapshots::configure_child(&mut command, name);
         let child = output(&mut command);
         let result: Result<Observation, SourceFailure> =
             serde_json::from_slice(&std::fs::read(&response).unwrap()).unwrap();
         let result = result.unwrap();
         assert_eq!(result.roots, roots);
+        assert_eq!(
+            result.transparent_result_wrappers,
+            Some(usize::from(matches!(
+                case,
+                OrdinarySourceCase::RetainedWrappedFill
+            )))
+        );
         assert_eq!(result.helper_calls, calls);
         assert_eq!(result.internal_helpers == 0, calls == 0);
         assert_eq!((result.reads, result.writes), (reads, writes));
@@ -542,6 +616,11 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         assert_ne!(result.output_digest, [0; 32]);
         assert!(result.llvm_bytes > 0);
         assert!(!result.missing_proof_refused);
+        if let Some(case) = simulation_case {
+            simulation::check_observation(&result, case).unwrap();
+        } else {
+            assert!(result.simulation.is_none());
+        }
         eprintln!(
             "actual-source checked native output {name}: {result:?}\n{}",
             String::from_utf8_lossy(&child.stdout)
@@ -549,6 +628,7 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
         if name == "fill" {
             let expected_output = result.output_digest;
             let proof_response = scratch.path().join("fill-proof-refusal.json");
+            simulation::configure_child(&mut command, None);
             snapshots::configure_child(&mut command, &format!("{name}-missing-proof"));
             let probe = output(
                 command
@@ -559,6 +639,8 @@ fn ordinary_rust_checked_output_cases(cases: &[OrdinarySourceCase]) {
                 serde_json::from_slice(&std::fs::read(proof_response).unwrap()).unwrap();
             let result = result.unwrap();
             assert!(result.missing_proof_refused);
+            assert_eq!(result.transparent_result_wrappers, Some(0));
+            assert!(result.simulation.is_none());
             assert_eq!(
                 result.runtime_domains,
                 Some(runtime_domains::RuntimeDomainObservation::default())
@@ -582,3 +664,5 @@ mod corpus_cargo;
 mod progress;
 #[path = "production_rustc_driver_checked_output_runtime_domains_v1_tests.rs"]
 mod runtime_domains;
+#[path = "production_rustc_driver_checked_output_simulation_v1_tests.rs"]
+mod simulation;

@@ -197,6 +197,7 @@ mod tests {
     fn observation() -> super::super::Observation {
         super::super::Observation {
             roots: vec!["kernel".to_owned()],
+            transparent_result_wrappers: None,
             internal_helpers: 0,
             helper_calls: 0,
             reads: 1,
@@ -209,6 +210,7 @@ mod tests {
             other_writes: 0,
             formal_accesses: 1,
             runtime_domains: None,
+            simulation: None,
             policy: 4,
             output_digest: [1; 32],
             llvm_bytes: 1,
@@ -243,8 +245,10 @@ mod tests {
         let bytes = serde_json::to_vec(&old).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(json.get("runtime_domains").is_none());
+        assert!(json.get("transparent_result_wrappers").is_none());
         let decoded: super::super::Observation = serde_json::from_slice(&bytes).unwrap();
         assert!(decoded.runtime_domains.is_none());
+        assert!(decoded.transparent_result_wrappers.is_none());
         assert!(check_observation(&decoded).is_err());
         let mut current = observation();
         current.runtime_domains = Some(RuntimeDomainObservation::default());

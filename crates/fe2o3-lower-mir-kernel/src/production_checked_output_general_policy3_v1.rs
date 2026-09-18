@@ -8,6 +8,8 @@ mod census;
 mod private_memory;
 #[path = "production_checked_output_scalar_helpers_v1.rs"]
 mod scalar_helpers;
+#[path = "production_checked_output_source_roles_v1.rs"]
+mod source_roles;
 #[path = "production_checked_output_unsigned_division_v1.rs"]
 mod unsigned_division;
 

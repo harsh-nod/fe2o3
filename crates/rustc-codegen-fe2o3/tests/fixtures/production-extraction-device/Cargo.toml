@@ -11,6 +11,7 @@ publish = false
 atomic-rmw = []
 multi-root-ownership = []
 multi-root-target-lineage = []
+wrapped-fill = []
 three-root-ownership = []
 write-only-output = []
 write-only-disjoint-output = []

@@ -2,6 +2,8 @@
 
 #[cfg(feature = "atomic-rmw")]
 use fe2o3_device::DeviceGlobalMutPtr;
+#[cfg(feature = "wrapped-fill")]
+use fe2o3_device::KernelResult;
 #[cfg(any(feature = "write-only-output", feature = "write-only-disjoint-output"))]
 use fe2o3_device::WriteOnlyDisjointSlice;
 #[cfg(feature = "atomic-rmw")]
@@ -20,6 +22,7 @@ mod write_only_reference;
     feature = "atomic-rmw",
     feature = "multi-root-ownership",
     feature = "multi-root-target-lineage",
+    feature = "wrapped-fill",
     feature = "three-root-ownership",
     feature = "write-only-output",
     feature = "write-only-disjoint-output",
@@ -60,6 +63,16 @@ pub fn fill(mut output: DisjointSlice<u32>) {
     if let Some(element) = output.get_mut(index) {
         *element = 17;
     }
+}
+
+#[cfg(feature = "wrapped-fill")]
+#[kernel(typed)]
+pub fn wrapped_fill(mut output: DisjointSlice<f32>) -> KernelResult {
+    let index = thread::index_1d();
+    if let Some(element) = output.get_mut(index) {
+        *element = 42.5;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "scalar-transmute")]

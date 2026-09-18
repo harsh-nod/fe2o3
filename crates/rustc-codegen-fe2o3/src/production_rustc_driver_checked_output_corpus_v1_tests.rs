@@ -274,6 +274,16 @@ fn check_observation(fixture: &Fixture, observed: &Observation) -> Result<(), So
 }
 
 fn run_case(workspace: &Path, fixture: &Fixture, case: &Path, target: &Path) -> CaseReport {
+    run_case_with_simulation(workspace, fixture, case, target, None)
+}
+
+fn run_case_with_simulation(
+    workspace: &Path,
+    fixture: &Fixture,
+    case: &Path,
+    target: &Path,
+    simulation_case: Option<simulation::Case>,
+) -> CaseReport {
     let started = std::time::Instant::now();
     let prepared = (|| {
         check_input_files(workspace, fixture)?;
@@ -315,6 +325,7 @@ fn run_case(workspace: &Path, fixture: &Fixture, case: &Path, target: &Path) -> 
             .env(progress::CHILD_PROGRESS, &callback_progress)
             .args(["--exact", CHILD_TEST, "--ignored", "--nocapture"]);
         progress::clear_inherited_jobserver(&mut command);
+        simulation::configure_child(&mut command, simulation_case);
         snapshots::configure_child(&mut command, &fixture.fixture_id);
         eprintln!(
             "P4 CORPUS {} callback-progress={}",
@@ -343,6 +354,14 @@ fn run_case(workspace: &Path, fixture: &Fixture, case: &Path, target: &Path) -> 
                     ));
                 }
                 check_observation(fixture, &observed)?;
+                if let Some(case) = simulation_case {
+                    simulation::check_observation(&observed, case)?;
+                } else if observed.simulation.is_some() {
+                    return Err(fail(
+                        SourceStage::Simulation,
+                        "unrequested simulation observation",
+                    ));
+                }
                 Ok(observed)
             }
             Err(error) => Err(error),
@@ -450,11 +469,12 @@ fn ordinary_scalar_gemm_requires_checked_policy4_output() {
         .find(|fixture| fixture.fixture_id == "gfx942-scalar-gemm")
         .expect("the declared ordinary-source scalar arithmetic regression");
     let scratch = crate::test_temp_dir::TestTempDir::create("fe2o3-policy4-scalar-gemm");
-    let report = run_case(
+    let report = run_case_with_simulation(
         &workspace,
         fixture,
         &scratch.path().join("case"),
         &scratch.path().join("dependencies"),
+        Some(simulation::Case::ScalarGemm),
     );
     eprintln!(
         "P4 FOCUSED REPORT\n{}",
@@ -516,6 +536,7 @@ fn private_memory_is_not_counted_as_global_formal_evidence() {
     .remove(0);
     let mut observed = Observation {
         roots: fixture.compiler_input.kernel_symbols.clone(),
+        transparent_result_wrappers: None,
         internal_helpers: 0,
         helper_calls: 0,
         reads: 3,
@@ -528,6 +549,7 @@ fn private_memory_is_not_counted_as_global_formal_evidence() {
         other_writes: 0,
         formal_accesses: 2,
         runtime_domains: Some(runtime_domains::RuntimeDomainObservation::default()),
+        simulation: None,
         policy: 4,
         output_digest: [1; 32],
         llvm_bytes: 100,

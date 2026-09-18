@@ -360,6 +360,23 @@ Source membership is checked against the reconstructed root-qualified function
 correspondence. Every retained helper is checked, including an uncalled helper
 left after independently checked dead-control removal.
 
+The source census distinguishes kernel roots, the bodies selected by the exact
+transparent Result-wrapper selector, and actual retained helpers. A selected
+body is not automatically a scalar helper: if it is also retained as a helper
+under another root, that occurrence must still satisfy the scalar ABI rule.
+Complete original source/N reconstruction remains mandatory. Repeated
+root-qualified mappings of a shared helper may identify the same physical
+statement only when their semantic function, block and statement all agree.
+The role census and selector scans use the existing work/storage ledger.
+
+Ranked allocation provenance also recognizes a whole-value Copy/Move chain from
+an unchanged ExclusiveOwner argument to a uniquely defined, same-type carrier.
+A later direct borrow is admitted only when every receiver use is an arg0 use
+of an authenticated descriptor-preserving disjoint intrinsic. Casts, projected
+copies, raw address escapes, aliases, unknown calls and carrier writes do not
+supply this authority. The bounded graph traversal is linear in source rows,
+locals and copy edges; it is not a new alias, initialization or borrow theorem.
+
 The helper census requires complete empty memory effects and a closed scalar
 opcode set. F32/F64 constants, comparisons, selects and strict add/subtract/
 multiply are admitted without reassociation, contraction or fast-math permission.
@@ -377,6 +394,33 @@ It requires the admitted Verus runtime for the earlier ranked helper-effect
 join. Without that runtime, the test fails before Policy4; semantic-MIR helper
 and ABI component tests do not substitute for this source qualification. No
 runtime bypass is provided, and this is not whole-corpus qualification.
+
+The focused ordinary-source fill/vecadd and scalar-GEMM parents also simulate
+the exact admitted optimized O. They re-verify its unchanged V12 canonical bytes
+and identity, then use the existing bounded CPU simulator with explicit test
+requests, actual entry ABI and workgroup metadata. They do not substitute a
+handwritten KIR graph or select compiler behavior by workload name.
+
+`ordinary_rust_result_wrapped_fill_reaches_checked_native_output` additionally
+checks the real Result-returning Rust fixture with normal optimized rustc MIR
+and with rustc MIR inlining explicitly disabled in the test invocation. It
+requires observing zero and one retained transparent wrappers respectively,
+then runs the same exact-O Fill oracle for each. The fe2o3 pass policy is
+unchanged; this frontend test variation is not a production optimizer selector.
+
+Each finite F32 scenario compares every backing byte and initialization bit with
+an independent CPU reference, including readonly inputs, unused output elements
+and canaries outside the slice views. Empty and workgroup-boundary lengths,
+short/long GEMM outputs and a separate-versus-fused multiply/add discriminator
+run twice. Numerical comparison is bit-exact for these inputs; it is not general
+IEEE, FTZ, LLVM or GPU equivalence. Observed races/conflicts refuse; incomplete
+bounded race assessments remain explicitly incomplete, never race-free.
+
+Simulation observations are optional in the test JSON. Historical reports
+without them stay unobserved; focused tests require them. The all48 corpus and
+missing-proof probe do not request simulation and keep their existing gates.
+These model runs grant no artifact or launch authority and do not qualify other
+tutorial kernels or hardware.
 
 The production admission is maintained by the following regression gates:
 
