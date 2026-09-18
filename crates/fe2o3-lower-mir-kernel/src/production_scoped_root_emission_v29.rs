@@ -141,7 +141,7 @@ impl ScopedRootPlacementV29 {
 )]
 #[allow(clippy::too_many_arguments)]
 fn emit_pending_scoped_root_v29(
-    checked: crate::ProductionCheckedContextRootV29<'_>,
+    checked: &crate::ProductionCheckedContextRootV29<'_>,
     source: &ExecutionLifecycleSourceV29<'_>,
     limits: ProductionSemanticKirLimitsV1,
     closure: &mut ReachableClosureBudgetV1,
@@ -160,7 +160,7 @@ fn emit_pending_scoped_root_v29(
     // not execute during unwinding, although their Rust-owned buffers drop.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let (pending, kernel, private_payload) = build_pending_scoped_root_v29(
-            &checked,
+            checked,
             source,
             limits,
             closure,
@@ -262,193 +262,203 @@ fn build_pending_scoped_root_v29(
         )?,
         None => BTreeSet::new(),
     };
-    let (pending, private_payload) = production_call_instances_v1::with_production_call_instances_v1(
-        checked.semantic_ssa(),
-        checked.root_id(),
-        budget,
-        |instances, budget| {
-            Ok::<_, production_call_instances_v1::ProductionCallInstanceErrorV1>(
-                with_execution_call_scope_v29(budget, |scope, budget| {
-                    scoped_root_preflight_v29(instances, &infallible, limits, closure, budget)?;
-                    let mut sink = ExecutionDefinedCallSinkV29::new(scope, instances, budget)?;
-                    let signature_floor = budget.storage();
-                    let mut signatures = BTreeMap::new();
-                    for index in 1..instances.instances().len() {
-                        budget.charge_work(
-                            call_splice_search_work_v1(signatures.len()).saturating_add(2),
-                        )?;
-                        let instance = instances
-                            .id_at(index)
-                            .ok_or_else(execution_call_error_v29)?;
-                        let row = instances
-                            .instance(instance)
-                            .ok_or_else(execution_call_error_v29)?;
-                        let signature = match signatures.entry(row.function()) {
-                            std::collections::btree_map::Entry::Vacant(entry) => {
-                                budget.reserve_storage(std::mem::size_of::<(
-                                    SemanticFunctionIdV1,
-                                    LoweredFunctionSignatureV1,
-                                )>())?;
-                                entry.insert(execution_function_signature_v29(
-                                    instances, instance, budget,
-                                )?)
-                            }
-                            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-                        };
-                        closure.charge_arguments(
-                            argument_product_v1(
-                                signature
-                                    .parameter_types
-                                    .len()
-                                    .saturating_sub(logical_argument_rows_v1(row.declaration())),
-                                2,
-                            )?,
-                            limits.max_operations,
-                        )?;
-                    }
-                    let signature_storage = budget
-                        .storage()
-                        .checked_sub(signature_floor)
-                        .ok_or(ArgumentResourceV1::Accounting)?;
-                    let mut emitted = emission_vec_v1(instances.instances().len(), budget)?;
-                    budget.charge_work(instances.instances().len())?;
-                    emitted.resize_with(instances.instances().len(), || None);
-                    let mut position = ScopedRootPlacementV29 {
-                        next: SemanticEmissionPlacementV1::default(),
-                        remaining_operations: limits.max_operations,
-                        private_payload: outer_private_payload,
-                    };
-                    let root_plan = kernel_entry_plan_v1(
-                        semantic,
-                        checked.root_id(),
-                        checked.root_id(),
-                        FunctionId::new(symbol),
-                        limits.max_operations,
-                        closure,
-                    )?;
-                    let mut producer = ExecutionLifecycleProducerV29::new(
-                        source,
-                        instances,
-                        instances.root(),
-                        position.next,
-                        budget,
-                    )?;
-                    let root = with_execution_availability_v29(
-                        instances,
-                        instances.root(),
-                        budget,
-                        |cursor, budget| {
-                            lower_one_semantic_function_with_calls_v29(
-                                semantic,
-                                &root_plan,
-                                checked.root_plan(),
-                                &BTreeMap::new(),
-                                &signatures,
-                                required_workgroup,
-                                infallible,
-                                checked.launch().source_rank(),
-                                true,
-                                position.remaining_operations,
-                                None,
-                                private_work,
-                                Some(PrivateArraySourcesV1::Pending(position.private_payload)),
-                                budget,
-                                position.next,
-                                Some(cursor),
-                                Some(&mut sink),
-                                Some(&mut producer),
-                            )
-                        },
-                    )?;
-                    drop(root_plan);
-                    position.advance(&root, limits, private_work, budget)?;
-                    emitted[instances.root().index()] = Some(root);
-                    while let Some(pending) = sink.pop_pending() {
-                        budget.charge_work(3)?;
-                        let child = pending.child;
-                        let slot = emitted
-                            .get_mut(child.index())
-                            .ok_or_else(execution_call_error_v29)?;
-                        if slot.is_some() {
-                            return Err(execution_call_error_v29());
+    let (pending, private_payload) =
+        production_call_instances_v1::with_production_call_instances_v1(
+            checked.semantic_ssa(),
+            checked.root_id(),
+            budget,
+            |instances, budget| {
+                Ok::<_, production_call_instances_v1::ProductionCallInstanceErrorV1>(
+                    with_execution_call_scope_v29(budget, |scope, budget| {
+                        scoped_root_preflight_v29(instances, &infallible, limits, closure, budget)?;
+                        let mut sink = ExecutionDefinedCallSinkV29::new(scope, instances, budget)?;
+                        let signature_floor = budget.storage();
+                        let mut signatures = BTreeMap::new();
+                        for index in 1..instances.instances().len() {
+                            budget.charge_work(
+                                call_splice_search_work_v1(signatures.len()).saturating_add(2),
+                            )?;
+                            let instance = instances
+                                .id_at(index)
+                                .ok_or_else(execution_call_error_v29)?;
+                            let row = instances
+                                .instance(instance)
+                                .ok_or_else(execution_call_error_v29)?;
+                            let signature = match signatures.entry(row.function()) {
+                                std::collections::btree_map::Entry::Vacant(entry) => {
+                                    budget.reserve_storage(std::mem::size_of::<(
+                                        SemanticFunctionIdV1,
+                                        LoweredFunctionSignatureV1,
+                                    )>(
+                                    ))?;
+                                    entry.insert(execution_function_signature_v29(
+                                        instances, instance, budget,
+                                    )?)
+                                }
+                                std::collections::btree_map::Entry::Occupied(entry) => {
+                                    entry.into_mut()
+                                }
+                            };
+                            closure.charge_arguments(
+                                argument_product_v1(
+                                    signature.parameter_types.len().saturating_sub(
+                                        logical_argument_rows_v1(row.declaration()),
+                                    ),
+                                    2,
+                                )?,
+                                limits.max_operations,
+                            )?;
                         }
-                        let row = instances
-                            .instance(child)
-                            .ok_or_else(execution_call_error_v29)?;
-                        let plan_floor = budget.storage();
-                        let plan = execution_instance_plan_v29(
-                            instances,
-                            child,
-                            pending.kernel_ir_function,
-                            position.next,
-                            budget,
-                        )?;
-                        let plan_storage = budget
+                        let signature_storage = budget
                             .storage()
-                            .checked_sub(plan_floor)
+                            .checked_sub(signature_floor)
                             .ok_or(ArgumentResourceV1::Accounting)?;
-                        let (_, parameters) = prepare_execution_parameters_v29(
-                            instances,
-                            child,
-                            pending.arguments,
-                            &plan,
-                            budget,
+                        let mut emitted = emission_vec_v1(instances.instances().len(), budget)?;
+                        budget.charge_work(instances.instances().len())?;
+                        emitted.resize_with(instances.instances().len(), || None);
+                        let mut position = ScopedRootPlacementV29 {
+                            next: SemanticEmissionPlacementV1::default(),
+                            remaining_operations: limits.max_operations,
+                            private_payload: outer_private_payload,
+                        };
+                        let root_plan = kernel_entry_plan_v1(
+                            semantic,
+                            checked.root_id(),
+                            checked.root_id(),
+                            FunctionId::new(symbol),
+                            limits.max_operations,
+                            closure,
                         )?;
                         let mut producer = ExecutionLifecycleProducerV29::new(
                             source,
                             instances,
-                            child,
+                            instances.root(),
                             position.next,
                             budget,
                         )?;
-                        let lowered = with_execution_availability_v29(
+                        let root = with_execution_availability_v29(
                             instances,
-                            child,
+                            instances.root(),
                             budget,
                             |cursor, budget| {
                                 lower_one_semantic_function_with_calls_v29(
                                     semantic,
-                                    &plan,
-                                    row.ssa(),
+                                    &root_plan,
+                                    checked.root_plan(),
                                     &BTreeMap::new(),
                                     &signatures,
-                                    None,
-                                    BTreeSet::new(),
+                                    required_workgroup,
+                                    infallible,
                                     checked.launch().source_rank(),
-                                    false,
+                                    true,
                                     position.remaining_operations,
                                     None,
                                     private_work,
                                     Some(PrivateArraySourcesV1::Pending(position.private_payload)),
                                     budget,
                                     position.next,
-                                    Some(cursor.with_call_parameters_v29(parameters)?),
+                                    Some(cursor),
                                     Some(&mut sink),
                                     Some(&mut producer),
                                 )
                             },
                         )?;
-                        drop(plan);
-                        budget.release_storage(plan_storage)?;
-                        position.advance(&lowered, limits, private_work, budget)?;
-                        *slot = Some(lowered);
-                    }
-                    sink.finish(budget)?;
-                    let pending =
-                        assemble_pending_scoped_root_v29(instances, &mut emitted, limits, budget)?;
-                    let slot_bytes = argument_product_v1(
-                        emitted.capacity(),
-                        std::mem::size_of::<Option<LoweredFunctionResultV1>>(),
-                    )?;
-                    drop(emitted);
-                    drop(signatures);
-                    budget.release_storage(argument_sum_v1(&[slot_bytes, signature_storage])?)?;
-                    Ok((pending, position.private_payload))
-                }),
-            )
-        },
-    )
-    .map_err(scoped_root_instance_error_v29)??;
+                        drop(root_plan);
+                        position.advance(&root, limits, private_work, budget)?;
+                        emitted[instances.root().index()] = Some(root);
+                        while let Some(pending) = sink.pop_pending() {
+                            budget.charge_work(3)?;
+                            let child = pending.child;
+                            let slot = emitted
+                                .get_mut(child.index())
+                                .ok_or_else(execution_call_error_v29)?;
+                            if slot.is_some() {
+                                return Err(execution_call_error_v29());
+                            }
+                            let row = instances
+                                .instance(child)
+                                .ok_or_else(execution_call_error_v29)?;
+                            let plan_floor = budget.storage();
+                            let plan = execution_instance_plan_v29(
+                                instances,
+                                child,
+                                pending.kernel_ir_function,
+                                position.next,
+                                budget,
+                            )?;
+                            let plan_storage = budget
+                                .storage()
+                                .checked_sub(plan_floor)
+                                .ok_or(ArgumentResourceV1::Accounting)?;
+                            let (_, parameters) = prepare_execution_parameters_v29(
+                                instances,
+                                child,
+                                pending.arguments,
+                                &plan,
+                                budget,
+                            )?;
+                            let mut producer = ExecutionLifecycleProducerV29::new(
+                                source,
+                                instances,
+                                child,
+                                position.next,
+                                budget,
+                            )?;
+                            let lowered = with_execution_availability_v29(
+                                instances,
+                                child,
+                                budget,
+                                |cursor, budget| {
+                                    lower_one_semantic_function_with_calls_v29(
+                                        semantic,
+                                        &plan,
+                                        row.ssa(),
+                                        &BTreeMap::new(),
+                                        &signatures,
+                                        None,
+                                        BTreeSet::new(),
+                                        checked.launch().source_rank(),
+                                        false,
+                                        position.remaining_operations,
+                                        None,
+                                        private_work,
+                                        Some(PrivateArraySourcesV1::Pending(
+                                            position.private_payload,
+                                        )),
+                                        budget,
+                                        position.next,
+                                        Some(cursor.with_call_parameters_v29(parameters)?),
+                                        Some(&mut sink),
+                                        Some(&mut producer),
+                                    )
+                                },
+                            )?;
+                            drop(plan);
+                            budget.release_storage(plan_storage)?;
+                            position.advance(&lowered, limits, private_work, budget)?;
+                            *slot = Some(lowered);
+                        }
+                        sink.finish(budget)?;
+                        let pending = assemble_pending_scoped_root_v29(
+                            instances,
+                            &mut emitted,
+                            limits,
+                            budget,
+                        )?;
+                        let slot_bytes = argument_product_v1(
+                            emitted.capacity(),
+                            std::mem::size_of::<Option<LoweredFunctionResultV1>>(),
+                        )?;
+                        drop(emitted);
+                        drop(signatures);
+                        budget
+                            .release_storage(argument_sum_v1(&[slot_bytes, signature_storage])?)?;
+                        Ok((pending, position.private_payload))
+                    }),
+                )
+            },
+        )
+        .map_err(scoped_root_instance_error_v29)??;
     let layout = checked.launch().layout();
     let kernel = semantic_kernel_metadata_v1(
         symbol,

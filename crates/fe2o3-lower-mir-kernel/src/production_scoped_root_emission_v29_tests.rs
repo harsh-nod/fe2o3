@@ -1,5 +1,82 @@
 use super::*;
 
+pub(super) fn assertion_owner() -> ProductionSemanticSsaOwnerV1 {
+    let original = lifecycle_owner(false);
+    let semantic = original.source_semantic();
+    let mut types = semantic.types().to_vec();
+    let boolean = declaration(
+        &mut types,
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(1),
+            1,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::integer(false, 8, 1),
+                SemanticScalarValidityRangeV1::new(0, 1),
+            )),
+            false,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool),
+        None,
+    );
+    let mut functions = semantic.functions().to_vec();
+    let provider = &functions[HELPER.index() as usize];
+    let mut blocks = provider.blocks().to_vec();
+    let call = blocks[1].terminator().kind().clone();
+    blocks[1] = block(
+        91,
+        vec![],
+        SemanticTerminatorKindV1::Assert {
+            condition: SemanticOperandV1::Constant(SemanticConstantV1::new(
+                boolean,
+                SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(1, 1).unwrap()),
+            )),
+            expected: true,
+            message: SemanticAssertMessageV1::NullPointerDereference,
+            target: SemanticControlFlowEdgeV1::new(
+                SemanticEdgeRoleV1::AssertSuccess,
+                SemanticBlockIdV1::from_index(3),
+            ),
+            unwind: SemanticUnwindActionV1::Unreachable,
+        },
+    );
+    blocks.push(block(96, vec![], call));
+    blocks.push(block(
+        97,
+        vec![],
+        SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+            SemanticEdgeRoleV1::Goto,
+            SemanticBlockIdV1::from_index(4),
+        )),
+    ));
+    functions[HELPER.index() as usize] = function(
+        100,
+        SemanticFunctionRoleV1::InternalHelper,
+        provider.abi().clone(),
+        provider.locals().to_vec(),
+        blocks,
+    );
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([250; 32])),
+        types,
+        vec![],
+        vec![],
+        vec![],
+        functions,
+        semantic.callables().to_vec(),
+        vec![ROOT],
+    )
+    .unwrap()
+    .admit_exact_v29(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+            .unwrap(),
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap()
+}
+
 pub(super) fn emit_checked(
     source: &ExecutionLifecycleSourceV29<'_>,
     launch: &ProductionSourceLaunchRosterV1,
@@ -9,6 +86,10 @@ pub(super) fn emit_checked(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<Vec<DeferredLifecycleEventV29>, ProductionSemanticKirErrorV1> {
     let floor = budget.storage();
+    let outer_private = PrivateArrayPayloadV1 {
+        occupied: 40,
+        capacity: 80,
+    };
     let result = crate::with_checked_context_root_v29(
         source.owner,
         launch,
@@ -17,13 +98,54 @@ pub(super) fn emit_checked(
         |checked, budget| {
             let mut closure = ReachableClosureBudgetV1::new(limits.max_blocks);
             let mut private = PrivateArrayLazyBudgetV1::new(1, limits.max_operations);
+            let mut foreign_work = CanonicalKernelIrWorkBudgetV1::new(10_000_000);
+            let mut foreign_budget = ArgumentBudgetV1::new(&mut foreign_work, 10_000_000);
+            assert!(matches!(
+                emit_pending_scoped_root_v29(
+                    &checked,
+                    source,
+                    limits,
+                    &mut closure,
+                    &mut private,
+                    outer_private,
+                    &mut foreign_budget,
+                ),
+                Err(
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Accounting
+                    )
+                )
+            ));
+            assert_eq!(foreign_budget.storage(), 0);
+            assert_eq!(foreign_work.work(), 0);
+            let foreign_owner = lifecycle_owner(false);
+            let foreign_source = ExecutionLifecycleSourceV29 {
+                owner: &foreign_owner,
+                input: source.input,
+                ledger: source.ledger,
+            };
+            assert!(
+                emit_pending_scoped_root_v29(
+                    &checked,
+                    &foreign_source,
+                    limits,
+                    &mut closure,
+                    &mut private,
+                    outer_private,
+                    budget,
+                )
+                .is_err()
+            );
+            assert_eq!(budget.storage(), floor);
+            assert_eq!(closure.consumed, 0);
+            assert_eq!(closure.argument_rows, 0);
             let output = emit_pending_scoped_root_v29(
-                checked,
+                &checked,
                 source,
                 limits,
                 &mut closure,
                 &mut private,
-                PrivateArrayPayloadV1::default(),
+                outer_private,
                 budget,
             );
             assert!(
@@ -49,6 +171,8 @@ pub(super) fn emit_checked(
         }
     };
     assert!(output.ledger == budget.work_ledger_identity_v1());
+    assert_eq!(output.private_payload.occupied, outer_private.occupied);
+    assert_eq!(output.private_payload.capacity, outer_private.capacity);
     assert_eq!(budget.storage() - floor, output.retained_emission_storage);
     assert!(output.pending.additional_storage_bytes <= output.retained_emission_storage);
     assert_eq!(output.kernel.entry.as_str(), "lifecycle_fixture");
@@ -102,6 +226,52 @@ pub(super) fn emit_checked(
         DeferredLifecycleKindV29::Issue { .. }
     ));
     assert_eq!(observations[0].original_block, BlockId(0));
+    if source.owner.source_semantic().functions()[HELPER.index() as usize]
+        .blocks()
+        .iter()
+        .any(|block| {
+            matches!(
+                block.terminator().kind(),
+                SemanticTerminatorKindV1::Assert { .. }
+            )
+        })
+    {
+        let provider = &output.pending.sidecars.rows[1];
+        let first = provider
+            .lifecycle_events
+            .as_ref()
+            .unwrap()
+            .placement
+            .first_block;
+        assert_eq!(provider.synthetic_operation_spans.len(), 1);
+        let failure = &provider.synthetic_operation_spans[0];
+        assert_eq!(
+            failure.rule,
+            SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap
+        );
+        assert_eq!(failure.kernel_ir_block, BlockId(first + 5));
+        assert_eq!(
+            output.pending.sidecars.rows[2]
+                .lifecycle_events
+                .as_ref()
+                .unwrap()
+                .placement
+                .first_block,
+            first + 6
+        );
+        let trap = body
+            .blocks
+            .iter()
+            .find(|block| block.id == failure.kernel_ir_block)
+            .unwrap();
+        assert_eq!(trap.terminator, Some(Terminator::Unreachable));
+        assert_eq!(provider.blocks.len(), 4);
+        assert!(
+            provider.diagnostic_declarations.values().any(|function| {
+                function.id == AmdGpuDiagnosticOperation::Trap.declaration().id
+            })
+        );
+    }
     let retained = output.retained_emission_storage;
     drop(output);
     budget.release_storage(retained)?;
@@ -110,7 +280,27 @@ pub(super) fn emit_checked(
 }
 
 fn fault(groups: u32, limits: ProductionSemanticKirLimitsV1) -> Fault {
-    Fault::Orchestrated { groups, limits }
+    Fault::Orchestrated {
+        groups,
+        limits,
+        assertion: false,
+    }
+}
+
+#[test]
+fn checked_root_placement_accounts_for_assert_failure_and_unreachable_holes() {
+    run_lifecycle(
+        false,
+        Fault::Orchestrated {
+            groups: 2,
+            limits: ProductionSemanticKirLimitsV1::default(),
+            assertion: true,
+        },
+        10_000_000,
+        10_000_000,
+    )
+    .0
+    .unwrap();
 }
 
 #[test]

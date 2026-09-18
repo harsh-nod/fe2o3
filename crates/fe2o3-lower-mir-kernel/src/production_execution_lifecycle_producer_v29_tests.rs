@@ -302,6 +302,7 @@ enum Fault {
     Orchestrated {
         groups: u32,
         limits: ProductionSemanticKirLimitsV1,
+        assertion: bool,
     },
 }
 
@@ -315,7 +316,19 @@ fn run_lifecycle(
     usize,
     usize,
 ) {
-    let mut owner = lifecycle_owner(branches);
+    let assertion = matches!(
+        fault,
+        Fault::Orchestrated {
+            assertion: true,
+            ..
+        }
+    );
+    let mut owner = if assertion {
+        assert!(!branches);
+        scoped_root_tests::assertion_owner()
+    } else {
+        lifecycle_owner(branches)
+    };
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
     let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
     let result = (|| {
@@ -399,6 +412,18 @@ fn run_lifecycle(
         for block in if branches { vec![3, 4] } else { vec![2] } {
             events.push((HELPER, block, 0, ProductionScopeEventKindV29::Return));
         }
+        if assertion {
+            events[2] = (HELPER, 1, 0, ProductionScopeEventKindV29::Assert);
+            events.push((
+                HELPER,
+                3,
+                0,
+                ProductionScopeEventKindV29::Call {
+                    callee: SemanticCallableIdV1::from_index(2),
+                    kind: ProductionScopeCallKindV29::Ordinary,
+                },
+            ));
+        }
         let events: Vec<_> = events
             .into_iter()
             .map(|(function, block, statement_count, kind)| {
@@ -421,7 +446,7 @@ fn run_lifecycle(
             },
             &mut budget,
         )?;
-        if let Fault::Orchestrated { groups, limits } = fault {
+        if let Fault::Orchestrated { groups, limits, .. } = fault {
             return scoped_root_tests::emit_checked(
                 &source,
                 &launch,

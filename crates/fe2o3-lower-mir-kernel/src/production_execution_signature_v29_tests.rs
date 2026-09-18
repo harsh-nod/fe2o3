@@ -174,6 +174,7 @@ fn signatures_preserve_reversed_same_typed_rust_call_fields() {
         10_000_000,
         |instances, budget| {
             let calls = instances.calls(instances.root()).unwrap();
+            assert_eq!(calls.len(), 2);
             for (index, call) in calls.iter().enumerate() {
                 let child = call.child().unwrap();
                 let signature = checked_signature(instances, child, budget)?;
