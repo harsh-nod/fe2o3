@@ -90,6 +90,249 @@ fn seal(
     )
 }
 
+pub(super) fn complete(semantic: &AdmittedInertSemanticMirV1) -> RetainedContextEntriesV29 {
+    seal(capture(semantic, |_, _| {}), semantic).unwrap()
+}
+
+fn ordinary_root(root: &SemanticFunctionDeclV1) -> SemanticFunctionDeclV1 {
+    SemanticFunctionDeclV1::new(
+        root.identity(),
+        root.role(),
+        root.item_definition_identity(),
+        root.monomorphization_identity(),
+        root.generic_type_arguments_identity(),
+        root.const_generic_arguments_identity(),
+        root.source(),
+        root.abi().clone(),
+        root.locals()[..3].to_vec(),
+        SemanticBlockIdV1::from_index(0),
+        vec![block(
+            10,
+            vec![unit_return()],
+            SemanticTerminatorKindV1::Return,
+        )],
+    )
+    .unwrap()
+    .with_kernel_entry(root.kernel_entry().unwrap().clone())
+}
+
+#[test]
+fn materialization_source_keeps_ordinary_roots_without_context_callbacks() {
+    use crate::production_pipeline::check_context_handoff_v29;
+    let original = fixture(Mutation::None);
+    let semantic = InertSemanticMirRequestV1::new(
+        original.target(),
+        original.types()[..2].to_vec(),
+        vec![],
+        vec![],
+        vec![],
+        vec![ordinary_root(&original.functions()[0])],
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+    .admit_exact_v29(SemanticMirLimitsV1::default())
+    .unwrap();
+    let receipt = RetainedContextEntriesV29::seal(vec![], &semantic, |_| Ok(())).unwrap();
+    let launch = launch_roster(&semantic);
+    let owner = ssa_owner(semantic);
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(2);
+    let mut budget = VisitBudget::new(&mut work, 7);
+    budget.reserve_storage(7).unwrap();
+    assert!(
+        receipt
+            .materialization_source_v29(owner.source_semantic(), &mut budget)
+            .unwrap()
+            .is_none()
+    );
+    check_context_handoff_v29(&receipt, &owner, &launch, &mut budget, |_, _| {
+        panic!("ordinary root entered the context consumer")
+    })
+    .unwrap();
+    assert_eq!(budget.work(), 2);
+    assert_eq!(budget.storage(), 7);
+    assert_eq!(launch.roots().len(), 1);
+}
+
+#[test]
+fn materialization_source_keeps_context_subset_of_the_physical_root_roster() {
+    use crate::production_pipeline::check_context_handoff_v29;
+    let original = fixture_roots(Mutation::None, 4);
+    let mut functions = original.functions().to_vec();
+    for index in [0, 2] {
+        functions[index] = ordinary_root(&functions[index]);
+    }
+    let semantic = InertSemanticMirRequestV1::new_with_callables(
+        original.target(),
+        original.types().to_vec(),
+        vec![],
+        vec![],
+        vec![],
+        functions,
+        original.callables().to_vec(),
+        original.roots().to_vec(),
+    )
+    .unwrap()
+    .admit_exact_v29(SemanticMirLimitsV1::default())
+    .unwrap();
+    let retained = entries(&original)
+        .into_iter()
+        .filter(|entry| matches!(entry.function().index(), 1 | 3))
+        .collect();
+    let receipt = RetainedContextEntriesV29::seal_with_scopes(
+        retained,
+        Some((capture(&semantic, |_, _| {}), declarations(&semantic))),
+        &semantic,
+        |_| Ok(()),
+    )
+    .unwrap();
+    let launch = launch_roster(&semantic);
+    let owner = ssa_owner(semantic);
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(10_000);
+    let mut budget = VisitBudget::new(&mut work, 7);
+    budget.reserve_storage(7).unwrap();
+    let view = receipt
+        .materialization_source_v29(owner.source_semantic(), &mut budget)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        view.roots()
+            .iter()
+            .map(|root| root.function().index())
+            .collect::<Vec<_>>(),
+        [1, 3]
+    );
+    let mut observed = Vec::new();
+    check_context_handoff_v29(&receipt, &owner, &launch, &mut budget, |root, _| {
+        observed.push(root.root_id().index());
+        assert_eq!(root.semantic_ssa().source_semantic().roots().len(), 4);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(observed, [1, 3]);
+    assert_eq!(launch.roots().len(), 4);
+    assert_eq!(budget.storage(), 7);
+}
+
+#[test]
+fn materialization_source_borrows_only_receipt_storage() {
+    for count in [1, 4] {
+        let semantic = fixture_roots(Mutation::None, count);
+        let receipt = complete(&semantic);
+        let owner = ssa_owner(semantic);
+        let view = {
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(10_000);
+            let mut budget = VisitBudget::new(&mut work, 7);
+            budget.reserve_storage(7).unwrap();
+            let view = receipt
+                .materialization_source_v29(owner.source_semantic(), &mut budget)
+                .unwrap()
+                .unwrap();
+            budget.charge_work(1).unwrap();
+            assert_eq!(budget.storage(), 7);
+            assert_eq!(
+                budget.work(),
+                2 + view.roots().len() + view.classes().len() + view.events().len()
+            );
+            view
+        };
+        drop(owner);
+        let scopes = receipt.scopes.as_ref().unwrap();
+        assert!(std::ptr::eq(
+            view.semantic_sha256(),
+            &receipt.semantic_sha256
+        ));
+        assert!(std::ptr::eq(view.roots(), receipt.entries.as_slice()));
+        assert!(std::ptr::eq(view.classes(), scopes.classes()));
+        assert!(std::ptr::eq(view.events(), scopes.events()));
+        assert_eq!(view.roots().len(), usize::from(count));
+        assert_eq!(view.events().len(), usize::from(count) + 1);
+    }
+}
+
+#[test]
+fn materialization_source_rejects_changed_source_and_incomplete_custody() {
+    let semantic = fixture(Mutation::None);
+    let receipt = complete(&semantic);
+    for mutation in [
+        Mutation::Arguments,
+        Mutation::HelperIdentity,
+        Mutation::ContextIdentity,
+    ] {
+        let changed = fixture(mutation);
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(10_000);
+        let mut budget = VisitBudget::new(&mut work, 7);
+        budget.reserve_storage(7).unwrap();
+        assert!(matches!(
+            receipt.materialization_source_v29(&changed, &mut budget),
+            Err(ContextRootVisitErrorV29::Source(_))
+        ));
+        assert_eq!(budget.work(), 1);
+        assert_eq!(budget.storage(), 7);
+    }
+    let without_scopes = sealed_roots(&semantic);
+    let mut without_roots = complete(&semantic);
+    without_roots.entries.clear();
+    for incomplete in [without_scopes, without_roots] {
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(10_000);
+        let mut budget = VisitBudget::new(&mut work, 7);
+        budget.reserve_storage(7).unwrap();
+        assert!(matches!(
+            incomplete.materialization_source_v29(&semantic, &mut budget),
+            Err(ContextRootVisitErrorV29::Source(_))
+        ));
+        assert_eq!(budget.work(), 1);
+        assert_eq!(budget.storage(), 7);
+    }
+}
+
+#[test]
+fn materialization_source_preserves_exact_shared_work_and_storage_boundaries() {
+    let semantic = fixture_roots(Mutation::None, 4);
+    let receipt = complete(&semantic);
+    let scopes = receipt.scopes.as_ref().unwrap();
+    let exact = 1 + receipt.entries.len() + scopes.classes().len() + scopes.events().len();
+    for prior in [0, 11] {
+        for remaining in [0, 1, exact - 1, exact] {
+            let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(prior + remaining);
+            let mut budget = VisitBudget::new(&mut work, 7);
+            budget.charge_work(prior).unwrap();
+            budget.reserve_storage(7).unwrap();
+            let result = receipt.materialization_source_v29(&semantic, &mut budget);
+            if remaining == exact {
+                assert!(result.unwrap().is_some());
+                assert_eq!(budget.work(), prior + exact);
+            } else {
+                assert!(matches!(result, Err(ContextRootVisitErrorV29::Resource(_))));
+                assert!((prior..=prior + remaining).contains(&budget.work()));
+            }
+            assert_eq!(budget.storage(), 7);
+        }
+    }
+}
+
+#[test]
+fn context_handoff_rejects_incomplete_custody_before_its_consumer() {
+    use crate::production_pipeline::{ProductionPipelineError, check_context_handoff_v29};
+    let semantic = fixture(Mutation::None);
+    let incomplete = sealed_roots(&semantic);
+    let launch = launch_roster(&semantic);
+    let owner = ssa_owner(semantic);
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(10_000);
+    let mut budget = VisitBudget::new(&mut work, 7);
+    budget.reserve_storage(7).unwrap();
+    let result = check_context_handoff_v29(&incomplete, &owner, &launch, &mut budget, |_, _| {
+        panic!("incomplete scope custody reached the context consumer")
+    });
+    assert!(matches!(
+        result,
+        Err(ProductionPipelineError::SemanticImport(
+            crate::collector::ProductionSemanticImportErrorV1::BodyConstruction(_)
+        ))
+    ));
+    assert_eq!(budget.work(), 1);
+    assert_eq!(budget.storage(), 7);
+}
+
 #[test]
 fn scope_capture_seals_complete_canonical_events_for_shared_provider() {
     for count in [1, 4] {
