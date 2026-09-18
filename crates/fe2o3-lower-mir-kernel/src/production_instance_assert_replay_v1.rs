@@ -59,7 +59,7 @@ fn replay_pending_instance_asserts_v1(
                 .find(|seed| seed.instance == instance)
                 .ok_or_else(execution_call_error_v29)?;
             let mut count = 0;
-            let mut argument_end = 0;
+            let mut argument_end = 0_usize;
             for block in row.ssa().plan().reverse_postorder() {
                 budget.charge_work(2)?;
                 let semantic_block = SemanticBlockIdV1::from_index(block.get());
