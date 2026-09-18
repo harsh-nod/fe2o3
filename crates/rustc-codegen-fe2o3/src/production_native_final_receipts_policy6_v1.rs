@@ -179,9 +179,7 @@ impl PreparedNativeFinalOutputPolicy6V1 {
         if budget.storage() < self.retained_floor {
             return Err(Resource::Accounting.into());
         }
-        let (checked, _) =
-            check_native_final_output_receipts_policy6_v1(&self.native, &self.receipts, budget)?;
-        drop(checked);
+        check_native_final_output_receipts_policy6_v1(&self.native, &self.receipts, budget)?;
         Ok(())
     }
 }
@@ -198,9 +196,7 @@ impl PreparedNativeCheckedOutputWorkerHandoffPolicy6V1 {
         FinalReceiptStoragePolicy6V1,
     )> {
         scoped(budget, move |budget| {
-            let (checked, _) =
-                check_native_final_output_receipts_policy6_v1(&self, &receipts, budget)?;
-            drop(checked);
+            check_native_final_output_receipts_policy6_v1(&self, &receipts, budget)?;
             let delta = size_of::<PreparedNativeFinalOutputPolicy6V1>()
                 .checked_sub(size_of::<Self>())
                 .and_then(|n| n.checked_sub(size_of::<NativeFinalOutputReceiptsPolicy6V1>()))

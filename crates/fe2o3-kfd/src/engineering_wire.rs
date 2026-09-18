@@ -63,7 +63,7 @@ pub struct OrderedBatchDispatchV1 {
     pub pointers: Vec<PointerFixupV1>,
 }
 
-fn ordered_batch_payload_bytes(
+pub(crate) fn ordered_batch_payload_bytes(
     dispatches: &[OrderedBatchDispatchV1],
     timeout_ms: u32,
 ) -> io::Result<usize> {
@@ -85,7 +85,7 @@ fn ordered_batch_payload_bytes(
     })
 }
 
-fn sequence_payload_bytes(dispatches: &[SequenceDispatchV1]) -> io::Result<usize> {
+pub(crate) fn sequence_payload_bytes(dispatches: &[SequenceDispatchV1]) -> io::Result<usize> {
     if dispatches.is_empty() || dispatches.len() > MAX_SEQUENCE_DISPATCHES_V1 {
         return Err(invalid("engineering sequence length"));
     }
@@ -415,6 +415,82 @@ mod tests {
             read_header_v1::<CommandV1>(&mut Cursor::new(bytes)).unwrap(),
             Some(command)
         );
+    }
+
+    #[test]
+    fn borrowed_batch_validators_preserve_last_dispatch_limits() {
+        let pointer = PointerFixupV1 {
+            kernarg_offset: 0,
+            buffer: 1,
+            buffer_offset: 0,
+            extent_bytes: 8,
+            access: BufferAccessV1::Read,
+        };
+        let ordered = vec![
+            OrderedBatchDispatchV1 {
+                kernel: 1,
+                payload_bytes: MAX_KERNARG_BYTES_V1,
+                workgroup: [64, 1, 1],
+                grid: [64, 1, 1],
+                pointers: vec![pointer.clone(); MAX_POINTER_FIXUPS_V1],
+            };
+            MAX_ORDERED_BATCH_DISPATCHES_V1
+        ];
+        let sequence: Vec<_> = ordered
+            .iter()
+            .map(|dispatch| SequenceDispatchV1 {
+                kernel: dispatch.kernel,
+                payload_bytes: dispatch.payload_bytes,
+                workgroup: dispatch.workgroup,
+                grid: dispatch.grid,
+                pointers: dispatch.pointers.clone(),
+                timeout_ms: 37_500,
+            })
+            .collect();
+        for mutation in 0..4 {
+            let mut ordered = ordered.clone();
+            let mut sequence = sequence.clone();
+            match mutation {
+                0 => {}
+                1 => {
+                    ordered.last_mut().unwrap().payload_bytes += 1;
+                    sequence.last_mut().unwrap().payload_bytes += 1;
+                }
+                2 => {
+                    ordered.last_mut().unwrap().pointers.push(pointer.clone());
+                    sequence.last_mut().unwrap().pointers.push(pointer.clone());
+                }
+                3 => {
+                    ordered.push(ordered[0].clone());
+                    sequence.last_mut().unwrap().timeout_ms += 1;
+                }
+                _ => unreachable!(),
+            }
+            let ordered_result = ordered_batch_payload_bytes(&ordered, 600_000);
+            let sequence_result = sequence_payload_bytes(&sequence);
+            for (borrowed, command) in [
+                (
+                    ordered_result,
+                    CommandV1::DispatchOrderedBatch {
+                        dispatches: ordered,
+                        timeout_ms: 600_000,
+                    },
+                ),
+                (
+                    sequence_result,
+                    CommandV1::DispatchSequence {
+                        dispatches: sequence,
+                    },
+                ),
+            ] {
+                let expected = command.payload_bytes();
+                assert_eq!(borrowed.is_ok(), mutation == 0);
+                assert_eq!(
+                    borrowed.map_err(|error| (error.kind(), error.to_string())),
+                    expected.map_err(|error| (error.kind(), error.to_string()))
+                );
+            }
+        }
     }
 
     #[test]

@@ -130,11 +130,13 @@ fn optimize<'input>(
     let (output, os) = Owner::from_module_ref_with_verification_budget_v12(&candidate, budget)
         .map_err(Error::Admission)?;
     budget.reserve_storage(os.retained_storage())?;
-    let (relation, rs) = applied
-        .check_output(&output, budget)
-        .map_err(Error::Deletion)?;
-    budget.reserve_storage(rs.retained_storage())?;
-    drop(relation);
+    let rs = {
+        let (_relation, rs) = applied
+            .check_output(&output, budget)
+            .map_err(Error::Deletion)?;
+        budget.reserve_storage(rs.retained_storage())?;
+        rs
+    };
     budget.release_storage(rs.retained_storage())?;
     budget.charge_work(3)?;
     let retained = header

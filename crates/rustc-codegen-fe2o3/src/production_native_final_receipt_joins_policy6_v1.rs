@@ -49,10 +49,8 @@ fn unique_index<'a>(
                 .and_then(|n| n.checked_add(2))
                 .ok_or(Resource::Arithmetic)?,
         )?;
-        if name == wanted {
-            if found.replace(index).is_some() {
-                return Err(E::Mismatch("unique final receipt root join"));
-            }
+        if name == wanted && found.replace(index).is_some() {
+            return Err(E::Mismatch("unique final receipt root join"));
         }
     }
     found.ok_or(E::Mismatch("complete final receipt root join"))

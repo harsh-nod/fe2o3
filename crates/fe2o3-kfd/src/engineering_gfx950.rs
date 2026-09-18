@@ -118,6 +118,107 @@ struct PerformanceOptions {
     profile: bool,
 }
 
+/// A preparation scope cannot mutate resource ownership or access the queue.
+struct DispatchPreparation<'a> {
+    kernels: &'a BTreeMap<u64, Kernel>,
+    buffers: &'a BTreeMap<u64, Allocation>,
+    performance: Option<PerformanceOptions>,
+    counters: &'a mut PerformanceCountersV1,
+}
+
+impl DispatchPreparation<'_> {
+    fn profile_started(&self) -> Option<Instant> {
+        self.performance
+            .filter(|options| options.profile)
+            .map(|_| Instant::now())
+    }
+
+    fn prepare(
+        &mut self,
+        id: u64,
+        mut bytes: Vec<u8>,
+        workgroup: [u16; 3],
+        grid: [u32; 3],
+        pointers: &[PointerFixupV1],
+        peer_bindings: Option<&BTreeMap<u64, (u64, u64)>>,
+    ) -> Result<PreparedDispatch> {
+        let geometry =
+            AqlDispatchGeometryV1::new(grid, workgroup.map(u32::from)).map_err(explain)?;
+        let admission_started = self.profile_started();
+        let kernel = self.kernels.get(&id).ok_or("unknown kernel")?;
+        let product = workgroup
+            .iter()
+            .try_fold(1_u32, |n, value| n.checked_mul(u32::from(*value)))
+            .ok_or("workgroup product")?;
+        if product > kernel.resources.max_flat_workgroup_size()
+            || kernel
+                .resources
+                .required_workgroup_size()
+                .is_some_and(|required| required != workgroup.map(u32::from))
+        {
+            return Err("kernel workgroup contract".into());
+        }
+        for (axis, maximum) in kernel.resources.max_workgroups().into_iter().enumerate() {
+            if maximum
+                .is_some_and(|maximum| grid[axis].div_ceil(u32::from(workgroup[axis])) > maximum)
+            {
+                return Err("kernel workgroup count".into());
+            }
+        }
+        // Only immutable owned load-time metadata is cached. Argument values,
+        // geometry, ownership ranges and aliasing are checked for every dispatch.
+        let closure = if self
+            .performance
+            .is_some_and(|options| options.cache_kernel_admission)
+        {
+            None
+        } else {
+            Some(
+                fe2o3_amdhsa_loader::validate(&kernel.object, AdmittedProfile::Gfx950XnackOffCov6)
+                    .map_err(explain)?
+                    .bind_kernel(&kernel.metadata.symbol)
+                    .map_err(explain)?,
+            )
+        };
+        if closure.is_some() && admission_started.is_some() {
+            add_counter(&mut self.counters.kernel_admissions, 1)?;
+            record_elapsed(&mut self.counters.kernel_admission_ns, admission_started)?;
+        }
+        patch_pointer_arguments(&kernel.metadata, &mut bytes, pointers, |id| {
+            if let Some(bindings) = peer_bindings {
+                bindings.get(&id).copied()
+            } else {
+                self.buffers
+                    .get(&id)
+                    .map(|allocation| (allocation.va, allocation.requested as u64))
+            }
+        })?;
+        crate::queue::dispatch_binding::initialize_engineering_cov6_kernarg(
+            closure
+                .as_ref()
+                .map_or(&kernel.inspected, |closure| closure.selected_kernel()),
+            geometry,
+            &mut bytes,
+        )
+        .map_err(explain)?;
+        let descriptor = kernel
+            .code
+            .va
+            .checked_add(kernel.descriptor_offset)
+            .ok_or("descriptor address")?;
+        let alignment = u64::from(kernel.metadata.kernarg_alignment);
+        let group_bytes = kernel.metadata.group_segment_bytes;
+        drop(closure);
+        Ok(PreparedDispatch {
+            bytes,
+            geometry,
+            descriptor,
+            alignment,
+            group_bytes,
+        })
+    }
+}
+
 fn add_counter(counter: &mut u64, value: u64) -> Result<()> {
     *counter = counter
         .checked_add(value)
@@ -677,7 +778,7 @@ impl Context {
     fn prepare_dispatch_with_peer_bindings(
         &mut self,
         id: u64,
-        mut bytes: Vec<u8>,
+        bytes: Vec<u8>,
         workgroup: [u16; 3],
         grid: [u32; 3],
         pointers: &[PointerFixupV1],
@@ -685,81 +786,25 @@ impl Context {
     ) -> Result<PreparedDispatch> {
         let prepare_started = self.profile_started();
         self.check_idle()?;
-        let geometry =
-            AqlDispatchGeometryV1::new(grid, workgroup.map(u32::from)).map_err(explain)?;
-        let admission_started = self.profile_started();
-        let kernel = self.kernels.get(&id).ok_or("unknown kernel")?;
-        let product = workgroup
-            .iter()
-            .try_fold(1_u32, |n, value| n.checked_mul(u32::from(*value)))
-            .ok_or("workgroup product")?;
-        if product > kernel.resources.max_flat_workgroup_size()
-            || kernel
-                .resources
-                .required_workgroup_size()
-                .is_some_and(|required| required != workgroup.map(u32::from))
-        {
-            return Err("kernel workgroup contract".into());
-        }
-        for (axis, maximum) in kernel.resources.max_workgroups().into_iter().enumerate() {
-            if maximum
-                .is_some_and(|maximum| grid[axis].div_ceil(u32::from(workgroup[axis])) > maximum)
-            {
-                return Err("kernel workgroup count".into());
-            }
-        }
-        // Only immutable owned load-time metadata is cached. Buffer ownership,
-        // aliasing, argument values, geometry, and queue state are checked anew.
-        let closure = if self
-            .performance
-            .is_some_and(|options| options.cache_kernel_admission)
-        {
-            None
-        } else {
-            Some(
-                fe2o3_amdhsa_loader::validate(&kernel.object, AdmittedProfile::Gfx950XnackOffCov6)
-                    .map_err(explain)?
-                    .bind_kernel(&kernel.metadata.symbol)
-                    .map_err(explain)?,
-            )
-        };
-        if closure.is_some() && admission_started.is_some() {
-            add_counter(&mut self.counters.kernel_admissions, 1)?;
-            record_elapsed(&mut self.counters.kernel_admission_ns, admission_started)?;
-        }
-        patch_pointer_arguments(&kernel.metadata, &mut bytes, pointers, |id| {
-            if let Some(bindings) = peer_bindings {
-                bindings.get(&id).copied()
-            } else {
-                self.buffers
-                    .get(&id)
-                    .map(|allocation| (allocation.va, allocation.requested as u64))
-            }
-        })?;
-        crate::queue::dispatch_binding::initialize_engineering_cov6_kernarg(
-            closure
-                .as_ref()
-                .map_or(&kernel.inspected, |closure| closure.selected_kernel()),
-            geometry,
-            &mut bytes,
-        )
-        .map_err(explain)?;
-        let descriptor = kernel
-            .code
-            .va
-            .checked_add(kernel.descriptor_offset)
-            .ok_or("descriptor address")?;
-        let alignment = u64::from(kernel.metadata.kernarg_alignment);
-        let group_bytes = kernel.metadata.group_segment_bytes;
-        drop(closure);
-        record_elapsed(&mut self.counters.dispatch_prepare_ns, prepare_started)?;
-        Ok(PreparedDispatch {
+        let prepared = self.preparation_scope().prepare(
+            id,
             bytes,
-            geometry,
-            descriptor,
-            alignment,
-            group_bytes,
-        })
+            workgroup,
+            grid,
+            pointers,
+            peer_bindings,
+        )?;
+        record_elapsed(&mut self.counters.dispatch_prepare_ns, prepare_started)?;
+        Ok(prepared)
+    }
+
+    fn preparation_scope(&mut self) -> DispatchPreparation<'_> {
+        DispatchPreparation {
+            kernels: &self.kernels,
+            buffers: &self.buffers,
+            performance: self.performance,
+            counters: &mut self.counters,
+        }
     }
 
     /// The enclosing process opted into unauthenticated machine code. Exact
@@ -935,11 +980,7 @@ impl Context {
         let mut elapsed_ns = Vec::with_capacity(dispatches.len());
         let mut attempted_dispatches = 0_u32;
         let result = (|| -> Result<()> {
-            let expected_payload = CommandV1::DispatchSequence {
-                dispatches: dispatches.clone(),
-            }
-            .payload_bytes()
-            .map_err(explain)?;
+            let expected_payload = sequence_payload_bytes(&dispatches).map_err(explain)?;
             if expected_payload != payload.len() {
                 return Err("sequence payload length".into());
             }
@@ -1565,6 +1606,34 @@ mod tests {
         assert!(body.contains("completed_dispatches: elapsed_ns.len() as u32"));
         assert!(!body.contains("self.free("));
         assert!(!body.contains("self.load("));
+    }
+
+    #[test]
+    fn batch_payload_validation_borrows_dispatches_before_preparation() {
+        for (source, entry, validator, preparation) in [
+            (
+                include_str!("engineering_gfx950.rs"),
+                "unsafe fn dispatch_sequence(",
+                "sequence_payload_bytes(&dispatches)",
+                "self.prepare_dispatch(",
+            ),
+            (
+                include_str!("engineering_gfx950_ordered_batch.rs"),
+                "pub(super) unsafe fn dispatch_ordered_batch(",
+                "ordered_batch_payload_bytes(&dispatches, timeout_ms)",
+                "let mut native = NativeOrdered",
+            ),
+        ] {
+            let body = source
+                .split(entry)
+                .nth(1)
+                .unwrap()
+                .split("#[cfg(test)]")
+                .next()
+                .unwrap();
+            assert!(body.find(validator).unwrap() < body.find(preparation).unwrap());
+            assert!(!body.contains("dispatches.clone()"));
+        }
     }
 
     #[test]

@@ -165,10 +165,12 @@ fn real_optimizer_preserves_dynamic_values_initialization_and_global_effects() {
                 assert_eq!(evaluate(output.output().module(), x, y), (x, vec![x], 1));
             }
         }
-        let (relation, rs) = output.replay(budget).unwrap();
-        budget.reserve_storage(rs.retained_storage()).unwrap();
-        assert_eq!(relation.retained_operations(), output.retained_operations());
-        drop(relation);
+        let rs = {
+            let (relation, rs) = output.replay(budget).unwrap();
+            budget.reserve_storage(rs.retained_storage()).unwrap();
+            assert_eq!(relation.retained_operations(), output.retained_operations());
+            rs
+        };
         budget.release_storage(rs.retained_storage()).unwrap();
         assert_eq!(input.canonical().canonical_bytes(), before);
         let retained = output.retained_storage();

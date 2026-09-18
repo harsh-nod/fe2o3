@@ -1069,3 +1069,22 @@ Evidence is native-neutral host custody and failure-injection testing only.
 R19 remains single-flight and local: it does not claim concurrent range borrows,
 striping, peer/XGMI copies, compute integration, hardware execution,
 copy-performance parity, or executable-Rust/formal refinement.
+
+## Engineering Ordered Preparation
+
+The opt-in gfx950 ordered worker validates payload bounds through borrowed
+dispatch slices. Its CPU preparation scope borrows kernel and allocation maps
+immutably and has no queue or backend access. Geometry, pointer ranges,
+aliasing, and argument values are still checked for every dispatch. The worker
+checks currentness and idle state before preparation and freshly before
+staging; allocation, publication, polling, completion, and exit checks remain.
+Standalone and peer preparation retain their per-dispatch checks. The batch
+limit remains sixteen dispatches.
+
+For ordered batches, `dispatch_prepare_ns` measures CPU preparation without
+the amortized boundary fences. Standalone preparation still includes its
+initial idle check. These host-wall counters overlap with other counters and
+are not GPU timings or directly comparable exclusive costs across worker
+revisions. Use source-bound end-to-end measurements and currentness counts
+when evaluating this optimization. Host fault tests model invalidation during
+preparation; they do not establish native reset-injection coverage.
