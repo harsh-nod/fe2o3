@@ -749,7 +749,6 @@ fn exact_work_and_storage_boundaries_preserve_the_callers_floor() {
     let exact_work = budget.work();
     let exact_storage = budget.peak_storage();
     assert_eq!(budget.storage(), floor);
-    drop(budget);
 
     for (work_limit, storage_limit, success) in [
         (exact_work, exact_storage, true),
@@ -799,7 +798,6 @@ fn every_work_failure_and_partial_storage_failure_cleans_up() {
     derive_conditional_total_view_from_verified_v1(verified, &kernel, &mut budget).unwrap();
     let required_work = budget.work();
     let peak = budget.peak_storage();
-    drop(budget);
     for limit in 0..required_work {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
         let mut budget = Budget::new(&mut work, usize::MAX);
