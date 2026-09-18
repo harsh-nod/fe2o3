@@ -558,9 +558,6 @@ fn constant_only_scanner_rejects_unsupported_operand_positions() {
                     .iter()
                     .any(|local| matches!(local.ty.kind(), TyKind::Closure(..)))
             );
-            let scan = |body: &Body<'_>| {
-                scan_untracked_uses_for_test(tcx, root, body, &mut SourceClosureWorkV1::default())
-            };
             let operand = || Operand::Constant(constant.clone());
             let reg =
                 InlineAsmRegOrRegClass::RegClass(InlineAsmRegClass::X86(X86InlineAsmRegClass::reg));
@@ -622,7 +619,14 @@ fn constant_only_scanner_rejects_unsupported_operand_positions() {
                     .as_mut()
                     .unwrap()
                     .kind = terminator;
-                let error = scan(&body).unwrap_err().to_string();
+                let error = scan_untracked_uses_for_test(
+                    tcx,
+                    root,
+                    &body,
+                    &mut SourceClosureWorkV1::default(),
+                )
+                .unwrap_err()
+                .to_string();
                 assert!(error.contains(expected), "{expected}: {error}");
             }
             let mut assignment = original.clone();
@@ -636,10 +640,15 @@ fn constant_only_scanner_rejects_unsupported_operand_positions() {
                     ))),
                 ));
             assert!(
-                scan(&assignment)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("unsupported assignment")
+                scan_untracked_uses_for_test(
+                    tcx,
+                    root,
+                    &assignment,
+                    &mut SourceClosureWorkV1::default()
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported assignment")
             );
             for name in ["unit_argument", "no_closures"] {
                 let instance = local(tcx, name);
