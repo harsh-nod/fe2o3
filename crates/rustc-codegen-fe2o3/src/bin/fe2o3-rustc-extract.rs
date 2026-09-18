@@ -33,6 +33,7 @@ const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V3: &str = "FE2O3_EXTRACT_SIMULATION_BU
 const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V4: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V4";
 const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V5: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V5";
 const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V6: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V6";
+const EXTRACT_DIAGNOSTIC_KIR_PATH_ENV_V16: &str = "FE2O3_EXTRACT_DIAGNOSTIC_KIR_PATH_V16";
 const EXTRACT_CRATE_BINDING_PATH_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_BINDING_PATH_V1";
 
 fn main() {
@@ -42,6 +43,7 @@ fn main() {
     let simulation_v4 = env::var_os(EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V4);
     let simulation_v5 = env::var_os(EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V5);
     let simulation_v6 = env::var_os(EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V6);
+    let diagnostic_kir_v16 = env::var_os(EXTRACT_DIAGNOSTIC_KIR_PATH_ENV_V16);
     let (simulation_output, version) = match select_simulation_output(
         simulation_v1,
         simulation_v2,
@@ -78,7 +80,8 @@ fn main() {
         None,
     )
     .map(|prepared| select_simulation_mode(prepared, version))
-    .map(|prepared| select_compiler_handoff_mode(prepared, generic_handoff));
+    .map(|prepared| select_compiler_handoff_mode(prepared, generic_handoff))
+    .and_then(|prepared| select_diagnostic_kir_v16_mode(prepared, diagnostic_kir_v16));
     let code = match prepared.and_then(execute) {
         Ok(code) => code,
         Err(error) => {
@@ -134,6 +137,34 @@ enum ExtractionModeV1 {
     SimulationBundleV4(OsString),
     SimulationBundleV5(OsString),
     SimulationBundleV6(OsString),
+    DiagnosticKirV16(OsString),
+}
+
+fn select_diagnostic_kir_v16_mode(
+    mut prepared: PreparedExtractionV1,
+    output: Option<OsString>,
+) -> Result<PreparedExtractionV1, String> {
+    let Some(output) = output else {
+        return Ok(prepared);
+    };
+    if output.is_empty() {
+        return Err(format!(
+            "{EXTRACT_DIAGNOSTIC_KIR_PATH_ENV_V16} must not be empty"
+        ));
+    }
+    if let PreparedExtractionV1::Selected(selected) = &mut prepared {
+        if !matches!(selected.mode, ExtractionModeV1::KernelIr)
+            || selected.crate_binding_output.is_some()
+        {
+            return Err(format!(
+                "{EXTRACT_DIAGNOSTIC_KIR_PATH_ENV_V16} is mutually exclusive with ranked, LLVM, compiler-handoff, simulation-bundle and crate-binding outputs"
+            ));
+        }
+        selected.mode = ExtractionModeV1::DiagnosticKirV16(output);
+    }
+    // A dependency or Cargo probe remains passthrough; only the actual selected
+    // terminal source invocation may produce this diagnostic program.
+    Ok(prepared)
 }
 
 fn select_compiler_handoff_output(
@@ -583,6 +614,12 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
                 std::path::Path::new(&output),
             )?;
         }
+        ExtractionModeV1::DiagnosticKirV16(output) => {
+            rustc_codegen_fe2o3::run_diagnostic_ordered_region_kir_extraction_driver_v16(
+                &selected.args,
+                std::path::Path::new(&output),
+            )?;
+        }
     }
     if let Some(output) = selected.crate_binding_output {
         publish_selected_crate_binding_v1(&output, selected.crate_binding)?;
@@ -751,6 +788,92 @@ mod tests {
 
     fn selected_binding(crate_name: &str, metadata: &[&str]) -> CrateBindingIdV1 {
         selected_compile(crate_name, metadata).crate_binding
+    }
+
+    #[test]
+    fn diagnostic_selection_retains_actual_selected_invocation_and_bindings() {
+        let selected = selected_compile("unit", &["actual-cargo-metadata"]);
+        let binding = selected.crate_binding;
+        let observation = selected.metadata_observation;
+        let arguments = selected.args.clone();
+        let prepared = select_diagnostic_kir_v16_mode(
+            PreparedExtractionV1::Selected(selected),
+            Some(OsString::from("kernel.kir")),
+        )
+        .unwrap();
+        let PreparedExtractionV1::Selected(selected) = prepared else {
+            panic!("selected source must remain selected");
+        };
+        assert_eq!(selected.crate_binding, binding);
+        assert_eq!(selected.metadata_observation, observation);
+        assert_eq!(selected.args, arguments);
+        assert!(
+            matches!(selected.mode, ExtractionModeV1::DiagnosticKirV16(path) if path == "kernel.kir")
+        );
+    }
+
+    #[test]
+    fn diagnostic_selection_rejects_every_other_output_mode_and_sidecar() {
+        let path = || OsString::from("other-output");
+        for mode in [
+            ExtractionModeV1::RankedMemory,
+            ExtractionModeV1::AmdgpuLlvm(path()),
+            ExtractionModeV1::Gfx942Llvm(path()),
+            ExtractionModeV1::Gfx942CompilerHandoff(path()),
+            ExtractionModeV1::AmdgpuCompilerHandoff(path()),
+            ExtractionModeV1::SimulationBundle(path()),
+            ExtractionModeV1::SimulationBundleV2(path()),
+            ExtractionModeV1::SimulationBundleV3(path()),
+            ExtractionModeV1::SimulationBundleV4(path()),
+            ExtractionModeV1::SimulationBundleV5(path()),
+            ExtractionModeV1::SimulationBundleV6(path()),
+            ExtractionModeV1::DiagnosticKirV16(path()),
+        ] {
+            let mut selected = selected_compile("unit", &["metadata"]);
+            selected.mode = mode;
+            let error = select_diagnostic_kir_v16_mode(
+                PreparedExtractionV1::Selected(selected),
+                Some(OsString::from("kernel.kir")),
+            )
+            .unwrap_err();
+            assert!(error.contains("mutually exclusive"));
+        }
+        let mut selected = selected_compile("unit", &["metadata"]);
+        selected.crate_binding_output = Some(PathBuf::from("binding.txt"));
+        assert!(
+            select_diagnostic_kir_v16_mode(
+                PreparedExtractionV1::Selected(selected),
+                Some(OsString::from("kernel.kir")),
+            )
+            .unwrap_err()
+            .contains("crate-binding")
+        );
+    }
+
+    #[test]
+    fn diagnostic_selection_is_explicit_nonempty_and_preserves_passthrough() {
+        let selected = || PreparedExtractionV1::Selected(selected_compile("unit", &["metadata"]));
+        assert!(matches!(
+            select_diagnostic_kir_v16_mode(selected(), None).unwrap(),
+            PreparedExtractionV1::Selected(SelectedExtractionV1 {
+                mode: ExtractionModeV1::KernelIr,
+                ..
+            })
+        ));
+        assert!(
+            select_diagnostic_kir_v16_mode(selected(), Some(OsString::new()))
+                .unwrap_err()
+                .contains("must not be empty")
+        );
+        let prepared = PreparedExtractionV1::Passthrough {
+            executable: OsString::from("actual-rustc"),
+            forwarded_args: vec![OsString::from("--version")],
+        };
+        assert!(matches!(
+            select_diagnostic_kir_v16_mode(prepared, Some(OsString::from("kernel.kir"))).unwrap(),
+            PreparedExtractionV1::Passthrough { executable, forwarded_args }
+                if executable == "actual-rustc" && forwarded_args == [OsString::from("--version")]
+        ));
     }
 
     fn session_metadata(selected: &SelectedExtractionV1) -> Vec<String> {

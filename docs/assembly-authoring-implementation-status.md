@@ -19,9 +19,12 @@ separately scoped below; none silently broadens source or artifact admission.
 Actual reference-bound assembly source has also now exercised the normal
 protected functional-proof path (E15); final ownership remains a separate gate.
 The subsequent E16/E17 slice admits an actual closed ordered region through a
-test-only continuation and observes its final machine instructions. E18 adds
+initially test-only continuation and observes its final machine instructions. E18 adds
 recorded lane/event/checkpoint navigation to the companion site. These are
 bounded extensions, not completion of the original milestone contracts.
+E22/E23 subsequently expose the same closed source profile through ordinary
+diagnostic export, simulation, typed inspection and JSONL debugging. These raw
+observations do not carry the private source owner's custody into consumers.
 
 ## Exercised evidence and implementation anchors
 
@@ -42,12 +45,15 @@ bounded extensions, not completion of the original milestone contracts.
 | E13: real protected generated proofs | Reviewed generator fixes use shared universally quantified specification functions and preserve normal runtime policy and exact closure pins. The [public-lease tests](../crates/fe2o3-verifier/src/functional_refinement_runtime_v1.rs) and [generated receipt tests](../crates/fe2o3-verifier/src/functional_refinement_receipt_v2/reviewed_host_tests.rs) run through the actual protected runtime: bootstrap true/false, wrapping scalar, effect-coordinate and floating-operator congruence pairs. All eight proof cases pass; false cases require genuine assertion failures. A separate installed-closure audit passes. These are generated fixtures, not yet proof of the actual assembly/reference source or artifact admission. |
 | E14: two-workgroup stopped-state isolation | The [two-workgroup query smoke](../scripts/resource-query-lds-multi-workgroup-v5-smoke.mjs) and [seven script controls](../scripts/resource-query-lds-multi-workgroup-v5-smoke.test.mjs) consume E9's unchanged real V5 source export. The actual run checks 128 output words of 128 and canaries, WG0 LDS present, the global-only transition, a distinct WG1 LDS allocation, exact reverse/forward restoration, complete scoped access paging and stale controls. Historical WG0 accesses remain separate from current allocation presence. Generation remains zero; no allocation lifetime, release event, physical reuse, source loop or source helper qualification is inferred. |
 | E15: actual source-reference proof | The [reference-bound Rust fixture](../crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/assembly_reference_v30.rs), [actual callback harness](../crates/rustc-codegen-fe2o3/src/production_rustc_driver_v1/gfx942_inline_reference_qualification_v30_tests.rs), and [bounded isolated runner](../scripts/assembly-reference-source-v30-smoke.mjs) exercise the real frontend and protected proof path. The correct seven-marker wrapping expression reaches the later unchanged dynamic TotalView ownership refusal. Wrong XOR-to-AND and OR-constant mutations fail genuine Verus assertions before ownership. The runner's seven controls separately reject setup failures and synthetic/zero-test success. No complete source admission, artifact or launch is claimed. |
-| E16: actual ordered-region source | The [closed source tutorial](ordered-region-authoring-v1.md) follows authenticated terminal 133, semantic MIR V31/tag 88 and canonical KIR V16/op 38. One retained immutable owner supplies CPU simulation and LLVM emission for an exact XOR/ADD e32 region with distinct authored VGPR bindings. Actual callbacks pass used/unused results and reject aliases, dynamic registers, divergent placement and wrong launch geometry. Lowerer tests separately cover correspondence, projected operands, control flow and budgets. The continuation is `cfg(test)` only; the production selector and existing protected gates are unchanged. |
+| E16: actual ordered-region source | The [closed source tutorial](ordered-region-authoring-v1.md) follows authenticated terminal 133, semantic MIR V31/tag 88 and canonical KIR V16/op 38. One retained immutable owner supplies CPU simulation and LLVM emission for an exact XOR/ADD e32 region with distinct authored VGPR bindings. Actual callbacks pass used/unused results and reject aliases, dynamic registers, divergent placement and wrong launch geometry. Lowerer tests separately cover correspondence, projected operands, control flow and budgets. This first qualification was test-only; E22 later shares its release-active private owner construction with diagnostic export. Protected production gates remain unchanged. |
 | E17: source-to-final-machine observation | The [bounded join runner](../scripts/assembly-region-source-machine-observation.mjs) and its [script controls](../scripts/assembly-region-source-machine-observation.test.mjs) join E16's exact retained source/canonical/LLVM bytes to fresh native-worker observations. O0/O3, used/unused cases retain the two exact instruction words and register bindings; independently decoded descriptor capacity covers the authored high-water mark. File/parser refusal controls execute the native observer. This test transport is not source authentication, a protected final artifact, or launch authority. |
 | E18: recorded debugger navigation | Companion-site commit `d49496044b2ce46d418708e0d96ab7503e893be2` adds exact recorded workgroup/wave/lane selection, retained access-event navigation with bounded paging, and capture-order checkpoint navigation. Context, anchor, request, page contents and allocation keys reset selection. Repeated cursors remain distinct revisions; selected historical accesses do not move the debugger or invent memory/source associations. Site validation passes 349 unit and 58 desktop/mobile tests; existing capture pins are unchanged. |
 | E19: historical-access overlays | Companion-site commit `1de9ecacebb09c8cc0b49d9c5747050248ba00ca` joins selected retained accesses to exact checkpoint memory context, snapshot, allocation, generation and address space. Lossless ranges decorate only the bounded viewport; read/write/atomic markers remain separate from initialization. WG0 history does not paint WG1 storage; stale, off-window, missing and partial data remain explicit. All 365 site unit and 60 desktop/mobile tests, lint/types/build and evidence gates pass. No new capture, source association, event-time bytes, lifecycle, physical-state or live-query claim. |
 | E20: borrowed ordered-region inspection | The [immutable inspector](../crates/fe2o3-lower-mir-kernel/src/production_ordered_region_inspection_v1.rs) validates exact V16 digest/length, roster coordinate, actual operand definitions, source-call/terminator correspondence and physical-role declarations. Twelve focused inspector tests distinguish earlier canonical refusals, actual semantic fixtures and deliberately corrupted private joins; three compile-fail examples cover construction, mutation and lifetime boundaries. Cumulative/local work and fixed view storage are bounded without resetting earlier ledger history. No serialization, source authentication, helper materialization or proof/resume authority is added. |
 | E21: same-source logical debugger observation | The [private actual-source qualifier](../crates/rustc-codegen-fe2o3/src/production_rustc_driver_v1/gfx942_ordered_region_debugger_v31_tests.rs) retains the same original source owner and immutable request during CPU capture. Each used/unused positive exercises six cases across 64 lanes, with exact atomic before/after indices, independent results and canaries; separate captures cover same-KIR/different-request isolation, truncation and unavailable values. The [debugger exercise](ordered-region-debugger-v1.md) separates logical values from planned VGPR numbers. Compact sidecars are retained observations, not a transcript import interface, source map or physical-state capture. |
+| E22: ordinary diagnostic source/edit workflow | The [ordinary-tool walkthrough](ordered-region-authoring-v1.md#use-the-ordinary-diagnostic-tools), [release-active private construction](../crates/rustc-codegen-fe2o3/src/production_pipeline/ordered_region_diagnostic_v31.rs), [export driver](../crates/rustc-codegen-fe2o3/src/production_rustc_driver_v1/ordered_region_diagnostic_export_v16.rs), and [shared bounded loader](../crates/fe2o3-kir-sim-cli/src/linux/diagnostic_kir_v16.rs) support explicit `--diagnostic-kir-v16` source export and CPU execution. Five real exports, four exact source refusals, thirty full 64-lane output/canary/initialization checks and fifteen CLI negative controls pass. Fresh operand/register edits produce independent 46/80/46 cases without editing canonical files or original source. All persisted schedules reject for this input; existing routes are preserved. Raw bytes are not a bundle, source-authentication, protected artifact or compiler-resume capability. |
+| E23: current-owner ordinary JSONL debugger | The [bounded inspection example](../crates/fe2o3-kir-sim-cli/examples/inspect_diagnostic_ordered_region_v16.rs) derives current canonical identity, roster coordinates, SSA IDs and declared register roles from the admitted immutable owner. The [diagnostic debugger route](../crates/fe2o3-debug-cli/src/diagnostic_kir_v16.rs) binds exact module/request/configuration under a separate domain, rejects incompatible maps/replay/wave32 and returns explicit unsupported diagnosis-V2 rather than false V7 evidence. Thirty real sessions check lane0 logical values, atomic before/after, reverse/repeat, stale state, all output memory and 64 write occurrences, with distinct session identities. Physical values, source maps, machine microsteps, lifetimes and protected authority remain unavailable. |
+| E24: recorded ordered-region browser | Companion-site commit `1673cf8d1128aac885a5fb9b1bd460cfa4746ee2` displays the exact retained E21 r5 sidecars with authored roles, selected logical inputs/results, variant/request/lane selection and explicit unavailable/truncated states. All 379 unit and 64 desktop/mobile tests plus lint/types/build/evidence gates pass on that site checkpoint. This is a development-only viewer of historical retained observations, not a live E23 connection, new lesson route, source map, physical state or publication-pin advance. |
 
 E2's actual captured successes were `assembly-v30-smoke-r1`,
 `assembly-source-roundtrip-r2`, and `ordinary-bitwise-promotion-r1`; E4 was
@@ -266,13 +272,61 @@ lowerer findings and none in the new inspector; this is not a strict-lint pass.
 Changed-Rust formatting and diff checks pass. Earlier source/backend runs precede
 only the two fixture-lock repairs, not a later Rust implementation change.
 
+### Ordinary diagnostic source and debugger working-build observations
+
+E22's final source run `phase8-ordinary-source-r4` has receipt SHA-256
+`441a757d093995210ea4b2f79cf082ca50ede0690a8fdd8d173ae140d0caf366`.
+It checks five actual source exports, four source-profile refusals, thirty
+simulations and fifteen ordinary CLI negative controls. The unchanged used and
+unused source variants plus isolated baseline/operand-swap/register-plan variants
+all use six arithmetic cases and full 64-lane backing-byte/initialization checks.
+The accepted isolated fixtures retain 109 unchanged external dependency tuples;
+their package/crate/path identities also differ, so identity changes are not
+attributed solely to register edits. The original source remains unchanged.
+
+E23's `phase8-ordinary-debugger-r2` receipt has SHA-256
+`82d40a95e9e3a6a277fa5fe88a9619212f5ba1f4f2dde82997764e02f2b6ce9f`.
+Five measured current-owner inspections precede thirty real JSONL sessions,
+34 commands each (1,020 total). The tests compare selected lane0 logical inputs
+and results, unused-result retention, adjacent whole-region before/after states,
+reverse/repeat, stale revisions/cursors and consumed continuation rejection.
+They independently check all 64 output words, both guards, every initialization
+bit and all 64 ordered allocation-relative writes. They do not inspect logical
+SSA values for every lane or test foreign-session tokens in this client.
+The edited declaration is v40..44/high-water45, compared with v32..36/high-water37;
+neither report observes physical registers, final encoding or GPU execution.
+
+The initial source r1 shared-library mismatch and r2 missing host dependency
+remain failed runs. A normal backend-library/four-binary build after test builds
+fixed the former without altering source checks; the normal conditional host
+dependency closure fixed the latter. The initial debugger pilot correctly
+rejected stale SSA IDs from a different canonical owner. Its replacement obtains
+IDs through the shipped typed inspection example. The first full debugger batch
+then rejected a malformed task-client negative: an old snapshot revision paired
+with a current request revision violated the frozen resource framing contract.
+The client now sends a consistent old-revision request (`stale_revision`) and a
+separate current-revision/old-event request (`invalid_cursor`). No compiler or
+debugger validation was weakened. All failed evidence is retained separately.
+
+The affected production compile check, 40 focused diagnostic tests, 235 CLI tests
+(three explicit ignores), 788 backend library/binary tests (nine ignores), and
+2,938 library tests (13 ignores) pass. The later documentation gate passes 166
+tests, and the inspection example adds three focused synthetic tests. Focused
+tests overlap broader gates; these are not summed into an independent total.
+Twenty-five task-runner pure controls pass (15 source, ten debugger), distinct
+from real executable acceptance. Source fingerprints remain unchanged within
+each frozen gate. Final normal library/binary/example build and selected pinned
+extractor health check pass. Subsequent documentation-only status updates do
+not relabel these working-build observations as clean-release or closure evidence.
+No new strict-Clippy, final native, protected proof or hardware result is claimed.
+
 ## #280: direct assembly
 
 | Milestone | Delivered portion | Required remaining work |
 | --- | --- | --- |
 | M0: contracts and ownership | E1/E3 freeze a bounded marker/observation profile; E10 supplies the reproducible two-architecture metadata inventory; E11 qualifies a closed inline-unit worker mechanism and observes whole-body export rejection; E16 retains one exact ordered subject across source, canonical ownership, CPU and LLVM. | Complete source/region/resource/ABI contracts, operand/effect/encoding overlays and two-target executable coverage matrix; integrate production emission and qualify whole-body support with the existing owners. |
 | M1: real-source instruction slice | E1/E2 exercise source, canonical instructions, CPU results and negative operands; E7 adds the closed checked scalar relation; E8 exercises the normal production target route; E15 qualifies actual source functional proof with opcode/constant counterexamples; E17 adds independent final-byte inspection for the bounded ordered pair. | Broader applicable correspondence, complete ownership/admission and full declared final-encoding matrix remain. A functional proof followed by ownership refusal is not source admission; test-only final-byte inspection is not protected artifact authority. |
-| M2: complete basic assembly kernels | Actual generated helpers and explicit concrete source variants re-enter the frontend (E2/E3); E16/E17 qualify one actual closed XOR/ADD region and inspect final fixed-register/e32 retention. | General ordered regions, physical allocation/lifetime ownership, labels/branches, full ABI metadata, broader helpers/specialization, whole bounded assembly kernels, source materialization and intended machine-contract roundtrips. The new continuation is test-only and has no production V16 admission. |
+| M2: complete basic assembly kernels | Actual generated helpers and explicit concrete source variants re-enter the frontend (E2/E3); E16/E17 qualify one actual closed XOR/ADD region and inspect final fixed-register/e32 retention; E22 adds ordinary diagnostic source/edit/export/simulation. | General ordered regions, physical allocation/lifetime ownership, labels/branches, full ABI metadata, broader helpers/specialization, whole bounded assembly kernels, source materialization and intended machine-contract roundtrips. Ordinary raw diagnostic V16 is not protected production V16 admission. |
 | M3: memory and synchronization | Existing ordinary-KIR checks remain in force around the marker slice. | Authored ISA memory/LDS/atomic/wave operations, address provenance, wait/scoreboard hazards, barrier/convergence/race obligations, descriptors, and applicable hardware checks. Ordinary surrounding loads/stores do not satisfy this milestone. |
 | M4: matrix and second architecture | No new matrix or gfx950 authoring qualification in this slice. | Reviewed matrix/low-precision semantics/layouts, exact gfx950 profile/catalog/lowering and independently qualified target cases. gfx942 integer success does not narrow the original target matrix. |
 | M5: debug and resource integration | Exact per-variant source references, logical instructions and stopped global/LDS CPU resource observations (E2/E5/E6/E9); E20/E21 join one retained source-region plan to actual logical before/after CPU observations. | Allocator trace/lifetime replay, expansion and cross-stage transformation lineage, final-machine mappings and exact artifact association; ambiguous or absent mappings must stay unavailable. |

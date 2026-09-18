@@ -19,6 +19,10 @@ const EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1: &str =
 #[path = "production_rustc_driver_checked_output_source_v1_tests.rs"]
 mod checked_output_source_v1_tests;
 
+#[path = "production_rustc_driver_v1/ordered_region_diagnostic_export_v16.rs"]
+mod ordered_region_diagnostic_export_v16;
+pub use ordered_region_diagnostic_export_v16::run_diagnostic_ordered_region_kir_extraction_driver_v16;
+
 #[derive(Default)]
 struct ProductionExtractionCallbacksV1 {
     ranked_memory: bool,
@@ -27,13 +31,16 @@ struct ProductionExtractionCallbacksV1 {
     compiler_handoff_output: Option<(PathBuf, Option<&'static str>)>,
     simulation_bundle_output: Option<PathBuf>,
     simulation_bundle_version: u16,
+    diagnostic_kir_v16_output: Option<PathBuf>,
     result: Option<Result<(), String>>,
 }
 
 impl Callbacks for ProductionExtractionCallbacksV1 {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         self.result = Some(
-            if let Some(output) = self.simulation_bundle_output.as_deref() {
+            if let Some(output) = self.diagnostic_kir_v16_output.as_deref() {
+                ordered_region_diagnostic_export_v16::extract_in_active_session_v16(tcx, output)
+            } else if let Some(output) = self.simulation_bundle_output.as_deref() {
                 match self.simulation_bundle_version {
                     6 => extract_simulation_bundle_in_active_session_v6(tcx, output),
                     5 => extract_simulation_bundle_in_active_session_v5(tcx, output),
@@ -591,8 +598,17 @@ fn publish_new_simulation_bundle(
     bytes: &[u8],
     maximum: usize,
 ) -> Result<(), String> {
+    publish_new_inert_output(output, bytes, maximum, "simulation bundle")
+}
+
+fn publish_new_inert_output(
+    output: &Path,
+    bytes: &[u8],
+    maximum: usize,
+    kind: &'static str,
+) -> Result<(), String> {
     if bytes.is_empty() || bytes.len() > maximum {
-        return Err("refusing to publish an empty or oversized simulation bundle".to_owned());
+        return Err(format!("refusing to publish an empty or oversized {kind}"));
     }
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -600,13 +616,13 @@ fn publish_new_simulation_bundle(
     options.mode(0o600);
     let mut file = options.open(output).map_err(|error| {
         format!(
-            "failed to create new simulation bundle output `{}`: {error}",
+            "failed to create new {kind} output `{}`: {error}",
             output.display()
         )
     })?;
     if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
         return Err(format!(
-            "failed to publish simulation bundle `{}`; the create-new partial output was retained for fail-closed cleanup: {error}",
+            "failed to publish {kind} `{}`; the create-new partial output was retained for fail-closed cleanup: {error}",
             output.display()
         ));
     }
@@ -614,13 +630,13 @@ fn publish_new_simulation_bundle(
     {
         let descriptor = file.metadata().map_err(|error| {
             format!(
-                "failed to inspect published simulation bundle descriptor `{}`: {error}",
+                "failed to inspect published {kind} descriptor `{}`: {error}",
                 output.display()
             )
         })?;
         let path = std::fs::symlink_metadata(output).map_err(|error| {
             format!(
-                "failed to re-inspect published simulation bundle path `{}`: {error}",
+                "failed to re-inspect published {kind} path `{}`: {error}",
                 output.display()
             )
         })?;
@@ -631,7 +647,7 @@ fn publish_new_simulation_bundle(
             || path.file_type().is_symlink()
         {
             return Err(format!(
-                "simulation bundle output `{}` changed identity during publication",
+                "{kind} output `{}` changed identity during publication",
                 output.display()
             ));
         }
@@ -672,6 +688,7 @@ pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(),
         compiler_handoff_output: None,
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
+        diagnostic_kir_v16_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -694,6 +711,7 @@ pub fn run_production_amdgpu_llvm_extraction_driver_v1(
         compiler_handoff_output: None,
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
+        diagnostic_kir_v16_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -715,6 +733,7 @@ pub fn run_production_gfx942_llvm_extraction_driver_v1(
         compiler_handoff_output: None,
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
+        diagnostic_kir_v16_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -760,6 +779,7 @@ pub fn run_production_gfx942_compiler_handoff_extraction_driver_v1(
         )),
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
+        diagnostic_kir_v16_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -783,6 +803,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v1(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 1,
+        diagnostic_kir_v16_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -805,6 +826,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v2(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 2,
+        diagnostic_kir_v16_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -827,6 +849,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v3(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 3,
+        diagnostic_kir_v16_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -849,6 +872,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v4(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 4,
+        diagnostic_kir_v16_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -871,6 +895,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v5(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 5,
+        diagnostic_kir_v16_output: None,
         result: None,
     };
     run_production_driver_v1(
@@ -893,6 +918,7 @@ pub fn run_production_simulation_bundle_extraction_driver_v6(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 6,
+        diagnostic_kir_v16_output: None,
         result: None,
     };
     run_production_driver_v1(

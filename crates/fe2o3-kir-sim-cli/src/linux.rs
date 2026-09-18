@@ -48,7 +48,9 @@ use sha2::{Digest, Sha256};
 
 use crate::schema::{ErrorKind, Stage};
 
-const USAGE: &str = "usage: fe2o3-kir-sim (--kir-v7 PATH | --kir-v12 PATH | --bundle PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH]";
+pub(super) mod diagnostic_kir_v16;
+
+const USAGE: &str = "usage: fe2o3-kir-sim (--kir-v7 PATH | --kir-v12 PATH | --diagnostic-kir-v16 PATH | --bundle PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH [--output PATH] [--race-evidence] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH | --explore-seeded-schedules COUNT --schedule-seed FIRST_U64 [--schedule-max-decisions COUNT] [--exploration-max-retained-decisions COUNT] | --reduce-failure [--schedule-seed U64] [--schedule-max-decisions COUNT] | --replay-failure-reduction PATH] (diagnostic V16 does not support schedule options)";
 const REQUEST_SCHEMA: &str = "fe2o3-simulation-request-v1";
 const RESULT_SCHEMA: &str = "fe2o3-simulation-result-v1";
 const EXPLORATION_SCHEMA: &str = "fe2o3-simulation-exploration-v1";
@@ -133,6 +135,7 @@ enum UnsupportedFeatureCode {
 enum InputCode {
     KirV7,
     KirV12,
+    KirV16,
     SimulationBundle,
     Request,
     DebugSidecar,
@@ -512,6 +515,7 @@ enum ScheduleOption {
 enum ProgramInput {
     KirV7(OsString),
     KirV12(OsString),
+    DiagnosticKirV16(OsString),
     Bundle(OsString),
     BundleV5(OsString),
     BundleV6(OsString),
@@ -1227,6 +1231,11 @@ fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
             let input = load_admitted_kir_v12(Path::new(&path), Path::new(&request))?;
             run_with_admitted_input(input, policy)
         }
+        ProgramInput::DiagnosticKirV16(path) => {
+            let input =
+                diagnostic_kir_v16::load_admitted_kir_v16(Path::new(&path), Path::new(&request))?;
+            run_with_admitted_input(input, policy)
+        }
         ProgramInput::Bundle(path) => {
             let admitted = load_admitted_bundle(Path::new(&path), Path::new(&request))?;
             run_with_admitted_input(admitted.input, policy)
@@ -1270,6 +1279,11 @@ fn run_with_admitted_input(
         schedule,
         race_evidence,
     } = policy;
+    // Library callers must receive the same explicit refusal as CLI parsing,
+    // before any schedule/report input or publication is touched.
+    if !matches!(&schedule, ScheduleOption::None) {
+        schedule_binding(&input)?;
+    }
     if let ScheduleOption::ExploreSeeded {
         first_seed,
         max_schedules,
@@ -1296,7 +1310,6 @@ fn run_with_admitted_input(
     if let ScheduleOption::ReplayFailureReduction { input: report } = schedule {
         return run_failure_reduction_replay(input, output, report);
     }
-    let binding = schedule_binding(&input);
     let replay = match &schedule {
         ScheduleOption::Replay { input: path } => {
             Some(load_persisted_schedule(Path::new(path), &input)?)
@@ -1365,6 +1378,7 @@ fn run_with_admitted_input(
                     "successful scheduled recording did not retain a record",
                 )
             })?;
+            let binding = schedule_binding(&input)?;
             let bytes = PersistedSimulationScheduleDocumentV1::encode_record(binding, record)
                 .map_err(|error| {
                     Failure::new(
@@ -1562,7 +1576,7 @@ fn run_seeded_exploration(
             bounded_display(&error),
         )
     })?;
-    let binding = schedule_binding(&input);
+    let binding = schedule_binding(&input)?;
     let exploration = input
         .module
         .explore_seeded_schedules(
@@ -1617,14 +1631,21 @@ fn encode_exploration_witnesses(
 
 fn schedule_binding(
     input: &crate::AdmittedSimulationInputV1,
-) -> PersistedSimulationScheduleBindingV1 {
-    input.persisted_schedule_binding()
+) -> Result<PersistedSimulationScheduleBindingV1, Failure> {
+    input.persisted_schedule_binding().map_err(|error| {
+        Failure::new(
+            Stage::Arguments,
+            ErrorKind::ScheduleInputUnsupported,
+            error.message,
+        )
+    })
 }
 
 fn load_persisted_schedule(
     path: &Path,
     input: &crate::AdmittedSimulationInputV1,
 ) -> Result<PersistedSimulationScheduleDocumentV1, Failure> {
+    let binding = schedule_binding(input)?;
     let bytes = secure_read(
         path,
         MAX_PERSISTED_SCHEDULE_BYTES_V1,
@@ -1639,7 +1660,7 @@ fn load_persisted_schedule(
                 bounded_display(&error),
             )
         })?;
-    if document.binding() != input.persisted_schedule_binding() {
+    if document.binding() != binding {
         return Err(Failure::input(
             InputCode::SemanticSchedule,
             ErrorKind::ScheduleBindingMismatch,
@@ -2341,6 +2362,7 @@ const fn cli_simulation_limits() -> SimulationLimitsV1 {
 fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, Failure> {
     let mut kir_v7 = None;
     let mut kir_v12 = None;
+    let mut diagnostic_kir_v16 = None;
     let mut bundle = None;
     let mut bundle_v5 = None;
     let mut bundle_v6 = None;
@@ -2384,6 +2406,8 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
             (&mut kir_v7, "--kir-v7")
         } else if argument == OsStr::new("--kir-v12") {
             (&mut kir_v12, "--kir-v12")
+        } else if argument == OsStr::new("--diagnostic-kir-v16") {
+            (&mut diagnostic_kir_v16, "--diagnostic-kir-v16")
         } else if argument == OsStr::new("--bundle") {
             (&mut bundle, "--bundle")
         } else if argument == OsStr::new("--bundle-v5") {
@@ -2438,31 +2462,52 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
             ));
         }
     }
-    let program = match (kir_v7, kir_v12, bundle, bundle_v5, bundle_v6) {
-        (Some(path), None, None, None, None) => ProgramInput::KirV7(path),
-        (None, Some(path), None, None, None) => ProgramInput::KirV12(path),
-        (None, None, Some(path), None, None) => ProgramInput::Bundle(path),
-        (None, None, None, Some(path), None) => ProgramInput::BundleV5(path),
-        (None, None, None, None, Some(path)) => ProgramInput::BundleV6(path),
-        (None, None, None, None, None) => {
+    let program = match (
+        kir_v7,
+        kir_v12,
+        diagnostic_kir_v16,
+        bundle,
+        bundle_v5,
+        bundle_v6,
+    ) {
+        (Some(path), None, None, None, None, None) => ProgramInput::KirV7(path),
+        (None, Some(path), None, None, None, None) => ProgramInput::KirV12(path),
+        (None, None, Some(path), None, None, None) => ProgramInput::DiagnosticKirV16(path),
+        (None, None, None, Some(path), None, None) => ProgramInput::Bundle(path),
+        (None, None, None, None, Some(path), None) => ProgramInput::BundleV5(path),
+        (None, None, None, None, None, Some(path)) => ProgramInput::BundleV6(path),
+        (None, None, None, None, None, None) => {
             return Err(Failure::new(
                 Stage::Arguments,
                 ErrorKind::InvalidCommandLine,
-                format!(
-                    "exactly one of --kir-v7, --kir-v12, --bundle, --bundle-v5, or --bundle-v6 is required; {USAGE}"
-                ),
+                format!("exactly one program input is required; {USAGE}"),
             ));
         }
         _ => {
             return Err(Failure::new(
                 Stage::Arguments,
                 ErrorKind::InvalidCommandLine,
-                format!(
-                    "--kir-v7, --kir-v12, --bundle, --bundle-v5, and --bundle-v6 are mutually exclusive; {USAGE}"
-                ),
+                format!("program input options are mutually exclusive; {USAGE}"),
             ));
         }
     };
+    if matches!(&program, ProgramInput::DiagnosticKirV16(_))
+        && (record_canonical_schedule.is_some()
+            || record_seeded_schedule.is_some()
+            || replay_schedule.is_some()
+            || replay_failure_reduction.is_some()
+            || explore_seeded_schedules.is_some()
+            || schedule_seed.is_some()
+            || schedule_max_decisions.is_some()
+            || exploration_max_retained_decisions.is_some()
+            || reduce_failure)
+    {
+        return Err(Failure::new(
+            Stage::Arguments,
+            ErrorKind::ScheduleInputUnsupported,
+            "diagnostic KIR V16 does not support persisted schedules, exploration, reduction, or schedule controls",
+        ));
+    }
     let max_decisions = match schedule_max_decisions.as_ref() {
         Some(value) => parse_schedule_usize(value, "--schedule-max-decisions").and_then(
             |value| {

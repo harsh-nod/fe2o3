@@ -16,6 +16,52 @@ same KIR/request admission and identity path as the file form. Descriptor
 numbers are transport state, not debug evidence, and JSONL remains on standard
 input/output.
 
+## Raw diagnostic ordered-region V16
+
+```sh
+fe2o3-debug sim --diagnostic-kir-v16 KERNEL.kir --request REQUEST.json \
+  --wave-width 64 --protocol jsonl
+```
+
+This explicit path uses the simulator CLI's shared hardened V16 loader, retains
+the exact immutable verified module, and captures bounded logical CPU execution.
+It never projects V16 to V7 or admits a simulation bundle. Its configuration
+identity binds the exact module, request, CPU target, wave width and limits;
+existing input-mode identity domains remain unchanged. The closed ordered-region
+profile requires gfx942:xnack-, wave64 and a `64x1x1` workgroup. Wave32, source-map
+overrides, persisted schedule replay and mixed input selectors are refused.
+There is no new V16 file-descriptor input mode or persisted schedule format.
+
+The [source walkthrough](../../../docs/ordered-region-authoring-v1.md#use-the-ordinary-diagnostic-tools)
+provides the final normal library/binary/example build, real Rust export and
+complete strict request. Use `inspect_diagnostic_ordered_region_v16 KIR_PATH
+REQUEST_PATH` from the built examples directory to obtain current-owner canonical
+identity, function/block/operation roster ordinals and input/result SSA IDs.
+Its separate `raw_block_id` is not the protocol block ordinal. The example
+preflights but does not execute; its declared source IDs authenticate no source
+and supply no map. Re-inspect after every export rather than copying historical
+fixture coordinates. The [debugger walkthrough](../../../docs/ordered-region-debugger-v1.md)
+explains current revision/anchor selection and lossless wave64 JSON integers.
+
+Forward/reverse navigation, logical SSA values and allocation-relative memory
+and resource queries remain available. The entire XOR/ADD region is one atomic
+logical operation, including when its result is unused. There is no observation
+between its two instructions. Authored register numbers describe a plan, not
+physical VGPR/SGPR/AGPR, EXEC or scratch contents, register lifetimes or a final
+artifact mapping. Source-variable/span features remain typed unavailable.
+
+`fe2o3-debug-diagnosis-request-v2` returns `unsupported_schema` for this route:
+its frozen required input evidence describes canonical V7 and cannot honestly
+represent raw V16. Separate resource-query V1 remains available. Raw bytes confer
+no compiler source-owner custody, source authentication, proof, artifact, launch
+or production-resume authority. Ordinary debugger qualification passed 30 sessions
+and 1,020 commands, with selected-lane logical navigation/value checks and all
+64 lanes' output memory/write history checked. See the [exact evidence scope](../../../docs/ordered-region-authoring-v1.md#evidence-scope-and-further-work)
+for receipts, retained failed client attempts and exclusions. The private
+same-owner tests remain distinct from this ordinary CLI qualification.
+
+## Existing bundle and source-map routes
+
 `fe2o3-debug sim --bundle KERNEL.fe2sim --request REQUEST.json` securely
 decodes and revalidates the authority-free compiler simulation bundle, then
 uses only its exact embedded KIR V7 and target. `--bundle` and `--kir-v7` are
@@ -106,6 +152,7 @@ lifetime kills, optimized-out values, unrepresented values, and truncated
 captures remain distinct typed states. `all` queries use admitted per-function
 indices and apply page bounds before value materialization.
 
+On schedule-supported input routes (not diagnostic V16),
 `--replay-schedule SCHEDULE.json` securely admits the canonical persisted
 semantic schedule and requires its exact raw-KIR/bundle route, KIR, complete
 bundle identity and subject, request bytes, target, and limits to match this
@@ -128,7 +175,8 @@ Captured F16/BF16/F32/F64 scalar values retain their exact software-IEEE bits;
 the debugger does not render or recompute them with host floating-point
 arithmetic.
 
-`fe2o3-debug-diagnosis-request-v2` adds a read-only, page-bounded diagnosis
+For input routes represented by its frozen evidence schema (not raw diagnostic
+V16), `fe2o3-debug-diagnosis-request-v2` adds a read-only, page-bounded diagnosis
 query to the same simulator JSONL stream without changing the closed V1
 operation set. For a retained out-of-bounds failure it returns the exact
 trace-local backing allocation, requested range, and narrower legal pointer or
@@ -194,6 +242,7 @@ record clears residency before scope state is reported, so its representative
 lane is `running` and other released lanes are `runnable` until their next
 record.
 
+On supported raw-map routes (not diagnostic V16),
 `--source-map MAP --source-bundle-subject SUBJECT` admits a strict, bounded
 canonical `fe2o3-debug-source-map-v1` or `fe2o3-debug-source-map-v2` sidecar.
 Both options are required together. The map binds the canonical KIR digest and length plus a non-circular
