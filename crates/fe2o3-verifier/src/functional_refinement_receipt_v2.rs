@@ -60,6 +60,10 @@ const VERUS_CONFIGURATION_DOMAIN: &[u8] =
 const SOLVER_CONFIGURATION_DOMAIN: &[u8] = b"FE2O3/FUNCTIONAL-REFINEMENT/RETAINED-Z3-CONFIG/V2\0";
 const EXECUTION_IDENTITY_DOMAIN: &[u8] = b"FE2O3/FUNCTIONAL-REFINEMENT/VERUS-EXECUTION/V2\0";
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "functional_refinement_protected_replay_v2_tests.rs"]
+mod protected_replay_tests;
+
 /// Returns the exact toolchain identity enforced by the retained runtime lease.
 pub fn functional_refinement_verus_toolchain_identity_v2(
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
