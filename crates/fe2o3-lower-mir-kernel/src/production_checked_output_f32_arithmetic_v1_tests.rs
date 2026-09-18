@@ -11,6 +11,8 @@ include!("production_checked_output_f32_fixture_v1_tests.rs");
 mod native;
 #[path = "production_checked_output_numeric_cast_connected_v1_tests.rs"]
 mod numeric_cast_connected;
+#[path = "production_checked_output_exp_connected_v1_tests.rs"]
+mod exp_connected;
 
 fn fp_census(module: &Module, recipe: FpRecipe, helper: bool) {
     let mut recipes = 0;

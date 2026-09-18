@@ -666,3 +666,27 @@ prepared handoff rejected at the actual-O/native join. These are not a full
 signed-stage construction test. That positive still needs the authentic signed
 source producer and approved proof runtime; the missing-receipt refusal and
 protected/default activation gates remain unchanged.
+
+## Existing F32 exponential contract
+
+Checked-output admission recognizes the existing reserved F32 `Exp` operation
+only under `OcmlAbiV1`, including ordinary retained scalar helpers. Its exact
+declaration, argument/result types, empty capabilities and existing effect
+contract are checked from the verified inventory. The source math context and
+ordered operand remain subject to complete source/N/B/C/O correspondence.
+Other external imports and other reserved math operations gain no exception.
+
+The descriptor query is inert, allocation-free and prepaid on the existing
+work ledger. Native lowering retains the exact `__ocml_exp_f32` import and
+strict floating-point attributes. The target-specific compiler FFI envelope
+retains the original neutral-source N identity; the separate native/descriptor
+relation is checked against actual optimized O. These identities are not
+interchangeable. This does not select or qualify an
+external OCML provider, establish real-number exponential accuracy, or grant
+linking or execution authority.
+
+The ordinary-source regression covers direct and retained-helper forms on
+gfx942 and gfx950. Component tests check operand/history/native mutations and
+exact/short resources. The actual O simulator preflight must still report
+`UnsupportedFeatureV1::FloatFunction(Exp)`: no host approximation substitutes
+for the missing OCML simulator, and no numerical or hardware pass is claimed.

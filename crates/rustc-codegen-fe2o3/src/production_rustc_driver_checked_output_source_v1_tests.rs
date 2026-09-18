@@ -200,6 +200,7 @@ impl Callbacks for CheckedOutputCallbacks {
                 }
             }
             let simulation_case = simulation::requested()?;
+            let exp_source_identity = exp_source::check_actual_if_requested(&stage)?;
             if let Some(case) = simulation_case {
                 observation.simulation =
                     Some(self.progress.run(SourceStage::Simulation, || {
@@ -263,6 +264,11 @@ impl Callbacks for CheckedOutputCallbacks {
             let llvm = std::str::from_utf8(handoff.module_bytes())
                 .map_err(|e| SourceFailure::new(SourceStage::NativeHandoff, e))?;
             assert!(llvm.contains("amdgpu_kernel"));
+            exp_source::check_handoff_if_requested(
+                &handoff,
+                exp_source_identity,
+                &observation.output_digest,
+            )?;
             if let Some(case) = simulation_case {
                 simulation::check_native_arithmetic(case, llvm)?;
             }
@@ -423,6 +429,8 @@ fn ordinary_rust_private_unit_helper_reaches_checked_native_output() {
 
 enum OrdinarySourceCase {
     NumericCast(numeric_cast_source::Config),
+    F32Exp,
+    RetainedF32Exp,
     SaturatingInteger(saturating_source::Config),
     Fill,
     Vecadd,
@@ -500,6 +508,24 @@ fn ordinary_rust_checked_output_cases_for_profile(
             _ => String::new(),
         };
         let (name, package_path, feature, roots, reads, writes, calls) = match case {
+            OrdinarySourceCase::F32Exp => (
+                "f32-exp",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("f32-exp"),
+                &["f32_exp"][..],
+                0,
+                1,
+                0,
+            ),
+            OrdinarySourceCase::RetainedF32Exp => (
+                "retained-f32-exp",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("f32-helper-exp"),
+                &["f32_helper_exp"][..],
+                0,
+                1,
+                1,
+            ),
             OrdinarySourceCase::NumericCast(config) => (
                 configuration_name.as_str(),
                 "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
@@ -662,7 +688,9 @@ fn ordinary_rust_checked_output_cases_for_profile(
         }
         if matches!(
             case,
-            OrdinarySourceCase::RetainedF32Negate | OrdinarySourceCase::RetainedF32Divide
+            OrdinarySourceCase::RetainedF32Negate
+                | OrdinarySourceCase::RetainedF32Divide
+                | OrdinarySourceCase::RetainedF32Exp
         ) {
             args.push("-Zinline-mir=no".into());
         }
@@ -706,6 +734,7 @@ fn ordinary_rust_checked_output_cases_for_profile(
             );
         progress::clear_inherited_jobserver(&mut command);
         let simulation_case = match case {
+            OrdinarySourceCase::F32Exp | OrdinarySourceCase::RetainedF32Exp => None,
             OrdinarySourceCase::NumericCast(config) => {
                 Some(simulation::Case::NumericCast(config.operation))
             }
@@ -727,6 +756,13 @@ fn ordinary_rust_checked_output_cases_for_profile(
             }
         };
         simulation::configure_child(&mut command, simulation_case);
+        exp_source::configure_child(
+            &mut command,
+            matches!(
+                case,
+                OrdinarySourceCase::F32Exp | OrdinarySourceCase::RetainedF32Exp
+            ),
+        );
         let diagnostic_name = format!("{}-{name}", profile.cpu());
         snapshots::configure_child(&mut command, &diagnostic_name);
         let child = output(&mut command);
@@ -861,6 +897,8 @@ mod corpus;
 mod corpus_cargo;
 #[path = "production_rustc_driver_checked_output_dispatch_v1_tests.rs"]
 mod dispatch;
+#[path = "production_rustc_driver_checked_output_exp_source_v1_tests.rs"]
+mod exp_source;
 #[path = "production_rustc_driver_checked_output_f32_source_v1_tests.rs"]
 mod f32_source;
 #[path = "production_rustc_driver_checked_output_numeric_cast_source_v1_tests.rs"]
