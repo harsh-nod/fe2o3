@@ -81,6 +81,7 @@ fn source_output_unit_local_replay_v1(
             module,
             correspondence,
             requires_source,
+            requires_borrowed,
         } = lower_pending_module_with_assert_origins_v1(
             &source.semantic_ssa,
             source.limits,
@@ -88,6 +89,7 @@ fn source_output_unit_local_replay_v1(
             &mut emission,
         )?;
         if !requires_source
+            || requires_borrowed
             || source.executable().module() != &module
             || source.correspondence != correspondence
         {
