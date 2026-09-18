@@ -10,6 +10,18 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
+Latest implementation (2026-09-18): [direct destination SDMA readback](runtime-primary-queue-release-v1.md#direct-destination-readback)
+removes the boxed intermediate buffer and redundant host copy from public
+HostVisible reads and DeviceLocal staging readback. It preserves the existing
+admission, currentness, retake, custody and cleanup-error policies. CPU tests
+cover allocation counts and destination visibility on failure. The full GNU
+run passes 1,412 KFD and 1,105 runtime tests; full musl runtime also passes 1,105,
+with twenty runtime tests ignored on each target. Ten focused musl KFD tests,
+73 doctests and the static checks pass. There is no new native or formal
+qualification. The copy comparator's DMA timers exclude this
+readback, so no matched HIP/HSA throughput gain follows. Accepted milestones
+and A1/A2/#182 remain unchanged.
+
 The corrected [primary teardown native run](evidence/dev-primary-envelope-late-selection-native-2026-09-18/README.md)
 executes all three test commands successfully from signed `a0db73625`: ordinary
 shutdown, installed-root error retention and original-payload panic retention.

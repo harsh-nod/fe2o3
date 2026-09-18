@@ -805,19 +805,19 @@ impl<'a> DirectionalSdmaOpsV1<'a> {
         }
     }
 
-    pub(super) fn read_host(
+    pub(super) fn read_host_into(
         &mut self,
         buffer: &SdmaBufferOwnerV1,
         offset: u64,
-        byte_len: u64,
-    ) -> Result<Box<[u8]>, String> {
+        destination: &mut [u8],
+    ) -> Result<(), String> {
         match (self, buffer) {
             (Self::Native(queue), SdmaBufferOwnerV1::Native(buffer)) => queue
-                .read_sdma_host_buffer(buffer, offset, byte_len)
+                .read_sdma_host_buffer_into(buffer, offset, destination)
                 .map_err(|error| error.to_string()),
             #[cfg(test)]
             (Self::Scripted(driver), SdmaBufferOwnerV1::Scripted(buffer)) => {
-                driver.read_host(buffer, offset, byte_len)
+                driver.read_host_into(buffer, offset, destination)
             }
             #[cfg(test)]
             (_, buffer) => Err(format!(
@@ -2233,6 +2233,12 @@ mod scripted {
             byte_len: u64,
             panic: bool,
         },
+        ReadPartialFault {
+            offset: u64,
+            byte_len: u64,
+            copied_prefix: usize,
+            panic: bool,
+        },
         ReadLength {
             offset: u64,
             byte_len: u64,
@@ -2751,31 +2757,42 @@ mod scripted {
             Ok(digest)
         }
 
-        pub(super) fn read_host(
+        pub(super) fn read_host_into(
             &mut self,
             buffer: &ScriptedBufferOwnerV1,
             offset: u64,
-            byte_len: u64,
-        ) -> Result<Box<[u8]>, String> {
+            destination: &mut [u8],
+        ) -> Result<(), String> {
             if !self.owns_buffer(buffer) {
                 return Err("scripted SDMA read owner belongs to another driver".to_owned());
             }
-            let (fault, returned_len) = match self.pop()? {
+            let byte_len = destination.len() as u64;
+            let (fault, copied_prefix, returned_len) = match self.pop()? {
                 ScriptedSdmaStepV1::Read {
                     offset: expected_offset,
                     byte_len: expected_len,
-                } if expected_offset == offset && expected_len == byte_len => (None, None),
+                } if expected_offset == offset && expected_len == byte_len => (None, 0, None),
                 ScriptedSdmaStepV1::ReadFault {
                     offset: expected_offset,
                     byte_len: expected_len,
                     panic,
-                } if expected_offset == offset && expected_len == byte_len => (Some(panic), None),
+                } if expected_offset == offset && expected_len == byte_len => {
+                    (Some(panic), 0, None)
+                }
+                ScriptedSdmaStepV1::ReadPartialFault {
+                    offset: expected_offset,
+                    byte_len: expected_len,
+                    copied_prefix,
+                    panic,
+                } if expected_offset == offset && expected_len == byte_len => {
+                    (Some(panic), copied_prefix, None)
+                }
                 ScriptedSdmaStepV1::ReadLength {
                     offset: expected_offset,
                     byte_len: expected_len,
                     returned_len,
                 } if expected_offset == offset && expected_len == byte_len => {
-                    (None, Some(returned_len))
+                    (None, 0, Some(returned_len))
                 }
                 step => return Err(format!("scripted SDMA read mismatch: {step:?}")),
             };
@@ -2789,15 +2806,21 @@ mod scripted {
                 .filter(|end| *end <= buffer.bytes.len())
                 .ok_or("scripted read exceeds buffer")?;
             if let Some(panic) = fault {
+                assert!(copied_prefix <= len);
+                destination[..copied_prefix]
+                    .copy_from_slice(&buffer.bytes[start..start + copied_prefix]);
                 if panic {
                     std::panic::panic_any("scripted SDMA host read panic");
                 }
                 return Err("scripted SDMA host read failure".to_owned());
             }
             if let Some(returned_len) = returned_len {
-                return Ok(vec![0x6b; returned_len].into_boxed_slice());
+                assert_eq!(returned_len, len, "scripted SDMA read length mismatch");
+                destination.fill(0x6b);
+            } else {
+                destination.copy_from_slice(&buffer.bytes[start..end]);
             }
-            Ok(buffer.bytes[start..end].into())
+            Ok(())
         }
 
         pub(super) fn promote(

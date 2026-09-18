@@ -9542,6 +9542,23 @@ impl ComputeAqlQueueSessionV1 {
         })
     }
 
+    /// Copies coherent host bytes into caller-owned storage without an
+    /// intermediate allocation. The caller establishes completion of GPU writes.
+    /// An error or panic may leave destination bytes modified; only success
+    /// confirms the closing currentness check and model retake.
+    pub fn read_sdma_host_buffer_into(
+        &mut self,
+        buffer: &Gfx942SdmaBufferV1,
+        offset: u64,
+        destination: &mut [u8],
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.require_sdma_enabled()?;
+        self.with_live_queue_memory_model(|memory| {
+            crate::sdma::read_host_buffer_into_v1(memory, buffer, offset, destination)
+                .map_err(Into::into)
+        })
+    }
+
     /// Reads one exact retained coherent buffer without output allocation or
     /// GPU work. The caller must establish completion before reading GPU writes.
     /// Operational reset/counter observations and the existing model loan remain
@@ -14150,16 +14167,18 @@ mod tests {
     #[test]
     fn nonpanic_retake_failure_requests_local_and_process_terminal_poison() {
         let mut poison = (false, false);
+        let mut destination = [0xff; 6];
         let ((), retake) = execute_live_model_custody_v1(
             &mut poison,
             |_| Ok(()),
-            |_| (),
+            |_| destination[1..5].copy_from_slice(&[1, 2, 3, 4]),
             |_, ()| Err("injected retake failure"),
             |poison| *poison = (true, true),
         )
         .unwrap();
         assert_eq!(retake, Err("injected retake failure"));
         assert_eq!(poison, (true, true));
+        assert_eq!(destination, [0xff, 1, 2, 3, 4, 0xff]);
         let source = include_str!("queue_live.rs");
         let envelope = source
             .split("fn with_live_queue_memory_model_custody<R>")
@@ -14208,17 +14227,22 @@ mod tests {
     #[test]
     fn retake_failure_does_not_replace_the_original_panic_payload() {
         let mut poisoned = false;
+        let mut destination = [0xff; 6];
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             execute_live_model_custody_v1(
                 &mut poisoned,
                 |_| Ok(()),
-                |_| -> () { std::panic::panic_any("original queue mutation panic") },
+                |_| -> () {
+                    destination[1..4].copy_from_slice(&[1, 2, 3]);
+                    std::panic::panic_any("original queue mutation panic")
+                },
                 |_, ()| Err("injected retake failure"),
                 |poisoned| *poisoned = true,
             )
         }))
         .expect_err("panic resumption must escape the cleanup boundary");
         assert!(poisoned);
+        assert_eq!(destination, [0xff, 1, 2, 3, 0xff, 0xff]);
         assert_eq!(
             caught.downcast_ref::<&str>(),
             Some(&"original queue mutation panic")
@@ -15733,6 +15757,93 @@ mod tests {
             Err(Gfx942SdmaHostReadIntoErrorV1::NativeUncertain)
         );
         assert_eq!(destination, [0xa5; 8]);
+    }
+
+    #[test]
+    fn coherent_read_into_preserves_disabled_and_terminal_admission_order() {
+        let queue = test_queue_key(701, 1);
+        let (device, host) = crate::sdma::persistent_sdma_buffers_for_test(queue, 91);
+        for terminal in [false, true] {
+            let mut session = persistent_compute_cancellation_test_session(queue, None, None);
+            session.terminal_poisoned = terminal;
+            for buffer in [&host, &device] {
+                for offset in [0, u64::MAX] {
+                    for len in [0, 8] {
+                        let mut destination = [0xa5; 8];
+                        let result = session.read_sdma_host_buffer_into(
+                            buffer,
+                            offset,
+                            &mut destination[..len],
+                        );
+                        assert!(matches!(
+                            result,
+                            Err(ComputeAqlQueueSessionErrorV1::Contract(detail))
+                                if detail == if terminal {
+                                    "terminal queue session requires process teardown"
+                                } else {
+                                    "SDMA copy engine is not enabled"
+                                }
+                        ));
+                        assert_eq!(destination, [0xa5; 8]);
+                        assert_eq!(session.terminal_poisoned, terminal);
+                        assert!(session.engine.is_none());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn coherent_read_into_retake_panic_preserves_copied_bytes_and_poison() {
+        let mut poison = (false, false);
+        let mut destination = [0xff; 6];
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute_live_model_custody_v1(
+                &mut poison,
+                |_| Ok(()),
+                |_| destination[1..5].copy_from_slice(&[1, 2, 3, 4]),
+                |_, ()| -> Result<(), &'static str> {
+                    std::panic::panic_any("readback retake panic")
+                },
+                |poison| *poison = (true, true),
+            )
+        }))
+        .unwrap_err();
+        assert_eq!(
+            caught.downcast_ref::<&str>(),
+            Some(&"readback retake panic")
+        );
+        assert_eq!(destination, [0xff, 1, 2, 3, 4, 0xff]);
+        assert_eq!(poison, (true, true));
+    }
+
+    #[test]
+    fn coherent_read_into_queue_wiring_preserves_legacy_policy_without_output_allocation() {
+        let source = include_str!("queue_live.rs");
+        let body = source
+            .split("pub fn read_sdma_host_buffer_into(")
+            .nth(1)
+            .unwrap()
+            .split("/// Reads one exact retained")
+            .next()
+            .unwrap();
+        assert!(body.contains("self.require_sdma_enabled()?"));
+        assert!(body.contains("self.with_live_queue_memory_model("));
+        assert!(body.contains("crate::sdma::read_host_buffer_into_v1"));
+        for forbidden in [
+            "preflight_sdma_host_read_into_v1",
+            "Gfx942SdmaHostReadIntoErrorV1",
+            ".poll(",
+            ".flush(",
+            "read_host_buffer(",
+            "to_vec(",
+            "allocate_",
+        ] {
+            assert!(
+                !body.contains(forbidden),
+                "unexpected read path: {forbidden}"
+            );
+        }
     }
 
     #[test]

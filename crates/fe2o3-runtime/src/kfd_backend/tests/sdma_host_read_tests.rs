@@ -48,6 +48,187 @@ fn read_step(mode: u8) -> ScriptedSdmaStepV1 {
 }
 
 #[test]
+fn sdma_host_read_into_has_no_intermediate_allocation() {
+    for (offset, len) in [(0, 8), (2, 3)] {
+        let (backend, _, host, _) = fixture(
+            8,
+            [
+                ScriptedSdmaStepV1::Write {
+                    offset: 0,
+                    byte_len: 8,
+                },
+                ScriptedSdmaStepV1::Read {
+                    offset,
+                    byte_len: len,
+                },
+            ],
+        );
+        let mut backend = ManuallyDrop::new(backend);
+        backend
+            .write_allocation_v1(host, 0, &DEVICE_PATTERN)
+            .unwrap();
+        backend.profiler = None;
+        let mut destination = [0xff; 10];
+        let (result, allocations) = counted_allocations_for_test_v1(|| {
+            backend.read_allocation_v1(host, offset, &mut destination[1..1 + len as usize])
+        });
+        result.unwrap();
+        assert_eq!(
+            destination[1..1 + len as usize],
+            DEVICE_PATTERN[offset as usize..(offset + len) as usize]
+        );
+        assert_eq!(destination[0], 0xff);
+        assert!(
+            destination[1 + len as usize..]
+                .iter()
+                .all(|byte| *byte == 0xff)
+        );
+        assert_eq!(allocations, 0, "readback must not allocate a byte copy");
+        assert_eq!(backend.scripted_sdma.as_ref().unwrap().remaining_steps(), 0);
+        discard_scripted_fixture(backend);
+    }
+}
+
+#[test]
+fn sdma_host_read_into_transient_has_no_intermediate_allocation() {
+    let (backend, _, _, _) = fixture(
+        8,
+        [
+            ScriptedSdmaStepV1::Write {
+                offset: 0,
+                byte_len: 8,
+            },
+            ScriptedSdmaStepV1::Read {
+                offset: 0,
+                byte_len: 8,
+            },
+            ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+        ],
+    );
+    let mut backend = ManuallyDrop::new(backend);
+    let mut stage = backend.scripted_sdma.as_ref().unwrap().test_host_owner(8);
+    backend
+        .directional_sdma_ops_v1()
+        .write_host(&mut stage, 0, &DEVICE_PATTERN)
+        .unwrap();
+    let mut destination = [0xff; 10];
+    let (result, allocations) = counted_allocations_for_test_v1(|| {
+        backend.readback_and_recycle_transient_sdma_v1(stage, &mut destination[1..9])
+    });
+    result.unwrap();
+    assert_eq!(destination[1..9], DEVICE_PATTERN);
+    assert_eq!((destination[0], destination[9]), (0xff, 0xff));
+    assert_eq!(allocations, 0);
+    assert!(backend.terminal_sdma_custody.is_none());
+    let driver = backend.scripted_sdma.as_ref().unwrap();
+    assert_eq!(driver.remaining_steps(), 0);
+    assert_eq!(driver.live_owner_count(), 2);
+    assert_eq!(driver.unexpected_drops(), 0);
+    discard_scripted_fixture(backend);
+}
+
+#[test]
+fn sdma_host_read_into_partial_failure_preserves_custody_and_visible_prefix() {
+    for transient in [false, true] {
+        for copied_prefix in [0, 3, 8] {
+            for panic in [false, true] {
+                let fault = ScriptedSdmaStepV1::ReadPartialFault {
+                    offset: 0,
+                    byte_len: 8,
+                    copied_prefix,
+                    panic,
+                };
+                let steps = if transient {
+                    let mut steps = scripted_sync_copy_steps_v1(
+                        Gfx942PersistentSdmaDirectionV1::DeviceToHost,
+                        0,
+                        8,
+                        ScriptedFailureModeV1::Success,
+                    );
+                    let index = steps.len() - 2;
+                    steps[index] = fault;
+                    steps
+                } else {
+                    vec![
+                        ScriptedSdmaStepV1::Write {
+                            offset: 0,
+                            byte_len: 8,
+                        },
+                        fault,
+                        ScriptedSdmaStepV1::Recycle(ScriptedRecycleOutcomeV1::Success),
+                    ]
+                };
+                let (backend, _, host, device) = fixture(8, steps);
+                let mut backend = ManuallyDrop::new(backend);
+                if transient {
+                    seed_device(&mut backend, device);
+                } else {
+                    backend
+                        .write_allocation_v1(host, 0, &DEVICE_PATTERN)
+                        .unwrap();
+                }
+                let before = snapshot(&backend, host, device);
+                let mut destination = [0xff; 10];
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    backend.read_allocation_v1(
+                        if transient { device } else { host },
+                        0,
+                        &mut destination[1..9],
+                    )
+                }));
+                if panic {
+                    assert_eq!(
+                        result.unwrap_err().downcast_ref::<&str>(),
+                        Some(&"scripted SDMA host read panic")
+                    );
+                } else {
+                    let Err(RuntimeBackendFailureV1::Terminal(error)) = result.unwrap() else {
+                        panic!()
+                    };
+                    assert_eq!(
+                        error.detail(),
+                        if transient {
+                            "KFD download readback: scripted SDMA host read failure"
+                        } else {
+                            "KFD persistent host read: scripted SDMA host read failure"
+                        }
+                    );
+                }
+                assert_eq!(destination[0], 0xff);
+                assert_eq!(
+                    destination[1..1 + copied_prefix],
+                    DEVICE_PATTERN[..copied_prefix]
+                );
+                assert!(
+                    destination[1 + copied_prefix..]
+                        .iter()
+                        .all(|byte| *byte == 0xff)
+                );
+                assert_eq!(snapshot(&backend, host, device), before);
+                no_host_read(&backend);
+                if transient && panic {
+                    assert_eq!(
+                        host_observation(retained_host(&backend)),
+                        (3, DEVICE_PATTERN.to_vec(), None)
+                    );
+                } else {
+                    assert!(backend.terminal_sdma_custody.is_none());
+                }
+                let driver = backend.scripted_sdma.as_ref().unwrap();
+                assert_eq!(driver.remaining_steps(), usize::from(!transient || panic));
+                assert_eq!(
+                    driver.live_owner_count(),
+                    if transient && panic { 3 } else { 2 }
+                );
+                assert_eq!(driver.unexpected_drops(), 0);
+                assert_terminal_retries_inert(&mut backend, host, device);
+                discard_scripted_fixture(backend);
+            }
+        }
+    }
+}
+
+#[test]
 fn sdma_host_read_indexed_failures_retain_bytes_certificate_and_unchanged_destination() {
     for mode in 0..4 {
         let (backend, _, host, device) = fixture(
@@ -127,7 +308,7 @@ fn sdma_host_read_indexed_failures_retain_bytes_certificate_and_unchanged_destin
 
 #[test]
 fn sdma_host_read_transient_errors_preserve_cleanup_precedence_and_copy_visibility() {
-    for read_fails in [false, true] {
+    for (read_fails, copied_prefix) in [(false, 8), (true, 0), (true, 3), (true, 8)] {
         for recycle in [
             ScriptedRecycleOutcomeV1::Success,
             ScriptedRecycleOutcomeV1::Recovered,
@@ -142,7 +323,12 @@ fn sdma_host_read_transient_errors_preserve_cleanup_precedence_and_copy_visibili
             );
             let n = steps.len();
             if read_fails {
-                steps[n - 2] = read_step(0);
+                steps[n - 2] = ScriptedSdmaStepV1::ReadPartialFault {
+                    offset: 0,
+                    byte_len: 8,
+                    copied_prefix,
+                    panic: false,
+                };
             }
             steps[n - 1] = ScriptedSdmaStepV1::Recycle(recycle);
             let (backend, _, host, device) = fixture(8, steps);
@@ -155,12 +341,13 @@ fn sdma_host_read_transient_errors_preserve_cleanup_precedence_and_copy_visibili
                 backend.read_allocation_v1(device, 0, &mut destination)
             }));
             assert_eq!(
-                destination,
-                if read_fails {
-                    [0xff; 8]
-                } else {
-                    DEVICE_PATTERN
-                }
+                destination[..copied_prefix],
+                DEVICE_PATTERN[..copied_prefix]
+            );
+            assert!(
+                destination[copied_prefix..]
+                    .iter()
+                    .all(|byte| *byte == 0xff)
             );
             match recycle {
                 ScriptedRecycleOutcomeV1::Panic => assert_eq!(

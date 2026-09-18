@@ -16,9 +16,7 @@ impl KfdRuntimeBackendV1 {
         destination: &mut [u8],
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.access_indexed_sdma_host_v1(allocation, "KFD persistent host read", |ops, buffer| {
-            let bytes = ops.read_host(buffer, offset, destination.len() as u64)?;
-            destination.copy_from_slice(&bytes);
-            Ok(())
+            ops.read_host_into(buffer, offset, destination)
         })
     }
 
@@ -45,9 +43,7 @@ impl KfdRuntimeBackendV1 {
             let mut ops = DirectionalSdmaOpsV1::Native(
                 self.queue.as_mut().expect("SDMA readback retains queue"),
             );
-            let bytes = ops.read_host(buffer, 0, destination.len() as u64)?;
-            destination.copy_from_slice(&bytes);
-            Ok::<(), String>(())
+            ops.read_host_into(buffer, 0, destination)
         }));
         let readback = match result {
             Ok(result) => result,

@@ -557,6 +557,8 @@ pub trait RuntimeBackendV1 {
         bytes: &[u8],
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>>;
 
+    /// Reads into caller-owned storage. A failure or panic after reading begins
+    /// may leave partial data in `destination`; those bytes are not a successful read.
     fn read_allocation_v1(
         &mut self,
         allocation: u64,
@@ -2068,6 +2070,8 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         self.backend_result(result)
     }
 
+    /// Reads into caller-owned storage. A failure or panic after reading begins
+    /// may leave partial data in `destination`; those bytes are not a successful read.
     pub fn read_allocation(
         &mut self,
         allocation: RuntimeAllocationIdV1,

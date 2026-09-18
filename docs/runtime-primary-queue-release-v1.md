@@ -723,6 +723,46 @@ source. It does not execute the CPU-injected failure matrices on hardware. Typed
 capacity disposition and warm pending-compute allocation are implemented below.
 R125 is still the accepted CPU/test checkpoint.
 
+## Direct Destination Readback
+
+Public indexed HostVisible reads and transient DeviceLocal readback now copy
+directly into caller-owned storage, removing the intermediate boxed byte buffer
+and its second host copy. The new lower `read_sdma_host_buffer_into` retains the
+boxed API's existing admission, model-loan/retake and error policy. The boxed API
+and the stricter fixed-error `read_sdma_host_buffer_into_v1` capture API remain
+unchanged. No completion, currentness, ownership or profiling check is skipped.
+
+Closing currentness and model retake occur after copying. A failure or panic can
+therefore leave partial or complete bytes in the destination without granting a
+successful read. Indexed owners remain in their allocation records; transient
+staging remains rooted until readback and recycling settle. Ordinary read errors
+retain cleanup-error precedence; read panics retain staging without attempting
+recycle. Failed reads never emit a successful HostRead profile event.
+
+Focused CPU tests cover zero intermediate allocations in the scripted indexed
+read (profiling disabled) and transient readback, full/subrange bytes and canaries,
+partial/full destination mutation on errors/panics, exact retained owners and
+inert retries. The lower tests cover opening/closing currentness, retake failure
+and original panic precedence, plus the new public wrapper's admission order.
+These do not establish zero total native allocations, native fault qualification,
+formal implementation correspondence or R126 acceptance. The current directional
+copy comparator performs readback outside its DMA timers; this change cannot be
+reported as an improvement to that measured HIP/HSA ratio without a new matched
+measurement of the relevant work.
+
+CPU qualification on 2026-09-18 used locked, offline all-feature builds with
+incremental compilation and debug information disabled, two build jobs and one
+test thread. The full GNU library run passed 1,412 KFD tests and 1,105 runtime
+tests, with twenty runtime tests ignored. The full musl runtime run passed the
+same 1,105 tests with twenty ignored; the focused musl KFD run passed ten
+readback/currentness/retake tests with 1,402 filtered out, not a full musl KFD run.
+All 73 KFD/runtime doctests passed. Strict all-target Clippy, runtime
+no-default-feature compilation, workspace formatting and diff whitespace checks
+passed. The unsafe-source policy passed five tests with its one maintenance test
+ignored. No ignored native test was executed for this change. Before the fix,
+the profiling-disabled indexed allocation regression observed one allocation;
+the same test now observes zero. These are CPU results, not GPU timings.
+
 ## Typed SDMA Allocation Disposition
 
 The lower fresh-allocation driver now preserves the original typed error and
