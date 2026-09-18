@@ -8,6 +8,8 @@ rust-version.workspace = true
 publish = false
 
 [features]
+scalar-borrow-policy5 = []
+scalar-borrow-policy5-barrier = ["scalar-borrow-policy5"]
 defined-helper-reference = []
 defined-helper-reference-nested = ["defined-helper-reference"]
 defined-helper-reference-swapped = ["defined-helper-reference"]

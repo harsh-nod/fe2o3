@@ -757,3 +757,33 @@ direct, nested, swapped and alternate helper formulas on both target profiles.
 It then requires the unchanged `ProofRuntimeUnavailable` refusal. This is
 request-construction coverage, not signed helper-reference composition,
 approved-runtime qualification or protected/default-pipeline activation.
+
+## Private scalar-borrow transport
+
+The ranked source projector can retain a same-block mutable reference to a
+once-initialized private fixed-width integer temporary. A complete, prepaid
+source census checks the original borrow, each exact read occurrence, storage
+lifetime and nonescape before mapping it to the original private allocation.
+The existing provenance result remains an independent requirement. Shared/raw
+references, projections, reborrows, alias copies, calls, cross-block uses,
+reinitialization and premature storage death do not gain admission.
+
+The census is linear in locals, blocks, statements and operand uses, followed
+by constant-time occurrence queries. Borrowed source identities and the caller
+ledger's retained-storage floor are checked on every query. This transports
+source occurrences; it does not establish arbitrary alias or initialization
+theorems and does not replace source/native correspondence or final checks.
+
+The fixed Policy5 ordinary-Rust regression separates normal MIR from explicit
+MIR opt0, where a genuine initialized private load pair must survive import.
+Only the later load may be forwarded; the first load remains. A separate opt0
+case places a global store between the reads and requires no forwarding.
+Both target profiles compare actual optimized O with an independent host-Rust
+oracle, complete backing bytes and canaries. These tests do not execute LLVM
+or hardware and do not activate the protected/default publisher.
+
+Literal observation goldens exercise V12 decode, checked load forwarding,
+independent full-pair replay, stable canonical coordinates and two fresh-process
+replays. Uninitialized and escaped-pointer graphs require conservative no-ops;
+they are not memory-safe source qualifications. These are observation fixtures,
+not a new compiler IR parser or publication authority.

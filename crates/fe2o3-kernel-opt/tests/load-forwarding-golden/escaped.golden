@@ -1,0 +1,34 @@
+CASE: escaped
+CHECK-BEFORE: module checked-load-forwarding kernels=0
+CHECK-BEFORE: f0 a InternalHelper
+CHECK-BEFORE: f0:b0 block-id=91
+CHECK-BEFORE: f0:b0:term Return []
+CHECK-BEFORE: f1 f InternalHelper
+CHECK-BEFORE: f1:b0 block-id=73
+CHECK-BEFORE: f1:b0:o0 [v2] Alloca u32 Private count=none align=4
+CHECK-BEFORE: f1:b0:o1 [] Store v2 <- v0 Private align=4 volatile=false
+CHECK-BEFORE: f1:b0:o2 [] Store v1 <- v0 Global align=4 volatile=false
+CHECK-BEFORE: f1:b0:o3 [] Call g(v2)
+CHECK-BEFORE: f1:b0:o4 [v3] Load v2 Private align=4 volatile=false
+CHECK-BEFORE: f1:b0:o5 [v4] Load v2 Private align=4 volatile=false
+CHECK-BEFORE: f1:b0:term Return [v4]
+CHECK-BEFORE: f2 g InternalHelper
+CHECK-BEFORE: f2:b0 block-id=14
+CHECK-BEFORE: f2:b0:term Return []
+CHECK-AFTER: module checked-load-forwarding kernels=0
+CHECK-AFTER: f0 a InternalHelper
+CHECK-AFTER: f0:b0 block-id=91
+CHECK-AFTER: f0:b0:term Return []
+CHECK-AFTER: f1 f InternalHelper
+CHECK-AFTER: f1:b0 block-id=73
+CHECK-AFTER: f1:b0:o0 [v2] Alloca u32 Private count=none align=4
+CHECK-AFTER: f1:b0:o1 [] Store v2 <- v0 Private align=4 volatile=false
+CHECK-AFTER: f1:b0:o2 [] Store v1 <- v0 Global align=4 volatile=false
+CHECK-AFTER: f1:b0:o3 [] Call g(v2)
+CHECK-AFTER: f1:b0:o4 [v3] Load v2 Private align=4 volatile=false
+CHECK-AFTER: f1:b0:o5 [v4] Load v2 Private align=4 volatile=false
+CHECK-AFTER: f1:b0:term Return [v4]
+CHECK-AFTER: f2 g InternalHelper
+CHECK-AFTER: f2:b0 block-id=14
+CHECK-AFTER: f2:b0:term Return []
+CHECK-REMARK: rows=0 changed=false independently-checked=true authority=false
