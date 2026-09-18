@@ -419,7 +419,7 @@ fn run_lifecycle(
             (
                 HELPER,
                 0,
-                semantic.functions()[1].blocks()[0].statements().len() as u32,
+                semantic.functions()[1].blocks()[0].statements().len(),
                 ProductionScopeEventKindV29::Call {
                     callee: derive.callee(),
                     kind: ProductionScopeCallKindV29::Derive,
