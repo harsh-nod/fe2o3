@@ -101,6 +101,71 @@ pub(super) struct SimulationObservation {
 }
 
 #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(super) struct ConditionalCoverageScenario {
+    pub length: usize,
+    pub global_x: u64,
+    pub expected_written_elements: usize,
+    pub expected_total_output: bool,
+}
+
+/// Finite observations of exact pre-ranked source bytes, not final-O admission
+/// or a proof of the conditional coverage theorem. Counts describe the matched
+/// oracle bytes, not observed store counts or a race/conflict assessment.
+pub(super) fn observe_conditional_fill_prefix(
+    source: &VerifiedCanonicalKernelIrV12,
+) -> Result<Vec<ConditionalCoverageScenario>, SourceFailure> {
+    let limits = limits();
+    if source.canonical_bytes().len() > limits.max_canonical_bytes {
+        return Err(failure("source coverage probe exceeds its byte cap"));
+    }
+    let reconstructed =
+        VerifiedCanonicalKernelIrV12::from_canonical_bytes(source.canonical_bytes().to_vec())
+            .map_err(failure)?;
+    if reconstructed.identity() != source.identity()
+        || reconstructed.canonical_bytes() != source.canonical_bytes()
+    {
+        return Err(failure("source coverage probe changed canonical identity"));
+    }
+    let identity = SimulationKernelIrIdentityV1::from(*source.identity());
+    let module = AdmittedSimulationModuleV1::admit_v12(reconstructed, limits).map_err(failure)?;
+    if module.identity() != &identity || module.grants_execution_authority() {
+        return Err(failure("source simulation changed identity or authority"));
+    }
+    let kernel = require_abi(&module, Case::Fill)?;
+    let (grid, workgroup) = launch(kernel, 64)?;
+    if grid != [64, 1, 1] {
+        return Err(failure(
+            "coverage counterexample requires exactly 64 invocations",
+        ));
+    }
+    let mut observations = Vec::new();
+    for length in [0, 1, 63, 64, 65] {
+        let scenario = elementwise(Case::Fill, length, 0)?;
+        let written_elements = length.min(64);
+        let mut expected_values = vec![SENTINEL; length];
+        expected_values[..written_elements].fill(42.5);
+        let expected = vec![guarded_buffer(0, &expected_values, AccessMode::ReadWrite)?.1];
+        let request =
+            SimulationRequestV1::new(kernel.id.clone(), grid, workgroup, scenario.arguments)
+                .with_shared_buffers(scenario.backings);
+        let before = request.clone();
+        let execution = module.simulate(&request, TARGET, limits).map_err(failure)?;
+        check_execution(&execution, &request, &expected, identity, Case::Fill)?;
+        let repeated = module.simulate(&request, TARGET, limits).map_err(failure)?;
+        if request != before || repeated != execution {
+            return Err(failure("source coverage simulation was not deterministic"));
+        }
+        observations.push(ConditionalCoverageScenario {
+            length,
+            global_x: grid[0],
+            expected_written_elements: written_elements,
+            expected_total_output: written_elements == length,
+        });
+    }
+    Ok(observations)
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct ScenarioObservation {
     label: String,
     grid: [u64; 3],

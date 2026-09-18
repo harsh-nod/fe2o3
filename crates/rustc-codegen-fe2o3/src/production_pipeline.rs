@@ -38,6 +38,9 @@ pub(crate) mod erased_checked_output_policy5_v1;
 pub(crate) mod fixed_checked_output_v1;
 #[path = "production_native_checked_output_handoff_v1.rs"]
 pub(crate) mod native_checked_output_handoff_v1;
+#[cfg(test)]
+#[path = "production_pipeline_pre_ranked_observation_v1_tests.rs"]
+mod pre_ranked_observation_v1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProductionDisposition {

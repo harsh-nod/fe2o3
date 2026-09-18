@@ -16,6 +16,8 @@ use std::process::Command;
 #[path = "production_context_source_v29_tests.rs"]
 mod context_source_v29_tests;
 
+#[path = "production_rustc_driver_conditional_coverage_v1_tests.rs"]
+mod conditional_coverage;
 #[path = "production_rustc_driver_helper_reference_source_v1_tests.rs"]
 mod helper_reference_source;
 #[path = "production_rustc_driver_wave64_capture_source_v1_tests.rs"]
@@ -481,6 +483,21 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
     profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
     fixed_facade: bool,
 ) {
+    ordinary_rust_source_cases(cases, profile, fixed_facade, None);
+}
+
+struct SourceObserver {
+    child_test: &'static str,
+    check: fn(&Path, &[&str]),
+}
+
+fn ordinary_rust_source_cases(
+    cases: &[OrdinarySourceCase],
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    fixed_facade: bool,
+    observer: Option<SourceObserver>,
+) {
+    assert!(!fixed_facade || observer.is_none());
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -795,7 +812,9 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
                 | OrdinarySourceCase::ScalarBorrowPolicy5Barrier
         );
         let checked_policy5 = policy5_case || fixed_facade;
-        let child_test = if checked_policy5 {
+        let child_test = if let Some(observer) = &observer {
+            observer.child_test
+        } else if checked_policy5 {
             policy5_source::CHILD_TEST
         } else {
             CHILD_TEST
@@ -859,6 +878,15 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
         );
         let diagnostic_name = format!("{}-{name}", profile.cpu());
         snapshots::configure_child(&mut command, &diagnostic_name);
+        if let Some(observer) = &observer {
+            let child = output(&mut command);
+            eprintln!(
+                "actual-source observation {diagnostic_name}:\n{}",
+                String::from_utf8_lossy(&child.stdout),
+            );
+            (observer.check)(&response, roots);
+            continue;
+        }
         let (child, result) = match case {
             OrdinarySourceCase::ConstantShift(config) if config.dynamic => {
                 shift_source::expected_refusal_child(&mut command, &response)
