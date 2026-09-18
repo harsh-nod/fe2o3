@@ -76,6 +76,7 @@ use fe2o3_pliron::{
 use sha2::{Digest as _, Sha256};
 
 include!("production_pre_ranked_v1.rs");
+include!("production_ordered_region_pre_ranked_v16.rs");
 #[path = "production_checked_output_admission_policy3_v1.rs"]
 mod checked_output_admission_policy3_v1;
 pub use checked_output_admission_policy3_v1::*;
@@ -12372,6 +12373,7 @@ fn semantic_source_argument_for_kir_parameter_v1(
 include!("production_semantic_kir_v1/semantic_ssa_transport_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_intrinsics_01.rs");
 include!("production_semantic_kir_v1/gfx942_inline_v30.rs");
+include!("production_semantic_kir_v1/gfx942_ordered_region_v31.rs");
 include!("production_semantic_kir_v1/semantic_ssa_plan_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 include!("production_call_destination_v1.rs");
@@ -15799,6 +15801,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let binding = match operation {
             SemanticCompilerIntrinsicOperationV1::Gfx942InlineU32(assembly) => {
                 self.lower_gfx942_inline_u32_v30(block, call, *assembly, operations)?
+            }
+            SemanticCompilerIntrinsicOperationV1::Gfx942OrderedRegion(profile) => {
+                self.lower_gfx942_ordered_region_v31(block, call, *profile, operations)?
             }
             SemanticCompilerIntrinsicOperationV1::Execution(_) => {
                 return Err(unsupported(

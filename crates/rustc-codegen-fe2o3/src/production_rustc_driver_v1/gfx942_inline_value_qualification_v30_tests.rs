@@ -98,6 +98,17 @@ struct Capture {
     stderr: Vec<u8>,
 }
 
+// Cargo may remove a temporary directory after the bounded census queues it.
+// Ignore only that disappearance; permission, type and other I/O errors remain
+// failures. This observed-size census is not a reservation or an RSS guarantee.
+fn queued_directory_entries(directory: &Path) -> Result<Option<fs::ReadDir>, String> {
+    match fs::read_dir(directory) {
+        Ok(entries) => Ok(Some(entries)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("{}: {error}", directory.display())),
+    }
+}
+
 // Poll the fresh target only; never scan or remove a shared build directory.
 fn directory_bytes(root: &Path) -> Result<u64, String> {
     if !root.exists() {
@@ -107,7 +118,10 @@ fn directory_bytes(root: &Path) -> Result<u64, String> {
     let mut entries = 0_usize;
     let mut bytes = 0_u64;
     while let Some(directory) = pending.pop() {
-        for entry in fs::read_dir(directory).map_err(|e| e.to_string())? {
+        let Some(observed_entries) = queued_directory_entries(&directory)? else {
+            continue;
+        };
+        for entry in observed_entries {
             let entry = entry.map_err(|e| e.to_string())?;
             entries += 1;
             if entries > 100_000 {
@@ -736,6 +750,37 @@ fn bounded_file_admission_rejects_symlinks_fifos_and_oversize() {
     assert!(read_bounded(&fifo, 5).is_err());
     assert!(read_bounded(&directory, 5).is_err());
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn queued_directory_census_tolerates_disappearance_but_retains_errors_and_size_bound() {
+    let directory = std::env::temp_dir().join(format!(
+        "fe2o3-queued-directory-control-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&directory).unwrap();
+    let queued = directory.join("queued");
+    fs::create_dir(&queued).unwrap();
+    assert!(queued_directory_entries(&queued).unwrap().is_some());
+    // Deterministically reproduce deletion after a path was queued but before
+    // its read_dir, without a timing-sensitive second process.
+    fs::remove_dir(&queued).unwrap();
+    assert!(queued_directory_entries(&queued).unwrap().is_none());
+    assert_eq!(directory_bytes(&directory).unwrap(), 0);
+    let regular = directory.join("regular");
+    fs::write(&regular, b"exact").unwrap();
+    assert!(queued_directory_entries(&regular).is_err());
+    assert_eq!(directory_bytes(&directory).unwrap(), 5);
+    let file = OpenOptions::new().write(true).open(&regular).unwrap();
+    file.set_len(DISK_CAP + 1).unwrap();
+    assert!(directory_bytes(&directory).unwrap_err().contains("500 MiB"));
+    drop(file);
+    fs::remove_file(&regular).unwrap();
+    fs::remove_dir(&directory).unwrap();
 }
 
 #[test]

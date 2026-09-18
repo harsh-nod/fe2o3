@@ -7,6 +7,12 @@ The [milestone status and owner handoffs](assembly-authoring-implementation-stat
 retain the full scope of all three issues and distinguish remaining implementation
 from shared compiler dependencies.
 
+The table below describes the original independent-instruction slice. The later
+[ordered-region tutorial](ordered-region-authoring-v1.md) adds a closed, two-step
+fixed-register region with actual-source CPU and final-machine observations.
+Its qualification continuation is test-only; it does not add shipping V16
+production admission, a protected artifact, or GPU execution.
+
 ## One program, several observations
 
 The executable subject remains the ordinary source-to-MIR-to-canonical-KIR

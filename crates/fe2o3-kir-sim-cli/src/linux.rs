@@ -122,6 +122,8 @@ enum UnsupportedFeatureCode {
     Wave,
     Gfx950LdsTranspose,
     InlineAssembly,
+    OrderedRegion,
+    OrderedRegionProfile,
     UnsupportedScalarOperation,
     TargetConstantOutOfRange,
 }
@@ -3247,6 +3249,9 @@ fn admission_error_kind(error: &SimulationAdmissionErrorV1) -> ErrorKind {
         SimulationAdmissionErrorV1::EncodeAfterAdmission(_) => {
             ErrorKind::SimulatorAdmissionEncodeFailed
         }
+        SimulationAdmissionErrorV1::CanonicalRoundTripMismatch => {
+            ErrorKind::SimulatorAdmissionCanonicalRoundTripMismatch
+        }
         SimulationAdmissionErrorV1::ResidentBytesOverflow => {
             ErrorKind::SimulatorAdmissionResidentBytesOverflow
         }
@@ -3500,6 +3505,8 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
         UnsupportedFeatureV1::Wave => UnsupportedFeatureCode::Wave,
         UnsupportedFeatureV1::Gfx950LdsTranspose => UnsupportedFeatureCode::Gfx950LdsTranspose,
         UnsupportedFeatureV1::InlineAssembly => UnsupportedFeatureCode::InlineAssembly,
+        UnsupportedFeatureV1::OrderedRegion => UnsupportedFeatureCode::OrderedRegion,
+        UnsupportedFeatureV1::OrderedRegionProfile => UnsupportedFeatureCode::OrderedRegionProfile,
         UnsupportedFeatureV1::UnsupportedScalarOperation => {
             UnsupportedFeatureCode::UnsupportedScalarOperation
         }
@@ -5579,6 +5586,43 @@ mod tests {
         );
         let value = serde_json::to_value(error_document_view(&failure)).unwrap();
         assert_eq!(value["publication_state"], "published_name_uncertain");
+    }
+
+    #[test]
+    fn ordered_region_diagnostics_are_exact_without_enabling_v16_input() {
+        let kind = admission_error_kind(&SimulationAdmissionErrorV1::CanonicalRoundTripMismatch);
+        assert_eq!(
+            kind,
+            ErrorKind::SimulatorAdmissionCanonicalRoundTripMismatch
+        );
+        assert_eq!(
+            serialized_tag(kind),
+            "simulator_admission_canonical_round_trip_mismatch"
+        );
+        for (feature, code, serialized) in [
+            (
+                UnsupportedFeatureV1::OrderedRegion,
+                UnsupportedFeatureCode::OrderedRegion,
+                "ordered_region",
+            ),
+            (
+                UnsupportedFeatureV1::OrderedRegionProfile,
+                UnsupportedFeatureCode::OrderedRegionProfile,
+                "ordered_region_profile",
+            ),
+        ] {
+            assert_eq!(unsupported_code(&feature), code);
+            assert_eq!(serialized_tag(code), serialized);
+        }
+        assert!(!USAGE.contains("--kir-v16"));
+        let rejected = parse_options(
+            ["--kir-v16", "kernel.kir", "--request", "request.json"]
+                .into_iter()
+                .map(OsString::from),
+        )
+        .unwrap_err();
+        assert_eq!(rejected.0.stage, Stage::Arguments);
+        assert_eq!(rejected.0.kind, ErrorKind::InvalidCommandLine);
     }
 
     #[test]

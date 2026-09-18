@@ -47,7 +47,8 @@ const WORKER_FILES = ['CMakeLists.txt', 'include/WorkerProtocol.h', 'include/Wor
   'include/WorkerDeviceLibraryPolicy.h', 'include/WorkerBuildConfig.h.in',
   'include/WorkerLldPolicy.h', 'include/WorkerMachineEffect.h', 'src/WorkerProtocol.cpp',
   'src/WorkerPipeline.cpp', 'src/WorkerDeviceLibraryPolicy.cpp', 'src/WorkerMachineEffect.cpp',
-  'src/main.cpp', 'tests/OrderedInlineRegionPrototypeTests.cpp'];
+  'src/main.cpp', 'tests/OrderedInlineRegionPrototypeTests.cpp',
+  'tests/OrderedInlineRegionSourceObservation.inc'];
 
 function demand(value, reason) { if (!value) throw new Error(reason); }
 function exactObject(value, keys, label) {

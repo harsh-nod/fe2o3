@@ -204,6 +204,9 @@ impl OperationKind {
                 }
                 WaveOperationKind::ReduceF32 { value, .. } => visitor(value)?,
             },
+            Self::Gfx942OrderedRegion(region) => {
+                region.inputs().iter().copied().try_for_each(&mut visitor)?;
+            }
             Self::InlineAssembly(assembly) => {
                 for operand in &assembly.operands {
                     match operand.kind {

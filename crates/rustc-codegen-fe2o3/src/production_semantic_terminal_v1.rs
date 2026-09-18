@@ -28,6 +28,7 @@ pub(crate) enum ProductionBf16ConversionV1 {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProductionTerminalExpansionV1 {
     Gfx942InlineU32(TrustedAmdGpuInlineOperation),
+    Gfx942OrderedXorAddE32,
     ThreadIndex(SemanticAxisV1),
     WorkgroupIndex(SemanticAxisV1),
     WorkgroupDimension(SemanticAxisV1),
@@ -160,6 +161,9 @@ pub(crate) const fn is_traversed_reviewed_helper_v1(item: TrustedDeviceItem) -> 
 impl ProductionSemanticTerminalRuleV1 {
     pub(crate) const fn from_trusted_device_item(item: TrustedDeviceItem) -> Self {
         match item {
+            TrustedDeviceItem::AmdGpuOrderedXorAddE32 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32)
+            }
             TrustedDeviceItem::AmdGpuInline(operation) => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx942InlineU32(operation))
             }
@@ -809,6 +813,9 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::Trap) => {
                 TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap)
             }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32) => {
+                TrustedDeviceItem::AmdGpuOrderedXorAddE32
+            }
             Self::Expand(ProductionTerminalExpansionV1::Gfx942InlineU32(operation)) => {
                 TrustedDeviceItem::AmdGpuInline(operation)
             }
@@ -1151,6 +1158,13 @@ mod tests {
             assert_eq!(rule, ProductionSemanticTerminalRuleV1::Expand(expansion));
             assert_eq!(rule.trusted_device_item(), item);
         }
+    }
+
+    #[test]
+    fn ordered_region_v31_terminal_inverse_preserves_exact_identity() {
+        let item = TrustedDeviceItem::AmdGpuOrderedXorAddE32;
+        let rule = ProductionSemanticTerminalRuleV1::from_trusted_device_item(item);
+        assert_eq!(rule.trusted_device_item(), item);
     }
 
     #[test]

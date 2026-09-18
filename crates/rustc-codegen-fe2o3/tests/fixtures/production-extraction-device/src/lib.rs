@@ -23,6 +23,16 @@ mod write_only_reference;
 ))]
 mod assembly_reference_v30;
 
+#[cfg(any(
+    feature = "ordered-region-v31",
+    feature = "ordered-region-unused-v31",
+    feature = "ordered-region-alias-v31",
+    feature = "ordered-region-dynamic-v31",
+    feature = "ordered-region-divergent-v31",
+    feature = "ordered-region-wrong-launch-v31",
+))]
+mod ordered_region_v31;
+
 #[cfg(not(any(
     feature = "atomic-rmw",
     feature = "multi-root-ownership",
@@ -59,6 +69,12 @@ mod assembly_reference_v30;
     feature = "assembly-reference-positive",
     feature = "assembly-reference-wrong-opcode",
     feature = "assembly-reference-wrong-constant",
+    feature = "ordered-region-v31",
+    feature = "ordered-region-unused-v31",
+    feature = "ordered-region-alias-v31",
+    feature = "ordered-region-dynamic-v31",
+    feature = "ordered-region-divergent-v31",
+    feature = "ordered-region-wrong-launch-v31",
     feature = "scalar-transmute",
     feature = "fabs-f32",
     feature = "is-finite-fabs-f32",

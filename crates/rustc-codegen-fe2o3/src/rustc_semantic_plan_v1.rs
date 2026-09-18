@@ -3602,6 +3602,13 @@ const fn terminal_expansion_tag_for_schema_v1(
     schema: TerminalIdentitySchemaV1,
 ) -> u8 {
     match expansion {
+        ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32 => {
+            if matches!(schema, TerminalIdentitySchemaV1::CombinedV4) {
+                133
+            } else {
+                u8::MAX
+            }
+        }
         ProductionTerminalExpansionV1::Gfx942InlineU32(operation) => {
             if matches!(schema, TerminalIdentitySchemaV1::CombinedV4) {
                 crate::production_inline_assembly_v30::source_terminal_tag(operation)
@@ -3771,4 +3778,23 @@ const fn f32_math_tag_v1(function: fe2o3_kernel_ir::F32MathFunction) -> u8 {
 #[cfg(test)]
 mod tests {
     include!("rustc_semantic_plan_v1/tests.rs");
+
+    #[test]
+    fn ordered_region_v31_preflight_tag_is_only_combined_v4_133() {
+        let region = ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32;
+        assert_eq!(
+            terminal_expansion_tag_for_schema_v1(region, TerminalIdentitySchemaV1::CombinedV4),
+            133
+        );
+        for schema in [
+            TerminalIdentitySchemaV1::IndependentV1,
+            TerminalIdentitySchemaV1::CombinedV2,
+            TerminalIdentitySchemaV1::CombinedV3,
+        ] {
+            assert_eq!(
+                terminal_expansion_tag_for_schema_v1(region, schema),
+                u8::MAX
+            );
+        }
+    }
 }

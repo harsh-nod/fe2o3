@@ -80,6 +80,7 @@ pub(crate) enum ErrorKind {
     SimulatorAdmissionCanonicalBytesLimit,
     SimulatorAdmissionDecodeFailed,
     SimulatorAdmissionEncodeFailed,
+    SimulatorAdmissionCanonicalRoundTripMismatch,
     SimulatorAdmissionResidentBytesOverflow,
     SimulatorAdmissionResidentBytesLimit,
     PreflightInvalidLimits,

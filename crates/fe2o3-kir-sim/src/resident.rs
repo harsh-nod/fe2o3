@@ -257,6 +257,7 @@ fn add_operation(resident: &mut ResidentLedger, operation: &Operation) -> Option
         OperationKind::Matrix(matrix) => add_matrix(resident, matrix),
         OperationKind::InlineAssembly(assembly) => add_inline_assembly(resident, assembly),
         OperationKind::Constant(_)
+        | OperationKind::Gfx942OrderedRegion(_)
         | OperationKind::MemoryIntrinsic(_)
         | OperationKind::Unary { .. }
         | OperationKind::Binary { .. }

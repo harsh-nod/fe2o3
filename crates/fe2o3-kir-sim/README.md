@@ -7,7 +7,7 @@ explicit subset of verified canonical Kernel IR. The frozen
 `admit_v10` consumes exact V10 custody for those collectives plus additive
 memory-intrinsic execution. `admit_v11` consumes exact V11 custody, including
 the target-neutral pointer-access restriction operation. `admit_v12` consumes
-exact current V12 custody without projecting it to V11; supported operations
+exact V12 custody without projecting it to V11; supported operations
 use the same interpreter, while reachable vector and verification-event
 carriers remain typed `InertV12Carrier` preflight refusals. Raw in-memory modules
 and other wire formats are not execution inputs. The production compiler's
@@ -15,18 +15,25 @@ Bundle V4 exporter binds exact V7 KIR, Bundle V5 binds exact V10 KIR, and the
 current Bundle V6 route binds exact V11 KIR. None grants execution or hardware
 authority.
 
+`admit_v16` borrows an exact move-only `VerifiedCanonicalKernelIrModuleV16`
+owner and retains its own bounded decoded CPU view, without consuming or
+changing the source owner's canonical bytes. It does not add a simulation-bundle,
+CLI, or debugger import route. Its canonical/resident limits retain the existing
+post-decode accounting contract, not an allocator/RSS cap on rejected attempts.
+
 The `fe2o3-kir-sim-capabilities` binary emits the complete V1 semantic
 ownership matrix as stable JSON. It covers every top-level KIR operation and
 terminator for each simulator-facing profile, plus every scalar
 unary/binary/compare/cast type combination. Rows name either the exact
 simulator owner or the typed preflight rejection; the document explicitly
-identifies V7, V9, V10, V11, and V12 separately, names those rows as declared tool-contract facts with no authority, and
+identifies V7, V9, V10, V11, V12, and V16 separately, names those rows as declared tool-contract facts with no authority, and
 grants no hardware or performance authority. The complete newline-terminated
-compact V1 document is fixed at 4,820,191 bytes and its regression test rejects
+compact V1 document is fixed at 4,852,346 bytes and its regression test rejects
 any unreviewed schema-size change.
 
-The named `gfx942` and `gfx950` profiles select CPU simulation data-layout
-semantics only. An owned row describes execution of already-verified KIR; it
+The named `gfx942` and `gfx950` profiles describe CPU simulation contracts,
+including layout and any explicitly checked retained target declarations.
+An owned row describes execution of already-verified KIR; it
 does not assert that the compiler can lower that operation for the named GPU,
 that the ISA or hardware supports it, or that a physical execution was
 observed. Those remain separate compiler, artifact, runtime, and qualification
@@ -54,14 +61,23 @@ apply. Unknown instructions, mismatched contracts, and `s_mov_b32` remain
 typed `InlineAssembly` refusals; the interpreter does not model SGPR uniformity,
 physical registers, EXEC state, encodings, or scheduling hazards.
 
+The V16 `Gfx942OrderedRegion` operation evaluates the closed U32 expression
+`(a ^ b).wrapping_add(c)` as one atomic value operation. Preflight requires the
+retained exact `gfx942:xnack-` and Wave64 declarations, required/requested
+`64x1x1` workgroups, a full-wave one-dimensional launch, and the 64-bit CPU
+layout. Conflicting target/wave declarations and partial launch waves are
+refused. The five checked register bindings remain inert metadata: there is no
+physical register file, implicit EXEC simulation, convergence proof, encoding
+check, or microstep trace. Normal operation events and before/after SSA
+checkpoints remain one pair per operation. The old canonical admission routes
+reject this new operation rather than reinterpreting its bytes.
+
 These are semantics of already-verified KIR, available under each CPU scalar
 layout profile. They do not admit these instructions on gfx950 hardware. The
-six `amdgpu_asm!` source spellings still have no production semantic intrinsic
-expansion, so source export/readmission and the source-to-GPU milestone remain
-unavailable. Source identity presence is not source authentication. The source
-representation, importer, ranked projection, and production lowerer owners
-must provide that extension before an authored assembly kernel can enter this
-path. Instruction selection remains in the original `InlineAssembly` operation
+source export/readmission and source-to-GPU qualification checks remain separate
+from this CPU surface. Source identity presence is not source authentication;
+the source representation, importer, ranked projection, and production lowerer
+owners must establish their own exact contracts. Instruction selection remains in the original `InlineAssembly` operation
 through simulation and its ordinary debug checkpoints.
 
 Ordinary admitted Rust can obtain these exact V7 bytes from a strict

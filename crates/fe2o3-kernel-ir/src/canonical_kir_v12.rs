@@ -7,9 +7,8 @@ use crate::{
     CanonicalKernelIrVerificationResourceReceiptV1, CanonicalKernelIrWorkBudgetV1,
     CanonicalKernelIrWorkLimitV1, KERNEL_IR_MAGIC_V1, KERNEL_IR_VERSION_V12, KernelIrDecodeError,
     KernelIrEncodeError, MAX_MODULE_BYTES_V1, MeteredKernelIrVerificationErrorV1, Module,
-    VerificationErrors, count_module_v12_wire_extent_with_work_v1, decode_module_v12,
-    decode_module_v12_with_work_v1, encode_module_v12, encode_module_v12_with_work_v1,
-    verify_exact_decoded_module_with_budget_v1, verify_module,
+    VerificationErrors, decode_module_v12, decode_module_v12_with_work_v1, encode_module_v12,
+    encode_module_v12_with_work_v1, verify_exact_decoded_module_with_budget_v1, verify_module,
 };
 
 /// Exact domain bytes for verified canonical Kernel IR V12 policy identities.
@@ -637,45 +636,25 @@ fn canonical_verified_inverse(
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     inverse_inline_payload: usize,
 ) -> Result<CanonicalVerifiedInverseV12, AdmissionError> {
-    let extent = count_module_v12_wire_extent_with_work_v1(module, budget.work_budget_v1())
-        .map_err(AdmissionError::Encode)?;
-    let retained = extent
-        .wire_bytes()
-        .checked_add(std::mem::size_of::<VerifiedCanonicalKernelIrV12>())
-        .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
-    budget.reserve_storage(retained)?;
-    let encoder_scratch =
-        crate::wire::decoded_tree_payload_bound_v12::<&crate::FunctionId>(module.kernels.len())
-            .map_err(AdmissionError::Decode)?
-            .checked_add(extent.peak_auxiliary_bytes())
-            .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
-    budget.reserve_storage(encoder_scratch)?;
-    let encoded = crate::wire::encode_module_v12_with_work_v1(module, budget.work_budget_v1())
-        .map_err(AdmissionError::Encode)?;
-    budget.release_storage(encoder_scratch)?;
-    if encoded.len() != extent.wire_bytes() || encoded.capacity() != encoded.len() {
-        return Err(AdmissionError::CanonicalMismatch);
-    }
-    let inverse_floor = budget.storage_checkpoint();
-    budget.reserve_storage(inverse_inline_payload)?;
-    let decoded = crate::wire::decode_module_v12_with_allocation_budget_v1(&encoded, budget)
-        .map_err(AdmissionError::Decode)?;
-    verify_exact_decoded_module_with_budget_v1(&decoded, None, budget).map_err(
-        |error| match error {
-            MeteredKernelIrVerificationErrorV1::Verification(error) => {
-                AdmissionError::Verification(error)
-            }
-            MeteredKernelIrVerificationErrorV1::Resource(error) => AdmissionError::Resource(error),
-        },
-    )?;
-    budget.charge_work(encoded.len())?;
-    if &decoded != module {
-        return Err(AdmissionError::CanonicalMismatch);
-    }
+    use crate::canonical_kir_bounded_inverse_v1::{InverseError, Profile, verified_inverse};
+    let inverse = verified_inverse(
+        module,
+        budget,
+        Profile::V12,
+        std::mem::size_of::<VerifiedCanonicalKernelIrV12>(),
+        inverse_inline_payload,
+    )
+    .map_err(|error| match error {
+        InverseError::Encode(error) => AdmissionError::Encode(error),
+        InverseError::Decode(error) => AdmissionError::Decode(error),
+        InverseError::Verification(error) => AdmissionError::Verification(error),
+        InverseError::Resource(error) => AdmissionError::Resource(error),
+        InverseError::CanonicalMismatch => AdmissionError::CanonicalMismatch,
+    })?;
     Ok(CanonicalVerifiedInverseV12 {
-        canonical_bytes: encoded,
-        module: decoded,
-        storage_floor: inverse_floor,
+        canonical_bytes: inverse.canonical_bytes,
+        module: inverse.module,
+        storage_floor: inverse.storage_floor,
     })
 }
 

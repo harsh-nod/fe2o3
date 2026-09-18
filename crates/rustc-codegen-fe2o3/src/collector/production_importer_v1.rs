@@ -476,8 +476,14 @@ fn construct_complete_request_v1<'tcx>(
             plan,
         )
         .map_err(body_owner_table_mismatch_v1)?;
+    let ordered_sources =
+        crate::production_ordered_source_occurrences_v31::OrderedSourceOccurrencesV31::from_plan(
+            tcx, plan,
+        )
+        .map_err(body_owner_table_mismatch_v1)?;
     let mut body_owner = build_body_request_owner_v1(plan, types.len(), function_count)?
-        .with_inline_sources_v30(inline_sources);
+        .with_inline_sources_v30(inline_sources)
+        .with_ordered_sources_v31(ordered_sources);
     let mut callables = (0..function_count)
         .map(|index| SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(index)))
         .collect::<Vec<_>>();
@@ -653,6 +659,9 @@ fn construct_complete_request_v1<'tcx>(
 
     body_owner
         .require_inline_sources_consumed_v30()
+        .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
+    body_owner
+        .require_ordered_sources_consumed_v31()
         .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
     let contains_execution_roles = types.iter().any(|ty| {
         matches!(
@@ -957,6 +966,15 @@ fn terminal_operation_v1<'tcx>(
     let rust_inputs = signature.inputs();
     let rust_output = signature.output();
     match expansion {
+        ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32
+            if crate::production_ordered_region_v31::valid_signature(
+                instance, &signature, abi, types
+            ) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::Gfx942OrderedRegion(
+                fe2o3_mir_model::semantic_mir_v1::SemanticGfx942OrderedRegionProfileV31::XorAddU32E32
+            ))
+        }
         ProductionTerminalExpansionV1::Gfx942InlineU32(operation)
             if inputs.len() == crate::production_inline_assembly_v30::input_count(operation)
                 && rust_inputs.len() == inputs.len()
@@ -2777,7 +2795,8 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
-        ProductionTerminalExpansionV1::Gfx942InlineU32(_)
+        ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32
+        | ProductionTerminalExpansionV1::Gfx942InlineU32(_)
         | ProductionTerminalExpansionV1::ThreadIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupIndex(_)
         | ProductionTerminalExpansionV1::WorkgroupDimension(_)
@@ -4095,6 +4114,13 @@ const fn terminal_operation_tag_for_schema_v1(
 ) -> u8 {
     use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
     match expansion {
+        ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32 => {
+            if matches!(schema, TerminalIdentitySchemaV1::CombinedV4) {
+                133
+            } else {
+                u8::MAX
+            }
+        }
         ProductionTerminalExpansionV1::Gfx942InlineU32(operation) => {
             if matches!(schema, TerminalIdentitySchemaV1::CombinedV4) {
                 crate::production_inline_assembly_v30::source_terminal_tag(operation)
@@ -4473,6 +4499,25 @@ mod typed_default_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordered_region_v31_terminal_133_never_enters_frozen_source_histories() {
+        let region = crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32;
+        assert_eq!(
+            terminal_operation_tag_for_schema_v1(region, TerminalIdentitySchemaV1::CombinedV4),
+            133
+        );
+        for schema in [
+            TerminalIdentitySchemaV1::IndependentV1,
+            TerminalIdentitySchemaV1::CombinedV2,
+            TerminalIdentitySchemaV1::CombinedV3,
+        ] {
+            assert_eq!(
+                terminal_operation_tag_for_schema_v1(region, schema),
+                u8::MAX
+            );
+        }
+    }
 
     #[test]
     fn tiled_geometry_requires_finite_equal_products() {

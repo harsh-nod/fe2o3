@@ -45,6 +45,10 @@ pub enum CompilerOrderingEffectV12 {
     OrderedVerificationContract,
     OrderedExecution,
     OrderedVerificationContractAndExecution,
+    OrderedRegion,
+    OrderedVerificationContractAndRegion,
+    OrderedExecutionAndRegion,
+    OrderedVerificationContractAndExecutionAndRegion,
 }
 
 /// Closed compiler-ordering summary, separate from physical memory effects.
@@ -52,6 +56,7 @@ pub enum CompilerOrderingEffectV12 {
 pub struct CompilerOrderingEffectSummaryV12 {
     ordered_verification_contract: bool,
     ordered_execution: bool,
+    ordered_region: bool,
 }
 
 impl CompilerOrderingEffectSummaryV12 {
@@ -59,22 +64,37 @@ impl CompilerOrderingEffectSummaryV12 {
         Self {
             ordered_verification_contract: false,
             ordered_execution: false,
+            ordered_region: false,
         }
     }
     pub const fn ordered_verification_contract() -> Self {
         Self {
             ordered_verification_contract: true,
             ordered_execution: false,
+            ordered_region: false,
         }
     }
     pub const fn ordered_execution() -> Self {
         Self {
             ordered_verification_contract: false,
             ordered_execution: true,
+            ordered_region: false,
         }
     }
     pub const fn is_empty(self) -> bool {
-        !self.ordered_verification_contract && !self.ordered_execution
+        !self.ordered_verification_contract && !self.ordered_execution && !self.ordered_region
+    }
+    /// An indivisible retained unit, not Execution or a verification event.
+    /// This is a compiler effect, not an external memory fence.
+    pub const fn ordered_region() -> Self {
+        Self {
+            ordered_verification_contract: false,
+            ordered_execution: false,
+            ordered_region: true,
+        }
+    }
+    pub const fn has_ordered_region(self) -> bool {
+        self.ordered_region
     }
     pub const fn has_ordered_verification_contract(self) -> bool {
         self.ordered_verification_contract
@@ -87,16 +107,29 @@ impl CompilerOrderingEffectSummaryV12 {
             ordered_verification_contract: self.ordered_verification_contract
                 || other.ordered_verification_contract,
             ordered_execution: self.ordered_execution || other.ordered_execution,
+            ordered_region: self.ordered_region || other.ordered_region,
         }
     }
-    /// Lossless summary, including coexistence of both ordered effect families.
+    /// Lossless summary, including all combinations of the three independent families.
     pub const fn effect(self) -> Option<CompilerOrderingEffectV12> {
-        match (self.ordered_verification_contract, self.ordered_execution) {
-            (false, false) => None,
-            (true, false) => Some(CompilerOrderingEffectV12::OrderedVerificationContract),
-            (false, true) => Some(CompilerOrderingEffectV12::OrderedExecution),
-            (true, true) => {
+        match (
+            self.ordered_verification_contract,
+            self.ordered_execution,
+            self.ordered_region,
+        ) {
+            (false, false, false) => None,
+            (true, false, false) => Some(CompilerOrderingEffectV12::OrderedVerificationContract),
+            (false, true, false) => Some(CompilerOrderingEffectV12::OrderedExecution),
+            (true, true, false) => {
                 Some(CompilerOrderingEffectV12::OrderedVerificationContractAndExecution)
+            }
+            (false, false, true) => Some(CompilerOrderingEffectV12::OrderedRegion),
+            (true, false, true) => {
+                Some(CompilerOrderingEffectV12::OrderedVerificationContractAndRegion)
+            }
+            (false, true, true) => Some(CompilerOrderingEffectV12::OrderedExecutionAndRegion),
+            (true, true, true) => {
+                Some(CompilerOrderingEffectV12::OrderedVerificationContractAndExecutionAndRegion)
             }
         }
     }
@@ -149,6 +182,9 @@ impl Operation {
     /// Local compiler effects. Calls require the transitive interprocedural analysis.
     pub fn compiler_ordering_effects_v12(&self) -> CompilerOrderingEffectSummaryV12 {
         match &self.kind {
+            OperationKind::Gfx942OrderedRegion(_) => {
+                CompilerOrderingEffectSummaryV12::ordered_region()
+            }
             OperationKind::Execution(_) => CompilerOrderingEffectSummaryV12::ordered_execution(),
             OperationKind::VerificationContract(_) => {
                 CompilerOrderingEffectSummaryV12::ordered_verification_contract()

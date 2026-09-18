@@ -314,6 +314,9 @@ pub(super) fn transfer(
         | OperationKind::Matrix(_)
         | OperationKind::Gfx950LdsTranspose(_)
         | OperationKind::Wave(_)
-        | OperationKind::InlineAssembly(_) => Transfer::one(Value::Dynamic),
+        | OperationKind::InlineAssembly(_)
+        // Exact region order/register bindings cannot be replaced by a folded
+        // scalar result through this older sparse-analysis contract.
+        | OperationKind::Gfx942OrderedRegion(_) => Transfer::one(Value::Dynamic),
     }
 }

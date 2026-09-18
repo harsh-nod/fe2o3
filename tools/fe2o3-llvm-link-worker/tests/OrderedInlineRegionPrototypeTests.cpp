@@ -15,6 +15,7 @@
 #include "WorkerPipeline.h"
 #include "WorkerProtocol.h"
 
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -23,10 +24,12 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/SHA256.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
@@ -34,6 +37,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
@@ -43,6 +47,8 @@
 #include <utility>
 #include <vector>
 
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #if !defined(FE2O3_LLVM_BUILD_ID) || !defined(FE2O3_WORKER_BUILD_ID)
@@ -272,7 +278,8 @@ Input makeFixture(Fixture Kind) {
   return Result;
 }
 
-Request makeRequest(Fixture Kind, OptimizationLevel Level) {
+Request makeInputRequest(Input CompilerModule, OptimizationLevel Level,
+                         StringRef Symbol = KernelName) {
   Request Value;
   Value.RequestId.fill(0x41);
   Value.Identity.fill(0x42);
@@ -287,17 +294,22 @@ Request makeRequest(Fixture Kind, OptimizationLevel Level) {
   Value.Target = "gfx942:xnack-";
   Value.CodeObjectVersion = 6;
   Value.LinkOptions = {Level, false, true};
-  Value.CompilerModule = makeFixture(Kind);
+  Value.CompilerModule = std::move(CompilerModule);
   Value.Inputs = {Value.CompilerModule};
-  Value.RequiredSymbols = {KernelName.str(), KernelName.str() + ".kd"};
+  Value.RequiredSymbols = {Symbol.str(), Symbol.str() + ".kd"};
   Value.ExpectedDefinedSymbols = Value.RequiredSymbols;
-  Value.ExportSymbols = {KernelName.str()};
+  Value.ExportSymbols = {Symbol.str()};
   Value.FinalSymbols = Value.RequiredSymbols;
   Value.MaxOutputBytes = PayloadByteLimit;
   return Value;
 }
 
-PhysicalMachineEffectEvidence analyzePayload(ArrayRef<uint8_t> Bytes) {
+Request makeRequest(Fixture Kind, OptimizationLevel Level) {
+  return makeInputRequest(makeFixture(Kind), Level);
+}
+
+PhysicalMachineEffectEvidence analyzePayload(ArrayRef<uint8_t> Bytes,
+                                            StringRef Symbol = KernelName) {
   require(!Bytes.empty() && Bytes.size() <= PayloadByteLimit,
           "payload exceeds prototype cap");
   const auto Identities = physicalMachineEffectIdentities();
@@ -310,7 +322,7 @@ PhysicalMachineEffectEvidence analyzePayload(ArrayRef<uint8_t> Bytes) {
   RequestValue.Payload.assign(Bytes.begin(), Bytes.end());
   RequestValue.PayloadDigest = SHA256::hash(Bytes);
   RequestValue.PayloadBytes = Bytes.size();
-  RequestValue.Entries = {{KernelName.str(), {16, 8, 4, 2, 0}}};
+  RequestValue.Entries = {{Symbol.str(), {16, 8, 4, 2, 0}}};
   auto Result = unwrap(analyzeGfx942PhysicalMachineEffects(RequestValue));
   require(Result.PayloadDigest == RequestValue.PayloadDigest &&
               Result.PayloadBytes == Bytes.size() &&
@@ -320,8 +332,8 @@ PhysicalMachineEffectEvidence analyzePayload(ArrayRef<uint8_t> Bytes) {
               Result.AnalyzerIdentity == RequestValue.AnalyzerIdentity &&
               Result.ToolchainIdentity == RequestValue.ToolchainIdentity &&
               Result.Entries.size() == 1 && Result.Functions.size() == 1 &&
-              Result.Entries[0].Symbol == KernelName &&
-              Result.Functions[0].Symbol == KernelName &&
+              Result.Entries[0].Symbol == Symbol &&
+              Result.Functions[0].Symbol == Symbol &&
               !Result.Instructions.empty() &&
               Result.Instructions.size() <= InstructionLimit,
           "decoded fixture identity, entry or instruction bounds changed");
@@ -347,7 +359,8 @@ void checkDiagnosticBounds(ArrayRef<std::string> Diagnostics) {
   }
 }
 
-void checkInspectionDiagnostics(ArrayRef<std::string> Diagnostics) {
+void checkInspectionDiagnostics(ArrayRef<std::string> Diagnostics,
+                                 StringRef Symbol = KernelName) {
   checkDiagnosticBounds(Diagnostics);
   // inspectLinkedOutputForPublication already validated the real ELF symbol
   // closure and compiler launch contract before returning these diagnostics.
@@ -361,14 +374,14 @@ void checkInspectionDiagnostics(ArrayRef<std::string> Diagnostics) {
         "e_flags=");
     Exports += Text ==
         "post_link.check=exports status=ok "
-        "symbols=[ordered_region_fixture,ordered_region_fixture.kd]";
+        "symbols=[" + Symbol.str() + "," + Symbol.str() + ".kd]";
     Unresolved += Text == "post_link.check=unresolved status=ok symbols=[]";
     Metadata += Text ==
         "post_link.check=metadata status=ok kernels=1 "
         "target=amdgcn-amd-amdhsa--gfx942%3Axnack-";
     Kernels += Text.starts_with(
-                   "post_link.kernel name=ordered_region_fixture "
-                   "symbol=ordered_region_fixture.kd ") &&
+                   "post_link.kernel name=" + Symbol.str() + " symbol=" +
+                   Symbol.str() + ".kd ") &&
                Text.ends_with(" wavefront_size=64 max_workgroup_size=64 "
                               "reqd_workgroup_size=[64,1,1]");
   }
@@ -377,8 +390,7 @@ void checkInspectionDiagnostics(ArrayRef<std::string> Diagnostics) {
           "bounded post-link diagnostic facts changed");
 }
 
-BuiltFixture buildFixture(Fixture Kind, OptimizationLevel Level) {
-  Request RequestValue = makeRequest(Kind, Level);
+BuiltFixture buildRequest(Request RequestValue, StringRef Symbol = KernelName) {
   Response ResponseValue = execute(RequestValue);
   if (!ResponseValue.LinkedOutput) {
     size_t Remaining = MaxTotalDiagnosticBytes;
@@ -418,10 +430,14 @@ BuiltFixture buildFixture(Fixture Kind, OptimizationLevel Level) {
           "normal LLVM/object/LLD derivation does not end at these bytes");
   auto InspectionDiagnostics =
       unwrap(inspectLinkedOutputForPublication(OutputValue.Bytes, RequestValue));
-  checkInspectionDiagnostics(InspectionDiagnostics);
-  auto Evidence = analyzePayload(OutputValue.Bytes);
+  checkInspectionDiagnostics(InspectionDiagnostics, Symbol);
+  auto Evidence = analyzePayload(OutputValue.Bytes, Symbol);
   return {std::move(RequestValue), std::move(ResponseValue), std::move(Evidence),
           std::move(InspectionDiagnostics)};
+}
+
+BuiltFixture buildFixture(Fixture Kind, OptimizationLevel Level) {
+  return buildRequest(makeRequest(Kind, Level));
 }
 
 struct ExpectedInstruction {
@@ -440,8 +456,8 @@ constexpr std::array<ExpectedInstruction, 2> ExpectedRegion{{
 
 bool matchesInstruction(const PhysicalMachineInstructionTrace &Actual,
                         const ExpectedInstruction &Expected,
-                        ArrayRef<uint8_t> Payload) {
-  if (Actual.FunctionSymbol != KernelName || Actual.Opcode != Expected.Opcode ||
+                        ArrayRef<uint8_t> Payload, StringRef Symbol = KernelName) {
+  if (Actual.FunctionSymbol != Symbol || Actual.Opcode != Expected.Opcode ||
       Actual.Encoding.size() != 4 || Actual.ExplicitDefinitionCount != 1 ||
       Actual.Operands.size() != 3 || !Actual.ImplicitDefinitions.empty() ||
       Actual.ImplicitUses != std::vector<std::string>{"EXEC"} ||
@@ -465,7 +481,8 @@ bool matchesInstruction(const PhysicalMachineInstructionTrace &Actual,
 }
 
 std::optional<size_t> locateExactRegion(
-    const PhysicalMachineEffectEvidence &Evidence, ArrayRef<uint8_t> Payload) {
+    const PhysicalMachineEffectEvidence &Evidence, ArrayRef<uint8_t> Payload,
+    StringRef Symbol = KernelName) {
   if (Payload.empty() || Payload.size() > PayloadByteLimit ||
       Evidence.Instructions.size() < 2 ||
       Evidence.Instructions.size() > InstructionLimit ||
@@ -476,8 +493,8 @@ std::optional<size_t> locateExactRegion(
   for (size_t Index = 0; Index + 1 < Evidence.Instructions.size(); ++Index) {
     const auto &First = Evidence.Instructions[Index];
     const auto &Second = Evidence.Instructions[Index + 1];
-    if (!matchesInstruction(First, ExpectedRegion[0], Payload) ||
-        !matchesInstruction(Second, ExpectedRegion[1], Payload) ||
+    if (!matchesInstruction(First, ExpectedRegion[0], Payload, Symbol) ||
+        !matchesInstruction(Second, ExpectedRegion[1], Payload, Symbol) ||
         First.InstructionOffset + 4 != Second.InstructionOffset ||
         First.BlockOrdinal != Second.BlockOrdinal)
       continue;
@@ -514,9 +531,9 @@ json::Object instructionJson(const PhysicalMachineInstructionTrace &Site) {
 }
 
 json::Object describePositive(const BuiltFixture &Built, OptimizationLevel Level,
-                              bool UsedResult) {
+                              bool UsedResult, StringRef Symbol = KernelName) {
   const auto &Payload = Built.ResponseValue.LinkedOutput->Bytes;
-  auto Position = locateExactRegion(Built.Evidence, Payload);
+  auto Position = locateExactRegion(Built.Evidence, Payload, Symbol);
   require(Position.has_value(),
           "independent opcode/order/e32/register/EXEC/byte check failed");
   json::Array Region;
@@ -692,14 +709,18 @@ void rejectModuleAssemblyOnly() {
           "module-only rejection did not exercise the existing export gate");
 }
 
+#include "OrderedInlineRegionSourceObservation.inc"
+
 } // namespace
 
-int main(int Argc, char **) {
-  require(Argc == 1, "this test accepts no paths, assembly or profile options");
+int main(int Argc, char **Argv) {
   // In-process LLVM/LLD only; no hardware or worker children are launched.
   // CTest should additionally supply TIMEOUT=120. A future receipt runner must
   // enforce its own process-group timeout and stdout/stderr byte caps.
   alarm(90);
+  if (Argc == 3)
+    return observeSourceLlvm(Argv[1], Argv[2]);
+  require(Argc == 1, "expected no arguments or --observe-llvm-used/unused ABS");
   const size_t ContractNegatives = rejectContractControls();
   json::Array PositiveCases;
   std::optional<BuiltFixture> MutationBaseline;

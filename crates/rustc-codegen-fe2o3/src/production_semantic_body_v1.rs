@@ -280,6 +280,7 @@ pub(crate) struct ProductionSemanticBodyRequestOwnerV1<'tcx> {
     totals: ConstructionTotalsV1,
     callables: HashMap<Instance<'tcx>, ProductionSemanticCallableOwnerRecordV1>,
     inline_sources: crate::production_inline_source_occurrences_v30::InlineSourceOccurrencesV30,
+    ordered_sources: crate::production_ordered_source_occurrences_v31::OrderedSourceOccurrencesV31,
 }
 
 impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
@@ -334,6 +335,7 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
             totals,
             callables,
             inline_sources: Default::default(),
+            ordered_sources: Default::default(),
         })
     }
 
@@ -349,6 +351,20 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
         &self,
     ) -> Result<(), ProductionSemanticBodyErrorV1> {
         self.inline_sources.require_drained().map_err(table)
+    }
+
+    pub(crate) fn with_ordered_sources_v31(
+        mut self,
+        sources: crate::production_ordered_source_occurrences_v31::OrderedSourceOccurrencesV31,
+    ) -> Self {
+        self.ordered_sources = sources;
+        self
+    }
+
+    pub(crate) fn require_ordered_sources_consumed_v31(
+        &self,
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        self.ordered_sources.require_drained().map_err(table)
     }
 
     fn charge(
@@ -1297,6 +1313,42 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 if requires_source != source.is_some() {
                     return Err(table("assembly call occurrence source binding"));
                 }
+                let requires_region = self
+                    .terminal_expansions_by_raw
+                    .get(raw_block as usize)
+                    .copied()
+                    .flatten()
+                    .is_some_and(|recipe| {
+                        recipe.expansion == ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32
+                    });
+                let registers = if requires_region {
+                    if args.len() != 8 {
+                        return Err(table("ordered region actual argument cardinality"));
+                    }
+                    Some(
+                        crate::production_ordered_region_v31::actual_registers(
+                            self.tcx,
+                            [
+                                &args[3].node,
+                                &args[4].node,
+                                &args[5].node,
+                                &args[6].node,
+                                &args[7].node,
+                            ],
+                        )
+                        .map_err(table)?,
+                    )
+                } else {
+                    None
+                };
+                let region_source = self
+                    .owner
+                    .ordered_sources
+                    .take(self.function, raw_block, semantic_callee, registers)
+                    .map_err(table)?;
+                if requires_region != region_source.is_some() {
+                    return Err(table("ordered region call occurrence source binding"));
+                }
                 let mut call = SemanticDirectCallV1::new_callable(
                     semantic_callee,
                     arguments,
@@ -1305,6 +1357,9 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 )?;
                 if let Some(source) = source {
                     call = call.with_inline_assembly_source_v30(source);
+                }
+                if let Some(source) = region_source {
+                    call = call.with_ordered_region_source_v31(source);
                 }
                 Ok(SemanticTerminatorKindV1::Call(call))
             }
@@ -2322,6 +2377,7 @@ fn semantic_borrow_kind_v1(
 
 const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) -> Option<usize> {
     match expansion {
+        ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32 => Some(8),
         ProductionTerminalExpansionV1::Gfx942InlineU32(operation) => Some(
             crate::production_inline_assembly_v30::input_count(operation),
         ),
@@ -2703,6 +2759,7 @@ mod tests {
             totals: ConstructionTotalsV1::default(),
             callables: HashMap::new(),
             inline_sources: Default::default(),
+            ordered_sources: Default::default(),
         };
 
         owner.charge(SemanticMirResourceV1::Functions, 1).unwrap();

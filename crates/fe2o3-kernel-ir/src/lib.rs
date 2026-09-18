@@ -55,12 +55,14 @@
 //! instance codecs do not alter or extend any frozen module wire format.
 
 mod canonical_graph_visitors_v1;
+mod canonical_kir_bounded_inverse_v1;
 mod canonical_kir_coordinates_v1;
 mod canonical_kir_transition_receipt_v1;
 mod canonical_kir_transition_v1;
 mod canonical_kir_v10;
 mod canonical_kir_v11;
 mod canonical_kir_v12;
+mod canonical_kir_v16;
 mod canonical_kir_v5;
 mod canonical_kir_v6;
 mod canonical_kir_v7;
@@ -75,6 +77,7 @@ mod effect_extraction;
 mod execution_operations_v15;
 mod formal_memory_obligations;
 mod gfx942_inline_assembly_v1;
+mod gfx942_ordered_region_v1;
 mod integer_semantic_oracle_v1;
 mod interprocedural_effects;
 mod ir;
@@ -113,6 +116,7 @@ mod verification_inline_assembly_v1;
 mod verification_legacy_operation_v1;
 mod verification_memory_operation_v1;
 mod verification_module_state_v1;
+mod verification_ordered_region_v16;
 mod verification_public_preflight_v1;
 mod verification_registered_operation_v1;
 mod verification_reserved_call_v1;
@@ -136,6 +140,7 @@ pub use canonical_kir_v9::*;
 pub use canonical_kir_v10::*;
 pub use canonical_kir_v11::*;
 pub use canonical_kir_v12::*;
+pub use canonical_kir_v16::*;
 pub use canonical_work_budget_v1::*;
 pub use contract_catalog_v1::*;
 pub use control_flow::*;
@@ -145,6 +150,7 @@ pub use effect_extraction::*;
 pub use execution_operations_v15::*;
 pub use formal_memory_obligations::*;
 pub use gfx942_inline_assembly_v1::*;
+pub use gfx942_ordered_region_v1::*;
 pub use integer_semantic_oracle_v1::*;
 pub use interprocedural_effects::{
     InterproceduralEffectAnalysisV1, InterproceduralEffectDecisionV1,

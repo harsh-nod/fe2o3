@@ -500,6 +500,7 @@ fn operation_name(kind: &OperationKind) -> &'static str {
         OperationKind::Gfx950LdsTranspose(_) => "gfx950-lds-transpose",
         OperationKind::Wave(_) => "wave",
         OperationKind::InlineAssembly(_) => "inline-assembly",
+        OperationKind::Gfx942OrderedRegion(_) => "ordered-region",
     }
 }
 

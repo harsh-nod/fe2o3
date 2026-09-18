@@ -60,6 +60,11 @@ pub const KERNEL_IR_VERSION_V11: u16 = 11;
 pub const KERNEL_IR_VERSION_V12: u16 = 12;
 /// Execution roles and lifecycle operations; historical V13/V14 remain unallocated here.
 pub const KERNEL_IR_VERSION_V15: u16 = 15;
+/// V12 grammar plus the closed gfx942 ordered region; not V15 Execution.
+pub const KERNEL_IR_VERSION_V16: u16 = 16;
+
+#[path = "wire/ordered_region_v16.rs"]
+mod ordered_region_v16;
 
 #[path = "wire_execution_v15.rs"]
 mod execution_v15;
@@ -330,6 +335,11 @@ pub fn encode_module_v15(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError
     encode_module(module, KERNEL_IR_VERSION_V15)
 }
 
+/// Encodes V16 structure without source, physical-resource or proof authority.
+pub fn encode_module_v16(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V16)
+}
+
 /// Authority-free storage extents observed through the V12 encoding schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KernelIrV12WireExtentV1 {
@@ -378,7 +388,7 @@ fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncod
     writer.finish_module()
 }
 
-fn encode_module_with_work_v1(
+pub(crate) fn encode_module_with_work_v1(
     module: &Module,
     version: u16,
     budget: &mut CanonicalKernelIrWorkBudgetV1,
@@ -393,7 +403,7 @@ fn encode_module_with_work_v1(
     writer.finish_module()
 }
 
-fn count_module_with_work_v1(
+pub(crate) fn count_module_with_work_v1(
     module: &Module,
     version: u16,
     budget: &mut CanonicalKernelIrWorkBudgetV1,
@@ -516,6 +526,24 @@ pub fn decode_module_v15(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V15, true)
 }
 
+/// Decodes exact V16, not historical V15 Execution or older wire versions.
+/// Successful decoding establishes structure only; an owner must verify semantics.
+pub fn decode_module_v16(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V16, false)
+}
+
+pub(crate) fn decode_module_v16_with_allocation_budget_v1(
+    bytes: &[u8],
+    budget: &mut crate::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<Module, KernelIrDecodeError> {
+    decode_module_impl_v1(
+        bytes,
+        KERNEL_IR_VERSION_V16,
+        false,
+        Some(DecodeBudgetV12::Resources(budget)),
+    )
+}
+
 pub(crate) fn decode_module_v12_with_work_v1(
     bytes: &[u8],
     budget: &mut CanonicalKernelIrWorkBudgetV1,
@@ -554,7 +582,10 @@ fn decode_module_impl_v1(
     let version = reader.u16()?;
     if version > maximum_version
         || (!accept_older && version != maximum_version)
-        || !matches!(version, 1..=12 | KERNEL_IR_VERSION_V15)
+        || !matches!(
+            version,
+            1..=12 | KERNEL_IR_VERSION_V15 | KERNEL_IR_VERSION_V16
+        )
     {
         return Err(KernelIrDecodeError::UnknownVersion(version));
     }
@@ -604,7 +635,7 @@ fn decode_module_impl_v1(
             .map_err(KernelIrDecodeError::WorkLimit)?;
     }
     let allocation_scratch = if let Some(budget @ DecodeBudgetV12::Resources(_)) = budget.as_mut() {
-        let extent = count_module_v12_wire_extent_with_work_v1(&module, budget.work_budget())?;
+        let extent = count_module_with_work_v1(&module, version, budget.work_budget(), false)?;
         let scratch = decoded_tree_payload_bound_v12::<&FunctionId>(module.kernels.len())?
             .checked_add(extent.peak_auxiliary_bytes())
             .ok_or(KernelIrDecodeError::Resource(
@@ -1169,6 +1200,16 @@ fn encode_operation_kind(
             writer.u8(24)?;
             encode_gfx950_lds_transpose_operation(writer, transpose)?;
         }
+        OperationKind::Gfx942OrderedRegion(region) => {
+            if writer.version != KERNEL_IR_VERSION_V16 {
+                return Err(KernelIrEncodeError::UnsupportedInVersion {
+                    version: writer.version,
+                    feature: "gfx942 ordered region",
+                });
+            }
+            writer.u8(38)?;
+            ordered_region_v16::encode(writer, region)?;
+        }
         OperationKind::InlineAssembly(assembly) => {
             require_v3(writer, "source-bound inline assembly")?;
             writer.u8(21)?;
@@ -1182,6 +1223,9 @@ fn decode_operation_kind(
     reader: &mut Reader<'_, '_>,
 ) -> Result<OperationKind, KernelIrDecodeError> {
     Ok(match reader.u8()? {
+        38 if reader.version == KERNEL_IR_VERSION_V16 => {
+            OperationKind::Gfx942OrderedRegion(ordered_region_v16::decode(reader)?)
+        }
         tag @ 32..=37 if reader.version == KERNEL_IR_VERSION_V15 => {
             OperationKind::Execution(execution_v15::decode_operation(reader, tag)?)
         }

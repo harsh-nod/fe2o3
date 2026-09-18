@@ -259,7 +259,8 @@ impl Operation {
             Op::Intrinsic(intrinsic) => match intrinsic.kind {
                 IntrinsicKind::InvocationIndex { .. } | IntrinsicKind::LaunchExtent { .. } => {}
             },
-            Op::VerificationContract(_)
+            Op::Gfx942OrderedRegion(_)
+            | Op::VerificationContract(_)
             | Op::VectorLayoutConvert(_)
             | Op::Constant(_)
             | Op::Unary { .. }

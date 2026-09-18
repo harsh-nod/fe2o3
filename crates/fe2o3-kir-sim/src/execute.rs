@@ -48,6 +48,9 @@ use crate::{
     SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1,
 };
 
+#[path = "execute_ordered_region_v16.rs"]
+mod ordered_region_v16;
+
 /// Ephemeral execution event kind. This is an in-process adapter, not a durable trace schema.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SimulationEventKindV1 {
@@ -6363,6 +6366,9 @@ fn execute_operation(
     if matches!(&operation.kind, OperationKind::InlineAssembly(_)) {
         let site = operation_site(function_index, block, ordinal);
         execute_inline_assembly(engine, values, operation, &site)
+    } else if matches!(&operation.kind, OperationKind::Gfx942OrderedRegion(_)) {
+        let site = operation_site(function_index, block, ordinal);
+        ordered_region_v16::execute(engine, values, operation, &site)
     } else {
         execute_non_assembly_operation(
             engine,
@@ -6837,6 +6843,7 @@ fn execute_non_assembly_operation(
         | OperationKind::Wave(_)
         | OperationKind::Gfx950LdsTranspose(_)
         | OperationKind::InlineAssembly(_)
+        | OperationKind::Gfx942OrderedRegion(_)
         | OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
         | OperationKind::VectorLayoutConvert(_)

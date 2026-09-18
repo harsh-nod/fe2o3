@@ -40,6 +40,10 @@ use sha2::{Digest, Sha256};
 mod v12_preflight;
 use v12_preflight::reject_unsupported_v12_module;
 
+#[path = "lowering/ordered_region_v16.rs"]
+mod ordered_region_v16;
+pub use ordered_region_v16::lower_canonical_v16_compiler_module_to_gfx942_xnack_minus_llvm_ir;
+
 include!("lowering_native_v12.rs");
 
 use crate::{
@@ -1042,6 +1046,24 @@ fn lower_compiler_module_to_llvm_ir_for_target(
     semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
     require_kernel: bool,
 ) -> Result<String, LoweringErrors> {
+    lower_compiler_module_with_ordered_region_context_v16(
+        module,
+        target,
+        launch_policies,
+        semantic_anchor_identity,
+        require_kernel,
+        None,
+    )
+}
+
+fn lower_compiler_module_with_ordered_region_context_v16(
+    module: &Module,
+    target: LoweringTarget,
+    launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+    semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
+    require_kernel: bool,
+    ordered_region_owner: Option<&fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV16>,
+) -> Result<String, LoweringErrors> {
     if require_kernel && module.kernels.is_empty() {
         return Err(LoweringErrors::one(
             LoweringLocation::module(module),
@@ -1050,7 +1072,12 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         ));
     }
     verify_module(module).map_err(LoweringErrors::verification)?;
-    reject_unsupported_v12_module(module)?;
+    if let Some(owner) = ordered_region_owner {
+        ordered_region_v16::validate_owner_context(module, target, owner)?;
+        v12_preflight::reject_unsupported_v16_module(owner)?;
+    } else {
+        reject_unsupported_v12_module(module)?;
+    }
 
     if let Some(exact_target) = target.exact_target_binding() {
         for kernel in &module.kernels {
@@ -1287,6 +1314,7 @@ fn lower_compiler_module_to_llvm_ir_for_target(
                     *emission
                 }),
         )?;
+        lowerer.ordered_region_v16 = ordered_region_owner.is_some();
         preflight_function(&mut lowerer)?;
         kernel_lowerers.push(lowerer);
     }
@@ -2571,7 +2599,16 @@ fn emit_compiler_module(
 
     let mut output = CapacityLimitedText::try_new(module, MAX_COMPILER_MODULE_TEXT_BYTES)?;
     writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"").unwrap();
-    if let Some(data_layout) = target.data_layout() {
+    // V16's closed target path emits directly for the pinned LLVM22 worker.
+    // The older renderer intentionally retains the Rust/frontend layout. Select
+    // the existing reviewed worker profile here, before any module text exists;
+    // never edit captured LLVM or relax the worker's exact layout validation.
+    let data_layout = if kernels.iter().any(|lowerer| lowerer.ordered_region_v16) {
+        Some(fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1)
+    } else {
+        target.data_layout()
+    };
+    if let Some(data_layout) = data_layout {
         writeln!(output, "target datalayout = \"{data_layout}\"").unwrap();
     }
     writeln!(output).unwrap();
@@ -3214,6 +3251,11 @@ fn validate_capabilities(
                 max_scope,
             } if supported_atomic_capability(*width_bits, *address_space, *max_scope) => {}
             TargetCapability::Extension { namespace, name }
+                if target == LoweringTarget::Gfx942XnackMinusV1
+                    && namespace
+                        == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_REGION_CAPABILITY_NAMESPACE
+                    && name == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_REGION_CAPABILITY_NAME => {}
+            TargetCapability::Extension { namespace, name }
                 if target.supports_gfx942_inline_assembly()
                     && namespace == AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE
                     && name == AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME => {}
@@ -3601,6 +3643,7 @@ struct FunctionLowerer<'a> {
     control_flow: IndexedControlFlow,
     split_edges: Vec<bool>,
     semantic_anchor_emission: SemanticAnchorEmissionV1,
+    ordered_region_v16: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -3949,6 +3992,7 @@ impl<'a> FunctionLowerer<'a> {
             control_flow,
             split_edges,
             semantic_anchor_emission,
+            ordered_region_v16: false,
         })
     }
 
@@ -3979,6 +4023,7 @@ impl<'a> FunctionLowerer<'a> {
             control_flow,
             split_edges,
             semantic_anchor_emission,
+            ordered_region_v16: false,
         })
     }
 
@@ -4004,6 +4049,7 @@ impl<'a> FunctionLowerer<'a> {
             control_flow,
             split_edges,
             semantic_anchor_emission: SemanticAnchorEmissionV1::Disabled,
+            ordered_region_v16: false,
         })
     }
 
@@ -4105,7 +4151,10 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::Call { callee, arguments }
                 if AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments).is_some()
         );
-        let is_inline_assembly = matches!(operation.kind, OperationKind::InlineAssembly(_));
+        let is_inline_assembly = matches!(
+            operation.kind,
+            OperationKind::InlineAssembly(_) | OperationKind::Gfx942OrderedRegion(_)
+        );
         let is_matrix = matches!(operation.kind, OperationKind::Matrix(_));
         let is_gfx950_collective_or_lds_transpose = matches!(
             operation.kind,
@@ -4144,6 +4193,11 @@ impl<'a> FunctionLowerer<'a> {
                         | TargetCapability::WaveWidth(_)
                         | TargetCapability::Float16
                         | TargetCapability::BFloat16
+                ) || matches!(
+                    capability,
+                    TargetCapability::Extension { namespace, name }
+                        if namespace == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_REGION_CAPABILITY_NAMESPACE
+                            && name == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_REGION_CAPABILITY_NAME
                 ) || matches!(
                     capability,
                     TargetCapability::Extension { namespace, name }
@@ -4738,6 +4792,9 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::InlineAssembly(assembly) => {
                 self.validate_inline_assembly(operation, assembly, &location)?;
+            }
+            OperationKind::Gfx942OrderedRegion(_) => {
+                self.validate_ordered_region_v16(operation, &location)?;
             }
             OperationKind::Matrix(matrix) => {
                 self.validate_matrix(matrix, &location)?;
@@ -6898,6 +6955,9 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::InlineAssembly(assembly) => {
                 self.emit_inline_assembly(output, operation, assembly);
+            }
+            OperationKind::Gfx942OrderedRegion(region) => {
+                self.emit_ordered_region_v16(output, operation, region);
             }
             OperationKind::Matrix(matrix) => {
                 self.emit_matrix(output, block, operation_index, operation, matrix);

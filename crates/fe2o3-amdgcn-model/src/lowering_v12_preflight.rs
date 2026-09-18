@@ -6,6 +6,19 @@ use fe2o3_kernel_ir::{Module, OperationKind, Type};
 /// Check the whole module before graph selection or textual emission. Uncalled
 /// declarations, unreachable blocks, and dead results are still input syntax.
 pub(super) fn reject_unsupported_v12_module(module: &Module) -> Result<(), LoweringErrors> {
+    reject_unsupported_module(module, false)
+}
+
+pub(super) fn reject_unsupported_v16_module(
+    owner: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV16,
+) -> Result<(), LoweringErrors> {
+    reject_unsupported_module(owner.module(), true)
+}
+
+fn reject_unsupported_module(
+    module: &Module,
+    ordered_region_v16: bool,
+) -> Result<(), LoweringErrors> {
     for function in &module.functions {
         for ty in function
             .signature
@@ -40,6 +53,18 @@ pub(super) fn reject_unsupported_v12_module(module: &Module) -> Result<(), Lower
                 // Keep this exhaustive: a new operation with embedded types or
                 // compiler effects must receive an explicit backend decision.
                 let embedded = match &operation.kind {
+                    OperationKind::Gfx942OrderedRegion(_) => {
+                        if !ordered_region_v16 {
+                            return Err(LoweringErrors::one(
+                                LoweringLocation::device_operation(
+                                    module, function, block.id, ordinal,
+                                ),
+                                LoweringDiagnosticCode::UnsupportedOperation,
+                                "ordered regions require the exact canonical V16 owner entry point",
+                            ));
+                        }
+                        None
+                    }
                     OperationKind::Execution(_) => {
                         return Err(LoweringErrors::one(
                             LoweringLocation::device_operation(module, function, block.id, ordinal),

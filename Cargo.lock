@@ -3072,6 +3072,7 @@ dependencies = [
  "dialect-kernel",
  "dialect-mir",
  "fe2o3-amd-target",
+ "fe2o3-amdgcn-model",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
  "fe2o3-build-authority",

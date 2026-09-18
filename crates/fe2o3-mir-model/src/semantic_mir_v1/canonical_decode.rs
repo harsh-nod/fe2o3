@@ -369,6 +369,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes exact V31 ordered regions, excluding the inert V29 capability grammar.
+    pub fn decode_exact_v31_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V31),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -411,6 +423,7 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V15
                         | SemanticMirWireVersionV1::V28
                         | SemanticMirWireVersionV1::V30
+                        | SemanticMirWireVersionV1::V31
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -1683,7 +1696,9 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V30 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V31 {
+            88
+        } else if self.wire_version == SemanticMirWireVersionV1::V30 {
             87
         } else if self.wire_version == SemanticMirWireVersionV1::V29 {
             86
@@ -1714,7 +1729,10 @@ impl<'a> CanonicalDecoderV1<'a> {
         let tag = self.tagged("compiler intrinsic", maximum_tag)?;
         // Historical capability drafts and synthetic scope exit are not callable grammar.
         if matches!(tag, 69..=80 | 83)
-            || self.wire_version == SemanticMirWireVersionV1::V30 && matches!(tag, 81..=86)
+            || matches!(
+                self.wire_version,
+                SemanticMirWireVersionV1::V30 | SemanticMirWireVersionV1::V31
+            ) && matches!(tag, 81..=86)
         {
             return Err(SemanticMirDecodeErrorV1::InvalidTag {
                 context: "compiler intrinsic",
@@ -1723,6 +1741,13 @@ impl<'a> CanonicalDecoderV1<'a> {
             });
         }
         Ok(match tag {
+            88 => {
+                let tag = self.tagged("gfx942 ordered region profile", 0)?;
+                SemanticCompilerIntrinsicOperationV1::Gfx942OrderedRegion(
+                    SemanticGfx942OrderedRegionProfileV31::from_wire_tag(tag)
+                        .expect("closed region profile tag was checked"),
+                )
+            }
             87 => {
                 let kind = self.tagged("gfx942 inline instruction", 5)?;
                 let instruction = SemanticGfx942InlineInstructionV30::from_wire_tag(kind)
@@ -2676,7 +2701,10 @@ impl<'a> CanonicalDecoderV1<'a> {
                     destination,
                     unwind,
                 )?;
-                if self.wire_version == SemanticMirWireVersionV1::V30 {
+                if matches!(
+                    self.wire_version,
+                    SemanticMirWireVersionV1::V30 | SemanticMirWireVersionV1::V31
+                ) {
                     let source = self.option("inline assembly source", |decoder| {
                         Ok(SemanticInlineAssemblySourceV30::new(
                             decoder.identity()?,
@@ -2687,6 +2715,19 @@ impl<'a> CanonicalDecoderV1<'a> {
                     })?;
                     if let Some(source) = source {
                         call = call.with_inline_assembly_source_v30(source);
+                    }
+                }
+                if self.wire_version == SemanticMirWireVersionV1::V31 {
+                    let source = self.option("ordered region source", |decoder| {
+                        Ok(SemanticOrderedRegionSourceV31::new(
+                            decoder.identity()?,
+                            SemanticFunctionIdentityV1(decoder.identity()?),
+                            decoder.identity()?,
+                            decoder.identity()?,
+                        )?)
+                    })?;
+                    if let Some(source) = source {
+                        call = call.with_ordered_region_source_v31(source);
                     }
                 }
                 SemanticTerminatorKindV1::Call(call)
@@ -2794,6 +2835,7 @@ mod tests {
     mod capability_v29_tests;
     mod frozen_v15;
     mod gfx942_inline_v30_tests;
+    mod gfx942_ordered_region_v31_tests;
     mod rust_call_local_tests;
 
     fn identity(tag: u8) -> [u8; 32] {
