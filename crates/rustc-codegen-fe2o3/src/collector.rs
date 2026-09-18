@@ -252,6 +252,9 @@ pub(crate) struct AuthenticatedCollectedKernelClosureV1<'tcx> {
     closure_flow: closure_flow_v1::AuthenticatedClosureFlowV1<'tcx>,
 }
 
+#[path = "production_source_census_v1.rs"]
+pub(crate) mod source_census_v1;
+
 impl<'tcx> AuthenticatedCollectedKernelClosureV1<'tcx> {
     pub(crate) fn function_count(&self) -> usize {
         self.collection.functions.len()
