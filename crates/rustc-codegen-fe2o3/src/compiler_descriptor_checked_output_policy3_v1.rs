@@ -5,7 +5,7 @@ use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1;
 use fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy3V1;
 
-/// A consumer for the closed scalar/Unit admission subset. The executable and
+/// A consumer for the owner's closed checked-output admission subset. The executable and
 /// fresh obligations come only from `admitted`; there is no free Module input.
 /// This remains inert descriptor input, not legacy lineage or artifact custody.
 /// Descriptor encoding and the inherited formal engine are not canonical-ledger
@@ -42,8 +42,8 @@ pub(crate) fn construct_checked_output_policy3_descriptor_source_v1(
     let geometries =
         validate_checked_output_policy3_descriptor_evidence_v1(typed_roots, admitted, &target)?;
     let producer_version = match profile {
-        ProductionAmdTargetProfileV1::Gfx942 => "production-policy3-scalar-gfx942-cov6-v1",
-        ProductionAmdTargetProfileV1::Gfx950 => "production-policy3-scalar-gfx950-cov6-v1",
+        ProductionAmdTargetProfileV1::Gfx942 => "production-policy3-checked-gfx942-cov6-v1",
+        ProductionAmdTargetProfileV1::Gfx950 => "production-policy3-checked-gfx950-cov6-v1",
     };
     let profiles = geometries
         .into_iter()
@@ -146,16 +146,9 @@ fn validate_checked_output_policy3_descriptor_evidence_v1(
                 "exact retained source launch fields",
             ));
         }
-        if !obligations.allocations().is_empty()
-            || !obligations.accesses().is_empty()
-            || !obligations.bounds_requirements().is_empty()
-            || !obligations.runtime_alias_requirements().is_empty()
-            || !obligations.inter_invocation_conflicts().is_empty()
-        {
-            return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
-                "closed scalar output memory obligations",
-            ));
-        }
+        // Fresh O obligations are retained by the admitted owner. The same
+        // per-root validator checks Global allocation/ownership, runtime bounds,
+        // aliases and source launch; no N facts replace O facts here.
         geometries.push(validate_production_v1_descriptor_root_evidence(
             module,
             root,

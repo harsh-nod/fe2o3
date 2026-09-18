@@ -1,6 +1,15 @@
 use super::*;
 
-/// Failure to close the deliberately memory-free Policy3 admission subset.
+#[path = "production_checked_output_general_policy3_v1.rs"]
+mod general;
+
+#[derive(Clone, Copy)]
+enum OutputAdmissionKindV1 {
+    ClosedScalar,
+    GuardedGlobal,
+}
+
+/// Failure to close an explicitly supported Policy3 admission grammar.
 #[derive(Debug)]
 pub enum ProductionCheckedOutputAdmissionErrorPolicy3V1 {
     /// The canonical work or storage contract was not satisfied.
@@ -46,9 +55,9 @@ impl Error for ProductionCheckedOutputAdmissionErrorPolicy3V1 {
     }
 }
 
-/// Move-only final safety custody for a closed, memory-free Policy3 output.
+/// Move-only final safety custody for an explicitly checked Policy3 subset.
 ///
-/// This version admits only scalar/Unit roots with one returning source and
+/// `try_admit` retains the closed scalar contract: roots have one returning source and
 /// executable block, total scalar recipes and no calls, memory, private
 /// addresses, assertions, conditional control, compiler ordering or borrowed
 /// interfaces. Ranked projection may use a finite unconditional chain covering
@@ -56,6 +65,8 @@ impl Error for ProductionCheckedOutputAdmissionErrorPolicy3V1 {
 /// and O are independently censused; formal completeness alone does not
 /// establish these restrictions. The source owner remains historical N
 /// custody, while `output()` always returns the actual checked Policy3 O.
+/// `try_admit_general_v1` additionally admits its documented guarded-global
+/// grammar, retaining runtime assertions, bounds and alias requirements.
 ///
 /// This is not artifact, target, descriptor, runtime-launch or publication
 /// authority. Fixed formal witnesses do not authenticate dynamic launches.
@@ -104,6 +115,7 @@ pub struct ProductionCheckedOutputOwnerPolicy3V1 {
     checked: fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
     kernels: Box<[FormalMemoryObligations]>,
     source_storage_floor: usize,
+    admission: OutputAdmissionKindV1,
 }
 
 impl fmt::Debug for ProductionCheckedOutputOwnerPolicy3V1 {
@@ -117,6 +129,74 @@ impl fmt::Debug for ProductionCheckedOutputOwnerPolicy3V1 {
 }
 
 impl ProductionCheckedOutputOwnerPolicy3V1 {
+    /// Consumes source/ranked custody for the checked guarded-global grammar.
+    ///
+    /// This accepts scalar roots and ordinary nonvolatile global scalar accesses,
+    /// with exact checked runtime assertion success/failure control. Private
+    /// addresses, local helpers, collective/ordered operations and
+    /// unsupported scalar recipes remain refused. Bounds and alias requirements
+    /// are retained obligations, not authenticated runtime bindings or launches.
+    ///
+    /// Source/capture, B's separate replay receipt and checked O must remain
+    /// caller-reserved as for `try_admit`. New inventories, transport and census
+    /// scratch use the supplied ledger and restore its incoming floor on every
+    /// result. Existing source/ranked reconstruction, formal analysis/results
+    /// and wrapper bookkeeping retain their non-canonical accounting exclusion.
+    pub fn try_admit_general_v1(
+        receipt: ProductionMaterializedRankedModuleReceiptV1,
+        bound: fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+        checked: fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> Result<Self, ProductionCheckedOutputAdmissionErrorPolicy3V1> {
+        use ProductionCheckedOutputAdmissionErrorPolicy3V1 as E;
+        output_admission_charge_v1(budget, 8)?;
+        let incoming = budget.storage();
+        let ledger = budget.work_ledger_identity_v1();
+        let source_storage_floor = receipt
+            .materialized
+            .unit_local_source_storage_floor_v1()
+            .map_err(E::Source)?;
+        let minimum = source_storage_floor
+            .checked_add(checked.storage().retained_storage())
+            .ok_or(E::Resource(AssertOriginResourceV1::Arithmetic))?;
+        if incoming < minimum {
+            return Err(E::Resource(AssertOriginResourceV1::Accounting));
+        }
+        receipt
+            .materialized
+            .require_legacy_helper_policy_v1("Policy3 general output admission")
+            .map_err(E::Source)?;
+        validate_source_ranked_roster_v1(
+            &receipt.materialized.semantic_ssa,
+            &receipt.materialized.source_launch,
+            &receipt.roots,
+        )
+        .map_err(E::Source)?;
+        output_admission_charge_v1(budget, 2)?;
+        if receipt.roots.is_empty()
+            || receipt.roots.len() != receipt.materialized.executable().module().kernels.len()
+        {
+            return Err(output_admission_unsupported_v1(
+                "ranked",
+                "complete nonempty root roster",
+            ));
+        }
+        let source = ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(receipt)
+            .map_err(E::Source)?;
+        let kernels = general::check_general_output_v1(&source, &bound, &checked, budget)?;
+        if ledger != budget.work_ledger_identity_v1() || incoming != budget.storage() {
+            return Err(E::Resource(AssertOriginResourceV1::Accounting));
+        }
+        Ok(Self {
+            source,
+            bound,
+            checked,
+            kernels,
+            source_storage_floor,
+            admission: OutputAdmissionKindV1::GuardedGlobal,
+        })
+    }
+
     /// Consumes actual ranked/source custody, canonical B, and checked Policy3 O.
     ///
     /// Reserve the source's retained analysis/capture payload, B's separate
@@ -210,6 +290,7 @@ impl ProductionCheckedOutputOwnerPolicy3V1 {
             checked,
             kernels,
             source_storage_floor,
+            admission: OutputAdmissionKindV1::ClosedScalar,
         })
     }
 
@@ -243,6 +324,18 @@ impl ProductionCheckedOutputOwnerPolicy3V1 {
         false
     }
 
+    /// Source/capture plus checked-output floor, excluding caller-reserved B.
+    /// This numeric requirement does not authenticate allocation custody.
+    pub fn retained_input_storage_floor_v1(
+        &self,
+    ) -> Result<usize, ProductionCheckedOutputAdmissionErrorPolicy3V1> {
+        self.source_storage_floor
+            .checked_add(self.checked.storage().retained_storage())
+            .ok_or(ProductionCheckedOutputAdmissionErrorPolicy3V1::Resource(
+                AssertOriginResourceV1::Arithmetic,
+            ))
+    }
+
     /// Rechecks the closed subset, canonical endpoint relation and fresh O facts.
     /// This preserves the construction method's explicit accounting exclusions.
     pub fn verify_equivalence(
@@ -259,6 +352,19 @@ impl ProductionCheckedOutputOwnerPolicy3V1 {
             .ok_or(E::Resource(AssertOriginResourceV1::Arithmetic))?;
         if incoming < minimum {
             return Err(E::Resource(AssertOriginResourceV1::Accounting));
+        }
+        if matches!(self.admission, OutputAdmissionKindV1::GuardedGlobal) {
+            let fresh =
+                general::check_general_output_v1(&self.source, &self.bound, &self.checked, budget)?;
+            if fresh != self.kernels {
+                return Err(E::Formal(
+                    crate::ProductionFormalMemoryErrorV1::ObligationMismatch,
+                ));
+            }
+            if ledger != budget.work_ledger_identity_v1() || incoming != budget.storage() {
+                return Err(E::Resource(AssertOriginResourceV1::Accounting));
+            }
+            return Ok(());
         }
         self.source.verify_equivalence().map_err(E::Source)?;
         check_output_source_v1(self.source.semantic().semantic(), budget)?;

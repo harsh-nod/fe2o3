@@ -682,6 +682,10 @@ fn canonical_verified_inverse(
 #[path = "canonical_kir_v12_bytes_admission.rs"]
 mod bytes_admission;
 
+#[path = "canonical_kir_v12_candidate_copy.rs"]
+mod candidate_copy;
+pub use candidate_copy::CanonicalKernelIrCandidateStorageV12;
+
 #[cfg(test)]
 #[path = "canonical_kir_v12_module_tests.rs"]
 mod module_tests;

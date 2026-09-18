@@ -585,7 +585,7 @@ fn derive_admitted_obligations_for_kernel(
     })
 }
 
-fn witness_extents(domain: &LaunchDomain) -> [u64; 3] {
+pub(crate) fn witness_extents(domain: &LaunchDomain) -> [u64; 3] {
     let mut witness = [1_u64; 3];
     for (axis, extent) in domain.extents().enumerate() {
         witness[axis] = match extent {

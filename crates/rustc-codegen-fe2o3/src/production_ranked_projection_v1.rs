@@ -14,7 +14,9 @@ mod slice_projection_v1;
 use slice_projection_v1::ProjectedViewsV1;
 
 #[cfg(test)]
-pub(crate) use tests::with_backend_checked_output_policy3_v1;
+pub(crate) use tests::{
+    with_backend_checked_output_policy3_owned_v1, with_backend_checked_output_policy3_v1,
+};
 
 use analysis_multi_split_v1::{
     append_analysis_multi_split_blocks, append_analysis_multi_split_blocks_with_arguments,
@@ -1531,6 +1533,13 @@ impl ProductionRankedSemanticProjectionRosterReceiptV1 {
                 canonical_kernel_order,
             },
         ))
+    }
+}
+
+impl ProductionRankedSemanticProgramV1 {
+    /// Borrows the exact retained N before consuming its authenticated roster.
+    pub(crate) fn materialized(&self) -> &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1 {
+        &self.materialized
     }
 }
 

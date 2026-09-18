@@ -16,6 +16,7 @@ mod canonical_kir_must_alias_v1;
 mod canonical_kir_physical_occurrences_v1;
 mod canonical_kir_sparse_scalar_v1;
 mod canonical_kir_sparse_v1;
+mod canonical_kir_store_forwarding_v1;
 mod canonical_kir_transition_v1;
 mod control_flow;
 #[cfg(feature = "authenticated-machine-effect")]
@@ -51,6 +52,7 @@ pub use canonical_kir_memory_ssa_v1::*;
 pub use canonical_kir_must_alias_v1::*;
 pub use canonical_kir_physical_occurrences_v1::*;
 pub use canonical_kir_sparse_v1::*;
+pub use canonical_kir_store_forwarding_v1::*;
 pub use canonical_kir_transition_v1::*;
 pub use control_flow::{
     ControlFlowAnalysis, ControlFlowDiagnostic, ControlFlowDiagnosticV2, ControlFlowEdge,
