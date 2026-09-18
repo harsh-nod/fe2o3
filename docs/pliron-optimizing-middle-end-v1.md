@@ -360,6 +360,23 @@ Source membership is checked against the reconstructed root-qualified function
 correspondence. Every retained helper is checked, including an uncalled helper
 left after independently checked dead-control removal.
 
+The source census distinguishes kernel roots, the bodies selected by the exact
+transparent Result-wrapper selector, and actual retained helpers. A selected
+body is not automatically a scalar helper: if it is also retained as a helper
+under another root, that occurrence must still satisfy the scalar ABI rule.
+Complete original source/N reconstruction remains mandatory. Repeated
+root-qualified mappings of a shared helper may identify the same physical
+statement only when their semantic function, block and statement all agree.
+The role census and selector scans use the existing work/storage ledger.
+
+Ranked allocation provenance also recognizes a whole-value Copy/Move chain from
+an unchanged ExclusiveOwner argument to a uniquely defined, same-type carrier.
+A later direct borrow is admitted only when every receiver use is an arg0 use
+of an authenticated descriptor-preserving disjoint intrinsic. Casts, projected
+copies, raw address escapes, aliases, unknown calls and carrier writes do not
+supply this authority. The bounded graph traversal is linear in source rows,
+locals and copy edges; it is not a new alias, initialization or borrow theorem.
+
 The helper census requires complete empty memory effects and a closed scalar
 opcode set. F32/F64 constants, comparisons, selects and strict add/subtract/
 multiply are admitted without reassociation, contraction or fast-math permission.
@@ -383,6 +400,13 @@ the exact admitted optimized O. They re-verify its unchanged V12 canonical bytes
 and identity, then use the existing bounded CPU simulator with explicit test
 requests, actual entry ABI and workgroup metadata. They do not substitute a
 handwritten KIR graph or select compiler behavior by workload name.
+
+`ordinary_rust_result_wrapped_fill_reaches_checked_native_output` additionally
+checks the real Result-returning Rust fixture with normal optimized rustc MIR
+and with rustc MIR inlining explicitly disabled in the test invocation. It
+requires observing zero and one retained transparent wrappers respectively,
+then runs the same exact-O Fill oracle for each. The fe2o3 pass policy is
+unchanged; this frontend test variation is not a production optimizer selector.
 
 Each finite F32 scenario compares every backing byte and initialization bit with
 an independent CPU reference, including readonly inputs, unused output elements

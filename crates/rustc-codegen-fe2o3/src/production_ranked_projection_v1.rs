@@ -104,6 +104,9 @@ use fe2o3_pliron::{
     ProductionSessionLimitsV1, compile_ranked_kernel_for_gfx942_lowering_v1,
 };
 
+#[path = "production_ranked_projection_v1/exclusive_owner_carrier_v1.rs"]
+mod exclusive_owner_carrier_v1;
+
 const ROOT_NAME_V1: &str = "semantic_safety_module";
 // Leave one operation for the ranked function terminator.
 const MAX_PROJECTED_OPERATIONS_V1: usize = MAX_RANKED_BOUNDS_OPERATIONS - 1;
@@ -7668,6 +7671,7 @@ fn project_intrinsic_contracts(
         allocation_origins,
         allocation_provenance,
     } = local_provenance_with_scalar_inventory_v1(
+        callables,
         types,
         function,
         &scalar_inventory.counts,
@@ -18688,6 +18692,7 @@ fn local_provenance_v1(
 ) -> Result<LocalProvenanceV1, ProductionRankedProjectionErrorV1> {
     let inventory = assertion_definition_inventory(function)?;
     local_provenance_with_scalar_inventory_v1(
+        &[],
         types,
         function,
         &inventory.counts,
@@ -18696,6 +18701,7 @@ fn local_provenance_v1(
 }
 
 fn local_provenance_with_scalar_inventory_v1(
+    callables: &[SemanticCallableDeclV1],
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     definitions: &[u8],
@@ -18707,6 +18713,11 @@ fn local_provenance_with_scalar_inventory_v1(
             "local provenance scalar custody tables do not match the semantic local table",
         ));
     }
+    let exclusive_owner_origins = exclusive_owner_carrier_v1::exclusive_owner_value_origins_v1(
+        callables,
+        function,
+        definitions,
+    )?;
     let mut stable_argument_origins = vec![None; local_count];
     let mut allocation_origins = vec![None; local_count];
     let mut allocation_provenance = vec![None; local_count];
@@ -18768,7 +18779,7 @@ fn local_provenance_with_scalar_inventory_v1(
                     operand,
                 } => simple_operand_local(operand),
                 SemanticRvalueKindV1::Borrow { place, .. } => {
-                    borrowed_allocation_local_v1(function, place)
+                    borrowed_allocation_local_v1(function, place, &exclusive_owner_origins)
                 }
                 SemanticRvalueKindV1::AddressOf { place, .. } => {
                     reborrowed_allocation_local_v1(place)
@@ -18964,6 +18975,7 @@ fn reborrowed_allocation_local_v1(place: &SemanticPlaceV1) -> Option<SemanticLoc
 fn borrowed_allocation_local_v1(
     function: &SemanticFunctionDeclV1,
     place: &SemanticPlaceV1,
+    exclusive_owner_origins: &[Option<u32>],
 ) -> Option<SemanticLocalIdV1> {
     if let Some(local) = reborrowed_allocation_local_v1(place) {
         return Some(local);
@@ -18972,17 +18984,21 @@ fn borrowed_allocation_local_v1(
         return None;
     }
     let local = function.locals().get(place.local().index() as usize)?;
-    let SemanticLocalRoleV1::Argument(argument) = local.role() else {
-        return None;
-    };
-    matches!(
-        function
-            .abi()
-            .source_argument_ownership()
-            .get(argument as usize),
-        Some(SemanticSourceArgumentOwnershipV1::ExclusiveOwner)
-    )
-    .then_some(place.local())
+    if let SemanticLocalRoleV1::Argument(argument) = local.role() {
+        return matches!(
+            function
+                .abi()
+                .source_argument_ownership()
+                .get(argument as usize),
+            Some(SemanticSourceArgumentOwnershipV1::ExclusiveOwner)
+        )
+        .then_some(place.local());
+    }
+    exclusive_owner_origins
+        .get(place.local().index() as usize)
+        .copied()
+        .flatten()
+        .map(|_| place.local())
 }
 
 #[cfg(test)]
@@ -24774,6 +24790,7 @@ mod tests {
     include!("production_ranked_projection_v1/projection_06_tests.rs");
     include!("production_ranked_projection_v1/projection_07_tests.rs");
     include!("production_ranked_projection_v1/projection_08_tests.rs");
+    include!("production_ranked_projection_v1/exclusive_owner_carrier_v1_tests.rs");
     include!("production_ranked_projection_v1/analysis_multi_split_v1_tests.rs");
     include!("production_ranked_projection_v1/induction_body_predicate_v1_tests.rs");
     #[test]

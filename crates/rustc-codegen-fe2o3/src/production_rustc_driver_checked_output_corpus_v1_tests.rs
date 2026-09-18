@@ -536,6 +536,7 @@ fn private_memory_is_not_counted_as_global_formal_evidence() {
     .remove(0);
     let mut observed = Observation {
         roots: fixture.compiler_input.kernel_symbols.clone(),
+        transparent_result_wrappers: None,
         internal_helpers: 0,
         helper_calls: 0,
         reads: 3,
