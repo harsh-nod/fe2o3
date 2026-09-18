@@ -258,6 +258,8 @@ impl RetainedContextEntryV29 {
             || !issuance.arguments().is_empty()
             || issuance.destination().ok_or_else(mismatch)?.place().ty() != self.context
             || helper_call.arguments() != source.arguments
+            || !matches!(helper_call.arguments().first(), Some(SemanticOperandV1::Move(place))
+                if place.local() == source.helper_argument && place.projections().is_empty() && place.ty() == self.context)
             || !matches!(semantic.callables().get(helper_call.callee().index() as usize),
                 Some(SemanticCallableDeclV1::Defined { function }) if *function == source.helper)
             || !matches!(semantic.callables().get(source.issuer.index() as usize),

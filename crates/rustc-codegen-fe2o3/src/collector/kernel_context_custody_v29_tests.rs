@@ -123,6 +123,7 @@ fn call(
 enum Mutation {
     None,
     Arguments,
+    ArgumentKind,
     Issuer,
     ExtraIssue,
     HelperIdentity,
@@ -240,6 +241,9 @@ fn fixture(mutation: Mutation) -> AdmittedInertSemanticMirV1 {
     ];
     if matches!(mutation, Mutation::Arguments) {
         arguments.swap(1, 2);
+    }
+    if matches!(mutation, Mutation::ArgumentKind) {
+        arguments[1] = SemanticOperandV1::Move(place(1, U32));
     }
     let mut blocks = vec![
         block(10, vec![], call(2, vec![], 3, CONTEXT, 1)),
@@ -407,11 +411,19 @@ fn retained_context_seal_checks_final_operands_identities_and_complete_roster() 
     );
     for mutation in [
         Mutation::Arguments,
+        Mutation::ArgumentKind,
         Mutation::Issuer,
         Mutation::ExtraIssue,
         Mutation::HelperIdentity,
         Mutation::ContextIdentity,
     ] {
+        if matches!(mutation, Mutation::Arguments | Mutation::ArgumentKind) {
+            assert!(
+                completed()
+                    .bind_function(&fixture(mutation).functions()[0], |_| Ok(()))
+                    .is_err()
+            );
+        }
         assert!(
             RetainedContextEntriesV29::seal(vec![retained()], &fixture(mutation), |_| Ok(()))
                 .is_err()
@@ -450,17 +462,28 @@ fn retained_context_seal_uses_exact_cumulative_work_budget() {
 #[test]
 fn completed_context_rechecks_typed_call_boundaries_before_retention() {
     let semantic = fixture(Mutation::None);
-    for mutation in 0..6 {
+    for mutation in 0..11 {
+        let corrupt = |entry: &mut CompletedContextEntryV29| {
+            if mutation == 10 {
+                entry.helper_argument = SemanticLocalIdV1::from_index(2);
+                return;
+            }
+            let call = if mutation < 5 {
+                &mut entry.issuance
+            } else {
+                &mut entry.helper_call
+            };
+            match mutation % 5 {
+                0 => call.destination_type = U32,
+                1 => call.destination = SemanticLocalIdV1::from_index(0),
+                2 => call.target = SemanticBlockIdV1::from_index(0),
+                3 => call.statements = 1,
+                4 => call.unwind = SemanticUnwindActionV1::Continue,
+                _ => unreachable!(),
+            }
+        };
         let mut entry = completed();
-        match mutation {
-            0 => entry.issuance.destination_type = UNIT,
-            1 => entry.helper_call.destination_type = U32,
-            2 => entry.helper_call.target = SemanticBlockIdV1::from_index(0),
-            3 => entry.issuance.statements = 1,
-            4 => entry.helper_argument = SemanticLocalIdV1::from_index(2),
-            5 => entry.helper_call.unwind = SemanticUnwindActionV1::Continue,
-            _ => unreachable!(),
-        }
+        corrupt(&mut entry);
         assert!(
             matches!(
                 entry.bind_function(&semantic.functions()[0], |_| Ok(())),
@@ -469,6 +492,17 @@ fn completed_context_rechecks_typed_call_boundaries_before_retention() {
                 })
             ),
             "boundary {mutation}"
+        );
+        let mut entry = retained();
+        corrupt(&mut entry.source);
+        assert!(
+            matches!(
+                RetainedContextEntriesV29::seal(vec![entry], &semantic, |_| Ok(())),
+                Err(Error::IdentityTableMismatch {
+                    table: "retained context entry custody"
+                })
+            ),
+            "sealed boundary {mutation}"
         );
     }
 }

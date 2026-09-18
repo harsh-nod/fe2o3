@@ -469,6 +469,18 @@ impl Callbacks for ContextCallbacks {
                 .is_err(),
                 "one-short {resource:?}"
             );
+            let mut exhausted = ProductionSemanticBodyRequestOwnerV1::new(
+                limits.with_limit(resource, low - 1).unwrap(),
+                types.len(),
+                &owned,
+            )
+            .unwrap();
+            assert!(construct_with_owner(erased, Some(receipt()), &mut exhausted).is_err());
+            assert_eq!(
+                exhausted.retained_context_entry_count(),
+                0,
+                "one-short publishes no receipt"
+            );
         }
         self.completed = true;
         Compilation::Stop
