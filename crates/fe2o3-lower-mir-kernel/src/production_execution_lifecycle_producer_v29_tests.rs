@@ -412,32 +412,9 @@ fn run_lifecycle(
                         for index in 1..instances.instances().len() {
                             let id = instances.id_at(index).unwrap();
                             let row = instances.instance(id).unwrap();
-                            let plan = execution_instance_plan_v29(
-                                instances,
-                                id,
-                                FunctionId::new(format!("signature_{index}")),
-                                SemanticEmissionPlacementV1 {
-                                    first_block: 0,
-                                    first_value: 300,
-                                },
-                                budget,
-                            )?;
                             signatures.insert(
                                 row.function(),
-                                LoweredFunctionSignatureV1 {
-                                    parameter_semantic_types: row
-                                        .declaration()
-                                        .abi()
-                                        .source_input_types()
-                                        .to_vec(),
-                                    call_arguments: plan.call_arguments,
-                                    parameter_types: plan.parameter_types,
-                                    result_types: plan.result_types,
-                                    result_semantic_type: row
-                                        .declaration()
-                                        .abi()
-                                        .source_output_type(),
-                                },
+                                execution_function_signature_v29(instances, id, budget)?,
                             );
                         }
                         let root_plan = kernel_entry_plan_v1(

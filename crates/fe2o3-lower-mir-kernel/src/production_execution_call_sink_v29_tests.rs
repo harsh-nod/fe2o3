@@ -64,28 +64,9 @@ fn run_sink(
                         SinkFault::SwappedChild => sink.routes[0].child = second,
                         _ => {}
                     }
-                    let template = execution_instance_plan_v29(
-                        instances,
-                        first,
-                        FunctionId::new("signature_only"),
-                        SemanticEmissionPlacementV1 {
-                            first_block: 0,
-                            first_value: 300,
-                        },
-                        budget,
-                    )?;
                     let signatures = BTreeMap::from([(
                         HELPER,
-                        LoweredFunctionSignatureV1 {
-                            parameter_semantic_types: semantic.functions()[1]
-                                .abi()
-                                .source_input_types()
-                                .to_vec(),
-                            call_arguments: template.call_arguments.clone(),
-                            parameter_types: template.parameter_types.clone(),
-                            result_types: template.result_types.clone(),
-                            result_semantic_type: U32,
-                        },
+                        execution_function_signature_v29(instances, first, budget)?,
                     )]);
                     let root = LoweredFunctionPlanV1 {
                         correspondence_owner: ROOT,
