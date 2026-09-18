@@ -124,6 +124,106 @@ pub(crate) fn prepare_checked_output_policy4_worker_handoff(
     observed_source_envelope: Option<CompilerFfiEnvelopeV1>,
     budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<PreparedProductionWorkerHandoff, ProductionWorkerHandoffError> {
+    prepare_checked_output_worker_handoff_v1(
+        CheckedOutputOwnerRefV1::Direct(admitted),
+        catalog,
+        target,
+        llvm_ir,
+        typed_roots,
+        observed_source_envelope,
+        budget,
+    )
+}
+
+pub(crate) fn prepare_erased_checked_output_policy4_worker_handoff(
+    admitted: &fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy4V1,
+    catalog: &fe2o3_kernel_ir::InertCanonicalKernelIrContractCatalogV1,
+    target: fe2o3_compiler_ffi::DeviceTargetV1,
+    llvm_ir: String,
+    typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+    observed_source_envelope: Option<CompilerFfiEnvelopeV1>,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<PreparedProductionWorkerHandoff, ProductionWorkerHandoffError> {
+    prepare_checked_output_worker_handoff_v1(
+        CheckedOutputOwnerRefV1::Erased(admitted),
+        catalog,
+        target,
+        llvm_ir,
+        typed_roots,
+        observed_source_envelope,
+        budget,
+    )
+}
+
+enum CheckedOutputOwnerRefV1<'a> {
+    Direct(&'a fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1),
+    Erased(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy4V1),
+}
+
+impl CheckedOutputOwnerRefV1<'_> {
+    fn output(&self) -> &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12 {
+        match self {
+            Self::Direct(owner) => owner.output(),
+            Self::Erased(owner) => owner.output(),
+        }
+    }
+
+    fn original_identity(&self) -> [u8; 32] {
+        match self {
+            Self::Direct(owner) => *owner
+                .source_semantic_kir()
+                .canonical_kernel_ir_identity()
+                .digest(),
+            Self::Erased(owner) => *owner
+                .original_source()
+                .executable()
+                .canonical()
+                .identity()
+                .digest(),
+        }
+    }
+
+    fn descriptor(
+        &self,
+        envelope: &CompilerFfiEnvelopeV1,
+        compiler_module: &crate::kernel_ir_codegen::InertCompilerModuleTextV1,
+        typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+        budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<CompilerDescriptorSourceV1, crate::compiler_descriptor::CompilerDescriptorError>
+    {
+        use crate::compiler_descriptor::checked_output_policy3_v1 as descriptors;
+        match self {
+            Self::Direct(owner) => {
+                descriptors::construct_checked_output_policy4_descriptor_source_v1(
+                    envelope,
+                    compiler_module,
+                    typed_roots,
+                    owner,
+                    budget,
+                )
+            }
+            Self::Erased(owner) => {
+                descriptors::construct_erased_checked_output_policy4_descriptor_source_v1(
+                    envelope,
+                    compiler_module,
+                    typed_roots,
+                    owner,
+                    budget,
+                )
+            }
+        }
+    }
+}
+
+fn prepare_checked_output_worker_handoff_v1(
+    admitted: CheckedOutputOwnerRefV1<'_>,
+    catalog: &fe2o3_kernel_ir::InertCanonicalKernelIrContractCatalogV1,
+    target: fe2o3_compiler_ffi::DeviceTargetV1,
+    llvm_ir: String,
+    typed_roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+    observed_source_envelope: Option<CompilerFfiEnvelopeV1>,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<PreparedProductionWorkerHandoff, ProductionWorkerHandoffError> {
     let module = admitted.output().module();
     validate_exact_target_binding(target, module)?;
     let profile =
@@ -136,16 +236,11 @@ pub(crate) fn prepare_checked_output_policy4_worker_handoff(
         module,
         &compiler_module,
         observed_source_envelope,
-        *admitted
-            .source_semantic_kir()
-            .canonical_kernel_ir_identity()
-            .digest(),
+        admitted.original_identity(),
     )?;
     validate_envelope_module_roles(&envelope, &compiler_module)?;
-    let descriptor_source =
-        crate::compiler_descriptor::checked_output_policy3_v1::construct_checked_output_policy4_descriptor_source_v1(
-            &envelope, &compiler_module, typed_roots, admitted, budget,
-        )
+    let descriptor_source = admitted
+        .descriptor(&envelope, &compiler_module, typed_roots, budget)
         .map_err(ProductionWorkerHandoffError::CompilerDescriptor)?;
     let prepared =
         assemble_production_worker_handoff(target, envelope, compiler_module, descriptor_source)?;

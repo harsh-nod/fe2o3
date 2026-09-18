@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_local_helper_deletion_v1_tests.rs"]
+mod deletion_tests;
+
 fn ranked_stage_roots(
     owner: &ProductionPreRankedKirOwnerV1,
 ) -> Vec<ProductionRankedSemanticProjectionRootV1> {

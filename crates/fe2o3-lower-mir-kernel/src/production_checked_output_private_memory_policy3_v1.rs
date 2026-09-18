@@ -529,6 +529,15 @@ pub(super) fn source_lifetimes(
             )?;
         }
     }
+    source_lifetimes_from_sites(source.semantic().semantic(), proof, &sites, budget)
+}
+
+fn source_lifetimes_from_sites(
+    semantic: &AdmittedInertSemanticMirV1,
+    proof: &PrivateMemory<'_, '_>,
+    sites: &[Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>],
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<()> {
     let mut kills = None;
     for (read, store) in proof.latest_stores.iter().enumerate() {
         charge(budget, 4)?;
@@ -553,7 +562,6 @@ pub(super) fn source_lifetimes(
                 "same-block ordered source Store/Load",
             ));
         }
-        let semantic = source.semantic().semantic();
         let function_id = function;
         let function = semantic
             .functions()
@@ -637,6 +645,8 @@ fn source_storage_local(
     }
     Ok(destination.local())
 }
+
+include!("production_checked_output_erased_private_lifetimes_v1.rs");
 
 #[cfg(test)]
 mod tests {

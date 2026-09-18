@@ -21,8 +21,15 @@ use crate::protected_rustc_invocation::{
     AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1,
 };
 
+#[path = "production_pipeline_checked_output_artifacts_v1.rs"]
+mod checked_output_artifacts_v1;
 #[path = "production_pipeline_checked_output_policy4_v1.rs"]
 pub(crate) mod checked_output_policy4_v1;
+#[cfg(test)]
+#[path = "production_pipeline_checked_output_progress_v1_tests.rs"]
+pub(crate) mod checked_output_progress_v1;
+#[path = "production_pipeline_erased_checked_output_policy4_v1.rs"]
+pub(crate) mod erased_checked_output_policy4_v1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProductionDisposition {
@@ -3033,6 +3040,13 @@ fn debug_block_ordinal_v1(
 }
 
 impl RankedVerifiedProductionCompilation {
+    #[cfg(test)]
+    pub(crate) fn checked_output_source_policy_v1(
+        &self,
+    ) -> fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1 {
+        self.ranked.materialized().helper_source_policy_v1()
+    }
+
     pub(crate) fn ranked_roots(
         &self,
     ) -> &[crate::production_ranked_projection_v1::ProductionRankedRootProgramV1] {
@@ -3844,11 +3858,14 @@ mod tests {
             .find("lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(")
             .expect("AMDGPU LLVM lowering");
         assert!(bind < optimize && bind < optimize_v11 && optimize < lower && optimize_v11 < lower);
-        let implementation = source
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production implementation");
-        assert_eq!(implementation.matches("&target_optimization,").count(), 2);
+        let target_lowered = source
+            .split_once("impl TargetLoweredProductionCompilation {")
+            .expect("target-lowered implementation")
+            .1
+            .split_once("\nfn require_complete_simulation_debug_source_capture_v2(")
+            .expect("target-lowered implementation end")
+            .0;
+        assert_eq!(target_lowered.matches("&target_optimization,").count(), 2);
         assert!(!transaction.contains("required_capabilities.insert"));
     }
 

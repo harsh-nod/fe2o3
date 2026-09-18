@@ -85,11 +85,19 @@ fn selected_body(
 /// Complete source/N replay remains mandatory at the caller. In particular,
 /// that replay independently checks the exact ordered root-qualified helper
 /// roster and its native function IDs; this census never replaces that join.
+#[cfg(test)]
 pub(super) fn check_source(
     owner: &ProductionSemanticKirOwnerV1,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<SourceRoleCensus> {
-    let semantic = owner.semantic().semantic();
+    check_source_parts(owner.semantic().semantic(), &owner.correspondence, budget)
+}
+
+pub(super) fn check_source_parts(
+    semantic: &AdmittedInertSemanticMirV1,
+    correspondence: &SemanticKirCorrespondenceV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<SourceRoleCensus> {
     charge(budget, 3)?;
     let mut functions = scratch::<SourceFunctionRole>(semantic.functions().len(), budget)?;
     charge(budget, semantic.functions().len())?;
@@ -110,7 +118,7 @@ pub(super) fn check_source(
             .ok_or_else(|| refused("scalar helpers", "selected source body coordinate"))?
             .flags |= SELECTED_BODY;
     }
-    for association in owner.correspondence.lowered_functions.iter() {
+    for association in correspondence.lowered_functions.iter() {
         charge(budget, 7)?;
         let root = functions
             .get_mut(association.correspondence_owner.index() as usize)
