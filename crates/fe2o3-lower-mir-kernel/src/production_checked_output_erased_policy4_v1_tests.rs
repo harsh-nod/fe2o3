@@ -2,6 +2,9 @@
 // fixtures, not collected Rust, authenticated runtime or artifact qualification.
 use super::*;
 
+#[path = "production_checked_output_erased_policy5_v1_tests.rs"]
+mod policy5_tests;
+
 type FinalErased = crate::ProductionUnitLocalErasedCheckedOutputOwnerPolicy4V1;
 type FinalError = crate::ProductionCheckedOutputAdmissionErrorPolicy4V1;
 type AdmissionError = crate::ProductionCheckedOutputAdmissionErrorPolicy3V1;
@@ -307,4 +310,3 @@ fn final_erased_policy4_restores_full_input_floor_at_work_and_storage_edges() {
     ));
     assert_eq!(budget.storage(), required - 1);
 }
-

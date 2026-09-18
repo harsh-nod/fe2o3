@@ -5,6 +5,17 @@
 //! success edge uniquely controls an access to the same slice and index.
 
 mod aggregate_value_projection_v2;
+mod defined_helper_expression_v1;
+mod helper_value_template_v1;
+mod source_helper_value_context_v1;
+mod source_helper_value_templates_v1;
+#[cfg(test)]
+mod helper_source_fixture_v1 {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/support/defined_helper_semantic_fixture_v1.rs"
+    ));
+}
 mod analysis_multi_split_v1;
 mod canonical_assertion_facts_v1;
 mod materialized_callable_effect_v1;
@@ -18,7 +29,8 @@ use slice_projection_v1::ProjectedViewsV1;
 pub(crate) use tests::{
     with_backend_checked_output_policy3_roster_v1, with_backend_checked_output_policy3_v1,
     with_backend_checked_output_policy4_owned_v1, with_backend_checked_output_policy4_v1,
-    with_backend_erased_bound_v1, with_backend_erased_roster_v1,
+    with_backend_checked_output_policy5_owned_v1, with_backend_erased_bound_v1,
+    with_backend_erased_output_policy5_owned_v1, with_backend_erased_roster_v1,
 };
 
 use analysis_multi_split_v1::{
@@ -3044,6 +3056,10 @@ pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(
     root_inputs: &[ProductionRankedRootInputV1],
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
+    #[cfg(test)]
+    crate::production_reference_effect_join_v2::prepared_observation_v1::observe_source(
+        &materialized,
+    );
     let roots = {
         let source = RankedProjectionSourceV1::from_materialized_checked(&materialized)?;
         with_projection_source_budget_v1(&source, |budget| {
@@ -3609,13 +3625,27 @@ fn project_and_verify_ranked_root_with_singletons_v1(
         projected_blocks,
         assertion_facts,
     )?;
-    let reference_writes = projected_reference_gpu_writes_v2(
-        semantic.types(),
-        function,
-        semantic.callables(),
-        &blocks,
-        &sources,
-    )?;
+    let (reference_writes, helper_expression_storage) = if reference_bindings.as_slice().is_empty()
+    {
+        (
+            projected_reference_gpu_writes_v2(
+                semantic.types(),
+                function,
+                semantic.callables(),
+                &blocks,
+                &sources,
+            )?,
+            0,
+        )
+    } else {
+        defined_helper_expression_v1::projected_reference_gpu_writes_with_helpers_v1(
+            semantic,
+            function,
+            &blocks,
+            &sources,
+            assertion_facts,
+        )?
+    };
     let access_sources = production_access_sources(
         semantic.types(),
         function,
@@ -3671,6 +3701,10 @@ fn project_and_verify_ranked_root_with_singletons_v1(
         .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?
     };
     let ranked_ir = format_ranked_cfg(function_name(root_function)?, lowering.kernel().blocks())?;
+    drop(reference_writes);
+    if helper_expression_storage != 0 {
+        assertion_facts.release_scalar_private_storage_v1(helper_expression_storage)?;
+    }
     let export_symbol = root_function
         .kernel_entry()
         .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -3706,6 +3740,22 @@ fn projected_reference_gpu_writes_v2(
     Vec<crate::production_reference_effect_join_v2::RankedGpuWriteV2>,
     ProductionRankedProjectionErrorV1,
 > {
+    let mut expressions =
+        GpuSemanticExpressionResolverV2::with_ranked_reads(types, function, blocks, sources)?
+            .with_scalar_callables_v1(callables)?;
+    projected_reference_gpu_writes_inner_v2(function, callables, blocks, sources, &mut expressions)
+}
+
+fn projected_reference_gpu_writes_inner_v2<'a>(
+    function: &'a SemanticFunctionDeclV1,
+    callables: &[SemanticCallableDeclV1],
+    blocks: &[ProductionRankedBlockV1],
+    sources: &[ProjectedAccessSourceV1],
+    expressions: &mut GpuSemanticExpressionResolverV2<'a>,
+) -> Result<
+    Vec<crate::production_reference_effect_join_v2::RankedGpuWriteV2>,
+    ProductionRankedProjectionErrorV1,
+> {
     let mut allocation_origins = HashMap::new();
     for block in blocks {
         for operation in block.operations() {
@@ -3728,9 +3778,6 @@ fn projected_reference_gpu_writes_v2(
         }
     }
     let mut writes = Vec::new();
-    let mut expressions =
-        GpuSemanticExpressionResolverV2::with_ranked_reads(types, function, blocks, sources)?
-            .with_scalar_callables_v1(callables)?;
     for source in sources
         .iter()
         .filter(|source| source.access.writes_memory())
@@ -3833,6 +3880,10 @@ struct GpuSemanticExpressionResolverV2<'a> {
     place_loads: HashMap<*const SemanticPlaceV1, ProductionSemanticLoadV2>,
     scalar_callables: &'a [SemanticCallableDeclV1],
     scalar_calls: Vec<Option<(usize, &'a SemanticDirectCallV1)>>,
+    helper_semantic: Option<&'a AdmittedInertSemanticMirV1>,
+    helper_values: Option<&'a source_helper_value_context_v1::SourceHelperValues<'a>>,
+    helper_meter: Option<&'a mut dyn helper_value_template_v1::Meter>,
+    helper_reserved: usize,
 }
 
 fn semantic_rvalue_read_places_v2<'a>(
@@ -3918,6 +3969,10 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             place_loads: HashMap::new(),
             scalar_callables: &[],
             scalar_calls: Vec::new(),
+            helper_semantic: None,
+            helper_values: None,
+            helper_meter: None,
+            helper_reserved: 0,
         })
     }
 
@@ -24545,6 +24600,7 @@ mod cold_compile_error_tests;
 mod tests {
     include!("production_ranked_projection_v1/projection_01_tests.rs");
     include!("production_ranked_projection_v1/checked_output_admission_policy3_v1_fixture.rs");
+    include!("production_ranked_projection_v1/production_ranked_policy5_fixture_v1_tests.rs");
 
     #[test]
     fn pipeline_scalar_rejection_trace_has_exact_bounded_numeric_fields() {

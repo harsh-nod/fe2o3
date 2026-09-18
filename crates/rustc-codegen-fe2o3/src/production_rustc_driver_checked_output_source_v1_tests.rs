@@ -16,6 +16,9 @@ use std::process::Command;
 #[path = "production_context_source_v29_tests.rs"]
 mod context_source_v29_tests;
 
+#[path = "production_rustc_driver_helper_reference_source_v1_tests.rs"]
+mod helper_reference_source;
+
 const CHILD_ARGS: &str = "FE2O3_TEST_CHECKED_OUTPUT_ARGS_V1";
 const CHILD_RESULT: &str = "FE2O3_TEST_CHECKED_OUTPUT_RESULT_V1";
 const CHILD_PROOF_PROBE: &str = "FE2O3_TEST_CHECKED_OUTPUT_PROOF_PROBE_V1";

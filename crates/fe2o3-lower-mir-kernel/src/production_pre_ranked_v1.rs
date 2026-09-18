@@ -429,6 +429,21 @@ impl ProductionSemanticKirOwnerV1 {
     pub fn try_attach_materialized_ranked_checks(
         receipt: ProductionMaterializedRankedModuleReceiptV1,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
+        let limits = receipt.materialized.limits;
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+            limits.max_argument_correspondence_work,
+        );
+        let mut budget = ArgumentBudgetV1::new(&mut work, limits.max_argument_correspondence_storage);
+        Self::try_attach_materialized_ranked_checks_with_budget_v1(receipt, &mut budget)
+    }
+
+    /// Attaches the same exact materialized source/ranked custody with new
+    /// helper-value cache and expansion work charged to the caller's ledger.
+    /// Existing graph, origin, capture and source floors remain caller-owned.
+    pub fn try_attach_materialized_ranked_checks_with_budget_v1(
+        receipt: ProductionMaterializedRankedModuleReceiptV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self, ProductionSemanticKirErrorV1> {
         receipt
             .materialized
             .require_legacy_helper_policy_v1("ranked attachment")?;
@@ -452,7 +467,7 @@ impl ProductionSemanticKirOwnerV1 {
         let mut generic_checks = Vec::with_capacity(roots.len());
         for root in roots.into_vec() {
             let function_name = root.function_name().to_owned();
-            let translation_validation = validate_mir_pliron_translation_with_semantic_v1(
+            let translation_validation = validate_mir_pliron_translation_with_semantic_and_budget_v1(
                 Some(semantic),
                 executable.module(),
                 &correspondence,
@@ -461,6 +476,7 @@ impl ProductionSemanticKirOwnerV1 {
                 &root.access_sources,
                 &root.executable_effect_sources,
                 limits.max_operations,
+                budget,
             )
             .map_err(ProductionSemanticKirErrorV1::MirPlironTranslation)?;
             generic_checks.push(RetainedGenericKernelChecksV1 {

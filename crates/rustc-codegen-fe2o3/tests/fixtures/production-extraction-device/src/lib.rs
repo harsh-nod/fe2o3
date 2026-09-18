@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "defined-helper-reference")]
+mod defined_helper_reference;
+
 #[cfg(feature = "atomic-rmw")]
 use fe2o3_device::DeviceGlobalMutPtr;
 #[cfg(feature = "wrapped-fill")]
@@ -34,6 +37,7 @@ mod saturating_integer;
 mod write_only_reference;
 
 #[cfg(not(any(
+    feature = "defined-helper-reference",
     feature = "f32-exp",
     feature = "f32-helper-exp",
     feature = "saturating-integer",

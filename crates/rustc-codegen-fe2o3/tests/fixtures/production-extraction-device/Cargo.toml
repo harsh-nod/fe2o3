@@ -8,6 +8,10 @@ rust-version.workspace = true
 publish = false
 
 [features]
+defined-helper-reference = []
+defined-helper-reference-nested = ["defined-helper-reference"]
+defined-helper-reference-swapped = ["defined-helper-reference"]
+defined-helper-reference-alternate = ["defined-helper-reference"]
 saturating-integer = []
 numeric-cast = []
 sat-sub = []

@@ -118,6 +118,20 @@ pub(super) trait ProjectedAssertionFactsV1 {
 
     fn charge_private_array_work(&mut self, amount: usize) -> Result<(), ProjectionError>;
 
+    fn helper_value_ledger_v1(
+        &self,
+    ) -> Result<
+        (
+            usize,
+            fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+        ),
+        ProjectionError,
+    > {
+        Err(ProjectionError::Incomplete(
+            "helper value projection requires canonical ledger custody",
+        ))
+    }
+
     fn scalar_private_storage_v1(&self) -> Result<usize, ProjectionError> {
         Err(ProjectionError::Incomplete(
             "scalar private projection requires canonical storage custody",
@@ -295,6 +309,20 @@ impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '
 
     fn scalar_private_storage_v1(&self) -> Result<usize, ProjectionError> {
         Ok(self.budget.storage())
+    }
+    fn helper_value_ledger_v1(
+        &self,
+    ) -> Result<
+        (
+            usize,
+            fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+        ),
+        ProjectionError,
+    > {
+        Ok((
+            self.budget as *const Budget<'_> as usize,
+            self.budget.work_ledger_identity_v1(),
+        ))
     }
     fn reserve_scalar_private_storage_v1(&mut self, amount: usize) -> Result<(), ProjectionError> {
         self.budget.reserve_storage(amount).map_err(resource)

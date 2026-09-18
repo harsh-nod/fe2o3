@@ -227,6 +227,44 @@ only; indexed-address/whole-operational equivalence, protected compiler origin,
 final-output provenance and default activation are still separate requirements.
 The in-process typed handoff is not a serialized artifact recipe format.
 
+### Fixed policy-5 load continuation
+
+The separate [policy-5 owner](../crates/fe2o3-kernel-opt/src/checked_optimization_policy5_v1.rs)
+retains the entire unchanged policy-4 prefix and adds one independently checked
+same-block private load-to-load continuation:
+
+```text
+B -> policy-3 -> C -> policy-4 store forwarding -> S -> load forwarding -> O
+```
+
+Its closed rule requires an initialized, aligned, nonescaping, direct private
+scalar allocation, fixed signed/unsigned 8/16/32/64-bit values, identical access
+attributes and the actual MemorySSA incoming version. The first load remains;
+only a later eligible load becomes a value identity. The complete use census
+rejects pointer escape, projected/array storage and pointer parameters. Other
+loads and unknown, ordered, trapping or convergent effects clear the seed.
+An unrelated verified Global Store may preserve initialization but clears the
+load seed; storing the private pointer globally fails the nonescape census.
+No operation is made pure and no load is speculated or reordered.
+
+Distinct [direct](../crates/rustc-codegen-fe2o3/src/production_pipeline_checked_output_policy5_v1.rs)
+and [silent-Unit-erased](../crates/rustc-codegen-fe2o3/src/production_pipeline_erased_checked_output_policy5_v1.rs)
+backend consumers retain original source/N, optional separately checked E,
+B/C/S/O, the ranked roster and collector bindings. Final admission checks the
+full policy-4 prefix, independently checks S/O and derives fresh actual-O
+formal obligations. Shared descriptor and worker checks lower actual O while
+preserving original source/launch identity. Old policy-3/4 schedules, records,
+receipts and public errors are unchanged. The new owning native handoff cannot
+manufacture signed source proof or protected publication rights.
+
+Coverage includes genuine semantic-source/normal-projector fixtures, exact
+before/after native load counts, both AMD profiles, hostile root/native joins
+and resource boundaries. It is not ordinary-Rust nonidentity qualification:
+ordinary scalar locals usually promote to SSA, while reference-taking and
+array/GEP retention remain outside this initial rule. No tutorial optimization,
+default activation, protected runtime or hardware execution is claimed. The
+existing ordinary-source corpus gate below still targets policy-4.
+
 ### Ordinary-source corpus gate
 
 The ignored `ordinary_tutorial_corpus_requires_every_checked_policy4_output`
@@ -690,3 +728,32 @@ gfx942 and gfx950. Component tests check operand/history/native mutations and
 exact/short resources. The actual O simulator preflight must still report
 `UnsupportedFeatureV1::FloatFunction(Exp)`: no host approximation substitutes
 for the missing OCML simulator, and no numerical or hardware pass is claimed.
+
+## Retained helper value correspondence
+
+The source and native checkers independently reconstruct parameterized value
+recipes for retained, acyclic `Defined` scalar helpers. Each recipe is bound to
+its borrowed source owner, exact callee, direct nounwind Rust scalar ABI and
+actual call occurrence. The caller must have one dominating definition of the
+result; ordered actual arguments are substituted at that occurrence. Nested
+calls reuse root-scoped templates, not inferred purity or an opaque call name.
+
+The recipe census checks the complete helper body, including otherwise unused
+statements and blocks. Memory effects, unknown calls, branches, loops, extra
+blocks and unsupported operations do not become transparent because the return
+expression looks equivalent. The native path separately reconstructs values
+from actual KIR and checks the complete original source/native call relation.
+Neither recipe is an independently supplied assertion or signed proof.
+
+Construction, retained caches, argument substitution and final correspondence
+replay use the existing caller work/storage ledger. Queries reject a foreign
+ledger or a lost retained-cache reservation before debit. Native expression
+construction enforces its node bound before recursive expansion; a later final
+tree-size check is not a substitute. Temporary scopes restore the inherited
+storage floor while preserving work and failure history.
+
+The ordinary-source reference regression observes exact prepared requests for
+direct, nested, swapped and alternate helper formulas on both target profiles.
+It then requires the unchanged `ProofRuntimeUnavailable` refusal. This is
+request-construction coverage, not signed helper-reference composition,
+approved-runtime qualification or protected/default-pipeline activation.

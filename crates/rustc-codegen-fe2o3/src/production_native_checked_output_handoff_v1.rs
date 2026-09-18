@@ -31,6 +31,7 @@ use std::{
 pub(crate) enum NativeOutputHandoffErrorV1 {
     Resource(Resource),
     Admission(Box<fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy4V1>),
+    Admission5(Box<fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy5V1>),
     Source(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     Descriptor(Box<crate::compiler_descriptor::CompilerDescriptorError>),
     Native(dialect_amdgcn::NativeV12TextDescriptorReplayErrorV1),
@@ -49,6 +50,7 @@ impl fmt::Display for NativeOutputHandoffErrorV1 {
         match self {
             Self::Resource(error) => write!(f, "resource: {error}"),
             Self::Admission(error) => write!(f, "admission: {error}"),
+            Self::Admission5(error) => write!(f, "Policy5 admission: {error}"),
             Self::Source(error) => write!(f, "source: {error}"),
             Self::Descriptor(error) => write!(f, "descriptor: {error}"),
             Self::Native(error) => write!(f, "native: {error}"),
@@ -62,29 +64,48 @@ impl std::error::Error for NativeOutputHandoffErrorV1 {}
 type E = NativeOutputHandoffErrorV1;
 type R<T> = Result<T, E>;
 
+#[path = "production_native_checked_output_policy5_handoff_v1.rs"]
+pub(crate) mod policy5;
+
 /// A borrowed closed view, never a new source or publication owner.
 #[derive(Clone, Copy)]
 pub(crate) enum OutputOwnerV1<'a> {
     Direct(&'a ProductionCheckedOutputOwnerPolicy4V1),
     Erased(&'a ProductionUnitLocalErasedCheckedOutputOwnerPolicy4V1),
+    Direct5(&'a fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy5V1),
+    Erased5(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy5V1),
 }
 impl<'a> OutputOwnerV1<'a> {
     pub(crate) fn output(self) -> &'a Graph {
         match self {
             Self::Direct(v) => v.output(),
             Self::Erased(v) => v.output(),
+            Self::Direct5(v) => v.output(),
+            Self::Erased5(v) => v.output(),
         }
     }
     pub(crate) fn source(self, catalog: &'a Catalog) -> R<SourceInputsV1<'a>> {
         match self {
             Self::Direct(v) => SourceInputsV1::direct(v.source_semantic_kir(), catalog),
             Self::Erased(v) => Ok(SourceInputsV1::erased(v.erased_source(), catalog)),
+            Self::Direct5(v) => SourceInputsV1::direct(v.source_semantic_kir(), catalog),
+            Self::Erased5(v) => Ok(SourceInputsV1::erased(v.erased_source(), catalog)),
         }
     }
     fn verify(self, budget: &mut Budget<'_>) -> R<()> {
         match self {
             Self::Direct(v) => v.verify_equivalence(budget),
             Self::Erased(v) => v.verify_equivalence(budget),
+            Self::Direct5(v) => {
+                return v
+                    .verify_equivalence(budget)
+                    .map_err(|e| E::Admission5(Box::new(e)));
+            }
+            Self::Erased5(v) => {
+                return v
+                    .verify_equivalence(budget)
+                    .map_err(|e| E::Admission5(Box::new(e)));
+            }
         }
         .map_err(|e| E::Admission(Box::new(e)))
     }
@@ -141,7 +162,10 @@ impl<'a> SourceProofV1<'a> {
         match self {
             Self::Direct(proof) => {
                 let replay = proof.source();
-                replay.source().verify_equivalence().map_err(E::Source)?;
+                replay
+                    .source()
+                    .verify_equivalence_with_budget_v1(budget)
+                    .map_err(E::Source)?;
                 SourceInputsV1::direct(replay.source(), replay.catalog())
             }
             Self::Erased(proof) => {

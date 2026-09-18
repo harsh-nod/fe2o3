@@ -11,6 +11,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         if callables.is_empty() {
             return Ok(self);
         }
+        let admit_defined = self.helper_values.is_some();
         let is_saturation = |call: &SemanticDirectCallV1| {
             matches!(
                 callables.get(call.callee().index() as usize),
@@ -18,7 +19,11 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
                     operation: SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_),
                     ..
                 })
-            )
+            ) || (admit_defined
+                && matches!(
+                    callables.get(call.callee().index() as usize),
+                    Some(SemanticCallableDeclV1::Defined { .. })
+                ))
         };
         let mut candidate = false;
         for body in self.function.blocks() {
@@ -104,7 +109,14 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             return Err("GPU semantic scalar local has a cyclic definition");
         }
         let previous = self.use_site.replace(definition);
-        let result = self.resolve_saturating_call_v2(call, depth);
+        let result = if matches!(
+            self.scalar_callables.get(call.callee().index() as usize),
+            Some(SemanticCallableDeclV1::Defined { .. })
+        ) {
+            self.resolve_defined_call_v1(block, call, depth)
+        } else {
+            self.resolve_saturating_call_v2(call, depth)
+        };
         self.use_site = previous;
         self.visiting.remove(&key);
         result
