@@ -456,12 +456,13 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "26d08a70341c632db64266c1005939db9e93c149eb25095f25c3f3ee6264dbd2")
+                         "6a42f01eb8ccf9c0efd655b7c58217cc1417a81c24f39d05b94a545890e7f017")
         self.assertEqual(len(inventory["kernels"]), 58)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 74, "required-negative": 3, "conceptual": 26, "helper": 18})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 64, "source-driver-contract": 13, "not-applicable": 44})
+                         {"pending": 58, "source-driver-contract": 13, "fixture-source-contract": 6,
+                          "not-applicable": 44})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         self.assertTrue(all(variant["status"] == "pending" and variant["source"] is None
                             for row in inventory["kernels"] for variant in row["variants"]))
@@ -471,6 +472,111 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         for row in inventory["displayItems"]:
             if row["lessonId"] == "typed-vecadd" and row["classification"] == "kernel":
                 self.assertEqual(row["kernelIds"], [])
+
+    def gpt_fixture_document(self):
+        """A six-binding component projection, not the live website census."""
+        document = copy.deepcopy(self.original)
+        rows = [row for row in document["kernelInventory"]["displayItems"]
+                if row["bindingStatus"] == "fixture-source-contract"]
+        self.assertEqual(len(rows), 6)
+        ids = {identity for row in rows for identity in row["kernelIds"]}
+        kernels = [row for row in document["kernelInventory"]["kernels"] if row["kernelId"] in ids]
+        fixtures = {ref["fixtureId"] for row in kernels for ref in row["selections"]}
+        document["compilerFixtures"] = [row for row in document["compilerFixtures"] if row["fixtureId"] in fixtures]
+        lesson = next(row for row in document["curriculum"]["lessons"]
+                      if row["lessonId"] == "gfx950-gpt-oss-120b-megakernel")
+        lesson["codeTabs"] = lesson["codeTabs"][1:5]
+        for index, tab in enumerate(lesson["codeTabs"]):
+            tab["ordinal"] = index
+        for row in rows:
+            row["tabOrdinal"] -= 1
+        document["curriculum"]["lessons"] = [lesson]
+        document["kernelInventory"].update(kernels=kernels, negativeCases=[], displayItems=rows)
+        runtime = {"schema": self.validator.SITE_INVENTORY_SCHEMA,
+                   "site": document["curriculum"]["site"], "lessons": [{
+                       "id": lesson["lessonId"], "codeTabs": [
+                           {**tab, "displayedCode": (ROOT / tab["sourcePath"]).read_bytes().decode("utf-8"),
+                            "sourceFragments": None} for tab in lesson["codeTabs"]]}]}
+        return document, runtime
+
+    def test_six_real_fixture_sources_bind_exact_display_occurrences(self):
+        document, runtime = self.gpt_fixture_document()
+        self.validator.validate_site_inventory(document["curriculum"], runtime)
+        result = self.validator.validate_kernel_inventory(document, runtime)
+        self.assertEqual(result["unresolvedBindings"], [])
+        self.assertEqual(result["displayItemCount"], 6)
+        self.assertTrue(all(variant["status"] == "pending" and variant["source"] is None
+                            for kernel in result["kernelIdentities"] for variant in kernel["variants"]))
+        without_runtime = self.validator.validate_kernel_inventory(document, None)
+        self.assertFalse(without_runtime["inventoryComplete"])
+        self.assertIsNone(without_runtime["requiredPairCount"])
+        self.assertEqual(sum("selection" in row for row in without_runtime["unresolvedBindings"]), 6)
+
+    def test_real_fixture_same_symbol_file_and_feature_substitutions_reject(self):
+        original, _ = self.gpt_fixture_document()
+        rows = original["kernelInventory"]["displayItems"]
+        for index in range(3):
+            document = copy.deepcopy(original)
+            document["kernelInventory"]["displayItems"][index]["kernelIds"] = rows[(index + 1) % 3]["kernelIds"]
+            with self.subTest(index=index), self.assertRaisesRegex(SystemExit, "exact selected source"):
+                self.validator.validate_kernel_inventory(document, None)
+        document = copy.deepcopy(original)
+        fixture = next(row for row in document["compilerFixtures"] if row["fixtureId"] == "gfx950-gpt-oss-serial-router")
+        fixture["compilerInput"]["features"] = ["kernel-gpt-oss-decode-held-fragments"]
+        fixture["compilerInput"]["contractSha256"] = self.validator.fixture_input_contract_sha256(fixture)
+        with self.assertRaisesRegex(SystemExit, "exact current source occurrence"):
+            self.validator.validate_kernel_inventory(document, None)
+        for row_index in range(6):
+            document = copy.deepcopy(original)
+            document["kernelInventory"]["displayItems"][row_index]["functionUtf8Offset"] += 1
+            with self.subTest(row=row_index), self.assertRaisesRegex(SystemExit, "exact current source occurrence"):
+                self.validator.validate_kernel_inventory(document, None)
+
+    def test_real_fixture_physical_closure_and_module_selection_are_rechecked(self):
+        original, _ = self.gpt_fixture_document()
+        package = original["compilerFixtures"][0]["compilerInput"]["packageManifest"]
+        package_root = (ROOT / package).parent
+        with tempfile.TemporaryDirectory(prefix="fe2o3-fixture-binding-") as temporary:
+            root = Path(temporary)
+            paths = [path for path, _ in self.validator.package_rust_sources(ROOT, package, "test")]
+            paths.extend([package_root / "Cargo.toml", package_root / "Cargo.lock"])
+            for path in paths:
+                copy_path = root / path.relative_to(ROOT)
+                copy_path.parent.mkdir(parents=True, exist_ok=True)
+                copy_path.write_bytes(path.read_bytes())
+
+            def refresh(document):
+                sources = self.validator.package_rust_sources(root, package, "test")
+                digest = self.validator.package_source_closure_sha256(root, sources)
+                for fixture in document["compilerFixtures"]:
+                    fixture["compilerInput"]["sourceClosureSha256"] = digest
+                    fixture["compilerInput"]["contractSha256"] = self.validator.fixture_input_contract_sha256(fixture)
+
+            self.validator.validate_kernel_inventory(original, None, repo_root=root)
+            helper = root / package_root.relative_to(ROOT) / "src/reference.rs"
+            helper.write_bytes(helper.read_bytes() + b"\n// changed inactive closure member\n")
+            with self.assertRaisesRegex(SystemExit, "sourceClosureSha256 is stale"):
+                self.validator.validate_kernel_inventory(original, None, repo_root=root)
+            document = copy.deepcopy(original)
+            refresh(document)
+            self.validator.validate_kernel_inventory(document, None, repo_root=root)
+
+            library = root / package_root.relative_to(ROOT) / "src/lib.rs"
+            before = library.read_text(encoding="utf-8")
+            for replacement, message in (("", "roster differs"),
+                                         ('#[cfg(unknown)] pub mod kernel_router_serial;', "cfg predicate"),
+                                         ('pub mod kernel_router_serial; pub mod kernel_router_serial;', "ambiguous")):
+                library.write_text(before.replace("pub mod kernel_router_serial;", replacement), encoding="utf-8")
+                altered = copy.deepcopy(document)
+                refresh(altered)
+                with self.subTest(replacement=replacement), self.assertRaisesRegex(SystemExit, message):
+                    self.validator.validate_kernel_inventory(altered, None, repo_root=root)
+            library.write_text(before, encoding="utf-8")
+            bound = root / package_root.relative_to(ROOT) / "src/kernel_router_serial.rs"
+            bound.write_bytes(bound.read_bytes() + b"\n// changed bound source\n")
+            refresh(document)
+            with self.assertRaisesRegex(SystemExit, "exact current source occurrence"):
+                self.validator.validate_kernel_inventory(document, None, repo_root=root)
 
     def test_kernel_identity_extension_rejects_incomplete_or_false_claims_before_stdout(self):
         for mutate in (
