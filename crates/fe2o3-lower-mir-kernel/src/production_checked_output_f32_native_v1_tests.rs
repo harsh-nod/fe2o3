@@ -19,7 +19,7 @@ use fe2o3_kernel_ir::InertCanonicalKernelIrContractCatalogV1 as Catalog;
 
 // Independent inert descriptor inputs. They model this fixture's three actual
 // physical arguments, but do not claim source-derived descriptor authority.
-fn table(profile: Profile) -> Table {
+pub(super) fn table(profile: Profile) -> Table {
     let pointer = SourceTypeRecordV1::new(SourceTypeDescriptorV1::global_mut_pointer(
         ScalarTypeV1::F32,
     ));
@@ -100,7 +100,7 @@ fn table(profile: Profile) -> Table {
     .unwrap()
 }
 
-fn final_text(prefix: &str, descriptors: &Table) -> String {
+pub(super) fn final_text(prefix: &str, descriptors: &Table) -> String {
     let bytes = encode_device_descriptor_table_v1(descriptors).unwrap();
     let mut text = prefix.to_owned();
     text.push_str(

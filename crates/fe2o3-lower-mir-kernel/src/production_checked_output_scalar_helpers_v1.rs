@@ -281,7 +281,8 @@ pub(super) fn check<'i, 'g>(
             if call.target.is_none_or(|target| {
                 inventory.functions()[target.0 as usize].function.role
                     != FunctionRole::InternalHelper
-            }) {
+            }) && !exp::call(call.operation, budget)?
+            {
                 return Err(refused(
                     "scalar helpers",
                     "internal scalar helper callees only",

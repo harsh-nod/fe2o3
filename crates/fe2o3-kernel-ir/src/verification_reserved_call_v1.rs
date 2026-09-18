@@ -47,6 +47,29 @@ impl crate::Operation {
     }
 }
 
+impl FloatOperation {
+    /// Allocation-free inert classification of an existing reserved F32 math
+    /// descriptor. This checks neither a declaration nor operand types and
+    /// grants no semantic, source, effect, target or execution authority.
+    /// Checked consumers must obtain their function/call from a verified owner.
+    pub fn f32_math_descriptor_with_budget_v1(
+        callee: &FunctionId,
+        budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<
+        Option<(crate::F32MathFunction, crate::F32MathImplementation)>,
+        CanonicalKernelIrVerificationResourceErrorV1,
+    > {
+        budget.charge_work(1)?;
+        charge_float_lookup_v1(callee, budget)?;
+        Ok(match Self::intrinsic_descriptor_v1(callee) {
+            Some(FloatIntrinsicDescriptorV1::F32Math(function)) => {
+                Some((function, function.required_implementation()))
+            }
+            _ => None,
+        })
+    }
+}
+
 fn charge_prefix_comparisons_v1(
     id: &FunctionId,
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
