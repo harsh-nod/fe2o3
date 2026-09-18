@@ -84,6 +84,55 @@ struct PendingDispatch {
     completed: bool,
 }
 
+const SERIAL_COMPLETION_EXTRA_POLLS: u8 = 16;
+const SERIAL_COMPLETION_SPIN_WINDOW: Duration = Duration::from_micros(10);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SerialCompletionPause {
+    Spin,
+    Sleep,
+}
+
+#[derive(Default)]
+struct SerialCompletionBackoff {
+    started: Option<Instant>,
+    extra_polls: u8,
+}
+
+impl SerialCompletionBackoff {
+    fn after_incomplete(&mut self, now: Instant) -> SerialCompletionPause {
+        // Anchor after the first incomplete poll, including its due currentness
+        // fence. This admits extra fresh polls, not a wall-time bound on a poll.
+        let started = *self.started.get_or_insert(now);
+        if self.extra_polls < SERIAL_COMPLETION_EXTRA_POLLS
+            && now
+                .checked_duration_since(started)
+                .is_some_and(|elapsed| elapsed < SERIAL_COMPLETION_SPIN_WINDOW)
+        {
+            self.extra_polls += 1;
+            SerialCompletionPause::Spin
+        } else {
+            // Neither elapsed time nor a later observation can reopen spinning.
+            self.extra_polls = SERIAL_COMPLETION_EXTRA_POLLS;
+            SerialCompletionPause::Sleep
+        }
+    }
+}
+
+fn wait_for_serial_completion(
+    mut poll: impl FnMut() -> Result<Option<u64>>,
+    mut now: impl FnMut() -> Instant,
+    mut pause: impl FnMut(SerialCompletionPause),
+) -> Result<u64> {
+    let mut backoff = SerialCompletionBackoff::default();
+    loop {
+        if let Some(elapsed) = poll()? {
+            return Ok(elapsed);
+        }
+        pause(backoff.after_incomplete(now()));
+    }
+}
+
 /// Crate-private owner used only by explicit disposable-process engineering
 /// entries, including the separately opted-in peer group. Any uncertain native
 /// result retains the owner until process teardown instead of retrying frees.
@@ -786,12 +835,14 @@ impl Context {
         // SAFETY: the same dedicated-process and trusted-code contract applies;
         // this serial path retains the context until observed completion.
         let mut pending = unsafe { self.publish_prepared_dispatch(prepared, timeout_ms) }?;
-        loop {
-            if let Some(elapsed) = self.poll_pending_dispatch(&mut pending)? {
-                return Ok(elapsed);
-            }
-            std::thread::sleep(Duration::from_micros(50));
-        }
+        wait_for_serial_completion(
+            || self.poll_pending_dispatch(&mut pending),
+            Instant::now,
+            |action| match action {
+                SerialCompletionPause::Spin => std::hint::spin_loop(),
+                SerialCompletionPause::Sleep => std::thread::sleep(Duration::from_micros(50)),
+            },
+        )
     }
 
     /// Retains this queue's sole kernarg/signal until `poll_pending_dispatch`
@@ -1514,6 +1565,177 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serial_completion_backoff_admits_at_most_sixteen_extra_polls() {
+        let now = Instant::now();
+        let mut backoff = SerialCompletionBackoff::default();
+        for count in 1..=SERIAL_COMPLETION_EXTRA_POLLS {
+            assert_eq!(backoff.after_incomplete(now), SerialCompletionPause::Spin);
+            assert_eq!(backoff.extra_polls, count);
+        }
+        for _ in 0..32 {
+            assert_eq!(backoff.after_incomplete(now), SerialCompletionPause::Sleep);
+            assert_eq!(backoff.extra_polls, SERIAL_COMPLETION_EXTRA_POLLS);
+            assert_eq!(backoff.started, Some(now));
+        }
+        let mut next_dispatch = SerialCompletionBackoff::default();
+        assert_eq!(
+            next_dispatch.after_incomplete(now),
+            SerialCompletionPause::Spin
+        );
+    }
+
+    #[test]
+    fn serial_completion_backoff_window_is_strict_and_never_restarts() {
+        let start = Instant::now();
+        let mut backoff = SerialCompletionBackoff::default();
+        assert_eq!(backoff.after_incomplete(start), SerialCompletionPause::Spin);
+        assert_eq!(
+            backoff.after_incomplete(start + Duration::from_nanos(9_999)),
+            SerialCompletionPause::Spin
+        );
+        assert_eq!(
+            backoff.after_incomplete(start + Duration::from_micros(10)),
+            SerialCompletionPause::Sleep
+        );
+        for now in [start, start + Duration::from_secs(1)] {
+            assert_eq!(backoff.after_incomplete(now), SerialCompletionPause::Sleep);
+            assert_eq!(backoff.started, Some(start));
+        }
+        let mut reversed_clock = SerialCompletionBackoff::default();
+        reversed_clock.after_incomplete(start + Duration::from_micros(1));
+        assert_eq!(
+            reversed_clock.after_incomplete(start),
+            SerialCompletionPause::Sleep
+        );
+    }
+
+    #[test]
+    fn serial_completion_terminal_first_poll_never_reads_clock_or_pauses() {
+        for observation in [Ok(Some(19)), Err("first-poll fault".to_owned())] {
+            let expected = observation.clone().map(Option::unwrap);
+            let mut observations = Some(observation);
+            assert_eq!(
+                wait_for_serial_completion(
+                    || observations
+                        .take()
+                        .expect("terminal observation was polled again"),
+                    || panic!("terminal observation read the backoff clock"),
+                    |_| panic!("terminal observation paused"),
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn serial_completion_spin_window_starts_after_first_incomplete_poll() {
+        use std::cell::Cell;
+        let start = Instant::now();
+        let clock = Cell::new(start);
+        let mut polls = 0;
+        let mut pauses = Vec::new();
+        let result = wait_for_serial_completion(
+            || {
+                polls += 1;
+                match polls {
+                    1 => {
+                        clock.set(start + Duration::from_millis(100));
+                        Ok(None)
+                    }
+                    2 => Ok(Some(23)),
+                    _ => panic!("completed dispatch was polled again"),
+                }
+            },
+            || clock.get(),
+            |action| pauses.push(action),
+        );
+        assert_eq!(result, Ok(23));
+        assert_eq!(polls, 2);
+        assert_eq!(pauses, [SerialCompletionPause::Spin]);
+    }
+
+    #[test]
+    fn serial_completion_continued_pending_observations_use_fixed_sleep_fallback() {
+        let start = Instant::now();
+        let mut observations = [Ok(None), Ok(None), Ok(None), Ok(Some(29))].into_iter();
+        let mut clocks = [
+            start,
+            start + Duration::from_micros(10),
+            start + Duration::from_micros(11),
+        ]
+        .into_iter();
+        let mut pauses = Vec::new();
+        assert_eq!(
+            wait_for_serial_completion(
+                || observations.next().expect("extra completion poll"),
+                || clocks.next().expect("extra backoff clock read"),
+                |action| pauses.push(action),
+            ),
+            Ok(29)
+        );
+        assert_eq!(
+            pauses,
+            [
+                SerialCompletionPause::Spin,
+                SerialCompletionPause::Sleep,
+                SerialCompletionPause::Sleep
+            ]
+        );
+        assert!(observations.next().is_none());
+        assert!(clocks.next().is_none());
+    }
+
+    #[test]
+    fn serial_completion_later_faults_stop_before_another_pause_or_poll() {
+        let now = Instant::now();
+        for fault in [
+            "identity",
+            "signal",
+            "counter",
+            "exception",
+            "currentness",
+            "timeout",
+        ] {
+            for incomplete in [1, 17] {
+                let mut polls = 0;
+                let mut clocks = 0;
+                let mut pauses = Vec::new();
+                let result = wait_for_serial_completion(
+                    || {
+                        polls += 1;
+                        if polls <= incomplete {
+                            Ok(None)
+                        } else if polls == incomplete + 1 {
+                            Err(fault.to_owned())
+                        } else {
+                            panic!("failed dispatch was polled again")
+                        }
+                    },
+                    || {
+                        clocks += 1;
+                        now
+                    },
+                    |action| pauses.push(action),
+                );
+                assert_eq!(result, Err(fault.to_owned()));
+                assert_eq!(polls, incomplete + 1);
+                assert_eq!(clocks, incomplete);
+                assert_eq!(pauses.len(), incomplete);
+                assert_eq!(
+                    pauses
+                        .iter()
+                        .filter(|&&action| action == SerialCompletionPause::Spin)
+                        .count(),
+                    incomplete.min(16)
+                );
+                if incomplete == 17 {
+                    assert_eq!(pauses.last(), Some(&SerialCompletionPause::Sleep));
+                }
+            }
+        }
+    }
 
     #[test]
     fn pending_dispatch_rejects_foreign_device_epoch_frontier_and_repeated_completion() {
