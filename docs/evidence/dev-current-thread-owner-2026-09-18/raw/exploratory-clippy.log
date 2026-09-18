@@ -1,0 +1,32 @@
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/fe2o3-runtime/src/async_engine/owned.rs:482:14
+    |
+482 |       outcome: thread::Result<(
+    |  ______________^
+483 | |         RuntimeCleanupReportV1<B::Error>,
+484 | |         Option<RuntimeBackendFailureV1<B::Error>>,
+485 | |     )>,
+    | |______^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#type_complexity
+    = note: `-D clippy::type-complexity` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: could not compile `fe2o3-runtime` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: items after a test module
+  --> crates/fe2o3-runtime/src/async_engine/scheduler.rs:18:1
+   |
+18 | mod tests {
+   | ^^^^^^^^^
+...
+76 | impl<B: RuntimeBackendV1 + 'static> SchedulerV1<B> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#items_after_test_module
+   = note: `-D clippy::items-after-test-module` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::items_after_test_module)]`
+   = help: move the items to before the test module was defined
+
+error: could not compile `fe2o3-runtime` (lib test) due to 2 previous errors

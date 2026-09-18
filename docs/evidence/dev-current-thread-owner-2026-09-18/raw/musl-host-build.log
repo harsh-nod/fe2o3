@@ -1,0 +1,5 @@
+warning: fe2o3-hip-sys@0.1.0: HIP headers not found; device-property discovery will return HIP_ERROR_NOT_SUPPORTED
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-host)
+    Finished `test` profile [unoptimized] target(s) in 39.91s
+  Executable unittests src/lib.rs (target/x86_64-unknown-linux-musl/debug/deps/fe2o3_host-0526106949c2dcd0)

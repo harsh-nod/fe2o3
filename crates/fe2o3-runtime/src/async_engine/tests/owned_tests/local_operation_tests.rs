@@ -2,7 +2,7 @@ use super::*;
 use operation::{EngineOperationFactoryV1, EngineOperationV1};
 
 #[derive(Clone, Copy)]
-enum Mode {
+pub(super) enum Mode {
     Pending,
     Complete,
     FactoryPanic,
@@ -27,7 +27,7 @@ fn record(trace: &Mutex<OwnerTrace>, name: &'static str) {
         .push((name, thread::current().id()));
 }
 
-fn count(trace: &Mutex<OwnerTrace>, name: &'static str) -> usize {
+pub(super) fn count(trace: &Mutex<OwnerTrace>, name: &'static str) -> usize {
     trace
         .lock()
         .unwrap()
@@ -123,7 +123,7 @@ impl Drop for LocalDriver {
     }
 }
 
-fn enqueue_local<B: RuntimeBackendV1 + 'static>(
+pub(super) fn enqueue_local<B: RuntimeBackendV1 + 'static>(
     handle: &RuntimeAsyncProgressHandleV1<B>,
     stream: RuntimeStreamIdV1,
     trace: Arc<Mutex<OwnerTrace>>,

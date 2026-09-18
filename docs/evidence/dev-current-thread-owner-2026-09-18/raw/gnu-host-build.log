@@ -1,0 +1,4 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+   Compiling fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-host)
+    Finished `test` profile [unoptimized] target(s) in 36.44s
+  Executable unittests src/lib.rs (target/debug/deps/fe2o3_host-ba5114b53aa85ed7)

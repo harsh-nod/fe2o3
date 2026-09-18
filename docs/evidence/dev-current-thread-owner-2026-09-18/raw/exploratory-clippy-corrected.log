@@ -1,0 +1,18 @@
+    Checking fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+    Checking fe2o3-host v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-host)
+error: items after a test module
+  --> crates/fe2o3-runtime/src/async_engine/scheduler.rs:18:1
+   |
+18 | mod tests {
+   | ^^^^^^^^^
+...
+76 | impl<B: RuntimeBackendV1 + 'static> SchedulerV1<B> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#items_after_test_module
+   = note: `-D clippy::items-after-test-module` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::items_after_test_module)]`
+   = help: move the items to before the test module was defined
+
+error: could not compile `fe2o3-runtime` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

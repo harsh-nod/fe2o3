@@ -488,7 +488,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         &self,
         dependencies: Vec<RuntimeEventIdV1>,
     ) -> Result<snapshot::Charged<Box<[RuntimeEventIdV1]>>, RuntimeAsyncEngineCallErrorV1> {
-        if self.observer.is_worker_thread() {
+        if self.observer.rejects_async_enqueue() {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
         }
         snapshot::charge_dependencies(&self.observer.snapshot_budget, dependencies)
@@ -518,7 +518,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         submit: Submit<B, A>,
         control: Option<RuntimeAsyncOperationControlV1>,
     ) -> Result<RuntimeAsyncOperationFutureV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
-        if self.observer.is_worker_thread() {
+        if self.observer.rejects_async_enqueue() {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
         }
         let (reply, future) = owned::Reply::budgeted_pair(&self.observer.reply_budget)?;

@@ -115,17 +115,26 @@ semantic-to-machine proof artifact. Test-only verifier implementations and
 lower native vecadd fixtures do not satisfy that authority boundary.
 
 Separately, the canonical `cargo fe2o3 run` application sandbox prohibits thread
-creation, while every public runtime async engine starts an owner thread. Even
-with a genuine deployment verifier, those APIs cannot currently compose in that
+creation. The background async engines therefore cannot compose in that
 single-threaded process. The synchronous inherited application helper creates
 no original async completion receipt and cannot stand in for this path.
 
-The runtime-side next step is caller-driven owned progress on the current
-thread, sharing the existing scheduler, operation registry, original reply
-cells, Stop/drain and cleanup machinery. Nonblocking enqueue between ticks must
-remain distinct from callback reentrancy and blocking self-waits. This is an
-unimplemented integration requirement, not permission to relax seccomp, expose
-receipt constructors, or promote inert CPU metadata to execution authority.
+`RuntimeAsyncCurrentThreadOwnedEngineV1` now offers caller-driven owned progress
+without creating a thread. It shares the background scheduler, operation
+registry, original reply cells, Stop/drain and cleanup machinery. `tick` performs
+one configured work budget; `drive_until_ready` borrows a pinned future and
+preserves it on cooperative deadline expiry. Nonblocking enqueue works between
+ticks, while callback reentrancy and blocking self-waits remain rejected.
+Shutdown is immediate Stop; drive `begin_drain` first to finish an accepted
+prefix. Cleanup or native-shutdown failure retains custody until process exit.
+
+Synchronous event/progress observer registration remains unavailable on the
+caller-owner thread; generated and tracked operations maintain their own
+progress. This runtime API does not supply the missing verifier/proof provider,
+change seccomp, expose receipt construction, or qualify protected application
+execution. Its [CPU development evidence](evidence/dev-current-thread-owner-2026-09-18/README.md)
+is separate from native, sandbox-composition, formal-refinement and performance
+acceptance. Public protected typed bundle execution remains open.
 
 ## Cancellation Boundary
 

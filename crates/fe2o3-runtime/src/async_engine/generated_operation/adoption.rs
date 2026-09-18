@@ -386,7 +386,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
             ticket,
             error: ActivationErrorV1::Engine(error),
         };
-        if self.observer.is_worker_thread() {
+        if self.observer.rejects_async_enqueue() {
             return Err(failure(
                 ticket,
                 RuntimeAsyncEngineCallErrorV1::ReentrantCall,

@@ -330,7 +330,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         reserve: Option<Reserve<B, P>>,
         adoption: Option<adoption::AdoptionHooksV1<B, P>>,
     ) -> Result<RuntimeAsyncPreparationV1<E>, RuntimeAsyncEngineCallErrorV1> {
-        if self.observer.is_worker_thread() {
+        if self.observer.rejects_async_enqueue() {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
         }
         let (reply, future) = owned::Reply::budgeted_pair(&self.observer.reply_budget)?;
@@ -363,7 +363,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         &self,
         ticket: RuntimeAsyncPreparedTicketV1,
     ) -> Result<RuntimeAsyncCommandFutureV1<()>, RuntimeAsyncPreparedDiscardFailureV1> {
-        let error = if self.observer.is_worker_thread() {
+        let error = if self.observer.rejects_async_enqueue() {
             Some(RuntimeAsyncEngineCallErrorV1::ReentrantCall)
         } else if ticket.key.context_generation != self.observer.context_generation {
             Some(RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket)

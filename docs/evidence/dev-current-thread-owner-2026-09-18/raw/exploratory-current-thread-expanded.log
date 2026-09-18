@@ -1,0 +1,31 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+error[E0599]: no variant, associated function, or constant named `Submitted` found for enum `R62OperationPhaseV1` in the current scope
+   --> crates/fe2o3-runtime/src/async_engine/tests/owned_tests/current_thread_tests.rs:428:40
+    |
+428 |     assert_eq!(control.phase(), Phase::Submitted);
+    |                                        ^^^^^^^^^ variant, associated function, or constant not found in `R62OperationPhaseV1`
+
+error[E0599]: no method named `result_domain` found for struct `async_engine::generated_operation::completion::RuntimeAsyncGeneratedCompletionV1` in the current scope
+  --> crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests/current_thread_tests.rs:23:32
+   |
+23 |     assert!(failure.completion.result_domain().matches_owner(&domain));
+   |                                ^^^^^^^^^^^^^ method not found in `async_engine::generated_operation::completion::RuntimeAsyncGeneratedCompletionV1`
+   |
+  ::: crates/fe2o3-runtime/src/async_engine/generated_operation/completion.rs:65:1
+   |
+65 | pub struct RuntimeAsyncGeneratedCompletionV1 {
+   | -------------------------------------------- method `result_domain` not found for this struct
+
+error[E0599]: no method named `result_domain` found for struct `async_engine::generated_operation::completion::RuntimeAsyncGeneratedCompletionV1` in the current scope
+  --> crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests/adoption_tests/completion_tests/current_thread_tests.rs:24:33
+   |
+24 |     assert!(!failure.completion.result_domain().matches_owner(&foreign));
+   |                                 ^^^^^^^^^^^^^ method not found in `async_engine::generated_operation::completion::RuntimeAsyncGeneratedCompletionV1`
+   |
+  ::: crates/fe2o3-runtime/src/async_engine/generated_operation/completion.rs:65:1
+   |
+65 | pub struct RuntimeAsyncGeneratedCompletionV1 {
+   | -------------------------------------------- method `result_domain` not found for this struct
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `fe2o3-runtime` (lib test) due to 3 previous errors

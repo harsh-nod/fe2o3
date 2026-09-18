@@ -1032,7 +1032,7 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static>
         &self,
         request: RuntimeGraphRequestV1<B>,
     ) -> Result<RuntimeAsyncGraphFutureV1<B::Error>, RuntimeAsyncEngineCallErrorV1> {
-        if self.observer.is_worker_thread() {
+        if self.observer.rejects_async_enqueue() {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
         }
         let (reply, future) = owned::Reply::budgeted_pair(&self.observer.reply_budget)?;

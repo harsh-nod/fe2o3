@@ -398,6 +398,7 @@ impl Harness {
                 ),
                 sender,
                 worker_thread: Arc::new(OnceLock::new()),
+                local_active: None,
                 quarantine_command_panics: true,
             },
         };

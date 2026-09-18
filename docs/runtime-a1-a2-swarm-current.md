@@ -10,7 +10,19 @@ Resources' V4-J1 proof handoff above the locally accepted
 Its immediate assignments supersede the older checkpoint tables below, whose
 detailed contracts and historical observations are retained.
 
-Latest development (2026-09-18): the [C5 typed bundle adapter](runtime-generated-typed-completion-v1.md#heterogeneous-bundles)
+Latest development (2026-09-18): [caller-driven owned progress](runtime-generated-typed-completion-v1.md#canonical-application-integration)
+adds a thread-affine runtime owner that shares the background scheduler and
+retirement rules without spawning a thread. Its cooperative ticks and borrowed
+future driver preserve accepted work across deadlines, reject callback reentrancy
+and blocking self-waits, and retain uncertain native custody. The
+[development archive](evidence/dev-current-thread-owner-2026-09-18/README.md)
+records 21 new CPU tests, with 1,088 runtime and 282 host passes on both GNU and
+scoped musl, plus 69 doctests. It keeps these results separate from protected/native
+execution, formal refinement and performance. Synchronous observer registration
+on the caller-owner remains unsupported. Accepted checkpoints, A1/A2 and #182
+are unchanged.
+
+Earlier development (2026-09-18): the [C5 typed bundle adapter](runtime-generated-typed-completion-v1.md#heterogeneous-bundles)
 collects 2 through 64 heterogeneous outputs atomically under the original
 completion receipt, preserving the original storage and independent credits.
 Eleven new CPU tests cover late-slot failures, maximum arity and observer
@@ -24,10 +36,10 @@ The subsequent [matched native-wait attempt](evidence/dev-kfd-native-wait-matche
 stopped after A/1 when another process attached to all eight GPUs. Thirteen
 legacy KFD round trips and teardown succeeded; no B/C/HSA cell launched and no
 performance ratio is accepted. The owned remote scratch directory is removed.
-Source review also identifies a runtime integration prerequisite: the canonical
-`cargo fe2o3 run` application sandbox forbids thread creation, but public async
-engines all spawn threads. [Caller-driven owned progress](runtime-generated-typed-completion-v1.md#canonical-application-integration)
-is needed independently of the missing production verifier/refinement provider.
+The canonical `cargo fe2o3 run` application sandbox forbids thread creation.
+Caller-driven progress addresses the runtime thread-creation prerequisite;
+actual sandbox composition and the missing production verifier/refinement
+provider remain independent qualification requirements.
 
 Earlier development (2026-09-18): the opt-in persistent SDMA native-wait
 [diagnostic success paths](evidence/dev-kfd-native-wait-smoke-mi300x-2026-09-18/README.md)

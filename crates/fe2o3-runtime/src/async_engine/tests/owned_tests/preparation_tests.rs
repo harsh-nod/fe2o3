@@ -89,6 +89,7 @@ impl Harness {
                 admission: drain::AdmissionV1::new(),
                 sender,
                 worker_thread: Arc::new(OnceLock::new()),
+                local_active: None,
                 quarantine_command_panics: true,
                 graph_slot: Arc::new(AtomicBool::new(false)),
                 snapshot_budget: snapshot::SnapshotBudgetV1::new(8),

@@ -156,7 +156,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         RuntimeAsyncDrainCaptureAdmissionFailureV1,
     > {
         use RuntimeAsyncDrainCaptureAdmissionErrorV1 as AdmissionError;
-        let invalid = if self.observer.is_worker_thread() {
+        let invalid = if self.observer.rejects_async_enqueue() {
             Some(AdmissionError::ReentrantCall)
         } else if max_ticks == 0 || max_ticks > MAX_RUNTIME_ASYNC_DRAIN_TICKS_V1 {
             Some(AdmissionError::InvalidTickBudget)

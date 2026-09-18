@@ -177,7 +177,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
             ticket,
             error: RuntimeGfx942GeneratedReservationErrorV1::Engine(error),
         };
-        if self.observer.is_worker_thread() {
+        if self.observer.rejects_async_enqueue() {
             return Err(failure(
                 ticket,
                 RuntimeAsyncEngineCallErrorV1::ReentrantCall,
@@ -235,7 +235,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         &self,
         ticket: RuntimeAsyncReservedTicketV1,
     ) -> Result<RuntimeAsyncCommandFutureV1<()>, RuntimeAsyncReservedDiscardFailureV1> {
-        let error = if self.observer.is_worker_thread() {
+        let error = if self.observer.rejects_async_enqueue() {
             Some(RuntimeAsyncEngineCallErrorV1::ReentrantCall)
         } else if ticket.key.context_generation != self.observer.context_generation {
             Some(RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket)

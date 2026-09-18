@@ -1,0 +1,30 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+    Finished `test` profile [unoptimized] target(s) in 39.25s
+     Running unittests src/lib.rs (target/debug/deps/fe2o3_runtime-4a27fcbe3e62fbea)
+
+running 22 tests
+test async_engine::scheduler::tests::current_thread_finish_retry_stops_suffix_after_graph_destructor_panics ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_borrowed_rc_factory_and_entire_lifetime_stay_on_caller ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_deadline_keeps_same_future_and_credit_for_later_completion ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_drain_finishes_accepted_prefix_across_ticks ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_exhausted_drain_retains_pending_driver ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_factory_error_and_panic_are_reported ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_foreign_thread_admission_still_works ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_full_queue_shutdown_and_drop_do_not_execute_commands ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_future_poll_can_enqueue_between_ticks ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_graph_progress_and_retirement_survive_separate_ticks ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_invalid_configuration_does_not_call_factory ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_outer_panic_retains_custody_and_guards_recovery_wake ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_pending_driver_shutdown_obeys_native_retirement_order ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_ready_result_wins_over_expired_deadline ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_rejects_blocking_owner_calls_and_callback_enqueue ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_reply_wake_runs_under_reentrancy_guard ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_retains_custody_on_cleanup_and_finalizer_error_or_panic ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_submitted_deadline_preserves_original_control_and_submission ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_tick_preserves_command_budget_and_progress_between_calls ... ok
+test async_engine::tests::owned_tests::current_thread_tests::current_thread_unit_poll_budget_advances_both_streams ... ok
+test async_engine::tests::owned_tests::executor_tests::r64_tokio_current_thread_uses_real_pending_wakeup ... ok
+test async_engine::tests::owned_tests::preparation_tests::adoption_tests::completion_tests::current_thread_tests::current_thread_generated_receipt_survives_owner_join_rejection_and_deadline ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 1026 filtered out; finished in 0.03s
+

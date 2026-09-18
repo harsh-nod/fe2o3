@@ -267,7 +267,7 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static>
             request: Box::new(request),
             error: RuntimeGeneratedGraphAdmissionErrorV1::Engine(error),
         };
-        if self.observer.is_worker_thread() {
+        if self.observer.rejects_async_enqueue() {
             return Err(failure(
                 request,
                 RuntimeAsyncEngineCallErrorV1::ReentrantCall,

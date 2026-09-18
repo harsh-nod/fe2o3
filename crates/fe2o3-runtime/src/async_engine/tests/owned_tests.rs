@@ -3,6 +3,7 @@ use crate::{RuntimeAsyncOwnedDispositionV1, RuntimeOwnedShutdownBackendV1};
 use std::cell::Cell;
 
 mod control_tests;
+mod current_thread_tests;
 mod drain_tests;
 mod executor_tests;
 mod graph_tests;
@@ -452,6 +453,7 @@ fn enqueue_is_nonblocking_bounded_and_discarded_commands_resolve() {
         snapshot_budget: snapshot::SnapshotBudgetV1::new(DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1),
         sender,
         worker_thread: Arc::new(OnceLock::new()),
+        local_active: None,
         quarantine_command_panics: false,
     };
     let future = handle.enqueue_with_context(|_| 5).unwrap();
@@ -664,6 +666,7 @@ fn command_future_replaces_waker_and_wakes_exactly_once() {
         snapshot_budget: snapshot::SnapshotBudgetV1::new(DEFAULT_RUNTIME_ASYNC_SNAPSHOT_BYTES_V1),
         sender,
         worker_thread: Arc::new(OnceLock::new()),
+        local_active: None,
         quarantine_command_panics: false,
     };
     let mut future = handle.enqueue_with_context(|_| 7).unwrap();

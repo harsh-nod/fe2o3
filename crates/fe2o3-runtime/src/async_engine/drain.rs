@@ -159,7 +159,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         max_ticks: usize,
     ) -> Result<RuntimeAsyncCommandFutureV1<RuntimeAsyncDrainReportV1>, RuntimeAsyncDrainErrorV1>
     {
-        if self.observer.is_worker_thread() {
+        if self.observer.rejects_async_enqueue() {
             return Err(RuntimeAsyncDrainErrorV1::ReentrantCall);
         }
         if max_ticks == 0 || max_ticks > MAX_RUNTIME_ASYNC_DRAIN_TICKS_V1 {

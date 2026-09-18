@@ -23,7 +23,10 @@ use std::time::Duration;
 
 mod owned;
 pub use owned::*;
+mod current_thread;
 mod drain;
+mod scheduler;
+pub use current_thread::*;
 pub(crate) use drain::DrainQuiescenceV1;
 pub use drain::*;
 mod drain_capture;
@@ -883,6 +886,7 @@ pub struct RuntimeAsyncEngineHandleV1<B: RuntimeBackendV1 + 'static> {
     admission: Arc<drain::AdmissionV1>,
     sender: SyncSender<RuntimeAsyncEngineCommandV1<B>>,
     worker_thread: Arc<OnceLock<thread::ThreadId>>,
+    local_active: Option<Arc<AtomicBool>>,
     quarantine_command_panics: bool,
     graph_slot: Arc<AtomicBool>,
     snapshot_budget: Arc<snapshot::SnapshotBudgetV1>,
@@ -897,6 +901,7 @@ impl<B: RuntimeBackendV1 + 'static> Clone for RuntimeAsyncEngineHandleV1<B> {
             admission: Arc::clone(&self.admission),
             reply_budget: Arc::clone(&self.reply_budget),
             worker_thread: Arc::clone(&self.worker_thread),
+            local_active: self.local_active.clone(),
             quarantine_command_panics: self.quarantine_command_panics,
             graph_slot: Arc::clone(&self.graph_slot),
             snapshot_budget: Arc::clone(&self.snapshot_budget),
@@ -994,6 +999,14 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
             cell,
             completed: false,
         })
+    }
+
+    fn rejects_async_enqueue(&self) -> bool {
+        self.is_worker_thread()
+            && self
+                .local_active
+                .as_ref()
+                .is_none_or(|active| active.load(Ordering::Acquire))
     }
 
     fn is_worker_thread(&self) -> bool {
@@ -1227,6 +1240,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
             graph_slot: Arc::new(AtomicBool::new(false)),
             sender: sender.clone(),
             worker_thread,
+            local_active: None,
             quarantine_command_panics: false,
         };
         Ok((
@@ -1337,6 +1351,7 @@ impl<B: RuntimeBackendV1 + Send + 'static> RuntimeAsyncEngineV1<B> {
             graph_slot: Arc::new(AtomicBool::new(false)),
             sender: sender.clone(),
             worker_thread,
+            local_active: None,
             quarantine_command_panics: false,
         };
         Ok((
@@ -1421,178 +1436,19 @@ fn run_engine_context_v1<B: RuntimeBackendV1 + 'static>(
     progress: Option<RuntimeAsyncProgressModeV1<B>>,
     admission: Arc<drain::AdmissionV1>,
 ) {
-    let admission = drain::AdmissionWorkerGuardV1(admission);
-    let mut draining = None;
-    let mut queue_exhausted = false;
-    let mut waiters = RuntimeAsyncWaiterRegistryV1::new();
-    let mut graph = None;
-    let mut progress_registry = progress
-        .as_ref()
-        .map(|_| RuntimeAsyncProgressRegistryV1::new());
-    let mut next_event = None;
-    let mut next_stream = None;
-    let mut stopped = context.is_terminal();
-    while !stopped {
-        if draining.is_none() {
-            draining = drain::DrainRequest::take(&admission.0);
-        }
-        match receiver.recv_timeout(config.poll_interval) {
-            Ok(command) => {
-                stopped = handle_command_v1(
-                    context,
-                    &mut waiters.entries,
-                    operations,
-                    &mut graph,
-                    progress_registry.as_mut(),
-                    command,
-                    config,
-                    progress.as_ref().map(|mode| mode.config),
-                );
-                for _ in 1..config.commands_per_tick {
-                    if stopped {
-                        break;
-                    }
-                    match receiver.try_recv() {
-                        Ok(command) => {
-                            stopped = handle_command_v1(
-                                context,
-                                &mut waiters.entries,
-                                operations,
-                                &mut graph,
-                                progress_registry.as_mut(),
-                                command,
-                                config,
-                                progress.as_ref().map(|mode| mode.config),
-                            );
-                        }
-                        Err(TryRecvError::Empty) => {
-                            queue_exhausted = draining.is_some();
-                            break;
-                        }
-                        Err(TryRecvError::Disconnected) => {
-                            stopped = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                queue_exhausted = draining.is_some();
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => stopped = true,
-        }
-        if !stopped && let Some(mode) = progress.as_ref() {
-            if let Some(active) = graph.as_mut() {
-                match catch_unwind(AssertUnwindSafe(|| {
-                    active.advance(
-                        context,
-                        operations,
-                        config.polls_per_tick,
-                        mode.config.flushes_per_tick,
-                    )
-                })) {
-                    Ok(true) => graph = None,
-                    Ok(false) => {}
-                    Err(payload) => {
-                        core::mem::forget(payload);
-                        context.quarantine_after_async_command_panic_v1();
-                    }
-                }
-            }
-            if context.is_terminal() {
-                stopped = true;
-                continue;
-            }
-            operation::advance_operations_v1(
-                context,
-                operations,
-                config.polls_per_tick,
-                mode.config.flushes_per_tick,
-                mode.flush_stream,
-            );
-            stopped = context.is_terminal();
-        }
-        if !stopped {
-            stopped = poll_waiters_v1(
-                context,
-                &mut waiters.entries,
-                progress_registry
-                    .as_mut()
-                    .map(|registry| &mut registry.entries),
-                &mut next_event,
-                config.polls_per_tick,
-            );
-        }
-        if !stopped
-            && let (Some(mode), Some(registry)) = (progress.as_ref(), progress_registry.as_mut())
-        {
-            stopped = flush_progress_v1(
-                context,
-                &mut registry.entries,
-                &mut next_stream,
-                mode.config.flushes_per_tick,
-                mode.flush_stream,
-            );
-        }
-        if !stopped && let (Some(request), Some(mode)) = (draining.as_mut(), progress.as_ref()) {
-            if queue_exhausted {
-                operations.retire_unpublished_v1(context, config.polls_per_tick);
-                if context.is_terminal() {
-                    stopped = true;
-                    continue;
-                }
-            }
-            stopped = match catch_unwind(AssertUnwindSafe(|| {
-                request.tick(
-                    context,
-                    queue_exhausted,
-                    operations.active_len(),
-                    graph.is_some(),
-                    waiters.entries.is_empty(),
-                    config,
-                    mode,
-                )
-            })) {
-                Ok(stopped) => stopped,
-                Err(payload) => {
-                    core::mem::forget(payload);
-                    context.quarantine_after_async_command_panic_v1();
-                    true
-                }
-            };
-        }
+    let mut scheduler =
+        scheduler::SchedulerV1::new(admission, progress.is_some(), context.is_terminal());
+    while !scheduler.stopped {
+        scheduler.tick(
+            context,
+            operations,
+            &receiver,
+            config,
+            progress.as_ref(),
+            config.poll_interval,
+        );
     }
-    let pending_drain = admission.0.close_and_take();
-    if draining.is_none() {
-        draining = pending_drain;
-    }
-    if draining
-        .as_ref()
-        .is_some_and(|request| !request.is_quiescent())
-    {
-        context.quarantine_after_async_command_panic_v1();
-    }
-    if let Some(mut graph) = graph {
-        if context.is_terminal() {
-            // Dropping an observer/driver cannot discharge ambiguous custody.
-        } else if let Err(payload) =
-            catch_unwind(AssertUnwindSafe(|| graph.stop(context, operations)))
-        {
-            core::mem::forget(payload);
-            context.quarantine_after_async_command_panic_v1();
-        }
-    }
-    if let Some(registry) = progress_registry.as_mut() {
-        for (_, cell) in core::mem::take(&mut registry.entries) {
-            cell.stop();
-        }
-    }
-    for (_, cell) in core::mem::take(&mut waiters.entries) {
-        cell.complete(Err(RuntimeAsyncEventErrorV1::EngineStopped));
-    }
-    if operations.stop_observations() {
-        context.quarantine_after_async_command_panic_v1();
-    }
+    scheduler.finish(context, operations);
 }
 
 #[allow(clippy::too_many_arguments)] // Independently bounded observer and operation registries.
@@ -2062,6 +1918,15 @@ mod tests {
     use super::*;
 
     mod owned_tests;
+    pub(super) fn scheduler_fixture() -> (RuntimeContextV1<impl RuntimeBackendV1>, RuntimeStreamIdV1)
+    {
+        let mut context = RuntimeContextV1::open(MockBackend {
+            state: Arc::new(Mutex::new(MockState::default())),
+        })
+        .unwrap();
+        let stream = context.create_stream(context.devices()[0].id()).unwrap();
+        (context, stream)
+    }
     use crate::{
         BackendDeviceDescriptionV1, BackendLaunchV1, BackendMemoryRegionV1, BackendPollV1,
         RuntimeArgumentsV1, RuntimeBackendFailureV1, RuntimeBindingV1, RuntimeCapabilitiesV1,

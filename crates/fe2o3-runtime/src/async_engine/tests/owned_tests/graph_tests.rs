@@ -63,6 +63,7 @@ impl Harness {
                 admission: drain::AdmissionV1::new(),
                 sender,
                 worker_thread: Arc::new(OnceLock::new()),
+                local_active: None,
                 quarantine_command_panics: true,
                 graph_slot: Arc::new(AtomicBool::new(false)),
                 snapshot_budget: snapshot::SnapshotBudgetV1::new(
@@ -734,7 +735,7 @@ fn r63_reply_releases_slot_before_wake_without_clearing_successor_slot() {
     assert_eq!(h.issue_count(), 2);
 }
 
-fn owner_request(
+pub(super) fn owner_request(
     context: &mut RuntimeContextV1<ThreadBoundBackend>,
 ) -> RuntimeGraphRequestV1<ThreadBoundBackend> {
     let device = context.devices()[0].id();

@@ -208,7 +208,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncEngineHandleV1<B> {
         R: Send + 'static,
         F: FnOnce(&mut RuntimeContextV1<B>) -> R + Send + 'static,
     {
-        if self.is_worker_thread() {
+        if self.rejects_async_enqueue() {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
         }
         let (mut reply, future) = Reply::budgeted_pair(&self.reply_budget)?;
@@ -386,59 +386,9 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
                         }),
                         worker_admission,
                     );
-                    operations.retire_unpublished_v1(&mut context, usize::MAX);
-                    let cleanup = context.cleanup();
-                    let native_failure = if cleanup.is_complete() {
-                        context.shutdown_owned_backend_v1().err()
-                    } else {
-                        None
-                    };
-                    if cleanup.is_complete() && native_failure.is_none() {
-                        operations.dispose_quiescent();
-                    }
-                    (cleanup, native_failure)
+                    cleanup_owned_context_v1(&mut context, &mut operations)
                 }));
-                match outcome {
-                    Ok((cleanup, None))
-                        if fe2o3_runtime_model::r61_owner_may_release_v1(
-                            fe2o3_runtime_model::R61ShutdownFactsV1 {
-                                worker_returned_normally: true,
-                                context_cleanup_complete: cleanup.is_complete(),
-                                native_shutdown_attempted: cleanup.is_complete(),
-                                native_shutdown_succeeded: cleanup.is_complete(),
-                            },
-                        ) =>
-                    {
-                        RuntimeAsyncOwnedShutdownV1 {
-                            disposition: RuntimeAsyncOwnedDispositionV1::Released,
-                            cleanup: Some(cleanup),
-                            worker_panicked: false,
-                            native_failure: None,
-                        }
-                    }
-                    Ok((cleanup, native_failure)) => {
-                        core::mem::forget(operations);
-                        core::mem::forget(context);
-                        RuntimeAsyncOwnedShutdownV1 {
-                            disposition: RuntimeAsyncOwnedDispositionV1::RetainedUntilProcessExit,
-                            cleanup: Some(cleanup),
-                            worker_panicked: false,
-                            native_failure,
-                        }
-                    }
-                    Err(payload) => {
-                        core::mem::forget(payload);
-                        operations.stop_observations();
-                        core::mem::forget(operations);
-                        core::mem::forget(context);
-                        RuntimeAsyncOwnedShutdownV1 {
-                            disposition: RuntimeAsyncOwnedDispositionV1::RetainedUntilProcessExit,
-                            cleanup: None,
-                            worker_panicked: true,
-                            native_failure: None,
-                        }
-                    }
-                }
+                settle_owned_context_v1(context, operations, outcome)
             })
             .map_err(RuntimeAsyncOwnedSpawnErrorV1::Thread)?;
         let context_generation = match startup_receiver
@@ -460,6 +410,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
             graph_slot: Arc::new(AtomicBool::new(false)),
             sender: sender.clone(),
             worker_thread,
+            local_active: None,
             quarantine_command_panics: true,
         };
         Ok((
@@ -500,5 +451,77 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncOwnedEngineV1<B> {
 impl<B: RuntimeBackendV1 + 'static> Drop for RuntimeAsyncOwnedEngineV1<B> {
     fn drop(&mut self) {
         let _ = self.stop_and_join();
+    }
+}
+
+type OwnedCleanupV1<E> = (
+    RuntimeCleanupReportV1<E>,
+    Option<RuntimeBackendFailureV1<E>>,
+);
+
+pub(super) fn cleanup_owned_context_v1<
+    B: RuntimeBackendV1 + RuntimeOwnedShutdownBackendV1 + 'static,
+>(
+    context: &mut RuntimeContextV1<B>,
+    operations: &mut operation::OperationRegistryV1<B>,
+) -> OwnedCleanupV1<B::Error> {
+    operations.retire_unpublished_v1(context, usize::MAX);
+    let cleanup = context.cleanup();
+    let native_failure = if cleanup.is_complete() {
+        context.shutdown_owned_backend_v1().err()
+    } else {
+        None
+    };
+    if cleanup.is_complete() && native_failure.is_none() {
+        operations.dispose_quiescent();
+    }
+    (cleanup, native_failure)
+}
+
+pub(super) fn settle_owned_context_v1<B: RuntimeBackendV1 + 'static>(
+    context: RuntimeContextV1<B>,
+    mut operations: operation::OperationRegistryV1<B>,
+    outcome: thread::Result<OwnedCleanupV1<B::Error>>,
+) -> RuntimeAsyncOwnedShutdownV1<B::Error> {
+    match outcome {
+        Ok((cleanup, None))
+            if fe2o3_runtime_model::r61_owner_may_release_v1(
+                fe2o3_runtime_model::R61ShutdownFactsV1 {
+                    worker_returned_normally: true,
+                    context_cleanup_complete: cleanup.is_complete(),
+                    native_shutdown_attempted: cleanup.is_complete(),
+                    native_shutdown_succeeded: cleanup.is_complete(),
+                },
+            ) =>
+        {
+            RuntimeAsyncOwnedShutdownV1 {
+                disposition: RuntimeAsyncOwnedDispositionV1::Released,
+                cleanup: Some(cleanup),
+                worker_panicked: false,
+                native_failure: None,
+            }
+        }
+        Ok((cleanup, native_failure)) => {
+            core::mem::forget(operations);
+            core::mem::forget(context);
+            RuntimeAsyncOwnedShutdownV1 {
+                disposition: RuntimeAsyncOwnedDispositionV1::RetainedUntilProcessExit,
+                cleanup: Some(cleanup),
+                worker_panicked: false,
+                native_failure,
+            }
+        }
+        Err(payload) => {
+            core::mem::forget(payload);
+            operations.stop_observations();
+            core::mem::forget(operations);
+            core::mem::forget(context);
+            RuntimeAsyncOwnedShutdownV1 {
+                disposition: RuntimeAsyncOwnedDispositionV1::RetainedUntilProcessExit,
+                cleanup: None,
+                worker_panicked: true,
+                native_failure: None,
+            }
+        }
     }
 }

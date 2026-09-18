@@ -1,5 +1,6 @@
 use super::*;
 use generated_operation::adoption::CompletionHooksV1;
+mod current_thread_tests;
 mod graph_tests;
 
 type Observation =

@@ -183,7 +183,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         &self,
         request: RuntimeAsyncLaunchRequestV1<A>,
     ) -> Result<RuntimeAsyncOperationFutureV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
-        if self.observer.is_worker_thread() {
+        if self.observer.rejects_async_enqueue() {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
         }
         let stream = request.stream;
@@ -200,7 +200,7 @@ impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
         &self,
         request: RuntimeAsyncLaunchRequestV1<A>,
     ) -> Result<RuntimeAsyncTrackedOperationV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
-        if self.observer.is_worker_thread() {
+        if self.observer.rejects_async_enqueue() {
             return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
         }
         let stream = request.stream;
