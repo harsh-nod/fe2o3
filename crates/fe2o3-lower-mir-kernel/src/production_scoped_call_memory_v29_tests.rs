@@ -10,6 +10,7 @@ fn check_anchors(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     with_canonical_call_scratch_v1(budget, |budget| {
+        check_scoped_defined_call_phases_v29(instances, emitted, budget)?;
         for item in &slots.instances {
             check_scoped_memory_anchors_v29(
                 instances,
