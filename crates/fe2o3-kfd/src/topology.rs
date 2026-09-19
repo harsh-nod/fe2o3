@@ -2800,7 +2800,23 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn admitted_xgmi_routes() -> [Gfx942XgmiRouteV1; 2] {
+        admitted_xgmi_routes_with_bandwidth(64000)
+    }
+
+    pub(crate) fn admitted_xgmi_routes_with_bandwidth(bandwidth: u32) -> [Gfx942XgmiRouteV1; 2] {
         let fixture = Fixture::valid(2);
+        if bandwidth != 64000 {
+            for node in 1..=2 {
+                let path = fixture.node(node).join("io_links/1/properties");
+                let properties = fs::read_to_string(&path).unwrap();
+                fs::write(
+                    path,
+                    properties
+                        .replace("max_bandwidth 64000", &format!("max_bandwidth {bandwidth}")),
+                )
+                .unwrap();
+            }
+        }
         let snapshot = fixture.discover().unwrap();
         [
             snapshot.admit_gfx942_xgmi_route(1001, 1002).unwrap(),

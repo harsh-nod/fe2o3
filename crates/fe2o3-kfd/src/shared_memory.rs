@@ -7,8 +7,12 @@ mod data_cleanup;
 mod device_allocation;
 mod device_initialization;
 mod dispatch_retention;
+mod pair_currentness;
 mod queue_cleanup;
 mod transitions;
+
+#[cfg(test)]
+pub(crate) use pair_currentness::with_terminal_pair as test_xgmi_pair_terminal;
 
 pub(crate) use control_cleanup::ControlCleanupCustodyV1;
 #[cfg(test)]
@@ -5410,14 +5414,11 @@ impl SharedGttMemorySessionV1 {
         route: crate::topology::Gfx942XgmiRouteV1,
     ) -> Result<(), MemorySessionError> {
         self.validate_gfx942_xgmi_pair_binding(peer, route)?;
-        if let Err(error) = self.engine.backend.check_xgmi_route_currentness(route) {
-            return self.engine.quarantine(error);
-        }
-        if let Err(error) = peer.engine.backend.check_xgmi_route_currentness(route) {
-            return peer.engine.quarantine(error);
-        }
-        self.engine.check_currentness()?;
-        peer.engine.check_currentness()
+        pair_currentness::with_terminal_pair(&mut self.engine.phase, &mut peer.engine.phase, || {
+            self.engine
+                .backend
+                .check_xgmi_pair_currentness(&mut peer.engine.backend, route)
+        })
     }
 
     pub(crate) fn validate_gfx942_xgmi_publication_with_peer(

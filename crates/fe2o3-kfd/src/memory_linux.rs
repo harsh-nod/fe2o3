@@ -145,6 +145,16 @@ impl LinuxMemoryBackend {
         Ok(())
     }
 
+    pub(super) fn check_xgmi_pair_currentness(
+        &mut self,
+        peer: &mut Self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+    ) -> Result<(), MemorySessionError> {
+        self.device
+            .check_gfx942_xgmi_pair_currentness(&mut peer.device, route)
+            .map_err(MemorySessionError::Device)
+    }
+
     pub(super) fn plan_aql_queue_resources(
         &self,
         ring_bytes: u32,

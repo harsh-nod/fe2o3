@@ -9,7 +9,9 @@ use rustix::fd::OwnedFd;
 use rustix::io::FdFlags;
 use rustix::ioctl::{Opcode, Updater};
 
-use crate::device::{CheckedGfx942XnackMinusDevice, DeviceBindingError, validate_apertures};
+use crate::device::{CheckedGfx942XnackMinusDevice, DeviceBindingError};
+
+mod full;
 
 const SMI_EVENTS_OPCODE: Opcode = AMDKFD_IOC_SMI_EVENTS as Opcode;
 
@@ -538,79 +540,17 @@ impl CheckedGfx942XnackMinusDevice {
     fn check_observable_currentness_inner(
         &mut self,
     ) -> Result<ObservableDeviceCurrentnessV1, DeviceBindingError> {
-        self.kfd
-            .opened
-            .ensure_process(std::process::id())
-            .map_err(DeviceBindingError::Kfd)?;
-        let process_before = crate::linux::observe_process_incarnation()?;
-        if process_before != self.process {
-            return Err(DeviceBindingError::ProcessIncarnationChanged);
-        }
-        // Validate the opener process before touching the shared kernel FIFO.
-        // An inherited child must not be able to consume a reset-event byte.
-        self.reset_fence.check_clear()?;
+        full::check_single(self)
+    }
 
-        crate::linux::validate_kfd_descriptor_and_sysfs(
-            &self.kfd.opened.fd,
-            self.kfd.opened.node_observation(),
-        )?;
-        crate::linux::revalidate_render_descriptor(
-            &self.render_fd,
-            self.observation.render_descriptor(),
-        )?;
-
-        let uapi = crate::linux::observe_uapi(&self.kfd.opened.fd)?;
-        if uapi != self.kfd.uapi.reported_version() {
-            return Err(DeviceBindingError::UapiChanged);
-        }
-        let drm = crate::linux::observe_drm_identity(&self.render_fd)?;
-        if drm != self.observation.drm() {
-            return Err(DeviceBindingError::ObservableCurrentnessChanged(
-                "DRM identity or VRAM-loss counter",
-            ));
-        }
-        if crate::linux::query_xnack_mode(&self.kfd.opened.fd)? != 0 {
-            return Err(DeviceBindingError::UnsupportedXnackMode);
-        }
-        let apertures = validate_apertures(
-            crate::linux::observe_process_apertures(&self.kfd.opened.fd)?,
-            &self.topology,
-        )?;
-        if apertures != self.apertures {
-            return Err(DeviceBindingError::AperturesChanged);
-        }
-        let topology = crate::topology::discover_default_topology()?;
-        if topology != self.topology {
-            return Err(DeviceBindingError::TopologySnapshotChanged);
-        }
-
-        crate::linux::revalidate_descriptor(
-            &self.kfd.opened.fd,
-            self.kfd.opened.node_observation(),
-            "KFD currentness fstat",
-        )?;
-        crate::linux::revalidate_render_descriptor(
-            &self.render_fd,
-            self.observation.render_descriptor(),
-        )?;
-        let process_after = crate::linux::observe_process_incarnation()?;
-        if process_after != process_before || process_after != self.process {
-            return Err(DeviceBindingError::ProcessIncarnationChanged);
-        }
-        if crate::linux::query_xnack_mode(&self.kfd.opened.fd)? != 0 {
-            return Err(DeviceBindingError::UnsupportedXnackMode);
-        }
-        let drm_after = crate::linux::observe_drm_identity(&self.render_fd)?;
-        if drm_after != drm {
-            return Err(DeviceBindingError::ObservableCurrentnessChanged(
-                "DRM identity or VRAM-loss counter during currentness check",
-            ));
-        }
-        self.reset_fence.check_clear()?;
-
-        Ok(ObservableDeviceCurrentnessV1 {
-            vram_lost_counter: drm_after.vram_lost_counter(),
-        })
+    /// The shared-memory caller first authenticates both selected devices and
+    /// their retained routes. This private observation grants no queue authority.
+    pub(crate) fn check_gfx942_xgmi_pair_currentness(
+        &mut self,
+        peer: &mut Self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+    ) -> Result<(), DeviceBindingError> {
+        full::check_pair(self, peer, route)
     }
 }
 
