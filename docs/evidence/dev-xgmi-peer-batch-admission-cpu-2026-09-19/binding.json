@@ -1,0 +1,163 @@
+{
+  "admission_profiles": {
+    "gnu": {
+      "rows": [
+        {
+          "accepted": true,
+          "active": 64,
+          "blocked": 0,
+          "candidate_ns": 142270,
+          "opposite_ready": 63,
+          "reference_ns": 64251,
+          "requested": 1
+        },
+        {
+          "accepted": true,
+          "active": 256,
+          "blocked": 0,
+          "candidate_ns": 22212,
+          "opposite_ready": 255,
+          "reference_ns": 91082,
+          "requested": 1
+        },
+        {
+          "accepted": true,
+          "active": 1024,
+          "blocked": 0,
+          "candidate_ns": 106101,
+          "opposite_ready": 1023,
+          "reference_ns": 1105695,
+          "requested": 1
+        },
+        {
+          "accepted": true,
+          "active": 4096,
+          "blocked": 0,
+          "candidate_ns": 1214902,
+          "opposite_ready": 4095,
+          "reference_ns": 18279642,
+          "requested": 1
+        },
+        {
+          "accepted": true,
+          "active": 16384,
+          "blocked": 0,
+          "candidate_ns": 9091101,
+          "opposite_ready": 16383,
+          "reference_ns": 271414970,
+          "requested": 1
+        },
+        {
+          "accepted": true,
+          "active": 65536,
+          "blocked": 0,
+          "candidate_ns": 32142490,
+          "opposite_ready": 65473,
+          "reference_ns": null,
+          "requested": 63
+        }
+      ],
+      "stdout_sha256": "4be7c4eafcf9b4e28e17c2bbc7dd52f1bf571bbaec08915fc3e17cfe13357938"
+    },
+    "musl": {
+      "rows": [
+        {
+          "accepted": true,
+          "active": 64,
+          "blocked": 0,
+          "candidate_ns": 77006,
+          "opposite_ready": 63,
+          "reference_ns": 61656,
+          "requested": 1
+        },
+        {
+          "accepted": true,
+          "active": 256,
+          "blocked": 0,
+          "candidate_ns": 24908,
+          "opposite_ready": 255,
+          "reference_ns": 87505,
+          "requested": 1
+        },
+        {
+          "accepted": true,
+          "active": 1024,
+          "blocked": 0,
+          "candidate_ns": 120248,
+          "opposite_ready": 1023,
+          "reference_ns": 1376478,
+          "requested": 1
+        },
+        {
+          "accepted": true,
+          "active": 4096,
+          "blocked": 0,
+          "candidate_ns": 1180717,
+          "opposite_ready": 4095,
+          "reference_ns": 14941840,
+          "requested": 1
+        },
+        {
+          "accepted": true,
+          "active": 16384,
+          "blocked": 0,
+          "candidate_ns": 6069860,
+          "opposite_ready": 16383,
+          "reference_ns": 226822629,
+          "requested": 1
+        },
+        {
+          "accepted": true,
+          "active": 65536,
+          "blocked": 0,
+          "candidate_ns": 23269988,
+          "opposite_ready": 65473,
+          "reference_ns": null,
+          "requested": 63
+        }
+      ],
+      "stdout_sha256": "458460b0dd8a3d29087425b9d2aee96ef9dd994ce397d94ca312dc169e3dffed"
+    }
+  },
+  "commands": 23,
+  "document": {
+    "path": "docs/runtime-xgmi-peer-batch-v1.md",
+    "sha256": "654f62cd07679d6bdc09ef678d616355aecf3b75273df4a049a0252865c007ab"
+  },
+  "execution_root": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "rosters": {
+    "example": {
+      "count": 6,
+      "sha256": "f97bac104dde54255660dccb9b3a330fc325da8b02d1a1488544b1d393a8bb5a"
+    },
+    "kfd": {
+      "count": 6,
+      "sha256": "219af10efb8d78f0154a5d9dd2ec5e3a908e87e94f94d4c41ef100846c88fbd0"
+    },
+    "runtime": {
+      "count": 258,
+      "sha256": "2f2762cc00c1b4941a207cd9e3cccdbe55eada0342a7738962999f6406d4dc2a"
+    }
+  },
+  "schema": "fe2o3.xgmi-peer-batch-admission-cpu.v1",
+  "source_base": "ca7a30d7d1a9705a6299ea9f5c8410a336856da5",
+  "source_files": 5579,
+  "source_snapshot_sha256": "ee6f7293406ca4f32dca9bdba151572e4053b4c4bdb9425aba5bfc7c5b9d81cc",
+  "toolchain": {
+    "cargo_stdout_sha256": "ec757dbb82aca77f9d653bc3a3f1e69665ac3ea072fcfba984595bf479b17fcc",
+    "rustc_stdout_sha256": "580dbecb7627e4e8ad67fd0b1d539727ba8d2651d04035c907b406d83200b4e2"
+  },
+  "tools": {
+    "docs/evidence/dev-sdma-direct-readback-cpu-2026-09-18/source.py": "a7a8b8e73aa1a0817e13f9e575369403ece42f4eb702fd1ec04d9bc57fcff953",
+    "docs/evidence/dev-xgmi-host-attribution-cpu-2026-09-18/accept.py": "be5998bbd3bde933c48d4ae3d6e12ae8231da62cffd254abdb7c7ebe3f7dc8bd",
+    "docs/evidence/dev-xgmi-host-attribution-cpu-2026-09-18/qualify.py": "43397a7a269a21dd317ba0e0d8137943800441f6e17eacbeee4e3766c684e7a3",
+    "docs/evidence/dev-xgmi-pair-currentness-cpu-2026-09-18/qualify.py": "06f5d1e8ba5f8e8afee3c7a3dce2373a64b9c1cb9621314613ef2eaa7da38686",
+    "docs/evidence/dev-xgmi-peer-batch-admission-cpu-2026-09-19/qualify.py": "27383ee65405404b6c5377364636cccb66bb27643ef5f4974e1db3ab170bc327",
+    "docs/evidence/dev-xgmi-peer-batch-admission-cpu-2026-09-19/test_verify.py": "f44fc8193f2bd25fa1ee2ab8bc09adbff1533a46cef0d6d18f1c5d8ce4de9343",
+    "docs/evidence/dev-xgmi-peer-batch-admission-cpu-2026-09-19/verify.py": "e8d4e9a1b24bd78b129d36aa53b90f524aa31bb6cdea421275812c570e0c93fa",
+    "docs/evidence/dev-xgmi-peer-batch-cpu-2026-09-18/qualify.py": "8cafe8b1e1944b2a06bfd20f5a85e830f466cf0fd0246c9db2bbd507f69e25de",
+    "docs/evidence/dev-xgmi-peer-batch-cpu-2026-09-18/test_verify.py": "d635c53753462bd2528f6a8040a9aa0a90abe4d59a95ca7723ff9eaaec22dcf8",
+    "docs/evidence/dev-xgmi-peer-batch-cpu-2026-09-18/verify.py": "c4f19d2bc23396dc585ebc29e391bfcc96cbabf2e54705e5bb034cf1fcf20442",
+    "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/native.py": "df740a80c83c94af02f7e7dfb1203dcf7c1eafbde0010e41219e4aac40b34bb7"
+  }
+}

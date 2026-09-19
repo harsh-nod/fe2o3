@@ -34,6 +34,7 @@ enum AdmissionError {
     Invalid,
     Busy,
     Corrupt,
+    Capacity,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +50,24 @@ fn admit(
     in_flight: &[Vec<u64>; 2],
     completed: &HashMap<u64, SubmissionRecordV1>,
 ) -> Result<Admission, AdmissionError> {
+    admit_with_reservation(
+        requested,
+        active,
+        ready,
+        in_flight,
+        completed,
+        Vec::try_reserve_exact,
+    )
+}
+
+fn admit_with_reservation(
+    requested: &[u64],
+    active: &HashMap<u64, XgmiRuntimeSubmissionV1>,
+    ready: &[VecDeque<u64>; 2],
+    in_flight: &[Vec<u64>; 2],
+    completed: &HashMap<u64, SubmissionRecordV1>,
+    mut reserve: impl FnMut(&mut Vec<u64>, usize) -> Result<(), std::collections::TryReserveError>,
+) -> Result<Admission, AdmissionError> {
     if requested.is_empty() || requested.len() > MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1 {
         return Err(AdmissionError::Invalid);
     }
@@ -57,13 +76,20 @@ fn admit(
             return Err(AdmissionError::Invalid);
         }
     }
-    // Check index integrity before deciding whether a healthy caller supplied
-    // a subset. Ready order is FIFO; only the in-flight index is ID-sorted.
+    // Sorted scratch indexes avoid quadratic backlog scans without changing
+    // FIFO execution order. Allocation rejection remains before native effects.
+    let mut ready_index = [Vec::new(), Vec::new()];
     for d in 0..2 {
-        for (index, id) in ready[d].iter().enumerate() {
+        reserve(&mut ready_index[d], ready[d].len()).map_err(|_| AdmissionError::Capacity)?;
+        ready_index[d].extend(ready[d].iter().copied());
+        ready_index[d].sort_unstable();
+    }
+    // Check index integrity before classifying an unknown ID or caller subset.
+    for d in 0..2 {
+        for (index, id) in ready_index[d].iter().enumerate() {
             let record = active.get(id).ok_or(AdmissionError::Corrupt)?;
             if record.id != *id
-                || ready[d].iter().take(index).any(|other| other == id)
+                || index > 0 && ready_index[d][index - 1] == *id
                 || !xgmi_submission_is_ready_v1(record, completed, d)
                 || completed.contains_key(id)
             {
@@ -93,10 +119,11 @@ fn admit(
             || record.id != *id
             || record.source == record.destination
             || completed.contains_key(id)
-            || ready[1 - d].contains(id)
-            || in_flight[1 - d].contains(id)
-            || in_flight[d].contains(id) != record.ticket.is_some()
-            || ready[d].contains(id) != xgmi_submission_is_ready_v1(record, completed, d)
+            || ready_index[1 - d].binary_search(id).is_ok()
+            || in_flight[1 - d].binary_search(id).is_ok()
+            || in_flight[d].binary_search(id).is_ok() != record.ticket.is_some()
+            || ready_index[d].binary_search(id).is_ok()
+                != xgmi_submission_is_ready_v1(record, completed, d)
         {
             return Err(AdmissionError::Corrupt);
         }
@@ -114,13 +141,15 @@ fn admit(
         if in_flight[direction].len() != requested.len()
             || requested
                 .iter()
-                .any(|id| !in_flight[direction].contains(id))
+                .any(|id| in_flight[direction].binary_search(id).is_err())
         {
             return Err(AdmissionError::Busy);
         }
     } else if !in_flight[direction].is_empty()
         || ready[direction].len() != requested.len()
-        || requested.iter().any(|id| !ready[direction].contains(id))
+        || requested
+            .iter()
+            .any(|id| ready_index[direction].binary_search(id).is_err())
     {
         return Err(AdmissionError::Busy);
     }
@@ -130,7 +159,7 @@ fn admit(
             return Err(AdmissionError::Corrupt);
         }
         if admission.published {
-            if ready[direction].contains(id) {
+            if ready_index[direction].binary_search(id).is_ok() {
                 return Err(AdmissionError::Corrupt);
             }
         } else if !xgmi_submission_is_ready_v1(record, completed, direction) {
@@ -728,6 +757,10 @@ impl RuntimePeerCopyBatchBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
                 "XGMI aggregate requires the complete ready or in-flight roster",
             ),
             AdmissionError::Corrupt => self.terminal_error("XGMI aggregate index corruption"),
+            AdmissionError::Capacity => Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "XGMI aggregate ready-index storage",
+            ),
         })?;
         if !self.batch_custody_is_valid(requested, admission) {
             return Err(self.terminal_error("XGMI aggregate custody corruption"));

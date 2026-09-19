@@ -1,0 +1,18 @@
+{
+  "command": [
+    "cargo",
+    "-V"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789803630626198162,
+  "group_absent": true,
+  "pid": 207523,
+  "started_ns": 1789803630558217785,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "ec757dbb82aca77f9d653bc3a3f1e69665ac3ea072fcfba984595bf479b17fcc",
+  "timeout_seconds": 30
+}

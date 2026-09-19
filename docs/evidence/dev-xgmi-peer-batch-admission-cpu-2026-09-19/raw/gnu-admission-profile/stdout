@@ -1,0 +1,12 @@
+
+running 1 test
+test kfd_backend::xgmi_batch::tests::admission_scaling::admission_scaling_profile_rows ... schema=fe2o3.xgmi-batch-admission-scaling.v1 active=64 requested=1 opposite_ready=63 blocked=0 reference_ns=64251 candidate_ns=142270 accepted=true
+schema=fe2o3.xgmi-batch-admission-scaling.v1 active=256 requested=1 opposite_ready=255 blocked=0 reference_ns=91082 candidate_ns=22212 accepted=true
+schema=fe2o3.xgmi-batch-admission-scaling.v1 active=1024 requested=1 opposite_ready=1023 blocked=0 reference_ns=1105695 candidate_ns=106101 accepted=true
+schema=fe2o3.xgmi-batch-admission-scaling.v1 active=4096 requested=1 opposite_ready=4095 blocked=0 reference_ns=18279642 candidate_ns=1214902 accepted=true
+schema=fe2o3.xgmi-batch-admission-scaling.v1 active=16384 requested=1 opposite_ready=16383 blocked=0 reference_ns=271414970 candidate_ns=9091101 accepted=true
+schema=fe2o3.xgmi-batch-admission-scaling.v1 active=65536 requested=63 opposite_ready=65473 blocked=0 reference_ns=not-run candidate_ns=32142490 accepted=true
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1165 filtered out; finished in 0.38s
+

@@ -42,6 +42,27 @@ their dependency, stream and allocation custody. Caller subsets are rejected.
 Single-packet host-attribution diagnostics do not cover aggregate calls. An
 aggregate invalidates an enabled capture rather than silently omitting calls.
 
+## Admission Cost
+
+Ready-index validation uses fallibly allocated sorted copies of the two ready
+queues. The execution queues retain FIFO order. With `Q` ready IDs and `A`
+active records, duplicate and ready-membership checks take
+`O(Q log Q + A log(Q + 1))` time and `O(Q)` temporary storage, instead of
+quadratic ready-backlog scans. In-flight indexes are validated as sorted before
+binary-search membership checks. This is not allocation-free admission.
+
+Invalid request shape (empty, over 63, or duplicate IDs) is rejected before
+scratch allocation. Scratch allocation failure is a pre-effect `Capacity`
+rejection; it takes precedence over subsequent index validation. After successful
+allocation, global corruption still takes precedence over unknown-request or
+subset errors. No native authority or scheduling state changes during these
+checks.
+
+Full admission remains backlog-dependent: readiness checks inspect dependencies,
+and custody validation still performs repeated reverse-dependency scans. The
+bounded allocation-owner checks are also unchanged. CPU admission timings do
+not measure those later checks, native copies, or HIP/HSA performance.
+
 ## Measurement
 
 The existing `gfx942-runtime-xgmi-peer-benchmark` accepts the opt-in exclusive

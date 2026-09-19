@@ -2,6 +2,8 @@ use super::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+mod admission_scaling;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Fault {
     Timeout,
