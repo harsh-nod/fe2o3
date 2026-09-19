@@ -16,8 +16,12 @@ struct Fake {
     retained: usize,
     completed: bool,
     count: usize,
+    publication_start: usize,
     fault_after_prepare: Option<(usize, PreparationFault)>,
     preparation_fault: Option<PreparationFault>,
+    pending_polls: usize,
+    pause_millis: u64,
+    retained_arena: Option<(OrderedMode, usize)>,
 }
 
 impl Fake {
@@ -41,7 +45,7 @@ impl Fake {
             ObservedGpuAddressV1::new(0x40_0000).unwrap(),
             ObservedGpuAddressV1::new(0x10_0000 + index as u64 * 65_536).unwrap(),
             4096,
-            ObservedGpuAddressV1::new(0x30_0000 + index as u64 * 64).unwrap(),
+            ObservedGpuAddressV1::new(0x80_0000 + index as u64 * 64).unwrap(),
             AqlDispatchOrderingV1::WaitForPrior,
         )
         .unwrap()
@@ -67,7 +71,7 @@ impl AqlPacketBatchPublicationTargetV1 for Fake {
         );
         assert_eq!(
             packet.completion_signal(),
-            0x30_0000 + u64::from(index) * 64
+            0x80_0000 + u64::from(index) * 64
         );
         self.event(format!("body:{index}"))
     }
@@ -75,7 +79,7 @@ impl AqlPacketBatchPublicationTargetV1 for Fake {
     fn publish_release_header(&mut self, index: u32, header: u16) -> Result<()> {
         assert_eq!(header, 0x1502);
         assert_eq!(
-            self.events
+            self.events[self.publication_start..]
                 .iter()
                 .filter(|event| event.starts_with("body:"))
                 .count(),
@@ -126,6 +130,9 @@ impl OrderedBackend for Fake {
         Ok(())
     }
     fn stage(&mut self, prepared: Vec<usize>) -> Result<usize> {
+        if let Some((mode, bytes)) = self.retained_arena {
+            mode.require_arena(bytes)?;
+        }
         self.count = prepared.len();
         assert_eq!(prepared, (0..self.count).collect::<Vec<_>>());
         self.event("retain_storage".into())?;
@@ -136,10 +143,15 @@ impl OrderedBackend for Fake {
         Ok(self.count)
     }
     fn publish(&mut self, count: usize, _deadline: Instant) -> Result<usize> {
+        self.publication_start = self.events.len();
         self.event("ring_capacity_reservation".into())?;
         match count {
             1 => self.expose::<1>()?,
             16 => self.expose::<16>()?,
+            17 => self.expose::<17>()?,
+            40 => self.expose::<40>()?,
+            63 => self.expose::<63>()?,
+            64 => self.expose::<64>()?,
             _ => panic!("unsupported fake count"),
         }
         Ok(count)
@@ -147,7 +159,12 @@ impl OrderedBackend for Fake {
     fn poll_final(&mut self, pending: &mut usize) -> Result<bool> {
         assert_eq!(*pending, self.count);
         self.event("poll_final_identity_counters_exception".into())?;
-        Ok(true)
+        if self.pending_polls > 0 {
+            self.pending_polls -= 1;
+            Ok(false)
+        } else {
+            Ok(true)
+        }
     }
     fn validate_all(&mut self, pending: &usize) -> Result<()> {
         for index in 0..*pending {
@@ -162,7 +179,11 @@ impl OrderedBackend for Fake {
         Ok(())
     }
     fn pause(&mut self) -> Result<()> {
-        self.event("pause".into())
+        self.event("pause".into())?;
+        if self.pause_millis != 0 {
+            std::thread::sleep(Duration::from_millis(self.pause_millis));
+        }
+        Ok(())
     }
     fn poison(&mut self) {
         self.poisoned = true;
@@ -584,3 +605,6 @@ fn optional_arena_and_signals_are_reinitialized_after_confirmed_queue_rollover()
     assert!(retain.contains("ORDERED_KERNARG =>"));
     assert!(retain.contains("count if count == ORDERED_KERNARG + 1 => {}"));
 }
+
+#[path = "engineering_gfx950_ordered64_tests.rs"]
+mod ordered64;

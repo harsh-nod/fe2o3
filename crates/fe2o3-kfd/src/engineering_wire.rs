@@ -19,6 +19,8 @@ pub const MAX_KERNARG_BYTES_V1: u32 = 65_536;
 pub const MAX_POINTER_FIXUPS_V1: usize = 256;
 pub const MAX_SEQUENCE_DISPATCHES_V1: usize = 16;
 pub const MAX_ORDERED_BATCH_DISPATCHES_V1: usize = 16;
+/// Separate opt-in command; does not enlarge ordered V1 or sequence limits.
+pub const MAX_ORDERED_BATCH64_DISPATCHES_V1: usize = 64;
 /// Conservative dispatch budget when hardware read-pointer reports never advance.
 pub const MAX_UNRETIRED_RING_PACKETS_V1: u64 = 131_072;
 
@@ -67,9 +69,22 @@ pub(crate) fn ordered_batch_payload_bytes(
     dispatches: &[OrderedBatchDispatchV1],
     timeout_ms: u32,
 ) -> io::Result<usize> {
-    if !(1..=MAX_ORDERED_BATCH_DISPATCHES_V1).contains(&dispatches.len())
-        || !(1..=600_000).contains(&timeout_ms)
-    {
+    ordered_payload_bytes(dispatches, timeout_ms, MAX_ORDERED_BATCH_DISPATCHES_V1)
+}
+
+pub(crate) fn ordered_batch64_payload_bytes(
+    dispatches: &[OrderedBatchDispatchV1],
+    timeout_ms: u32,
+) -> io::Result<usize> {
+    ordered_payload_bytes(dispatches, timeout_ms, MAX_ORDERED_BATCH64_DISPATCHES_V1)
+}
+
+fn ordered_payload_bytes(
+    dispatches: &[OrderedBatchDispatchV1],
+    timeout_ms: u32,
+    maximum: usize,
+) -> io::Result<usize> {
+    if !(1..=maximum).contains(&dispatches.len()) || !(1..=600_000).contains(&timeout_ms) {
         return Err(invalid("engineering ordered batch count or deadline"));
     }
     dispatches.iter().try_fold(0_usize, |total, dispatch| {
@@ -135,6 +150,12 @@ pub enum CommandV1 {
         dispatches: Vec<OrderedBatchDispatchV1>,
         timeout_ms: u32,
     },
+    /// Separate engineering-only 1..64 route. The first ordered command fixes
+    /// arena shape until confirmed idle rollover; changing modes fails closed.
+    DispatchOrderedBatch64 {
+        dispatches: Vec<OrderedBatchDispatchV1>,
+        timeout_ms: u32,
+    },
     Allocate {
         bytes: u64,
     },
@@ -177,6 +198,12 @@ impl CommandV1 {
                 timeout_ms,
             } => {
                 return ordered_batch_payload_bytes(dispatches, *timeout_ms);
+            }
+            Self::DispatchOrderedBatch64 {
+                dispatches,
+                timeout_ms,
+            } => {
+                return ordered_batch64_payload_bytes(dispatches, *timeout_ms);
             }
             Self::Write { payload_bytes, .. } if *payload_bytes <= MAX_TRANSFER_BYTES_V1 => {
                 *payload_bytes
@@ -276,6 +303,11 @@ pub enum ResponseV1 {
     /// Every retained signal completed and the selected exit currentness/idle
     /// fence passed. Time is aggregate host wall time, not GPU/kernel time.
     DispatchOrderedBatchCompleted {
+        completed_dispatches: u32,
+        elapsed_ns: u64,
+    },
+    /// Distinct acknowledgement of the opt-in 64-packet engineering route.
+    DispatchOrderedBatch64Completed {
         completed_dispatches: u32,
         elapsed_ns: u64,
     },

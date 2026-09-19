@@ -271,7 +271,38 @@ impl<D: LinuxMemoryDevice> LinuxMemoryBackendFor<D> {
         mapping: &mut LinuxCpuMapping,
         count: usize,
     ) -> Result<(), MemorySessionError> {
-        if !(1..=crate::engineering_wire::MAX_ORDERED_BATCH_DISPATCHES_V1).contains(&count) {
+        Self::initialize_engineering_signal_slots_bounded(
+            mapping,
+            count,
+            crate::engineering_wire::MAX_ORDERED_BATCH_DISPATCHES_V1,
+        )
+    }
+
+    /// Separate ordered64 path; the same private page holds exactly 64 signals.
+    /// Caller retains an idle queue, as for the legacy initializer.
+    #[cfg(feature = "engineering-gfx950")]
+    pub(super) fn initialize_engineering_signal_slots64(
+        mapping: &mut LinuxCpuMapping,
+        count: usize,
+    ) -> Result<(), MemorySessionError> {
+        Self::initialize_engineering_signal_slots_bounded(
+            mapping,
+            count,
+            crate::engineering_wire::MAX_ORDERED_BATCH64_DISPATCHES_V1,
+        )
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    fn initialize_engineering_signal_slots_bounded(
+        mapping: &mut LinuxCpuMapping,
+        count: usize,
+        maximum: usize,
+    ) -> Result<(), MemorySessionError> {
+        if !(1..=maximum).contains(&count)
+            || count
+                .checked_mul(AMD_SIGNAL_BYTES_V1)
+                .is_none_or(|bytes| bytes > 4096)
+        {
             return Err(malformed_aql_mapping("engineering signal slot count"));
         }
         for index in 0..count {
@@ -1640,5 +1671,85 @@ mod tests {
             LinuxGfx950MemoryBackend::initialize_engineering_signal_slots(&mut mapping, 16)
                 .is_err()
         );
+    }
+
+    #[cfg(feature = "engineering-gfx950")]
+    #[test]
+    fn ordered64_signal_page_has_exactly_sixty_four_reusable_slots() {
+        let mut page = MinimumRing([0xa5; 4096]);
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut page).cast(),
+            bytes: 4096,
+            active: true,
+            accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
+        };
+        for count in [0, 65, usize::MAX] {
+            assert!(
+                LinuxGfx950MemoryBackend::initialize_engineering_signal_slots64(
+                    &mut mapping,
+                    count
+                )
+                .is_err()
+            );
+            assert_eq!(page.0, [0xa5; 4096]);
+        }
+        assert!(
+            LinuxGfx950MemoryBackend::initialize_engineering_signal_slots(&mut mapping, 17)
+                .is_err()
+        );
+        assert_eq!(page.0, [0xa5; 4096]);
+        for _ in 0..2 {
+            LinuxGfx950MemoryBackend::initialize_engineering_signal_slots64(&mut mapping, 64)
+                .unwrap();
+            for slot in 0..64 {
+                assert_eq!(
+                    LinuxGfx950MemoryBackend::observe_completion_signal_state_acquire(
+                        &mut mapping,
+                        4096,
+                        slot
+                    )
+                    .unwrap(),
+                    (
+                        fe2o3_aql::AMD_SIGNAL_KIND_USER_V1,
+                        AMD_SIGNAL_VALUE_PENDING_V1
+                    ),
+                );
+                checked_completion_value(&mut mapping, 4096, slot)
+                    .unwrap()
+                    .store(0, Ordering::Release);
+                assert_eq!(
+                    LinuxGfx950MemoryBackend::observe_completion_signal_acquire(
+                        &mut mapping,
+                        4096,
+                        slot
+                    )
+                    .unwrap(),
+                    AqlCompletionObservationV1::Completed
+                );
+                LinuxGfx950MemoryBackend::reset_completion_signal_release(&mut mapping, 4096, slot)
+                    .unwrap();
+                assert_eq!(
+                    LinuxGfx950MemoryBackend::observe_completion_signal_acquire(
+                        &mut mapping,
+                        4096,
+                        slot
+                    )
+                    .unwrap(),
+                    AqlCompletionObservationV1::Pending
+                );
+            }
+        }
+        let before = page.0;
+        assert!(
+            LinuxGfx950MemoryBackend::observe_completion_signal_acquire(&mut mapping, 4096, 64)
+                .is_err()
+        );
+        mapping.accessible = false;
+        assert!(
+            LinuxGfx950MemoryBackend::initialize_engineering_signal_slots64(&mut mapping, 64)
+                .is_err()
+        );
+        assert_eq!(page.0, before);
     }
 }

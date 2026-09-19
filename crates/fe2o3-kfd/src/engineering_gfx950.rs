@@ -1470,6 +1470,14 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
                     // applies; this command retains every operand until its fence.
                     unsafe { context.dispatch_ordered_batch(dispatches, payload, timeout_ms) }?
                 }
+                CommandV1::DispatchOrderedBatch64 {
+                    dispatches,
+                    timeout_ms,
+                } => {
+                    // SAFETY: explicit engineering-only route, with the same
+                    // dedicated owner, trusted code and terminal failure rules.
+                    unsafe { context.dispatch_ordered_batch64(dispatches, payload, timeout_ms) }?
+                }
                 CommandV1::Allocate { bytes } => context.allocate(bytes)?,
                 CommandV1::Free { buffer } => {
                     context.free(buffer)?;
@@ -1619,8 +1627,8 @@ mod tests {
             ),
             (
                 include_str!("engineering_gfx950_ordered_batch.rs"),
-                "pub(super) unsafe fn dispatch_ordered_batch(",
-                "ordered_batch_payload_bytes(&dispatches, timeout_ms)",
+                "unsafe fn dispatch_ordered_batch_mode(",
+                "mode.payload_bytes(&dispatches, timeout_ms)",
                 "let mut native = NativeOrdered",
             ),
         ] {
@@ -1634,6 +1642,49 @@ mod tests {
             assert!(body.find(validator).unwrap() < body.find(preparation).unwrap());
             assert!(!body.contains("dispatches.clone()"));
         }
+        let ordered = include_str!("engineering_gfx950_ordered_batch.rs");
+        for (entry, end, mode, other_mode) in [
+            (
+                "pub(super) unsafe fn dispatch_ordered_batch(",
+                "pub(super) unsafe fn dispatch_ordered_batch64(",
+                "OrderedMode::V1",
+                "OrderedMode::Batch64",
+            ),
+            (
+                "pub(super) unsafe fn dispatch_ordered_batch64(",
+                "unsafe fn dispatch_ordered_batch_mode(",
+                "OrderedMode::Batch64",
+                "OrderedMode::V1",
+            ),
+        ] {
+            let body = ordered
+                .split(entry)
+                .nth(1)
+                .unwrap()
+                .split(end)
+                .next()
+                .unwrap();
+            assert!(body.contains("self.dispatch_ordered_batch_mode("));
+            assert!(body.contains(mode));
+            assert!(!body.contains(other_mode));
+            assert!(!body.contains("NativeOrdered"));
+            assert!(!body.contains("dispatches.clone()"));
+        }
+        let validators = ordered
+            .split("fn payload_bytes(")
+            .nth(1)
+            .unwrap()
+            .split("fn require_ordered64_capacity(")
+            .next()
+            .unwrap();
+        assert!(validators.contains("dispatches: &[OrderedBatchDispatchV1]"));
+        assert!(
+            validators.contains("Self::V1 => ordered_batch_payload_bytes(dispatches, timeout_ms)")
+        );
+        assert!(
+            validators
+                .contains("Self::Batch64 => ordered_batch64_payload_bytes(dispatches, timeout_ms)")
+        );
     }
 
     #[test]
