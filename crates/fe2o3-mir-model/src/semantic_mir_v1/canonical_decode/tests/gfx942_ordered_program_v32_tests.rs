@@ -341,7 +341,7 @@ fn canonical_identity_retains_dead_repeated_and_self_steps() {
 }
 
 #[test]
-fn frozen_v30_v31_encodings_and_new_sibling_call_layout_are_exact() {
+fn ordinary_and_frozen_diagnostic_sibling_call_layouts_are_exact() {
     let ordinary = SemanticTerminatorKindV1::Call(
         SemanticDirectCallV1::new_callable(
             SemanticCallableIdV1(7),
@@ -351,16 +351,23 @@ fn frozen_v30_v31_encodings_and_new_sibling_call_layout_are_exact() {
         )
         .unwrap(),
     );
-    let frozen_v30 = vec![2, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0];
+    let ordinary_bytes = vec![2, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
     for version in [
         SemanticMirWireVersionV1::V30,
         SemanticMirWireVersionV1::V31,
         SemanticMirWireVersionV1::V32,
+        SemanticMirWireVersionV1::V33,
+        SemanticMirWireVersionV1::V34,
     ] {
         let mut writer = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
         encode_terminator(&mut writer, &ordinary, version).unwrap();
-        let mut expected = frozen_v30.clone();
-        if version != SemanticMirWireVersionV1::V30 {
+        let mut expected = ordinary_bytes.clone();
+        if matches!(
+            version,
+            SemanticMirWireVersionV1::V31 | SemanticMirWireVersionV1::V32
+        ) {
+            expected.extend([0, 0]);
+        } else if version == SemanticMirWireVersionV1::V34 {
             expected.push(0);
         }
         assert_eq!(writer.finish(), expected);
@@ -765,7 +772,10 @@ fn v32_never_accepts_hidden_or_unused_v29_execution_types_or_intrinsics() {
             fixture
                 .admit_current_production(SemanticMirLimitsV1::default())
                 .unwrap_err(),
-            expected
+            SemanticMirErrorV1::WireVersionCannotRepresent {
+                requested: SemanticMirWireVersionV1::V28,
+                required: SemanticMirWireVersionV1::V29,
+            }
         );
     }
     let mut fixture = request(REGISTERS);

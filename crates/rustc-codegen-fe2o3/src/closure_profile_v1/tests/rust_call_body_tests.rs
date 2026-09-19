@@ -68,6 +68,7 @@ pub(super) fn check<'tcx>(tcx: TyCtxt<'tcx>) -> (usize, usize) {
             vec![function].into_boxed_slice(),
             [0x78; 32],
             DebugSourceCaptureRequestV2::Disabled,
+            None,
         )
         .unwrap_or_else(|error| panic!("{name} preflight: {error}"));
         assert!(plan.direct_call_producers().is_empty(), "{name}");
@@ -141,6 +142,7 @@ pub(super) fn check<'tcx>(tcx: TyCtxt<'tcx>) -> (usize, usize) {
             .unwrap();
             construct_production_semantic_body_v1(
                 ProductionSemanticBodyInputV1 {
+                    context_entry: None,
                     tcx,
                     instance,
                     body,

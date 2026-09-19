@@ -2,10 +2,32 @@ use super::*;
 
 #[path = "production_checked_output_general_policy3_v1.rs"]
 mod general;
+pub use general::redundant_store::{
+    ProductionOwnedRedundantStoreContinuationV1, ProductionOwnedRedundantStoreStorageV1,
+    ProductionOwnedUnitLocalRedundantStoreContinuationV1, ProductionRedundantStoreAdmissionErrorV1,
+    ProductionRedundantStoreAdmissionStorageV1, ProductionRedundantStoreAdmissionV1,
+};
 
 #[path = "production_checked_output_admission_policy4_v1.rs"]
 mod policy4;
-pub use policy4::*;
+pub use policy4::{
+    ProductionCheckedOutputAdmissionErrorPolicy4V1, ProductionCheckedOutputOwnerPolicy4V1,
+    ProductionUnitLocalErasedCheckedOutputOwnerPolicy4V1,
+};
+
+#[path = "production_checked_output_admission_policy5_v1.rs"]
+mod policy5;
+pub use policy5::{
+    ProductionCheckedOutputAdmissionErrorPolicy5V1, ProductionCheckedOutputOwnerPolicy5V1,
+    ProductionUnitLocalErasedCheckedOutputOwnerPolicy5V1,
+};
+
+#[path = "production_checked_output_admission_policy6_v1.rs"]
+mod policy6;
+pub use policy6::{
+    ProductionCheckedOutputAdmissionErrorPolicy6V1, ProductionCheckedOutputOwnerPolicy6V1,
+    ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1,
+};
 
 #[derive(Clone, Copy)]
 enum OutputAdmissionKindV1 {
@@ -186,7 +208,10 @@ impl ProductionCheckedOutputOwnerPolicy3V1 {
                 "complete nonempty root roster",
             ));
         }
-        let source = ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(receipt)
+        let source =
+            ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks_with_budget_v1(
+                receipt, budget,
+            )
             .map_err(E::Source)?;
         let kernels = general::check_general_output_v1(&source, &bound, &checked, budget)?;
         if ledger != budget.work_ledger_identity_v1() || incoming != budget.storage() {
@@ -278,9 +303,14 @@ impl ProductionCheckedOutputOwnerPolicy3V1 {
         if facts != 0 {
             return Err(E::PrivateAddressR2);
         }
-        let source = ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(receipt)
+        let source =
+            ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks_with_budget_v1(
+                receipt, budget,
+            )
             .map_err(E::Source)?;
-        source.verify_equivalence().map_err(E::Source)?;
+        source
+            .verify_equivalence_with_budget_v1(budget)
+            .map_err(E::Source)?;
         let kernels = crate::production_formal_memory_v1::derive_complete_output_obligations_v1(
             checked.owner().module(),
         )
@@ -371,7 +401,9 @@ impl ProductionCheckedOutputOwnerPolicy3V1 {
             }
             return Ok(());
         }
-        self.source.verify_equivalence().map_err(E::Source)?;
+        self.source
+            .verify_equivalence_with_budget_v1(budget)
+            .map_err(E::Source)?;
         check_output_source_v1(self.source.semantic().semantic(), budget)?;
         for root in &self.source.generic_checks {
             check_output_ranked_v1(

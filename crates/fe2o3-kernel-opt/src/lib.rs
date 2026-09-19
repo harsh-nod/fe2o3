@@ -11,12 +11,16 @@
 
 #![forbid(unsafe_code)]
 
+mod checked_load_forwarding_v1;
 mod checked_optimization_policy3_receipt_v1;
 mod checked_optimization_policy3_v1;
 mod checked_optimization_policy4_receipt_v1;
 mod checked_optimization_policy4_v1;
+mod checked_optimization_policy5_v1;
+mod checked_optimization_policy6_v1;
 mod checked_optimization_receipt_v1;
 mod checked_optimization_v1;
+mod checked_redundant_store_v1;
 mod checked_store_forwarding_v1;
 mod checked_u32_local_order_v1;
 mod optimization_v2;
@@ -24,12 +28,16 @@ mod optimization_v3;
 mod structural_replay_admission_v2;
 mod structural_replay_admission_v3;
 
+pub use checked_load_forwarding_v1::*;
 pub use checked_optimization_policy3_receipt_v1::*;
 pub use checked_optimization_policy3_v1::*;
 pub use checked_optimization_policy4_receipt_v1::*;
 pub use checked_optimization_policy4_v1::*;
+pub use checked_optimization_policy5_v1::*;
+pub use checked_optimization_policy6_v1::*;
 pub use checked_optimization_receipt_v1::*;
 pub use checked_optimization_v1::*;
+pub use checked_redundant_store_v1::*;
 pub use checked_store_forwarding_v1::*;
 pub use checked_u32_local_order_v1::*;
 pub use optimization_v2::*;

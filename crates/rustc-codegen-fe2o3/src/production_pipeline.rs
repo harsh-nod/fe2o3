@@ -21,8 +21,29 @@ use crate::protected_rustc_invocation::{
     AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1,
 };
 
+#[path = "production_pipeline_checked_output_artifacts_v1.rs"]
+mod checked_output_artifacts_v1;
 #[path = "production_pipeline_checked_output_policy4_v1.rs"]
 pub(crate) mod checked_output_policy4_v1;
+#[path = "production_pipeline_checked_output_policy5_v1.rs"]
+pub(crate) mod checked_output_policy5_v1;
+#[path = "production_pipeline_checked_output_policy6_v1.rs"]
+pub(crate) mod checked_output_policy6_v1;
+#[cfg(test)]
+#[path = "production_pipeline_checked_output_progress_v1_tests.rs"]
+pub(crate) mod checked_output_progress_v1;
+#[path = "production_pipeline_erased_checked_output_policy4_v1.rs"]
+pub(crate) mod erased_checked_output_policy4_v1;
+#[path = "production_pipeline_erased_checked_output_policy5_v1.rs"]
+pub(crate) mod erased_checked_output_policy5_v1;
+#[path = "production_pipeline_erased_checked_output_policy6_v1.rs"]
+pub(crate) mod erased_checked_output_policy6_v1;
+#[path = "production_pipeline_fixed_checked_output_policy6_v1.rs"]
+pub(crate) mod fixed_checked_output_policy6_v1;
+#[path = "production_pipeline_fixed_checked_output_v1.rs"]
+pub(crate) mod fixed_checked_output_v1;
+#[path = "production_native_checked_output_handoff_v1.rs"]
+pub(crate) mod native_checked_output_handoff_v1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProductionDisposition {
@@ -45,6 +66,7 @@ pub(crate) enum ProductionPipelineError {
     SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     SemanticSsa(fe2o3_pliron::ProductionSemanticSsaErrorV1),
+    ContextHandoff(fe2o3_lower_mir_kernel::ProductionContextRootErrorV29),
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
@@ -72,6 +94,8 @@ pub(crate) enum ProductionPipelineError {
     TargetOptimization(fe2o3_kernel_opt::KernelIrPlironOptimizationErrorV2),
     TargetOptimizationV3(fe2o3_kernel_opt::KernelIrPlironOptimizationErrorV3),
     CheckedOutputStage(checked_output_policy4_v1::CheckedOutputStageErrorV1),
+    CheckedOutputPolicy5Stage(checked_output_policy5_v1::CheckedOutputPolicy5StageErrorV1),
+    CheckedOutputPolicy6Stage(checked_output_policy6_v1::CheckedOutputPolicy6StageErrorV1),
     TargetKernelIrV8(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV8),
     TargetKernelIrV9(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV9),
     TargetKernelIrV11(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV11),
@@ -103,6 +127,8 @@ impl fmt::Display for ProductionPipelineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CheckedOutputStage(error) => write!(formatter, "checked-output production stage failed: {error}"),
+            Self::CheckedOutputPolicy5Stage(error) => write!(formatter, "checked Policy5 production stage failed: {error}"),
+            Self::CheckedOutputPolicy6Stage(error) => write!(formatter, "checked Policy6 production stage failed: {error}"),
             Self::CustomLlvmConfiguration => formatter.write_str(
                 "production compilation rejects caller-selected LLVM arguments or passes before transaction construction",
             ),
@@ -116,6 +142,7 @@ impl fmt::Display for ProductionPipelineError {
             Self::SemanticSsa(error) => {
                 write!(formatter, "production compilation semantic SSA planning failed: {error}")
             }
+            Self::ContextHandoff(error) => write!(formatter, "production compilation context root handoff failed: {error}"),
             Self::RankedProjection(error) => {
                 write!(formatter, "production compilation general kernel verification failed: {error}")
             }
@@ -275,6 +302,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::SemanticImport(error) => Some(error),
             Self::SemanticMiddleEnd(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
+            Self::ContextHandoff(error) => Some(error),
             Self::RankedProjection(error) => Some(error),
             Self::RankedVerification(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
@@ -297,6 +325,8 @@ impl std::error::Error for ProductionPipelineError {
             Self::TargetOptimization(error) => Some(error),
             Self::TargetOptimizationV3(error) => Some(error),
             Self::CheckedOutputStage(error) => Some(error),
+            Self::CheckedOutputPolicy5Stage(error) => Some(error),
+            Self::CheckedOutputPolicy6Stage(error) => Some(error),
             Self::TargetKernelIrV8(error) => Some(error),
             Self::TargetKernelIrV9(error) => Some(error),
             Self::TargetKernelIrV11(error) => Some(error),
@@ -412,6 +442,7 @@ struct ProtectedProductionPublicationCustody {
 }
 
 struct AuthenticatedProductionBindings {
+    context_entries: crate::collector::RetainedContextEntriesV29,
     rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
     rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
@@ -1329,6 +1360,7 @@ impl TargetLoweredProductionCompilation {
             rustc_preflight_plan,
             rustc_target,
             reference_effect_bindings: _,
+            context_entries: _,
             debug_source_files: _,
             debug_source_scopes: _,
             debug_source_variables: _,
@@ -1380,6 +1412,7 @@ impl TargetLoweredProductionCompilation {
             rustc_preflight_plan,
             rustc_target,
             reference_effect_bindings: _,
+            context_entries: _,
             debug_source_files,
             debug_source_scopes,
             debug_source_variables,
@@ -1477,6 +1510,7 @@ impl TargetLoweredProductionCompilation {
             rustc_preflight_plan,
             rustc_target,
             reference_effect_bindings,
+            context_entries: _,
             debug_source_files,
             debug_source_scopes,
             debug_source_variables,
@@ -3026,6 +3060,13 @@ fn debug_block_ordinal_v1(
 }
 
 impl RankedVerifiedProductionCompilation {
+    #[cfg(test)]
+    pub(crate) fn checked_output_source_policy_v1(
+        &self,
+    ) -> fe2o3_lower_mir_kernel::ProductionHelperSourcePolicyV1 {
+        self.ranked.materialized().helper_source_policy_v1()
+    }
+
     pub(crate) fn ranked_roots(
         &self,
     ) -> &[crate::production_ranked_projection_v1::ProductionRankedRootProgramV1] {
@@ -3172,6 +3213,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         } = self.stage;
         let crate::collector::ConstructedProductionSemanticMirV1 {
             semantic_mir,
+            context_entries,
             rustc_identity_inventory,
             rustc_preflight_plan,
             rustc_target,
@@ -3196,6 +3238,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             stage: AdmittedSemanticMirStage {
                 semantic_mir,
                 bindings: AuthenticatedProductionBindings {
+                    context_entries,
                     rustc_identity_inventory,
                     rustc_preflight_plan,
                     rustc_target,
@@ -3406,6 +3449,16 @@ impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
             fe2o3_pliron::ProductionSemanticSsaLimitsV1::default(),
         )
         .map_err(ProductionPipelineError::SemanticSsa)?;
+        bindings
+            .context_entries
+            .validate_source(semantic_ssa.source_semantic())
+            .map_err(|error| {
+                ProductionPipelineError::SemanticImport(
+                    crate::collector::ProductionSemanticImportErrorV1::BodyConstruction(Box::new(
+                        error,
+                    )),
+                )
+            })?;
         Ok(ProductionCompilation {
             stage: SsaSemanticMirStage {
                 semantic_ssa,
@@ -3415,6 +3468,11 @@ impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
         })
     }
 }
+
+#[path = "production_context_handoff_v29.rs"]
+mod context_handoff_v29;
+#[cfg(test)]
+pub(crate) use context_handoff_v29::check_context_handoff_v29;
 
 impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
     fn require_target_neutral_lowering(self) -> ProductionPipelineError {
@@ -3436,6 +3494,19 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
 
     fn materialize_target_neutral(
         self,
+    ) -> Result<MaterializedNeutralProductionCompilation, Box<ProductionPipelineError>> {
+        self.materialize_with_context_observer_v29(|_, _| Ok(()))
+    }
+
+    fn materialize_with_context_observer_v29(
+        self,
+        use_root: impl for<'a> FnMut(
+            fe2o3_lower_mir_kernel::ProductionCheckedContextRootV29<'a>,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<
+            (),
+            fe2o3_lower_mir_kernel::ProductionContextRootErrorV29,
+        >,
     ) -> Result<MaterializedNeutralProductionCompilation, Box<ProductionPipelineError>> {
         let SsaSemanticMirStage {
             semantic_ssa,
@@ -3489,6 +3560,13 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
             &mut work,
             crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
         );
+        context_handoff_v29::check_context_handoff_v29(
+            &bindings.context_entries,
+            &semantic_ssa,
+            &launch,
+            &mut budget,
+            use_root,
+        )?;
         let materialized =
             fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
                 semantic_ssa,
@@ -3805,11 +3883,14 @@ mod tests {
             .find("lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(")
             .expect("AMDGPU LLVM lowering");
         assert!(bind < optimize && bind < optimize_v11 && optimize < lower && optimize_v11 < lower);
-        let implementation = source
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production implementation");
-        assert_eq!(implementation.matches("&target_optimization,").count(), 2);
+        let target_lowered = source
+            .split_once("impl TargetLoweredProductionCompilation {")
+            .expect("target-lowered implementation")
+            .1
+            .split_once("\nfn require_complete_simulation_debug_source_capture_v2(")
+            .expect("target-lowered implementation end")
+            .0;
+        assert_eq!(target_lowered.matches("&target_optimization,").count(), 2);
         assert!(!transaction.contains("required_capabilities.insert"));
     }
 

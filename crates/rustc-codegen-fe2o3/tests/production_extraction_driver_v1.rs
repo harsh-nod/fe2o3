@@ -15,6 +15,7 @@ use fe2o3_verifier::{
 mod inert_invocation_v3;
 
 include!("production_extraction_driver_v1/generative_provider_tests.rs");
+include!("production_extraction_driver_v1/source_census_tests.rs");
 
 struct ScratchTarget {
     path: PathBuf,
@@ -233,6 +234,30 @@ fn production_collector_rejects_reachable_unsafe_rust_with_rooted_diagnostics() 
             ],
         ),
         (
+            "workgroup-unsafe-callback",
+            include_str!("fixtures/production-source-safety-device/workgroup_unsafe_callback.rs"),
+            [
+                "containing a user-provided unsafe block",
+                "reachable call chain:",
+                "unsafe_workgroup_callback",
+                "with_workgroup",
+                "{closure#",
+            ],
+        ),
+        (
+            "workgroup-external-unsafe-callback-optimized",
+            include_str!(
+                "fixtures/production-source-safety-device/workgroup_external_unsafe_callback.rs"
+            ),
+            [
+                "containing a user-provided unsafe block",
+                "reachable call chain:",
+                "unsafe_external_workgroup_callback",
+                "user_callback",
+                "{closure#",
+            ],
+        ),
+        (
             "external-hir-gap",
             include_str!("fixtures/production-source-safety-device/external_hir_gap.rs"),
             [
@@ -246,6 +271,11 @@ fn production_collector_rejects_reachable_unsafe_rust_with_rooted_diagnostics() 
     ] {
         let target = ScratchTarget::new();
         let fixture = materialize_source_safety_fixture(&target, source);
+        let flags = if case == "workgroup-external-unsafe-callback-optimized" {
+            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32 -Copt-level=3 -Zmir-opt-level=2"
+        } else {
+            "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32"
+        };
         let output = Command::new(env!("CARGO"))
             .current_dir(fixture)
             .env(
@@ -256,17 +286,11 @@ fn production_collector_rejects_reachable_unsafe_rust_with_rooted_diagnostics() 
                 "FE2O3_EXTRACT_CRATE_V1",
                 "fe2o3_production_source_safety_fixture",
             )
-            .env(
-                "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
-                "55".repeat(32),
-            )
+            .env("FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2", "55".repeat(32))
             .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
             .env_remove("RUSTFLAGS")
             .env_remove("CARGO_ENCODED_RUSTFLAGS")
-            .env(
-                "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
-                "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
-            )
+            .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS", flags)
             .args([
                 "check",
                 "--offline",

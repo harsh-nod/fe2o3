@@ -10,6 +10,13 @@ use rustc_target::callconv::PassMode;
 #[path = "kernel_context_flow_v1.rs"]
 mod flow;
 
+#[path = "kernel_context_semantic_v29.rs"]
+mod semantic;
+pub(crate) use semantic::{
+    BoundContextEntryV29, CallBoundaryV29, ContextRootVisitErrorV29, RetainedContextEntriesV29,
+    RetainedContextEntryV29,
+};
+
 pub(crate) struct CapturedContextProducersV1<'tcx> {
     pub(super) declarations: Vec<kernel_context_frontend_v1::DeclaredContextEntryV1<'tcx>>,
     proofs: Vec<CapturedProducerV1<'tcx>>,
@@ -21,10 +28,11 @@ struct CapturedProducerV1<'tcx> {
     marker: DefId,
     context: Ty<'tcx>,
     flow: flow::SourceFlowV1<'tcx>,
+    original_mir_sha256: [u8; 32],
 }
 
 /// Move-only, same-session custody; cloneable collection metadata is not evidence.
-pub(super) struct AuthenticatedContextEntriesV1<'tcx> {
+pub(crate) struct AuthenticatedContextEntriesV1<'tcx> {
     entries: Vec<AuthenticatedContextEntryV1<'tcx>>,
 }
 
@@ -32,6 +40,7 @@ struct AuthenticatedContextEntryV1<'tcx> {
     function_index: usize,
     source: CapturedProducerV1<'tcx>,
     optimized: flow::AuthenticatedFlowV1<'tcx>,
+    optimized_body: &'tcx Body<'tcx>,
     declaration: kernel_context_frontend_v1::BoundContextEntryV1,
     export_name: String,
     logical_name: Option<String>,
@@ -45,7 +54,7 @@ impl<'tcx> AuthenticatedContextEntriesV1<'tcx> {
         self,
         tcx: TyCtxt<'tcx>,
         collection: &CollectionResult<'tcx>,
-    ) -> Result<(), CollectError> {
+    ) -> Result<Self, CollectError> {
         let roots = collection
             .functions
             .iter()
@@ -64,7 +73,7 @@ impl<'tcx> AuthenticatedContextEntriesV1<'tcx> {
                 .clone()
                 .map(|(index, function, _)| (index, function.instance)),
         )?;
-        for (entry, (_, function, bound)) in self.entries.into_iter().zip(roots) {
+        for (entry, (_, function, bound)) in self.entries.iter().zip(roots) {
             if function.role != CollectedFunctionRole::KernelEntry
                 || function.instance != entry.source.root
                 || function.export_name != entry.export_name
@@ -102,13 +111,17 @@ impl<'tcx> AuthenticatedContextEntriesV1<'tcx> {
                     "semantic import changed the authenticated context signature",
                 ));
             }
-            if flow::authenticate_optimized(tcx, &entry.source.flow)? != entry.optimized {
+            if !std::ptr::eq(
+                tcx.instance_mir(entry.source.root.def),
+                entry.optimized_body,
+            ) || flow::authenticate_optimized(tcx, &entry.source.flow)? != entry.optimized
+            {
                 return Err(error(
                     "semantic import changed the authenticated optimized entry occurrences",
                 ));
             }
         }
-        Ok(())
+        Ok(self)
     }
 }
 
@@ -174,9 +187,9 @@ pub(crate) fn capture_context_producers_v1<'tcx>(
                 "nominal kernel marker is shared by distinct physical roots",
             ));
         }
-        let context = authenticate_signature(tcx, root, helper, marker_ty)?;
+        let context = authenticate_source_signature(tcx, root, helper, marker_ty)?;
         // This query is borrowed before monomorphization can steal it. No
-        // optimized-MIR query or body-hashing helper may run under this borrow.
+        // optimized-MIR query may run under this borrow.
         let source = tcx.mir_drops_elaborated_and_const_checked(local);
         if source.is_stolen() {
             return Err(error(
@@ -185,13 +198,24 @@ pub(crate) fn capture_context_producers_v1<'tcx>(
         }
         let source = source.borrow();
         let flow = flow::authenticate_source(tcx, root, helper, context, &source)?;
+        let original_mir_sha256 =
+            crate::rustc_semantic_adapter_v1::borrowed_rustc_mir_body_sha256_v1(tcx, root, &source);
         proofs.push(CapturedProducerV1 {
             root,
             helper,
             marker,
             context,
             flow,
+            original_mir_sha256,
         });
+    }
+    // FnAbi can request optimized MIR to deduce parameter attributes. Capture
+    // every original root before those queries can steal any producer body.
+    for proof in &proofs {
+        let marker = tcx.type_of(proof.marker).instantiate_identity();
+        if authenticate_signature(tcx, proof.root, proof.helper, marker)? != proof.context {
+            return Err(error("context signature changed after source capture"));
+        }
     }
     Ok(CapturedContextProducersV1 {
         declarations,
@@ -282,7 +306,7 @@ pub(super) fn authenticate_v1<'tcx>(
         if collector
             .call_edges
             .values()
-            .any(|callees| callees.contains(&identity))
+            .any(|callees| callees.contains_key(&identity))
         {
             return Err(error("physical context root is reachable as a callee"));
         }
@@ -318,6 +342,7 @@ pub(super) fn authenticate_v1<'tcx>(
         declaration.authenticated_items = Some(items);
         entries.push(AuthenticatedContextEntryV1 {
             function_index: index,
+            optimized_body: tcx.instance_mir(source.root.def),
             source,
             optimized,
             declaration: declaration.clone(),
@@ -376,7 +401,7 @@ fn marker_definition<'tcx>(
     Ok((marker, ty))
 }
 
-fn authenticate_signature<'tcx>(
+fn authenticate_source_signature<'tcx>(
     tcx: TyCtxt<'tcx>,
     root: Instance<'tcx>,
     helper: Instance<'tcx>,
@@ -429,6 +454,19 @@ fn authenticate_signature<'tcx>(
     {
         return Err(error("logical context kernel/target/launch brands differ"));
     }
+    Ok(context)
+}
+
+fn authenticate_signature<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    root: Instance<'tcx>,
+    helper: Instance<'tcx>,
+    marker: Ty<'tcx>,
+) -> Result<Ty<'tcx>, CollectError> {
+    let context = authenticate_source_signature(tcx, root, helper, marker)?;
+    let physical = source_signature_v1(tcx, root).map_err(error)?;
+    let logical = source_signature_v1(tcx, helper).map_err(error)?;
+    let discard_result = physical.output().is_unit() && exact_kernel_result(tcx, logical.output());
     let env = TypingEnv::fully_monomorphized();
     let root_abi = tcx
         .fn_abi_of_instance(env.as_query_input((root, ty::List::empty())))

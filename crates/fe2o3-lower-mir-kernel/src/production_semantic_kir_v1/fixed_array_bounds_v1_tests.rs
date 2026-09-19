@@ -150,7 +150,7 @@ impl Fixture {
             },
             None,
             None,
-            BTreeSet::new(),
+            BTreeSet::new().into(),
             1,
             false,
             64,
@@ -158,6 +158,9 @@ impl Fixture {
             None,
             CallReturnBufferV1::for_function(&self.function, &[], &BTreeMap::new(), 0, &mut budget)
                 .unwrap(),
+            None,
+            SemanticEmissionPlacementV1::default(),
+            None,
         )
         .unwrap()
     }

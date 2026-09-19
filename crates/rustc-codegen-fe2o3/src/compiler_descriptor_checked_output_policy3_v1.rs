@@ -5,8 +5,17 @@ use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1;
 use fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy3V1;
 
+#[path = "compiler_descriptor_native_worker_binding_v1.rs"]
+pub(crate) mod native_worker_binding_v1;
+#[path = "compiler_descriptor_checked_output_policy5_v1.rs"]
+pub(crate) mod policy5;
+#[path = "compiler_descriptor_checked_output_policy6_v1.rs"]
+pub(crate) mod policy6;
+
 struct CheckedDescriptorViewV1<'a> {
-    source: &'a fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    semantic: &'a fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    source_launch: &'a fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1,
+    neutral: &'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
     bound: &'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
     output: &'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
     kernels: &'a [fe2o3_kernel_ir::FormalMemoryObligations],
@@ -33,7 +42,19 @@ pub(crate) fn construct_checked_output_policy3_descriptor_source_v1(
         compiler_module,
         typed_roots,
         CheckedDescriptorViewV1 {
-            source: admitted.source_semantic_kir(),
+            semantic: admitted.source_semantic_kir().semantic().semantic(),
+            source_launch: admitted
+                .source_semantic_kir()
+                .source_launch_roster()
+                .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+                    "retained source launch roster",
+                ))?,
+            neutral: admitted
+                .source_semantic_kir()
+                .pre_ranked_executable()
+                .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+                    "connected historical source",
+                ))?,
             bound: admitted.bound(),
             output: admitted.output(),
             kernels: admitted.kernels(),
@@ -58,7 +79,46 @@ pub(crate) fn construct_checked_output_policy4_descriptor_source_v1(
         compiler_module,
         typed_roots,
         CheckedDescriptorViewV1 {
-            source: admitted.source_semantic_kir(),
+            semantic: admitted.source_semantic_kir().semantic().semantic(),
+            source_launch: admitted
+                .source_semantic_kir()
+                .source_launch_roster()
+                .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+                    "retained source launch roster",
+                ))?,
+            neutral: admitted
+                .source_semantic_kir()
+                .pre_ranked_executable()
+                .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
+                    "connected historical source",
+                ))?,
+            bound: admitted.bound(),
+            output: admitted.output(),
+            kernels: admitted.kernels(),
+        },
+        4,
+        budget,
+    )
+}
+
+pub(crate) fn construct_erased_checked_output_policy4_descriptor_source_v1(
+    envelope: &CompilerFfiEnvelopeV1,
+    compiler_module: &InertCompilerModuleTextV1,
+    typed_roots: &[TypedDescriptorRootV1],
+    admitted: &fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy4V1,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<CompilerDescriptorSourceV1, CompilerDescriptorError> {
+    admitted
+        .verify_equivalence(budget)
+        .map_err(|error| CompilerDescriptorError::CheckedOutputPolicy4(Box::new(error)))?;
+    construct_checked_descriptor_v1(
+        envelope,
+        compiler_module,
+        typed_roots,
+        CheckedDescriptorViewV1 {
+            semantic: admitted.original_source().semantic_ssa().source_semantic(),
+            source_launch: admitted.original_source().source_launch(),
+            neutral: admitted.erased(),
             bound: admitted.bound(),
             output: admitted.output(),
             kernels: admitted.kernels(),
@@ -79,13 +139,10 @@ fn construct_checked_descriptor_v1(
     let target = envelope.target().to_string();
     let profile = ProductionAmdTargetProfileV1::from_device_target(&target)
         .ok_or_else(|| CompilerDescriptorError::UnsupportedTarget(target.clone()))?;
-    let neutral = admitted.source.pre_ranked_executable().ok_or(
-        CompilerDescriptorError::ProductionDescriptorMismatch("connected historical source"),
-    )?;
     // The admission's generic coordinate check permits capability extensions.
     // Descriptor target selection additionally requires the exact binder delta.
     let _ = dialect_amdgcn::check_production_target_coordinate_preservation_v1(
-        neutral,
+        admitted.neutral,
         admitted.bound,
         profile,
         budget,
@@ -98,7 +155,11 @@ fn construct_checked_descriptor_v1(
         (ProductionAmdTargetProfileV1::Gfx950, 3) => "production-policy3-checked-gfx950-cov6-v1",
         (ProductionAmdTargetProfileV1::Gfx942, 4) => "production-policy4-checked-gfx942-cov6-v1",
         (ProductionAmdTargetProfileV1::Gfx950, 4) => "production-policy4-checked-gfx950-cov6-v1",
-        _ => unreachable!("only the two consuming checked-owner constructors call this helper"),
+        (ProductionAmdTargetProfileV1::Gfx942, 5) => "production-policy5-checked-gfx942-cov6-v1",
+        (ProductionAmdTargetProfileV1::Gfx950, 5) => "production-policy5-checked-gfx950-cov6-v1",
+        (ProductionAmdTargetProfileV1::Gfx942, 6) => "production-policy6-checked-gfx942-cov6-v1",
+        (ProductionAmdTargetProfileV1::Gfx950, 6) => "production-policy6-checked-gfx950-cov6-v1",
+        _ => unreachable!("only fixed consuming checked-owner constructors call this helper"),
     };
     let profiles = geometries
         .into_iter()
@@ -131,10 +192,8 @@ fn validate_checked_output_descriptor_evidence_v1(
     target: &str,
 ) -> Result<Vec<crate::production_geometry_v1::ProductionGeometryV1>, CompilerDescriptorError> {
     let module = admitted.output.module();
-    let semantic = admitted.source.semantic().semantic();
-    let source_launch = admitted.source.source_launch_roster().ok_or(
-        CompilerDescriptorError::ProductionDescriptorMismatch("retained source launch roster"),
-    )?;
+    let semantic = admitted.semantic;
+    let source_launch = admitted.source_launch;
     if typed_roots.is_empty()
         || typed_roots.len() != semantic.roots().len()
         || typed_roots.len() != module.kernels.len()

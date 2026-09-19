@@ -1,9 +1,10 @@
 """Bounded identity reconciliation for an already validated tutorial manifest.
 
-This module owns no source inventory, Rust parser, execution evidence, or file
-I/O. The caller validates the existing manifest/runtime projection first and
-supplies its bounded ordinary Rust item scanner. References retain those input
-contracts; a lexical occurrence is never compiler or qualification evidence.
+This module owns no source inventory, execution evidence, or file I/O. The caller
+validates the existing manifest/runtime projection first and supplies its bounded
+Rust scanner and lexer. Restricted fixture selection uses those same coordinates.
+References retain those input contracts; a lexical occurrence is never compiler
+or qualification evidence.
 """
 
 from __future__ import annotations
@@ -81,6 +82,7 @@ class _Budget:
         self.maximum = maximum
         self.used = 0
         self.identity_bytes = 0
+        self.source_bytes = 0
 
     def rows(self, value: Any, label: str) -> list[Any]:
         if not isinstance(value, list) or len(value) > self.maximum - self.used:
@@ -168,9 +170,186 @@ def _fragment_intervals(tab: dict[str, Any], runtime: dict[str, Any], encoded: b
     return intervals
 
 
+def _fixture_cfg(body: str, features: set[str]) -> bool:
+    """Evaluate only literal feature/AMDGPU cfg expressions, without expansion."""
+    if len(body) > 8192 or len(body.encode("utf-8")) > 8192:
+        _fail("fixture cfg exceeds its byte bound")
+    tokens = re.findall(r'\s+|[A-Za-z_][A-Za-z0-9_]*|"[A-Za-z0-9_-]+"|[(),=]', body)
+    if "".join(tokens) != body:
+        _fail("unsupported fixture cfg syntax")
+    tokens = [token for token in tokens if not token.isspace()]
+    if len(tokens) > 256:
+        _fail("fixture cfg exceeds its token bound")
+    cursor = 0
+
+    def take() -> str:
+        nonlocal cursor
+        if cursor == len(tokens):
+            _fail("incomplete fixture cfg")
+        token = tokens[cursor]
+        cursor += 1
+        return token
+
+    def expression(depth: int) -> bool:
+        if depth > 32:
+            _fail("fixture cfg exceeds its nesting bound")
+        name = take()
+        if name in {"all", "any", "not"}:
+            if take() != "(":
+                _fail("unsupported fixture cfg syntax")
+            values = []
+            while cursor < len(tokens) and tokens[cursor] != ")":
+                values.append(expression(depth + 1))
+                if cursor < len(tokens) and tokens[cursor] == ",":
+                    take()
+                elif cursor == len(tokens) or tokens[cursor] != ")":
+                    _fail("unsupported fixture cfg syntax")
+            if take() != ")" or (name == "not" and len(values) != 1):
+                _fail("unsupported fixture cfg arity")
+            return all(values) if name == "all" else any(values) if name == "any" else not values[0]
+        if name not in {"feature", "target_arch"} or take() != "=":
+            _fail("unsupported fixture cfg predicate")
+        value = take()
+        if not value.startswith('"'):
+            _fail("fixture cfg requires a literal value")
+        value = value[1:-1]
+        return value in features if name == "feature" else value == "amdgpu"
+
+    result = expression(0)
+    if cursor != len(tokens):
+        _fail("trailing fixture cfg syntax")
+    return result
+
+
+def _fixture_declarations(
+    source: str, features: set[str], scan_functions: Callable,
+    rust_syntax: Callable, budget: _Budget,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Select top-level functions and ordinary external modules only."""
+    _utf8(source, "fixture source")
+    functions = budget.rows(scan_functions(source), "fixture function items")
+    code, pairs = rust_syntax(source)
+    cursor = 0
+    function_index = previous_character = previous_byte = 0
+    selected = []
+    modules = []
+    attribute = re.compile(r"#\s*(!?)\s*\[")
+    while cursor < len(code):
+        if code[cursor].isspace() or code[cursor] == ";":
+            cursor += 1
+            continue
+        budget.rows([None], "fixture source items")
+        enabled = True
+        while match := attribute.match(code, cursor):
+            opening = match.end() - 1
+            end = pairs[opening]
+            body = source[opening + 1:end - 1].strip()
+            masked = code[opening + 1:end - 1].strip()
+            cfg = re.fullmatch(r"cfg\s*\((.*)\)", body, re.DOTALL)
+            if cfg is not None:
+                enabled = _fixture_cfg(cfg[1], features) and enabled
+            elif re.fullmatch(r'cfg_attr\s*\(\s*target_arch\s*=\s*"amdgpu"\s*,\s*no_std\s*\)', body) and match[1]:
+                pass
+            else:
+                benign = re.fullmatch(r"(allow|deny|forbid|warn|doc|inline|kernel)(?:\s*(\(.*\)))?", masked, re.DOTALL)
+                if benign is None or (benign[2] is None and benign[1] not in {"inline", "kernel"}):
+                    _fail("unsupported fixture selection attribute")
+                if benign[2] is not None:
+                    arguments = code.find("(", opening + 1, end - 1)
+                    if code[pairs[arguments]:end - 1].strip():
+                        _fail("unsupported fixture selection attribute")
+                    if benign[1] == "inline" and re.fullmatch(r"inline\s*\(\s*(?:always|never)\s*\)", masked) is None:
+                        _fail("unsupported fixture selection attribute")
+            if match[1] and not enabled:
+                _fail("conditional fixture crate/module is unsupported")
+            cursor = end
+            while cursor < len(code) and code[cursor].isspace():
+                cursor += 1
+        if cursor == len(code):
+            break
+        start = cursor
+        while cursor < len(code) and code[cursor] not in "{;":
+            if code[cursor] in "([":
+                cursor = pairs[cursor]
+            else:
+                cursor += 1
+        if cursor == len(code):
+            _fail("unsupported fixture item boundary")
+        head = code[start:cursor]
+        boundary = cursor
+        cursor = pairs[cursor] if code[cursor] == "{" else cursor + 1
+        first_byte = previous_byte + len(source[previous_character:start].encode("utf-8"))
+        last_byte = first_byte + len(source[start:boundary].encode("utf-8"))
+        end_byte = last_byte + len(source[boundary:cursor].encode("utf-8"))
+        previous_character, previous_byte = cursor, end_byte
+        item_functions = []
+        while function_index < len(functions) and functions[function_index]["functionUtf8Offset"] < end_byte:
+            function = functions[function_index]
+            function_index += 1
+            if enabled and function["attributedKernel"]:
+                if not first_byte <= function["functionUtf8Offset"] < last_byte:
+                    _fail("nested fixture kernel declaration is unsupported")
+                item_functions.append(function)
+        if not enabled:
+            continue
+        module = re.fullmatch(r"\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*", head)
+        if module is not None:
+            if code[boundary] != ";":
+                _fail("inline fixture modules are unsupported")
+            modules.append(module[1])
+            continue
+        if (re.search(r"\b(?:macro_rules|include)\b|!", head)
+                or re.match(r"\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:use|const|static|type|fn)\b", head) is None):
+            _fail("unsupported fixture item or module selection")
+        selected.extend(item_functions)
+    return selected, modules
+
+
+def _fixture_selection(fixture: dict[str, Any], load_sources: Callable, scan_functions: Callable,
+                       rust_syntax: Callable, budget: _Budget) -> dict[str, tuple[str, int, str]]:
+    library, sources, enabled = load_sources(fixture)
+    # The loader authenticates the current physical package closure and Cargo
+    # inputs. Traversal establishes only this bounded source selection, not rustc
+    # acceptance or any executable outcome.
+    pending = [library]
+    visited = set()
+    selected = {}
+    while pending:
+        path = pending.pop()
+        if path in visited or path not in sources:
+            _fail("ambiguous or missing fixture module selection")
+        visited.add(path)
+        source = sources[path]
+        budget.source_bytes += len(_utf8(source, "fixture source"))
+        if budget.source_bytes > MAX_RUNTIME_BYTES:
+            _fail("selected fixture source exceeds its aggregate byte bound")
+        functions, modules = _fixture_declarations(source, set(enabled), scan_functions, rust_syntax, budget)
+        for function in functions:
+            symbol = function["kernelSymbol"]
+            if symbol in selected:
+                _fail("ambiguous feature-selected fixture kernel")
+            selected[symbol] = (path, function["functionUtf8Offset"], source)
+        # Deliberately bounded to ordinary sibling modules of a library root.
+        # Nested, inline, #[path] and macro-selected modules need a separate
+        # reviewed extension, not a guess about Rust's module resolution.
+        if modules and path != library:
+            _fail("nested fixture modules are unsupported")
+        for module in modules:
+            parent = path.rsplit("/", 1)[0]
+            candidates = [candidate for candidate in (f"{parent}/{module}.rs", f"{parent}/{module}/mod.rs")
+                          if candidate in sources]
+            if len(candidates) != 1:
+                _fail("ambiguous or missing fixture module selection")
+            pending.append(candidates[0])
+    if set(selected) != set(fixture["compilerInput"]["kernelSymbols"]):
+        _fail("feature-selected fixture kernel roster differs")
+    return selected
+
+
 def validate_kernel_inventory(
     manifest: dict[str, Any], runtime_inventory: dict[str, Any] | None,
     scan_functions: Callable[[str], list[dict[str, Any]]], *, max_records: int = 4096,
+    load_fixture_sources: Callable | None = None, rust_syntax: Callable | None = None,
 ) -> dict[str, Any]:
     """Validate the optional sibling and return only bounded validated fields.
 
@@ -200,7 +379,8 @@ def validate_kernel_inventory(
         for symbol in budget.rows(inputs["kernelSymbols"], "fixture symbols"):
             symbol = _symbol(symbol)
             key = ("fixture", fixture["fixtureId"], symbol)
-            add_selection(key, {"identity": _selection_identity(inputs, symbol, budget), "symbol": symbol})
+            add_selection(key, {"identity": _selection_identity(inputs, symbol, budget), "symbol": symbol,
+                                "fixture": fixture})
     for lesson in budget.rows(manifest["curriculum"]["lessons"], "lessons"):
         lesson_id = lesson["lessonId"]
         for ordinal, tab in enumerate(budget.rows(lesson["codeTabs"], "tabs")):
@@ -319,6 +499,7 @@ def validate_kernel_inventory(
     negative_display_keys = set()
     bound_positive = set()
     unresolved = []
+    fixture_sources = {}
     for row in budget.rows(inventory["displayItems"], "display items"):
         _object(row, DISPLAY_FIELDS, "display item")
         lesson = _text(row["lessonId"], "lessonId")
@@ -369,7 +550,7 @@ def validate_kernel_inventory(
             if classification == "helper" and (tab["kind"] != "kernel" or candidates.get(coordinate, False)):
                 _fail("attributed kernel cannot be classified as a helper")
         elif classification in {"kernel", "required-negative"}:
-            if role != "executable" or status not in {"pending", "source-driver-contract"}:
+            if role != "executable" or status not in {"pending", "source-driver-contract", "fixture-source-contract"}:
                 _fail("kernel display has an invalid role or binding status")
             if classification == "kernel" and (refs or (runtime_inventory is not None and matching_cases & expected_negative)):
                 _fail("required negative cannot be converted into a positive kernel")
@@ -380,7 +561,37 @@ def validate_kernel_inventory(
                 if negative_display_keys & refs_keys:
                     _fail("required-negative case has duplicate display bindings")
                 negative_display_keys.update(refs_keys)
-            if status == "pending":
+            if status == "fixture-source-contract":
+                if (classification != "kernel" or not ids or refs or matching_cases
+                        or tab["kind"] != "kernel" or tab["sourceItem"] is not None
+                        or tab["sourceDigestScope"] != "file" or tab["sourceFragmentsSha256"] is not None):
+                    _fail("fixture display requires an exclusive whole-file positive binding")
+                if load_fixture_sources is None or rust_syntax is None:
+                    _fail("fixture display requires current physical source validation")
+                for kernel_id in ids:
+                    keys = by_id[kernel_id]
+                    if any(key[0] != "fixture" or selections[key]["symbol"] != symbol for key in keys):
+                        _fail("fixture display identity has a different selection")
+                    for key in sorted(keys):
+                        fixture = selections[key]["fixture"]
+                        if tab["sourcePath"] not in fixture["compilerInput"]["sourcePaths"]:
+                            _fail("fixture display path is not an exact selected source")
+                        if key[1] not in fixture_sources:
+                            fixture_sources[key[1]] = _fixture_selection(
+                                fixture, load_fixture_sources, scan_functions, rust_syntax, budget)
+                        path, source_offset, source = fixture_sources[key[1]][symbol]
+                        encoded = _utf8(source, "fixture source")
+                        digest = hashlib.sha256(encoded).hexdigest()
+                        if (path != tab["sourcePath"] or source_offset != offset
+                                or len(encoded) != tab["displayedUtf8Bytes"]
+                                or digest != tab["sourceSha256"] or digest != tab["displayedSha256"]):
+                            _fail("fixture display differs from the exact current source occurrence")
+                        if runtime_inventory is not None:
+                            live = runtime_tabs[location]
+                            if live.get("sourceFragments") is not None or live["displayedCode"] != source or not candidates[coordinate]:
+                                _fail("fixture display differs from the live whole-file occurrence")
+                            bound_positive.add(key)
+            elif status == "pending":
                 unresolved.append({"lessonId": lesson, "tabOrdinal": ordinal,
                                    "functionUtf8Offset": offset, "kernelSymbol": symbol, "reason": reason})
             else:

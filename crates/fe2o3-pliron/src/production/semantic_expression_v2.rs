@@ -311,8 +311,8 @@ impl ProductionSemanticExpressionV2 {
         Ok(stats)
     }
 
-    /// Discharges operation-definedness using only authenticated constants.
-    /// Dynamic guards are intentionally not assumed by this V2 expression.
+    /// Discharges definedness from constants or an exact positional shift mask.
+    /// Dynamic guards and source provenance are not assumed by this expression.
     pub fn validate_static_domains(&self) -> Result<(), ProductionSemanticExpressionErrorV2> {
         match self {
             Self::Symbol { .. } | Self::Constant { .. } | Self::Load(_) => Ok(()),
@@ -379,10 +379,7 @@ impl ProductionSemanticExpressionV2 {
                     ProductionSemanticBinaryOpV2::ShiftLeft
                         | ProductionSemanticBinaryOpV2::ShiftRight
                 ) {
-                    let Some(shift) = constant_bits(rhs) else {
-                        return Err(ProductionSemanticExpressionErrorV2::IncompleteDomain);
-                    };
-                    if shift >= u64::from(scalar.bit_width()) {
+                    if !shift_count_is_defined(rhs, *scalar) {
                         return Err(ProductionSemanticExpressionErrorV2::IncompleteDomain);
                     }
                 }
@@ -761,6 +758,44 @@ fn constant_bits(expression: &ProductionSemanticExpressionV2) -> Option<u64> {
         _ => None,
     }
 }
+
+fn shift_count_is_defined(
+    count: &ProductionSemanticExpressionV2,
+    shifted: ProductionSemanticScalarTypeV2,
+) -> bool {
+    if let Some(bits) = constant_bits(count) {
+        return bits < u64::from(shifted.bit_width());
+    }
+    let ProductionSemanticExpressionV2::Binary {
+        operation: ProductionSemanticBinaryOpV2::BitAnd,
+        scalar,
+        overflow: ProductionOverflowContractV2::Wrapping,
+        lhs,
+        rhs,
+    } = count
+    else {
+        return false;
+    };
+    matches!(
+        shifted,
+        ProductionSemanticScalarTypeV2::Integer {
+            bits: 8 | 16 | 32 | 64,
+            ..
+        }
+    ) && matches!(
+        scalar,
+        ProductionSemanticScalarTypeV2::Integer {
+            bits: 8 | 16 | 32 | 64,
+            ..
+        }
+    ) && lhs.scalar() == *scalar
+        && rhs.scalar() == *scalar
+        && constant_bits(rhs) == Some(u64::from(shifted.bit_width()) - 1)
+}
+
+#[cfg(test)]
+#[path = "masked_shift_domains_v2_tests.rs"]
+mod masked_shift_domains;
 
 fn signed_value(bits: u64, width: u16) -> i128 {
     let value = i128::from(bits);

@@ -8,6 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
 use std::io;
 
+#[path = "ordered_program_materialization_v1.rs"]
+pub mod ordered_program_materialization_v1;
+
 use fe2o3_kernel_ir::{
     AssemblyOption, BinaryOp, DebugSourceMapDocumentV2, DebugSourceMapSpanV1, Function, Module,
     Operation, OperationKind, ScalarType, Terminator, Type, ValueId, VerifiedSimulationBundleV6,

@@ -5,6 +5,7 @@ fn generative_provider_items_require_exact_reviewed_identity() {
         TrustedDeviceItem::KernelContextIssue,
         TrustedDeviceItem::ExecutionWorkgroupCapability,
         TrustedDeviceItem::ExecutionWorkgroupCurrent,
+        TrustedDeviceItem::ExecutionWithWorkgroup,
         TrustedDeviceItem::MaskedTile1D,
         TrustedDeviceItem::LaneFragment1D,
         TrustedDeviceItem::MaskedTile1DLoadMasked,

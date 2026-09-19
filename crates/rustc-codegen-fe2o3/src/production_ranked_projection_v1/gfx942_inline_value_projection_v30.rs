@@ -7,7 +7,8 @@ use super::{
     ProductionRankedProjectionErrorV1, ProductionSemanticBinaryOpV2,
     ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2, ScalarAssignmentSiteV1,
     SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1, SemanticEdgeRoleV1,
-    SemanticFunctionRoleV1, SemanticPlaceV1, SemanticTerminatorKindV1, SemanticUnwindActionV1,
+    SemanticFunctionRoleV1, SemanticOperandV1, SemanticPlaceV1, SemanticTerminatorKindV1,
+    SemanticUnwindActionV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticGfx942InlineInstructionV30, SemanticGfx942InlineU32V30,
@@ -17,6 +18,12 @@ use fe2o3_mir_model::semantic_mir_v1::{
 pub(super) struct InlineCallRosterV30<'a> {
     callables: &'a [SemanticCallableDeclV1],
     blocks: Vec<Option<usize>>,
+}
+
+impl InlineCallRosterV30<'_> {
+    pub(super) fn contains_local(&self, local: usize) -> bool {
+        self.blocks.get(local).is_some_and(Option::is_some)
+    }
 }
 
 const U32: ProductionSemanticScalarTypeV2 = ProductionSemanticScalarTypeV2::Integer {
@@ -196,6 +203,25 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         {
             return Err("GPU typed ISA normal return edge does not dominate its use");
         }
+        let instruction = assembly.instruction();
+        // Dominance alone does not establish a live result: moves and storage
+        // lifetime boundaries do not count as additional definitions. Keep the
+        // existing scalar/helper walk and its cumulative work/error behavior.
+        self.require_live_scalar_call_v1(local, call_block, use_site)?;
+        // The closed ABI has at most two ordered operands. A final move is
+        // valid; another operand may not read the same local after that move.
+        // Charge the one possible comparison before inspecting its operands.
+        if let [first, second] = call.arguments() {
+            self.definitions
+                .charge(1)
+                .map_err(|_| "GPU typed ISA operand order exceeds its analysis budget")?;
+            if let SemanticOperandV1::Move(first) = first
+                && matches!(second, SemanticOperandV1::Copy(second) | SemanticOperandV1::Move(second)
+                    if first.local() == second.local())
+            {
+                return Err("GPU typed ISA argument reads a moved source local");
+            }
+        }
         let definition = ScalarAssignmentSiteV1 {
             block: call_block,
             statement: block.statements().len(),
@@ -206,7 +232,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
         }
         // Inputs are values at the call, not values of mutated locals at the store.
         let previous = self.use_site.replace(definition);
-        let resolved = match assembly.instruction() {
+        let resolved = match instruction {
             SemanticGfx942InlineInstructionV30::VMovB32 => {
                 self.resolve_operand_v2(&call.arguments()[0], depth + 1)
             }

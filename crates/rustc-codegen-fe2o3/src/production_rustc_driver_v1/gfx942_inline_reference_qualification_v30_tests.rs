@@ -145,7 +145,7 @@ struct ReferenceCallbacks {
 impl Callbacks for ReferenceCallbacks {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         self.calls += 1;
-        self.result = Some(super::extract_ranked_memory_in_active_session_v1(tcx));
+        self.result = Some(super::extract_ranked_memory_in_active_session_v1(tcx, None));
         Compilation::Stop
     }
 }

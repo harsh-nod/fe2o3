@@ -1307,7 +1307,6 @@ dependencies = [
  "dialect-gpu",
  "fe2o3-kernel-analysis",
  "fe2o3-kernel-ir",
- "fe2o3-kir-sim",
  "fe2o3-pliron",
 ]
 
@@ -1411,6 +1410,7 @@ dependencies = [
  "dialect-mir",
  "fe2o3-amd-target",
  "fe2o3-kernel-analysis",
+ "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
  "fe2o3-kernel-opt",
  "fe2o3-kir-sim",
@@ -1845,6 +1845,7 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-differential",
  "fe2o3-kernel-ir",
+ "fe2o3-kernel-opt",
  "fe2o3-kir-sim",
  "fe2o3-kir-sim-cli",
  "serde",
@@ -2758,7 +2759,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 [[package]]
 name = "pliron"
 version = "0.17.0"
-source = "git+https://github.com/harsh-nod/pliron.git?rev=cc902cc8c669b5de2b292ae8638d9e8311bc735b#cc902cc8c669b5de2b292ae8638d9e8311bc735b"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=7ebf6e6638c2a3bcec179423993b01211a9689b4#7ebf6e6638c2a3bcec179423993b01211a9689b4"
 dependencies = [
  "awint",
  "combine",
@@ -2785,7 +2786,7 @@ dependencies = [
 [[package]]
 name = "pliron-derive"
 version = "0.17.0"
-source = "git+https://github.com/harsh-nod/pliron.git?rev=cc902cc8c669b5de2b292ae8638d9e8311bc735b#cc902cc8c669b5de2b292ae8638d9e8311bc735b"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=7ebf6e6638c2a3bcec179423993b01211a9689b4#7ebf6e6638c2a3bcec179423993b01211a9689b4"
 dependencies = [
  "combine",
  "convert_case",
@@ -2799,7 +2800,7 @@ dependencies = [
 [[package]]
 name = "pliron-llvm"
 version = "0.17.0"
-source = "git+https://github.com/harsh-nod/pliron.git?rev=cc902cc8c669b5de2b292ae8638d9e8311bc735b#cc902cc8c669b5de2b292ae8638d9e8311bc735b"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=7ebf6e6638c2a3bcec179423993b01211a9689b4#7ebf6e6638c2a3bcec179423993b01211a9689b4"
 dependencies = [
  "bitflags",
  "log",
@@ -3083,6 +3084,7 @@ dependencies = [
  "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
+ "fe2o3-device",
  "fe2o3-functional-proof",
  "fe2o3-host",
  "fe2o3-hsaco",

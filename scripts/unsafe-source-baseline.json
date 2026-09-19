@@ -988,6 +988,12 @@
     "block": 1,
     "function": 1
   },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/production-source-safety-device/workgroup_external_unsafe_callback.rs": {
+    "block": 1
+  },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/production-source-safety-device/workgroup_unsafe_callback.rs": {
+    "block": 1
+  },
   "crates/rustc-codegen-fe2o3/tests/fixtures/renamed-genuine/src/main.rs": {
     "attribute": 6
   },

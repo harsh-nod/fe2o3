@@ -9,6 +9,8 @@ publish = false
 duplicate-genuine = ["dep:fe2o3-device-real"]
 reserved-capability-spoof = []
 reserved-capability-control = []
+workgroup-provider-spoof = ["reserved-capability-control"]
+workgroup-provider-control = ["reserved-capability-control"]
 
 [dependencies]
 fe2o3-device-real = { package = "fe2o3-device", path = "../../../../fe2o3-device", optional = true }

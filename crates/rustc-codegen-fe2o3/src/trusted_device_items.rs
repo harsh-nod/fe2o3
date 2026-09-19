@@ -32,18 +32,26 @@ use dialect_amdgcn::{
 use fe2o3_kernel_ir::{NarrowFloatFormat, WidenedFloatBinaryOp};
 use fe2o3_rustc_invocation::CARGO_METADATA_BUILD_OBSERVATION_ENV_V2;
 
+mod wave64_shuffle_provider_v1;
+#[cfg(test)]
+pub(crate) use wave64_shuffle_provider_v1::check_actual_sealed_trait_chain_paths_v1;
+pub(crate) use wave64_shuffle_provider_v1::{
+    Wave64ShuffleScalarV1, is_authenticated_gfx942_wave64_shuffle_instance_v1,
+    scalar_for_instance as wave64_shuffle_scalar_for_instance_v1,
+};
+
 const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-IDENTITY/V1\0";
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x25, 0xc5, 0xdb, 0x5e, 0x1f, 0x8f, 0x3e, 0x34, 0x67, 0xe9, 0xae, 0x96, 0x98, 0x6c, 0x5e, 0x83,
-    0x94, 0xf3, 0xbb, 0x38, 0xf0, 0x8c, 0x8f, 0x43, 0xc6, 0x24, 0x7c, 0x9b, 0xa4, 0xaf, 0x93, 0x62,
+    0x47, 0x11, 0x73, 0x0b, 0xba, 0x47, 0x00, 0x7d, 0xe8, 0x8f, 0x56, 0x09, 0x3e, 0xf0, 0x78, 0x09,
+    0x4b, 0xc4, 0x23, 0x67, 0xee, 0xef, 0x5e, 0x2d, 0xde, 0xb8, 0x29, 0x66, 0x60, 0xcd, 0x9a, 0x49,
 ];
 // The pinned Cargo-produced manifest fixture is checked with the complete source tree.
 const REVIEWED_SAFE_EXECUTION_CARGO_VENDOR_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0xa7, 0xd3, 0xe2, 0xf1, 0xb1, 0x77, 0x06, 0xfb, 0xb8, 0x2c, 0xe8, 0x6e, 0x30, 0xdc, 0x75, 0xd6,
-    0x79, 0x4c, 0x9e, 0xe9, 0x9b, 0x2f, 0x72, 0x77, 0xc7, 0xd6, 0x7e, 0xaf, 0xa5, 0xfb, 0xdb, 0xd2,
+    0x8d, 0xc1, 0xcf, 0x09, 0xe4, 0xda, 0xb0, 0xbe, 0x17, 0x57, 0xb8, 0xe8, 0xd8, 0xe1, 0x0b, 0x83,
+    0xb8, 0x5b, 0x92, 0x66, 0xa9, 0xaf, 0xbb, 0x28, 0xe9, 0x72, 0x77, 0xbe, 0xa5, 0x77, 0x55, 0x23,
 ];
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1: [[u8; 32]; 2] = [
     REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
@@ -290,6 +298,7 @@ pub(crate) enum TrustedDeviceItem {
     Gfx942StaticLdsU32x256,
     Gfx942StaticLdsU32x256Type,
     Gfx942Wave64ReduceActiveU32,
+    Gfx942Wave64Shuffle(Wave64ShuffleScalarV1),
     Gfx942Workgroup256ReduceActiveU32,
     Gfx942Wave64ReduceSum,
     Gfx942Wave64InclusiveScanSum,
@@ -376,6 +385,7 @@ pub(crate) enum TrustedDeviceItem {
     KernelContextIssue,
     ExecutionWorkgroupCapability,
     ExecutionWorkgroupCurrent,
+    ExecutionWithWorkgroup,
     MaskedTile1D,
     LaneFragment1D,
     MaskedTile1DLoadMasked,
@@ -403,6 +413,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::ExecutionWorkgroupCurrent,
         "fe2o3_device_workgroup_capability_current_v1",
         "fe2o3_device::KernelContext::__compiler_workgroup_capability_current",
+    ),
+    (
+        TrustedDeviceItem::ExecutionWithWorkgroup,
+        "fe2o3_device_with_workgroup_v1",
+        "fe2o3_device::KernelContext::with_workgroup",
     ),
     (
         TrustedDeviceItem::MaskedTile1D,
@@ -933,6 +948,21 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::Gfx942Wave64ReduceActiveU32,
         "fe2o3_device_gfx942_wave64_reduce_active_u32_v1",
         "fe2o3_device::Gfx942Collectives::wave64_reduce_sum_active_u32",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Wave64Shuffle(Wave64ShuffleScalarV1::U32),
+        "fe2o3_device_gfx942_wave64_shuffle_u32_v1",
+        "<u32 as fe2o3_device::Gfx942CollectiveElement>::__fe2o3_wave64_shuffle_index",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Wave64Shuffle(Wave64ShuffleScalarV1::I32),
+        "fe2o3_device_gfx942_wave64_shuffle_i32_v1",
+        "<i32 as fe2o3_device::Gfx942CollectiveElement>::__fe2o3_wave64_shuffle_index",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Wave64Shuffle(Wave64ShuffleScalarV1::F32),
+        "fe2o3_device_gfx942_wave64_shuffle_f32_v1",
+        "<f32 as fe2o3_device::Gfx942CollectiveElement>::__fe2o3_wave64_shuffle_index",
     ),
     (
         TrustedDeviceItem::Gfx942Workgroup256ReduceActiveU32,
@@ -1579,7 +1609,11 @@ pub(crate) fn rejected_provider(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Reject
 
 fn provider_rule(tcx: TyCtxt<'_>, def_id: DefId, item: TrustedDeviceItem) -> Result<(), String> {
     let definition = reviewed_provider_semantic_definition_v1(tcx, def_id)?;
-    validate_reviewed_fe2o3_device_provider_definition_v1(item, &definition)
+    validate_reviewed_fe2o3_device_provider_definition_v1(item, &definition)?;
+    if let TrustedDeviceItem::Gfx942Wave64Shuffle(scalar) = item {
+        wave64_shuffle_provider_v1::validate_definition(tcx, def_id, scalar, &definition)?;
+    }
+    Ok(())
 }
 
 fn validate_reviewed_fe2o3_device_provider_definition_v1(
@@ -1751,6 +1785,9 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         }
         TrustedDeviceItem::ExecutionWorkgroupCurrent => {
             "fe2o3_device::execution::{impl#2}::__compiler_workgroup_capability_current"
+        }
+        TrustedDeviceItem::ExecutionWithWorkgroup => {
+            "fe2o3_device::execution::{impl#2}::with_workgroup"
         }
         TrustedDeviceItem::MaskedTile1D => "fe2o3_device::tile::MaskedTile1D",
         TrustedDeviceItem::LaneFragment1D => "fe2o3_device::tile::LaneFragment",
@@ -1986,6 +2023,7 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::KernelContextIssue
             | TrustedDeviceItem::ExecutionWorkgroupCapability
             | TrustedDeviceItem::ExecutionWorkgroupCurrent
+            | TrustedDeviceItem::ExecutionWithWorkgroup
             | TrustedDeviceItem::MaskedTile1D
             | TrustedDeviceItem::LaneFragment1D
             | TrustedDeviceItem::MaskedTile1DLoadMasked
@@ -2266,6 +2304,16 @@ pub(crate) fn authenticate_reviewed_safe_core_fabs_f32_helper_v1<'tcx>(
         && matches!(signature.output().kind(), TyKind::Float(FloatTy::F32))
 }
 
+#[path = "trusted_device_items/core_saturating_integer_v1.rs"]
+mod core_saturating_integer_v1;
+
+pub(crate) fn authenticate_reviewed_safe_core_saturating_integer_helper_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> bool {
+    core_saturating_integer_v1::authenticate_v1(tcx, instance)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReviewedSafeCoreWrappingIntegerContractV1<'a> {
     item_instance: bool,
@@ -2307,17 +2355,21 @@ fn authenticate_reviewed_safe_core_wrapping_integer_contract_v1(
     let Some((owner, method)) = contract.canonical_path.rsplit_once("::") else {
         return false;
     };
+    let second_integer = match method {
+        "wrapping_add" | "wrapping_sub" | "wrapping_mul" => integer,
+        "wrapping_shl" | "wrapping_shr" => "u32",
+        _ => return false,
+    };
     contract.item_instance
         && contract.core_identity
         && contract.generic_arguments == 0
         && contract.mir_available
-        && matches!(method, "wrapping_add" | "wrapping_sub" | "wrapping_mul")
         && owner == format!("core::num::<impl {integer}>")
         && contract.safe_signature
         && contract.rust_abi
         && !contract.variadic
         && contract.input_count == 2
-        && contract.second_integer == Some(integer)
+        && contract.second_integer == Some(second_integer)
         && contract.result_integer == Some(integer)
 }
 
@@ -2327,6 +2379,8 @@ fn authenticate_reviewed_safe_core_wrapping_integer_contract_v1(
 /// abs, not cryptographic authentication of a replacement sysroot. It only
 /// discharges the external-HIR source-safety check: real MIR, nested calls and
 /// arithmetic remain subject to ordinary collection, import and verification.
+/// Shift counts use the actual primitive method's `u32` signature. This does
+/// not authenticate unsafe unchecked helpers or prove their range precondition.
 pub(crate) fn authenticate_reviewed_safe_core_wrapping_integer_helper_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
@@ -3277,6 +3331,7 @@ const fn narrow_format(value: DeviceValueDiagnosticItem) -> Option<NarrowFloatFo
 mod tests {
     include!("trusted_device_items/core_01_tests.rs");
     include!("trusted_device_items/generative_provider_v1_tests.rs");
+    include!("trusted_device_items/wave64_shuffle_provider_v1_tests.rs");
     include!("trusted_device_items/materialization_v1_tests.rs");
 
     include!("trusted_device_items/wrapping_integer_v1_tests.rs");
@@ -3361,6 +3416,7 @@ mod tests {
             );
         }
     }
+    include!("trusted_device_items/wrapping_shift_source_safety_v1_tests.rs");
 
     #[test]
     fn exact_device_provider_rejects_same_name_path_and_source_substitution() {
@@ -3576,7 +3632,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("25c5db5e1f8f3e3467e9ae96986c5e8394f3bb38f08c8f43c6247c9ba4af9362")
+            digest("4711730bba47007de88f56093ef078094bc42367eeef5e2ddeb8296660cd9a49")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
@@ -3986,6 +4042,7 @@ mod tests {
             TrustedDeviceItem::KernelContextIssue,
             TrustedDeviceItem::ExecutionWorkgroupCapability,
             TrustedDeviceItem::ExecutionWorkgroupCurrent,
+            TrustedDeviceItem::ExecutionWithWorkgroup,
             TrustedDeviceItem::MaskedTile1D,
             TrustedDeviceItem::LaneFragment1D,
             TrustedDeviceItem::MaskedTile1DLoadMasked,
@@ -4091,6 +4148,9 @@ mod tests {
             TrustedDeviceItem::Gfx942StaticLdsU32x256,
             TrustedDeviceItem::Gfx942StaticLdsU32x256Type,
             TrustedDeviceItem::Gfx942Wave64ReduceActiveU32,
+            TrustedDeviceItem::Gfx942Wave64Shuffle(Wave64ShuffleScalarV1::U32),
+            TrustedDeviceItem::Gfx942Wave64Shuffle(Wave64ShuffleScalarV1::I32),
+            TrustedDeviceItem::Gfx942Wave64Shuffle(Wave64ShuffleScalarV1::F32),
             TrustedDeviceItem::Gfx942Workgroup256ReduceActiveU32,
             TrustedDeviceItem::Gfx942Wave64ReduceSum,
             TrustedDeviceItem::Gfx942Wave64InclusiveScanSum,
@@ -4245,6 +4305,7 @@ mod tests {
     #[test]
     fn safe_execution_items_have_exact_structural_provider_paths() {
         let items = [
+            TrustedDeviceItem::ExecutionWithWorkgroup,
             TrustedDeviceItem::WorkgroupLdsScope,
             TrustedDeviceItem::WorkgroupLdsScopeCurrent,
             TrustedDeviceItem::DynamicLdsExactCurrent,
@@ -4334,6 +4395,7 @@ mod tests {
             assert!(path.starts_with("fe2o3_device::"));
             assert!(
                 path.contains("::collective::")
+                    || path.contains("::execution::")
                     || path.contains("::group::")
                     || path.contains("::lds::")
                     || path.contains("::gfx950::")

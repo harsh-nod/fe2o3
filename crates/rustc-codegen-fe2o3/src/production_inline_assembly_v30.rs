@@ -1,5 +1,6 @@
 //! Closed source mapping for authenticated gfx942 integer instruction markers.
-//! Source terminal codes 127..=132 are disjoint from reserved capability codes.
+//! Source terminal codes 138..=143 are disjoint from saturation and Wave64 codes.
+//! Historical V30 type names do not denote the standalone MIR34 wire version.
 
 use crate::trusted_device_items::TrustedAmdGpuInlineOperation;
 use fe2o3_mir_model::semantic_mir_v1::{
@@ -19,12 +20,12 @@ pub(crate) const fn input_count(operation: TrustedAmdGpuInlineOperation) -> usiz
 
 pub(crate) const fn source_terminal_tag(operation: TrustedAmdGpuInlineOperation) -> u8 {
     match operation {
-        TrustedAmdGpuInlineOperation::VMovB32 => 127,
-        TrustedAmdGpuInlineOperation::VAddU32 => 128,
-        TrustedAmdGpuInlineOperation::VSubU32 => 129,
-        TrustedAmdGpuInlineOperation::VAndB32 => 130,
-        TrustedAmdGpuInlineOperation::VOrB32 => 131,
-        TrustedAmdGpuInlineOperation::VXorB32 => 132,
+        TrustedAmdGpuInlineOperation::VMovB32 => 138,
+        TrustedAmdGpuInlineOperation::VAddU32 => 139,
+        TrustedAmdGpuInlineOperation::VSubU32 => 140,
+        TrustedAmdGpuInlineOperation::VAndB32 => 141,
+        TrustedAmdGpuInlineOperation::VOrB32 => 142,
+        TrustedAmdGpuInlineOperation::VXorB32 => 143,
     }
 }
 
@@ -53,12 +54,12 @@ mod tests {
     fn closed_source_terminal_codes_arity_and_options_match_semantic_catalog() {
         use TrustedAmdGpuInlineOperation as T;
         let cases = [
-            (T::VMovB32, 127, "v_mov_b32", 1),
-            (T::VAddU32, 128, "v_add_u32", 2),
-            (T::VSubU32, 129, "v_sub_u32", 2),
-            (T::VAndB32, 130, "v_and_b32", 2),
-            (T::VOrB32, 131, "v_or_b32", 2),
-            (T::VXorB32, 132, "v_xor_b32", 2),
+            (T::VMovB32, 138, "v_mov_b32", 1),
+            (T::VAddU32, 139, "v_add_u32", 2),
+            (T::VSubU32, 140, "v_sub_u32", 2),
+            (T::VAndB32, 141, "v_and_b32", 2),
+            (T::VOrB32, 142, "v_or_b32", 2),
+            (T::VXorB32, 143, "v_xor_b32", 2),
         ];
         for (trusted, tag, mnemonic, arity) in cases {
             let semantic = semantic_operation(trusted).unwrap();

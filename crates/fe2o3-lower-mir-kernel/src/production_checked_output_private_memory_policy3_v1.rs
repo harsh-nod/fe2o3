@@ -458,6 +458,19 @@ fn source_interval_is_killed(
     }))
 }
 
+fn record_source_statement(
+    site: &mut Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>,
+    incoming: (SemanticFunctionIdV1, SemanticBlockIdV1, u32),
+) -> R<()> {
+    // Root-qualified occurrences of one retained helper share its physical
+    // instructions. Complete source/N replay establishes their common body.
+    if site.is_some_and(|previous| previous != incoming) {
+        return Err(refused("private source", "unique source statement span"));
+    }
+    *site = Some(incoming);
+    Ok(())
+}
+
 // Physical Store/Load validity does not resurrect a source lifetime killed by
 // a statement that emits no memory instruction. This initial source rule is
 // deliberately conservative for Moves and partial deinitialization.
@@ -466,7 +479,15 @@ pub(super) fn source_lifetimes(
     proof: &PrivateMemory<'_, '_>,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<()> {
-    let inventory = proof.inventory;
+    let sites = source_statement_sites_v1(source, proof.inventory, budget)?;
+    source_lifetimes_from_sites(source.semantic().semantic(), proof, &sites, budget)
+}
+
+pub(super) fn source_statement_sites_v1(
+    source: &ProductionSemanticKirOwnerV1,
+    inventory: &CanonicalKirInventoryV1<'_>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<Vec<Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>>> {
     let mut sites = scratch::<Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>>(
         inventory.operations().len(),
         budget,
@@ -506,18 +527,25 @@ pub(super) fn source_lifetimes(
         }
         for site in &mut sites[start..end] {
             charge(budget, 2)?;
-            if site
-                .replace((
+            record_source_statement(
+                site,
+                (
                     span.semantic_function(),
                     span.semantic_block(),
                     span.statement_ordinal(),
-                ))
-                .is_some()
-            {
-                return Err(refused("private source", "unique source statement span"));
-            }
+                ),
+            )?;
         }
     }
+    Ok(sites)
+}
+
+pub(super) fn source_lifetimes_from_sites(
+    semantic: &AdmittedInertSemanticMirV1,
+    proof: &PrivateMemory<'_, '_>,
+    sites: &[Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>],
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<()> {
     let mut kills = None;
     for (read, store) in proof.latest_stores.iter().enumerate() {
         charge(budget, 4)?;
@@ -542,7 +570,6 @@ pub(super) fn source_lifetimes(
                 "same-block ordered source Store/Load",
             ));
         }
-        let semantic = source.semantic().semantic();
         let function_id = function;
         let function = semantic
             .functions()
@@ -627,6 +654,9 @@ fn source_storage_local(
     Ok(destination.local())
 }
 
+include!("production_checked_output_erased_private_lifetimes_v1.rs");
+include!("production_checked_output_redundant_store_lifetimes_v1.rs");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,6 +664,33 @@ mod tests {
     use fe2o3_mir_model::semantic_mir_v1::{
         SemanticAssignmentV1, SemanticMemoryStoreV1, SemanticRvalueV1,
     };
+
+    #[test]
+    fn shared_helper_source_sites_coalesce_only_identical_statement_coordinates() {
+        let original = (
+            SemanticFunctionIdV1::from_index(2),
+            SemanticBlockIdV1::from_index(3),
+            4,
+        );
+        let mut site = None;
+        record_source_statement(&mut site, original).unwrap();
+        record_source_statement(&mut site, original).unwrap();
+        assert_eq!(site, Some(original));
+        for conflicting in [
+            (SemanticFunctionIdV1::from_index(1), original.1, original.2),
+            (original.0, SemanticBlockIdV1::from_index(2), original.2),
+            (original.0, original.1, 3),
+        ] {
+            assert!(matches!(
+                record_source_statement(&mut site, conflicting),
+                Err(E::Unsupported {
+                    phase: "private source",
+                    detail: "unique source statement span",
+                })
+            ));
+            assert_eq!(site, Some(original));
+        }
+    }
 
     // These are independently verified native hostile components, not claimed
     // source-owned positive fixtures. The sibling general tests own that lane.

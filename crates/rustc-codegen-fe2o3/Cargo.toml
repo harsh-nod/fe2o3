@@ -48,6 +48,7 @@ pliron.workspace = true
 
 [dev-dependencies]
 fe2o3-amdgcn-model.workspace = true
+fe2o3-device.workspace = true
 fe2o3-hsaco.workspace = true
 fe2o3-hsaco-finalize.workspace = true
 fe2o3-host.workspace = true

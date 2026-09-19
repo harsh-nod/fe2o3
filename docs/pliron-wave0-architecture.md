@@ -28,7 +28,7 @@ printer output are not public source concepts, durable identities, or artifact
 authority.
 
 The Wave 0 dependency baseline is reviewed Pliron workspace fork commit
-`cc902cc8c669b5de2b292ae8638d9e8311bc735b`, a strict descendant of upstream
+`7ebf6e6638c2a3bcec179423993b01211a9689b4`, a strict descendant of upstream
 release `v0.17.0` commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed` that adds
 mutation-attempt epochs and context-owner provenance. Every implementation dependency on
 `pliron` or `pliron-derive` MUST resolve to that same source revision through
@@ -89,7 +89,7 @@ The following infrastructure is implemented:
 - `fe2o3-pliron` constructs a real bounded Pliron context with a private,
   process-local identity anchor and validates dialect registration and pass
   plans using v0.17.0 commit
-  `cc902cc8c669b5de2b292ae8638d9e8311bc735b`. Upstream pointers retain private
+  `7ebf6e6638c2a3bcec179423993b01211a9689b4`. Upstream pointers retain private
   context provenance, while production execution additionally checks owner,
   stage, root, and graph snapshot. Generic caller-supplied passes are unavailable.
   The workspace policy rejects another Pliron revision, duplicate Pliron
@@ -637,7 +637,7 @@ D1-D11 production route is claimed complete by those crates.
 
 Input: this ADR, existing architecture/safety/evidence contracts, the pinned
 Rust/Verus/LLVM environment, and Pliron commit
-`cc902cc8c669b5de2b292ae8638d9e8311bc735b`.
+`7ebf6e6638c2a3bcec179423993b01211a9689b4`.
 
 Output: centralized exact Pliron dependencies; `fe2o3-pliron` context,
 identity, registration, and non-executing pass-plan shell; versioned GPU Rust conformance matrix,

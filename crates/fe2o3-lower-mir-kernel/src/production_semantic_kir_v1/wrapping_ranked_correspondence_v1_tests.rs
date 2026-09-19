@@ -1,6 +1,7 @@
 // This is source/ranked/N correspondence, not rustc projection, optimization,
 // protected proof execution, indexed-address qualification, or launch authority.
 mod wrapping_ranked_correspondence_v1_tests {
+    include!("defined_helper_ranked_correspondence_v1_tests.rs");
     use super::*;
     use crate::{
         ProductionMaterializedRankedModuleReceiptV1, ProductionPreRankedKirOwnerV1,
@@ -493,7 +494,7 @@ mod wrapping_ranked_correspondence_v1_tests {
     fn source_ranked_global_store_matches_modular_checked_value_for_all_supported_integer_types() {
         for signed in [false, true] {
             for bits in [8, 16, 32, 64] {
-                for operation in 0..OPERATIONS.len() {
+                for (operation, expected) in OPERATIONS.iter().enumerate() {
                     let source = ranked_wrapping_source(signed, bits, operation);
                     let checked = ranked_wrapping_checked_operation(&source);
                     assert_eq!(checked.results.len(), 2);
@@ -503,7 +504,7 @@ mod wrapping_ranked_correspondence_v1_tests {
                         Some(ProductionSemanticScalarTypeV2::Integer { signed, bits })
                     );
                     assert!(
-                        matches!(checked.kind, OperationKind::Binary { op: BinaryOp::Checked(op), .. } if op == OPERATIONS[operation].2)
+                        matches!(checked.kind, OperationKind::Binary { op: BinaryOp::Checked(op), .. } if op == expected.2)
                     );
                     let value = checked.results[0].id;
                     assert!(source.executable().module().functions[0].body.as_ref().unwrap().blocks.iter()

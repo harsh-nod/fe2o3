@@ -1,5 +1,10 @@
 use super::*;
 
+#[path = "production_checked_output_admission_policy5_v1_tests.rs"]
+mod policy5_tests;
+#[path = "production_checked_output_admission_policy6_v1_tests.rs"]
+mod policy6_tests;
+
 fn retained_scalar_source() -> ProductionPreRankedKirOwnerV1 {
     retained_scalar_source_with_reads(1)
 }
@@ -269,11 +274,18 @@ fn general_policy3_private_budget_failure_restores_transferred_input_floor() {
     budget.reserve_storage(floor).unwrap();
     let result =
         AdmittedOutput::try_admit_general_v1(input.receipt, input.bound, input.output, &mut budget);
-    assert!(matches!(
-        result,
-        Err(AdmissionError::Resource(_))
-            | Err(AdmissionError::Coordinates(_))
-            | Err(AdmissionError::SourceOutput(_))
-    ));
+    // Source attachment now shares this ledger and exhausts it before the
+    // later coordinate and private-memory checks can run.
+    assert!(
+        matches!(
+            result,
+            Err(AdmissionError::Source(
+                crate::ProductionSemanticKirErrorV1::MirPlironTranslation(
+                    crate::ProductionMirPlironTranslationErrorV1::ResourceLimit
+                )
+            ))
+        ),
+        "expected the exact caller-budget refusal during source attachment: {result:?}"
+    );
     assert_eq!(budget.storage(), floor);
 }

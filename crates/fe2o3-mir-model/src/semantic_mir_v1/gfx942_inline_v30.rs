@@ -1,8 +1,10 @@
-//! Closed, inert V30 ISA descriptions and per-call source references.
+//! Closed, inert scalar ISA descriptions and per-call source references.
 //!
 //! These records validate shape, not provenance. Only the compiler's independent
-//! source/occurrence replay can authenticate the referenced records. V30 extends
-//! the ordinary V28 grammar; it does not admit V29 execution capabilities.
+//! source/occurrence replay can authenticate the referenced records. The V30
+//! suffix is the historical record API, not the current standalone wire schema.
+//! V34 encodes these records at intrinsic 91; frozen diagnostic V31/V32 retain
+//! their scalar intrinsic 87. All three extend V28 without V29 capabilities.
 
 use super::*;
 
@@ -146,7 +148,7 @@ impl SemanticInlineAssemblySourceV30 {
     }
 }
 
-pub(super) fn uses_v30(request: &InertSemanticMirRequestV1) -> bool {
+pub(super) fn uses_scalar_authoring(request: &InertSemanticMirRequestV1) -> bool {
     request.callables.iter().any(|callable| {
         matches!(
             callable,
@@ -161,22 +163,6 @@ pub(super) fn uses_v30(request: &InertSemanticMirRequestV1) -> bool {
             if call.inline_assembly_source_v30.is_some())
         })
     })
-}
-
-pub(super) fn has_execution_v29(request: &InertSemanticMirRequestV1) -> bool {
-    request
-        .types
-        .iter()
-        .any(|ty| matches!(ty.rust_type_kind, SemanticRustTypeKindV1::Execution(_)))
-        || request.callables.iter().any(|callable| {
-            matches!(
-                callable,
-                SemanticCallableDeclV1::CompilerIntrinsic {
-                    operation: SemanticCompilerIntrinsicOperationV1::Execution(_),
-                    ..
-                }
-            )
-        })
 }
 
 pub(super) fn validate_call_source(

@@ -26,9 +26,26 @@ E22/E23 subsequently expose the same closed source profile through ordinary
 diagnostic export, simulation, typed inspection and JSONL debugging. These raw
 observations do not carry the private source owner's custody into consumers.
 
-The portable E25 exercise now reproduces the ordinary debugger checks using
-checked-in scripts. The longer instruction-program contract remains a separate
-development task, not a widening of the frozen two-instruction profile.
+The portable E25 exercise reproduces the ordinary debugger checks using
+checked-in scripts. The new [bounded instruction-program contract](ordered-program-authoring-v1.md)
+is a separate MIR32/KIR17 diagnostic path, not a widening of the frozen
+two-instruction profile. It supports one to sixteen ordered integer steps.
+
+The September 18–19 integration also preserves published MIR30 saturation and
+MIR33 Wave64 while moving standalone scalar authoring to MIR34/intrinsic91 and
+source terminals138–143. Historical diagnostic MIR31/32 scalar87 encodings
+remain version-qualified. Neither old captured bytes nor older validation
+receipts are relabelled. The model migration passes220tests; the merged KIR
+model passes520tests. These scoped results are not full milestone signoffs.
+
+The new checked bit-select materialization planner passes95library tests
+(including19new planner cases) and4documentation tests. It checks the typed
+three-operation graph, explicit names/registers and baseline byte commitment;
+general checked HIR source replacement remains unimplemented. The new native
+program runner observes12synthetic cases/80authored instruction sites, with
+parser and decoded-payload negative controls. Actual-source-to-native joining,
+ordinary source/debugger batch qualification and final publication remain
+separate checks; synthetic success supplies none of their authority.
 
 ## Exercised evidence and implementation anchors
 

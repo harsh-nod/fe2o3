@@ -24,7 +24,7 @@ depends on the core and publicly re-exports its existing API for downstream
 compatibility.
 
 The dependency is pinned to reviewed Pliron v0.17.0 fork commit
-`cc902cc8c669b5de2b292ae8638d9e8311bc735b`. It is a strict descendant of
+`7ebf6e6638c2a3bcec179423993b01211a9689b4`. It is a strict descendant of
 upstream v0.17.0 commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed` and adds
 private context provenance on upstream pointers and the mutation-attempt epoch
 used by the production analysis boundary.

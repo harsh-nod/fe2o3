@@ -1,5 +1,7 @@
 use super::*;
 
+mod declaration_commitment_tests;
+
 fn abi_value(request: &InertSemanticMirRequestV1, id: SemanticTypeIdV1) -> SemanticAbiValueV1 {
     let ty = &request.types[id.0 as usize];
     let scalar = SemanticAbiValueAttributesV1::new(

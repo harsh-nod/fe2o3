@@ -306,5 +306,217 @@ class KernelIdentitiesTests(unittest.TestCase):
             return False
 
 
+class FixtureDisplayTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        path = PATH.with_name("validate-tutorial-kernel-manifest.py")
+        spec = importlib.util.spec_from_file_location("fixture_scanner", path)
+        cls.scanner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.scanner)
+
+    def setUp(self):
+        self.library = "example/src/lib.rs"
+        self.path = "example/src/left.rs"
+        self.sources = {
+            self.library: '#![cfg_attr(target_arch = "amdgpu", no_std)]\n'
+                          '#[cfg(feature = "left")] mod left;\n#[cfg(feature = "right")] mod right;\n',
+            self.path: '// UTF-8: \u03bb\n#[cfg(any(not(target_arch = "amdgpu"), feature = "left"))]\n#[kernel] fn same() {}\n',
+            "example/src/right.rs": '#[cfg(feature = "right")]\n#[kernel] fn same() {}\n',
+        }
+        source = self.sources[self.path]
+        digest = hashlib.sha256(source.encode()).hexdigest()
+        self.tab = {**KernelIdentitiesTests.tab(source), "sourcePath": self.path,
+                    "sourceDigestScope": "file", "sourceSha256": digest,
+                    "sourceFragmentsSha256": None}
+        inputs = {"packageManifest": "example/Cargo.toml", "packageManifestSha256": "1" * 64,
+                  "cargoLockPath": "Cargo.lock", "cargoLockSha256": "2" * 64,
+                  "sourcePaths": [self.path], "sourceClosureSha256": "3" * 64,
+                  "cargoTarget": {"kind": "lib", "name": "example", "sourcePath": "src/lib.rs"},
+                  "defaultFeatures": False, "features": ["left"], "kernelSymbols": ["same"]}
+        self.fixture = {"fixtureId": "left", "target": "gfx950", "compilerInput": inputs}
+        function = self.scanner.ordinary_rust_function_items(source)[0]
+        self.row = {"lessonId": "lesson", "tabOrdinal": 0, "kernelSymbol": "same",
+                    "functionUtf8Offset": function["functionUtf8Offset"], "classification": "kernel",
+                    "kernelIds": ["left"], "negativeCases": [], "bindingStatus": "fixture-source-contract",
+                    "reason": "Expected fixture/source contract only."}
+        self.manifest = {
+            "compilerFixtures": [self.fixture],
+            "curriculum": {"schema": "fe2o3-tutorial-curriculum-obligations-v2",
+                           "lessons": [{"lessonId": "lesson", "role": "executable", "codeTabs": [self.tab]}]},
+            "kernelInventory": {"schema": IDENTITIES.SCHEMA,
+                                "kernels": [{"kernelId": "left", "variants": variants(), "selections": [
+                                    {"kind": "fixture", "fixtureId": "left", "kernelSymbol": "same"}]}],
+                                "negativeCases": [], "displayItems": [self.row]},
+        }
+        self.runtime = {"lessons": [{"id": "lesson", "codeTabs": [
+            {"displayedCode": source, "sourceFragments": None}]}]}
+
+    def validate(self, runtime=True, **kwargs):
+        def syntax(source):
+            code = self.scanner._rust_code_without_comments_and_literals(source)
+            return code, self.scanner._rust_delimiters(code)
+
+        return IDENTITIES.validate_kernel_inventory(
+            self.manifest, self.runtime if runtime else None, self.scanner.ordinary_rust_function_items,
+            load_fixture_sources=kwargs.pop("load_fixture_sources", lambda fixture: (
+                self.library, self.sources, fixture["compilerInput"]["features"])),
+            rust_syntax=syntax, **kwargs,
+        )
+
+    def test_whole_file_contract_requires_live_census_and_keeps_variants_pending(self):
+        before = copy.deepcopy((self.manifest, self.runtime, self.sources))
+        result = self.validate()
+        self.assertEqual(result["unresolvedBindings"], [])
+        self.assertEqual(result["kernelIdentities"][0]["variants"], variants())
+        self.assertEqual((self.manifest, self.runtime, self.sources), before)
+        without_runtime = self.validate(False)
+        self.assertFalse(without_runtime["inventoryComplete"])
+        self.assertIsNone(without_runtime["requiredPairCount"])
+        self.assertTrue(any("selection" in row for row in without_runtime["unresolvedBindings"]))
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "physical source validation"):
+            IDENTITIES.validate_kernel_inventory(self.manifest, None, self.scanner.ordinary_rust_function_items)
+
+    def test_wrong_file_feature_bytes_and_occurrence_reject(self):
+        for field, value in (("sourcePath", "example/src/right.rs"), ("sourceSha256", "0" * 64),
+                             ("displayedSha256", "0" * 64), ("displayedUtf8Bytes", 1),
+                             ("sourceDigestScope", "displayed"), ("sourceFragmentsSha256", [])):
+            self.setUp()
+            self.tab[field] = value
+            with self.subTest(field=field), self.assertRaises(IDENTITIES.KernelInventoryError):
+                self.validate(False)
+        self.setUp()
+        self.fixture["compilerInput"]["features"] = ["right"]
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "exact current source occurrence"):
+            self.validate(False)
+        self.setUp()
+        self.row["functionUtf8Offset"] += 1
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "exact current source occurrence"):
+            self.validate(False)
+        self.setUp()
+        self.sources[self.path] += "// changed\n"
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "exact current source occurrence"):
+            self.validate(False)
+
+    def test_package_membership_does_not_prove_module_reachability(self):
+        cases = [
+            ('#[cfg(feature = "right")] mod left;', "roster differs"),
+            ('mod left; mod left;', "ambiguous"),
+            ('#[path = "left.rs"] mod renamed;', "selection attribute"),
+            ('mod left { #[kernel] fn same() {} }', "nested fixture kernel"),
+            ('mod r#left;', "unsupported fixture item"),
+            ('include!("left.rs");', "unsupported fixture item"),
+            ('#[cfg_attr(feature = "left", path = "left.rs")] mod left;', "selection attribute"),
+            ('#[unknown_attribute] mod left;', "selection attribute"),
+            ('#[cfg(all(feature = "left", unknown))] mod left;', "cfg predicate"),
+        ]
+        for library, message in cases:
+            self.setUp()
+            self.sources[self.library] = library
+            with self.subTest(library=library), self.assertRaisesRegex(IDENTITIES.KernelInventoryError, message):
+                self.validate(False)
+        self.setUp()
+        self.sources["example/src/left/mod.rs"] = self.sources[self.path]
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "ambiguous"):
+            self.validate(False)
+
+    def test_fixture_attributes_reject_qualified_benign_names(self):
+        for attribute in ("doc::rewrite", "inline::rewrite", "doc::rewrite(hidden)",
+                          "inline :: rewrite(always)", "allow::rewrite(dead_code)",
+                          "doc /* before */ :: /* after */ rewrite",
+                          "inline /* before */ :: /* after */ rewrite(always)"):
+            for location in ("function", "module"):
+                self.setUp()
+                if location == "function":
+                    self.sources[self.path] = f"#[{attribute}]\n#[kernel] fn same() {{}}\n"
+                else:
+                    self.sources[self.library] = f'#[{attribute}]\n#[cfg(feature = "left")] mod left;\n'
+                source = self.sources[self.path]
+                digest = hashlib.sha256(source.encode()).hexdigest()
+                self.tab.update(sourceSha256=digest, displayedSha256=digest, displayedUtf8Bytes=len(source.encode()))
+                self.row["functionUtf8Offset"] = self.scanner.ordinary_rust_function_items(source)[0]["functionUtf8Offset"]
+                with self.subTest(attribute=attribute, location=location), self.assertRaisesRegex(
+                    IDENTITIES.KernelInventoryError, "unsupported fixture selection attribute",
+                ):
+                    self.validate(False)
+
+    def test_fixture_attributes_require_one_supported_body_form(self):
+        for attribute in ("doc[hidden]", "inline{always}", "inline(sometimes)",
+                          "doc(hidden) (alias)", "allow", "doc", 'doc = "description"'):
+            self.setUp()
+            self.sources[self.path] = f"#[{attribute}]\n#[kernel] fn same() {{}}\n"
+            source = self.sources[self.path]
+            digest = hashlib.sha256(source.encode()).hexdigest()
+            self.tab.update(sourceSha256=digest, displayedSha256=digest, displayedUtf8Bytes=len(source.encode()))
+            self.row["functionUtf8Offset"] = self.scanner.ordinary_rust_function_items(source)[0]["functionUtf8Offset"]
+            with self.subTest(attribute=attribute), self.assertRaisesRegex(
+                IDENTITIES.KernelInventoryError, "unsupported fixture selection attribute",
+            ):
+                self.validate(False)
+
+    def test_fixture_attributes_accept_supported_builtin_forms(self):
+        for attribute in ("allow(dead_code)", "deny(missing_docs)", "forbid(unsafe_code)",
+                          "warn(dead_code)", "doc(hidden)", "inline", "inline(always)",
+                          "inline(never)", "inline /* gap */ (always)"):
+            for location in (("function",) if attribute.startswith("inline") else ("function", "module")):
+                self.setUp()
+                if location == "function":
+                    self.sources[self.path] = f"#[{attribute}]\n#[kernel] fn same() {{}}\n"
+                else:
+                    self.sources[self.library] = f'#[{attribute}]\n#[cfg(feature = "left")] mod left;\n'
+                source = self.sources[self.path]
+                digest = hashlib.sha256(source.encode()).hexdigest()
+                self.tab.update(sourceSha256=digest, displayedSha256=digest, displayedUtf8Bytes=len(source.encode()))
+                self.row["functionUtf8Offset"] = self.scanner.ordinary_rust_function_items(source)[0]["functionUtf8Offset"]
+                self.runtime["lessons"][0]["codeTabs"][0]["displayedCode"] = source
+                with self.subTest(attribute=attribute, location=location):
+                    result = self.validate()
+                    self.assertEqual(result["unresolvedBindings"], [])
+                    self.assertEqual(result["kernelIdentities"][0]["variants"], variants())
+
+    def test_duplicate_selected_symbol_and_unknown_cfg_stay_unresolved(self):
+        self.fixture["compilerInput"]["features"] = ["left", "right"]
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "ambiguous feature-selected"):
+            self.validate(False)
+        self.setUp()
+        self.sources[self.path] = '#[cfg(unknown)] #[kernel] fn same() {}'
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "cfg predicate"):
+            self.validate(False)
+        self.row.update(kernelIds=[], bindingStatus="pending")
+        result = self.validate(False)
+        self.assertEqual(result["pendingDisplayItemCount"], 1)
+        self.assertFalse(result["inventoryComplete"])
+
+    def test_fixture_source_work_and_cfg_bounds(self):
+        successes = []
+        for limit in range(1, 100):
+            try:
+                self.validate(False, max_records=limit)
+                successes.append(limit)
+                break
+            except IDENTITIES.KernelInventoryError:
+                pass
+        self.assertTrue(successes)
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "record bound"):
+            self.validate(False, max_records=successes[0] - 1)
+        source_bytes = sum(len(self.sources[path].encode()) for path in (self.library, self.path))
+        with mock.patch.object(IDENTITIES, "MAX_RUNTIME_BYTES", source_bytes):
+            self.validate(False)
+        with mock.patch.object(IDENTITIES, "MAX_RUNTIME_BYTES", source_bytes - 1):
+            with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "aggregate byte bound"):
+                self.validate(False)
+        for cfg in ("not(" * 34 + 'feature="left"' + ")" * 34,
+                    "all(" + ','.join(['feature="left"'] * 70) + ")", " " * 8193):
+            with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "bound"):
+                IDENTITIES._fixture_cfg(cfg, {"left"})
+
+    def test_repeated_displays_use_one_fixture_selection_cache(self):
+        self.manifest["curriculum"]["lessons"][0]["codeTabs"].append(copy.deepcopy(self.tab))
+        self.manifest["kernelInventory"]["displayItems"].append({**self.row, "tabOrdinal": 1})
+        self.runtime["lessons"][0]["codeTabs"].append(copy.deepcopy(self.runtime["lessons"][0]["codeTabs"][0]))
+        loader = mock.Mock(return_value=(self.library, self.sources, ["left"]))
+        self.assertEqual(self.validate(load_fixture_sources=loader)["unresolvedBindings"], [])
+        loader.assert_called_once_with(self.fixture)
+
+
 if __name__ == "__main__":
     unittest.main()

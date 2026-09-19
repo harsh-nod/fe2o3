@@ -51,6 +51,14 @@ must continue rejecting it before artifact export. This reconciles the fixture
 introduced in `669713204edf8f6685b79f604bd5f05708cedcf2`, without changing its
 source or the inventory gate.
 
+The `workgroup_unsafe_callback.rs` and `workgroup_external_unsafe_callback.rs`
+source-safety fixtures likewise each contain one deliberate empty unsafe block.
+They ensure that traversing an authenticated `with_workgroup` provider still
+checks user callbacks, including an external callback factory under optimized
+MIR. These are negative-test syntax, not unsafe runtime operations. Each block
+is counted separately, and the rooted source-safety test must reject both
+before artifact export; provider authentication grants no callback exemption.
+
 - Keep pure compiler, simulator, debugger-engine, and profiler-analysis modules
   unsafe-free, using `forbid(unsafe_code)` where the crate boundary supports it.
 - Prefer existing safe typed OS APIs. Keep descriptor ownership in `OwnedFd`,

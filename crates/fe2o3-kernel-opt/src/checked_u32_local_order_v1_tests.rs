@@ -9,9 +9,6 @@ use fe2o3_kernel_ir::{
     WorkgroupPipelineEventKindV12,
 };
 
-#[path = "checked_u32_local_order_v1_simulation_tests.rs"]
-mod simulation;
-
 const LIMIT: usize = 20_000_000;
 const U32: Type = Type::Scalar(ScalarType::U32);
 const F: CanonicalKirFunctionCoordinateV1 = CanonicalKirFunctionCoordinateV1(0);

@@ -5,20 +5,20 @@ use rustc_middle::mir::{
     BasicBlock, Const, ConstValue, Local, Location, START_BLOCK, StatementKind,
 };
 
-#[derive(Debug, Eq, PartialEq)]
-struct CallOccurrenceV1 {
-    location: Location,
-    destination: Local,
-    target: BasicBlock,
-    unwind: UnwindAction,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct CallOccurrenceV1 {
+    pub(super) location: Location,
+    pub(super) destination: Local,
+    pub(super) target: BasicBlock,
+    pub(super) unwind: UnwindAction,
 }
 
 /// Occurrences are qualified by the exact root instance in the retained source flow.
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct AuthenticatedFlowV1<'tcx> {
-    issuer: Instance<'tcx>,
-    issuance: CallOccurrenceV1,
-    helper_call: CallOccurrenceV1,
+    pub(super) issuer: Instance<'tcx>,
+    pub(super) issuance: CallOccurrenceV1,
+    pub(super) helper_call: CallOccurrenceV1,
 }
 
 impl<'tcx> AuthenticatedFlowV1<'tcx> {
@@ -31,7 +31,7 @@ impl<'tcx> AuthenticatedFlowV1<'tcx> {
 pub(super) struct SourceFlowV1<'tcx> {
     root: Instance<'tcx>,
     helper: Instance<'tcx>,
-    original: AuthenticatedFlowV1<'tcx>,
+    pub(super) original: AuthenticatedFlowV1<'tcx>,
     context: Ty<'tcx>,
     physical_types: Vec<Ty<'tcx>>,
 }

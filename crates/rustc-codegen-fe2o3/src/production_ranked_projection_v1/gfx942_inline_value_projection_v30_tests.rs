@@ -635,6 +635,328 @@ fn call_index_and_recursive_expression_share_existing_budgets() {
     assert!(ordinary.inline_calls_v30.is_none());
 }
 
+#[test]
+fn inline_result_storage_and_move_kills_preserve_errors_and_resolver_state() {
+    let types = projection_types();
+    let callables = [marker(Instruction::VMovB32, false)];
+    let kills = [
+        statement(SemanticStatementKindV1::StorageDead(
+            SemanticLocalIdV1::from_index(2),
+        )),
+        statement(SemanticStatementKindV1::StorageLive(
+            SemanticLocalIdV1::from_index(2),
+        )),
+        aggregate_assignment_v2(
+            1,
+            SCALAR_TYPE,
+            SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place(2))),
+        ),
+    ];
+    for kill in kills {
+        let function = fixture(
+            call(vec![constant(5)], 1),
+            vec![],
+            vec![kill, output(), aggregate_output_v2(constant(17))],
+        );
+        let mut resolver = GpuSemanticExpressionResolverV2::new(&types, &function)
+            .unwrap()
+            .with_gfx942_inline_callables_v30(&callables)
+            .unwrap()
+            .with_scalar_callables_v1(&callables)
+            .unwrap();
+        assert_eq!(
+            resolver.resolve_store_v2(
+                function.blocks()[1].statements()[1].kind(),
+                ScalarAssignmentSiteV1 {
+                    block: 1,
+                    statement: 1
+                },
+            ),
+            Err("GPU scalar intrinsic result was killed before its use"),
+        );
+        assert!(resolver.use_site.is_none());
+        assert!(resolver.visiting.is_empty());
+        assert_eq!(
+            resolver.resolve_store_v2(
+                function.blocks()[1].statements()[2].kind(),
+                ScalarAssignmentSiteV1 {
+                    block: 1,
+                    statement: 2
+                },
+            ),
+            Ok(scalar(17)),
+        );
+        assert!(resolver.use_site.is_none());
+        assert!(resolver.visiting.is_empty());
+    }
+}
+
+#[test]
+fn inline_result_lifetime_boundaries_outside_definition_to_use_are_valid() {
+    let types = projection_types();
+    let function = fixture(
+        call(vec![constant(5)], 1),
+        vec![statement(SemanticStatementKindV1::StorageLive(
+            SemanticLocalIdV1::from_index(2),
+        ))],
+        vec![
+            output(),
+            aggregate_assignment_v2(
+                1,
+                SCALAR_TYPE,
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place(2))),
+            ),
+            statement(SemanticStatementKindV1::StorageDead(
+                SemanticLocalIdV1::from_index(2),
+            )),
+        ],
+    );
+    assert_eq!(
+        resolve(
+            &types,
+            &function,
+            &[marker(Instruction::VMovB32, false)],
+            1,
+            0
+        ),
+        Ok(scalar(5)),
+    );
+}
+
+#[test]
+fn inline_result_final_move_is_valid_but_a_subsequent_read_is_not() {
+    let types = projection_types();
+    let function = fixture(
+        call(vec![constant(5)], 1),
+        vec![],
+        vec![
+            aggregate_output_v2(SemanticOperandV1::Move(place(2))),
+            output(),
+        ],
+    );
+    let callables = [marker(Instruction::VMovB32, false)];
+    assert_eq!(resolve(&types, &function, &callables, 1, 0), Ok(scalar(5)));
+    assert_eq!(
+        resolve(&types, &function, &callables, 1, 1),
+        Err("GPU scalar intrinsic result was killed before its use"),
+    );
+}
+
+#[test]
+fn inline_ordered_operands_allow_final_moves_but_never_read_after_a_move() {
+    let types = projection_types();
+    for second in [copy(1), SemanticOperandV1::Move(place(1))] {
+        let function = fixture(
+            call(vec![SemanticOperandV1::Move(place(1)), second], 1),
+            vec![assignment(1, 5)],
+            vec![output(), aggregate_output_v2(constant(17))],
+        );
+        let callables = [marker(Instruction::VAddU32, false)];
+        let mut resolver = GpuSemanticExpressionResolverV2::new(&types, &function)
+            .unwrap()
+            .with_gfx942_inline_callables_v30(&callables)
+            .unwrap();
+        assert_eq!(
+            resolver.resolve_store_v2(
+                function.blocks()[1].statements()[0].kind(),
+                ScalarAssignmentSiteV1 {
+                    block: 1,
+                    statement: 0
+                },
+            ),
+            Err("GPU typed ISA argument reads a moved source local"),
+        );
+        assert!(resolver.use_site.is_none());
+        assert!(resolver.visiting.is_empty());
+        assert_eq!(
+            resolver.resolve_store_v2(
+                function.blocks()[1].statements()[1].kind(),
+                ScalarAssignmentSiteV1 {
+                    block: 1,
+                    statement: 1
+                },
+            ),
+            Ok(scalar(17)),
+        );
+    }
+    for (arguments, rhs) in [
+        (vec![copy(1), SemanticOperandV1::Move(place(1))], 5),
+        (vec![SemanticOperandV1::Move(place(1)), constant(2)], 2),
+    ] {
+        let function = fixture(call(arguments, 1), vec![assignment(1, 5)], vec![output()]);
+        assert_eq!(
+            resolve(
+                &types,
+                &function,
+                &[marker(Instruction::VAddU32, false)],
+                1,
+                0
+            ),
+            Ok(ProductionSemanticExpressionV2::Binary {
+                operation: ProductionSemanticBinaryOpV2::Add,
+                scalar: ProductionSemanticScalarTypeV2::Integer {
+                    signed: false,
+                    bits: 32
+                },
+                overflow: ProductionOverflowContractV2::Wrapping,
+                lhs: Box::new(scalar(5)),
+                rhs: Box::new(scalar(rhs)),
+            }),
+        );
+    }
+    let function = fixture(
+        call(vec![SemanticOperandV1::Move(place(1))], 1),
+        vec![assignment(1, 5)],
+        vec![output()],
+    );
+    assert_eq!(
+        resolve(
+            &types,
+            &function,
+            &[marker(Instruction::VMovB32, false)],
+            1,
+            0
+        ),
+        Ok(scalar(5)),
+    );
+}
+
+fn nested_inline_operand_fixture(
+    between: Vec<SemanticStatementV1>,
+    operand: SemanticOperandV1,
+) -> SemanticFunctionDeclV1 {
+    let first = SemanticDirectCallV1::new_callable(
+        SemanticCallableIdV1::from_index(0),
+        vec![constant(5)],
+        Some(SemanticCallDestinationV1::new(
+            place(1),
+            cfg_edge(SemanticEdgeRoleV1::CallReturn, 1),
+        )),
+        SemanticUnwindActionV1::Unreachable,
+    )
+    .unwrap()
+    .with_inline_assembly_source_v30(
+        SemanticInlineAssemblySourceV30::new(
+            bytes(210),
+            SemanticFunctionIdentityV1::from_sha256(bytes(11)),
+            bytes(211),
+            bytes(213),
+        )
+        .unwrap(),
+    );
+    function(vec![
+        block(224, vec![], SemanticTerminatorKindV1::Call(first)),
+        block(
+            225,
+            between,
+            SemanticTerminatorKindV1::Call(call(vec![operand], 2)),
+        ),
+        block(
+            226,
+            vec![output(), aggregate_output_v2(constant(17))],
+            SemanticTerminatorKindV1::Return,
+        ),
+    ])
+}
+
+#[test]
+fn nested_inline_call_input_must_be_live_and_failure_restores_every_frame() {
+    let types = projection_types();
+    let callables = [marker(Instruction::VMovB32, false)];
+    for kill in [
+        statement(SemanticStatementKindV1::StorageDead(
+            SemanticLocalIdV1::from_index(1),
+        )),
+        statement(SemanticStatementKindV1::StorageLive(
+            SemanticLocalIdV1::from_index(1),
+        )),
+        aggregate_assignment_v2(
+            0,
+            SCALAR_TYPE,
+            SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place(1))),
+        ),
+    ] {
+        let function = nested_inline_operand_fixture(vec![kill], copy(1));
+        let mut resolver = GpuSemanticExpressionResolverV2::new(&types, &function)
+            .unwrap()
+            .with_gfx942_inline_callables_v30(&callables)
+            .unwrap();
+        assert_eq!(
+            resolver.resolve_store_v2(
+                function.blocks()[2].statements()[0].kind(),
+                ScalarAssignmentSiteV1 {
+                    block: 2,
+                    statement: 0
+                },
+            ),
+            Err("GPU scalar intrinsic result was killed before its use"),
+        );
+        assert!(resolver.use_site.is_none());
+        assert!(resolver.visiting.is_empty());
+        assert_eq!(
+            resolver.resolve_store_v2(
+                function.blocks()[2].statements()[1].kind(),
+                ScalarAssignmentSiteV1 {
+                    block: 2,
+                    statement: 1
+                },
+            ),
+            Ok(scalar(17)),
+        );
+    }
+    // Moving a still-live producer into its final consumer is admitted.
+    let function = nested_inline_operand_fixture(vec![], SemanticOperandV1::Move(place(1)));
+    assert_eq!(resolve(&types, &function, &callables, 2, 0), Ok(scalar(5)));
+}
+
+#[test]
+fn inline_liveness_consumes_the_existing_exact_graph_work_budget() {
+    let types = projection_types();
+    let function = fixture(call(vec![constant(5)], 1), vec![], vec![output()]);
+    let callables = [marker(Instruction::VMovB32, false)];
+    let resolver = || {
+        GpuSemanticExpressionResolverV2::new(&types, &function)
+            .unwrap()
+            .with_gfx942_inline_callables_v30(&callables)
+            .unwrap()
+    };
+    let mut measured = resolver();
+    let before = measured.definitions.work;
+    assert_eq!(
+        measured.resolve_store_v2(
+            function.blocks()[1].statements()[0].kind(),
+            ScalarAssignmentSiteV1 {
+                block: 1,
+                statement: 0
+            },
+        ),
+        Ok(scalar(5)),
+    );
+    let work = measured.definitions.work - before;
+    assert!(work > 0);
+    for extra in 0..=1 {
+        let mut resolver = resolver();
+        resolver.definitions.work = MAX_PROJECTED_LOOP_GRAPH_WORK_V1 - work + extra;
+        let result = resolver.resolve_store_v2(
+            function.blocks()[1].statements()[0].kind(),
+            ScalarAssignmentSiteV1 {
+                block: 1,
+                statement: 0,
+            },
+        );
+        if extra == 0 {
+            assert_eq!(result, Ok(scalar(5)));
+        } else {
+            assert_eq!(
+                result,
+                Err("GPU scalar call source analysis exceeds its work limit")
+            );
+        }
+        assert!(resolver.use_site.is_none());
+        assert!(resolver.visiting.is_empty());
+    }
+}
+
 fn dependent_chain(
     instructions: &[(Instruction, Option<u32>)],
 ) -> (SemanticFunctionDeclV1, Vec<SemanticCallableDeclV1>) {

@@ -29,7 +29,7 @@ use fe2o3_compiler_lineage::{
     TargetBindingTranscriptV3, TargetLineageIdentityV3, derive_semantic_target_layout_identity_v1,
 };
 use fe2o3_kernel_ir::{
-    FunctionRole, InertFormalMemoryReceiptFormatV3, Module, ProductionSemanticDebugAvailabilityV1,
+    FunctionRole, InertFormalMemoryReceiptFormatV4, Module, ProductionSemanticDebugAvailabilityV1,
     ProductionSemanticDebugCarrierV1, ProductionSemanticDebugProducerGapV1,
     ProductionSemanticDebugReceiptExtensionV1, VerifiedCanonicalKernelIrErrorV8,
     VerifiedCanonicalKernelIrErrorV9, VerifiedCanonicalKernelIrErrorV11,
@@ -310,7 +310,7 @@ fn prepare_lineage_evidence_v1(
             fe2o3_mir_model::InertCanonicalSemanticU32InductionEvidenceV1::from_report(induction)
                 .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
         let formal_receipt =
-            InertFormalMemoryReceiptFormatV3::from_current_obligations(formal.obligations())
+            InertFormalMemoryReceiptFormatV4::from_current_obligations(formal.obligations())
                 .map_err(|error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()))?;
         let correspondence = encode_correspondence_root_payload_v1(
             admitted.semantic_kir().correspondence(),
@@ -860,7 +860,7 @@ fn validate_lineage_roster_envelope_v1(
                 )?;
             }
             LineageRosterPayloadV1::FormalMemory => {
-                InertFormalMemoryReceiptFormatV3::decode_current(root.payload().to_vec()).map_err(
+                InertFormalMemoryReceiptFormatV4::decode_current(root.payload().to_vec()).map_err(
                     |error| ProductionSemanticLineageErrorV3::LiveOwner(error.to_string()),
                 )?;
             }
@@ -1949,6 +1949,10 @@ impl From<InertSemanticCompilerModuleHandoffErrorV3> for ProductionSemanticLinea
 }
 
 #[cfg(test)]
+#[path = "production_semantic_lineage_runtime_read_v1_tests.rs"]
+mod runtime_read_tests;
+
+#[cfg(test)]
 mod layout_tests {
     use super::*;
     use fe2o3_kernel_ir::{
@@ -1993,7 +1997,7 @@ mod layout_tests {
             FormalIndexWidth::Bits64,
         )
         .unwrap();
-        InertFormalMemoryReceiptFormatV3::from_current_obligations(obligations.obligations())
+        InertFormalMemoryReceiptFormatV4::from_current_obligations(obligations.obligations())
             .unwrap()
             .into_canonical_bytes()
             .into_boxed_slice()
@@ -2115,11 +2119,11 @@ mod layout_tests {
         .unwrap();
         assert!(report.is_complete());
         let receipt =
-            InertFormalMemoryReceiptFormatV3::from_current_obligations(report.obligations())
+            InertFormalMemoryReceiptFormatV4::from_current_obligations(report.obligations())
                 .unwrap();
         assert_eq!(
             receipt.metadata().encoding(),
-            fe2o3_kernel_ir::FormalMemoryReceiptEncodingV3::GuardedV3
+            fe2o3_kernel_ir::FormalMemoryReceiptEncodingV4::GuardedV3
         );
         assert!(!receipt.grants_authority());
         receipt.into_canonical_bytes().into_boxed_slice()
@@ -2353,14 +2357,14 @@ mod layout_tests {
         for ordinal in 0..2 {
             let root = decoded.root(ordinal).unwrap();
             let receipt =
-                InertFormalMemoryReceiptFormatV3::decode_current(root.payload().to_vec()).unwrap();
+                InertFormalMemoryReceiptFormatV4::decode_current(root.payload().to_vec()).unwrap();
             assert_eq!(receipt.kernel_id(), root.kernel_id());
             assert_eq!(receipt.entry_id(), root.kernel_id());
             assert!(!receipt.grants_authority());
             encodings.push(receipt.metadata().encoding());
         }
-        assert!(encodings.contains(&fe2o3_kernel_ir::FormalMemoryReceiptEncodingV3::LegacyV1));
-        assert!(encodings.contains(&fe2o3_kernel_ir::FormalMemoryReceiptEncodingV3::GuardedV3));
+        assert!(encodings.contains(&fe2o3_kernel_ir::FormalMemoryReceiptEncodingV4::LegacyV1));
+        assert!(encodings.contains(&fe2o3_kernel_ir::FormalMemoryReceiptEncodingV4::GuardedV3));
         let mut hostile = bytes.clone();
         *hostile.last_mut().unwrap() ^= 1;
         assert!(

@@ -132,7 +132,11 @@ fn runtime_error_from_backend(
         eprintln!(
             "retained runtime test diagnostic: {:?}{}",
             String::from_utf8_lossy(&bytes[..bytes.len().min(2048)]),
-            if bytes.len() > 2048 { " (truncated)" } else { "" },
+            if bytes.len() > 2048 {
+                " (truncated)"
+            } else {
+                ""
+            },
         );
     }
     FunctionalRefinementRuntimeErrorV1 {
@@ -183,8 +187,13 @@ mod tests {
     fn protected_public_lease_audits_installed_closure() {
         let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(PROTECTED_RUNTIME_ROOT)
             .expect("the public lease must admit the installed protected runtime");
-        runtime.revalidate().expect("revalidate the installed closure");
-        eprintln!("protected runtime audit identity={:?}", runtime.identity().as_bytes());
+        runtime
+            .revalidate()
+            .expect("revalidate the installed closure");
+        eprintln!(
+            "protected runtime audit identity={:?}",
+            runtime.identity().as_bytes()
+        );
         // Deliberately no execute call: an installed-closure audit is not a proof.
     }
 

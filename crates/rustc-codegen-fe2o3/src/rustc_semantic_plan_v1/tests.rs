@@ -389,6 +389,29 @@
 
     #[test]
     fn terminal_recipe_tags_are_closed_and_distinct() {
+        for (expansion, tag) in [
+            (ProductionTerminalExpansionV1::Gfx950LdsTransposePublish, 83),
+            (ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent, 118),
+            (
+                ProductionTerminalExpansionV1::DisjointBlockComponentIndex,
+                119,
+            ),
+            (ProductionTerminalExpansionV1::Bf16MatrixBColumnMajor, 120),
+            (
+                ProductionTerminalExpansionV1::Bf16MatrixBColumnMajorLoadZeroFilledV1,
+                121,
+            ),
+            (ProductionTerminalExpansionV1::ContextIssue, 122),
+            (ProductionTerminalExpansionV1::WorkgroupDerive, 123),
+            (ProductionTerminalExpansionV1::MaskedTileLoadU32, 124),
+            (ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32, 125),
+            (ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32, 126),
+        ] {
+            assert_eq!(
+                terminal_expansion_tag_for_schema_v1(expansion, TerminalIdentitySchemaV1::CombinedV4),
+                tag
+            );
+        }
         let tags = [
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::ThreadIndex1d),
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::ThreadIndexGet),

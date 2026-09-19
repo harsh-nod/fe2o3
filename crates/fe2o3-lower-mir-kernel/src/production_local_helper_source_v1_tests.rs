@@ -640,3 +640,5 @@ mod memory_tests;
 mod resource_tests;
 #[path = "production_local_helper_ranked_v1_tests.rs"]
 mod ranked_tests;
+#[path = "production_local_helper_ranked_stage_v1_tests.rs"]
+mod ranked_stage_tests;

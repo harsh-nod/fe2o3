@@ -3,8 +3,8 @@
 use std::{error::Error, fmt};
 
 use fe2o3_kernel_ir::{
-    FormalIndexWidth, FormalMemoryAnalysisBasis, FormalMemoryReceiptEncodingV3,
-    FormalMemoryReceiptErrorV1, FormalMemoryReceiptMetadataV3, InertFormalMemoryReceiptFormatV3,
+    FormalIndexWidth, FormalMemoryAnalysisBasis, FormalMemoryReceiptEncodingV4,
+    FormalMemoryReceiptErrorV1, FormalMemoryReceiptMetadataV4, InertFormalMemoryReceiptFormatV4,
 };
 use sha2::{Digest, Sha256};
 
@@ -19,6 +19,8 @@ pub const FORMAL_MEMORY_ADMISSION_EVIDENCE_VERSION_V4: u16 = 4;
 pub const FORMAL_MEMORY_ADMISSION_EVIDENCE_POLICY_V4: u16 = 1;
 /// Domain-aware validation policy paired only with obligation receipt V3/policy 2.
 pub const FORMAL_MEMORY_ADMISSION_EVIDENCE_GUARDED_POLICY_V4: u16 = 2;
+/// Runtime-read policy paired only with obligation receipt V4/extraction policy 3.
+pub const FORMAL_MEMORY_ADMISSION_EVIDENCE_RUNTIME_BOUNDED_POLICY_V4: u16 = 3;
 /// Maximum exact bytes accepted by the outer compiler-lineage receipt.
 pub const MAX_FORMAL_MEMORY_ADMISSION_EVIDENCE_BYTES_V4: usize = 4 * 1024 * 1024;
 
@@ -34,6 +36,8 @@ pub enum FormalMemoryAdmissionValidationPolicyV4 {
     LegacyV1 = FORMAL_MEMORY_ADMISSION_EVIDENCE_POLICY_V4,
     /// Policy 2 accepts only V3/extraction-policy 2 with the current Bits64 witness.
     GuardedV2 = FORMAL_MEMORY_ADMISSION_EVIDENCE_GUARDED_POLICY_V4,
+    /// Policy 3 accepts only V4/extraction-policy 3 with the current Bits64 witness.
+    RuntimeBoundedV3 = FORMAL_MEMORY_ADMISSION_EVIDENCE_RUNTIME_BOUNDED_POLICY_V4,
 }
 
 /// Exact completeness policy committed by V4 formal-memory evidence.
@@ -83,7 +87,7 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV4 {
             return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
         }
         let receipt =
-            InertFormalMemoryReceiptFormatV3::from_current_obligations(kernel.obligations())
+            InertFormalMemoryReceiptFormatV4::from_current_obligations(kernel.obligations())
                 .map_err(ProductionFormalMemoryEvidenceErrorV4::FormalReceipt)?;
         receipt
             .revalidate()
@@ -97,13 +101,16 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV4 {
             return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
         }
         let validation_policy = match receipt.metadata().encoding() {
-            FormalMemoryReceiptEncodingV3::LegacyV1 => {
+            FormalMemoryReceiptEncodingV4::LegacyV1 => {
                 FormalMemoryAdmissionValidationPolicyV4::LegacyV1
             }
-            FormalMemoryReceiptEncodingV3::GuardedV3 => {
+            FormalMemoryReceiptEncodingV4::GuardedV3 => {
                 FormalMemoryAdmissionValidationPolicyV4::GuardedV2
             }
-            FormalMemoryReceiptEncodingV3::LegacyV2 => {
+            FormalMemoryReceiptEncodingV4::RuntimeBoundedV4 => {
+                FormalMemoryAdmissionValidationPolicyV4::RuntimeBoundedV3
+            }
+            FormalMemoryReceiptEncodingV4::LegacyV2 => {
                 return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
             }
         };
@@ -138,6 +145,9 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV4 {
             }
             FORMAL_MEMORY_ADMISSION_EVIDENCE_GUARDED_POLICY_V4 => {
                 FormalMemoryAdmissionValidationPolicyV4::GuardedV2
+            }
+            FORMAL_MEMORY_ADMISSION_EVIDENCE_RUNTIME_BOUNDED_POLICY_V4 => {
+                FormalMemoryAdmissionValidationPolicyV4::RuntimeBoundedV3
             }
             _ => return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidHeader),
         };
@@ -197,7 +207,7 @@ impl InertCanonicalFormalMemoryAdmissionEvidenceV4 {
         }
         let formal_obligation_receipt_offset = reader.offset();
         let receipt =
-            InertFormalMemoryReceiptFormatV3::decode_current(reader.take(receipt_len)?.to_vec())
+            InertFormalMemoryReceiptFormatV4::decode_current(reader.take(receipt_len)?.to_vec())
                 .map_err(ProductionFormalMemoryEvidenceErrorV4::FormalReceipt)?;
         reader.finish()?;
         receipt
@@ -393,7 +403,7 @@ fn encode(
     completeness_status: FormalMemoryCompletenessStatusV4,
     static_conflict_count: u32,
     inter_invocation_conflict_count: u32,
-    receipt: &InertFormalMemoryReceiptFormatV3,
+    receipt: &InertFormalMemoryReceiptFormatV4,
 ) -> Result<Vec<u8>, ProductionFormalMemoryEvidenceErrorV4> {
     if canonical_kernel_ir.digest() == &[0; 32]
         || canonical_kernel_ir.canonical_length() == 0
@@ -455,24 +465,30 @@ fn encode(
 
 fn validate_receipt_witness(
     validation_policy: FormalMemoryAdmissionValidationPolicyV4,
-    metadata: FormalMemoryReceiptMetadataV3,
+    metadata: FormalMemoryReceiptMetadataV4,
     witness_invocation_count: u64,
 ) -> Result<(), ProductionFormalMemoryEvidenceErrorV4> {
     let expected = match validation_policy {
         FormalMemoryAdmissionValidationPolicyV4::LegacyV1 => {
-            FormalMemoryReceiptEncodingV3::LegacyV1
+            FormalMemoryReceiptEncodingV4::LegacyV1
         }
         FormalMemoryAdmissionValidationPolicyV4::GuardedV2 => {
-            FormalMemoryReceiptEncodingV3::GuardedV3
+            FormalMemoryReceiptEncodingV4::GuardedV3
+        }
+        FormalMemoryAdmissionValidationPolicyV4::RuntimeBoundedV3 => {
+            FormalMemoryReceiptEncodingV4::RuntimeBoundedV4
         }
     };
     if metadata.encoding() != expected {
         return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
     }
-    if validation_policy == FormalMemoryAdmissionValidationPolicyV4::GuardedV2
-        && (metadata.index_width() != FormalIndexWidth::Bits64
-            || metadata.analysis_basis()
-                != FormalMemoryAnalysisBasis::CompilerDerivedIrWithUnauthenticatedLaunchInputs)
+    if matches!(
+        validation_policy,
+        FormalMemoryAdmissionValidationPolicyV4::GuardedV2
+            | FormalMemoryAdmissionValidationPolicyV4::RuntimeBoundedV3
+    ) && (metadata.index_width() != FormalIndexWidth::Bits64
+        || metadata.analysis_basis()
+            != FormalMemoryAnalysisBasis::CompilerDerivedIrWithUnauthenticatedLaunchInputs)
     {
         return Err(ProductionFormalMemoryEvidenceErrorV4::InvalidAdmission);
     }
@@ -602,7 +618,7 @@ mod guarded_policy_tests {
         width: FormalIndexWidth,
     ) -> (
         ProductionCanonicalKernelIrIdentityV1,
-        InertFormalMemoryReceiptFormatV3,
+        InertFormalMemoryReceiptFormatV4,
     ) {
         let mut block = BasicBlock::new(BlockId(0));
         block.terminator = Some(Terminator::Return { values: vec![] });
@@ -645,7 +661,7 @@ mod guarded_policy_tests {
             assert!(report.is_complete());
         }
         let receipt =
-            InertFormalMemoryReceiptFormatV3::from_current_obligations(report.obligations())
+            InertFormalMemoryReceiptFormatV4::from_current_obligations(report.obligations())
                 .unwrap();
         let identity = if access == AccessMode::WriteOnly {
             let canonical = VerifiedCanonicalKernelIrV9::from_module(module).unwrap();
@@ -714,11 +730,12 @@ mod guarded_policy_tests {
         let (_, write_only) = fixed_receipt(AccessMode::WriteOnly, FormalIndexWidth::Bits64);
         assert_eq!(
             write_only.metadata().encoding(),
-            FormalMemoryReceiptEncodingV3::LegacyV2
+            FormalMemoryReceiptEncodingV4::LegacyV2
         );
         for policy in [
             FormalMemoryAdmissionValidationPolicyV4::LegacyV1,
             FormalMemoryAdmissionValidationPolicyV4::GuardedV2,
+            FormalMemoryAdmissionValidationPolicyV4::RuntimeBoundedV3,
         ] {
             assert!(matches!(
                 validate_receipt_witness(policy, write_only.metadata(), 64),
@@ -727,3 +744,7 @@ mod guarded_policy_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "production_formal_memory_runtime_read_v1_tests.rs"]
+mod runtime_read_tests;

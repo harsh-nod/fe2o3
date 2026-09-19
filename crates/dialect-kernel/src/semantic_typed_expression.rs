@@ -178,10 +178,7 @@ impl SemanticTypedExpressionV1 {
                     SemanticTypedBinaryKindAttr::ShiftLeft
                         | SemanticTypedBinaryKindAttr::ShiftRight
                 ) {
-                    let Some(shift) = constant_bits(rhs) else {
-                        return Err(SemanticTypedExpressionErrorV1::IncompleteDomain);
-                    };
-                    if shift >= u64::from(scalar.bits()) {
+                    if !shift_count_is_defined(rhs, *scalar) {
                         return Err(SemanticTypedExpressionErrorV1::IncompleteDomain);
                     }
                 }
@@ -432,6 +429,34 @@ fn constant_bits(expression: &SemanticTypedExpressionV1) -> Option<u64> {
         _ => None,
     }
 }
+
+fn shift_count_is_defined(
+    count: &SemanticTypedExpressionV1,
+    shifted: SemanticTypedScalarV1,
+) -> bool {
+    if let Some(bits) = constant_bits(count) {
+        return bits < u64::from(shifted.bits());
+    }
+    let SemanticTypedExpressionV1::Binary {
+        operation: SemanticTypedBinaryKindAttr::BitAnd,
+        scalar,
+        overflow: SemanticOverflowAttr::Wrapping,
+        lhs,
+        rhs,
+    } = count
+    else {
+        return false;
+    };
+    shifted.is_integer()
+        && scalar.is_integer()
+        && lhs.scalar() == *scalar
+        && rhs.scalar() == *scalar
+        && constant_bits(rhs) == Some(u64::from(shifted.bits()) - 1)
+}
+
+#[cfg(test)]
+#[path = "masked_shift_domains_v1_tests.rs"]
+mod masked_shift_domains;
 
 fn signed_value(bits: u64, width: u16) -> i128 {
     let value = i128::from(bits);

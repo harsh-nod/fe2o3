@@ -248,6 +248,97 @@ fn check_rederived_aggregate(
     Ok(())
 }
 
+pub(super) struct RecompiledNativeRankedRootsV1<'a> {
+    pub(super) candidates: Vec<NativeRankedSourceCandidateV1<'a>>,
+    pub(super) lowerings: Vec<ProductionRankedKernelLoweringInputV1>,
+    pub(super) candidate_storage: usize,
+    pub(super) lowering_vector_storage: usize,
+    pub(super) lowering_storage: usize,
+}
+
+pub(super) fn recompile_native_ranked_roots_v1<'a>(
+    source: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    middle: &Roster,
+    roots: &[CheckedRoot],
+    inputs: &[NativeCompilerRankedRootV1<'a>],
+    budget: &mut Budget<'_>,
+) -> Result<RecompiledNativeRankedRootsV1<'a>, E> {
+    let (mut candidates, candidate_storage) = reserve_vec(inputs.len(), budget)?;
+    let (mut lowerings, lowering_vector_storage) = reserve_vec(inputs.len(), budget)?;
+    let mut lowering_storage = 0usize;
+    for (ordinal, input) in inputs.iter().enumerate() {
+        let row = middle
+            .root(ordinal)
+            .ok_or(E::Mismatch("typed ranked root row"))?;
+        let root = &roots[ordinal];
+        budget.charge_work(3)?;
+        if input.candidate.semantic_root() != row.semantic_root()
+            || input.candidate.launch_rank() != row.source_rank()
+        {
+            return Err(E::Mismatch("ordered typed ranked root/rank"));
+        }
+        // Exact transport equality bounds the subsequent V5 allocation;
+        // diagnostic text is never parsed or accepted as a semantic proof.
+        budget.charge_work(1)?;
+        let diagnostic = input.candidate.ranked_ir();
+        if diagnostic.len() != root.middle.ranked_ir().len() {
+            return Err(E::Mismatch("exact typed ranked diagnostic text"));
+        }
+        budget.charge_work(diagnostic.len())?;
+        if diagnostic != root.middle.ranked_ir() {
+            return Err(E::Mismatch("exact typed ranked diagnostic text"));
+        }
+        let lowering = recompile_root(
+            *input,
+            &root.staging,
+            root.signed.imported_proof().toolchain(),
+            budget,
+        )?;
+        let retained = lowering.production_analysis_retained_storage_upper_bound_v1();
+        budget.reserve_storage(retained)?;
+        lowering_storage = lowering_storage
+            .checked_add(retained)
+            .ok_or(Resource::Arithmetic)?;
+        let evidence_storage = row
+            .payload()
+            .len()
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(std::mem::size_of::<ProductionMiddleEndEvidenceV5>()))
+            .ok_or(Resource::Arithmetic)?;
+        budget.reserve_storage(evidence_storage)?;
+        budget.charge_work(
+            input
+                .candidate
+                .ranked_ir()
+                .len()
+                .checked_add(row.payload().len())
+                .ok_or(Resource::Arithmetic)?,
+        )?;
+        let evidence = ProductionMiddleEndEvidenceV5::try_new(
+            source.semantic_ssa().source_owner(),
+            &lowering,
+            input.candidate.ranked_ir(),
+        )
+        .map_err(E::Middle)?;
+        budget.charge_work(evidence.as_inert().canonical_bytes().len())?;
+        if evidence.as_inert().canonical_bytes() != row.payload() {
+            return Err(E::Mismatch("fresh typed ranked V5 evidence"));
+        }
+        check_rederived_aggregate(&lowering, &evidence, &root.signed)?;
+        drop(evidence);
+        budget.release_storage(evidence_storage)?;
+        candidates.push(input.candidate);
+        lowerings.push(lowering);
+    }
+    Ok(RecompiledNativeRankedRootsV1 {
+        candidates,
+        lowerings,
+        candidate_storage,
+        lowering_vector_storage,
+        lowering_storage,
+    })
+}
+
 /// Reconstructs source/N, imports every effect signature against its exact typed
 /// request, invokes the real staged ranked compiler, rebuilds exact V5 evidence
 /// and aggregate proof inputs, then consumes the fresh lowerings into the source
@@ -283,75 +374,19 @@ pub fn validate_native_compiler_ranked_source_proof_v1(
         }
         let wrapper = std::mem::size_of::<ValidatedNativeCompilerRankedSourceProofV1>();
         budget.reserve_storage(wrapper)?;
-        let (mut candidates, candidate_storage) = reserve_vec(inputs.ranked_roots.len(), budget)?;
-        let (mut lowerings, lowering_vector_storage) =
-            reserve_vec(inputs.ranked_roots.len(), budget)?;
-        let mut lowering_storage = 0usize;
-        for (ordinal, input) in inputs.ranked_roots.iter().enumerate() {
-            let row = checked
-                .middle
-                .root(ordinal)
-                .ok_or(E::Mismatch("typed ranked root row"))?;
-            let root = &checked.roots[ordinal];
-            budget.charge_work(3)?;
-            if input.candidate.semantic_root() != row.semantic_root()
-                || input.candidate.launch_rank() != row.source_rank()
-            {
-                return Err(E::Mismatch("ordered typed ranked root/rank"));
-            }
-            // Exact transport equality bounds the subsequent V5 allocation;
-            // diagnostic text is never parsed or accepted as a semantic proof.
-            budget.charge_work(1)?;
-            let diagnostic = input.candidate.ranked_ir();
-            if diagnostic.len() != root.middle.ranked_ir().len() {
-                return Err(E::Mismatch("exact typed ranked diagnostic text"));
-            }
-            budget.charge_work(diagnostic.len())?;
-            if diagnostic != root.middle.ranked_ir() {
-                return Err(E::Mismatch("exact typed ranked diagnostic text"));
-            }
-            let lowering = recompile_root(
-                *input,
-                &root.staging,
-                root.signed.imported_proof().toolchain(),
-                budget,
-            )?;
-            let retained = lowering.production_analysis_retained_storage_upper_bound_v1();
-            budget.reserve_storage(retained)?;
-            lowering_storage = lowering_storage
-                .checked_add(retained)
-                .ok_or(Resource::Arithmetic)?;
-            let evidence_storage = row
-                .payload()
-                .len()
-                .checked_mul(2)
-                .and_then(|n| n.checked_add(std::mem::size_of::<ProductionMiddleEndEvidenceV5>()))
-                .ok_or(Resource::Arithmetic)?;
-            budget.reserve_storage(evidence_storage)?;
-            budget.charge_work(
-                input
-                    .candidate
-                    .ranked_ir()
-                    .len()
-                    .checked_add(row.payload().len())
-                    .ok_or(Resource::Arithmetic)?,
-            )?;
-            let evidence = ProductionMiddleEndEvidenceV5::try_new(
-                checked.source.source().semantic_ssa().source_owner(),
-                &lowering,
-                input.candidate.ranked_ir(),
-            )
-            .map_err(E::Middle)?;
-            budget.charge_work(evidence.as_inert().canonical_bytes().len())?;
-            if evidence.as_inert().canonical_bytes() != row.payload() {
-                return Err(E::Mismatch("fresh typed ranked V5 evidence"));
-            }
-            check_rederived_aggregate(&lowering, &evidence, &root.signed)?;
-            drop(evidence);
-            budget.release_storage(evidence_storage)?;
-            candidates.push(input.candidate);
-            lowerings.push(lowering);
-        }
+        let RecompiledNativeRankedRootsV1 {
+            candidates,
+            lowerings,
+            candidate_storage,
+            lowering_vector_storage,
+            lowering_storage,
+        } = recompile_native_ranked_roots_v1(
+            checked.source.source(),
+            &checked.middle,
+            &checked.roots,
+            inputs.ranked_roots,
+            budget,
+        )?;
         let ValidatedNativeCompilerSourceProofV1 {
             source,
             middle,

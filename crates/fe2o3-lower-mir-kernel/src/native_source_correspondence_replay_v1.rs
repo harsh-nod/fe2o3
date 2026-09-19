@@ -23,6 +23,8 @@ use fe2o3_pliron::{
     ProductionSemanticSsaLimitsV1, ProductionSemanticSsaOwnerV1,
 };
 
+include!("native_erased_source_staging_v1.rs");
+
 /// Failure of normal source replay or an exact retained ranked-subject join.
 #[derive(Debug)]
 pub enum NativeSourceReplayErrorV1 {
@@ -398,7 +400,7 @@ pub fn attach_replayed_native_source_ranked_v1(
         let receipt = super::ProductionMaterializedRankedModuleReceiptV1::from_unvalidated_projection_roster_candidate(source, roots)
             .map_err(NativeSourceReplayErrorV1::RankedSource)?;
         let source =
-            super::ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(receipt)
+            super::ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks_with_budget_v1(receipt, budget)
                 .map_err(NativeSourceReplayErrorV1::RankedSource)?;
         // The existing attachment creates these strings. Their exact retained
         // capacities, not just the requested payload, transfer with this owner.
@@ -412,7 +414,7 @@ pub fn attach_replayed_native_source_ranked_v1(
             retained = retained.checked_add(surplus).ok_or(Resource::Arithmetic)?;
         }
         source
-            .verify_equivalence()
+            .verify_equivalence_with_budget_v1(budget)
             .map_err(NativeSourceReplayErrorV1::RankedSource)?;
         Ok((
             ReplayedRankedNativeSourceV1 { source, catalog },
@@ -565,49 +567,7 @@ pub fn native_source_ranked_staging_commitments_v1(
         let receipts = retained
             .lowering
             .retained_policy_checked_refinement_staging();
-        budget.charge_work(3)?;
-        let header = std::mem::size_of::<Vec<NativeRankedStagingCommitmentV1>>();
-        let requested = receipts
-            .len()
-            .checked_mul(std::mem::size_of::<NativeRankedStagingCommitmentV1>())
-            .ok_or(Resource::Arithmetic)?;
-        budget.reserve_storage(header.checked_add(requested).ok_or(Resource::Arithmetic)?)?;
-        let mut rows = Vec::new();
-        rows.try_reserve_exact(receipts.len())
-            .map_err(|_| Resource::Allocation)?;
-        let capacity = rows
-            .capacity()
-            .checked_mul(std::mem::size_of::<NativeRankedStagingCommitmentV1>())
-            .ok_or(Resource::Arithmetic)?;
-        budget.reserve_storage(
-            capacity
-                .checked_sub(requested)
-                .ok_or(Resource::Accounting)?,
-        )?;
-        for receipt in receipts {
-            budget.charge_work(289)?;
-            let toolchain = receipt.toolchain();
-            rows.push(NativeRankedStagingCommitmentV1 {
-                digests: [
-                    *receipt.receipt_identity().digest().as_bytes(),
-                    *receipt
-                        .binding()
-                        .normalized_obligation_effect_ir_hash()
-                        .as_bytes(),
-                    *receipt.signer_identity().as_bytes(),
-                    *receipt.execution_identity().as_bytes(),
-                    *toolchain.verus_executable().as_bytes(),
-                    *toolchain.verus_configuration().as_bytes(),
-                    *toolchain.solver_executable().as_bytes(),
-                    *toolchain.solver_configuration().as_bytes(),
-                    *toolchain.runtime_closure().as_bytes(),
-                ],
-            });
-        }
-        Ok((
-            rows,
-            NativeRankedStagingStorageV1(header.checked_add(capacity).ok_or(Resource::Arithmetic)?),
-        ))
+        copy_native_ranked_staging_commitments_v1(receipts, budget)
     }));
     if token != budget.work_ledger_identity_v1() || slot != budget as *const Budget<'_> as usize {
         drop(result);
@@ -695,12 +655,52 @@ pub fn replay_native_source_correspondence_v1(
     launch_inputs: &[ProductionSourceLaunchRootInputV1<'_>],
     budget: &mut Budget<'_>,
 ) -> Result<(ReplayedNativeSourceV1, NativeSourceReplayStorageV1), NativeSourceReplayErrorV1> {
+    let (parts, storage) = replay_native_source_parts_v1(
+        semantic_bytes,
+        native_n_bytes,
+        catalog_bytes,
+        launch_inputs,
+        NativeSourceReplayRouteV1::RawEmpty,
+        std::mem::size_of::<ReplayedNativeSourceV1>(),
+        budget,
+    )?;
+    Ok((
+        ReplayedNativeSourceV1 {
+            source: parts.source,
+            catalog: parts.catalog,
+            retained_storage: storage.retained_storage(),
+        },
+        storage,
+    ))
+}
+
+#[derive(Clone, Copy)]
+enum NativeSourceReplayRouteV1 {
+    RawEmpty,
+    UnitLocal,
+}
+
+struct ReplayedNativeSourcePartsV1 {
+    source: ProductionPreRankedKirOwnerV1,
+    catalog: Catalog,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn replay_native_source_parts_v1(
+    semantic_bytes: &[u8],
+    native_n_bytes: &[u8],
+    catalog_bytes: &[u8],
+    launch_inputs: &[ProductionSourceLaunchRootInputV1<'_>],
+    route: NativeSourceReplayRouteV1,
+    wrapper_bytes: usize,
+    budget: &mut Budget<'_>,
+) -> Result<(ReplayedNativeSourcePartsV1, NativeSourceReplayStorageV1), NativeSourceReplayErrorV1> {
     budget.charge_work(4)?;
     let floor = budget.storage();
     let token = budget.work_ledger_identity_v1();
     let slot = budget as *const Budget<'_> as usize;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let wrapper = std::mem::size_of::<ReplayedNativeSourceV1>()
+        let wrapper = wrapper_bytes
             .checked_add(semantic_bytes.len())
             .ok_or(Resource::Arithmetic)?;
         budget.reserve_storage(wrapper)?;
@@ -728,10 +728,19 @@ pub fn replay_native_source_correspondence_v1(
             budget,
         )
         .map_err(NativeSourceReplayErrorV1::Materialize)?;
-        let source_storage = source.retained_analysis_storage_v1();
+        let source_storage = match route {
+            NativeSourceReplayRouteV1::RawEmpty => source.retained_analysis_storage_v1(),
+            NativeSourceReplayRouteV1::UnitLocal => source
+                .unit_local_source_storage_floor_v1()
+                .map_err(NativeSourceReplayErrorV1::RankedSource)?,
+        };
         budget.reserve_storage(source_storage)?;
         budget.charge_work(1)?;
-        if source.helper_source_policy_v1() != ProductionHelperSourcePolicyV1::RawEmpty {
+        let expected = match route {
+            NativeSourceReplayRouteV1::RawEmpty => ProductionHelperSourcePolicyV1::RawEmpty,
+            NativeSourceReplayRouteV1::UnitLocal => ProductionHelperSourcePolicyV1::UnitLocal,
+        };
+        if source.helper_source_policy_v1() != expected {
             return Err(NativeSourceReplayErrorV1::Mismatch(
                 "local helper source policy",
             ));
@@ -776,11 +785,7 @@ pub fn replay_native_source_correspondence_v1(
             .and_then(|n| n.checked_add(catalog_storage.retained_storage()))
             .ok_or(Resource::Arithmetic)?;
         Ok((
-            ReplayedNativeSourceV1 {
-                source,
-                catalog,
-                retained_storage: retained,
-            },
+            ReplayedNativeSourcePartsV1 { source, catalog },
             NativeSourceReplayStorageV1(retained),
         ))
     }));
@@ -801,3 +806,7 @@ pub fn replay_native_source_correspondence_v1(
         Err(payload) => std::panic::resume_unwind(payload),
     }
 }
+
+#[path = "native_unit_local_source_replay_v1.rs"]
+mod unit_local;
+pub use unit_local::*;

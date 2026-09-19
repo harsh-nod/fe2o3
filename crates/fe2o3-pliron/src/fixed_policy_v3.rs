@@ -34,6 +34,7 @@ pub(crate) const POLICY3_SESSION_WORK_CAP: usize = 25_268_224;
 pub(crate) enum FixedPolicy {
     Historical2,
     Checked3,
+    Integer6,
 }
 
 impl FixedPolicy {
@@ -41,6 +42,7 @@ impl FixedPolicy {
         match self {
             Self::Historical2 => &KIR_PLIRON_PRODUCTION_PASSES_V12,
             Self::Checked3 => &POLICY3_PASSES,
+            Self::Integer6 => &crate::fixed_integer_continuation_v1::INTEGER_CONTINUATION_PASSES,
         }
     }
 
@@ -48,6 +50,7 @@ impl FixedPolicy {
         match self {
             Self::Historical2 => b"FE2O3/KIR-OPTIMIZATION-MAP/V12/POLICY-2/OBSERVED-V1\0",
             Self::Checked3 => b"FE2O3/KIR-OPTIMIZATION-MAP/V12/POLICY-3/OBSERVED-V1\0",
+            Self::Integer6 => b"FE2O3/KIR-OPTIMIZATION-MAP/V12/POLICY-6/INTEGER-CONTINUATION-V1\0",
         }
     }
 }
@@ -85,6 +88,18 @@ impl<'budget, 'work> CseLedger<'budget, 'work> {
 
     pub(crate) fn failure(&self) -> Option<Resource> {
         self.first_failure
+    }
+
+    pub(crate) fn record_integer_error(
+        &mut self,
+        error: dialect_gpu::integer_identity_v1::IntegerIdentityErrorV1<Resource>,
+    ) -> Resource {
+        use dialect_gpu::integer_identity_v1::IntegerIdentityErrorV1 as E;
+        self.remember(match error {
+            E::Budget(error) => error,
+            E::Overflow => Resource::Arithmetic,
+            E::Allocation => Resource::Allocation,
+        })
     }
 
     pub(crate) fn finish(&mut self) -> Result<usize, Resource> {
@@ -447,7 +462,7 @@ impl Policy3ExecutionWitnessV1 {
     }
 }
 
-fn pass_tag(pass: PassKind) -> u8 {
+pub(crate) fn pass_tag(pass: PassKind) -> u8 {
     match pass {
         PassKind::DeadCodeElimination => 1,
         PassKind::SparseConditionalConstantPropagation => 2,
@@ -455,6 +470,7 @@ fn pass_tag(pass: PassKind) -> u8 {
         PassKind::LocalPureCommonSubexpressionElimination => 4,
         PassKind::SimplifyControlFlow => 5,
         PassKind::DominancePureCommonSubexpressionElimination => 6,
+        PassKind::IntegerNeutralCanonicalization => 7,
     }
 }
 

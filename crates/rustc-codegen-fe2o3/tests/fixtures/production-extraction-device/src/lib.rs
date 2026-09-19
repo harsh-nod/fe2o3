@@ -1,7 +1,21 @@
 #![no_std]
 
+#[cfg(feature = "integer-identity")]
+mod integer_identity;
+
+#[cfg(feature = "wave64-capture")]
+mod wave64_capture;
+
+#[cfg(feature = "scalar-borrow-policy5")]
+mod scalar_borrow_policy5;
+
+#[cfg(feature = "defined-helper-reference")]
+mod defined_helper_reference;
+
 #[cfg(feature = "atomic-rmw")]
 use fe2o3_device::DeviceGlobalMutPtr;
+#[cfg(feature = "wrapped-fill")]
+use fe2o3_device::KernelResult;
 #[cfg(any(feature = "write-only-output", feature = "write-only-disjoint-output"))]
 use fe2o3_device::WriteOnlyDisjointSlice;
 #[cfg(feature = "atomic-rmw")]
@@ -9,6 +23,25 @@ use fe2o3_device::atomic::Ordering;
 #[cfg(feature = "volatile-load-f32")]
 use fe2o3_device::memory;
 use fe2o3_device::{DisjointSlice, kernel, thread};
+
+#[cfg(any(
+    feature = "f32-negate",
+    feature = "f32-divide",
+    feature = "f32-helper-negate",
+    feature = "f32-helper-divide",
+))]
+mod f32_arithmetic;
+#[cfg(any(feature = "f32-exp", feature = "f32-helper-exp"))]
+mod f32_exp;
+
+#[cfg(feature = "constant-shift")]
+mod constant_shift;
+#[cfg(feature = "masked-shift")]
+mod masked_shift;
+#[cfg(feature = "numeric-cast")]
+mod numeric_cast;
+#[cfg(feature = "saturating-integer")]
+mod saturating_integer;
 
 #[cfg(any(
     feature = "reference-write-only-positive",
@@ -50,9 +83,25 @@ mod ordered_region_v31;
 mod ordered_program_v32;
 
 #[cfg(not(any(
+    feature = "integer-identity",
+    feature = "wave64-capture",
+    feature = "constant-shift",
+    feature = "masked-shift",
+    feature = "scalar-borrow-policy5",
+    feature = "defined-helper-reference",
+    feature = "f32-exp",
+    feature = "f32-helper-exp",
+    feature = "saturating-integer",
+    feature = "numeric-cast",
     feature = "atomic-rmw",
     feature = "multi-root-ownership",
     feature = "multi-root-target-lineage",
+    feature = "wrapped-fill",
+    feature = "private-unit-helper",
+    feature = "f32-negate",
+    feature = "f32-divide",
+    feature = "f32-helper-negate",
+    feature = "f32-helper-divide",
     feature = "three-root-ownership",
     feature = "write-only-output",
     feature = "write-only-disjoint-output",
@@ -113,6 +162,34 @@ pub fn fill(mut output: DisjointSlice<u32>) {
     let index = thread::index_1d();
     if let Some(element) = output.get_mut(index) {
         *element = 17;
+    }
+}
+
+#[cfg(feature = "wrapped-fill")]
+#[kernel(typed)]
+pub fn wrapped_fill(mut output: DisjointSlice<f32>) -> KernelResult {
+    let index = thread::index_1d();
+    if let Some(element) = output.get_mut(index) {
+        *element = 42.5;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "private-unit-helper")]
+#[inline(never)]
+fn private_unit_helper() {
+    let index = 0_usize;
+    let mut values = [7_u32, 11_u32];
+    values[index] = 13;
+    let _observed = values[index];
+}
+
+#[cfg(feature = "private-unit-helper")]
+#[kernel(typed)]
+pub fn private_helper_fill(mut output: DisjointSlice<f32>) {
+    private_unit_helper();
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = 42.5;
     }
 }
 

@@ -5,12 +5,16 @@ use std::fmt;
 use crate::trusted_device_items::TrustedDeviceItem;
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAtomicAccessV1, SemanticAtomicOrderingV1, SemanticAtomicRmwOpV1, SemanticAtomicScopeV1,
+    SemanticSaturatingIntegerOpV1,
 };
 use rustc_abi::ExternAbi;
 use rustc_hir::{Mutability, Safety};
 use rustc_middle::ty::{
     self, ConstKind, FloatTy, Instance, InstanceKind, IntTy, Ty, TyCtxt, TyKind, UintTy,
 };
+
+#[path = "production_rustc_saturating_integer_v1.rs"]
+pub(crate) mod saturating_integer;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AtomicRmwIntrinsicShapeV1 {
@@ -31,6 +35,7 @@ pub(crate) enum ProductionRustcIntrinsicOperationV1 {
         access: SemanticAtomicAccessV1,
     },
     FabsF32,
+    SaturatingInteger(SemanticSaturatingIntegerOpV1),
 }
 
 impl ProductionRustcIntrinsicOperationV1 {
@@ -38,6 +43,8 @@ impl ProductionRustcIntrinsicOperationV1 {
         match self {
             Self::AtomicRmw { .. } => 0,
             Self::FabsF32 => 1,
+            Self::SaturatingInteger(SemanticSaturatingIntegerOpV1::Add) => 2,
+            Self::SaturatingInteger(SemanticSaturatingIntegerOpV1::Subtract) => 3,
         }
     }
 
@@ -46,7 +53,7 @@ impl ProductionRustcIntrinsicOperationV1 {
     ) -> Option<(SemanticAtomicRmwOpV1, SemanticAtomicAccessV1)> {
         match self {
             Self::AtomicRmw { operation, access } => Some((operation, access)),
-            Self::FabsF32 => None,
+            Self::FabsF32 | Self::SaturatingInteger(_) => None,
         }
     }
 }
@@ -74,6 +81,7 @@ pub(crate) enum ProductionRustcIntrinsicErrorV1 {
     FabsResultType,
     OrderingArgument,
     UnsupportedOrdering,
+    Saturating(saturating_integer::SaturatingIntrinsicErrorV1),
 }
 
 impl fmt::Display for ProductionRustcIntrinsicErrorV1 {
@@ -96,6 +104,7 @@ impl fmt::Display for ProductionRustcIntrinsicErrorV1 {
             Self::FabsResultType => "fabs intrinsic whose result is not its f32 type argument",
             Self::OrderingArgument => "atomic intrinsic without a concrete ordering argument",
             Self::UnsupportedOrdering => "atomic intrinsic with an unsupported ordering value",
+            Self::Saturating(error) => return fmt::Display::fmt(error, formatter),
         })
     }
 }
@@ -141,6 +150,11 @@ pub(crate) fn classify<'tcx>(
             operation: ProductionRustcIntrinsicOperationV1::FabsF32,
             element_type,
         }));
+    }
+    if let Some(operation) = saturating_integer::operation_v1(intrinsic.name.as_str()) {
+        return saturating_integer::classify_v1(tcx, instance, operation)
+            .map(Some)
+            .map_err(ProductionRustcIntrinsicErrorV1::Saturating);
     }
     let rule = atomic_rmw_intrinsic_rule_v1(intrinsic.name.as_str())
         .ok_or(ProductionRustcIntrinsicErrorV1::UnsupportedIntrinsic)?;

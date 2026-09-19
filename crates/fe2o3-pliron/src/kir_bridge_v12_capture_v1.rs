@@ -100,7 +100,8 @@ impl<'input> KirPlironGraphV12<'input> {
                     work,
                 );
             }
-            crate::fixed_policy_v3::FixedPolicy::Checked3 => {
+            crate::fixed_policy_v3::FixedPolicy::Checked3
+            | crate::fixed_policy_v3::FixedPolicy::Integer6 => {
                 crate::kir_occurrence_capture_v1::Capture::new_for_policy
             }
         };

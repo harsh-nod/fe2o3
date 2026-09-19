@@ -4,8 +4,22 @@ use fe2o3_kernel_ir::{CanonicalKirOperationCoordinateV1, CanonicalKirOperationOr
 
 #[path = "production_checked_output_general_census_policy3_v1.rs"]
 mod census;
+#[path = "production_checked_output_constant_shifts_v1.rs"]
+mod constant_shifts;
+#[path = "production_checked_output_exp_v1.rs"]
+mod exp;
+#[path = "production_checked_output_masked_shifts_v1.rs"]
+mod masked_shifts;
+#[path = "production_checked_output_numeric_casts_v1.rs"]
+mod numeric_casts;
 #[path = "production_checked_output_private_memory_policy3_v1.rs"]
 mod private_memory;
+#[path = "production_checked_output_redundant_store_v1.rs"]
+pub(super) mod redundant_store;
+#[path = "production_checked_output_scalar_helpers_v1.rs"]
+mod scalar_helpers;
+#[path = "production_checked_output_source_roles_v1.rs"]
+mod source_roles;
 #[path = "production_checked_output_unsigned_division_v1.rs"]
 mod unsigned_division;
 
@@ -15,6 +29,10 @@ mod arithmetic_census_tests;
 
 type E = ProductionCheckedOutputAdmissionErrorPolicy3V1;
 type R<T> = Result<T, E>;
+
+include!("production_checked_output_general_source_context_v1.rs");
+include!("production_checked_output_erased_general_v1.rs");
+include!("production_checked_output_integer_continuation_v1.rs");
 
 fn inventory_error(error: fe2o3_kernel_analysis::CanonicalKirInventoryErrorV1) -> E {
     E::SourceOutput(ProductionSourceOutputErrorV1::Inventory(error))
@@ -40,6 +58,20 @@ pub(super) fn check_general_output_v1(
     checked: &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<Box<[FormalMemoryObligations]>> {
+    check_general_context_v1(
+        GeneralSourceContextV1::Direct(source),
+        bound,
+        checked,
+        budget,
+    )
+}
+
+fn check_general_context_v1(
+    source: GeneralSourceContextV1<'_>,
+    bound: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    checked: &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<Box<[FormalMemoryObligations]>> {
     charge(budget, 3)?;
     let floor = budget.storage();
     let ledger = budget.work_ledger_identity_v1();
@@ -59,34 +91,16 @@ pub(super) fn check_general_output_v1(
 }
 
 fn check_inner(
-    source: &ProductionSemanticKirOwnerV1,
+    source: GeneralSourceContextV1<'_>,
     bound: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
     checked: &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<Box<[FormalMemoryObligations]>> {
-    source.verify_equivalence().map_err(E::Source)?;
-    census::source(source.semantic().semantic(), budget)?;
+    source.replay_and_census(budget)?;
     charge(budget, 3)?;
-    let original = source
-        .pre_ranked_executable()
-        .ok_or_else(|| refused("N", "consumed connected source custody"))?;
-    let origins = source
-        .pre_ranked_assert_origins()
-        .ok_or_else(|| refused("N", "sealed assertion custody"))?;
-    if source.generic_checks.is_empty()
-        || source.generic_checks.len() != original.module().kernels.len()
-    {
-        return Err(refused("ranked", "complete nonempty root roster"));
-    }
-    for root in &source.generic_checks {
-        charge(budget, 1)?;
-        if !root.lowering.all_mandatory_reports_are_clean() {
-            return Err(refused("ranked", "mandatory source/ranked reports"));
-        }
-        census::ranked(&root.lowering, budget)?;
-        // verify_equivalence above replays every exact ranked operation, effect,
-        // access and terminator against this root's authenticated source/N.
-    }
+    let original = source.neutral()?;
+    let origins = source.origins()?;
+    source.ranked(budget)?;
     let (coordinates, storage) =
         fe2o3_kernel_analysis::check_canonical_kir_coordinate_preservation_v1(
             original, bound, budget,
@@ -124,6 +138,21 @@ fn check_inner(
     budget
         .reserve_storage(storage.retained_storage())
         .map_err(E::Resource)?;
+    let source = match source {
+        GeneralSourceContextV1::Direct(source) => source,
+        GeneralSourceContextV1::Erased(source) => {
+            return check_erased_source_outputs_v1(
+                source,
+                &coordinates,
+                checked,
+                &transition,
+                &control,
+                &input,
+                &output,
+                budget,
+            );
+        }
+    };
     let (_assertions, storage) =
         source_output_assertion_transport_v1(origins, &coordinates, &control, budget)
             .map_err(|error| E::SourceOutput(ProductionSourceOutputErrorV1::Assertion(error)))?;
@@ -193,22 +222,47 @@ fn check_inner(
     }
     let private_input = private_memory::check(&input, source.limits.max_operations, budget)?;
     private_memory::source_lifetimes(source, &private_input, budget)?;
-    let private_output = private_memory::check(&output, source.limits.max_operations, budget)?;
-    let target = source.semantic().semantic().target();
-    let input_division = unsigned_division::check(&input, target, budget)?;
-    let output_division = unsigned_division::check(&output, target, budget)?;
-    census::native(
+    check_native_outputs_v1(
+        GeneralSourceContextV1::Direct(source),
         &input,
+        &output,
+        checked,
         &private_input,
+        &traps,
+        budget,
+    )
+}
+
+fn check_native_outputs_v1(
+    source: GeneralSourceContextV1<'_>,
+    input: &CanonicalKirInventoryV1<'_>,
+    output: &CanonicalKirInventoryV1<'_>,
+    checked: &fe2o3_pliron::CheckedNeutralKernelIrOwnerPolicy3V1,
+    private_input: &private_memory::PrivateMemory<'_, '_>,
+    traps: &[u8],
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<Box<[FormalMemoryObligations]>> {
+    let candidate = checked.occurrences().candidate();
+    let private_output = private_memory::check(output, source.limits().max_operations, budget)?;
+    let target = source.semantic().target();
+    let input_division = unsigned_division::check(input, target, budget)?;
+    let output_division = unsigned_division::check(output, target, budget)?;
+    let input_helpers = scalar_helpers::check(input, budget)?;
+    let output_helpers = scalar_helpers::check(output, budget)?;
+    census::native(
+        input,
+        private_input,
         &input_division,
+        &input_helpers,
         "B",
         |ordinal, _| Ok(traps[ordinal] == 1),
         budget,
     )?;
     census::native(
-        &output,
+        output,
         &private_output,
         &output_division,
+        &output_helpers,
         "O",
         |ordinal, coordinate| {
             let row = candidate
@@ -220,17 +274,19 @@ fn check_inner(
             }
             match row.origin {
                 CanonicalKirOperationOriginV1::Retained(origin) => {
-                    Ok(traps[operation_ordinal(&input, origin)?] == 1)
+                    Ok(traps[operation_ordinal(input, origin)?] == 1)
                 }
                 CanonicalKirOperationOriginV1::ConstantFrom(_) => Ok(false),
             }
         },
         budget,
     )?;
-    let kernels =
-        derive_checked_output_guarded_obligations_v1(checked.owner(), source.limits.max_operations)
-            .map_err(E::Formal)?;
-    census::formal(&output, &private_output, &kernels, budget)?;
+    let kernels = derive_checked_output_guarded_obligations_v1(
+        checked.owner(),
+        source.limits().max_operations,
+    )
+    .map_err(E::Formal)?;
+    census::formal(output, &private_output, &kernels, budget)?;
     Ok(kernels)
 }
 
@@ -271,6 +327,20 @@ pub(crate) fn check_forwarded_output_v1(
     output: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<Box<[FormalMemoryObligations]>> {
+    check_forwarded_context_v1(
+        GeneralSourceContextV1::Direct(source),
+        qualified_intermediate,
+        output,
+        budget,
+    )
+}
+
+fn check_forwarded_context_v1(
+    source: GeneralSourceContextV1<'_>,
+    qualified_intermediate: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    output: &fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<Box<[FormalMemoryObligations]>> {
     charge(budget, 3)?;
     let floor = budget.storage();
     let ledger = budget.work_ledger_identity_v1();
@@ -285,13 +355,14 @@ pub(crate) fn check_forwarded_output_v1(
         budget
             .reserve_storage(storage.retained_storage())
             .map_err(E::Resource)?;
-        let private = private_memory::check(&actual, source.limits.max_operations, budget)?;
-        let division =
-            unsigned_division::check(&actual, source.semantic().semantic().target(), budget)?;
+        let private = private_memory::check(&actual, source.limits().max_operations, budget)?;
+        let division = unsigned_division::check(&actual, source.semantic().target(), budget)?;
+        let helpers = scalar_helpers::check(&actual, budget)?;
         census::native(
             &actual,
             &private,
             &division,
+            &helpers,
             "forwarded O",
             |_, coordinate| {
                 let old = &input.operations()[operation_ordinal(&input, coordinate)?];
@@ -303,7 +374,7 @@ pub(crate) fn check_forwarded_output_v1(
             budget,
         )?;
         let reports =
-            derive_checked_output_guarded_obligations_v1(output, source.limits.max_operations)
+            derive_checked_output_guarded_obligations_v1(output, source.limits().max_operations)
                 .map_err(E::Formal)?;
         census::formal(&actual, &private, &reports, budget)?;
         Ok(reports)

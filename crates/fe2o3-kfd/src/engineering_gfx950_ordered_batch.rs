@@ -15,7 +15,8 @@ trait OrderedBackend {
     type Staged;
     type Pending;
     fn dispatch_fence(&mut self) -> Result<()>;
-    fn prepare(&mut self, index: usize) -> Result<Self::Prepared>;
+    fn prepare_all(&mut self, count: usize) -> Result<Vec<Self::Prepared>>;
+    fn preparation_fence(&mut self) -> Result<()>;
     fn stage(&mut self, prepared: Vec<Self::Prepared>) -> Result<Self::Staged>;
     fn publish(&mut self, staged: Self::Staged, deadline: Instant) -> Result<Self::Pending>;
     fn poll_final(&mut self, pending: &mut Self::Pending) -> Result<bool>;
@@ -44,9 +45,8 @@ fn run_ordered_batch(
             return Err("ordered batch count or aggregate timeout".into());
         }
         backend.dispatch_fence()?;
-        let prepared = (0..count)
-            .map(|index| backend.prepare(index))
-            .collect::<Result<Vec<_>>>()?;
+        let prepared = backend.prepare_all(count)?;
+        backend.preparation_fence()?;
         let staged = backend.stage(prepared)?;
         let started = Instant::now();
         let deadline = started
@@ -199,30 +199,45 @@ impl OrderedBackend for NativeOrdered<'_> {
         self.context.check_idle()
     }
 
-    fn prepare(&mut self, index: usize) -> Result<PreparedDispatch> {
-        let command = self
-            .commands
-            .get_mut(index)
-            .and_then(Option::take)
-            .ok_or("ordered batch command unavailable")?;
-        let end = self
-            .offset
-            .checked_add(command.payload_bytes as usize)
-            .ok_or("ordered batch payload overflow")?;
-        let bytes = self
-            .payload
-            .get(self.offset..end)
-            .ok_or("ordered batch payload bounds")?
-            .to_vec();
-        let prepared = self.context.prepare_dispatch(
-            command.kernel,
-            bytes,
-            command.workgroup,
-            command.grid,
-            &command.pointers,
-        )?;
-        self.offset = end;
+    fn prepare_all(&mut self, count: usize) -> Result<Vec<PreparedDispatch>> {
+        // The scope borrows ownership maps immutably for the whole CPU phase.
+        // It has no queue/backend access and cannot stage or publish anything.
+        let mut scope = self.context.preparation_scope();
+        let mut prepared = Vec::with_capacity(count);
+        for index in 0..count {
+            let command = self
+                .commands
+                .get_mut(index)
+                .and_then(Option::take)
+                .ok_or("ordered batch command unavailable")?;
+            let end = self
+                .offset
+                .checked_add(command.payload_bytes as usize)
+                .ok_or("ordered batch payload overflow")?;
+            let bytes = self
+                .payload
+                .get(self.offset..end)
+                .ok_or("ordered batch payload bounds")?
+                .to_vec();
+            let prepare_started = scope.profile_started();
+            prepared.push(scope.prepare(
+                command.kernel,
+                bytes,
+                command.workgroup,
+                command.grid,
+                &command.pointers,
+                None,
+            )?);
+            record_elapsed(&mut scope.counters.dispatch_prepare_ns, prepare_started)?;
+            self.offset = end;
+        }
         Ok(prepared)
+    }
+
+    fn preparation_fence(&mut self) -> Result<()> {
+        // CPU preparation cannot authorize later GPU-visible writes. Reobserve
+        // reset/process identity, poison, counters and exceptions before staging.
+        self.context.check_idle()
     }
 
     fn stage(&mut self, prepared: Vec<PreparedDispatch>) -> Result<Self::Staged> {
@@ -500,12 +515,7 @@ impl Context {
         timeout_ms: u32,
     ) -> Result<ResponseV1> {
         let result = (|| {
-            let expected = CommandV1::DispatchOrderedBatch {
-                dispatches: dispatches.clone(),
-                timeout_ms,
-            }
-            .payload_bytes()
-            .map_err(explain)?;
+            let expected = ordered_batch_payload_bytes(&dispatches, timeout_ms).map_err(explain)?;
             if expected != payload.len() {
                 return Err("ordered batch payload length".into());
             }

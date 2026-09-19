@@ -24,8 +24,8 @@ use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::interpret::GlobalAlloc;
 use rustc_middle::mir::mono::{CodegenUnit, MonoItem};
 use rustc_middle::mir::{
-    AggregateKind, Body, CastKind, InlineAsmMacro, InlineAsmOperand, Operand, RETURN_PLACE, Rvalue,
-    TerminatorKind, UnwindAction,
+    AggregateKind, BasicBlock, Body, CastKind, InlineAsmMacro, InlineAsmOperand, Operand,
+    RETURN_PLACE, Rvalue, TerminatorKind, UnwindAction,
 };
 use rustc_middle::ty::adjustment::PointerCoercion;
 use rustc_middle::ty::{
@@ -37,9 +37,20 @@ use std::fmt;
 use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc_drop_v1};
 
 mod kernel_context_auth_v1;
-pub(crate) use kernel_context_auth_v1::{CapturedContextProducersV1, capture_context_producers_v1};
+pub(crate) mod workgroup_scope_custody_v29;
+pub(crate) use kernel_context_auth_v1::{
+    AuthenticatedContextEntriesV1, BoundContextEntryV29, CallBoundaryV29,
+    CapturedContextProducersV1, ContextRootVisitErrorV29, RetainedContextEntriesV29,
+    RetainedContextEntryV29, capture_context_producers_v1,
+};
+mod closure_flow_v1;
 mod kernel_context_frontend_v1;
 mod production_importer_v1;
+
+#[cfg(test)]
+pub(crate) use production_importer_v1::check_wave64_descriptor_mutations_v1;
+#[cfg(test)]
+pub(crate) mod semantic_import_observation_v1_tests;
 
 pub(crate) use production_importer_v1::{
     AuthenticatedRustcIdentityInventoryV3, AuthenticatedRustcPreflightPlanV3,
@@ -243,7 +254,11 @@ pub(crate) struct AuthenticatedCollectedKernelClosureV1<'tcx> {
     collection: CollectionResult<'tcx>,
     roots: Box<[AuthenticatedProductionRootV1<'tcx>]>,
     context_entries: kernel_context_auth_v1::AuthenticatedContextEntriesV1<'tcx>,
+    closure_flow: closure_flow_v1::AuthenticatedClosureFlowV1<'tcx>,
 }
+
+#[path = "production_source_census_v1.rs"]
+pub(crate) mod source_census_v1;
 
 impl<'tcx> AuthenticatedCollectedKernelClosureV1<'tcx> {
     pub(crate) fn function_count(&self) -> usize {
@@ -319,7 +334,7 @@ pub(crate) fn collect_authenticated_kernel_closure_v1<'tcx>(
     target: crate::production_target_v1::RetainedProductionTargetV1,
     context_producers: CapturedContextProducersV1<'tcx>,
 ) -> Result<AuthenticatedCollectedKernelClosureV1<'tcx>, CollectError> {
-    let (collection, context_entries) = collect_device_functions(
+    let (collection, context_entries, closure_flow) = collect_device_functions(
         tcx,
         cgus,
         verbose,
@@ -352,6 +367,7 @@ pub(crate) fn collect_authenticated_kernel_closure_v1<'tcx>(
         collection,
         roots: roots.into_boxed_slice(),
         context_entries,
+        closure_flow,
     })
 }
 
@@ -365,6 +381,7 @@ fn collect_device_functions<'tcx>(
     (
         CollectionResult<'tcx>,
         kernel_context_auth_v1::AuthenticatedContextEntriesV1<'tcx>,
+        closure_flow_v1::AuthenticatedClosureFlowV1<'tcx>,
     ),
     CollectError,
 > {
@@ -2216,10 +2233,8 @@ struct DeviceCollector<'tcx> {
         crate::device_ffi::DeviceFfiInstanceIdentity,
         CallChainLink<crate::device_ffi::DeviceFfiInstanceIdentity>,
     >,
-    call_edges: BTreeMap<
-        crate::device_ffi::DeviceFfiInstanceIdentity,
-        BTreeSet<crate::device_ffi::DeviceFfiInstanceIdentity>,
-    >,
+    call_edges: closure_flow_v1::CallGraphV1,
+    closure_work: crate::rustc_semantic_plan_v1::SourceClosureWorkV1,
     reachable_unsafe_calls:
         BTreeMap<crate::device_ffi::DeviceFfiInstanceIdentity, BTreeSet<String>>,
     inline_assembly:
@@ -2260,8 +2275,8 @@ fn reconstruct_call_chain<T: Clone + Ord>(
     reverse_chain
 }
 
-fn root_scoped_call_chains<T: Clone + Ord>(
-    edges: &BTreeMap<T, BTreeSet<T>>,
+fn root_scoped_call_chains<T: Clone + Ord, S>(
+    edges: &BTreeMap<T, BTreeMap<T, S>>,
     labels: &BTreeMap<T, String>,
     root: &T,
 ) -> (BTreeMap<T, CallChainLink<T>>, Vec<T>) {
@@ -2282,7 +2297,7 @@ fn root_scoped_call_chains<T: Clone + Ord>(
         let Some(callees) = edges.get(&caller) else {
             continue;
         };
-        for callee in callees {
+        for callee in callees.keys() {
             let Some(label) = labels.get(callee) else {
                 continue;
             };
@@ -2348,6 +2363,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             seen: BTreeSet::new(),
             call_chains: BTreeMap::new(),
             call_edges: BTreeMap::new(),
+            closure_work: crate::rustc_semantic_plan_v1::SourceClosureWorkV1::default(),
             reachable_unsafe_calls: BTreeMap::new(),
             inline_assembly: BTreeMap::new(),
             used_export_names: BTreeSet::new(),
@@ -2500,13 +2516,20 @@ impl<'tcx> DeviceCollector<'tcx> {
         (
             CollectionResult<'tcx>,
             kernel_context_auth_v1::AuthenticatedContextEntriesV1<'tcx>,
+            closure_flow_v1::AuthenticatedClosureFlowV1<'tcx>,
         ),
         CollectError,
     > {
         while let Some(mut function) = self.worklist.pop_front() {
             let def_id = function.instance.def_id();
 
-            if !self.tcx.is_mir_available(def_id) {
+            if !self.tcx.is_mir_available(def_id)
+                && crate::closure_profile_v1::authenticate_once_shim_v1(self.tcx, function.instance)
+                    .map_err(|error| {
+                        self.reachable_error(&function.instance, &error.to_string(), None)
+                    })?
+                    .is_none()
+            {
                 return Err(self.reachable_error(
                     &function.instance,
                     "MIR is unavailable for a collected device function",
@@ -2516,25 +2539,6 @@ impl<'tcx> DeviceCollector<'tcx> {
 
             let mir = self.tcx.instance_mir(function.instance.def);
             self.charge_function_blocks(&function.instance, mir.basic_blocks.len())?;
-            if let Some(admission) =
-                crate::closure_profile_v1::observe_closures_v2(self.tcx, function.instance)
-                    .map_err(|error| {
-                        self.reachable_error(
-                            &function.instance,
-                            &format!("bounded closure admission failed: {error}"),
-                            None,
-                        )
-                    })?
-            {
-                if self.verbose {
-                    eprintln!(
-                        "[collector] bounded closure admission: {} environment(s), {} static call(s)",
-                        admission.environments().len(),
-                        admission.calls().len(),
-                    );
-                }
-                function.closure_observation = Some(Box::new(admission.into_observation()));
-            }
             let dead_branches =
                 crate::monomorphization_dead::CompilerDeadBranchObservationV1::observe(
                     self.tcx,
@@ -2566,9 +2570,9 @@ impl<'tcx> DeviceCollector<'tcx> {
                 );
             }
 
-            for (_, block) in mir.basic_blocks.iter_enumerated() {
+            for (index, block) in mir.basic_blocks.iter_enumerated() {
                 if let Some(terminator) = &block.terminator {
-                    self.process_terminator(&terminator.kind, mir, &function.instance)?;
+                    self.process_terminator(&terminator.kind, mir, index, &function.instance)?;
                 }
             }
 
@@ -2579,6 +2583,16 @@ impl<'tcx> DeviceCollector<'tcx> {
         self.authenticate_production_kernel_source_safety()?;
         self.authenticate_reachable_frontend_contracts()?;
         let context_entries = kernel_context_auth_v1::authenticate_v1(&mut self)?;
+        let closure_flow = closure_flow_v1::authenticate_v1(
+            self.tcx,
+            &mut self.result,
+            self.call_edges,
+            self.closure_work,
+            self.verbose,
+        )
+        .map_err(|error| CollectError {
+            message: format!("bounded closure admission failed: {error}"),
+        })?;
 
         let device_ffi = crate::device_ffi::validate_local_closure(
             self.tcx,
@@ -2613,13 +2627,14 @@ impl<'tcx> DeviceCollector<'tcx> {
                     message: format!("compiler FFI envelope construction failed: {error}"),
                 },
             )?;
-        Ok((collection, context_entries))
+        Ok((collection, context_entries, closure_flow))
     }
 
     fn process_terminator(
         &mut self,
         terminator: &TerminatorKind<'tcx>,
         body: &Body<'tcx>,
+        block: BasicBlock,
         caller: &Instance<'tcx>,
     ) -> Result<(), CollectError> {
         match terminator {
@@ -2636,7 +2651,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                         None,
                     ));
                 }
-                self.process_call_operand(func, caller)
+                self.process_call_operand(func, caller, body, block)
             }
             TerminatorKind::InlineAsm {
                 asm_macro,
@@ -2939,6 +2954,16 @@ impl<'tcx> DeviceCollector<'tcx> {
                 {
                     continue;
                 }
+                if crate::closure_profile_v1::authenticate_once_shim_v1(self.tcx, function.instance)
+                    .map_err(|error| {
+                        self.reachable_error(&function.instance, &error.to_string(), None)
+                    })?
+                    .is_some()
+                {
+                    // Only generated adapter syntax has no user HIR. The
+                    // actual closure body remains in this traversal.
+                    continue;
+                }
                 let Some(local_def_id) = function.instance.def_id().as_local() else {
                     if crate::trusted_device_items::authenticate_reviewed_safe_core_scalar_bitcast_helper_v1(
                         self.tcx,
@@ -2953,6 +2978,12 @@ impl<'tcx> DeviceCollector<'tcx> {
                         continue;
                     }
                     if crate::trusted_device_items::authenticate_reviewed_safe_core_wrapping_integer_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_saturating_integer_helper_v1(
                         self.tcx,
                         function.instance,
                     ) {
@@ -3044,7 +3075,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     .extend(observed.option_sets.iter().copied());
             }
             if let Some(callees) = self.call_edges.get(&identity) {
-                pending.extend(callees.iter().cloned());
+                pending.extend(callees.keys().cloned());
             }
         }
         Ok(summary)
@@ -3054,6 +3085,8 @@ impl<'tcx> DeviceCollector<'tcx> {
         &mut self,
         func: &Operand<'tcx>,
         caller: &Instance<'tcx>,
+        body: &Body<'tcx>,
+        block: BasicBlock,
     ) -> Result<(), CollectError> {
         let Operand::Constant(const_op) = func else {
             return Err(self.reachable_error(
@@ -3147,6 +3180,11 @@ impl<'tcx> DeviceCollector<'tcx> {
             && self.tcx.fn_sig(*def_id).skip_binder().safety() == Safety::Unsafe
             && !crate::production_rustc_intrinsic_v1::is_reviewed_core_atomic_function_v1(
                 self.tcx, resolved,
+            )
+            && !crate::trusted_device_items::is_authenticated_gfx942_wave64_shuffle_instance_v1(
+                self.tcx,
+                resolved,
+                &self.expected_target,
             )
         {
             let caller_identity = self.instance_identity(*caller);
@@ -3244,13 +3282,6 @@ impl<'tcx> DeviceCollector<'tcx> {
 
         let identity = self.instance_identity(resolved);
         let caller_identity = self.instance_identity(*caller);
-        self.call_edges
-            .entry(caller_identity.clone())
-            .or_default()
-            .insert(identity.clone());
-        if self.seen.contains(&identity) {
-            return Ok(());
-        }
 
         if !is_fully_monomorphized(self.tcx, resolved) {
             return Err(self.reachable_error(
@@ -3273,7 +3304,23 @@ impl<'tcx> DeviceCollector<'tcx> {
             return Ok(());
         }
 
-        if !matches!(resolved.def, InstanceKind::Item(_)) {
+        closure_flow_v1::record_call_v1(
+            &mut self.call_edges,
+            self.tcx,
+            (*caller, resolved),
+            body,
+            block,
+            &mut self.closure_work,
+        )
+        .map_err(|error| self.reachable_error(caller, &error.to_string(), None))?;
+        if self.seen.contains(&identity) {
+            return Ok(());
+        }
+
+        let closure_shim = crate::closure_profile_v1::authenticate_once_shim_v1(self.tcx, resolved)
+            .map_err(|error| self.reachable_error(caller, &error.to_string(), None))?
+            .is_some();
+        if !matches!(resolved.def, InstanceKind::Item(_)) && !closure_shim {
             return Err(self.reachable_error(
                 caller,
                 &format!(
@@ -3304,7 +3351,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             ));
         }
 
-        if !self.tcx.is_mir_available(resolved.def_id()) {
+        if !closure_shim && !self.tcx.is_mir_available(resolved.def_id()) {
             return Err(self.reachable_error(
                 caller,
                 "MIR is unavailable for a device-reachable item; compile the dependency with encoded MIR (for example, an inline Rust definition) or keep the call out of device code",
@@ -3312,7 +3359,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             ));
         }
 
-        if self.is_unreachable_body(resolved.def_id()) {
+        if !closure_shim && self.is_unreachable_body(resolved.def_id()) {
             return Err(self.reachable_error(
                 caller,
                 "device code reaches a panic path",
@@ -3664,9 +3711,9 @@ mod tests {
     #[test]
     fn source_safety_call_chains_are_reconstructed_per_root() {
         let edges = BTreeMap::from([
-            (1_u8, BTreeSet::from([3_u8])),
-            (2_u8, BTreeSet::from([3_u8])),
-            (3_u8, BTreeSet::from([4_u8])),
+            (1_u8, BTreeMap::from([(3_u8, ())])),
+            (2_u8, BTreeMap::from([(3_u8, ())])),
+            (3_u8, BTreeMap::from([(4_u8, ())])),
         ]);
         let labels = BTreeMap::from([
             (1_u8, "ordinary_root".to_owned()),

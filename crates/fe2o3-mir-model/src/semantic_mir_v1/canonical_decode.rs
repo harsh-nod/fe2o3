@@ -357,7 +357,7 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
-    /// Decodes exact V30 typed ISA calls, excluding the inert V29 capability grammar.
+    /// Decodes V30 typed integer saturation without V29 capability content.
     pub fn decode_exact_v30_canonical(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -390,6 +390,30 @@ impl AdmittedInertSemanticMirV1 {
             bytes,
             limits,
             CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V32),
+        )
+    }
+
+    /// Decodes inert Wave64 primitive capture, not execution authority.
+    pub fn decode_exact_v33_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V33),
+        )
+    }
+
+    /// Decodes standalone scalar authoring, excluding saturation and Wave64.
+    pub fn decode_exact_v34_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V34),
         )
     }
 
@@ -437,11 +461,14 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V30
                         | SemanticMirWireVersionV1::V31
                         | SemanticMirWireVersionV1::V32
+                        | SemanticMirWireVersionV1::V33
+                        | SemanticMirWireVersionV1::V34
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
                     ));
                 }
+                saturating_integer_v30::check_current_production_content(&request)?;
                 request.admit_for_wire_version(wire_version, limits)?
             }
         };
@@ -1709,7 +1736,11 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V32 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V34 {
+            91
+        } else if self.wire_version == SemanticMirWireVersionV1::V33 {
+            90
+        } else if self.wire_version == SemanticMirWireVersionV1::V32 {
             89
         } else if self.wire_version == SemanticMirWireVersionV1::V31 {
             88
@@ -1744,13 +1775,19 @@ impl<'a> CanonicalDecoderV1<'a> {
         let tag = self.tagged("compiler intrinsic", maximum_tag)?;
         // Historical capability drafts and synthetic scope exit are not callable grammar.
         if matches!(tag, 69..=80 | 83)
-            || matches!(
-                self.wire_version,
-                SemanticMirWireVersionV1::V30
-                    | SemanticMirWireVersionV1::V31
-                    | SemanticMirWireVersionV1::V32
-            ) && matches!(tag, 81..=86)
-            || self.wire_version == SemanticMirWireVersionV1::V32 && tag == 88
+            || (matches!(tag, 81..=86) && self.wire_version != SemanticMirWireVersionV1::V29)
+            || (tag == 87
+                && !matches!(
+                    self.wire_version,
+                    SemanticMirWireVersionV1::V30
+                        | SemanticMirWireVersionV1::V31
+                        | SemanticMirWireVersionV1::V32
+                        | SemanticMirWireVersionV1::V33
+                ))
+            || (tag == 88 && self.wire_version != SemanticMirWireVersionV1::V31)
+            || (tag == 89 && self.wire_version != SemanticMirWireVersionV1::V32)
+            || (tag == 90 && self.wire_version != SemanticMirWireVersionV1::V33)
+            || (tag == 91 && self.wire_version != SemanticMirWireVersionV1::V34)
         {
             return Err(SemanticMirDecodeErrorV1::InvalidTag {
                 context: "compiler intrinsic",
@@ -1777,7 +1814,7 @@ impl<'a> CanonicalDecoderV1<'a> {
                         .expect("closed region profile tag was checked"),
                 )
             }
-            87 => {
+            87 | 91 if self.wire_version.scalar_authoring_intrinsic_tag() == Some(tag) => {
                 let kind = self.tagged("gfx942 inline instruction", 5)?;
                 let instruction = SemanticGfx942InlineInstructionV30::from_wire_tag(kind)
                     .expect("closed instruction tag was checked");
@@ -1785,6 +1822,17 @@ impl<'a> CanonicalDecoderV1<'a> {
                     SemanticGfx942InlineU32V30::new(instruction, self.u16()?)?,
                 )
             }
+            87 => SemanticCompilerIntrinsicOperationV1::SaturatingInteger(
+                match self.tagged("saturating integer operation", 1)? {
+                    0 => SemanticSaturatingIntegerOpV1::Add,
+                    1 => SemanticSaturatingIntegerOpV1::Subtract,
+                    _ => unreachable!(),
+                },
+            ),
+            90 => SemanticCompilerIntrinsicOperationV1::Gfx942Wave64ShuffleIndex {
+                context: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+            },
             81 => SemanticCompilerIntrinsicOperationV1::Execution(
                 SemanticExecutionOperationV29::ContextIssue {
                     context: SemanticTypeIdV1(self.u32()?),
@@ -2730,12 +2778,7 @@ impl<'a> CanonicalDecoderV1<'a> {
                     destination,
                     unwind,
                 )?;
-                if matches!(
-                    self.wire_version,
-                    SemanticMirWireVersionV1::V30
-                        | SemanticMirWireVersionV1::V31
-                        | SemanticMirWireVersionV1::V32
-                ) {
+                if self.wire_version.scalar_authoring_intrinsic_tag().is_some() {
                     let source = self.option("inline assembly source", |decoder| {
                         Ok(SemanticInlineAssemblySourceV30::new(
                             decoder.identity()?,
@@ -2882,6 +2925,8 @@ mod tests {
     mod gfx942_ordered_program_v32_tests;
     mod gfx942_ordered_region_v31_tests;
     mod rust_call_local_tests;
+    mod saturating_integer_v30_tests;
+    mod wave64_shuffle_v33_tests;
 
     fn identity(tag: u8) -> [u8; 32] {
         [tag; 32]

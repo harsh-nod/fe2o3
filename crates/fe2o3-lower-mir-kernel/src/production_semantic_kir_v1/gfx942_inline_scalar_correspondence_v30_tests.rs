@@ -614,14 +614,22 @@ fn normalized(
         .id;
     work.remaining = remaining;
     let mut visiting = BTreeSet::new();
-    let normalized = normalize_kir_expression_v1(
-        function,
-        &kir,
-        &BTreeMap::new(),
-        result,
-        depth,
-        &mut visiting,
-        &mut work,
+    let mut helper_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100_000);
+    let mut helper_budget = ArgumentBudgetV1::new(&mut helper_work, 1024 * 1024);
+    let normalized = native_helper_value_expansion_v1::with_no_helpers_for_test_v1(
+        &mut helper_budget,
+        |helpers| {
+            normalize_kir_expression_v1(
+                function,
+                &kir,
+                &BTreeMap::new(),
+                result,
+                depth,
+                &mut visiting,
+                &mut work,
+                helpers,
+            )
+        },
     );
     assert!(
         visiting.is_empty(),

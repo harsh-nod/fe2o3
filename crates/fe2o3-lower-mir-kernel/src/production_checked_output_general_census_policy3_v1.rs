@@ -4,144 +4,261 @@ use fe2o3_kernel_ir::{
     KirLocalMemoryEffectRefV1,
 };
 
+include!("production_checked_output_masked_assert_success_v1.rs");
+
 pub(super) fn source(
+    owner: &ProductionSemanticKirOwnerV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<()> {
+    source_parts(owner.semantic().semantic(), &owner.correspondence, budget)
+}
+
+pub(super) fn source_parts(
     source: &AdmittedInertSemanticMirV1,
+    correspondence: &SemanticKirCorrespondenceV1,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> R<()> {
     charge(budget, 4)?;
-    if source.roots().is_empty()
-        || source.functions().len() != source.roots().len()
-        || !source.statics().is_empty()
-        || !source.allocations().is_empty()
+    if source.roots().is_empty() || !source.statics().is_empty() || !source.allocations().is_empty()
     {
-        return Err(refused("source", "root-only global interface"));
+        return Err(refused(
+            "source",
+            "nonempty roots without source statics or allocations",
+        ));
     }
-    for function in source.functions() {
+    let roles = source_roles::check_source_parts(source, correspondence, budget)?;
+    for (ordinal, function) in source.functions().iter().enumerate() {
         charge(budget, 7)?;
-        let abi = function.abi();
-        if function.role() != SemanticFunctionRoleV1::KernelRoot
-            || abi.can_unwind()
+        let helper = roles.retained_helper(ordinal)?;
+        charge(budget, function.blocks().len())?;
+        let has_shift_assertion = function.blocks().iter().any(|block| {
+            matches!(
+                block.terminator().kind(),
+                SemanticTerminatorKindV1::Assert {
+                    message: SemanticAssertMessageV1::Overflow {
+                        operation: SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight,
+                        ..
+                    },
+                    ..
+                }
+            )
+        });
+        if has_shift_assertion {
+            let function =
+                SemanticFunctionIdV1::from_index(u32::try_from(ordinal).map_err(|_| arithmetic())?);
+            // The callback returns the census result, not a query owner. Source
+            // errors survive intact after the query's exact-floor cleanup.
+            crate::with_production_semantic_masked_shift_query_v1(
+                source,
+                function,
+                fe2o3_mir_model::SemanticMaskedShiftLimitsV1::default(),
+                budget,
+                |query, budget| {
+                    Ok(source_function(
+                        source,
+                        ordinal,
+                        helper,
+                        Some(query),
+                        budget,
+                    ))
+                },
+            )
+            .map_err(masked_assertion_query_error_v1)??;
+        } else {
+            source_function(source, ordinal, helper, None, budget)?;
+        }
+    }
+    Ok(())
+}
+
+fn source_function(
+    source: &AdmittedInertSemanticMirV1,
+    ordinal: usize,
+    helper: bool,
+    mut masked_assertions: Option<&mut crate::ProductionSemanticMaskedShiftQueryV1<'_, '_>>,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> R<()> {
+    let function = source.functions().get(ordinal).ok_or(E::Source(
+        ProductionSemanticKirErrorV1::CorrespondenceMismatch,
+    ))?;
+    let abi = function.abi();
+    if function.role() == SemanticFunctionRoleV1::KernelRoot
+        && (abi.can_unwind()
             || abi.c_variadic()
             || !abi.hidden_arguments().is_empty()
             || !matches!(abi.return_value().mode(), SemanticAbiPassModeV1::Ignore)
             || !matches!(
                 source.types()[abi.return_type().index() as usize].shape(),
                 SemanticTypeShapeV1::Unit
-            )
-        {
-            return Err(refused("source", "Unit root ABI"));
-        }
-        // Retained fixed arrays require the exact source/N/ranked relation and
-        // the independent actual-B/O private-memory census below. A source
-        // array type alone is neither an admission nor a refusal certificate.
-        for block in function.blocks() {
-            charge(budget, 1)?;
-            match block.terminator().kind() {
-                SemanticTerminatorKindV1::Goto(_)
-                | SemanticTerminatorKindV1::SwitchInt { .. }
-                | SemanticTerminatorKindV1::Assert { .. }
-                | SemanticTerminatorKindV1::Return
-                | SemanticTerminatorKindV1::Unreachable => {}
-                SemanticTerminatorKindV1::Call(call) => {
-                    charge(budget, 1)?;
-                    if !matches!(
-                        source.callables().get(call.callee().index() as usize),
-                        Some(SemanticCallableDeclV1::CompilerIntrinsic { .. })
-                    ) {
-                        return Err(refused("source", "no ordinary helper calls"));
-                    }
-                }
-                _ => return Err(refused("source", "closed control and assertion grammar")),
-            }
-            for statement in block.statements() {
+            ))
+    {
+        return Err(refused("source", "Unit root ABI"));
+    }
+    // Retained fixed arrays require the exact source/N/ranked relation and
+    // the independent actual-B/O private-memory census below. A source
+    // array type alone is neither an admission nor a refusal certificate.
+    for (block_ordinal, block) in function.blocks().iter().enumerate() {
+        charge(budget, 1)?;
+        match block.terminator().kind() {
+            SemanticTerminatorKindV1::Goto(_)
+            | SemanticTerminatorKindV1::SwitchInt { .. }
+            | SemanticTerminatorKindV1::Assert { .. }
+            | SemanticTerminatorKindV1::Return
+            | SemanticTerminatorKindV1::Unreachable => {}
+            SemanticTerminatorKindV1::Call(call) => {
                 charge(budget, 1)?;
-                let value = match statement.kind() {
-                    SemanticStatementKindV1::Nop
-                    | SemanticStatementKindV1::StorageLive(_)
-                    | SemanticStatementKindV1::StorageDead(_)
-                    | SemanticStatementKindV1::Deinitialize(_)
-                    | SemanticStatementKindV1::SetDiscriminant { .. } => continue,
-                    SemanticStatementKindV1::Store(store)
-                        if store.volatility() == SemanticVolatilityV1::NonVolatile =>
-                    {
-                        continue;
-                    }
-                    SemanticStatementKindV1::Assign(assignment) => assignment.value(),
-                    _ => return Err(refused("source", "no atomic, volatile or assumed effects")),
-                };
-                charge(budget, 2)?;
-                match value.kind() {
-                    SemanticRvalueKindV1::Use(_)
-                    | SemanticRvalueKindV1::Length(_)
-                    | SemanticRvalueKindV1::Discriminant(_)
-                    | SemanticRvalueKindV1::Aggregate(_)
-                    | SemanticRvalueKindV1::Borrow { .. }
-                    | SemanticRvalueKindV1::AddressOf { .. }
-                    | SemanticRvalueKindV1::CheckedBinary(_)
-                    | SemanticRvalueKindV1::Unary {
-                        operation: SemanticUnaryOpV1::Not | SemanticUnaryOpV1::PointerMetadata,
+                match source.callables().get(call.callee().index() as usize) {
+                    Some(SemanticCallableDeclV1::CompilerIntrinsic { .. }) if !helper => {}
+                    Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                        operation: SemanticCompilerIntrinsicOperationV1::SaturatingInteger(_),
                         ..
-                    }
-                    | SemanticRvalueKindV1::Cast {
-                        kind: SemanticCastKindV1::Integer | SemanticCastKindV1::Pointer,
-                        ..
-                    }
-                    | SemanticRvalueKindV1::Binary {
+                    }) => {}
+                    Some(SemanticCallableDeclV1::CompilerIntrinsic {
                         operation:
-                            SemanticBinaryOpV1::BitAnd
-                            | SemanticBinaryOpV1::BitOr
-                            | SemanticBinaryOpV1::BitXor
-                            | SemanticBinaryOpV1::Equal
-                            | SemanticBinaryOpV1::NotEqual
-                            | SemanticBinaryOpV1::LessThan
-                            | SemanticBinaryOpV1::LessOrEqual
-                            | SemanticBinaryOpV1::GreaterThan
-                            | SemanticBinaryOpV1::GreaterOrEqual,
+                            SemanticCompilerIntrinsicOperationV1::MathContextCurrent { .. }
+                            | SemanticCompilerIntrinsicOperationV1::MathF32 {
+                                function:
+                                    fe2o3_mir_model::semantic_mir_v1::SemanticF32MathFunctionV1::Exp,
+                                ..
+                            },
                         ..
-                    } => {}
-                    SemanticRvalueKindV1::Binary {
-                        operation:
-                            SemanticBinaryOpV1::Add
-                            | SemanticBinaryOpV1::Subtract
-                            | SemanticBinaryOpV1::Multiply,
-                        ..
-                    } if matches!(
-                        source.types()[value.result_type().index() as usize].shape(),
-                        SemanticTypeShapeV1::Scalar(
-                            SemanticScalarTypeV1::Float { bits: 32 | 64 }
-                                | SemanticScalarTypeV1::Integer {
-                                    bits: 8 | 16 | 32 | 64,
-                                    ..
-                                }
-                        )
-                    ) =>
-                    {
-                        // Integer wrapping results materialize as result zero
-                        // of Checked; exact source/N/B joins retain that pair.
-                        // Plain native integer arithmetic remains inadmissible.
-                    }
-                    SemanticRvalueKindV1::Binary {
-                        operation: SemanticBinaryOpV1::Divide | SemanticBinaryOpV1::Remainder,
-                        ..
-                    } if matches!(
-                        source.types()[value.result_type().index() as usize].shape(),
-                        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
-                            signed: false,
-                            bits: 32 | 64,
-                        })
-                    ) =>
-                    {
-                        // The native census must independently prove a nonzero
-                        // divisor at each actual B/C/O operation, not just N.
-                    }
-                    SemanticRvalueKindV1::Load(load)
-                        if load.volatility() == SemanticVolatilityV1::NonVolatile => {}
-                    _ => {
-                        return Err(refused(
-                            "source",
-                            "total scalar/global recipe; no unchecked arithmetic",
-                        ));
-                    }
+                    }) => {}
+                    Some(SemanticCallableDeclV1::Defined { function: callee })
+                        if source.functions().get(callee.index() as usize).is_some_and(
+                            |callee| callee.role() == SemanticFunctionRoleV1::InternalHelper,
+                        ) => {}
+                    _ => return Err(refused("source", "closed direct scalar helper calls")),
+                }
+            }
+            _ => return Err(refused("source", "closed control and assertion grammar")),
+        }
+        for (statement_ordinal, statement) in block.statements().iter().enumerate() {
+            charge(budget, 1)?;
+            let value = match statement.kind() {
+                SemanticStatementKindV1::Nop
+                | SemanticStatementKindV1::StorageLive(_)
+                | SemanticStatementKindV1::StorageDead(_)
+                | SemanticStatementKindV1::Deinitialize(_)
+                | SemanticStatementKindV1::SetDiscriminant { .. } => continue,
+                SemanticStatementKindV1::Store(store)
+                    if store.volatility() == SemanticVolatilityV1::NonVolatile =>
+                {
+                    continue;
+                }
+                SemanticStatementKindV1::Assign(assignment) => assignment.value(),
+                _ => return Err(refused("source", "no atomic, volatile or assumed effects")),
+            };
+            charge(budget, 2)?;
+            match value.kind() {
+                SemanticRvalueKindV1::Use(_)
+                | SemanticRvalueKindV1::Length(_)
+                | SemanticRvalueKindV1::Discriminant(_)
+                | SemanticRvalueKindV1::Aggregate(_)
+                | SemanticRvalueKindV1::Borrow { .. }
+                | SemanticRvalueKindV1::AddressOf { .. }
+                | SemanticRvalueKindV1::CheckedBinary(_)
+                | SemanticRvalueKindV1::Unary {
+                    operation: SemanticUnaryOpV1::Not | SemanticUnaryOpV1::PointerMetadata,
+                    ..
+                }
+                | SemanticRvalueKindV1::Cast {
+                    kind: SemanticCastKindV1::Integer | SemanticCastKindV1::Pointer,
+                    ..
+                }
+                | SemanticRvalueKindV1::Binary {
+                    operation:
+                        SemanticBinaryOpV1::BitAnd
+                        | SemanticBinaryOpV1::BitOr
+                        | SemanticBinaryOpV1::BitXor
+                        | SemanticBinaryOpV1::Equal
+                        | SemanticBinaryOpV1::NotEqual
+                        | SemanticBinaryOpV1::LessThan
+                        | SemanticBinaryOpV1::LessOrEqual
+                        | SemanticBinaryOpV1::GreaterThan
+                        | SemanticBinaryOpV1::GreaterOrEqual,
+                    ..
+                } => {}
+                SemanticRvalueKindV1::Cast {
+                    kind: SemanticCastKindV1::Float,
+                    operand,
+                } if numeric_casts::source_integer_to_f32(
+                    source,
+                    operand.ty(),
+                    value.result_type(),
+                    budget,
+                )? => {}
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight,
+                    ..
+                } if constant_shifts::source(source, value, budget)?
+                    || masked_shifts::source(
+                        source,
+                        ordinal,
+                        block_ordinal,
+                        statement_ordinal,
+                        budget,
+                    )?
+                    || masked_assertion_success_shift_v1(
+                        source,
+                        ordinal,
+                        block_ordinal,
+                        statement_ordinal,
+                        masked_assertions.as_deref_mut(),
+                        budget,
+                    )? => {}
+                SemanticRvalueKindV1::Unary {
+                    operation: SemanticUnaryOpV1::Negate,
+                    ..
+                }
+                | SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Divide,
+                    ..
+                } if matches!(
+                    source.types()[value.result_type().index() as usize].shape(),
+                    SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float { bits: 32 })
+                ) => {}
+                SemanticRvalueKindV1::Binary {
+                    operation:
+                        SemanticBinaryOpV1::Add
+                        | SemanticBinaryOpV1::Subtract
+                        | SemanticBinaryOpV1::Multiply,
+                    ..
+                } if matches!(
+                    source.types()[value.result_type().index() as usize].shape(),
+                    SemanticTypeShapeV1::Scalar(
+                        SemanticScalarTypeV1::Float { bits: 32 | 64 }
+                            | SemanticScalarTypeV1::Integer {
+                                bits: 8 | 16 | 32 | 64,
+                                ..
+                            }
+                    )
+                ) =>
+                {
+                    // Integer wrapping results materialize as result zero
+                    // of Checked; exact source/N/B joins retain that pair.
+                    // Plain native integer arithmetic remains inadmissible.
+                }
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Divide | SemanticBinaryOpV1::Remainder,
+                    ..
+                } if matches!(
+                    source.types()[value.result_type().index() as usize].shape(),
+                    SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                        signed: false,
+                        bits: 32 | 64,
+                    })
+                ) =>
+                {
+                    // The native census must independently prove a nonzero
+                    // divisor at each actual B/C/O operation, not just N.
+                }
+                SemanticRvalueKindV1::Load(load)
+                    if load.volatility() == SemanticVolatilityV1::NonVolatile => {}
+                _ => {
+                    return Err(refused(
+                        "source",
+                        "total scalar/global recipe; no unchecked arithmetic",
+                    ));
                 }
             }
         }
@@ -209,10 +326,12 @@ fn ty(ty: &Type) -> bool {
         }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn native(
     inventory: &CanonicalKirInventoryV1<'_>,
     private: &private_memory::PrivateMemory<'_, '_>,
     division: &unsigned_division::UnsignedDivision<'_, '_>,
+    helpers: &scalar_helpers::RawEmptyScalarHelpers<'_, '_>,
     phase: &'static str,
     mut authorized_trap: impl FnMut(usize, CanonicalKirOperationCoordinateV1) -> R<bool>,
     budget: &mut AssertOriginBudgetV1<'_>,
@@ -227,6 +346,7 @@ pub(super) fn native(
     let mut roots = 0usize;
     for function in inventory.functions() {
         charge(budget, 3)?;
+        let helper = helpers.function(inventory, function.coordinate, budget)?;
         if function.function.role == FunctionRole::ExternalImport {
             charge(
                 budget,
@@ -251,10 +371,16 @@ pub(super) fn native(
             ) {
                 continue;
             }
+            if exp::declaration(function.function, budget)? {
+                continue;
+            }
             return Err(refused(
                 phase,
                 "only the canonical assertion trap declaration",
             ));
+        }
+        if helper {
+            continue;
         }
         if function.function.role != FunctionRole::KernelEntry
             || function.function.body.is_none()
@@ -285,7 +411,9 @@ pub(super) fn native(
             | Terminator::Switch { .. }
             | Terminator::IntegerSwitch { .. }
             | Terminator::Unreachable => {}
-            Terminator::Return { values } if values.is_empty() => {}
+            Terminator::Return { values }
+                if values.is_empty()
+                    || helpers.function(inventory, block.coordinate.function, budget)? => {}
             _ => return Err(refused(phase, "closed native control")),
         }
     }
@@ -325,6 +453,30 @@ pub(super) fn native(
             } if matches!(row.operation.results.as_slice(), [value] if matches!(value.ty, Type::F32 | Type::F64)) => {
                 None
             }
+            OperationKind::Binary {
+                op: BinaryOp::ShiftLeft | BinaryOp::ShiftRight,
+                ..
+            } if constant_shifts::native(inventory, ordinal, budget)?
+                || masked_shifts::native(inventory, ordinal, budget)? =>
+            {
+                None
+            }
+            OperationKind::Unary {
+                op: UnaryOp::Negate,
+                ..
+            }
+            | OperationKind::Binary {
+                op: BinaryOp::Divide,
+                ..
+            } if matches!(row.operation.results.as_slice(), [value] if value.ty == Type::F32) => {
+                // Exact IEEE F32 recipes, not the integer nonzero/overflow
+                // rule below. No reciprocal rewrite or fast-math permission.
+                None
+            }
+            OperationKind::Cast {
+                kind: CastKind::IntegerToFloat | CastKind::FloatToInteger,
+                ..
+            } if numeric_casts::native(inventory, ordinal, budget)? => None,
             OperationKind::Cast {
                 kind:
                     CastKind::Truncate
@@ -358,36 +510,39 @@ pub(super) fn native(
                 None
             }
             OperationKind::Call { callee, arguments } => {
-                charge(
-                    budget,
-                    callee
-                        .as_str()
-                        .len()
-                        .checked_add(2)
-                        .and_then(|n| n.checked_mul(8))
-                        .ok_or_else(arithmetic)?,
-                )?;
-                if !arguments.is_empty()
-                    || !row.operation.results.is_empty()
-                    || !authorized_trap(ordinal, row.coordinate)?
+                if !helpers.call(inventory, ordinal, budget)? && !exp::call(row.operation, budget)?
                 {
-                    return Err(refused(phase, "source-authorized trap only"));
-                }
-                if !matches!(
-                    fe2o3_kernel_ir::AmdGpuDiagnosticOperation::from_intrinsic_call(
-                        callee, arguments
-                    ),
-                    Some(fe2o3_kernel_ir::AmdGpuDiagnosticOperation::Trap)
-                ) {
-                    return Err(refused(phase, "exact reserved trap descriptor"));
-                }
-                let function = &inventory.functions()[row.coordinate.block.function.0 as usize];
-                let block = &inventory.blocks()
-                    [function.blocks.start + row.coordinate.block.block as usize];
-                if ordinal + 1 != block.operations.end
-                    || !matches!(block.terminator, Terminator::Unreachable)
-                {
-                    return Err(refused(phase, "terminating trap control"));
+                    charge(
+                        budget,
+                        callee
+                            .as_str()
+                            .len()
+                            .checked_add(2)
+                            .and_then(|n| n.checked_mul(8))
+                            .ok_or_else(arithmetic)?,
+                    )?;
+                    if !arguments.is_empty()
+                        || !row.operation.results.is_empty()
+                        || !authorized_trap(ordinal, row.coordinate)?
+                    {
+                        return Err(refused(phase, "source-authorized trap only"));
+                    }
+                    if !matches!(
+                        fe2o3_kernel_ir::AmdGpuDiagnosticOperation::from_intrinsic_call(
+                            callee, arguments
+                        ),
+                        Some(fe2o3_kernel_ir::AmdGpuDiagnosticOperation::Trap)
+                    ) {
+                        return Err(refused(phase, "exact reserved trap descriptor"));
+                    }
+                    let function = &inventory.functions()[row.coordinate.block.function.0 as usize];
+                    let block = &inventory.blocks()
+                        [function.blocks.start + row.coordinate.block.block as usize];
+                    if ordinal + 1 != block.operations.end
+                        || !matches!(block.terminator, Terminator::Unreachable)
+                    {
+                        return Err(refused(phase, "terminating trap control"));
+                    }
                 }
                 None
             }

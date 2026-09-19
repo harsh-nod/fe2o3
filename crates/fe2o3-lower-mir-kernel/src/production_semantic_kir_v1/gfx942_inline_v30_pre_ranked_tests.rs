@@ -152,7 +152,7 @@ fn fixture(
     .unwrap()
     .admit_current_production(SemanticMirLimitsV1::default())
     .unwrap();
-    assert_eq!(admitted.wire_version(), SemanticMirWireVersionV1::V30);
+    assert_eq!(admitted.wire_version(), SemanticMirWireVersionV1::V34);
     let semantic =
         ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
             .unwrap();

@@ -541,7 +541,7 @@ fn profile_and_source_byte_mutations_fail_closed() {
 }
 
 #[test]
-fn frozen_v30_encoding_stays_unchanged_and_v31_appends_only_its_source_option() {
+fn frozen_v31_scalar_frames_and_both_source_options_stay_unchanged() {
     let ordinary = SemanticTerminatorKindV1::Call(
         SemanticDirectCallV1::new_callable(
             SemanticCallableIdV1(7),
@@ -551,32 +551,37 @@ fn frozen_v30_encoding_stays_unchanged_and_v31_appends_only_its_source_option() 
         )
         .unwrap(),
     );
-    let mut frozen_v30 = vec![2, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0];
+    let ordinary_bytes = vec![2, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
     let mut writer = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
     encode_terminator(&mut writer, &ordinary, SemanticMirWireVersionV1::V30).unwrap();
-    assert_eq!(writer.finish(), frozen_v30);
+    assert_eq!(writer.finish(), ordinary_bytes);
     let mut writer = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
     encode_terminator(&mut writer, &ordinary, SemanticMirWireVersionV1::V31).unwrap();
-    frozen_v30.push(0);
-    assert_eq!(writer.finish(), frozen_v30);
-    for instruction in [
+    let mut frozen_v31 = ordinary_bytes;
+    frozen_v31.extend([0, 0]);
+    assert_eq!(writer.finish(), frozen_v31);
+    for (tag, instruction) in [
         SemanticGfx942InlineInstructionV30::VMovB32,
         SemanticGfx942InlineInstructionV30::VAddU32,
         SemanticGfx942InlineInstructionV30::VSubU32,
         SemanticGfx942InlineInstructionV30::VAndB32,
         SemanticGfx942InlineInstructionV30::VOrB32,
         SemanticGfx942InlineInstructionV30::VXorB32,
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let operation = SemanticCompilerIntrinsicOperationV1::Gfx942InlineU32(
             SemanticGfx942InlineU32V30::new(instruction, 1).unwrap(),
         );
         let mut old = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
         let mut new = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
-        encode_compiler_intrinsic_operation(&mut old, operation, SemanticMirWireVersionV1::V30)
+        encode_compiler_intrinsic_operation(&mut old, operation, SemanticMirWireVersionV1::V34)
             .unwrap();
         encode_compiler_intrinsic_operation(&mut new, operation, SemanticMirWireVersionV1::V31)
             .unwrap();
-        assert_eq!(old.finish(), new.finish());
+        assert_eq!(old.finish(), [91, tag as u8, 1, 0]);
+        assert_eq!(new.finish(), [87, tag as u8, 1, 0]);
     }
     let mut fixture = request(REGISTERS);
     let function = fixture.functions[0].identity;
@@ -586,7 +591,7 @@ fn frozen_v30_encoding_stays_unchanged_and_v31_appends_only_its_source_option() 
     let old = SemanticTerminatorKindV1::Call(old.clone());
     let mut previous = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
     let mut current = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
-    encode_terminator(&mut previous, &old, SemanticMirWireVersionV1::V30).unwrap();
+    encode_terminator(&mut previous, &old, SemanticMirWireVersionV1::V34).unwrap();
     encode_terminator(&mut current, &old, SemanticMirWireVersionV1::V31).unwrap();
     let mut previous = previous.finish();
     previous.push(0);
@@ -686,7 +691,10 @@ fn v31_never_accepts_hidden_or_unused_v29_execution_types_or_intrinsics() {
             fixture
                 .admit_current_production(SemanticMirLimitsV1::default())
                 .unwrap_err(),
-            expected
+            SemanticMirErrorV1::WireVersionCannotRepresent {
+                requested: SemanticMirWireVersionV1::V28,
+                required: SemanticMirWireVersionV1::V29,
+            }
         );
     }
     let mut fixture = request(REGISTERS);

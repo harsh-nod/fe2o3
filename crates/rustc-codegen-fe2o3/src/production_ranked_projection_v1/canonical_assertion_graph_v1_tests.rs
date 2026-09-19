@@ -1,3 +1,7 @@
+pub(crate) use canonical_assertion_graph_tests::{
+    with_backend_erased_bound_v1, with_backend_erased_load_roster_v1, with_backend_erased_roster_v1,
+};
+
 mod canonical_assertion_graph_tests {
     use super::super::canonical_assertion_facts_v1::*;
     use super::*;
@@ -9,6 +13,7 @@ mod canonical_assertion_graph_tests {
     include!("canonical_assertion_fixtures_v1_tests.rs");
     include!("materialized_callable_effect_v1_tests.rs");
     include!("legacy_assertion_scope_v1_tests.rs");
+    include!("canonical_masked_assertion_consumers_v1_tests.rs");
 
     const ROOT: SemanticFunctionIdV1 = SemanticFunctionIdV1::from_index(0);
 

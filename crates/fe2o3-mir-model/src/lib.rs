@@ -4,6 +4,7 @@ mod executable_wire;
 mod mem2reg;
 mod semantic_constant;
 mod semantic_logical_arguments;
+mod semantic_masked_shift_v1;
 mod semantic_memory;
 pub mod semantic_mir_v1;
 mod semantic_option_dominance;
@@ -58,6 +59,11 @@ pub use semantic_constant::{
 pub use semantic_logical_arguments::{
     SemanticAdjustedArgumentV1, SemanticLogicalArgumentErrorV1, SemanticLogicalArgumentMapV1,
     SemanticSourceArgumentBindingV1, SemanticSourceArgumentV1,
+};
+pub use semantic_masked_shift_v1::{
+    MAX_SEMANTIC_MASKED_SHIFT_STORAGE_V1, MAX_SEMANTIC_MASKED_SHIFT_WORK_V1,
+    SemanticMaskedShiftErrorV1, SemanticMaskedShiftFactV1, SemanticMaskedShiftIndexV1,
+    SemanticMaskedShiftLimitsV1, SemanticMaskedShiftMeterV1, SemanticMaskedShiftMeteredErrorV1,
 };
 pub use semantic_memory::{
     MAX_MEMORY_OPERATION_WIRE_BYTES, MirCopyNonOverlappingContract, MirElementCount,

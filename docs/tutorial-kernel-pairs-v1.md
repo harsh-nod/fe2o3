@@ -24,6 +24,55 @@ Without it, displayed declarations are unknown, not guessed from current files.
 
 ## Report Contract
 
+### Live Compiler Source Census
+
+Set `FE2O3_DIAGNOSTIC_SOURCE_CENSUS_PATH_V1` to a new file path and
+`FE2O3_DIAGNOSTIC_SOURCE_CENSUS_RUN_ID_V1` to a fresh caller-generated
+64-digit lowercase hexadecimal ID when invoking the existing
+`fe2o3-rustc-extract` wrapper. Consumers must match that expected `runId`,
+arguments and extraction mode, not just find a report at the requested path.
+The run ID is diagnostic correlation, not execution authentication.
+This optional diagnostic observes
+the same authenticated collected closure before the production transaction
+consumes it. It does not select a different importer or extraction mode.
+
+The `fe2o3-diagnostic-source-census-v1` JSON records the actual driver arguments,
+working directory, extraction mode/version, run ID, selected target, canonical function/definition/instance
+identities, compiler-assigned roles, and separate definition and identifier
+provenance. Original byte offsets account for BOM/CRLF normalization and are
+distinct from rustc's normalized offsets. Expansion and callsite anchors remain
+separate. Source SHA-256 values cover original bytes checked against rustc's
+recorded source hash; diagnostic paths and stable source-file identities alone
+are not content identities. An identifier is available only when its source
+token matches the compiled definition, including a possible `r#` prefix.
+Generated entry wrappers may therefore have an unavailable identifier even
+when their definition anchor is known. Their logical names are not substituted
+for missing identifier provenance.
+
+Unavailable files, mismatched bytes, missing identifiers and exhausted bounds
+remain explicitly unavailable. The census permits at most 512 functions, 128
+source-file observations, 4 MiB per source file, 16 MiB total source reads, 64
+macro-expansion levels, 1 MiB of argument bytes and 4 MiB of encoded output.
+Existing report paths are never overwritten. Paths aliasing the explicit
+extraction output or wrapper crate-binding sidecar disable the report.
+Protected output symlinks also disable recording, including dangling links.
+
+`extractionSucceeded` describes only that extraction invocation. A selected
+closure may still fail semantic import or a later check; observation preserves
+that failure. A rustc fatal error before collection yields unavailable selection
+and is re-raised unchanged. A process crash or interruption can leave no
+complete report. Diagnostic
+errors do not change the extraction result. Empty or incomplete files are not
+reports.
+
+This census is not a compiler-execution receipt, proof, executable artifact or
+qualification. `diagnosticOnly` is true; `qualified` and
+`authenticatesCompilerExecution` are false. It does not yet join the tutorial's
+Cargo/lock/source-closure/default-feature contracts or generated-source maps.
+Consequently it does not change any pending display binding or kernel count.
+
+### Inventory Projection
+
 The JSON schema is `fe2o3-tutorial-kernel-pair-obligations-v2` when the manifest
 contains its optional `kernelInventory` extension. Legacy manifests without
 that extension retain `fe2o3-tutorial-kernel-pair-obligations-v1`. This is a derived
@@ -81,8 +130,32 @@ the fixture inputs, source-driver contracts or curriculum source metadata.
   and required negatives have explicit separate classifications. Bare-function
   intent is reviewed inventory data, not inferred from lexical syntax.
 - A `source-driver-contract` binding must match an existing exact source case
-  and its displayed fragment. Other source/display joins remain `pending`;
-  a fixture's lesson scope is not an exact displayed-source binding.
+  and its displayed fragment.
+- A `fixture-source-contract` is an expected fixture/source contract, not
+  rustc-selected execution or semantic admission. It joins an existing
+  feature-specific fixture identity to one attributed function occurrence in an
+  exact whole-file kernel display. The validator rechecks the physical package
+  closure, Cargo manifest/lock, selected source member, file/display digests and
+  UTF-8 name offset. Package membership alone is insufficient.
+  Selection uses the existing lexer/scanner with a restricted check of ordinary
+  sibling modules and literal `feature`/`target_arch` cfg expressions (`all`,
+  `any`, `not`) for AMDGPU. Unknown cfg, item macros, transforming attributes,
+  build-script cfg, dependency features, nested/inline/path-selected modules,
+  duplicate modules or selected symbols reject a claimed binding. Such sources
+  retain `pending` until an exact selection can be established. This bounded
+  check does not replace rustc or qualify kernel implementations.
+  Supported non-cfg forms are bare `kernel`/`inline`, parenthesized
+  `allow`/`deny`/`forbid`/`warn`/`doc`/`kernel`, and `inline(always)`/`inline(never)`.
+  Qualified attribute paths and name-value forms such as `#[doc = "..."]` are
+  unsupported and reject claimed bindings.
+
+Six GPT-OSS occurrences in tabs 1-4 now retain these expected fixture/source
+contracts: serial-router, held-fragments, interleaved-stores, and the three
+materialized components. Their existing source/feature identities remain
+distinct, including the repeated megakernel symbol. This leaves 58 pending
+display bindings; the two named lesson-level source gaps remain unresolved.
+Other source/display joins remain `pending`; a fixture's lesson scope is not
+an exact displayed-source binding.
 
 The V2 report's `kernelInventory` projects these records and reports known
 identity, display, negative-case and pending-join counts separately.
@@ -98,10 +171,13 @@ qualifies implementations: pending variants still require their own sources,
 oracles and every production/target gate. The current known source selections
 must not be presented as the final number of tutorial pairs.
 
-This is a bounded lexical inventory, not a Rust parser or feature evaluator.
-Comments, literals and `macro_rules!` template bodies are excluded; conditional
-kernel attributes are conservatively retained. Rust compilation remains the
-authority for feature reachability and executable semantics.
+This is a bounded lexical inventory, not a general Rust parser or compiler
+feature-reachability proof. The runtime census excludes comments, literals and
+`macro_rules!` template bodies and conservatively retains conditional kernel
+attributes. Direct fixture selection additionally evaluates only the restricted
+literal cfg and module forms described above against the retained Cargo feature
+contract. Rust compilation remains the authority for feature reachability and
+executable semantics.
 
 ## Remaining Integration
 

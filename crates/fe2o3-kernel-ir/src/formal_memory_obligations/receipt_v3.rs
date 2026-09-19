@@ -14,6 +14,31 @@ use crate::{
 };
 use std::cmp::Ordering;
 
+#[path = "receipt_v4.rs"]
+mod receipt_v4;
+pub use receipt_v4::*;
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum WireRevision {
+    GuardedV3,
+    RuntimeV4,
+}
+
+impl WireRevision {
+    const fn version(self) -> u16 {
+        match self {
+            Self::GuardedV3 => 3,
+            Self::RuntimeV4 => 4,
+        }
+    }
+    const fn policy(self) -> u16 {
+        match self {
+            Self::GuardedV3 => 2,
+            Self::RuntimeV4 => 3,
+        }
+    }
+}
+
 pub const FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V3: u16 = 3;
 pub const FORMAL_MEMORY_OBLIGATION_POLICY_V2: u16 = 2;
 const IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-FORMAL-MEMORY-OBLIGATION-CONTENT/V3\0";
@@ -388,6 +413,7 @@ fn domain_bytes(domain: FormalAccessDomainV1) -> usize {
             FormalGuardedPathV1::ExplicitPredicate => 38,
             _ => 54,
         },
+        FormalAccessDomainV1::RuntimeSliceReadBounded(_) => 54,
     }
 }
 fn region_bytes(region: FormalAliasRegionV1) -> usize {
@@ -398,6 +424,14 @@ fn region_bytes(region: FormalAliasRegionV1) -> usize {
 }
 
 fn exact_bytes(obligations: &FormalMemoryObligations, meter: &mut CodecMeter) -> ResultV3<usize> {
+    exact_bytes_revision(obligations, WireRevision::GuardedV3, meter)
+}
+
+fn exact_bytes_revision(
+    obligations: &FormalMemoryObligations,
+    revision: WireRevision,
+    meter: &mut CodecMeter,
+) -> ResultV3<usize> {
     let counts = ObligationRecordCountsV1::from_obligations(obligations);
     preflight_record_counts(counts)?;
     let rows = counts
@@ -438,6 +472,11 @@ fn exact_bytes(obligations: &FormalMemoryObligations, meter: &mut CodecMeter) ->
         bytes = bytes.checked_add(12).ok_or_else(overflow)?;
     }
     for row in &obligations.accesses {
+        if revision == WireRevision::GuardedV3
+            && matches!(row.domain, FormalAccessDomainV1::RuntimeSliceReadBounded(_))
+        {
+            return Err(FormalMemoryReceiptErrorV1::UnsupportedGuardedRepresentation);
+        }
         bytes = bytes
             .checked_add(70 + domain_bytes(row.domain))
             .ok_or_else(overflow)?;
@@ -447,6 +486,12 @@ fn exact_bytes(obligations: &FormalMemoryObligations, meter: &mut CodecMeter) ->
             FormalBoundsKindV1::FixedMinimumBytes(_) => 25,
             FormalBoundsKindV1::SliceElementAtGuardedIndex(domain) => {
                 17 + domain_bytes(FormalAccessDomainV1::SliceBounded(domain))
+            }
+            FormalBoundsKindV1::RuntimeSliceElementAtGuardedIndex(domain) => {
+                if revision == WireRevision::GuardedV3 {
+                    return Err(FormalMemoryReceiptErrorV1::UnsupportedGuardedRepresentation);
+                }
+                17 + domain_bytes(FormalAccessDomainV1::RuntimeSliceReadBounded(domain))
             }
         };
         bytes = bytes.checked_add(width).ok_or_else(overflow)?;
@@ -474,7 +519,18 @@ fn copy_rows<'a, T>(rows: &'a [T], meter: &mut CodecMeter) -> ResultV3<Vec<&'a T
 }
 
 fn encode_v3(obligations: &FormalMemoryObligations, meter: &mut CodecMeter) -> ResultV3<Vec<u8>> {
-    let length = exact_bytes(obligations, meter)?;
+    encode_revision(obligations, WireRevision::GuardedV3, meter)
+}
+
+fn encode_revision(
+    obligations: &FormalMemoryObligations,
+    revision: WireRevision,
+    meter: &mut CodecMeter,
+) -> ResultV3<Vec<u8>> {
+    let length = match revision {
+        WireRevision::GuardedV3 => exact_bytes(obligations, meter)?,
+        WireRevision::RuntimeV4 => exact_bytes_revision(obligations, revision, meter)?,
+    };
     let mut rows = SortedRows {
         allocations: copy_rows(&obligations.allocations, meter)?,
         accesses: copy_rows(&obligations.accesses, meter)?,
@@ -497,8 +553,8 @@ fn encode_v3(obligations: &FormalMemoryObligations, meter: &mut CodecMeter) -> R
         aggregate_records: 0,
     };
     writer.bytes(&MAGIC_V1)?;
-    writer.u16(3)?;
-    writer.u16(2)?;
+    writer.u16(revision.version())?;
+    writer.u16(revision.policy())?;
     writer.u16(0)?;
     writer.u16(0)?;
     writer.u32(0)?;
@@ -533,6 +589,13 @@ fn encode_v3(obligations: &FormalMemoryObligations, meter: &mut CodecMeter) -> R
                 writer.u8(1)?;
                 encode_domain(&mut writer, FormalAccessDomainV1::SliceBounded(domain))?;
             }
+            FormalBoundsKindV1::RuntimeSliceElementAtGuardedIndex(domain) => {
+                writer.u8(2)?;
+                encode_domain(
+                    &mut writer,
+                    FormalAccessDomainV1::RuntimeSliceReadBounded(domain),
+                )?;
+            }
         }
     }
     writer.count("runtime alias requirements", rows.aliases.len())?;
@@ -559,6 +622,9 @@ fn encode_v3(obligations: &FormalMemoryObligations, meter: &mut CodecMeter) -> R
 fn encode_domain(writer: &mut Writer, domain: FormalAccessDomainV1) -> ResultV3<()> {
     match domain {
         FormalAccessDomainV1::LaunchEnvelope => writer.u8(0),
+        FormalAccessDomainV1::RuntimeSliceReadBounded(domain) => {
+            receipt_v4::encode_runtime_domain(writer, domain)
+        }
         FormalAccessDomainV1::SliceBounded(domain) => {
             writer.u8(1)?;
             writer.u32(domain.allocation.parameter_index)?;
@@ -619,6 +685,13 @@ fn invalid(field: &'static str) -> FormalMemoryReceiptErrorV1 {
 }
 
 fn decode_domain(reader: &mut Reader<'_>) -> ResultV3<FormalAccessDomainV1> {
+    decode_domain_revision(reader, WireRevision::GuardedV3)
+}
+
+fn decode_domain_revision(
+    reader: &mut Reader<'_>,
+    revision: WireRevision,
+) -> ResultV3<FormalAccessDomainV1> {
     match reader.u8()? {
         0 => Ok(FormalAccessDomainV1::LaunchEnvelope),
         1 => {
@@ -671,6 +744,7 @@ fn decode_domain(reader: &mut Reader<'_>) -> ResultV3<FormalAccessDomainV1> {
                 },
             ))
         }
+        2 if revision == WireRevision::RuntimeV4 => receipt_v4::decode_runtime_domain(reader),
         tag => Err(FormalMemoryReceiptErrorV1::UnknownTag {
             kind: "access domain",
             tag,
@@ -711,6 +785,11 @@ fn strict_key<T: Ord>(previous: &mut Option<T>, key: T, field: &'static str) -> 
 }
 
 fn validate_v3(bytes: &[u8], meter: &mut CodecMeter) -> ResultV3<FormalMemoryReceiptMetadataV3> {
+    validate_revision(bytes, WireRevision::GuardedV3, meter)?;
+    read_metadata(bytes)
+}
+
+fn validate_revision(bytes: &[u8], revision: WireRevision, meter: &mut CodecMeter) -> ResultV3<()> {
     if bytes.len() > MAX_FORMAL_MEMORY_RECEIPT_BYTES_V1 {
         return Err(FormalMemoryReceiptErrorV1::TooLarge {
             max: MAX_FORMAL_MEMORY_RECEIPT_BYTES_V1,
@@ -729,11 +808,11 @@ fn validate_v3(bytes: &[u8], meter: &mut CodecMeter) -> ResultV3<FormalMemoryRec
         return Err(FormalMemoryReceiptErrorV1::InvalidMagic);
     }
     let version = reader.u16()?;
-    if version != 3 {
+    if version != revision.version() {
         return Err(FormalMemoryReceiptErrorV1::UnknownVersion(version));
     }
     let policy = reader.u16()?;
-    if policy != 2 {
+    if policy != revision.policy() {
         return Err(FormalMemoryReceiptErrorV1::UnknownPolicy(policy));
     }
     let flags = reader.u16()?;
@@ -791,10 +870,14 @@ fn validate_v3(bytes: &[u8], meter: &mut CodecMeter) -> ResultV3<FormalMemoryRec
     let mut accesses = meter.vector::<AccessV3>(count, "guarded access metadata")?;
     let mut previous = None;
     let mut has_guarded = false;
+    let mut has_runtime = false;
     for _ in 0..count {
         meter.charge(64)?;
         let record = decode_access(&mut reader)?;
-        let domain = decode_domain(&mut reader)?;
+        let domain = match revision {
+            WireRevision::GuardedV3 => decode_domain(&mut reader)?,
+            WireRevision::RuntimeV4 => decode_domain_revision(&mut reader, revision)?,
+        };
         strict_key(&mut previous, record.0, "access location")?;
         let index = meter.find(&allocations, 1, |row| row.record.0.cmp(&record.1))?;
         let allocation = &mut allocations[index];
@@ -838,6 +921,11 @@ fn validate_v3(bytes: &[u8], meter: &mut CodecMeter) -> ResultV3<FormalMemoryRec
             allocation.guarded = true;
             has_guarded = true;
         }
+        if let FormalAccessDomainV1::RuntimeSliceReadBounded(domain) = domain {
+            receipt_v4::validate_runtime_access(width, allocation.record, record, domain)?;
+            allocation.guarded = true;
+            has_runtime = true;
+        }
         allocation.accessed = true;
         allocation.writes |= record.2 != 1;
         accesses.push(AccessV3 {
@@ -873,11 +961,19 @@ fn validate_v3(bytes: &[u8], meter: &mut CodecMeter) -> ResultV3<FormalMemoryRec
                 }
             }
             1 => {
-                let domain = decode_domain(&mut reader)?;
+                let domain = decode_domain_revision(&mut reader, revision)?;
                 if !matches!(domain, FormalAccessDomainV1::SliceBounded(_))
                     || access.domain != domain
                 {
                     return Err(invalid("bounds and access complete guarded domain"));
+                }
+            }
+            2 if revision == WireRevision::RuntimeV4 => {
+                let domain = decode_domain_revision(&mut reader, revision)?;
+                if !matches!(domain, FormalAccessDomainV1::RuntimeSliceReadBounded(_))
+                    || access.domain != domain
+                {
+                    return Err(invalid("bounds and access complete runtime read domain"));
                 }
             }
             tag => {
@@ -965,10 +1061,16 @@ fn validate_v3(bytes: &[u8], meter: &mut CodecMeter) -> ResultV3<FormalMemoryRec
     if !reader.is_finished() {
         return Err(FormalMemoryReceiptErrorV1::TrailingBytes);
     }
-    if !has_guarded {
-        return Err(FormalMemoryReceiptErrorV1::NonCanonicalVersion { version: 3 });
+    let canonical = match revision {
+        WireRevision::GuardedV3 => has_guarded,
+        WireRevision::RuntimeV4 => has_runtime,
+    };
+    if !canonical {
+        return Err(FormalMemoryReceiptErrorV1::NonCanonicalVersion {
+            version: revision.version(),
+        });
     }
-    read_metadata(bytes)
+    Ok(())
 }
 
 #[cfg(test)]

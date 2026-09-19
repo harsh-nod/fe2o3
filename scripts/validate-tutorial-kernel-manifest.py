@@ -186,6 +186,7 @@ def fail(message: str) -> None:
 def validate_kernel_inventory(
     manifest: dict[str, Any], inventory: dict[str, Any] | None,
     *, max_records: int = MAX_KERNEL_PAIR_RECORDS,
+    repo_root: Path | None = None, package_cache: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     if "kernelInventory" not in manifest:
         return None
@@ -194,9 +195,35 @@ def validate_kernel_inventory(
     assert specification is not None and specification.loader is not None
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)
+    root = Path(__file__).resolve().parents[1] if repo_root is None else repo_root
+    cache = {} if package_cache is None else package_cache
+
+    def fixture_sources(fixture: dict[str, Any]) -> tuple[str, dict[str, str], list[str]]:
+        checked = validate_compiler_input(root, fixture, "direct fixture binding", cache)
+        inputs = fixture["compilerInput"]
+        package = cache[inputs["packageManifest"]]
+        cargo = package["cargo"]
+        if (cargo["package"].get("build") not in (None, False)
+                or (cargo["package"].get("build") is not False and (package["packageRoot"] / "build.rs").exists())
+                or any(member not in cargo.get("features", {})
+                       for members in cargo.get("features", {}).values() for member in members)):
+            fail("direct fixture binding requires local features without build-script cfg")
+        sources = {}
+        for path, source in package["packageSources"]:
+            if sha256_file(path, MAX_ATTRIBUTED_SOURCE_BYTES, "direct fixture source") != hashlib.sha256(source.encode("utf-8")).hexdigest():
+                fail("direct fixture physical source differs from its validated closure")
+            sources[path.relative_to(root).as_posix()] = source
+        library = (PurePosixPath(inputs["packageManifest"]).parent / inputs["cargoTarget"]["sourcePath"]).as_posix()
+        return library, sources, checked["enabledFeatures"]
+
+    def rust_syntax(source: str) -> tuple[str, dict[int, int]]:
+        code = _rust_code_without_comments_and_literals(source)
+        return code, _rust_delimiters(code)
+
     try:
         return module.validate_kernel_inventory(
             manifest, inventory, ordinary_rust_function_items, max_records=max_records,
+            load_fixture_sources=fixture_sources, rust_syntax=rust_syntax,
         )
     except module.KernelInventoryError as error:
         fail(str(error))
@@ -1814,7 +1841,7 @@ def validate_manifest(
         gaps = validate_curriculum(manifest["curriculum"], entries, fixtures, repo_root, cache)
         if curriculum_gaps is not None:
             curriculum_gaps.update(gaps)
-    validate_kernel_inventory(manifest, None)
+    validate_kernel_inventory(manifest, None, repo_root=repo_root, package_cache=cache)
     return fixtures
 
 
@@ -1876,6 +1903,7 @@ def load_manifest(path: Path, maximum_bytes: int = MAX_CARGO_MANIFEST_BYTES) -> 
 def _kernel_pair_report(
     manifest: dict[str, Any], fixtures: dict[str, Any],
     gaps: dict[str, list[str]], inventory: dict[str, Any] | None,
+    *, repo_root: Path | None = None,
 ) -> dict[str, Any]:
     """Project already validated contracts without inferring variant custody."""
     curriculum = manifest.get("curriculum")
@@ -1990,7 +2018,7 @@ def _kernel_pair_report(
         "sourceBindingGaps": gaps,
     }
     identities = validate_kernel_inventory(
-        manifest, inventory, max_records=MAX_KERNEL_PAIR_RECORDS - records,
+        manifest, inventory, max_records=MAX_KERNEL_PAIR_RECORDS - records, repo_root=repo_root,
     )
     if identities is not None:
         report.update(
@@ -2038,11 +2066,11 @@ def main() -> None:
         inventory = load_manifest(arguments.site_inventory, MAX_SITE_INVENTORY_BYTES)
         validate_site_inventory(manifest["curriculum"], inventory)
         if not arguments.emit_kernel_pairs:
-            validate_kernel_inventory(manifest, inventory)
+            validate_kernel_inventory(manifest, inventory, repo_root=root)
     if arguments.require_qualified:
         fail("qualification receipts and policy/final-graph evidence are not implemented by source contracts")
     if arguments.emit_kernel_pairs:
-        print(_encode_kernel_pair_report(_kernel_pair_report(manifest, fixtures, curriculum_gaps, inventory)))
+        print(_encode_kernel_pair_report(_kernel_pair_report(manifest, fixtures, curriculum_gaps, inventory, repo_root=root)))
     elif arguments.emit_matrix:
         records = [fixture for fixture in fixtures.values() if fixture["target"] == arguments.emit_matrix]
         if not records:

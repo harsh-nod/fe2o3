@@ -2,7 +2,7 @@
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn staged_generative_providers_reject_without_export_authority() {
     const REASON: &str = EXECUTION_ROLE_MATERIALIZATION_PENDING;
-    const ENTRY_REASON: &str = "raw rustc MIR preflight rejected reviewed terminal without production expansion: KernelContextIssue";
+    const ENTRY_REASON: &str = EXECUTION_ROLE_MATERIALIZATION_PENDING;
     let target = ScratchTarget::new();
     let build_dir = target.path().join("provider-target");
     let mut failures = Vec::new();
@@ -106,7 +106,62 @@ fn staged_generative_providers_reject_without_export_authority() {
     // The protocol matrix builds its own fixture; release this completed cache first.
     drop(target);
     check_kernel_context_source_protocol();
+    check_context_root_roster();
     check_execution_role_source_shapes();
+}
+
+fn check_context_root_roster() {
+    let target = ScratchTarget::new();
+    let build_dir = target.path().join("context-roster-target");
+    let mut failures = Vec::new();
+    for profile in ["gfx942", "gfx950"] {
+        for names in [["alpha", "zeta"], ["zeta", "alpha"]] {
+            let label = format!("{profile}-{}", names[0]);
+            let source_path = target.path().join(format!("{label}.rs"));
+            let bundle = target.path().join(format!("{label}.fe2sim"));
+            let mut source = "use fe2o3_device::{kernel, KernelContext};\ntype Tag = core::marker::PhantomData<&'static u32>;\n".to_owned();
+            for name in names {
+                source.push_str(&format!(
+                    r#"
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn {name}(_context: KernelContext<'_>, a: u32, b: u32, tag: Tag) {{ let _ = (a, b, tag); }}
+"#
+                ));
+            }
+            std::fs::write(&source_path, source).unwrap();
+            let mut command = simulation_export_command_for_feature(
+                profile,
+                &bundle,
+                &build_dir,
+                Some(5),
+                "provider_context_protocol",
+            );
+            command.env("FE2O3_CONTEXT_PROTOCOL_SOURCE", &source_path);
+            let result = output(command, "construct each distinct physical context root");
+            if let Some(diagnostic) = result
+                .stderr
+                .lines()
+                .find(|line| line.contains("fe2o3 rustc extraction:"))
+            {
+                eprintln!("context roster {label}: {diagnostic}");
+            }
+            if result.status.success()
+                || !result
+                    .stderr
+                    .contains(EXECUTION_ROLE_MATERIALIZATION_PENDING)
+            {
+                failures.push(format!(
+                    "{label} did not reach context materialization refusal:\n{}",
+                    result.stderr
+                ));
+            }
+            assert!(
+                std::fs::symlink_metadata(&bundle)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            );
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 fn check_execution_role_source_shapes() {

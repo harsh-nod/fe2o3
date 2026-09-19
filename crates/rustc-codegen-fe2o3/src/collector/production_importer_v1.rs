@@ -32,11 +32,11 @@ use super::{
     CollectionResult,
 };
 use crate::production_semantic_body_v1::{
-    ProductionSemanticBlockBindingV1, ProductionSemanticBodyErrorV1, ProductionSemanticBodyInputV1,
-    ProductionSemanticBodyRequestOwnerV1, ProductionSemanticCallableOwnerEntryV1,
-    ProductionSemanticDirectCallBindingV1, ProductionSemanticFunctionExportV1,
-    ProductionSemanticFunctionIdentitiesV1, ProductionSemanticLocalBindingV1,
-    ProductionSemanticNormalizedRustcIntrinsicRecipeV1,
+    ExpectedFunctionCommitmentV29, ProductionSemanticBlockBindingV1, ProductionSemanticBodyErrorV1,
+    ProductionSemanticBodyInputV1, ProductionSemanticBodyRequestOwnerV1,
+    ProductionSemanticCallableOwnerEntryV1, ProductionSemanticDirectCallBindingV1,
+    ProductionSemanticFunctionExportV1, ProductionSemanticFunctionIdentitiesV1,
+    ProductionSemanticLocalBindingV1, ProductionSemanticNormalizedRustcIntrinsicRecipeV1,
     ProductionSemanticTerminalExpansionRecipeV1, ProductionSemanticTypeBindingV1,
     construct_production_semantic_body_v1,
 };
@@ -56,10 +56,19 @@ use crate::rustc_semantic_adapter_v1::{
 };
 use crate::rustc_semantic_plan_v1::{
     DebugSourceCaptureRequestV2, ProductionSemanticPreflightErrorV1,
-    ProductionSemanticPreflightPlanV1, RetainedSemanticFunctionProducerV1,
-    build_production_semantic_preflight_plan_v1,
+    ProductionSemanticPreflightPlanV1, RetainedSemanticFunctionProducerV1, SourceClosureWorkV1,
+    build_production_semantic_preflight_plan_with_work_v1,
 };
 use crate::trusted_device_items::{self, TrustedDeviceItem};
+
+#[path = "execution_terminal_descriptors_v29.rs"]
+mod execution_terminals;
+#[path = "production_saturating_terminal_v1.rs"]
+mod saturating_terminal;
+#[path = "production_wave64_shuffle_terminal_v1.rs"]
+mod wave64_shuffle_terminal;
+#[cfg(test)]
+pub(crate) use wave64_shuffle_terminal::check_wave64_descriptor_mutations_v1;
 
 const IDENTITY_INVENTORY_DOMAIN_V2: &[u8] = b"fe2o3/semantic-mir/rustc-identity-inventory/v2";
 #[cfg(test)]
@@ -257,6 +266,7 @@ impl AuthenticatedRustcPreflightPlanV3 {
 /// substitution as the import surface grows.
 pub(crate) struct ConstructedProductionSemanticMirV1 {
     pub(crate) semantic_mir: AdmittedInertSemanticMirV1,
+    pub(crate) context_entries: super::RetainedContextEntriesV29,
     pub(crate) rustc_identity_inventory: AuthenticatedRustcIdentityInventoryV3,
     pub(crate) rustc_preflight_plan: AuthenticatedRustcPreflightPlanV3,
     pub(crate) rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
@@ -280,6 +290,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         collection,
         roots,
         context_entries,
+        closure_flow,
     } = closure;
     let target = match target.authenticate_import_session(tcx) {
         Ok(target) => target,
@@ -308,7 +319,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     if !exact_ordered_axes_match(retained_roots, independently_observed_roots) {
         return Err(ProductionSemanticImportErrorV1::RootCustodyMismatch);
     }
-    context_entries
+    let context_entries = context_entries
         .validate_for_import_v1(tcx, &collection)
         .map_err(ProductionSemanticImportErrorV1::ContextCustody)?;
     let reference_effect_bindings =
@@ -319,7 +330,8 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
                 .filter_map(|function| function.reference_effect_binding.clone())
                 .collect(),
         );
-    let identity_inventory = build_identity_inventory_v1(tcx, &target, &collection, &roots)?;
+    let (identity_inventory, closure_work) =
+        build_identity_inventory_v1(tcx, &target, &collection, &roots, closure_flow)?;
     require_lineage_transcript_bound_v3(
         "rustc identity inventory",
         &identity_inventory.canonical_transcript,
@@ -331,13 +343,14 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         sha256: rustc_identity_inventory_sha256,
         canonical_transcript: rustc_identity_inventory_transcript,
     } = identity_inventory;
-    let plan = match build_production_semantic_preflight_plan_v1(
+    let mut plan = match build_production_semantic_preflight_plan_with_work_v1(
         tcx,
         canonical_target_layout_v1(target.rustc_layout()),
         functions,
         roots,
         rustc_identity_inventory_sha256,
         debug_source_capture,
+        (Some(context_entries), closure_work),
     ) {
         Ok(plan) => plan,
         Err(error) => return Err(ProductionSemanticImportErrorV1::Preflight(Box::new(error))),
@@ -380,14 +393,16 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
             ));
         }
     };
-    let semantic_mir = construct_complete_request_v1(
+    let (semantic_mir, context_entries) = construct_complete_request_v1(
         tcx,
         canonical_target_layout_v1(target.rustc_layout()),
-        &plan,
+        &mut plan,
         semantic_types.into_records(),
         semantic_function_abis,
         semantic_terminal_abis,
     )?;
+    #[cfg(test)]
+    super::semantic_import_observation_v1_tests::observe_actual(tcx, &semantic_mir);
     let (
         rustc_preflight_plan_sha256,
         rustc_preflight_plan_transcript,
@@ -401,6 +416,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     drop(collection);
     Ok(ConstructedProductionSemanticMirV1 {
         semantic_mir,
+        context_entries,
         rustc_identity_inventory: AuthenticatedRustcIdentityInventoryV3 {
             sha256: rustc_identity_inventory_sha256,
             canonical_transcript: rustc_identity_inventory_transcript,
@@ -437,11 +453,14 @@ fn require_lineage_transcript_bound_v3(
 fn construct_complete_request_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     target: SemanticTargetDataLayoutV1,
-    plan: &ProductionSemanticPreflightPlanV1<'tcx>,
+    plan: &mut ProductionSemanticPreflightPlanV1<'tcx>,
     types: Vec<SemanticTypeDeclV1>,
     function_abis: ConstructedSemanticFunctionAbisV1,
     terminal_abis: ConstructedSemanticFunctionAbisV1,
-) -> Result<AdmittedInertSemanticMirV1, ProductionSemanticImportErrorV1> {
+) -> Result<
+    (AdmittedInertSemanticMirV1, super::RetainedContextEntriesV29),
+    ProductionSemanticImportErrorV1,
+> {
     let function_abis = function_abis.into_records();
     let terminal_abis = terminal_abis.into_records();
     if function_abis.len() != plan.function_producers().len() {
@@ -495,10 +514,16 @@ fn construct_complete_request_v1<'tcx>(
     } else {
         Default::default()
     };
-    let mut body_owner = build_body_request_owner_v1(plan, types.len(), function_count)?
-        .with_inline_sources_v30(inline_sources)
-        .with_ordered_sources_v31(ordered_sources)
-        .with_program_sources_v32(program_sources);
+    let mut context_entries = plan.take_context_entries_v29();
+    let mut body_owner = build_body_request_owner_v1(
+        plan,
+        types.len(),
+        function_count,
+        !context_entries.is_empty(),
+    )?
+    .with_inline_sources_v30(inline_sources)
+    .with_ordered_sources_v31(ordered_sources)
+    .with_program_sources_v32(program_sources);
     let mut callables = (0..function_count)
         .map(|index| SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(index)))
         .collect::<Vec<_>>();
@@ -538,6 +563,11 @@ fn construct_complete_request_v1<'tcx>(
         });
     }
 
+    if !context_entries.is_empty() {
+        body_owner
+            .enable_workgroup_scope_custody_v29(tcx, target, &types, &callables)
+            .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
+    }
     let mut functions = Vec::new();
     functions
         .try_reserve_exact(plan.function_producers().len())
@@ -563,14 +593,13 @@ fn construct_complete_request_v1<'tcx>(
         let local_bindings = body
             .locals
             .iter()
-            .enumerate()
-            .map(|(semantic, local)| {
+            .map(|local| {
                 Ok(ProductionSemanticLocalBindingV1::new(
                     local.rustc_local,
-                    fe2o3_mir_model::semantic_mir_v1::SemanticLocalIdV1::from_index(
-                        u32::try_from(semantic)
-                            .map_err(|_| ProductionSemanticImportErrorV1::RootIdentityMismatch)?,
-                    ),
+                    *body
+                        .raw_to_semantic_locals
+                        .get(local.rustc_local as usize)
+                        .ok_or(ProductionSemanticImportErrorV1::RootIdentityMismatch)?,
                     local.identity,
                     local.source.provenance,
                 ))
@@ -666,6 +695,7 @@ fn construct_complete_request_v1<'tcx>(
                     direct_calls: &direct_calls,
                     terminal_expansions: &terminal_expansions,
                     normalized_intrinsics: &normalized_intrinsics,
+                    context_entry: context_entries.remove(&function_id),
                 },
                 &mut body_owner,
             )
@@ -682,13 +712,16 @@ fn construct_complete_request_v1<'tcx>(
     body_owner
         .require_program_sources_consumed_v32()
         .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
+    if !context_entries.is_empty() {
+        return Err(body_owner_table_mismatch_v1("unused context root binding"));
+    }
     let contains_execution_roles = types.iter().any(|ty| {
         matches!(
             ty.rust_type_kind(),
             fe2o3_mir_model::semantic_mir_v1::SemanticRustTypeKindV1::Execution(_)
         )
     });
-    InertSemanticMirRequestV1::new_with_callables(
+    let semantic = InertSemanticMirRequestV1::new_with_callables(
         target,
         types,
         Vec::new(),
@@ -711,13 +744,18 @@ fn construct_complete_request_v1<'tcx>(
             request.admit_current_production(SemanticMirLimitsV1::default())
         }
     })
-    .map_err(ProductionSemanticImportErrorV1::SemanticSchema)
+    .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?;
+    let context_entries = body_owner
+        .seal_context_entries(&semantic)
+        .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
+    Ok((semantic, context_entries))
 }
 
 fn build_body_request_owner_v1<'tcx>(
-    plan: &ProductionSemanticPreflightPlanV1<'tcx>,
+    plan: &mut ProductionSemanticPreflightPlanV1<'tcx>,
     type_count: usize,
     function_count: u32,
+    context_transaction: bool,
 ) -> Result<ProductionSemanticBodyRequestOwnerV1<'tcx>, ProductionSemanticImportErrorV1> {
     let callable_count = plan
         .function_producers()
@@ -790,8 +828,46 @@ fn build_body_request_owner_v1<'tcx>(
         ));
     }
 
-    ProductionSemanticBodyRequestOwnerV1::new(SemanticMirLimitsV1::default(), type_count, &entries)
-        .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))
+    let mut owner = ProductionSemanticBodyRequestOwnerV1::with_preflight_work(
+        plan.take_construction_work()
+            .map_err(|error| ProductionSemanticImportErrorV1::Preflight(Box::new(error)))?,
+        type_count,
+        &entries,
+    )
+    .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
+    if context_transaction {
+        if plan.function_producers().len() != function_count as usize
+            || plan.body_producers().len() != function_count as usize
+        {
+            return Err(body_owner_table_mismatch_v1(
+                "function commitment preflight bodies",
+            ));
+        }
+        owner
+            .enable_function_commitments_v29(
+                function_count as usize,
+                plan.function_producers()
+                    .iter()
+                    .zip(plan.body_producers())
+                    .map(|(function, body)| {
+                        ExpectedFunctionCommitmentV29::new(
+                            function.instance,
+                            body.function,
+                            ProductionSemanticFunctionIdentitiesV1::new(
+                                function.identities.function(),
+                                function.identities.item_definition(),
+                                function.identities.monomorphization(),
+                                function.identities.generic_type_arguments(),
+                                function.identities.const_generic_arguments(),
+                            ),
+                            semantic_function_role_v1(function.role),
+                            body.source.provenance,
+                        )
+                    }),
+            )
+            .map_err(|error| ProductionSemanticImportErrorV1::BodyConstruction(Box::new(error)))?;
+    }
+    Ok(owner)
 }
 
 fn body_owner_table_mismatch_v1(table: &'static str) -> ProductionSemanticImportErrorV1 {
@@ -1033,6 +1109,15 @@ fn terminal_operation_v1<'tcx>(
             crate::production_inline_assembly_v30::semantic_operation(operation)
                 .map(SemanticCompilerIntrinsicOperationV1::Gfx942InlineU32)
                 .map_err(ProductionSemanticImportErrorV1::SemanticSchema)
+            }
+        ProductionTerminalExpansionV1::ContextIssue
+        | ProductionTerminalExpansionV1::WorkgroupDerive
+        | ProductionTerminalExpansionV1::MaskedTileLoadU32
+        | ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32
+        | ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32 => {
+            execution_terminals::construct(tcx, instance, expansion, abi, types)
+                .map(SemanticCompilerIntrinsicOperationV1::Execution)
+                .ok_or_else(|| body_owner_table_mismatch_v1("execution terminal descriptor"))
         }
         ProductionTerminalExpansionV1::ThreadIndex(axis)
             if inputs.is_empty()
@@ -1300,6 +1385,24 @@ fn terminal_operation_v1<'tcx>(
                 && matches!(rust_output.kind(), TyKind::Float(FloatTy::F32)) =>
         {
             Ok(SemanticCompilerIntrinsicOperationV1::FabsF32)
+        }
+        ProductionTerminalExpansionV1::RustcSaturatingInteger(operation)
+            if saturating_terminal::matches_v1(
+                tcx,
+                types,
+                inputs,
+                output,
+                rust_inputs,
+                rust_output,
+            ) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::SaturatingInteger(
+                operation,
+            ))
+        }
+        ProductionTerminalExpansionV1::Gfx942Wave64Shuffle(scalar) => {
+            wave64_shuffle_terminal::construct(tcx, instance, scalar, abi, types)
+                .ok_or_else(|| body_owner_table_mismatch_v1("exact Wave64 shuffle primitive"))
         }
         ProductionTerminalExpansionV1::MemoryVolatileLoad
             if inputs.len() == 2
@@ -2856,6 +2959,7 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::MathContextCurrent
         | ProductionTerminalExpansionV1::MathF32(_)
         | ProductionTerminalExpansionV1::RustcFabsF32
+        | ProductionTerminalExpansionV1::RustcSaturatingInteger(_)
         | ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent
         | ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum
         | ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum
@@ -4189,6 +4293,12 @@ const fn terminal_operation_tag_for_schema_v1(
                 u8::MAX
             }
         }
+        // Draft allocation requested in #271; do not publish before acknowledgment.
+        ProductionTerminalExpansionV1::ContextIssue => 122,
+        ProductionTerminalExpansionV1::WorkgroupDerive => 123,
+        ProductionTerminalExpansionV1::MaskedTileLoadU32 => 124,
+        ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32 => 125,
+        ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32 => 126,
         ProductionTerminalExpansionV1::ThreadIndex(
             fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1::X,
         ) => 13,
@@ -4314,6 +4424,11 @@ const fn terminal_operation_tag_for_schema_v1(
             | TerminalIdentitySchemaV1::CombinedV5 => 112,
         },
         ProductionTerminalExpansionV1::RustcFabsF32 => 113,
+        ProductionTerminalExpansionV1::Gfx942Wave64Shuffle(scalar) => scalar.terminal_tag(),
+        ProductionTerminalExpansionV1::RustcSaturatingInteger(operation) => match operation {
+            fe2o3_mir_model::semantic_mir_v1::SemanticSaturatingIntegerOpV1::Add => 127,
+            fe2o3_mir_model::semantic_mir_v1::SemanticSaturatingIntegerOpV1::Subtract => 128,
+        },
         ProductionTerminalExpansionV1::MemoryVolatileLoad => 115,
         ProductionTerminalExpansionV1::NeutralWorkgroupInclusiveScanSum => match schema {
             #[cfg(test)]
@@ -4383,23 +4498,27 @@ fn build_identity_inventory_v1<'tcx>(
     target: &crate::production_target_v1::AuthenticatedProductionTargetV1,
     collection: &CollectionResult<'tcx>,
     roots: &[AuthenticatedProductionRootV1<'tcx>],
-) -> Result<ProductionSemanticIdentityInventoryV1<'tcx>, ProductionSemanticImportErrorV1> {
+    closure_flow: super::closure_flow_v1::AuthenticatedClosureFlowV1<'tcx>,
+) -> Result<
+    (
+        ProductionSemanticIdentityInventoryV1<'tcx>,
+        SourceClosureWorkV1,
+    ),
+    ProductionSemanticImportErrorV1,
+> {
     require_count_within_limit_v1(
         SemanticMirResourceV1::Functions,
         collection.functions.len(),
         HARD_MAX_FUNCTIONS_V1,
     )?;
     require_count_within_limit_v1(SemanticMirResourceV1::Roots, roots.len(), HARD_MAX_ROOTS_V1)?;
+    let closure_work = closure_flow
+        .revalidate_for_import_v1(tcx, collection)
+        .map_err(ProductionSemanticImportErrorV1::ClosureAdmission)?;
 
     let target = canonical_target_layout_v1(target.rustc_layout());
     let mut functions = Vec::with_capacity(collection.functions.len());
     for function in &collection.functions {
-        crate::closure_profile_v1::revalidate_closure_observation_v2(
-            tcx,
-            function.instance,
-            function.closure_observation.as_deref(),
-        )
-        .map_err(ProductionSemanticImportErrorV1::ClosureAdmission)?;
         functions.push(RetainedSemanticFunctionProducerV1 {
             identities: canonical_function_identities_v1(tcx, function.instance),
             instance: function.instance,
@@ -4451,12 +4570,15 @@ fn build_identity_inventory_v1<'tcx>(
 
     let (sha256, canonical_transcript) =
         identity_inventory_identity_and_transcript_v1(target, &functions, &canonical_roots);
-    Ok(ProductionSemanticIdentityInventoryV1 {
-        functions: functions.into_boxed_slice(),
-        roots: canonical_roots.into_boxed_slice(),
-        sha256,
-        canonical_transcript,
-    })
+    Ok((
+        ProductionSemanticIdentityInventoryV1 {
+            functions: functions.into_boxed_slice(),
+            roots: canonical_roots.into_boxed_slice(),
+            sha256,
+            canonical_transcript,
+        },
+        closure_work,
+    ))
 }
 
 fn identity_inventory_identity_and_transcript_v1(
@@ -4705,6 +4827,35 @@ mod tests {
         use crate::production_semantic_terminal_v1::{
             ProductionBf16ConversionV1, ProductionTerminalExpansionV1,
         };
+        for (expansion, tag) in [
+            (ProductionTerminalExpansionV1::Gfx950LdsTransposePublish, 83),
+            (ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent, 118),
+            (
+                ProductionTerminalExpansionV1::DisjointBlockComponentIndex,
+                119,
+            ),
+            (ProductionTerminalExpansionV1::Bf16MatrixBColumnMajor, 120),
+            (
+                ProductionTerminalExpansionV1::Bf16MatrixBColumnMajorLoadZeroFilledV1,
+                121,
+            ),
+            (ProductionTerminalExpansionV1::ContextIssue, 122),
+            (ProductionTerminalExpansionV1::WorkgroupDerive, 123),
+            (ProductionTerminalExpansionV1::MaskedTileLoadU32, 124),
+            (
+                ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32,
+                125,
+            ),
+            (ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32, 126),
+        ] {
+            assert_eq!(
+                terminal_operation_tag_for_schema_v1(
+                    expansion,
+                    TerminalIdentitySchemaV1::CombinedV4
+                ),
+                tag
+            );
+        }
 
         let pipeline = [
             ProductionTerminalExpansionV1::WorkgroupPipelineCurrent,

@@ -328,6 +328,7 @@ where
         &mut Budget<'work>,
     ) -> Result<(T, usize), E>,
 {
+    let ledger = budget.work_ledger_identity_v1();
     let observed_storage = parts.storage.retained_storage();
     let Some(floor) = budget.storage().checked_sub(observed_storage) else {
         drop(parts);
@@ -353,6 +354,10 @@ where
             budget.reserve_storage(checked_storage.retained_storage())?;
             let callback_floor = budget.storage();
             let callback = origins(&checked, budget);
+            if budget.work_ledger_identity_v1() != ledger {
+                drop(callback);
+                return Err(Resource::Accounting.into());
+            }
             if budget.storage() != callback_floor {
                 drop(callback);
                 return Err(KirCheckedNeutralOptimizationErrorV1::OriginAccounting);
@@ -385,14 +390,14 @@ where
         budget.charge_work(bytes.len())?;
         budget.reserve_storage(bytes.len())?;
         let mut input_history = Vec::new();
-        if policy == crate::fixed_policy_v3::FixedPolicy::Checked3 {
+        if policy != crate::fixed_policy_v3::FixedPolicy::Historical2 {
             budget.charge_work(2)?;
         }
         input_history
             .try_reserve_exact(bytes.len())
             .map_err(|_| Resource::Allocation)?;
         if input_history.capacity() != bytes.len() {
-            if policy == crate::fixed_policy_v3::FixedPolicy::Checked3 {
+            if policy != crate::fixed_policy_v3::FixedPolicy::Historical2 {
                 let excess = input_history
                     .capacity()
                     .checked_sub(bytes.len())
@@ -441,6 +446,12 @@ where
             Err(KirCheckedNeutralOptimizationErrorV1::Panicked)
         }
     };
+    // A hostile callback may replace the borrowed ledger before returning or
+    // panicking. Refuse custody without charging or releasing that foreign meter.
+    if budget.work_ledger_identity_v1() != ledger {
+        drop(result);
+        return Err(Resource::Accounting.into());
+    }
     // No allocation or callback may intervene after this explicit output
     // transfer. Rejected owners were dropped by the unwound/returned scope.
     if let Err(error) = restore_floor(budget, floor) {

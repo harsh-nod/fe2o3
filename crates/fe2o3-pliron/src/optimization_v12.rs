@@ -148,6 +148,10 @@ enum ExecutionAdmissionV1<'a> {
         occurrences: &'a crate::kir_occurrence_capture_v1::Capture,
         limits: crate::kir_occurrence_capture_v1::Limits,
     },
+    Integer6 {
+        occurrences: &'a crate::kir_occurrence_capture_v1::Capture,
+        limits: crate::kir_occurrence_capture_v1::Limits,
+    },
 }
 
 fn native_execution_resources_v1(
@@ -375,6 +379,19 @@ impl KirPlironGraphV12<'_> {
                     FixedPolicy::Checked3,
                 )
             }
+            ExecutionAdmissionV1::Integer6 {
+                occurrences,
+                limits,
+            } => {
+                let (profile, capture) =
+                    integer_continuation_resources_v1(canonical_bytes, limits.nodes)?;
+                (
+                    profile,
+                    Some(capture),
+                    Some(occurrences),
+                    FixedPolicy::Integer6,
+                )
+            }
         };
         let retained = self
             .retained_storage
@@ -405,15 +422,26 @@ impl KirPlironGraphV12<'_> {
             .map_err(PlironOptimizationErrorV12::Mapping)?;
             self.retained_storage = retained;
             self.optimization_started = true;
-            let (result, cse_work) = if policy == FixedPolicy::Checked3 {
+            let (result, cse_work) = if policy != FixedPolicy::Historical2 {
                 let mut ledger = crate::fixed_policy_v3::CseLedger::new(budget);
-                let result = self.session.execute_fixed_policy3_v1(
-                    &self.root,
-                    &plan,
-                    &capture,
-                    occurrences.ok_or(PlironOptimizationErrorV12::Accounting)?,
-                    &mut ledger,
-                );
+                let occurrences = occurrences.ok_or(PlironOptimizationErrorV12::Accounting)?;
+                let result = match policy {
+                    FixedPolicy::Checked3 => self.session.execute_fixed_policy3_v1(
+                        &self.root,
+                        &plan,
+                        &capture,
+                        occurrences,
+                        &mut ledger,
+                    ),
+                    FixedPolicy::Integer6 => self.session.execute_fixed_integer_continuation_v1(
+                        &self.root,
+                        &plan,
+                        &capture,
+                        occurrences,
+                        &mut ledger,
+                    ),
+                    FixedPolicy::Historical2 => unreachable!(),
+                };
                 // Preserve the original ledger denial even when the pass
                 // manager wraps it, and reject sticky cleanup/accounting errors.
                 let work = ledger.finish()?;
@@ -457,6 +485,8 @@ impl KirPlironGraphV12<'_> {
         result.map(|(report, cse_work)| (report, profile, cse_work))
     }
 }
+
+include!("optimization_integer_resources_v1.rs");
 
 #[cfg(test)]
 mod tests {

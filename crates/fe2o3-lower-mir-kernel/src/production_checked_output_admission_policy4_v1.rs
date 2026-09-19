@@ -2,6 +2,8 @@ use super::*;
 use fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12 as Owner;
 use fe2o3_kernel_opt::CheckedCanonicalKernelIrOwnerPolicy4V1 as Checked;
 
+include!("production_checked_output_erased_policy4_v1.rs");
+
 /// Failure to compose source/B/C admission with independently checked C/O.
 #[derive(Debug)]
 pub enum ProductionCheckedOutputAdmissionErrorPolicy4V1 {
@@ -106,7 +108,10 @@ impl ProductionCheckedOutputOwnerPolicy4V1 {
                 output_admission_unsupported_v1("ranked", "complete nonempty root roster").into(),
             );
         }
-        let source = ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks(receipt)
+        let source =
+            ProductionSemanticKirOwnerV1::try_attach_materialized_ranked_checks_with_budget_v1(
+                receipt, budget,
+            )
             .map_err(P3::Source)?;
         let kernels = check(&source, &bound, &checked, budget)?;
         Ok(Self {
@@ -164,7 +169,7 @@ impl ProductionCheckedOutputOwnerPolicy4V1 {
     }
 }
 
-fn check(
+pub(super) fn check(
     source: &ProductionSemanticKirOwnerV1,
     bound: &Owner,
     checked: &Checked,
