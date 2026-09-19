@@ -25,6 +25,7 @@ mod monomorphization_dead;
 #[cfg(test)]
 mod process_execution;
 mod production_canonical_phase_policy_v1;
+mod production_conditional_reference_output_v1;
 mod production_geometry_v1;
 mod production_mir_pliron_verus_join_v1;
 mod production_native_source_lineage_v1;

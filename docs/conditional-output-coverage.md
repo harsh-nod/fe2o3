@@ -130,6 +130,52 @@ kernel-argument coordinates, excluding the CPU point-coordinate prefix; it is
 not a raw CPU parameter number. The inspection retains this field but does not
 validate the reference's logical ABI relation. No proof counter is incremented.
 
+## Scoped CPU Reference Join
+
+The backend-private `with_conditional_reference_output_v1` composes these
+queries against the actual pending ranked owner. Its synchronous callback
+borrows checked source translation, canonical and ranked coverage, the selected
+ownership occurrence and the original authenticated reference binding. No graph
+or argument map is copied. The callback cannot retain the locally derived facts
+or convert them into a clean compilation stage.
+
+The initial reference fragment is deliberately narrow: one complete `u32`
+output argument, one leading `usize` point coordinate, and one unconditional
+constant output store in a normally returning CPU block. The checker compares
+the original signature preimage, derived relations, CPU effect IR and selected
+write, source-root identities and bound proof subjects. It also checks the
+contract's coordinate, domain, precondition, value and numeric model. Signature
+replay is separate from the effect-IR hash: changing the signature without
+changing that hash must not preserve acceptance. Unsupported shapes refuse.
+
+For the fill example, the four checked positions are:
+
+| Position | Output argument |
+| --- | --- |
+| Rust source | 0 |
+| Adjusted FnAbi | 0, complete slice pair |
+| Physical KIR entry | 0, global slice |
+| Raw CPU reference | 1, following the point coordinate |
+
+The reference contract stores the logical source ordinal, not the raw CPU
+ordinal. The source root supplies kernel identity even when a transparent
+Result wrapper selects a different body. Equal metadata is not independent
+producer custody: the production observer borrows the same per-root roster
+used to prepare the proof request, without reconstructing it.
+
+The test-only post-bind observer retains the actual imported receipts and
+protected-runtime lease while running the join. It still returns `Incomplete`.
+Every residual check, the legacy trace finding, selected coverage blocker and
+mandatory bounds diagnostic remain unchanged. Unconditional `TotalView`
+credit remains zero. The live work ledger is inherited; existing lowerer
+allocation and unwind boundaries are not upgraded to whole-process bounds.
+
+This is not conditional proof discharge or launch authority. The host must
+still establish `N <= G`, unit inactive axes, admitted memory bindings and the
+retained address-representation domain, including when `N == 0`. Aggregate
+proof generation, exact optimized-graph replay, machine refinement and safe
+host admission remain separate integration requirements.
+
 ## Existing Host Binding
 
 The descriptor already identifies each slice-length ABI component. The
@@ -197,8 +243,9 @@ new work, retained rows and diagnostic/name storage use that caller's metered
 manager. Its conservative monotonic resource domain is distinct from the
 canonical query ledger. There is no clean-report conversion, coverage-counter
 credit or production admission path in this diagnostic result. The acyclic
-typed conditional stage and independent reference-signature/effect preimage
-remain integration requirements.
+typed conditional discharge and independent replay of the reference relation
+remain integration requirements. The scoped backend join does not change
+these diagnostic rows into proved obligations.
 
 Required integration negatives include `G=64, N=65`, omitted or swapped argument
 bindings, cross-kernel and stale-graph substitution, unsupported dimensions,
@@ -222,3 +269,10 @@ Retained wrappers use their source-derived 256-invocation launch and lengths
 These tests do not bypass ranked checks, import proof receipts, produce GPU
 artifacts, or execute on a GPU. Neither these observations nor the
 analysis/packing unit tests qualify a tutorial kernel end to end.
+
+The separate post-bind source parent does require the real protected proof
+runtime and imported receipts. It exercises the scoped CPU reference join on
+both target profiles, tampered-reference refusals and inherited-budget limits,
+but always stops before a clean output stage. Runtime absence is a refusal,
+not an alternative positive result. Those compiler tests also do not execute
+on a GPU or qualify a tutorial kernel end to end.

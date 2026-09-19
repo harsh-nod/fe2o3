@@ -106,10 +106,7 @@ pub(super) trait ProjectedAssertionFactsV1 {
     fn observe_conditional_bound_for_test_v1(
         &mut self,
         _bound: crate::production_reference_effect_join_v2::CompilerOwnedBoundReferenceEffectV2,
-        _root: u32,
-        _rank: u8,
-        _access_sources: &[fe2o3_lower_mir_kernel::ProductionRankedAccessSourceV1],
-        _effect_sources: &[fe2o3_lower_mir_kernel::ProductionRankedExecutableEffectSourceV1],
+        _source: super::conditional_bound_observation_v1_tests::BoundSourceV1<'_>,
     ) -> Result<(), ProjectionError> {
         Err(ProjectionError::Incomplete(
             "post-bind observation requires a canonical owner",
@@ -296,18 +293,12 @@ impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '
     fn observe_conditional_bound_for_test_v1(
         &mut self,
         bound: crate::production_reference_effect_join_v2::CompilerOwnedBoundReferenceEffectV2,
-        root: u32,
-        rank: u8,
-        access_sources: &[fe2o3_lower_mir_kernel::ProductionRankedAccessSourceV1],
-        effect_sources: &[fe2o3_lower_mir_kernel::ProductionRankedExecutableEffectSourceV1],
+        source: super::conditional_bound_observation_v1_tests::BoundSourceV1<'_>,
     ) -> Result<(), ProjectionError> {
         super::conditional_bound_observation_v1_tests::observe_bound(
             self.owner,
             bound,
-            root,
-            rank,
-            access_sources,
-            effect_sources,
+            source,
             self.budget,
         )
     }

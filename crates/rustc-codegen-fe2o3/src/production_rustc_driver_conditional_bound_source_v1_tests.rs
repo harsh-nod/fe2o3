@@ -124,7 +124,14 @@ fn actual_reference_fill_retains_pending_checks_after_proof_binding() {
                     assert_eq!(result.selected, 1);
                     assert_eq!(result.signed_receipts, 1);
                     assert!(result.memory_effects > 0 && result.value_expressions > 0);
-                    assert!(result.pending_checks > 0 && result.work > 0);
+                    assert_eq!(result.pending_checks, 9);
+                    assert!(result.work > 0);
+                    assert_eq!(result.output.source_argument, 0);
+                    assert_eq!(result.output.adjusted_argument, 0);
+                    assert_eq!(result.output.physical_argument, 0);
+                    assert_eq!(result.output.raw_reference_argument, 1);
+                    assert_eq!(result.output.element_bytes, 4);
+                    assert_eq!(result.output.address_domain, "GlobalLaunch");
                 },
             }),
         );
