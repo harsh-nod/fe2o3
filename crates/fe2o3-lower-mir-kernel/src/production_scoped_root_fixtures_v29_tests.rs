@@ -62,7 +62,7 @@ pub(in super::super) fn root_assertion_slot_owner() -> ProductionSemanticSsaOwne
         )),
     );
     blocks[0] = block(
-        150,
+        85,
         vec![store],
         SemanticTerminatorKindV1::Assert {
             condition: SemanticOperandV1::Constant(SemanticConstantV1::new(
