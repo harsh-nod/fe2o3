@@ -13446,7 +13446,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             return Err(scoped_memory_error_v29());
         }
         let result =
-            self.with_scoped_memory_frame_v29(ScopedMemoryFrameV29 { site, role }, |this| {
+            self.with_scoped_memory_frame_v29(ScopedMemoryFrameV29::operand(site, role), |this| {
                 this.private_arrays.begin_statement(
                     this.function,
                     block,
@@ -13816,7 +13816,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     .is_some_and(|source| std::ptr::eq(source, *place))
             })
             .map(|_| ExecutionOperandV29::RvaluePlace);
-        self.with_scoped_memory_frame_v29(ScopedMemoryFrameV29 { site, role }, |this| {
+        self.with_scoped_memory_frame_v29(ScopedMemoryFrameV29::operand(site, role), |this| {
             this.lower_rvalue_inner_v29(block, statement, result_type, value, operations)
         })
     }
@@ -18345,21 +18345,23 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 unreachable!("trap compiler intrinsic returned before destination lowering")
             }
         };
-        self.store_enum_payload_v1(
-            block,
-            None,
-            destination.place().local(),
-            &binding,
-            operations,
-        )?;
-        self.finish_call_destination_v1(
-            block,
-            destination.place(),
-            prepared_destination,
-            binding,
-            runtime_guard,
-            operations,
-        )?;
+        self.with_scoped_call_memory_frame_v29(block, destination.place(), true, |this| {
+            this.store_enum_payload_v1(
+                block,
+                None,
+                destination.place().local(),
+                &binding,
+                operations,
+            )?;
+            this.finish_call_destination_inner_v29(
+                block,
+                destination.place(),
+                prepared_destination,
+                binding,
+                runtime_guard,
+                operations,
+            )
+        })?;
         let target = self.kernel_block_id_v1(destination.edge().target())?;
         let arguments = self.edge_arguments(block, 0, destination.edge().target(), operations)?;
         if let Some(condition) = runtime_guard {
@@ -21534,7 +21536,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             scoped_source_place_v29(self.function, site, role)
                 .is_some_and(|source| std::ptr::eq(source, destination))
         });
-        self.with_scoped_memory_frame_v29(ScopedMemoryFrameV29 { site, role }, |this| {
+        self.with_scoped_memory_frame_v29(ScopedMemoryFrameV29::operand(site, role), |this| {
             this.assign_place_inner_v29(
                 block,
                 statement,

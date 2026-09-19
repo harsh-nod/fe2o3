@@ -6,6 +6,7 @@ include!("production_execution_lifecycle_insertion_v29_tests.rs");
 pub(super) mod fixtures {
     use super::*;
     include!("production_scoped_root_fixtures_v29_tests.rs");
+    include!("production_scoped_call_memory_fixtures_v29_tests.rs");
 }
 
 pub(super) fn assertion_owner() -> ProductionSemanticSsaOwnerV1 {

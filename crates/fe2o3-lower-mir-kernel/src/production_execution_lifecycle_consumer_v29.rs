@@ -114,21 +114,23 @@ impl SemanticFunctionLoweringV1<'_> {
             consumer.produce(lowering, block, call, operation, operations)
         })?;
         let prepared = self.prepare_call_destination_v1(block, destination.place(), operations)?;
-        self.store_enum_payload_v1(
-            block,
-            None,
-            destination.place().local(),
-            &binding,
-            operations,
-        )?;
-        self.finish_call_destination_v1(
-            block,
-            destination.place(),
-            prepared,
-            binding,
-            None,
-            operations,
-        )?;
+        self.with_scoped_call_memory_frame_v29(block, destination.place(), true, |this| {
+            this.store_enum_payload_v1(
+                block,
+                None,
+                destination.place().local(),
+                &binding,
+                operations,
+            )?;
+            this.finish_call_destination_inner_v29(
+                block,
+                destination.place(),
+                prepared,
+                binding,
+                None,
+                operations,
+            )
+        })?;
         let target = self.kernel_block_id_v1(destination.edge().target())?;
         let arguments = self.edge_arguments(block, 0, destination.edge().target(), operations)?;
         Ok(Terminator::Branch { target, arguments })

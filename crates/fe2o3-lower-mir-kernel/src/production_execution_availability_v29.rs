@@ -487,7 +487,7 @@ impl SemanticFunctionLoweringV1<'_> {
             scoped_source_operand_v29(self.function, site, role)
                 .is_some_and(|source| std::ptr::eq(source, operand))
         });
-        self.with_scoped_memory_frame_v29(ScopedMemoryFrameV29 { site, role }, |this| {
+        self.with_scoped_memory_frame_v29(ScopedMemoryFrameV29::operand(site, role), |this| {
             this.lower_operand_inner_v1(block, statement, operand, operations)
         })
     }

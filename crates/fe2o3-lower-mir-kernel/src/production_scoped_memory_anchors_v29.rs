@@ -215,6 +215,12 @@ fn check_scoped_memory_anchors_v29(
                 {
                     return Err(scoped_memory_error_v29());
                 }
+                check_scoped_call_memory_frame_v29(
+                    source.declaration(),
+                    row.source,
+                    &block.operations[position].kind,
+                    budget,
+                )?;
                 next = argument_sum_v1(&[next, 1])?;
             }
         }
@@ -256,7 +262,7 @@ fn check_scoped_memory_anchors_v29(
                 .get(event)
                 .ok_or_else(scoped_memory_error_v29)?;
             if original.site() != frame.site
-                || Some(original.operand()) != frame.role
+                || Some(ScopedMemoryRoleV29::Operand(original.operand())) != frame.role
                 || original.role() != cause.event_role()
                 || expected.get_mut(event).and_then(Option::take) != Some((local, cause))
             {
@@ -274,7 +280,69 @@ fn check_scoped_memory_anchors_v29(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ScopedMemoryFrameV29 {
     site: ExecutionSiteV29,
-    role: Option<ExecutionOperandV29>,
+    role: Option<ScopedMemoryRoleV29>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScopedMemoryRoleV29 {
+    Operand(ExecutionOperandV29),
+    CallResult,
+}
+
+impl ScopedMemoryFrameV29 {
+    fn operand(site: ExecutionSiteV29, role: Option<ExecutionOperandV29>) -> Self {
+        Self {
+            site,
+            role: role.map(ScopedMemoryRoleV29::Operand),
+        }
+    }
+}
+
+fn scoped_source_call_destination_v29(
+    function: &SemanticFunctionDeclV1,
+    site: ExecutionSiteV29,
+) -> Option<&SemanticPlaceV1> {
+    let ExecutionSiteV29::Terminator { block } = site else {
+        return None;
+    };
+    let SemanticTerminatorKindV1::Call(call) = function
+        .blocks()
+        .get(block.get() as usize)?
+        .terminator()
+        .kind()
+    else {
+        return None;
+    };
+    Some(call.destination()?.place())
+}
+
+fn check_scoped_call_memory_frame_v29(
+    function: &SemanticFunctionDeclV1,
+    frame: Option<ScopedMemoryFrameV29>,
+    operation: &OperationKind,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    budget.charge_work(4)?;
+    let Some(frame) = frame else {
+        return Ok(());
+    };
+    let valid_kind = match frame.role {
+        Some(ScopedMemoryRoleV29::Operand(ExecutionOperandV29::CallDestinationAddress)) => {
+            matches!(
+                operation,
+                OperationKind::Load { .. } | OperationKind::GuardedLoad { .. }
+            )
+        }
+        Some(ScopedMemoryRoleV29::CallResult) => matches!(
+            operation,
+            OperationKind::Store { .. } | OperationKind::GuardedStore { .. }
+        ),
+        _ => return Ok(()),
+    };
+    if !valid_kind || scoped_source_call_destination_v29(function, frame.site).is_none() {
+        return Err(scoped_memory_error_v29());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -510,6 +578,9 @@ fn scoped_source_place_v29(
     site: ExecutionSiteV29,
     role: ExecutionOperandV29,
 ) -> Option<&SemanticPlaceV1> {
+    if role == ExecutionOperandV29::CallDestinationAddress {
+        return scoped_source_call_destination_v29(function, site);
+    }
     match scoped_source_statement_v29(function, site)? {
         SemanticStatementKindV1::Assign(assignment) => match role {
             ExecutionOperandV29::Destination => Some(assignment.destination()),
@@ -606,6 +677,44 @@ fn scoped_expected_kill_v29(
 }
 
 impl SemanticFunctionLoweringV1<'_> {
+    fn with_scoped_call_memory_frame_v29<T>(
+        &mut self,
+        block: SemanticBlockIdV1,
+        destination: &SemanticPlaceV1,
+        result: bool,
+        body: impl FnOnce(&mut Self) -> Result<T, ProductionSemanticKirErrorV1>,
+    ) -> Result<T, ProductionSemanticKirErrorV1> {
+        if self.scoped_memory.is_none() {
+            return body(self);
+        }
+        let site = execution_site_v29(block, None);
+        self.with_emission_budget_v1(|this, budget| {
+            budget.charge_work(4)?;
+            this.execution
+                .as_ref()
+                .ok_or_else(scoped_memory_error_v29)?
+                .check_ledger(budget)?;
+            if !scoped_source_call_destination_v29(this.function, site)
+                .is_some_and(|source| std::ptr::eq(source, destination))
+            {
+                return Err(scoped_memory_error_v29());
+            }
+            Ok(())
+        })?;
+        let role = if result {
+            ScopedMemoryRoleV29::CallResult
+        } else {
+            ScopedMemoryRoleV29::Operand(ExecutionOperandV29::CallDestinationAddress)
+        };
+        self.with_scoped_memory_frame_v29(
+            ScopedMemoryFrameV29 {
+                site,
+                role: Some(role),
+            },
+            body,
+        )
+    }
+
     fn consume_scoped_discarded_operand_v29(
         &mut self,
         block: SemanticBlockIdV1,
@@ -656,19 +765,13 @@ impl SemanticFunctionLoweringV1<'_> {
             return Ok(());
         };
         let index = self.require_local(block, None, local.index())?;
-        self.with_scoped_memory_frame_v29(
-            ScopedMemoryFrameV29 {
-                site,
-                role: Some(role),
-            },
-            |this| {
-                // Discarding a diagnostic preserves its move effect, not a physical read.
-                this.record_scoped_memory_kill_v29(local, cause, position)?;
-                this.locals[index] = None;
-                this.retained_local_initialized.remove(&local.index());
-                Ok(())
-            },
-        )
+        self.with_scoped_memory_frame_v29(ScopedMemoryFrameV29::operand(site, Some(role)), |this| {
+            // Discarding a diagnostic preserves its move effect, not a physical read.
+            this.record_scoped_memory_kill_v29(local, cause, position)?;
+            this.locals[index] = None;
+            this.retained_local_initialized.remove(&local.index());
+            Ok(())
+        })
     }
 
     fn with_scoped_memory_frame_v29<T>(
@@ -746,7 +849,9 @@ impl SemanticFunctionLoweringV1<'_> {
                 .as_mut()
                 .ok_or_else(scoped_memory_error_v29)?;
             let frame = recorder.frame.ok_or_else(scoped_memory_error_v29)?;
-            let role = frame.role.ok_or_else(scoped_memory_error_v29)?;
+            let Some(ScopedMemoryRoleV29::Operand(role)) = frame.role else {
+                return Err(scoped_memory_error_v29());
+            };
             let cursor = this
                 .execution
                 .as_ref()

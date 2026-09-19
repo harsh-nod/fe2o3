@@ -16,19 +16,28 @@ fn check_assertion(
     else {
         panic!("expected assertion");
     };
+    let SemanticAssertMessageV1::BoundsCheck { length, index } = message else {
+        panic!("expected bounds diagnostics");
+    };
     let mut expected = Vec::new();
     for (role, operand) in [
         (ExecutionOperandV29::AssertCondition, condition),
-        (
-            ExecutionOperandV29::AssertMessage(0),
-            execution_assert_operand_v29(message, 0).unwrap(),
-        ),
-        (
-            ExecutionOperandV29::AssertMessage(1),
-            execution_assert_operand_v29(message, 1).unwrap(),
-        ),
+        (ExecutionOperandV29::AssertMessage(0), length),
+        (ExecutionOperandV29::AssertMessage(1), index),
     ] {
-        if let SemanticOperandV1::Move(place) = operand {
+        let (SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place)) = operand else {
+            panic!("expected local operand");
+        };
+        assert_eq!(
+            place.local().index(),
+            match role {
+                ExecutionOperandV29::AssertCondition => 4,
+                ExecutionOperandV29::AssertMessage(0) => 2,
+                ExecutionOperandV29::AssertMessage(1) => 3,
+                _ => unreachable!(),
+            }
+        );
+        if matches!(operand, SemanticOperandV1::Move(_)) {
             expected.push((role, place.local().index()));
         }
     }
@@ -55,7 +64,18 @@ fn check_assertion(
         .collect();
     assert_eq!(actual_memory.len(), usize::from(!folded));
     if !folded {
-        assert!(matches!(actual_memory[0].kind, OperationKind::Load { .. }));
+        let condition_pointer = lowered
+            .scoped_slot_origins
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|slot| slot.local == 4)
+            .unwrap()
+            .pointer;
+        assert!(
+            matches!(actual_memory[0].kind, OperationKind::Load { pointer, .. }
+            if pointer == condition_pointer)
+        );
     }
     let rows: Vec<_> = anchors
         .rows
@@ -74,7 +94,9 @@ fn check_assertion(
                 assert!(!folded);
                 assert_eq!(
                     row.source.unwrap().role,
-                    Some(ExecutionOperandV29::AssertCondition)
+                    Some(ScopedMemoryRoleV29::Operand(
+                        ExecutionOperandV29::AssertCondition
+                    ))
                 );
                 assert_eq!(row.position, start);
             }
@@ -85,10 +107,14 @@ fn check_assertion(
             } => {
                 assert_eq!(cause, ScopedMemoryKillV29::Move);
                 assert_eq!(row.position, start + usize::from(!folded));
-                let original = &instances.occurrences(instance).unwrap().events()[event];
+                let occurrences = instances.occurrences(instance).unwrap();
+                let original = &occurrences.events()[event];
                 assert_eq!(original.role(), ExecutionEventV29::MoveKill);
                 assert_eq!(original.site(), row.source.unwrap().site);
-                assert_eq!(Some(original.operand()), row.source.unwrap().role);
+                assert_eq!(
+                    Some(ScopedMemoryRoleV29::Operand(original.operand())),
+                    row.source.unwrap().role
+                );
                 kills.push((original.operand(), local));
             }
         }

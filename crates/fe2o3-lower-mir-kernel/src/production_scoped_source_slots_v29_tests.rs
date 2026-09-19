@@ -16,6 +16,10 @@ mod discarded_assert_tests {
     include!("production_scoped_discarded_assert_v29_tests.rs");
 }
 
+mod call_memory_tests {
+    include!("production_scoped_call_memory_v29_tests.rs");
+}
+
 const STOP: &str = "test stopped after scoped source-slot validation";
 thread_local! {
     static OBSERVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };

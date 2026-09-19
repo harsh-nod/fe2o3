@@ -327,6 +327,10 @@ enum ScopedFixture {
     InitializationArray(bool),
     InitializationArrayMove(bool),
     CheckedSlot,
+    CallDestinations {
+        projected: bool,
+        retained_address: bool,
+    },
     AssertionSlots {
         move_condition: bool,
         move_message: bool,
@@ -373,6 +377,7 @@ fn run_lifecycle(
             | ScopedFixture::InitializationArray(_)
             | ScopedFixture::InitializationArrayMove(_)
             | ScopedFixture::CheckedSlot
+            | ScopedFixture::CallDestinations { .. }
             | ScopedFixture::AssertionSlots { .. }
     );
     let mut owner = match fixture {
@@ -405,6 +410,13 @@ fn run_lifecycle(
         ScopedFixture::CheckedSlot => {
             assert!(!branches);
             scoped_root_tests::fixtures::checked_slot_owner()
+        }
+        ScopedFixture::CallDestinations {
+            projected,
+            retained_address,
+        } => {
+            assert!(!branches);
+            scoped_root_tests::fixtures::call_destinations_owner(projected, retained_address)
         }
         ScopedFixture::AssertionSlots {
             move_condition,
@@ -472,6 +484,9 @@ fn run_lifecycle(
         ];
         if repeated {
             classes.insert(3, ProductionScopeCallableCandidateV29::Ordinary);
+        }
+        if matches!(fixture, ScopedFixture::CallDestinations { .. }) {
+            classes.push(ProductionScopeCallableCandidateV29::Ordinary);
         }
         let SemanticTerminatorKindV1::Call(derive) =
             semantic.functions()[1].blocks()[0].terminator().kind()

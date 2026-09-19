@@ -122,7 +122,9 @@ fn inspect_rollback(
                 };
                 let inner = ScopedMemoryFrameV29 {
                     site: execution_site_v29(block_id, Some(1)),
-                    role: Some(ExecutionOperandV29::StoreValue),
+                    role: Some(ScopedMemoryRoleV29::Operand(
+                        ExecutionOperandV29::StoreValue,
+                    )),
                 };
                 lowering.with_scoped_memory_frame_v29(outer, |lowering| {
                     let error: Result<(), _> = lowering
@@ -377,11 +379,15 @@ fn inspect_self_move(
         assert_eq!(rows[index + 1].position, kill.position);
         assert_eq!(
             rows[index - 1].source.unwrap().role,
-            Some(ExecutionOperandV29::RvalueOperand(0))
+            Some(ScopedMemoryRoleV29::Operand(
+                ExecutionOperandV29::RvalueOperand(0)
+            ))
         );
         assert_eq!(
             rows[index + 1].source.unwrap().role,
-            Some(ExecutionOperandV29::Destination)
+            Some(ScopedMemoryRoleV29::Operand(
+                ExecutionOperandV29::Destination
+            ))
         );
     }
     assert_eq!(pointers.len(), 2);
