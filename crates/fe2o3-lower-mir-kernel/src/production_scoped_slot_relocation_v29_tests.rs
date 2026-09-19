@@ -141,6 +141,7 @@ fn relocation_preserves_nested_repeated_array_and_assertion_payloads() {
     for (fixture, branches, expected) in [
         (ScopedFixture::Plain, false, (0, 0, 1)),
         (ScopedFixture::RepeatedSlots, false, (2, 8, 4)),
+        (ScopedFixture::RootAssertionSlot, false, (3, 12, 4)),
         (ScopedFixture::InitializationArray(true), false, (2, 16, 4)),
         (ScopedFixture::Arrays, false, (2, 8, 4)),
         (ScopedFixture::Arrays, true, (2, 8, 4)),
@@ -178,7 +179,16 @@ fn relocation_obeys_exact_work_and_storage_limits() {
         ));
         for (work, storage, work_failure) in [(work - 1, peak, true), (work, peak - 1, false)] {
             let error = run(false, fixture, inspect_relocation, work, storage).0;
-            assert_resource(error.as_ref().err().unwrap(), work_failure);
+            let error = error.as_ref().err().unwrap();
+            match error {
+                ProductionSemanticKirErrorV1::AssertOrigin(
+                    SemanticKirAssertOriginErrorV1::Resource(ArgumentResourceV1::Work(_)),
+                ) => assert!(work_failure),
+                ProductionSemanticKirErrorV1::AssertOrigin(
+                    SemanticKirAssertOriginErrorV1::Resource(ArgumentResourceV1::Storage(_)),
+                ) => assert!(!work_failure),
+                _ => assert_resource(error, work_failure),
+            }
         }
     }
 }
@@ -247,4 +257,85 @@ fn relocation_rejects_new_storage_in_a_slot_free_reentered_root() {
     );
     assert!(is_stopped(&result), "{result:?}");
     assert_eq!(OBSERVED.get(), 1);
+}
+
+fn reject_foreign_ledger(
+    _source: &ExecutionLifecycleSourceV29<'_>,
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &mut [Option<LoweredFunctionResultV1>],
+    slots: &OwnedScopedSourceSlotsV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    OBSERVED.set(OBSERVED.get() + 1);
+    with_canonical_call_scratch_v1(budget, |budget| {
+        let prepared =
+            scoped_slot_relocation_v29::prepare(instances, emitted, slots, 1024, budget)?;
+        let charged = budget.storage();
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(10_000_000);
+        let mut foreign = ArgumentBudgetV1::new(&mut work, 10_000_000);
+        let result = prepared.assemble(ProductionSemanticKirLimitsV1::default(), &mut foreign);
+        assert!(matches!(
+            result,
+            Err(
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Accounting
+                )
+            )
+        ));
+        drop(result);
+        assert_eq!(foreign.work(), 0);
+        assert_eq!(foreign.storage(), 0);
+        assert_eq!(budget.storage(), charged);
+        assert!(emitted.iter().all(Option::is_some));
+        Ok(())
+    })?;
+    Err(unsupported(0, None, None, STOP))
+}
+
+fn reject_refunded_preparation(
+    _source: &ExecutionLifecycleSourceV29<'_>,
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &mut [Option<LoweredFunctionResultV1>],
+    slots: &OwnedScopedSourceSlotsV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    OBSERVED.set(OBSERVED.get() + 1);
+    with_canonical_call_scratch_v1(budget, |budget| {
+        let floor = budget.storage();
+        let prepared =
+            scoped_slot_relocation_v29::prepare(instances, emitted, slots, 1024, budget)?;
+        assert!(budget.storage() > floor);
+        budget.release_storage(1)?;
+        let charged = budget.storage();
+        let work = budget.work();
+        let result = prepared.assemble(ProductionSemanticKirLimitsV1::default(), budget);
+        assert!(matches!(
+            result,
+            Err(
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Accounting
+                )
+            )
+        ));
+        drop(result);
+        assert_eq!(budget.storage(), charged);
+        assert_eq!(budget.work(), work);
+        assert!(emitted.iter().all(Option::is_some));
+        Ok(())
+    })?;
+    Err(unsupported(0, None, None, STOP))
+}
+
+#[test]
+fn relocation_preparation_cannot_cross_ledgers_or_use_refunded_storage() {
+    for fixture in [ScopedFixture::Plain, ScopedFixture::Arrays] {
+        for observer in [
+            reject_foreign_ledger as ScopedSlotObserverV29,
+            reject_refunded_preparation,
+        ] {
+            let (result, _, _) = run(false, fixture, observer, 10_000_000, 10_000_000);
+            assert!(is_stopped(&result), "{fixture:?}: {result:?}");
+            assert_eq!(OBSERVED.get(), 1);
+        }
+    }
 }

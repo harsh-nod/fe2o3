@@ -255,11 +255,24 @@ fn lifecycle_owner(branches: bool) -> ProductionSemanticSsaOwnerV1 {
 
 fn root_input(owner: &ProductionSemanticSsaOwnerV1) -> RootInput<'_> {
     let semantic = owner.source_semantic();
-    let SemanticTerminatorKindV1::Call(issuer) =
-        semantic.functions()[0].blocks()[0].terminator().kind()
-    else {
-        panic!("issuer call");
-    };
+    let mut issuers = semantic.functions()[0]
+        .blocks()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, block)| {
+            let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+                return None;
+            };
+            matches!(semantic.callables().get(call.callee().index() as usize),
+                Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                    operation: SemanticCompilerIntrinsicOperationV1::Execution(
+                        SemanticExecutionOperationV29::ContextIssue { context }), ..
+                }) if *context == CONTEXT
+            )
+            .then_some((index, block, call))
+        });
+    let (issuer_block, issuer_source, issuer) = issuers.next().expect("issuer call");
+    assert!(issuers.next().is_none(), "one issuer call");
     let SemanticTerminatorKindV1::Call(helper) =
         semantic.functions()[0].blocks()[1].terminator().kind()
     else {
@@ -276,8 +289,8 @@ fn root_input(owner: &ProductionSemanticSsaOwnerV1) -> RootInput<'_> {
         context_type: CONTEXT,
         context_identity: semantic.types()[CONTEXT.index() as usize].identity(),
         issuance: Boundary {
-            block: SemanticBlockIdV1::from_index(0),
-            statement_count: 0,
+            block: SemanticBlockIdV1::from_index(u32::try_from(issuer_block).unwrap()),
+            statement_count: issuer_source.statements().len(),
             destination: SemanticLocalIdV1::from_index(2),
             destination_type: CONTEXT,
             target: SemanticBlockIdV1::from_index(1),
@@ -323,6 +336,7 @@ enum ScopedFixture {
     Assertion,
     Repeated,
     RepeatedSlots,
+    RootAssertionSlot,
     Initialization(InitializationFixtureV29),
     InitializationArray(bool),
     InitializationArrayMove(bool),
@@ -374,6 +388,7 @@ fn run_lifecycle(
         fixture,
         ScopedFixture::Repeated
             | ScopedFixture::RepeatedSlots
+            | ScopedFixture::RootAssertionSlot
             | ScopedFixture::Initialization(_)
             | ScopedFixture::InitializationArray(_)
             | ScopedFixture::InitializationArrayMove(_)
@@ -396,6 +411,10 @@ fn run_lifecycle(
             scoped_root_tests::fixtures::repeated_slot_owner()
         }
         ScopedFixture::Arrays => scoped_root_tests::fixtures::array_owner(branches),
+        ScopedFixture::RootAssertionSlot => {
+            assert!(!branches);
+            scoped_root_tests::fixtures::root_assertion_slot_owner()
+        }
         ScopedFixture::Initialization(config) => {
             assert!(!branches);
             scoped_root_tests::fixtures::initialization_owner(config)

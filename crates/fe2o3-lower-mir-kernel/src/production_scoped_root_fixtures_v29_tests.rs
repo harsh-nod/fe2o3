@@ -24,6 +24,66 @@ fn build(
     .unwrap()
 }
 
+pub(in super::super) fn root_assertion_slot_owner() -> ProductionSemanticSsaOwnerV1 {
+    let original = repeated_slot_owner();
+    let semantic = original.source_semantic();
+    let mut types = semantic.types().to_vec();
+    let boolean = declaration(
+        &mut types,
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(1),
+            1,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::integer(false, 8, 1),
+                SemanticScalarValidityRangeV1::new(0, 1),
+            )),
+            false,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool),
+        None,
+    );
+    let mut functions = semantic.functions().to_vec();
+    let root = &functions[0];
+    let entry = root.kernel_entry().unwrap().clone();
+    let mut locals = root.locals().to_vec();
+    assert_eq!(locals.len(), 3);
+    locals.push(local(152, U32, SemanticLocalRoleV1::Temporary));
+    let mut blocks = root.blocks().to_vec();
+    assert_eq!(blocks.len(), 3);
+    let issuance = blocks[0].terminator().kind().clone();
+    let store = SemanticStatementV1::new(
+        source(),
+        SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+            place(3, U32),
+            literal(7),
+            SemanticVolatilityV1::NonVolatile,
+            None,
+        )),
+    );
+    blocks[0] = block(
+        150,
+        vec![store],
+        SemanticTerminatorKindV1::Assert {
+            condition: SemanticOperandV1::Constant(SemanticConstantV1::new(
+                boolean,
+                SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(1, 1).unwrap()),
+            )),
+            expected: true,
+            message: SemanticAssertMessageV1::NullPointerDereference,
+            target: SemanticControlFlowEdgeV1::new(
+                SemanticEdgeRoleV1::AssertSuccess,
+                SemanticBlockIdV1::from_index(3),
+            ),
+            unwind: SemanticUnwindActionV1::Unreachable,
+        },
+    );
+    blocks.push(block(151, vec![], issuance));
+    functions[0] =
+        function(80, root.role(), root.abi().clone(), locals, blocks).with_kernel_entry(entry);
+    build(types, functions, semantic.callables().to_vec())
+}
+
 pub(in super::super) fn initialization_array_move_owner(
     projected: bool,
 ) -> ProductionSemanticSsaOwnerV1 {
