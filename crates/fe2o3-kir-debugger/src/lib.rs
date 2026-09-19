@@ -1,6 +1,10 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+// Private runtime-origin retention candidate; no production API or V1 changes.
+#[cfg(test)]
+mod runtime_origin_retention;
+
 use std::error::Error;
 use std::fmt;
 

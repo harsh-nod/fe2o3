@@ -4,11 +4,24 @@ use super::*;
 use crate::collector::source_census_v1::bitselect_feasibility::retained::fresh_header;
 use fe2o3_mir_model::semantic_mir_v1::SemanticMirWireVersionV1;
 
+#[path = "source_bitselect_candidate_machine_pipeline_v1_tests.rs"]
+mod machine;
+
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     pub(crate) fn observe_fresh_source_bitselect_candidate(
         self,
-        mut input: RetainedInput,
+        input: RetainedInput,
     ) -> Result<Value, String> {
+        self.observe_fresh_source_bitselect_candidate_with(input, registers(), |_| Ok(()))
+            .map(|(observation, ())| observation)
+    }
+
+    fn observe_fresh_source_bitselect_candidate_with<R>(
+        self,
+        mut input: RetainedInput,
+        expected_registers: Gfx942OrderedProgramRegistersV1,
+        observe: impl FnOnce(&fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV17) -> Result<R, String>,
+    ) -> Result<(Value, R), String> {
         let mut meter = ScanMeter::default();
         let header = fresh_header(self.stage.tcx, &self.stage.closure, &input, &mut meter)?;
         // This is the existing source-bound pre-ranked route, not V8 ranked
@@ -122,11 +135,11 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         meter.scan(2 * 64 * 1024)?;
         let (expected, _) = render_bitselect_expression_v1(
             header.names.each_ref().map(String::as_str),
-            registers(),
+            expected_registers,
         )
         .map_err(|e| e.to_string())?;
         if program.inputs() != &inputs
-            || program.registers() != registers()
+            || program.registers() != expected_registers
             || program.program() != &expected
             || program.source().function != *header.identities.function().as_bytes()
         {
@@ -158,22 +171,26 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             }
             checked += 1;
         }
+        let additional = observe(executable)?;
         input.recheck()?;
-        Ok(json!({
-            "stage": "fresh_actual_source_mir32_kir17_candidate",
-            "semantic_version": "V32", "kernel_ir_version": "V17",
-            "semantic_sha256": semantic.semantic_sha256().as_bytes(),
-            "kernel_ir_sha256": executable.identity().digest(),
-            "candidate_sha256": <[u8;32]>::from(Sha256::digest(input.original())),
-            "descriptors": program.program().active_descriptors(),
-            "fresh_input_values": inputs.map(|value| value.0),
-            "fresh_source_parameter_ordinals": header.ordinals,
-            "boolean_oracle_cases": checked,
-            "scan_accounting": meter, "io_envelope_accounting": input.io,
-            "fresh_frontend_admitted": true, "pre_ranked_diagnostic": true,
-            "ranked_checks": false, "functional_proof": false, "production_resume": false,
-            "source_map_available": false, "hardware_observed": false,
-            "grants_artifact_or_launch_authority": false,
-        }))
+        Ok((
+            json!({
+                "stage": "fresh_actual_source_mir32_kir17_candidate",
+                "semantic_version": "V32", "kernel_ir_version": "V17",
+                "semantic_sha256": semantic.semantic_sha256().as_bytes(),
+                "kernel_ir_sha256": executable.identity().digest(),
+                "candidate_sha256": <[u8;32]>::from(Sha256::digest(input.original())),
+                "descriptors": program.program().active_descriptors(),
+                "fresh_input_values": inputs.map(|value| value.0),
+                "fresh_source_parameter_ordinals": header.ordinals,
+                "boolean_oracle_cases": checked,
+                "scan_accounting": meter, "io_envelope_accounting": input.io,
+                "fresh_frontend_admitted": true, "pre_ranked_diagnostic": true,
+                "ranked_checks": false, "functional_proof": false, "production_resume": false,
+                "source_map_available": false, "hardware_observed": false,
+                "grants_artifact_or_launch_authority": false,
+            }),
+            additional,
+        ))
     }
 }

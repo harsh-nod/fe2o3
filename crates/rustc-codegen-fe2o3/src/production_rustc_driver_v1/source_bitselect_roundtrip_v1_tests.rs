@@ -1,5 +1,4 @@
-//! Opt-in actual source replacement and independent fresh source admission.
-//! All mutable sources are task-owned copies. No diagnostic is admitted as an owner.
+//! Task-owned source replacement and fresh admission; diagnostics never become owners.
 
 use super::super::gfx942_inline_value_qualification_v30_tests::invocation_for_fixture_source;
 use super::*;
@@ -8,6 +7,8 @@ use std::io::Write as _;
 
 #[path = "source_local_order_driver_v1_tests.rs"]
 mod local_order;
+#[path = "source_bitselect_candidate_machine_driver_v1_tests.rs"]
+mod machine;
 #[path = "source_bitselect_roundtrip_paths_v1_tests.rs"]
 mod paths;
 
@@ -229,8 +230,7 @@ fn actual_source_bitselect_roundtrip_child() {
     });
     let source = RetainedInput::open(source_path.to_str().unwrap(), phase == "fresh").unwrap();
     if case == "stale-candidate" && phase == "fresh" {
-        // Real rustc parses changed bytes; the retained file held before parsing
-        // must fail its same-callback compiler-hash association, not be trusted.
+        // Real changed bytes must fail the retained same-callback source hash.
         fs::OpenOptions::new()
             .append(true)
             .open(source_directory.join("candidate.rs"))
