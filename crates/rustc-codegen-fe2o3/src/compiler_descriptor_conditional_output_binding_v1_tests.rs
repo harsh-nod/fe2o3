@@ -22,16 +22,16 @@ mod fixture {
 fn source() -> AdmittedInertSemanticMirV1 {
     let original = fixture::source(vec![fixture::subtract()]);
     let second = fixture::function(
-        60,
+        90,
         true,
         2,
         vec![
             fixture::block(
-                61,
+                91,
                 vec![],
                 fixture::call(1, vec![fixture::copy(1), fixture::copy(2)], 3, 1),
             ),
-            fixture::block(62, vec![], SemanticTerminatorKindV1::Return),
+            fixture::block(92, vec![], SemanticTerminatorKindV1::Return),
         ],
     )
     .with_kernel_entry(SemanticKernelEntryV1::new(
