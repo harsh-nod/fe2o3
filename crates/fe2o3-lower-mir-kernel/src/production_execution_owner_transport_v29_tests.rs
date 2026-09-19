@@ -144,20 +144,24 @@ fn owner_parameter_crosses_the_real_source_lifecycle_boundary() {
             ))
         )
     ));
-    assert!(matches!(
-        run_lifecycle(
-            false,
-            Fault::OwnerParameter(OwnerTransportFault::None),
-            work,
-            peak - 1
-        )
-        .0,
-        Err(
-            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
-                ArgumentResourceV1::Storage(_)
+    let short_storage = run_lifecycle(
+        false,
+        Fault::OwnerParameter(OwnerTransportFault::None),
+        work,
+        peak - 1,
+    )
+    .0;
+    assert!(
+        matches!(
+            short_storage,
+            Err(
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Storage(_)
+                )
             )
-        )
-    ));
+        ),
+        "{short_storage:?}"
+    );
 }
 
 #[test]
