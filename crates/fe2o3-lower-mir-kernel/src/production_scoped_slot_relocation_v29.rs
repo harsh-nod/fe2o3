@@ -336,10 +336,8 @@ impl RelocationV29 {
                 ];
             }
         } else {
-            for segment in &mut mapped.segments {
-                if let Some(span) = segment {
-                    *span = self.ordinary_span(*span)?;
-                }
+            for span in mapped.segments.iter_mut().flatten() {
+                *span = self.ordinary_span(*span)?;
             }
         }
         Ok(mapped)

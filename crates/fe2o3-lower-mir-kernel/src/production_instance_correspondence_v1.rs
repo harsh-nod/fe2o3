@@ -853,15 +853,25 @@ impl ProductionInstanceCorrespondenceV1<'_, '_> {
             return Err(InstanceCorrespondenceErrorV1::SpanCoverage);
         }
         self.controls.reserve(2, budget, &mut self.storage)?;
-        let result = splice_production_call_instance_with_scoped_frame_v29(
-            caller,
-            callee,
-            site,
-            entry,
-            continuation,
-            frame.map(|frame| frame.for_child(self.plan, child)),
-            budget,
-        )?;
+        let result = match frame {
+            Some(frame) => splice_production_call_instance_with_scoped_frame_v29(
+                caller,
+                callee,
+                site,
+                entry,
+                continuation,
+                Some(frame.for_child(self.plan, child)),
+                budget,
+            ),
+            None => splice_production_call_instance_v1(
+                caller,
+                callee,
+                site,
+                entry,
+                continuation,
+                budget,
+            ),
+        }?;
         let checked =
             self.check_new_edges(occurrence, child, anchor_index, child_seed, &result, budget);
         if let Err(error) = checked {
