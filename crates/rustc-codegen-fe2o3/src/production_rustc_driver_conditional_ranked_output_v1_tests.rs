@@ -80,9 +80,11 @@ fn check(path: &Path, roots: &[&str]) {
     assert_eq!(result.source_argument, 0);
     assert_eq!(result.physical_parameter, 0);
     // The producer normalizes past the CPU point-coordinate prefix. Equality
-    // here is not proof of the logical ABI relation or an extent binding.
+    // here is not proof of the reference's logical ABI relation.
     assert_eq!(result.reference_argument, 0);
-    assert_eq!(result.dynamic_extent, "Unbound(Argument(0))");
+    // The child checked this operand's interpretation against the exact
+    // canonical SliceLength value, not against its numerical ordinal.
+    assert_eq!(result.ranked_extent_argument, 0);
     assert_eq!(result.address_domain, "GlobalLaunch");
     assert!(result.work > 0);
 }

@@ -1235,6 +1235,13 @@ fn fmt_semantic_source_location_v1(
 ///
 /// This is compiler-internal correspondence, not proof authority. It is
 /// revalidated against all three retained IR owners before formal admission.
+///
+/// Optional output extent provenance is in-memory only. Reconstructing the five
+/// legacy coordinate fields (including a legacy payload decode) uses `new` and
+/// loses that proposal. Existing codecs/digests must not serialize it under an
+/// old version. Eq/Ord compare the complete in-memory row, including the proposal;
+/// neither trait is a wire identity or an authentication check. Existing source
+/// replay validates the base coordinates, not this optional extent meaning.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ProductionRankedAccessSourceV1 {
     semantic_block: u32,
@@ -1242,6 +1249,54 @@ pub struct ProductionRankedAccessSourceV1 {
     semantic_access_ordinal: u32,
     ranked_block: u32,
     ranked_operation: u32,
+    output_extent: Option<ProductionRankedOutputExtentSourceV1>,
+}
+
+/// Inert rank-one checked-view provenance, retained with its access occurrence.
+///
+/// The argument is the original semantic source argument, not a ranked operand
+/// ordinal or a CPU-reference argument. Construction is not authentication;
+/// canonical rederivation and existing source replay remain required.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ProductionRankedOutputExtentSourceV1 {
+    source_argument: u32,
+    view: ProductionRankedValueV1,
+    extent: ProductionRankedValueV1,
+    index: ProductionRankedValueV1,
+}
+
+impl ProductionRankedOutputExtentSourceV1 {
+    /// Describes the checked view's sole dimension as its receiver slice length.
+    pub const fn new(
+        source_argument: u32,
+        view: ProductionRankedValueV1,
+        extent: ProductionRankedValueV1,
+        index: ProductionRankedValueV1,
+    ) -> Self {
+        Self {
+            source_argument,
+            view,
+            extent,
+            index,
+        }
+    }
+
+    /// Original source argument supplying the receiver allocation.
+    pub const fn source_argument(self) -> u32 {
+        self.source_argument
+    }
+    /// Exact rank-one checked view operand.
+    pub const fn view(self) -> ProductionRankedValueV1 {
+        self.view
+    }
+    /// Exact dynamic extent operand, with no meaning inferred from its ordinal.
+    pub const fn extent(self) -> ProductionRankedValueV1 {
+        self.extent
+    }
+    /// Exact checked index retained at construction.
+    pub const fn index(self) -> ProductionRankedValueV1 {
+        self.index
+    }
 }
 
 /// Provenance class for one compiler-generated executable effect.
@@ -1320,7 +1375,8 @@ impl ProductionRankedExecutableEffectSourceV1 {
 }
 
 impl ProductionRankedAccessSourceV1 {
-    /// Constructs one compiler-projected access correspondence record.
+    /// Constructs one base correspondence record with no extent proposal.
+    /// Legacy decoding must retain this conservative absence.
     #[doc(hidden)]
     pub const fn new(
         semantic_block: u32,
@@ -1335,7 +1391,22 @@ impl ProductionRankedAccessSourceV1 {
             semantic_access_ordinal,
             ranked_block,
             ranked_operation,
+            output_extent: None,
         }
+    }
+
+    /// Attaches an inert checked-view proposal; does not validate its meaning.
+    pub const fn with_output_extent(
+        mut self,
+        extent: ProductionRankedOutputExtentSourceV1,
+    ) -> Self {
+        self.output_extent = Some(extent);
+        self
+    }
+
+    /// Retained checked-view provenance, absent for legacy or unsupported recipes.
+    pub const fn output_extent(self) -> Option<ProductionRankedOutputExtentSourceV1> {
+        self.output_extent
     }
 
     /// Returns the exact source semantic block.
@@ -1430,6 +1501,14 @@ impl ProductionRankedSemanticProjectionRootV1 {
     /// Returns the exact ranked function name.
     pub fn function_name(&self) -> &str {
         self.lowering.kernel().function_name()
+    }
+
+    /// Exact retained access rows, including optional inert extent provenance.
+    /// Their inline storage is part of the existing access-row allocation.
+    /// Moving or borrowing this root preserves proposals; base-field wire
+    /// reconstruction does not and cannot authenticate a conditional extent.
+    pub fn access_sources(&self) -> &[ProductionRankedAccessSourceV1] {
+        &self.access_sources
     }
 }
 

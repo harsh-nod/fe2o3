@@ -2,10 +2,17 @@
 //! An active observer always stops before proof execution, never admits a root.
 use super::ProductionRankedProjectionErrorV1;
 use fe2o3_kernel_ir::{
-    CanonicalKernelIrVerificationResourceBudgetV1 as Budget, ConditionalTotalViewAnalysisV1,
+    CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+    CanonicalKernelIrWorkBudgetV1 as Work, ConditionalTotalViewAnalysisV1,
     derive_conditional_total_view_from_verified_v1,
 };
-use fe2o3_lower_mir_kernel::{NativeRankedSourceCandidateV1, ProductionPreRankedKirOwnerV1};
+use fe2o3_lower_mir_kernel::{
+    NativeRankedSourceCandidateV1, ProductionConditionalOutputBindingV1,
+    ProductionConditionalRankedExtentV1, ProductionConditionalRankedOutputErrorV1 as Error,
+    ProductionPreRankedKirOwnerV1,
+};
+use fe2o3_pliron::ProductionRankedValueV1;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 
@@ -23,7 +30,8 @@ pub(crate) struct Observation {
     pub(crate) reference_argument: u32,
     pub(crate) ranked_block: u32,
     pub(crate) ranked_operation: u32,
-    pub(crate) dynamic_extent: String,
+    pub(crate) ranked_extent_argument: u32,
+    pub(crate) canonical_length_value: u32,
     pub(crate) address_domain: String,
     pub(crate) work: usize,
 }
@@ -109,12 +117,22 @@ fn inspect(
             .map_err(|e| e.to_string())?;
         let joined = binding
             .inspect_ranked_output_v1(candidate, budget)
+            .and_then(|joined| joined.rederive_output_extent_v1(budget))
             .map_err(|e| e.to_string())?;
         assert!(std::ptr::eq(joined.binding().owner(), owner));
         assert!(std::ptr::eq(
             joined.candidate().kernel(),
             candidate.kernel()
         ));
+        let ProductionConditionalRankedExtentV1::CanonicalOutputLength {
+            operand: ProductionRankedValueV1::Argument(ranked_extent_argument),
+            length,
+        } = joined.dynamic_extent()
+        else {
+            return Err("source extent rederivation did not retain the exact relation".into());
+        };
+        assert_eq!(length, binding.coverage().length());
+        check_extent_budget(&binding, candidate);
         Ok(Observation {
             kernel: kernel.id.as_str().to_owned(),
             canonical_digest: *owner.executable().canonical().identity().digest(),
@@ -124,7 +142,8 @@ fn inspect(
             reference_argument: joined.contract().reference_output_site().argument(),
             ranked_block: joined.gpu_write_site().block(),
             ranked_operation: joined.gpu_write_site().operation(),
-            dynamic_extent: format!("{:?}", joined.dynamic_extent()),
+            ranked_extent_argument,
+            canonical_length_value: length.0,
             address_domain: format!("{:?}", joined.address_domain()),
             work: budget.work() - work,
         })
@@ -136,6 +155,45 @@ fn inspect(
     );
     assert!(budget.work_ledger_identity_v1() == ledger);
     result
+}
+
+fn check_extent_budget(
+    binding: &ProductionConditionalOutputBindingV1<'_>,
+    candidate: NativeRankedSourceCandidateV1<'_>,
+) {
+    let floor = binding.owner().retained_analysis_storage_v1();
+    assert!(floor > 0);
+    // Separate test measurements, not replacement ledgers in the production
+    // phase. Each measurement carries its inherited work through both queries.
+    let run = |work_limit, lose_reservation| {
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, floor);
+        budget.reserve_storage(floor).unwrap();
+        budget.charge_work(17).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let joined = binding
+            .inspect_ranked_output_v1(candidate, &mut budget)
+            .unwrap();
+        if lose_reservation {
+            budget.release_storage(1).unwrap();
+        }
+        let result = joined.rederive_output_extent_v1(&mut budget).map(|_| ());
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(budget.storage(), floor - usize::from(lose_reservation));
+        assert_eq!(budget.peak_storage(), floor);
+        (result, budget.work())
+    };
+    let (baseline, exact_work) = run(1_000_000, false);
+    baseline.unwrap();
+    run(exact_work, false).0.unwrap();
+    assert!(matches!(
+        run(exact_work - 1, false).0,
+        Err(Error::Resource(Resource::Work(_)))
+    ));
+    assert!(matches!(
+        run(exact_work, true).0,
+        Err(Error::Resource(Resource::Accounting))
+    ));
 }
 
 #[test]

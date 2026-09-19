@@ -219,6 +219,7 @@
                 access: AccessKindAttr::Write,
                 memory_space: MemorySpaceAttr::Global,
                 source: SemanticSourceProvenanceV1::unavailable(),
+                output_extent: None,
                 semantic_site: Some(ProjectedSemanticAccessSiteV1 {
                     block: 7,
                     statement: None,
@@ -230,6 +231,7 @@
                 access: AccessKindAttr::AtomicReadModifyWrite,
                 memory_space: MemorySpaceAttr::Global,
                 source: SemanticSourceProvenanceV1::unavailable(),
+                output_extent: None,
                 semantic_site: Some(ProjectedSemanticAccessSiteV1 {
                     block: 7,
                     statement: None,
@@ -285,6 +287,7 @@
             access: AccessKindAttr::Read,
             memory_space: MemorySpaceAttr::Global,
             source: SemanticSourceProvenanceV1::unavailable(),
+            output_extent: None,
             semantic_site: Some(ProjectedSemanticAccessSiteV1 {
                 block: 9,
                 statement: None,

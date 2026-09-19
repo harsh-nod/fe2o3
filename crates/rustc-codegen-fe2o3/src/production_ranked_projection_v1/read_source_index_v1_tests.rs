@@ -9,6 +9,7 @@ fn indexed_read_source_v1(
         access: AccessKindAttr::Read,
         memory_space: MemorySpaceAttr::Global,
         source: SemanticSourceProvenanceV1::unavailable(),
+        output_extent: None,
         semantic_site: Some(ProjectedSemanticAccessSiteV1 { block, statement }),
     }
 }
@@ -89,6 +90,7 @@ fn read_source_index_filters_exact_kind_space_and_statement_presence() {
         });
     }
     sources.push(ProjectedAccessSourceV1 {
+        output_extent: None,
         semantic_site: None,
         ..base
     });
@@ -135,6 +137,7 @@ fn read_source_index_actual_resolver_still_skips_unknown_or_invalid_statement_si
         indexed_read_source_v1(0, Some(0), usize::MAX),
         indexed_read_source_v1(0, None, usize::MAX),
         ProjectedAccessSourceV1 {
+            output_extent: None,
             semantic_site: None,
             ..indexed_read_source_v1(0, Some(0), usize::MAX)
         },

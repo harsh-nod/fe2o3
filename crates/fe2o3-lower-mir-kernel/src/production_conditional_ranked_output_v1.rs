@@ -9,13 +9,23 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceErrorV1 as ResourceError,
     ConditionalTotalViewAddressDomainV1,
 };
-use fe2o3_pliron::{ProductionEffectRefinementContractV2, ProductionGpuWriteSiteV2};
+use fe2o3_pliron::{
+    ProductionEffectRefinementContractV2, ProductionGpuWriteSiteV2, ProductionRankedKernelV1,
+};
 
-/// A ranked extent operand with no established canonical-length interpretation.
+/// A descriptive ranked extent interpretation, never production authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProductionConditionalRankedExtentV1 {
     /// Even `Argument(0)` remains an uninterpreted ranked operand here.
     Unbound(ProductionRankedValueV1),
+    /// A retained proposal rederived against this borrow's exact canonical facts.
+    /// Candidate verification/source replay and runtime premises remain external.
+    CanonicalOutputLength {
+        /// Exact ranked dimension operand; its ordinal carries no meaning.
+        operand: ProductionRankedValueV1,
+        /// Exact `SliceLength(output_value)` result in the retained canonical owner.
+        length: ValueId,
+    },
 }
 
 /// Failure of the narrow descriptive join, not a failed runtime condition.
@@ -45,6 +55,18 @@ pub enum ProductionConditionalRankedOutputErrorV1 {
     View,
     /// Multiple view definitions claim the output operand.
     AmbiguousView,
+    /// No checked-view extent provenance was retained for this access.
+    MissingExtentSource,
+    /// Extent provenance disagrees with the canonical source or exact ranked access.
+    ExtentSource,
+    /// Another access proposes a competing meaning for the selected extent/view.
+    ConflictingExtentSource,
+    /// The selected ranked index is not uniquely the dynamic global-X invocation.
+    ExtentIndex,
+    /// The candidate uses the extent outside the supported view/bounds roles.
+    ExtentUse,
+    /// No exact index-less-than-extent success edge leads to the selected write.
+    ExtentGuard,
 }
 
 impl From<ResourceError> for ProductionConditionalRankedOutputErrorV1 {
@@ -77,12 +99,14 @@ use ProductionConditionalRankedOutputErrorV1 as JoinError;
 /// Exact occurrence checks against an inert ranked candidate, not authentication.
 ///
 /// This borrow preserves the canonical binding and the candidate; it does not
-/// establish source/ranked translation, index or extent equivalence, reference
+/// establish source/ranked translation, reference
 /// argument identity, reference-value equivalence, or any runtime premise. Both
 /// RequestEffectRefinement and RequireEffectRefinement are inspected as data;
 /// neither supplies authority to this query. Production admission remains gated
 /// on existing source replay, evidence and final-graph checks.
 /// Unique matching view rows do not establish whole-candidate SSA validity.
+/// The initial extent is unbound. Explicit rederivation can interpret its narrow
+/// checked-view role using canonical facts, but is still not source replay.
 pub struct ProductionConditionalRankedOutputV1<'a> {
     binding: &'a ProductionConditionalOutputBindingV1<'a>,
     candidate: NativeRankedSourceCandidateV1<'a>,
@@ -134,11 +158,11 @@ impl<'a> ProductionConditionalRankedOutputV1<'a> {
     pub const fn view(&self) -> ProductionRankedValueV1 {
         self.contract.view()
     }
-    /// Exact ranked operand only; canonical index equivalence is not established.
+    /// Exact ranked operand; rederivation additionally checks dynamic global X.
     pub fn ranked_index(&self) -> ProductionRankedValueV1 {
         self.contract.indices()[0]
     }
-    /// Ranked extent operand, still unrelated to a canonical slice length.
+    /// Ranked extent interpretation; initially unbound until explicit rederivation.
     pub const fn dynamic_extent(&self) -> ProductionConditionalRankedExtentV1 {
         self.dynamic_extent
     }
@@ -146,6 +170,242 @@ impl<'a> ProductionConditionalRankedOutputV1<'a> {
     pub const fn address_domain(&self) -> ConditionalTotalViewAddressDomainV1 {
         self.binding.coverage().address_domain()
     }
+
+    /// Rederives the retained rank-one extent proposal from exact canonical facts.
+    ///
+    /// This consumes no graph, creates no map, and allocates no heap storage.
+    /// Work is prepaid on the SAME caller ledger; the canonical retained-storage
+    /// floor must still be live. Missing provenance is a refusal, including for
+    /// `Argument(0)`. Only an argument extent, one dynamic global-X index and the
+    /// closed checked-view use fragment are supported. Unsupported operations
+    /// fail closed rather than hiding an unrelated extent use.
+    ///
+    /// This is an internal provenance prerequisite, not authenticated translation
+    /// or total-coverage credit. Existing candidate verification/source replay
+    /// must precede any authoritative consumer. Reference argument/value relations
+    /// and all runtime conditions remain unproved. In particular GlobalLaunch
+    /// address representability remains required even when the output length is
+    /// zero; GuardedOutput retains its existing output-span/zero-offset premise.
+    /// The matching success edge is not a dominance or complete CFG proof.
+    pub fn rederive_output_extent_v1(mut self, budget: &mut Budget<'_>) -> JoinResult<Self> {
+        budget.charge_work(4)?;
+        if budget.storage() < self.binding.owner().retained_analysis_storage_v1() {
+            return Err(ResourceError::Accounting.into());
+        }
+        let write = ranked_write(self.candidate, self.source, budget)?;
+        let operand = match self.dynamic_extent {
+            ProductionConditionalRankedExtentV1::Unbound(operand)
+            | ProductionConditionalRankedExtentV1::CanonicalOutputLength { operand, .. } => operand,
+        };
+        rederive_extent_source(
+            self.candidate,
+            self.source,
+            &write,
+            operand,
+            self.binding.source_argument(),
+            budget,
+        )?;
+        // Coverage is sealed to this exact verified owner: its length is the
+        // output's SliceLength, and its predicate is global-X < that length.
+        self.dynamic_extent = ProductionConditionalRankedExtentV1::CanonicalOutputLength {
+            operand,
+            length: self.binding.coverage().length(),
+        };
+        Ok(self)
+    }
+}
+
+fn rederive_extent_source(
+    candidate: NativeRankedSourceCandidateV1<'_>,
+    source: &ProductionRankedAccessSourceV1,
+    write: &RankedWrite,
+    extent: ProductionRankedValueV1,
+    source_argument: u32,
+    budget: &mut Budget<'_>,
+) -> JoinResult<()> {
+    budget.charge_work(8)?;
+    let proposal = source
+        .output_extent()
+        .ok_or(JoinError::MissingExtentSource)?;
+    if proposal.source_argument() != source_argument
+        || proposal.view() != write.view
+        || proposal.index() != write.index
+        || proposal.extent() != extent
+        || write.view == write.index
+        || !matches!(extent, ProductionRankedValueV1::Argument(_))
+    {
+        return Err(JoinError::ExtentSource);
+    }
+    for row in candidate.access_sources() {
+        budget.charge_work(4)?;
+        if let Some(other) = row.output_extent()
+            && (other.extent() == extent || other.view() == write.view)
+            && !std::ptr::eq(row, source)
+        {
+            return Err(JoinError::ConflictingExtentSource);
+        }
+    }
+    check_extent_uses(candidate.kernel(), write, extent, budget)
+}
+
+fn check_extent_uses(
+    kernel: &ProductionRankedKernelV1,
+    write: &RankedWrite,
+    extent: ProductionRankedValueV1,
+    budget: &mut Budget<'_>,
+) -> JoinResult<()> {
+    use ProductionRankedOperationV1 as Op;
+    use fe2o3_pliron::ProductionRankedTerminatorV1 as Term;
+    let mut index_seen = false;
+    let mut write_guard = false;
+    for (block_index, block) in kernel.blocks().iter().enumerate() {
+        budget.charge_work(4)?;
+        if block.index_argument_count() != 0 {
+            return Err(JoinError::ExtentUse);
+        }
+        for (operation_index, operation) in block.operations().iter().enumerate() {
+            budget.charge_work(12)?;
+            let result = match operation {
+                Op::InvocationIndex {
+                    result,
+                    dimension,
+                    launch_extent,
+                } => {
+                    if ProductionRankedValueV1::Local(*result) != write.index
+                        || *dimension != 0
+                        || *launch_extent != 0
+                        || index_seen
+                    {
+                        return Err(JoinError::ExtentIndex);
+                    }
+                    index_seen = true;
+                    continue;
+                }
+                Op::View {
+                    result,
+                    dynamic_extents,
+                    ..
+                }
+                | Op::ViewInSpace {
+                    result,
+                    dynamic_extents,
+                    ..
+                } => {
+                    if ProductionRankedValueV1::Local(*result) != write.view
+                        || dynamic_extents.as_slice() != [extent]
+                    {
+                        return Err(JoinError::ExtentUse);
+                    }
+                    continue;
+                }
+                Op::Access {
+                    kind: AccessKindAttr::Write,
+                    view,
+                    indices,
+                }
+                | Op::ValueAccess {
+                    kind: AccessKindAttr::Write,
+                    view,
+                    indices,
+                    ..
+                } => {
+                    if block_index != write.site.block() as usize
+                        || operation_index != write.site.operation() as usize
+                        || *view != write.view
+                        || indices.as_slice() != [write.index]
+                        || matches!(operation, Op::ValueAccess { value, .. } if *value == extent)
+                    {
+                        return Err(JoinError::ExtentUse);
+                    }
+                    None
+                }
+                // Semantic expression symbols/loads are in a separate source
+                // namespace, not ranked operands. No expression proof is made.
+                Op::IndexConstant { result, .. }
+                | Op::IndexUnknown { result }
+                | Op::SemanticConstant { result, .. }
+                | Op::SemanticSymbol { result, .. }
+                | Op::SemanticExpression { result, .. } => Some(*result),
+                Op::IndexBinary {
+                    result, lhs, rhs, ..
+                }
+                | Op::SemanticBinary {
+                    result, lhs, rhs, ..
+                } => {
+                    if *lhs == extent || *rhs == extent {
+                        return Err(JoinError::ExtentUse);
+                    }
+                    Some(*result)
+                }
+                Op::OwnershipContract { view, .. } if *view == write.view => None,
+                Op::ExecutionLayout { .. } => None,
+                Op::RequestEffectRefinement { contract, .. }
+                | Op::RequireEffectRefinement { contract, .. } => {
+                    if contract.gpu_write_site() != write.site {
+                        return Err(JoinError::ExtentUse);
+                    }
+                    for values in [
+                        contract.indices(),
+                        contract.gpu_coordinates(),
+                        contract.reference_coordinates(),
+                    ] {
+                        for value in values {
+                            budget.charge_work(1)?;
+                            if *value == extent {
+                                return Err(JoinError::ExtentUse);
+                            }
+                        }
+                    }
+                    for value in [
+                        contract.view(),
+                        contract.gpu_domain(),
+                        contract.reference_domain(),
+                        contract.gpu_precondition(),
+                        contract.reference_precondition(),
+                        contract.gpu_value(),
+                        contract.reference_value(),
+                    ] {
+                        budget.charge_work(1)?;
+                        if value == extent {
+                            return Err(JoinError::ExtentUse);
+                        }
+                    }
+                    None
+                }
+                _ => return Err(JoinError::ExtentUse),
+            };
+            if result.is_some_and(|result| {
+                let value = ProductionRankedValueV1::Local(result);
+                value == write.index || value == write.view
+            }) {
+                return Err(JoinError::ExtentIndex);
+            }
+        }
+        budget.charge_work(6)?;
+        match block.terminator() {
+            Term::IndexLessThan {
+                lhs,
+                rhs,
+                true_block,
+                false_block,
+            } if *rhs == extent && *lhs == write.index && true_block != false_block => {
+                if *true_block == write.site.block() {
+                    write_guard = true;
+                }
+            }
+            Term::IndexLessThan { lhs, rhs, .. } | Term::IndexEqual { lhs, rhs, .. }
+                if *lhs != extent && *rhs != extent => {}
+            Term::Branch { .. } | Term::Return | Term::Trap => {}
+            _ => return Err(JoinError::ExtentUse),
+        }
+    }
+    if !index_seen {
+        return Err(JoinError::ExtentIndex);
+    }
+    if !write_guard {
+        return Err(JoinError::ExtentGuard);
+    }
+    Ok(())
 }
 
 impl ProductionConditionalOutputBindingV1<'_> {

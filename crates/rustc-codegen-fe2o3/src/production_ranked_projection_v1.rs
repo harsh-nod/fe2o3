@@ -65,8 +65,9 @@ use fe2o3_artifacts::{BlockSize, LaunchContract};
 use fe2o3_lower_mir_kernel::{
     ProductionMaterializedRankedModuleReceiptV1, ProductionRankedAccessSourceV1,
     ProductionRankedExecutableEffectOriginV1, ProductionRankedExecutableEffectSourceV1,
-    ProductionSourceExecutionLayoutV1, ProductionSourceLaunchErrorV1,
-    ProductionSourceLaunchInputV1, ProductionSourceLaunchRootInputV1, ProductionSourceLaunchRootV1,
+    ProductionRankedOutputExtentSourceV1, ProductionSourceExecutionLayoutV1,
+    ProductionSourceLaunchErrorV1, ProductionSourceLaunchInputV1,
+    ProductionSourceLaunchRootInputV1, ProductionSourceLaunchRootV1,
     ProductionSourceLaunchRosterV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
@@ -156,6 +157,7 @@ pub(crate) struct ProjectedAccessSourceV1 {
     memory_space: MemorySpaceAttr,
     source: SemanticSourceProvenanceV1,
     semantic_site: Option<ProjectedSemanticAccessSiteV1>,
+    output_extent: Option<ProductionRankedOutputExtentSourceV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -174,6 +176,7 @@ struct GuardedRankedAccessV1 {
     memory_space: MemorySpaceAttr,
     source: SemanticSourceProvenanceV1,
     semantic_site: Option<ProjectedSemanticAccessSiteV1>,
+    output_extent: Option<ProductionRankedOutputExtentSourceV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -668,6 +671,7 @@ struct ProjectedEffectSourceV1 {
     memory_space: MemorySpaceAttr,
     source: SemanticSourceProvenanceV1,
     semantic_site: Option<ProjectedSemanticAccessSiteV1>,
+    output_extent: Option<ProductionRankedOutputExtentSourceV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3330,6 +3334,14 @@ fn project_and_verify_ranked_root_with_singletons_v1(
         .with_scalar_private_singletons(singletons)
         .with_scalar_private_borrows(borrows, semantic.target());
     let mut discarded_ir = String::new();
+    // Fixed-size extent provenance construction visits at most one checked
+    // receiver per semantic terminator; use the existing source-phase ledger.
+    let extent_work = function.blocks().len().checked_mul(16).ok_or_else(|| {
+        ranked_projection_source_v1::resource(
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Arithmetic,
+        )
+    })?;
+    projected_views.charge_private_array_work(extent_work)?;
     let intrinsic = project_intrinsic_contracts(
         semantic.callables(),
         callable_effects,
@@ -3478,6 +3490,7 @@ fn project_and_verify_ranked_root_with_singletons_v1(
                 access: AccessKindAttr::Read,
                 memory_space: MemorySpaceAttr::Global,
                 source: effect.source,
+                output_extent: None,
                 semantic_site: None,
             });
         }
@@ -3503,6 +3516,7 @@ fn project_and_verify_ranked_root_with_singletons_v1(
                 access: effect.access,
                 memory_space: MemorySpaceAttr::Workgroup,
                 source: block.terminator().source(),
+                output_extent: None,
                 semantic_site: None,
             });
         }
@@ -4676,6 +4690,7 @@ fn project_private_array_initializer_v1(
             access: AccessKindAttr::Write,
             memory_space: MemorySpaceAttr::Private,
             source: statement.source(),
+            output_extent: None,
             semantic_site: None,
         });
     }
@@ -4866,7 +4881,7 @@ fn production_access_sources(
                 "ranked access correspondence has no exact semantic site",
             ))?;
         let ordinal = ordinals.entry((site.block, site.statement)).or_default();
-        retained.push(ProductionRankedAccessSourceV1::new(
+        let mut retained_source = ProductionRankedAccessSourceV1::new(
             u32::try_from(site.block).map_err(|_| {
                 ProductionRankedProjectionErrorV1::Unsupported(
                     "semantic access block does not fit u32",
@@ -4888,7 +4903,12 @@ fn production_access_sources(
                     "ranked access operation does not fit u32",
                 )
             })?,
-        ));
+        );
+        if let Some(extent) = source.output_extent {
+            facts.charge_private_array_work(8)?;
+            retained_source = retained_source.with_output_extent(extent);
+        }
+        retained.push(retained_source);
         *ordinal = ordinal
             .checked_add(1)
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -5896,6 +5916,7 @@ fn project_strided_read_effects_v1(
             access: AccessKindAttr::Read,
             memory_space: MemorySpaceAttr::Global,
             source: block.terminator().source(),
+            output_extent: None,
             semantic_site: None,
         }));
     }
@@ -8679,6 +8700,7 @@ fn project_intrinsic_contracts(
                 access: AccessKindAttr::Read,
                 memory_space: MemorySpaceAttr::Global,
                 source: block.terminator().source(),
+                output_extent: None,
                 semantic_site: None,
             };
             let slot = direct_read_effects.get_mut(block_index).ok_or(
@@ -9366,6 +9388,22 @@ fn project_intrinsic_contracts(
             comparisons.push(precondition);
         }
         comparisons.push((index, ProductionRankedValueV1::Argument(0)));
+        // Allocation provenance excludes offset-only allocation contracts. It
+        // proposes a source identity, not whole-slice equality: the latter is
+        // independently rederived from the exact canonical store and guard.
+        let output_extent = match allocation_provenance.get(receiver).copied().flatten() {
+            Some(LocalAllocationProvenanceV1::Argument(argument))
+                if checked_success.is_none() && precondition.is_none() =>
+            {
+                Some(ProductionRankedOutputExtentSourceV1::new(
+                    argument,
+                    ProductionRankedValueV1::Local(view),
+                    ProductionRankedValueV1::Argument(0),
+                    index,
+                ))
+            }
+            _ => None,
+        };
         let access = GuardedRankedAccessV1 {
             view,
             indices: vec![index],
@@ -9375,6 +9413,7 @@ fn project_intrinsic_contracts(
             memory_space: MemorySpaceAttr::Global,
             source: block.terminator().source(),
             semantic_site: None,
+            output_extent,
         };
         if direct_write {
             let slot = direct_write_effects.get_mut(block_index).ok_or(
@@ -19876,6 +19915,7 @@ fn order_projected_block_effects(
             access: source.access,
             memory_space: source.memory_space,
             source: source.source,
+            output_extent: source.output_extent,
             semantic_site: source.semantic_site,
         });
     }
@@ -20401,6 +20441,7 @@ fn build_ranked_cfg(
                             access: source.access,
                             memory_space: source.memory_space,
                             source: source.source,
+                            output_extent: source.output_extent,
                             semantic_site: source.semantic_site,
                         });
                     }
@@ -20487,6 +20528,7 @@ fn build_ranked_cfg(
                         access: access.access,
                         memory_space: access.memory_space,
                         source: access.source,
+                        output_extent: access.output_extent,
                         semantic_site: access.semantic_site,
                     });
                     push_block_at(
@@ -20528,6 +20570,7 @@ fn build_ranked_cfg(
                             access,
                             memory_space: MemorySpaceAttr::Workgroup,
                             source: function.blocks()[semantic_index].terminator().source(),
+                            output_extent: None,
                             semantic_site: Some(ProjectedSemanticAccessSiteV1 {
                                 block: semantic_index,
                                 statement: None,
@@ -24420,6 +24463,7 @@ fn project_place_access_with_atomic(
                 access,
                 memory_space,
                 source,
+                output_extent: None,
                 semantic_site: None,
             },
         });
@@ -24471,6 +24515,7 @@ fn project_place_access_with_atomic(
         access,
         memory_space,
         source,
+        output_extent: None,
         semantic_site: None,
     });
     Ok(())
@@ -40469,6 +40514,7 @@ mod tests {
                 access: AccessKindAttr::Read,
                 memory_space: MemorySpaceAttr::Global,
                 source: SemanticSourceProvenanceV1::unavailable(),
+                output_extent: None,
                 semantic_site: None,
             }));
         let (blocks, _, _) = build_ranked_cfg(

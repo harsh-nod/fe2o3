@@ -23,6 +23,7 @@ struct OutputSourceBinding {
     function: u32,
     argument: u32,
     physical_parameter: u32,
+    descriptor_argument: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -48,7 +49,7 @@ impl Callbacks for CoverageCallbacks {
             )
             .map_err(|error| error.to_string())?;
             transaction
-                .observe_pre_ranked_for_test_v1(|materialized| {
+                .observe_pre_ranked_for_test_v1(|materialized, typed_roots| {
                     assert!(!materialized.grants_artifact_or_launch_authority());
                     let owner = materialized.executable();
                     // This separate test-observation phase is not a claim about
@@ -74,11 +75,17 @@ impl Callbacks for CoverageCallbacks {
                                     .map_err(|error| error.to_string())?;
                                 assert!(std::ptr::eq(binding.owner(), materialized));
                                 assert!(std::ptr::eq(binding.coverage().module(), owner.module()));
+                                let descriptor = crate::compiler_descriptor::bind_conditional_output_descriptor_v1(
+                                    materialized, typed_roots, &binding, &mut budget,
+                                )
+                                .map_err(|error| error.to_string())?;
+                                check_descriptor_budget(materialized, typed_roots, &binding);
                                 let source = OutputSourceBinding {
                                     root: binding.association().correspondence_owner().index(),
                                     function: binding.association().semantic_function().index(),
                                     argument: binding.source_argument(),
                                     physical_parameter: binding.coverage().output_parameter_index(),
+                                    descriptor_argument: descriptor.argument_index(),
                                 };
                                 assert_eq!(
                                     binding.source_launch().selected_root().index(),
@@ -129,6 +136,45 @@ impl Callbacks for CoverageCallbacks {
         })());
         Compilation::Stop
     }
+}
+
+fn check_descriptor_budget(
+    owner: &fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+    binding: &fe2o3_lower_mir_kernel::ProductionConditionalOutputBindingV1<'_>,
+) {
+    use crate::compiler_descriptor::{
+        CompilerConditionalOutputDescriptorErrorV1 as Error, bind_conditional_output_descriptor_v1,
+    };
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+
+    // Independent test measurements include pre-existing work and the retained
+    // owner. Production callers must continue their existing phase ledger.
+    let run = |work_limit, retained| {
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, retained);
+        budget.reserve_storage(retained).unwrap();
+        budget.charge_work(17).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let outcome =
+            bind_conditional_output_descriptor_v1(owner, roots, binding, &mut budget).map(|_| ());
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(budget.storage(), retained);
+        assert_eq!(budget.peak_storage(), retained, "allocation-free join");
+        (outcome, budget.work())
+    };
+    let floor = owner.retained_analysis_storage_v1();
+    let (baseline, exact_work) = run(1_000_000, floor);
+    baseline.unwrap();
+    run(exact_work, floor).0.unwrap();
+    assert!(matches!(
+        run(exact_work - 1, floor).0,
+        Err(Error::Resource(Resource::Work(_)))
+    ));
+    assert!(matches!(
+        run(exact_work, floor - 1).0,
+        Err(Error::Resource(Resource::Accounting))
+    ));
 }
 
 fn check_binding_rejections(
@@ -284,6 +330,7 @@ fn check(response: &Path, expected_roots: &[&str], conditional: bool) {
             let source = root.source.as_ref().expect("exact source binding");
             assert_eq!(source.argument, 0);
             assert_eq!(source.physical_parameter, 0);
+            assert_eq!(source.descriptor_argument, 0);
         } else {
             assert!(root.source.is_none());
         }
@@ -389,4 +436,45 @@ fn retained_helper_coverage_is_not_inferred_from_a_guarded_store() {
             check: |path, roots| check(path, roots, false),
         }),
     );
+}
+
+#[test]
+#[ignore = "requires pinned nightly rust-src and retained-wrapper source compilation; no GPU or Verus"]
+fn descriptor_binding_distinguishes_same_typed_output_parameters() {
+    for profile in [
+        fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
+        fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950,
+    ] {
+        ordinary_rust_source_cases(
+            &[OrdinarySourceCase::ConditionalDescriptorPair],
+            profile,
+            false,
+            Some(SourceObserver {
+                child_test: CHILD,
+                check: |path, expected_roots| {
+                    let result: Result<CoverageObservation, String> =
+                        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+                    let result = result.unwrap();
+                    assert_ne!(result.canonical_digest, [0; 32]);
+                    assert!(result.work > 0);
+                    assert!(result.simulation.is_none());
+                    assert_eq!(result.roots.len(), expected_roots.len());
+                    for (name, argument) in [("binding_first", 0), ("binding_second", 1)] {
+                        assert!(expected_roots.contains(&name));
+                        let mut roots = result.roots.iter().filter(|root| root.root == name);
+                        let root = roots.next().unwrap();
+                        assert!(roots.next().is_none());
+                        assert!(root.conditional);
+                        assert!(root.unsupported.is_none());
+                        assert_eq!(root.address_domain.as_deref(), Some("GlobalLaunch"));
+                        let source = root.source.as_ref().unwrap();
+                        assert_ne!(source.root, source.function, "retained Result wrapper");
+                        assert_eq!(source.argument, argument);
+                        assert_eq!(source.physical_parameter, argument);
+                        assert_eq!(source.descriptor_argument, argument as usize);
+                    }
+                },
+            }),
+        );
+    }
 }

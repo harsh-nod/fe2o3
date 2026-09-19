@@ -640,3 +640,338 @@ fn same_work_ledger_exact_boundary_and_storage_floor_are_preserved() {
         ));
     }
 }
+
+fn extent_source(extent: ProductionRankedValueV1) -> ProductionRankedAccessSourceV1 {
+    source().with_output_extent(ProductionRankedOutputExtentSourceV1::new(
+        0,
+        local(2),
+        extent,
+        local(1),
+    ))
+}
+
+fn extent_query(
+    kernel: &ProductionRankedKernelV1,
+    rows: &[ProductionRankedAccessSourceV1],
+    extent: ProductionRankedValueV1,
+    budget: &mut Budget<'_>,
+) -> JoinResult<()> {
+    let candidate = candidate(kernel, rows);
+    let selected = ranked_source(rows, site(), budget)?;
+    let write = ranked_write(candidate, selected, budget)?;
+    ranked_view_and_contract(candidate, &write, 0, 4, budget)?;
+    rederive_extent_source(candidate, selected, &write, extent, 0, budget)
+}
+
+fn change_ranked_block(
+    kernel: &ProductionRankedKernelV1,
+    block: usize,
+    change: impl FnOnce(&mut Vec<ProductionRankedOperationV1>, &mut ProductionRankedTerminatorV1),
+) -> ProductionRankedKernelV1 {
+    let mut blocks = kernel.blocks().to_vec();
+    let mut operations = blocks[block].operations().to_vec();
+    let mut terminator = blocks[block].terminator().clone();
+    change(&mut operations, &mut terminator);
+    blocks[block] = ProductionRankedBlockV1::new(operations, terminator);
+    ProductionRankedKernelV1::new("inert_extent_candidate", 2, blocks).unwrap()
+}
+
+#[test]
+fn extent_proposal_is_borrowed_inline_and_argument_ordinal_has_no_meaning() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, 0);
+    for extent in [
+        ProductionRankedValueV1::Argument(0),
+        ProductionRankedValueV1::Argument(1),
+    ] {
+        let kernel = ranked_kernel(extent, access());
+        let rows = [extent_source(extent)];
+        let candidate = candidate(&kernel, &rows);
+        assert!(std::ptr::eq(candidate.access_sources(), rows.as_slice()));
+        assert_eq!(
+            candidate.access_sources()[0]
+                .output_extent()
+                .unwrap()
+                .extent(),
+            extent
+        );
+        extent_query(&kernel, &rows, extent, &mut budget).unwrap();
+        assert_eq!(
+            extent_query(&kernel, &[source()], extent, &mut budget),
+            Err(JoinError::MissingExtentSource)
+        );
+    }
+    assert_eq!(budget.storage(), 0);
+    assert_eq!(budget.peak_storage(), 0);
+}
+
+#[test]
+fn base_field_reconstruction_loses_proposal_and_never_authenticates_extent() {
+    let extent = ProductionRankedValueV1::Argument(0);
+    let proposed = extent_source(extent);
+    // Model the legacy constructor boundary, not a new wire codec.
+    let reconstructed = ProductionRankedAccessSourceV1::new(
+        proposed.semantic_block(),
+        proposed.semantic_statement(),
+        proposed.semantic_access_ordinal(),
+        proposed.ranked_block(),
+        proposed.ranked_operation(),
+    );
+    assert_eq!(reconstructed, source());
+    assert_eq!(reconstructed.cmp(&source()), std::cmp::Ordering::Equal);
+    assert_ne!(proposed, reconstructed);
+    assert_ne!(proposed.cmp(&reconstructed), std::cmp::Ordering::Equal);
+    assert_eq!(reconstructed.output_extent(), None);
+    let kernel = ranked_kernel(extent, access());
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, 0);
+    assert_eq!(
+        extent_query(&kernel, &[reconstructed], extent, &mut budget),
+        Err(JoinError::MissingExtentSource)
+    );
+}
+
+#[test]
+fn extent_proposal_requires_exact_source_view_index_and_operand() {
+    let extent = ProductionRankedValueV1::Argument(0);
+    let kernel = ranked_kernel(extent, access());
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, 0);
+    for proposal in [
+        ProductionRankedOutputExtentSourceV1::new(1, local(2), extent, local(1)),
+        ProductionRankedOutputExtentSourceV1::new(0, local(0), extent, local(1)),
+        ProductionRankedOutputExtentSourceV1::new(0, local(2), extent, local(0)),
+        ProductionRankedOutputExtentSourceV1::new(
+            0,
+            local(2),
+            ProductionRankedValueV1::Argument(1),
+            local(1),
+        ),
+    ] {
+        assert_eq!(
+            extent_query(
+                &kernel,
+                &[source().with_output_extent(proposal)],
+                extent,
+                &mut budget
+            ),
+            Err(JoinError::ExtentSource)
+        );
+    }
+    let local_extent = ranked_kernel(local(0), access());
+    assert_eq!(
+        extent_query(
+            &local_extent,
+            &[extent_source(local(0))],
+            local(0),
+            &mut budget
+        ),
+        Err(JoinError::ExtentSource)
+    );
+}
+
+#[test]
+fn conflicting_extent_meanings_and_duplicate_occurrences_are_refused() {
+    let extent = ProductionRankedValueV1::Argument(0);
+    let kernel = ranked_kernel(extent, access());
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, 0);
+    let selected = extent_source(extent);
+    for other in [
+        ProductionRankedOutputExtentSourceV1::new(7, local(0), extent, local(1)),
+        ProductionRankedOutputExtentSourceV1::new(
+            0,
+            local(2),
+            ProductionRankedValueV1::Argument(1),
+            local(1),
+        ),
+        selected.output_extent().unwrap(),
+    ] {
+        let rows = [
+            selected,
+            ProductionRankedAccessSourceV1::new(99, None, 0, 1, 0).with_output_extent(other),
+        ];
+        assert_eq!(
+            extent_query(&kernel, &rows, extent, &mut budget),
+            Err(JoinError::ConflictingExtentSource)
+        );
+    }
+    assert_eq!(
+        extent_query(&kernel, &[selected, selected], extent, &mut budget),
+        Err(JoinError::AmbiguousSourceAccess)
+    );
+}
+
+#[test]
+fn unrelated_extent_uses_in_arithmetic_and_other_views_are_refused() {
+    let extent = ProductionRankedValueV1::Argument(0);
+    let kernel = ranked_kernel(extent, access());
+    let rows = [extent_source(extent)];
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, 0);
+    for extra in [
+        ProductionRankedOperationV1::IndexBinary {
+            result: ProductionRankedValueIdV1::new(4),
+            kind: dialect_kernel::IndexBinaryKindAttr::Add,
+            lhs: local(1),
+            rhs: extent,
+        },
+        ProductionRankedOperationV1::ViewInSpace {
+            result: ProductionRankedValueIdV1::new(4),
+            element_width: 32,
+            writable: true,
+            shape: vec![DYNAMIC_EXTENT],
+            dynamic_extents: vec![extent],
+            memory_space: MemorySpaceAttr::Global,
+            allocation_origin: 2,
+            noalias_class: 2,
+        },
+    ] {
+        let changed = change_ranked_block(&kernel, 0, |ops, _| ops.push(extra));
+        assert_eq!(
+            extent_query(&changed, &rows, extent, &mut budget),
+            Err(JoinError::ExtentUse)
+        );
+    }
+}
+
+#[test]
+fn ranked_constructor_rejects_extent_as_a_semantic_store_value_before_the_join() {
+    let extent = ProductionRankedValueV1::Argument(0);
+    let kernel = ranked_kernel(extent, access());
+    let mut blocks = kernel.blocks().to_vec();
+    blocks[2] = ProductionRankedBlockV1::new(
+        vec![ProductionRankedOperationV1::ValueAccess {
+            kind: AccessKindAttr::Write,
+            view: local(2),
+            indices: vec![local(1)],
+            value: extent,
+        }],
+        ProductionRankedTerminatorV1::Branch { target: 1 },
+    );
+    assert!(matches!(
+        ProductionRankedKernelV1::new("inert_extent_value", 2, blocks),
+        Err(fe2o3_pliron::ProductionRankedKernelErrorV1::ExpectedSemantic(value))
+            if value == extent
+    ));
+}
+
+#[test]
+fn extent_index_must_be_dynamic_global_x_and_guard_must_target_the_write() {
+    let extent = ProductionRankedValueV1::Argument(0);
+    let kernel = ranked_kernel(extent, access());
+    let rows = [extent_source(extent)];
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, 0);
+    let extra_index = change_ranked_block(&kernel, 0, |ops, _| {
+        ops.push(ProductionRankedOperationV1::InvocationIndex {
+            result: ProductionRankedValueIdV1::new(4),
+            dimension: 0,
+            launch_extent: 0,
+        });
+    });
+    assert_eq!(
+        extent_query(&extra_index, &rows, extent, &mut budget),
+        Err(JoinError::ExtentIndex)
+    );
+    for (dimension, launch_extent) in [(1, 0), (0, 64)] {
+        let changed = change_ranked_block(&kernel, 0, |ops, _| {
+            ops[1] = ProductionRankedOperationV1::InvocationIndex {
+                result: ProductionRankedValueIdV1::new(1),
+                dimension,
+                launch_extent,
+            };
+        });
+        assert_eq!(
+            extent_query(&changed, &rows, extent, &mut budget),
+            Err(JoinError::ExtentIndex)
+        );
+    }
+    let changed = change_ranked_block(&kernel, 0, |ops, _| {
+        ops[1] = ProductionRankedOperationV1::IndexConstant {
+            result: ProductionRankedValueIdV1::new(1),
+            value: 0,
+        };
+    });
+    assert_eq!(
+        extent_query(&changed, &rows, extent, &mut budget),
+        Err(JoinError::ExtentIndex)
+    );
+    for (terminator, error) in [
+        (ProductionRankedTerminatorV1::Return, JoinError::ExtentGuard),
+        (
+            ProductionRankedTerminatorV1::IndexLessThan {
+                lhs: local(1),
+                rhs: extent,
+                true_block: 1,
+                false_block: 2,
+            },
+            JoinError::ExtentGuard,
+        ),
+        (
+            ProductionRankedTerminatorV1::IndexLessThan {
+                lhs: local(0),
+                rhs: extent,
+                true_block: 2,
+                false_block: 1,
+            },
+            JoinError::ExtentUse,
+        ),
+        (
+            ProductionRankedTerminatorV1::IndexLessThan {
+                lhs: local(1),
+                rhs: extent,
+                true_block: 2,
+                false_block: 2,
+            },
+            JoinError::ExtentUse,
+        ),
+        (
+            ProductionRankedTerminatorV1::IndexEqual {
+                lhs: local(1),
+                rhs: extent,
+                true_block: 2,
+                false_block: 1,
+            },
+            JoinError::ExtentUse,
+        ),
+    ] {
+        let changed = change_ranked_block(&kernel, 3, |_, term| *term = terminator);
+        assert_eq!(
+            extent_query(&changed, &rows, extent, &mut budget),
+            Err(error)
+        );
+    }
+}
+
+#[test]
+fn extent_rederivation_charges_same_ledger_and_never_changes_storage() {
+    let extent = ProductionRankedValueV1::Argument(0);
+    let kernel = ranked_kernel(extent, access());
+    let rows = [extent_source(extent)];
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, 37);
+    budget.reserve_storage(37).unwrap();
+    budget.charge_work(17).unwrap();
+    extent_query(&kernel, &rows, extent, &mut budget).unwrap();
+    let exact = budget.work();
+    for (limit, succeeds) in [(17, false), (exact - 1, false), (exact, true)] {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
+        let mut budget = Budget::new(&mut work, 37);
+        budget.reserve_storage(37).unwrap();
+        budget.charge_work(17).unwrap();
+        let outcome = extent_query(&kernel, &rows, extent, &mut budget);
+        if succeeds {
+            outcome.unwrap();
+        } else {
+            assert!(matches!(
+                outcome,
+                Err(JoinError::Resource(ResourceError::Work(_)))
+            ));
+        }
+        assert_eq!(budget.storage(), 37);
+        assert_eq!(budget.peak_storage(), 37);
+        budget.release_storage(37).unwrap();
+        assert_eq!(budget.storage(), 0);
+    }
+}

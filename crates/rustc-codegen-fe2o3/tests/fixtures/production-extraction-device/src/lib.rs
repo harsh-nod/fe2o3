@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "conditional-descriptor-pair")]
+mod conditional_descriptor_pair;
+
 #[cfg(feature = "wave64-capture")]
 mod wave64_capture;
 
@@ -57,6 +60,7 @@ mod write_only_reference;
     feature = "multi-root-ownership",
     feature = "multi-root-target-lineage",
     feature = "wrapped-fill",
+    feature = "conditional-descriptor-pair",
     feature = "private-unit-helper",
     feature = "f32-negate",
     feature = "f32-divide",

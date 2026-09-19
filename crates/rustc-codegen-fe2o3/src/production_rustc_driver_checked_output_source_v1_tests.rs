@@ -445,6 +445,7 @@ fn ordinary_rust_private_unit_helper_reaches_checked_native_output() {
 }
 
 enum OrdinarySourceCase {
+    ConditionalDescriptorPair,
     ReferenceFill,
     ConstantShift(shift_source::Config),
     ScalarBorrowPolicy5,
@@ -631,6 +632,15 @@ fn ordinary_rust_source_cases(
                 1,
                 0,
             ),
+            OrdinarySourceCase::ConditionalDescriptorPair => (
+                "conditional-descriptor-pair",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("conditional-descriptor-pair"),
+                &["binding_first", "binding_second"][..],
+                0,
+                2,
+                0,
+            ),
             OrdinarySourceCase::Vecadd => {
                 ("vecadd", "examples/vecadd", None, &["vecadd"][..], 2, 1, 0)
             }
@@ -782,7 +792,10 @@ fn ordinary_rust_source_cases(
         }
         // Qualify both real frontend shapes. This changes only rustc's test
         // invocation, never the fixed fe2o3 optimizer or its admission policy.
-        if matches!(case, OrdinarySourceCase::RetainedWrappedFill) {
+        if matches!(
+            case,
+            OrdinarySourceCase::RetainedWrappedFill | OrdinarySourceCase::ConditionalDescriptorPair
+        ) {
             args.push("-Zinline-mir=no".into());
         }
         if matches!(
@@ -872,7 +885,9 @@ fn ordinary_rust_source_cases(
             | OrdinarySourceCase::PrivateUnitHelper
             | OrdinarySourceCase::RetainedPrivateUnitHelper => Some(simulation::Case::Fill),
             OrdinarySourceCase::Vecadd => Some(simulation::Case::Vecadd),
-            OrdinarySourceCase::SharedUnitHelper | OrdinarySourceCase::ReferenceFill => None,
+            OrdinarySourceCase::SharedUnitHelper
+            | OrdinarySourceCase::ReferenceFill
+            | OrdinarySourceCase::ConditionalDescriptorPair => None,
             OrdinarySourceCase::F32Negate | OrdinarySourceCase::RetainedF32Negate => {
                 Some(simulation::Case::F32Negate)
             }

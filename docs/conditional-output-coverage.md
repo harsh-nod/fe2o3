@@ -90,11 +90,27 @@ back to allocation identity. Sparse block IDs are resolved by identity, not
 vector position. These bounded queries share the caller's work/storage ledger
 and retain the canonical address-formation premise.
 
-The ranked candidate is still inert input. This inspection does not authenticate
-the translation or prove index, value, predicate or extent equivalence. In
-particular, its dynamic extent is returned as `Unbound(operand)`: a ranked
-`Argument(0)` does not by itself identify the original Rust output argument or
-its length. The reference contract's output ordinal is normalized into logical
+The initial inspection returns `Unbound(operand)`: a ranked `Argument(0)` does
+not by itself identify the original Rust output argument or its length.
+Checked-view construction now retains an optional, fixed-size extent proposal
+inline in the existing access row. It records the original source argument,
+view, index and extent operands; no separate correspondence map is added.
+
+`rederive_output_extent_v1` checks that proposal against the exact conditional
+binding, unique dynamic global-X index and supported uses of the extent. Missing
+provenance, conflicting interpretations, unrelated arithmetic/view uses and
+unsupported operations reject. The result retains the exact canonical
+`SliceLength` value and address domain. A matching guard-to-write edge is not a
+dominance or complete CFG proof.
+
+The ranked candidate and its proposal are still inert input. These queries do
+not authenticate translation or establish reference-value equivalence. Existing
+source replay validates base occurrence coordinates, not the new extent meaning.
+Legacy base-field reconstruction leaves the proposal absent; no old wire or
+digest version acquires new fields implicitly. Authoritative replay and a
+coordinated conditional-evidence successor remain required.
+
+The reference contract's output ordinal is normalized into logical
 kernel-argument coordinates, excluding the CPU point-coordinate prefix; it is
 not a raw CPU parameter number. The inspection retains this field but does not
 validate the reference's logical ABI relation. No proof counter is incremented.
@@ -106,12 +122,23 @@ generated packing plan can resolve the base address and length together from
 the exact packed argument owner, checking plan/kernel identity, generated ABI
 field ordinal, unique pointer/length component locations, widths, memory role,
 and packing-buffer bounds. That field ordinal is not automatically the Rust
-source argument number or physical KIR slot. It does not infer a coverage requirement
-from a kernel name or assume that every slice is an output.
+source argument number or physical KIR slot. It does not infer a coverage
+requirement from a kernel name or assume that every slice is an output.
+
+A compiler-private join now checks the conditional binding against the complete
+ordered typed-root roster using existing semantic ownership, type and ABI
+validators. For the supported flat profile it retains the exact descriptor
+argument position, using the certified physical slot only for KIR type checking.
+Same-typed fields are selected by source correspondence, not by shape. Ignored,
+expanded tuple and context-forwarding profiles remain unsupported. This is
+descriptive agreement: caller-supplied matching roots do not acquire
+same-transaction custody. Production integration must use the transaction's own
+retained owner and typed roots.
 
 The resolver returns inert borrowed data, not pointer validity, allocation
-admission or a discharged coverage condition. A host-side `N <= G` comparison without a bound conditional theorem
-would not repair an unconditional compiler proof claim.
+admission or a discharged coverage condition. A host-side `N <= G` comparison
+without a bound conditional theorem would not repair an unconditional compiler
+proof claim.
 
 ## Remaining Integration
 
@@ -149,9 +176,15 @@ or at reference-proof request preparation. The latter borrows the actual owner
 and prepared ranked request in the same phase ledger, then returns an explicit
 test-only `Incomplete` error before opening a proof runtime. It cannot yield a
 clean ranked program, signed receipt, handoff or artifact.
+The source tests also exercise the full descriptor and extent-query budget
+boundaries; independent test measurements are not replacement production ledgers.
+Two same-typed output parameters in retained Result wrappers test exact argument
+selection without claiming that the untouched output is fully written.
 Finite simulator checks consume its exact bytes, compare output and canary
 bytes, and repeat each execution. The fill probe includes lengths 0, 1, 63, 64
 and 65 at a 64-invocation launch; the last case must leave one element unwritten.
+Retained wrappers use their source-derived 256-invocation launch and lengths
+0, 1, 255, 256 and 257, preserving the same boundary check.
 These tests do not bypass ranked checks, import proof receipts, produce GPU
 artifacts, or execute on a GPU. Neither these observations nor the
 analysis/packing unit tests qualify a tutorial kernel end to end.
