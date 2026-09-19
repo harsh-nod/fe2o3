@@ -1,6 +1,6 @@
 # Inspector packaging and fresh cursor qualification — 2026-09-19
 
-These are qualified implementation slices, not closure of M2–M6, V2–V7 or U2–U5.
+These are qualified implementation slices, not closure of M2–M6, V2–V5 or U2–U4.
 All runs used the primary checkout on mi350-2. Compiler publication remains
 separately blocked by the inherited unsigned main commit; tests do not waive DCO.
 
@@ -61,4 +61,3 @@ The cursor resource roster explicitly charged both whole-body experiment roots.
 Combined charged storage remained about 15.02 GB, below the unchanged 20 GiB cap.
 There is no public frame-navigation/step-out, allocation-generation/reuse,
 hardware timing, physical-register-state or production-resume completion claim.
-

@@ -9,6 +9,8 @@ use std::mem::size_of;
 
 #[path = "runtime_origin_retention/capture.rs"]
 mod capture;
+#[path = "runtime_origin_retention/lifecycle.rs"]
+mod lifecycle;
 #[path = "runtime_origin_retention/pair.rs"]
 mod pair;
 use capture::OriginCollector;

@@ -51,6 +51,8 @@ use crate::{
 
 #[path = "execute_debug_identity.rs"]
 mod debug_identity;
+#[path = "execute_observed_debug.rs"]
+mod observed_debug;
 #[path = "execute_ordered_program_v17.rs"]
 mod ordered_program_v17;
 #[path = "execute_ordered_region_v16.rs"]
