@@ -235,10 +235,15 @@ fn mutate(
         } else {
             ScopedMemoryRoleV29::Operand(ExecutionOperandV29::CallDestinationAddress)
         });
-        assert_eq!(
-            check_anchors(instances, emitted, slots, budget).unwrap_err(),
-            scoped_memory_error_v29()
-        );
+        assert!(matches!(
+            check_anchors(instances, emitted, slots, budget),
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                function: 0,
+                block: None,
+                statement: None,
+                detail: "scoped memory anchors differ from their source instance",
+            })
+        ));
         emitted[item.instance.index()]
             .as_mut()
             .unwrap()

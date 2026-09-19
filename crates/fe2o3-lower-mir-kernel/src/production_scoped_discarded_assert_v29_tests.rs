@@ -3,6 +3,188 @@ use crate::production_semantic_kir_v1::scoped_slot_uses_v29;
 
 const LIMIT: usize = 10_000_000;
 
+fn probe_authentication(
+    source: &ExecutionLifecycleSourceV29<'_>,
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &mut [Option<LoweredFunctionResultV1>],
+    slots: &OwnedScopedSourceSlotsV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let item = slots
+        .instances
+        .iter()
+        .find(|item| item.function.index() == 3)
+        .unwrap();
+    let floor = budget.storage();
+    with_canonical_call_scratch_v1(budget, |budget| {
+        let row = instances.instance(item.instance).unwrap();
+        let plan = execution_instance_plan_v29(
+            instances,
+            item.instance,
+            FunctionId::new("discarded_auth_probe"),
+            item.placement,
+            budget,
+        )?;
+        let mut producer = ExecutionLifecycleProducerV29::new(
+            source,
+            instances,
+            item.instance,
+            item.placement,
+            budget,
+        )?;
+        with_execution_availability_v29(instances, item.instance, budget, |cursor, budget| {
+            let semantic = instances.owner().source_semantic();
+            let function = row.declaration();
+            let mut lowering = SemanticFunctionLoweringV1::new_interprocedural(
+                semantic.types(),
+                semantic.callables(),
+                function,
+                row.ssa(),
+                plan.correspondence_owner,
+                plan.semantic_function,
+                BTreeMap::new(),
+                BTreeMap::new(),
+                plan.result_types.clone(),
+                SemanticParameterBindingsV1 {
+                    declarations: &plan.parameter_declarations,
+                    values: &plan.parameter_values,
+                    types: &plan.parameter_types,
+                    local_bindings: None,
+                },
+                None,
+                Some([64, 1, 1]),
+                BTreeSet::new(),
+                1,
+                false,
+                1024,
+                PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(1, 1024)),
+                None,
+                CallReturnBufferV1::empty(),
+                Some(budget),
+                item.placement,
+                Some(cursor),
+                Some(&mut producer),
+            )?;
+            let block_id = SemanticBlockIdV1::from_index(0);
+            let mut block = BasicBlock::new(item.placement.block(0)?);
+            lowering.begin_block(block_id, &mut block)?;
+            for (ordinal, statement) in function.blocks()[0].statements().iter().enumerate() {
+                lowering.lower_statement(
+                    block_id,
+                    Some(ordinal as u32),
+                    statement.kind(),
+                    &mut block.operations,
+                )?;
+            }
+            let SemanticTerminatorKindV1::Assert {
+                message: SemanticAssertMessageV1::BoundsCheck { length, .. },
+                ..
+            } = function.blocks()[0].terminator().kind()
+            else {
+                unreachable!();
+            };
+            let cloned = length.clone();
+            let old_rows = lowering
+                .scoped_memory
+                .as_ref()
+                .unwrap()
+                .anchors
+                .rows
+                .clone();
+            let old_frame = lowering.scoped_memory.as_ref().unwrap().frame;
+            let old_operations = block.operations.clone();
+            let old_counts = (lowering.next_value, lowering.emitted_operations);
+            let old_initialized = lowering.retained_local_initialized.clone();
+            let values = |lowering: &SemanticFunctionLoweringV1<'_>| {
+                lowering
+                    .locals
+                    .iter()
+                    .map(|value| value.as_ref().map(|value| value.value().unwrap()))
+                    .collect::<Vec<_>>()
+            };
+            let old_values = values(&lowering);
+            let old_storage = lowering.emission_work.as_deref().unwrap().storage();
+            for (at, role, operand) in [
+                (block_id, ExecutionOperandV29::AssertMessage(0), &cloned),
+                (block_id, ExecutionOperandV29::AssertMessage(1), length),
+                (
+                    SemanticBlockIdV1::from_index(1),
+                    ExecutionOperandV29::AssertMessage(0),
+                    length,
+                ),
+                (block_id, ExecutionOperandV29::RvalueOperand(0), length),
+            ] {
+                assert!(matches!(
+                    lowering.consume_execution_assert_operand_v29(
+                        at,
+                        role,
+                        operand,
+                        &mut block.operations
+                    ),
+                    Err(ProductionSemanticKirErrorV1::Unsupported {
+                        function: 0,
+                        block: None,
+                        statement: None,
+                        detail: "scoped memory anchors differ from their source instance",
+                    })
+                ));
+                assert_eq!(
+                    lowering.scoped_memory.as_ref().unwrap().anchors.rows,
+                    old_rows
+                );
+                assert_eq!(lowering.scoped_memory.as_ref().unwrap().frame, old_frame);
+                assert_eq!(block.operations, old_operations);
+                assert_eq!(
+                    (lowering.next_value, lowering.emitted_operations),
+                    old_counts
+                );
+                assert_eq!(lowering.retained_local_initialized, old_initialized);
+                assert_eq!(values(&lowering), old_values);
+                assert_eq!(
+                    lowering.emission_work.as_deref().unwrap().storage(),
+                    old_storage
+                );
+            }
+            lowering.consume_execution_assert_operand_v29(
+                block_id,
+                ExecutionOperandV29::AssertMessage(0),
+                length,
+                &mut block.operations,
+            )?;
+            assert_eq!(block.operations, old_operations);
+            let moved = matches!(length, SemanticOperandV1::Move(_));
+            assert_eq!(
+                lowering.scoped_memory.as_ref().unwrap().anchors.rows.len(),
+                old_rows.len() + usize::from(moved)
+            );
+            assert_eq!(lowering.retained_local_initialized.contains(&2), !moved);
+            if moved {
+                assert!(lowering.locals[2].is_none());
+            } else {
+                assert_eq!(values(&lowering), old_values);
+            }
+            assert_eq!(lowering.scoped_memory.as_ref().unwrap().frame, old_frame);
+            Ok(())
+        })
+    })?;
+    assert_eq!(budget.storage(), floor);
+    observe_runtime(source, instances, emitted, slots, budget)
+}
+
+#[test]
+fn discarded_operand_authentication_rejects_clones_wrong_roles_and_wrong_blocks() {
+    for move_message in [false, true] {
+        let fixture = ScopedFixture::AssertionSlots {
+            move_condition: false,
+            move_message,
+            reinitialize: true,
+        };
+        let (result, _, _) = run(false, fixture, probe_authentication, LIMIT, LIMIT);
+        assert_eq!(OBSERVED.get(), 1, "{fixture:?}: {result:?}");
+        assert!(is_stopped(&result), "{fixture:?}: {result:?}");
+    }
+}
+
 fn check_assertion(
     instances: &ExecutionInstancesV29<'_>,
     instance: ProductionCallInstanceIdV1,
