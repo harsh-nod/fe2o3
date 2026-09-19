@@ -9,7 +9,7 @@ pub enum ProductionConditionalSourceTranslationErrorV1 {
     /// Source rows are duplicate, incomplete, or point to the wrong operation kind.
     SourceRows,
     /// The frozen pending owner could not authenticate its retained recipe.
-    Pending(fe2o3_pliron::ProductionSessionErrorV1),
+    Pending,
     /// Source policy, resource accounting, or the effect/value relation failed.
     Correspondence(ProductionSemanticKirErrorV1),
 }
@@ -24,7 +24,7 @@ impl fmt::Display for ProductionConditionalSourceTranslationErrorV1 {
             Self::SourceRows => {
                 out.write_str("pending recipe has invalid source correspondence rows")
             }
-            Self::Pending(error) => error.fmt(out),
+            Self::Pending => out.write_str("pending recipe custody could not be authenticated"),
             Self::Correspondence(error) => error.fmt(out),
         }
     }
@@ -33,7 +33,6 @@ impl fmt::Display for ProductionConditionalSourceTranslationErrorV1 {
 impl std::error::Error for ProductionConditionalSourceTranslationErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Pending(error) => Some(error),
             Self::Correspondence(error) => Some(error),
             _ => None,
         }
@@ -170,7 +169,7 @@ impl ProductionPreRankedKirOwnerV1 {
             return Err(ArgumentResourceV1::Accounting.into());
         }
         self.require_legacy_helper_policy_v1("conditional source translation")?;
-        let recipe = pending.kernel().map_err(E::Pending)?;
+        let recipe = pending.kernel().map_err(|_| E::Pending)?;
         if !std::ptr::eq(recipe, candidate.kernel()) {
             return Err(E::ForeignRecipe);
         }
