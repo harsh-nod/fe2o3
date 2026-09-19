@@ -435,7 +435,11 @@ fn owner_parameter_caller_rejects_mixed_duplicate_and_wrong_types() {
             &mut budget,
         )
     };
-    run(&[direct.clone()], &[expected.clone()]).unwrap();
+    run(
+        std::slice::from_ref(&direct),
+        std::slice::from_ref(&expected),
+    )
+    .unwrap();
     for projections in [
         vec![direct.clone(), direct.clone()],
         vec![direct.clone(), component],
@@ -463,6 +467,6 @@ fn owner_parameter_caller_rejects_mixed_duplicate_and_wrong_types() {
             AccessMode::ReadWrite,
         ),
     ] {
-        assert!(run(&[direct.clone()], &[physical]).is_err());
+        assert!(run(std::slice::from_ref(&direct), &[physical]).is_err());
     }
 }
