@@ -261,7 +261,7 @@ fn owned_execution_input_checks_ledger_and_live_reservation_before_work() {
         let owned = OwnedExecutionInputV29::capture(source, budget).unwrap();
         assert!(
             owned
-                .with_source(source.owner, source.launch, &mut foreign, |_, _| {
+                .with_source::<()>(source.owner, source.launch, &mut foreign, |_, _| {
                     panic!("foreign visitor");
                 })
                 .is_err()
@@ -273,7 +273,7 @@ fn owned_execution_input_checks_ledger_and_live_reservation_before_work() {
         let before = budget.work();
         assert!(
             owned
-                .with_source(source.owner, source.launch, budget, |_, _| {
+                .with_source::<()>(source.owner, source.launch, budget, |_, _| {
                     panic!("unreserved visitor");
                 })
                 .is_err()
@@ -385,4 +385,73 @@ fn owned_execution_input_obeys_exact_and_one_short_resources() {
     let short_storage = owned_input_probe(work, storage - 1);
     assert!(short_storage.0.is_err());
     assert!(short_storage.4.is_some());
+}
+
+#[test]
+fn owned_execution_input_capture_cleans_partial_allocation_at_exact_stage_limits() {
+    for mode in 0..4 {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+        let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+        with_module_fixture(ModuleFixture::Mixed, &mut budget, |source, budget| {
+            let capture_work = 79
+                + size_of::<ScopedRootRecipeV29>()
+                + 7 * size_of::<ProductionScopeCallableCandidateV29>()
+                + 4 * size_of::<crate::ProductionScopeEventCandidateV29>()
+                + 3 * size_of::<crate::ProductionSourceLaunchRootV1>();
+            let capture_storage = size_of::<OwnedExecutionInputV29>()
+                + size_of::<ScopedRootRecipeV29>()
+                + 7 * size_of::<ProductionScopeCallableCandidateV29>()
+                + 4 * size_of::<crate::ProductionScopeEventCandidateV29>()
+                + 3 * size_of::<crate::ProductionSourceLaunchRootV1>();
+            if mode == 3 {
+                assert!(budget.reserve_storage(usize::MAX).is_err());
+                assert!(budget.charge_work(usize::MAX).is_err());
+            }
+            // Raise the live floor above fixture scratch, then leave only this
+            // capture's independently counted allowance in the original ledger.
+            let allowance = capture_storage - usize::from(mode == 2);
+            let filler = MODULE_LIMIT - budget.storage() - allowance;
+            budget.reserve_storage(filler).unwrap();
+            budget
+                .charge_work(MODULE_LIMIT - budget.work() - capture_work + usize::from(mode == 1))
+                .unwrap();
+            let floor = budget.storage();
+            let before = budget.work();
+            match OwnedExecutionInputV29::capture(source, budget) {
+                Ok(input) => {
+                    assert!(mode == 0 || mode == 3);
+                    assert_eq!(input.retained_storage, capture_storage);
+                    assert_eq!(budget.storage(), MODULE_LIMIT);
+                    assert_eq!(budget.work() - before, capture_work);
+                    drop(input);
+                    budget.release_storage(capture_storage).unwrap();
+                }
+                Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error)) => {
+                    if mode == 1 {
+                        assert!(matches!(error, ArgumentResourceV1::Work(_)));
+                        // The final identity-copy charge follows all four allocations.
+                        assert_eq!(budget.work() - before, capture_work - 64);
+                        assert_eq!(budget.peak_storage(), MODULE_LIMIT);
+                    } else {
+                        assert_eq!(mode, 2);
+                        assert!(matches!(error, ArgumentResourceV1::Storage(_)));
+                        assert!(budget.peak_storage() > floor);
+                        assert_eq!(budget.failed_storage(), Some(MODULE_LIMIT + 1));
+                    }
+                }
+                other => panic!("unexpected capture outcome: {}", other.is_ok()),
+            }
+            assert_eq!(budget.storage(), floor);
+            if mode == 3 {
+                assert_eq!(budget.failed_storage(), Some(usize::MAX));
+            }
+            budget.release_storage(filler).unwrap();
+        })
+        .unwrap();
+        assert_eq!(budget.storage(), 0);
+        drop(budget);
+        if mode == 3 {
+            assert_eq!(work.failed_work(), Some(usize::MAX));
+        }
+    }
 }
