@@ -484,3 +484,65 @@ fn complete_module_restores_its_floor_after_late_root_panic() {
     );
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }
+
+#[test]
+fn capability_union_preserves_long_names_and_obeys_exact_resources() {
+    use fe2o3_kernel_ir::TargetCapability;
+    let capability = |index| TargetCapability::Extension {
+        namespace: "shared.namespace.".repeat(32),
+        name: format!("{}{index:02}", "shared.prefix.".repeat(32)),
+    };
+    let first: BTreeSet<_> = (0..12).map(capability).collect();
+    let second: BTreeSet<_> = (6..18).map(capability).collect();
+    let expected: BTreeSet<_> = (0..18).map(capability).collect();
+    let probe = |work_limit, storage_limit| {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+        let (result, peak, denied_storage) = {
+            let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
+            budget.reserve_storage(MODULE_FLOOR).unwrap();
+            let mut output = BTreeSet::new();
+            let result = (|| {
+                scoped_module_capabilities_v29(&mut output, &first, &mut budget)?;
+                scoped_module_capabilities_v29(&mut output, &second, &mut budget)?;
+                assert_eq!(output, expected);
+                Ok::<_, ProductionSemanticKirErrorV1>(())
+            })();
+            drop(output);
+            budget
+                .release_storage(budget.storage() - MODULE_FLOOR)
+                .unwrap();
+            assert_eq!(budget.storage(), MODULE_FLOOR);
+            (result, budget.peak_storage(), budget.failed_storage())
+        };
+        (
+            result,
+            work.work(),
+            peak,
+            work.failed_work(),
+            denied_storage,
+        )
+    };
+    let (result, work, peak, _, _) = probe(MODULE_LIMIT, MODULE_LIMIT);
+    result.unwrap();
+    assert!(probe(work, peak).0.is_ok());
+    for (work_limit, storage_limit, is_work) in [(work - 1, peak, true), (work, peak - 1, false)] {
+        let (result, _, _, denied_work, denied_storage) = probe(work_limit, storage_limit);
+        match result.unwrap_err() {
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Work(_),
+            ) => {
+                assert!(is_work);
+                assert!(denied_work.is_some());
+            }
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Storage(_),
+            ) => {
+                assert!(!is_work);
+                assert!(denied_storage.is_some());
+            }
+            other => panic!("expected exact capability resource refusal: {other:?}"),
+        }
+    }
+    assert_eq!(first, (0..12).map(capability).collect());
+    assert_eq!(second, (6..18).map(capability).collect());
+}
