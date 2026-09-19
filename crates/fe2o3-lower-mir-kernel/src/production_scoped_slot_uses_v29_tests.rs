@@ -3,19 +3,19 @@ use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1;
 
 const LIMIT: usize = 10_000_000;
 const FLOOR: usize = 31;
-const P: ValueId = ValueId(4_000_000_000);
+pub(super) const P: ValueId = ValueId(4_000_000_000);
 const Q: ValueId = ValueId(4_000_000_001);
 
-fn scalar() -> Type {
+pub(super) fn scalar() -> Type {
     Type::Scalar(ScalarType::U32)
 }
-fn pointer(access: AccessMode) -> Type {
+pub(super) fn pointer(access: AccessMode) -> Type {
     Type::pointer(scalar(), AddressSpace::Private, access)
 }
-fn access() -> MemoryAccess {
+pub(super) fn access() -> MemoryAccess {
     MemoryAccess::new(AddressSpace::Private, 4)
 }
-fn result(id: u32, ty: Type, kind: OperationKind) -> Operation {
+pub(super) fn result(id: u32, ty: Type, kind: OperationKind) -> Operation {
     Operation::effect_free(ValueDef::new(ValueId(id), ty), kind)
 }
 fn allocation(id: ValueId, element: Type) -> Operation {
@@ -36,7 +36,7 @@ fn allocation(id: ValueId, element: Type) -> Operation {
         },
     )
 }
-fn store(pointer: ValueId, value: ValueId) -> Operation {
+pub(super) fn store(pointer: ValueId, value: ValueId) -> Operation {
     Operation::new(
         vec![],
         OperationKind::Store {
@@ -46,7 +46,7 @@ fn store(pointer: ValueId, value: ValueId) -> Operation {
         },
     )
 }
-fn load(id: u32, pointer: ValueId, ty: Type) -> Operation {
+pub(super) fn load(id: u32, pointer: ValueId, ty: Type) -> Operation {
     result(
         id,
         ty,
@@ -61,7 +61,7 @@ fn block(id: u32) -> BasicBlock {
     block.terminator = Some(Terminator::Return { values: vec![] });
     block
 }
-fn fixture() -> Function {
+pub(super) fn fixture() -> Function {
     let mut entry = block(77);
     entry.operations = vec![
         allocation(P, scalar()),
@@ -90,7 +90,7 @@ fn fixture() -> Function {
 }
 
 // Inert candidate labels for analysis of raw KIR, never source-census authority.
-fn candidates(function: &Function) -> Vec<ScopedSourceSlotV29> {
+pub(super) fn candidates(function: &Function) -> Vec<ScopedSourceSlotV29> {
     let mut slots = Vec::new();
     for (block_ordinal, block) in function.body.as_ref().unwrap().blocks.iter().enumerate() {
         for (operation, row) in block.operations.iter().enumerate() {
@@ -136,7 +136,7 @@ fn candidates(function: &Function) -> Vec<ScopedSourceSlotV29> {
     slots
 }
 
-fn verified(function: &Function) {
+pub(super) fn verified(function: &Function) {
     let mut module = Module::new("slot-use-analysis-only");
     module.functions.push(function.clone());
     module.functions.push(Function::external_import(
@@ -225,7 +225,7 @@ fn direct_gep_restricted_selected_and_guarded_accesses_keep_one_slot_origin() {
     run(&function, LIMIT, LIMIT).0.unwrap();
 }
 
-fn loop_fixture(other: ValueId) -> Function {
+pub(super) fn loop_fixture(other: ValueId) -> Function {
     let mut function = fixture();
     let body = function.body.as_mut().unwrap();
     body.blocks[0].terminator = Some(Terminator::ConditionalBranch {

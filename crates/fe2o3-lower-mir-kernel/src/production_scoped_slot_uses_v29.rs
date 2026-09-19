@@ -7,6 +7,9 @@ use super::*;
 #[path = "production_scoped_slot_uses_v29_tests.rs"]
 mod tests;
 
+#[path = "production_scoped_slot_history_v29.rs"]
+mod history;
+
 type Origin = OriginStateV1<Option<usize>>;
 type UseResult<T> = Result<T, ProductionSemanticKirErrorV1>;
 
@@ -466,15 +469,26 @@ fn transport_result(operation: &Operation) -> Option<&ValueDef> {
     .then_some(result)
 }
 
+fn checked_graph<'a>(
+    function: &'a Function,
+    slots: &[ScopedSourceSlotV29],
+    first_slot: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> UseResult<SlotUseGraphV29<'a>> {
+    let mut graph = SlotUseGraphV29::new(function, slots, first_slot, budget)?;
+    graph.solve(budget)?;
+    graph.check_uses(budget)?;
+    Ok(graph)
+}
+
+#[cfg(test)]
 fn check_function(
     function: &Function,
     slots: &[ScopedSourceSlotV29],
     first_slot: usize,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> UseResult<()> {
-    let mut graph = SlotUseGraphV29::new(function, slots, first_slot, budget)?;
-    graph.solve(budget)?;
-    graph.check_uses(budget)
+    checked_graph(function, slots, first_slot, budget).map(|_| ())
 }
 
 pub(super) fn check_scoped_source_slot_uses_v29(
@@ -528,7 +542,14 @@ pub(super) fn check_scoped_source_slot_uses_v29(
                 .and_then(Option::as_ref)
                 .ok_or_else(scoped_slot_error_v29)?;
             with_canonical_call_scratch_v1(budget, |budget| {
-                check_function(&lowered.function, candidates, row.slots.start, budget)
+                let graph = checked_graph(&lowered.function, candidates, row.slots.start, budget)?;
+                history::check(
+                    &lowered.function,
+                    &graph,
+                    candidates,
+                    row.slots.start,
+                    budget,
+                )
             })
             .map_err(|error| match error {
                 ProductionSemanticKirErrorV1::Unsupported { detail, .. } => {

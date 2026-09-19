@@ -243,6 +243,67 @@ fn production_pre_splice_hook_rejects_slot_identity_observation_after_capture() 
     );
 }
 
+fn replace_initial_store_with_read(
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &mut [Option<LoweredFunctionResultV1>],
+    receipt: &OwnedScopedSourceSlotsV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    check_receipt(instances, emitted, receipt, budget);
+    let slot = receipt.slots[0];
+    let body = emitted[slot.instance.index()]
+        .as_mut()
+        .unwrap()
+        .function
+        .body
+        .as_mut()
+        .unwrap();
+    assert!(
+        !body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .flat_map(|operation| &operation.results)
+            .any(|result| result.id == ValueId(u32::MAX))
+    );
+    let operation = body.blocks.iter_mut().flat_map(|block| &mut block.operations)
+        .find(|operation| matches!(operation.kind, OperationKind::Store { pointer, .. } if pointer == slot.origin.pointer)).unwrap();
+    let OperationKind::Store { access, .. } = &operation.kind else {
+        unreachable!()
+    };
+    *operation = Operation::effect_free(
+        ValueDef::new(ValueId(u32::MAX), Type::Scalar(ScalarType::U32)),
+        OperationKind::Load {
+            pointer: slot.origin.pointer,
+            access: access.clone(),
+        },
+    );
+    Ok(())
+}
+
+#[test]
+fn production_physical_history_does_not_trust_source_initialization_summaries() {
+    let (result, _, _) = run(
+        false,
+        ScopedFixture::RepeatedSlots,
+        replace_initial_store_with_read,
+        10_000_000,
+        10_000_000,
+    );
+    assert_eq!(OBSERVED.get(), 1);
+    assert!(
+        matches!(
+            result,
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                function: 3,
+                detail: "scoped slot read is not initialized in its fresh physical activation",
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+}
+
 fn mutate_allocation(
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
