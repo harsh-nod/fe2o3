@@ -597,6 +597,62 @@ fn shared_work_boundary_is_exact_and_no_scratch_or_retained_storage_is_added() {
 }
 
 #[test]
+fn literal_lookup_exhaustion_after_structural_scan_preserves_storage() {
+    let mut blocks = blocks();
+    set_terminator(
+        &mut blocks,
+        0,
+        Term::IndexEqual {
+            lhs: local(4),
+            rhs: local(5),
+            true_block: 1,
+            false_block: 3,
+        },
+    );
+    let kernel = construct(blocks);
+    let prefix = 17;
+    let floor = 43;
+    let measure = |limit| {
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
+        let mut budget = Budget::new(&mut work, floor);
+        budget.reserve_storage(floor).unwrap();
+        budget.charge_work(prefix).unwrap();
+        let result = check_paths(&kernel, local(1), EXTENT, WRITE, &mut budget);
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(budget.peak_storage(), floor);
+        (result, budget.work())
+    };
+
+    // Only the entry condition scans literals: one lookup/block charge plus
+    // two units per operation through the fifth and sixth entry operations.
+    let lhs_lookup = 1 + 1 + 2 * 5;
+    let rhs_lookup = 1 + 1 + 2 * 6;
+    let structural_scan = kernel
+        .blocks()
+        .iter()
+        .map(|block| 4 + 4 * block.operations().len() + 6)
+        .sum::<usize>()
+        + lhs_lookup
+        + rhs_lookup;
+    // Finish the structural scan, enter the false-case walk, and resolve its
+    // first literal. The second lookup visits two operations before exhaustion.
+    let before_rhs = prefix + structural_scan + 4 + 6 + lhs_lookup;
+    let short_limit = before_rhs + 1 + 1 + 2 * 2;
+    let (result, accepted_work) = measure(short_limit);
+    let Err(Error::Resource(ResourceError::Work(error))) = result else {
+        panic!("expected literal-scan work refusal, got {result:?}");
+    };
+    assert_eq!(error.limit(), short_limit);
+    assert_eq!(error.actual(), short_limit + 2);
+    assert_eq!(accepted_work, short_limit);
+
+    let (result, exact_work) = measure(usize::MAX);
+    assert_eq!(result, Ok([1, 1]));
+    assert!(exact_work > short_limit);
+    assert_eq!(measure(exact_work), (Ok([1, 1]), exact_work));
+}
+
+#[test]
 fn constant_lookup_and_late_refusals_preserve_the_callers_storage() {
     let mut blocks = blocks();
     set_terminator(
