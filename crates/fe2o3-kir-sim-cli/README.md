@@ -5,6 +5,8 @@ deterministic CPU execution of supported exact verified canonical Kernel IR:
 
     fe2o3-kir-sim --kir-v7 kernel.kir --request request.json
     fe2o3-kir-sim --kir-v12 kernel-v12.kir --request request.json
+    fe2o3-kir-sim --diagnostic-kir-v16 kernel-v16.kir --request request.json
+    fe2o3-kir-sim --diagnostic-kir-v16 kernel-v16.kir --request request.json --output result.json
     fe2o3-kir-sim --bundle kernel.fe2sim --request request.json
     fe2o3-kir-sim --bundle-v5 kernel.fe2sim --request request.json
     fe2o3-kir-sim --bundle-v6 kernel.fe2sim --request request.json
@@ -25,8 +27,8 @@ observation only. It grants no source-refinement, proof, compiler, artifact,
 load, launch, GPU-equivalence, race-freedom, timing, performance, or performance
 prediction authority.
 
-`--bundle`, `--bundle-v5`, `--bundle-v6`, `--kir-v7`, and `--kir-v12` are mutually
-exclusive. Legacy bundle admission securely
+`--bundle`, `--bundle-v5`, `--bundle-v6`, `--kir-v7`, `--kir-v12`, and
+`--diagnostic-kir-v16` are mutually exclusive. Legacy bundle admission securely
 captures one bounded regular file, strictly decodes and revalidates
 `VerifiedSimulationBundleV1`, maps its exact admitted gfx942/gfx950 target to
 the CPU target profile, and executes only its embedded canonical V7 bytes. It
@@ -65,6 +67,49 @@ for that context during replay. This raw-input route is not Bundle V7 admission,
 source-to-tile lowering, a GPU execution claim, or evidence that a tutorial pair
 works end to end.
 
+## Diagnostic ordered-region V16
+
+`--diagnostic-kir-v16 PATH` admits exact canonical KIR V16 with its budgeted,
+immutable owner and executes that module with the existing bounded CPU
+interpreter. It does not retry another wire version, downgrade operations, admit
+a simulation bundle, or reconstruct private compiler source custody. The CPU
+data layout is AMDGPU 64-bit little-endian. The closed ordered-region operation
+declares `gfx942:xnack-`, wave64 and a required `64x1x1` workgroup; request/target
+preflight must match. This does not enable gfx950 or arbitrary assembly.
+
+The [ordinary source walkthrough](../../../docs/ordered-region-authoring-v1.md#use-the-ordinary-diagnostic-tools)
+builds the exporter, simulator, debugger and checked-in inspection example,
+exports real Rust, generates the complete output-slice-first request, and checks
+all 64 results plus unchanged/uninitialized guards. Exporter
+`--diagnostic-kir-v16` is valueless; this simulator option takes the input path.
+The example `inspect_diagnostic_ordered_region_v16 KIR_PATH REQUEST_PATH` uses
+the shared loader and CPU preflight to report current canonical identity, roster
+coordinates, logical SSA IDs and declared register roles without execution or
+source authentication. Its JSON is an example report, not a registered transport.
+The fresh ordinary-tool qualification passed five real source exports and 30
+CPU simulations, alongside four source refusals and 15 ordinary negative controls;
+the linked [evidence scope](../../../docs/ordered-region-authoring-v1.md#evidence-scope-and-further-work)
+records the exact source/debugger receipts and their limits. These observations
+do not qualify a released compiler closure or GPU execution.
+
+All persisted schedule recording, replay, exploration and reduction options,
+including auxiliary seeds/decision bounds, are rejected for this route before
+input/output file access. Ordinary execution keeps canonical cooperative CPU
+ordering. Old modes retain their existing scheduling behavior; V16 is never
+relabeled as a schedule-supported version. Library callers must handle the
+fallible `persisted_schedule_binding()` result, including
+`schedule_input_unsupported`.
+
+The path loader accounts actual owned canonical-buffer capacity, while the
+borrowed-byte loader accounts the supplied slice extent in the canonical
+verification ledger. V16 admission has a separate 256 MiB logical storage
+budget; simulator preflight/execution resident accounting follows admission.
+Neither budget is a whole-process RSS or allocator bound. The raw-file size cap
+and canonical wire/count/depth limits also apply. No source map, proof, artifact,
+production resume, GPU-equivalence or physical-register observation is supplied.
+
+## Other runnable inputs and file boundaries
+
 The versioned `tutorial/fill-v1` known-answer fixture is directly runnable:
 
     cargo run --locked -q -p fe2o3-kir-sim-cli --bin fe2o3-kir-sim -- \
@@ -91,6 +136,7 @@ whether durability is unknown or the published name is uncertain, and callers
 must resolve that explicit state. There is no attacker-visible staging name;
 filesystems or procfs setups without these primitives fail closed.
 
+For schedule-supported inputs (not diagnostic V16),
 `--record-canonical-schedule PATH` and `--record-seeded-schedule PATH
 --schedule-seed U64` publish the existing semantic CPU scheduler's successful
 decision record. `--schedule-max-decisions COUNT` bounds recording and defaults
@@ -104,6 +150,7 @@ decisions.
 Binding drift is rejected before execution; runnable-decision and transcript
 validation remains in the simulator itself.
 
+For those same schedule-supported inputs,
 `--explore-seeded-schedules COUNT --schedule-seed FIRST_U64` is a separate,
 bounded multi-schedule mode. It sweeps the contiguous wrapping seed interval,
 uses `--schedule-max-decisions` as the per-schedule dynamic bound, and retains
@@ -193,7 +240,7 @@ scheduler, and exact canonical KIR. Every failure is stable
 fe2o3-simulation-error-v1 JSON on stderr. Parsing failures use closed application
 codes selected from private structural markers, while other malformed JSON is
 classified by serde's closed syntax/data categories. Input failures identify
-kir_v7, simulation_bundle, or request. Dynamic failures include exact invocation hierarchy and Kernel IR
+kir_v7, kir_v12, kir_v16, simulation_bundle, or request. Dynamic failures include exact invocation hierarchy and Kernel IR
 site coordinates; overlong function identities carry an explicit bounded
 prefix, original byte count, and truncation flag. Unsupported preflight failures
 report exact total/emitted/truncated counts and a deterministic
@@ -206,11 +253,13 @@ resident peaks at 256 MiB, logical
 invocations at 1,048,576, scheduled slots at 4,194,304, and execution steps at
 134,217,728. Call depth is capped at 64 and live SSA values in one frame at
 4,096 so their conservative resident-memory product remains within the host
-budget. The 256 MiB setting is not enforced before canonical construction or
-decode: verified-owner construction and a simulator decode/re-encode later
+budget. This simulator resident setting is not itself enforced before canonical
+construction or decode: verified-owner construction and a simulator decode/re-encode later
 rejected by the post-decode resident check may transiently exceed it. Those
 phases remain bounded by the 16 MiB canonical input limit and frozen KIR
-wire/count/depth caps.
+wire/count/depth caps. Diagnostic V16 additionally applies the separate canonical
+verification ledger described above; it does not turn simulator accounting into
+a process-wide memory limit.
 
 ## Result V1
 

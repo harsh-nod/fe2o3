@@ -9,8 +9,13 @@ use fe2o3_kernel_ir::{F32MathFunction, NarrowFloatFormat};
 use fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1;
 
 use crate::trusted_device_items::{
-    self, TrustedAmdGpuDiagnosticOperation, TrustedDeviceItem, TrustedHalfOperation,
+    self, TrustedAmdGpuDiagnosticOperation, TrustedAmdGpuInlineOperation, TrustedDeviceItem,
+    TrustedHalfOperation,
 };
+
+#[cfg(test)]
+#[path = "production_semantic_terminal_v1/gfx942_inline_v30_tests.rs"]
+mod gfx942_inline_v30_tests;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProductionBf16ConversionV1 {
@@ -22,6 +27,9 @@ pub(crate) enum ProductionBf16ConversionV1 {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProductionTerminalExpansionV1 {
+    Gfx942InlineU32(TrustedAmdGpuInlineOperation),
+    Gfx942OrderedXorAddE32,
+    Gfx942OrderedProgramE32,
     ContextIssue,
     WorkgroupDerive,
     MaskedTileLoadU32,
@@ -165,6 +173,15 @@ pub(crate) const fn is_traversed_reviewed_helper_v1(item: TrustedDeviceItem) -> 
 impl ProductionSemanticTerminalRuleV1 {
     pub(crate) const fn from_trusted_device_item(item: TrustedDeviceItem) -> Self {
         match item {
+            TrustedDeviceItem::AmdGpuOrderedXorAddE32 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32)
+            }
+            TrustedDeviceItem::AmdGpuOrderedProgramE32 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx942OrderedProgramE32)
+            }
+            TrustedDeviceItem::AmdGpuInline(operation) => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx942InlineU32(operation))
+            }
             TrustedDeviceItem::KernelContextIssue => {
                 Self::Expand(ProductionTerminalExpansionV1::ContextIssue)
             }
@@ -843,6 +860,15 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::Trap) => {
                 TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap)
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32) => {
+                TrustedDeviceItem::AmdGpuOrderedXorAddE32
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx942OrderedProgramE32) => {
+                TrustedDeviceItem::AmdGpuOrderedProgramE32
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx942InlineU32(operation)) => {
+                TrustedDeviceItem::AmdGpuInline(operation)
             }
             Self::Expand(ProductionTerminalExpansionV1::MemoryVolatileLoad) => {
                 TrustedDeviceItem::MemoryVolatileLoad

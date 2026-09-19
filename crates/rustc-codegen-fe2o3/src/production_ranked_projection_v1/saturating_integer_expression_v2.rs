@@ -133,7 +133,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
     // entry. The existing CFG coalesces parallel edges to the same block;
     // this is valid here because call results have no edge-specific arguments.
     // Each full block is scanned once.
-    fn require_live_scalar_call_v1(
+    pub(super) fn require_live_scalar_call_v1(
         &mut self,
         local: usize,
         definition: usize,

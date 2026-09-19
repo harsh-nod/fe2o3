@@ -2393,7 +2393,10 @@ fn ordinary_rust_workgroup_reductions_export_v5_and_execute_every_cpu_path() {
             .args(["--protocol", "jsonl", "--wave-width", "64"]);
         let schedule_path = target.path().join(format!("{feature}-schedule.json"));
         let schedule_bytes = PersistedSimulationScheduleDocumentV1::encode_record(
-            admitted.input().persisted_schedule_binding(),
+            admitted
+                .input()
+                .persisted_schedule_binding()
+                .expect("existing bundle schedule binding"),
             &record,
         )
         .unwrap();

@@ -5,6 +5,9 @@ use fe2o3_kernel_ir::{
     Type, ValueDef, ValueId, VerifiedCanonicalKernelIrModuleV12,
 };
 
+#[path = "canonical_kir_call_effects_v1/gfx942_inline_v30_tests.rs"]
+mod gfx942_inline_v30_tests;
+
 fn function(name: &str, calls: &[&str], reads: usize) -> fe2o3_kernel_ir::Function {
     let pointer = Type::pointer(
         Type::Scalar(ScalarType::U32),

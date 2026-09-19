@@ -7,7 +7,7 @@ explicit subset of verified canonical Kernel IR. The frozen
 `admit_v10` consumes exact V10 custody for those collectives plus additive
 memory-intrinsic execution. `admit_v11` consumes exact V11 custody, including
 the target-neutral pointer-access restriction operation. `admit_v12` consumes
-exact current V12 custody without projecting it to V11; supported operations
+exact V12 custody without projecting it to V11; supported operations
 use the same interpreter, while reachable vector and verification-event
 carriers remain typed `InertV12Carrier` preflight refusals. Raw in-memory modules
 and other wire formats are not execution inputs. The production compiler's
@@ -15,18 +15,25 @@ Bundle V4 exporter binds exact V7 KIR, Bundle V5 binds exact V10 KIR, and the
 current Bundle V6 route binds exact V11 KIR. None grants execution or hardware
 authority.
 
+`admit_v16` borrows an exact move-only `VerifiedCanonicalKernelIrModuleV16`
+owner and retains its own bounded decoded CPU view, without consuming or
+changing the source owner's canonical bytes. It does not add a simulation-bundle,
+CLI, or debugger import route. Its canonical/resident limits retain the existing
+post-decode accounting contract, not an allocator/RSS cap on rejected attempts.
+
 The `fe2o3-kir-sim-capabilities` binary emits the complete V1 semantic
 ownership matrix as stable JSON. It covers every top-level KIR operation and
 terminator for each simulator-facing profile, plus every scalar
 unary/binary/compare/cast type combination. Rows name either the exact
 simulator owner or the typed preflight rejection; the document explicitly
-identifies V7, V9, V10, V11, and V12 separately, names those rows as declared tool-contract facts with no authority, and
+identifies V7, V9, V10, V11, V12, and V16 separately, names those rows as declared tool-contract facts with no authority, and
 grants no hardware or performance authority. The complete newline-terminated
-compact V1 document is fixed at 4,819,631 bytes and its regression test rejects
+compact V1 document is fixed at 4,852,346 bytes and its regression test rejects
 any unreviewed schema-size change.
 
-The named `gfx942` and `gfx950` profiles select CPU simulation data-layout
-semantics only. An owned row describes execution of already-verified KIR; it
+The named `gfx942` and `gfx950` profiles describe CPU simulation contracts,
+including layout and any explicitly checked retained target declarations.
+An owned row describes execution of already-verified KIR; it
 does not assert that the compiler can lower that operation for the named GPU,
 that the ISA or hardware supports it, or that a physical execution was
 observed. Those remain separate compiler, artifact, runtime, and qualification
@@ -39,6 +46,39 @@ rejects access widening, identity relabeling, write-only substitution, and any
 pointee or address-space change. Execution copies the pointer provenance and
 allocation identity while narrowing its access; it does not create Rust
 reference validity or aliasing evidence.
+
+The existing gfx942 `InlineAssembly` carrier supports `v_mov_b32`, `v_add_u32`,
+`v_sub_u32`, `v_and_b32`, `v_or_b32`, and `v_xor_b32` with exact `Vgpr32` SSA
+operands and a matching `i32` or `u32` result. Add/sub wrap modulo 2^32; their
+overflow behavior deliberately differs from ordinary KIR integer arithmetic.
+The operation semantics follow the unmodified integer forms in the
+[AMD Instinct MI300 ISA reference](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf);
+this carrier admits no saturation or other instruction modifiers.
+The shared kernel-IR validator enforces complete source-identity fields,
+input-only roles, one result, `NoMemory`, and no declared effects. Generic
+canonical verification and all existing source/target/capability gates still
+apply. Unknown instructions, mismatched contracts, and `s_mov_b32` remain
+typed `InlineAssembly` refusals; the interpreter does not model SGPR uniformity,
+physical registers, EXEC state, encodings, or scheduling hazards.
+
+The V16 `Gfx942OrderedRegion` operation evaluates the closed U32 expression
+`(a ^ b).wrapping_add(c)` as one atomic value operation. Preflight requires the
+retained exact `gfx942:xnack-` and Wave64 declarations, required/requested
+`64x1x1` workgroups, a full-wave one-dimensional launch, and the 64-bit CPU
+layout. Conflicting target/wave declarations and partial launch waves are
+refused. The five checked register bindings remain inert metadata: there is no
+physical register file, implicit EXEC simulation, convergence proof, encoding
+check, or microstep trace. Normal operation events and before/after SSA
+checkpoints remain one pair per operation. The old canonical admission routes
+reject this new operation rather than reinterpreting its bytes.
+
+These are semantics of already-verified KIR, available under each CPU scalar
+layout profile. They do not admit these instructions on gfx950 hardware. The
+source export/readmission and source-to-GPU qualification checks remain separate
+from this CPU surface. Source identity presence is not source authentication;
+the source representation, importer, ranked projection, and production lowerer
+owners must establish their own exact contracts. Instruction selection remains in the original `InlineAssembly` operation
+through simulation and its ordinary debug checkpoints.
 
 Ordinary admitted Rust can obtain these exact V7 bytes from a strict
 `VerifiedSimulationBundleV1` produced by the authority-free
@@ -270,7 +310,8 @@ legacy-request dynamic LDS, multiple dynamic bases, `DynamicAtLeast`,
 non-scalar workgroup memory, matrix operations, gfx950 LDS transpose
 operations, V7 memory intrinsics,
 V10/V11/V12 non-scalar, constant-address-space, or generic-address-space memory intrinsics, external-MMIO
-volatile access, target-layout mismatches, and inline assembly remain typed
+volatile access, target-layout mismatches, and inline assembly outside the closed
+gfx942 vector integer subset remain typed
 unsupported states. Pointer distance additionally rejects distinct logical
 allocations because the CPU model has no physical-address equality claim. The
 canonical sin/cos/exp/exp2/log/log2/log10 functions each retain a

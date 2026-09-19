@@ -20,6 +20,13 @@ const EXTRACT_INERT_RUSTC_INVOCATION_V3_HEX_ENV_V1: &str =
 #[path = "production_rustc_driver_checked_output_source_v1_tests.rs"]
 mod checked_output_source_v1_tests;
 
+#[path = "production_rustc_driver_v1/ordered_region_diagnostic_export_v16.rs"]
+mod ordered_region_diagnostic_export_v16;
+pub use ordered_region_diagnostic_export_v16::run_diagnostic_ordered_region_kir_extraction_driver_v16;
+
+#[path = "production_rustc_driver_v1/ordered_program_diagnostic_export_v17.rs"]
+mod ordered_program_diagnostic_export_v17;
+pub use ordered_program_diagnostic_export_v17::run_diagnostic_ordered_program_kir_extraction_driver_v17;
 #[path = "production_rustc_driver_fixed_checked_output_v1.rs"]
 mod fixed_checked_output_v1;
 pub use fixed_checked_output_v1::run_production_fixed_checked_output_extraction_driver_v1;
@@ -45,6 +52,8 @@ struct ProductionExtractionCallbacksV1 {
     compiler_handoff_output: Option<(PathBuf, Option<&'static str>)>,
     simulation_bundle_output: Option<PathBuf>,
     simulation_bundle_version: u16,
+    diagnostic_kir_v16_output: Option<PathBuf>,
+    diagnostic_kir_v17_output: Option<PathBuf>,
     census: Option<SourceCensusRecorder>,
     result: Option<Result<(), String>>,
 }
@@ -52,7 +61,14 @@ struct ProductionExtractionCallbacksV1 {
 impl Callbacks for ProductionExtractionCallbacksV1 {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         self.result = Some(
-            if let Some(output) = self.simulation_bundle_output.as_deref() {
+            if self.diagnostic_kir_v16_output.is_some() && self.diagnostic_kir_v17_output.is_some()
+            {
+                Err("diagnostic KIR V16 and V17 callbacks are mutually exclusive".to_owned())
+            } else if let Some(output) = self.diagnostic_kir_v17_output.as_deref() {
+                ordered_program_diagnostic_export_v17::extract_in_active_session_v17(tcx, output)
+            } else if let Some(output) = self.diagnostic_kir_v16_output.as_deref() {
+                ordered_region_diagnostic_export_v16::extract_in_active_session_v16(tcx, output)
+            } else if let Some(output) = self.simulation_bundle_output.as_deref() {
                 match self.simulation_bundle_version {
                     6 => extract_simulation_bundle_in_active_session_v6(
                         tcx,
@@ -690,6 +706,15 @@ fn publish_new_simulation_bundle(
     publish_new_extraction_bytes_v1(output, bytes, maximum, "simulation bundle")
 }
 
+fn publish_new_inert_output(
+    output: &Path,
+    bytes: &[u8],
+    maximum: usize,
+    label: &'static str,
+) -> Result<(), String> {
+    publish_new_extraction_bytes_v1(output, bytes, maximum, label)
+}
+
 fn publish_new_extraction_bytes_v1(
     output: &Path,
     bytes: &[u8],
@@ -789,6 +814,8 @@ pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(),
         compiler_handoff_output: None,
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
+        diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         census: None,
         result: None,
     };
@@ -812,6 +839,8 @@ pub fn run_production_amdgpu_llvm_extraction_driver_v1(
         compiler_handoff_output: None,
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
+        diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         census: None,
         result: None,
     };
@@ -834,6 +863,8 @@ pub fn run_production_gfx942_llvm_extraction_driver_v1(
         compiler_handoff_output: None,
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
+        diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         census: None,
         result: None,
     };
@@ -880,6 +911,8 @@ pub fn run_production_gfx942_compiler_handoff_extraction_driver_v1(
         )),
         simulation_bundle_output: None,
         simulation_bundle_version: 1,
+        diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         census: None,
         result: None,
     };
@@ -904,6 +937,8 @@ pub fn run_production_simulation_bundle_extraction_driver_v1(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 1,
+        diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         census: None,
         result: None,
     };
@@ -927,6 +962,8 @@ pub fn run_production_simulation_bundle_extraction_driver_v2(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 2,
+        diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         census: None,
         result: None,
     };
@@ -950,6 +987,8 @@ pub fn run_production_simulation_bundle_extraction_driver_v3(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 3,
+        diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         census: None,
         result: None,
     };
@@ -973,6 +1012,8 @@ pub fn run_production_simulation_bundle_extraction_driver_v4(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 4,
+        diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         census: None,
         result: None,
     };
@@ -996,6 +1037,8 @@ pub fn run_production_simulation_bundle_extraction_driver_v5(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 5,
+        diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         census: None,
         result: None,
     };
@@ -1019,6 +1062,8 @@ pub fn run_production_simulation_bundle_extraction_driver_v6(
         compiler_handoff_output: None,
         simulation_bundle_output: Some(output.to_path_buf()),
         simulation_bundle_version: 6,
+        diagnostic_kir_v16_output: None,
+        diagnostic_kir_v17_output: None,
         census: None,
         result: None,
     };
@@ -1105,6 +1150,16 @@ fn require_canonical_overflow_checks_v1(args: &[String]) -> Result<(), String> {
         ))
     }
 }
+
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+mod gfx942_inline_value_qualification_v30_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+mod gfx942_inline_reference_qualification_v30_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+mod gfx942_ordered_region_qualification_v31_tests;
 
 #[cfg(test)]
 #[path = "production_rustc_driver_v1_tests.rs"]

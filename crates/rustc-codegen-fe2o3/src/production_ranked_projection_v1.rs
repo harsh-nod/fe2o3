@@ -18,6 +18,7 @@ mod helper_source_fixture_v1 {
 }
 mod analysis_multi_split_v1;
 mod canonical_assertion_facts_v1;
+mod gfx942_inline_value_projection_v30;
 mod materialized_callable_effect_v1;
 mod ranked_projection_source_v1;
 mod saturating_integer_expression_v2;
@@ -765,9 +766,20 @@ pub(crate) struct ProductionRankedRootProgramV1 {
     ranked_ir: String,
     access_sources: Vec<ProductionRankedAccessSourceV1>,
     executable_effect_sources: Vec<ProductionRankedExecutableEffectSourceV1>,
+    // Observation of the already-computed source projection, not a reference
+    // binding or a checked-owner value refinement. Absent in shipping builds.
+    #[cfg(test)]
+    observed_reference_writes: Vec<crate::production_reference_effect_join_v2::RankedGpuWriteV2>,
 }
 
 impl ProductionRankedRootProgramV1 {
+    #[cfg(test)]
+    pub(crate) fn observed_reference_writes(
+        &self,
+    ) -> &[crate::production_reference_effect_join_v2::RankedGpuWriteV2] {
+        &self.observed_reference_writes
+    }
+
     pub(crate) fn export_symbol(&self) -> &[u8] {
         &self.export_symbol
     }
@@ -1666,6 +1678,8 @@ impl ProductionRankedSemanticProgramV1 {
                 ranked_ir,
                 access_sources,
                 executable_effect_sources,
+                #[cfg(test)]
+                    observed_reference_writes: _,
             } = root;
             let verification = authenticate_ranked_root_v5(
                 semantic_owner,
@@ -3718,6 +3732,9 @@ fn project_and_verify_ranked_root_with_singletons_v1(
         .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?
     };
     let ranked_ir = format_ranked_cfg(function_name(root_function)?, lowering.kernel().blocks())?;
+    // The test-only source qualifier retains this observation. Shipping builds
+    // release the temporary expression forest before returning the owner.
+    #[cfg(not(test))]
     drop(reference_writes);
     if helper_expression_storage != 0 {
         assertion_facts.release_scalar_private_storage_v1(helper_expression_storage)?;
@@ -3744,6 +3761,8 @@ fn project_and_verify_ranked_root_with_singletons_v1(
         ranked_ir,
         access_sources,
         executable_effect_sources,
+        #[cfg(test)]
+        observed_reference_writes: reference_writes,
     })
 }
 
@@ -3757,9 +3776,10 @@ fn projected_reference_gpu_writes_v2(
     Vec<crate::production_reference_effect_join_v2::RankedGpuWriteV2>,
     ProductionRankedProjectionErrorV1,
 > {
-    let mut expressions =
-        GpuSemanticExpressionResolverV2::with_ranked_reads(types, function, blocks, sources)?
-            .with_scalar_callables_v1(callables)?;
+    let mut expressions = GpuSemanticExpressionResolverV2::with_ranked_reads(
+        types, function, callables, blocks, sources,
+    )?
+    .with_scalar_callables_v1(callables)?;
     projected_reference_gpu_writes_inner_v2(function, callables, blocks, sources, &mut expressions)
 }
 
@@ -3895,6 +3915,7 @@ struct GpuSemanticExpressionResolverV2<'a> {
     work: usize,
     loads: HashMap<*const SemanticRvalueV1, ProductionSemanticLoadV2>,
     place_loads: HashMap<*const SemanticPlaceV1, ProductionSemanticLoadV2>,
+    inline_calls_v30: Option<gfx942_inline_value_projection_v30::InlineCallRosterV30<'a>>,
     scalar_callables: &'a [SemanticCallableDeclV1],
     scalar_calls: Vec<Option<(usize, &'a SemanticDirectCallV1)>>,
     helper_semantic: Option<&'a AdmittedInertSemanticMirV1>,
@@ -3984,6 +4005,7 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             work: 0,
             loads: HashMap::new(),
             place_loads: HashMap::new(),
+            inline_calls_v30: None,
             scalar_callables: &[],
             scalar_calls: Vec::new(),
             helper_semantic: None,
@@ -3996,10 +4018,12 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
     fn with_ranked_reads(
         types: &'a [SemanticTypeDeclV1],
         function: &'a SemanticFunctionDeclV1,
+        callables: &'a [SemanticCallableDeclV1],
         blocks: &[ProductionRankedBlockV1],
         sources: &[ProjectedAccessSourceV1],
     ) -> Result<Self, ProductionRankedProjectionErrorV1> {
-        let mut resolver = Self::new(types, function)?;
+        let mut resolver =
+            Self::new(types, function)?.with_gfx942_inline_callables_v30(callables)?;
         let mut allocation_origins = HashMap::new();
         for block in blocks {
             for operation in block.operations() {
@@ -24915,6 +24939,10 @@ mod tests {
     include!("production_ranked_projection_v1/projection_02_tests.rs");
     include!("production_ranked_projection_v1/projection_03_tests.rs");
     include!("production_ranked_projection_v1/aggregate_value_projection_v2_tests.rs");
+    mod gfx942_inline_value_projection_v30_tests {
+        use super::*;
+        include!("production_ranked_projection_v1/gfx942_inline_value_projection_v30_tests.rs");
+    }
     include!("production_ranked_projection_v1/saturating_integer_expression_v2_tests.rs");
     include!("production_ranked_projection_v1/read_source_index_v1_tests.rs");
     include!("production_ranked_projection_v1/statement_definition_index_v1_tests.rs");

@@ -44,11 +44,23 @@ fn authority_free_dependency_closure_is_exact() {
         dependencies,
         [
             ("fe2o3-kernel-ir", "normal"),
+            ("rustix", "normal"),
             ("serde", "normal"),
             ("serde_json", "normal"),
             ("sha2", "normal"),
         ]
     );
+    // The explicit source-candidate CLI uses descriptor-relative Linux I/O.
+    // This ordinary filesystem wrapper grants no compiler/build/artifact
+    // authority, and is not used by the observation or materializer library.
+    // Keep its platform restriction as part of the reviewed dependency surface.
+    let rustix = package["dependencies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|dependency| dependency["name"] == "rustix")
+        .unwrap();
+    assert_eq!(rustix["target"], "cfg(target_os = \"linux\")");
     for forbidden in [
         "fe2o3-artifact-transaction",
         "fe2o3-build-authority",

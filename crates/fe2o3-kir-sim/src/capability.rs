@@ -12,7 +12,7 @@ use crate::{IndexWidthV1, SimulationTargetV1, UnsupportedFeatureV1};
 pub const SEMANTIC_CAPABILITY_MATRIX_SCHEMA_V1: &str =
     "fe2o3-kir-sim-semantic-capability-matrix-v1";
 /// Exact newline-terminated compact JSON size emitted by the V1 command.
-pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_819_631;
+pub const SEMANTIC_CAPABILITY_MATRIX_JSON_BYTES_V1: usize = 4_885_766;
 pub const TOP_LEVEL_CAPABILITY_ROWS_V1: usize = SimulationOperationSurfaceV1::COUNT
     * SimulationCapabilityProfileV1::COUNT
     * SimulationKirWireVersionV1::COUNT;
@@ -116,10 +116,20 @@ pub enum SimulationKirWireVersionV1 {
     V10,
     V11,
     V12,
+    V16,
+    V17,
 }
 
 impl SimulationKirWireVersionV1 {
-    const ALL: [Self; 5] = [Self::V7, Self::V9, Self::V10, Self::V11, Self::V12];
+    const ALL: [Self; 7] = [
+        Self::V7,
+        Self::V9,
+        Self::V10,
+        Self::V11,
+        Self::V12,
+        Self::V16,
+        Self::V17,
+    ];
     const COUNT: usize = Self::ALL.len();
 }
 
@@ -166,10 +176,12 @@ pub enum SimulationOperationSurfaceV1 {
     VectorLayoutConvert = 35,
     VerificationContract = 36,
     Execution = 37,
+    OrderedRegion = 38,
+    OrderedProgram = 39,
 }
 
 impl SimulationOperationSurfaceV1 {
-    const ALL: [Self; 38] = [
+    const ALL: [Self; 40] = [
         Self::Constant,
         Self::Intrinsic,
         Self::MemoryIntrinsic,
@@ -208,8 +220,10 @@ impl SimulationOperationSurfaceV1 {
         Self::VectorLayoutConvert,
         Self::VerificationContract,
         Self::Execution,
+        Self::OrderedRegion,
+        Self::OrderedProgram,
     ];
-    const COUNT: usize = Self::Execution as usize + 1;
+    const COUNT: usize = Self::OrderedProgram as usize + 1;
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -264,12 +278,20 @@ pub enum SimulationUnsupportedReasonCodeV1 {
     DynamicWorkgroupMemoryExtentLayout,
     InertV12Carrier,
     InertExecutionV15,
+    OrderedRegion,
+    OrderedRegionProfile,
+    OrderedProgram,
+    OrderedProgramProfile,
 }
 
 impl UnsupportedFeatureV1 {
     pub const fn reason_code(&self) -> SimulationUnsupportedReasonCodeV1 {
         match self {
             Self::InertExecutionV15 => SimulationUnsupportedReasonCodeV1::InertExecutionV15,
+            Self::OrderedRegion => SimulationUnsupportedReasonCodeV1::OrderedRegion,
+            Self::OrderedRegionProfile => SimulationUnsupportedReasonCodeV1::OrderedRegionProfile,
+            Self::OrderedProgram => SimulationUnsupportedReasonCodeV1::OrderedProgram,
+            Self::OrderedProgramProfile => SimulationUnsupportedReasonCodeV1::OrderedProgramProfile,
             Self::InertV12Carrier => SimulationUnsupportedReasonCodeV1::InertV12Carrier,
             Self::FloatType(_) => SimulationUnsupportedReasonCodeV1::FloatType,
             Self::UnsupportedType => SimulationUnsupportedReasonCodeV1::UnsupportedType,
@@ -408,7 +430,10 @@ pub fn semantic_capability_matrix_v1() -> SimulationCapabilityMatrixV1 {
                 to_access: "read_only",
                 capability: if matches!(
                     kir_wire_version,
-                    SimulationKirWireVersionV1::V11 | SimulationKirWireVersionV1::V12
+                    SimulationKirWireVersionV1::V11
+                        | SimulationKirWireVersionV1::V12
+                        | SimulationKirWireVersionV1::V16
+                        | SimulationKirWireVersionV1::V17
                 ) {
                     SimulationCapabilityDispositionV1::Owned {
                         owner: SimulationSemanticOwnerV1::TypedMemory,
@@ -644,7 +669,30 @@ fn top_level_capability(
             owned(Owner::WaveCooperative, &[Reason::Wave])
         }
         Surface::Wave => owned(Owner::WaveCooperative, &[]),
-        Surface::InlineAssembly => unsupported(Reason::InlineAssembly),
+        // The closed gfx942 VGPR integer subset is evaluated as 32-bit data;
+        // other mnemonics/contracts and scalar-register execution remain rejected.
+        Surface::InlineAssembly => owned(Owner::ScalarBits, &[Reason::InlineAssembly]),
+        // One atomic CPU value abstraction, not physical-register or GPU execution.
+        Surface::OrderedRegion
+            if kir_wire_version == SimulationKirWireVersionV1::V16
+                && profile == SimulationCapabilityProfileV1::Gfx942XnackMinus =>
+        {
+            owned(
+                Owner::ScalarBits,
+                &[Reason::OrderedRegion, Reason::OrderedRegionProfile],
+            )
+        }
+        Surface::OrderedRegion => unsupported(Reason::OrderedRegionProfile),
+        Surface::OrderedProgram
+            if kir_wire_version == SimulationKirWireVersionV1::V17
+                && profile == SimulationCapabilityProfileV1::Gfx942XnackMinus =>
+        {
+            owned(
+                Owner::ScalarBits,
+                &[Reason::OrderedProgram, Reason::OrderedProgramProfile],
+            )
+        }
+        Surface::OrderedProgram => unsupported(Reason::OrderedProgramProfile),
         Surface::Execution => unsupported(Reason::InertExecutionV15),
         Surface::VectorLoad
         | Surface::VectorStore
@@ -696,6 +744,8 @@ pub(crate) fn operation_surface_v1(operation: &OperationKind) -> SimulationOpera
         OperationKind::Gfx950LdsTranspose(_) => SimulationOperationSurfaceV1::Gfx950LdsTranspose,
         OperationKind::Wave(_) => SimulationOperationSurfaceV1::Wave,
         OperationKind::InlineAssembly(_) => SimulationOperationSurfaceV1::InlineAssembly,
+        OperationKind::Gfx942OrderedRegion(_) => SimulationOperationSurfaceV1::OrderedRegion,
+        OperationKind::Gfx942OrderedProgram(_) => SimulationOperationSurfaceV1::OrderedProgram,
     }
 }
 

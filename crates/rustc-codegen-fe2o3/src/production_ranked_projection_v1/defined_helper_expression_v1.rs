@@ -102,6 +102,7 @@ pub(super) fn projected_reference_gpu_writes_with_helpers_v1(
         let mut expressions = GpuSemanticExpressionResolverV2::with_ranked_reads(
             semantic.types(),
             function,
+            semantic.callables(),
             blocks,
             sources,
         )

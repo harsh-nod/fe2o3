@@ -65,6 +65,8 @@ pub enum DiagnosticCode {
     InvalidVectorOperation,
     InvalidAmdGpuDiagnosticOperation,
     InvalidInlineAssembly,
+    InvalidOrderedRegion,
+    InvalidOrderedProgram,
     InvalidTerminator,
 }
 

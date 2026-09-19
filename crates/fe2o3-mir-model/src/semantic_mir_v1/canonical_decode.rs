@@ -369,6 +369,30 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Decodes exact V31 ordered regions, excluding the inert V29 capability grammar.
+    pub fn decode_exact_v31_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V31),
+        )
+    }
+
+    /// Decodes exact V32 programs, excluding V31 regions and V29 capabilities.
+    pub fn decode_exact_v32_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V32),
+        )
+    }
+
     /// Decodes inert Wave64 primitive capture, not execution authority.
     pub fn decode_exact_v33_canonical(
         bytes: &[u8],
@@ -378,6 +402,18 @@ impl AdmittedInertSemanticMirV1 {
             bytes,
             limits,
             CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V33),
+        )
+    }
+
+    /// Decodes standalone scalar authoring, excluding saturation and Wave64.
+    pub fn decode_exact_v34_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V34),
         )
     }
 
@@ -423,7 +459,10 @@ impl AdmittedInertSemanticMirV1 {
                         | SemanticMirWireVersionV1::V15
                         | SemanticMirWireVersionV1::V28
                         | SemanticMirWireVersionV1::V30
+                        | SemanticMirWireVersionV1::V31
+                        | SemanticMirWireVersionV1::V32
                         | SemanticMirWireVersionV1::V33
+                        | SemanticMirWireVersionV1::V34
                 ) {
                     return Err(SemanticMirDecodeErrorV1::UnsupportedProductionWireVersion(
                         wire_version,
@@ -1697,8 +1736,14 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V33 {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V34 {
+            91
+        } else if self.wire_version == SemanticMirWireVersionV1::V33 {
             90
+        } else if self.wire_version == SemanticMirWireVersionV1::V32 {
+            89
+        } else if self.wire_version == SemanticMirWireVersionV1::V31 {
+            88
         } else if self.wire_version == SemanticMirWireVersionV1::V30 {
             87
         } else if self.wire_version == SemanticMirWireVersionV1::V29 {
@@ -1731,7 +1776,18 @@ impl<'a> CanonicalDecoderV1<'a> {
         // Historical capability drafts and synthetic scope exit are not callable grammar.
         if matches!(tag, 69..=80 | 83)
             || (matches!(tag, 81..=86) && self.wire_version != SemanticMirWireVersionV1::V29)
-            || matches!(tag, 88 | 89)
+            || (tag == 87
+                && !matches!(
+                    self.wire_version,
+                    SemanticMirWireVersionV1::V30
+                        | SemanticMirWireVersionV1::V31
+                        | SemanticMirWireVersionV1::V32
+                        | SemanticMirWireVersionV1::V33
+                ))
+            || (tag == 88 && self.wire_version != SemanticMirWireVersionV1::V31)
+            || (tag == 89 && self.wire_version != SemanticMirWireVersionV1::V32)
+            || (tag == 90 && self.wire_version != SemanticMirWireVersionV1::V33)
+            || (tag == 91 && self.wire_version != SemanticMirWireVersionV1::V34)
         {
             return Err(SemanticMirDecodeErrorV1::InvalidTag {
                 context: "compiler intrinsic",
@@ -1740,6 +1796,32 @@ impl<'a> CanonicalDecoderV1<'a> {
             });
         }
         Ok(match tag {
+            89 => {
+                self.tagged("gfx942 ordered program revision", 0)?;
+                let count = self.u8()?;
+                let mut descriptors = [0; SEMANTIC_GFX942_U32_PROGRAM_MAX_STEPS_V32];
+                for descriptor in &mut descriptors {
+                    *descriptor = self.u16()?;
+                }
+                SemanticCompilerIntrinsicOperationV1::Gfx942OrderedProgram(
+                    SemanticGfx942U32ProgramV32::from_descriptors(count, descriptors)?,
+                )
+            }
+            88 => {
+                let tag = self.tagged("gfx942 ordered region profile", 0)?;
+                SemanticCompilerIntrinsicOperationV1::Gfx942OrderedRegion(
+                    SemanticGfx942OrderedRegionProfileV31::from_wire_tag(tag)
+                        .expect("closed region profile tag was checked"),
+                )
+            }
+            87 | 91 if self.wire_version.scalar_authoring_intrinsic_tag() == Some(tag) => {
+                let kind = self.tagged("gfx942 inline instruction", 5)?;
+                let instruction = SemanticGfx942InlineInstructionV30::from_wire_tag(kind)
+                    .expect("closed instruction tag was checked");
+                SemanticCompilerIntrinsicOperationV1::Gfx942InlineU32(
+                    SemanticGfx942InlineU32V30::new(instruction, self.u16()?)?,
+                )
+            }
             87 => SemanticCompilerIntrinsicOperationV1::SaturatingInteger(
                 match self.tagged("saturating integer operation", 1)? {
                     0 => SemanticSaturatingIntegerOpV1::Add,
@@ -2689,15 +2771,53 @@ impl<'a> CanonicalDecoderV1<'a> {
                     ))
                 })?;
                 let unwind = self.unwind()?;
-                SemanticTerminatorKindV1::Call(
-                    SemanticDirectCallV1::new_callable_with_variadic_argument_abis(
-                        callee,
-                        arguments,
-                        variadic_argument_abis,
-                        destination,
-                        unwind,
-                    )?,
-                )
+                let mut call = SemanticDirectCallV1::new_callable_with_variadic_argument_abis(
+                    callee,
+                    arguments,
+                    variadic_argument_abis,
+                    destination,
+                    unwind,
+                )?;
+                if self.wire_version.scalar_authoring_intrinsic_tag().is_some() {
+                    let source = self.option("inline assembly source", |decoder| {
+                        Ok(SemanticInlineAssemblySourceV30::new(
+                            decoder.identity()?,
+                            SemanticFunctionIdentityV1(decoder.identity()?),
+                            decoder.identity()?,
+                            decoder.identity()?,
+                        )?)
+                    })?;
+                    if let Some(source) = source {
+                        call = call.with_inline_assembly_source_v30(source);
+                    }
+                }
+                if self.wire_version == SemanticMirWireVersionV1::V31 {
+                    let source = self.option("ordered region source", |decoder| {
+                        Ok(SemanticOrderedRegionSourceV31::new(
+                            decoder.identity()?,
+                            SemanticFunctionIdentityV1(decoder.identity()?),
+                            decoder.identity()?,
+                            decoder.identity()?,
+                        )?)
+                    })?;
+                    if let Some(source) = source {
+                        call = call.with_ordered_region_source_v31(source);
+                    }
+                }
+                if self.wire_version == SemanticMirWireVersionV1::V32 {
+                    let source = self.option("ordered program source", |decoder| {
+                        Ok(SemanticOrderedProgramSourceV32::new(
+                            decoder.identity()?,
+                            SemanticFunctionIdentityV1(decoder.identity()?),
+                            decoder.identity()?,
+                            decoder.identity()?,
+                        )?)
+                    })?;
+                    if let Some(source) = source {
+                        call = call.with_ordered_program_source_v32(source);
+                    }
+                }
+                SemanticTerminatorKindV1::Call(call)
             }
             3 => {
                 let callee = SemanticCallableIdV1(self.u32()?);
@@ -2801,6 +2921,9 @@ mod tests {
 
     mod capability_v29_tests;
     mod frozen_v15;
+    mod gfx942_inline_v30_tests;
+    mod gfx942_ordered_program_v32_tests;
+    mod gfx942_ordered_region_v31_tests;
     mod rust_call_local_tests;
     mod saturating_integer_v30_tests;
     mod wave64_shuffle_v33_tests;
@@ -5813,9 +5936,13 @@ mod tests {
         ];
         assert_eq!(terminators.len(), 12);
         for terminator in terminators {
-            component_round_trip(terminator, encode_terminator, |decoder| {
-                decoder.terminator()
-            });
+            component_round_trip(
+                terminator,
+                |writer, terminator| {
+                    encode_terminator(writer, terminator, SemanticMirWireVersionV1::V6)
+                },
+                |decoder| decoder.terminator(),
+            );
         }
     }
 }

@@ -16,27 +16,36 @@ use fe2o3_kernel_ir::{
     BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, Constant,
     DiagnosticCode as VerificationDiagnosticCode, F32MathFunction, F32MathImplementation,
     FloatConversionKind, FloatOperation, Function, FunctionBody, FunctionId, FunctionRole,
-    Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1,
-    IndexKind, IndexedControlFlow, InlineAssembly, InlineAssemblyTarget, IntrinsicKind, Kernel,
-    KernelId, LDS_TILE_16X16_XOR4_CAPABILITY, LaunchDomain, LaunchExtent,
-    MATRIX_CAPABILITY_NAMESPACE, MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1,
-    MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2, MatrixElement, MatrixFrontendBindingV2,
-    MatrixMultiplyProfile, MatrixOperation, MatrixOperationKind, MatrixProjectedKernargPolicyV1,
-    MemoryElementType, MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId,
-    NarrowFloatFormat, Operation, OperationKind, PointerDistanceContract, PointerDistanceKind,
-    PointerDistanceUnit, SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY,
-    SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY, SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY,
-    ScalarType, Signature, SynchronizationScope, TargetCapability, TensorInstructionProfileV1,
-    Terminator, Type, UnaryOp, ValueId, VerificationErrors, VerifiedCanonicalKernelIrV8,
-    VerifiedCanonicalKernelIrV9, VerifiedCanonicalKernelIrV11, WaveF32ReductionKindV1,
-    WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent,
-    WorkgroupSize, analyze_control_flow, verify_module,
+    Gfx942InlineAssemblyErrorV1, Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1,
+    Gfx950LdsTransposeOperationV1, IndexKind, IndexedControlFlow, InlineAssembly,
+    InlineAssemblyTarget, IntrinsicKind, Kernel, KernelId, LDS_TILE_16X16_XOR4_CAPABILITY,
+    LaunchDomain, LaunchExtent, MATRIX_CAPABILITY_NAMESPACE,
+    MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1, MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2,
+    MatrixElement, MatrixFrontendBindingV2, MatrixMultiplyProfile, MatrixOperation,
+    MatrixOperationKind, MatrixProjectedKernargPolicyV1, MemoryElementType,
+    MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId, NarrowFloatFormat, Operation,
+    OperationKind, PointerDistanceContract, PointerDistanceKind, PointerDistanceUnit,
+    SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY, SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY,
+    SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY, ScalarType, Signature, SynchronizationScope,
+    TargetCapability, TensorInstructionProfileV1, Terminator, Type, UnaryOp, ValueId,
+    VerificationErrors, VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9,
+    VerifiedCanonicalKernelIrV11, WaveF32ReductionKindV1, WaveOperation, WaveOperationKind,
+    WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize, analyze_control_flow,
+    gfx942_inline_assembly_instruction_v1 as gfx942_assembly_instruction,
+    validate_gfx942_inline_assembly_v1, verify_module,
 };
 use sha2::{Digest, Sha256};
 
 #[path = "lowering_v12_preflight.rs"]
 mod v12_preflight;
 use v12_preflight::reject_unsupported_v12_module;
+
+#[path = "lowering/ordered_region_v16.rs"]
+mod ordered_region_v16;
+pub use ordered_region_v16::lower_canonical_v16_compiler_module_to_gfx942_xnack_minus_llvm_ir;
+#[path = "lowering/ordered_program_v17.rs"]
+mod ordered_program_v17;
+pub use ordered_program_v17::lower_canonical_v17_compiler_module_to_gfx942_xnack_minus_llvm_ir;
 
 include!("lowering_native_v12.rs");
 
@@ -158,31 +167,6 @@ impl LoweringTarget {
             (_, WaveWidth::Wave64) => " \"target-features\"=\"-wavefrontsize32,+wavefrontsize64\"",
         }
     }
-}
-
-#[derive(Clone, Copy)]
-struct Gfx942AssemblyInstruction {
-    mnemonic: &'static str,
-    constraint: AssemblyConstraint,
-    input_count: usize,
-}
-
-fn gfx942_assembly_instruction(mnemonic: &str) -> Option<Gfx942AssemblyInstruction> {
-    let (mnemonic, constraint, input_count) = match mnemonic {
-        "v_mov_b32" => ("v_mov_b32", AssemblyConstraint::Vgpr32, 1),
-        "s_mov_b32" => ("s_mov_b32", AssemblyConstraint::Sgpr32, 1),
-        "v_add_u32" => ("v_add_u32", AssemblyConstraint::Vgpr32, 2),
-        "v_sub_u32" => ("v_sub_u32", AssemblyConstraint::Vgpr32, 2),
-        "v_and_b32" => ("v_and_b32", AssemblyConstraint::Vgpr32, 2),
-        "v_or_b32" => ("v_or_b32", AssemblyConstraint::Vgpr32, 2),
-        "v_xor_b32" => ("v_xor_b32", AssemblyConstraint::Vgpr32, 2),
-        _ => return None,
-    };
-    Some(Gfx942AssemblyInstruction {
-        mnemonic,
-        constraint,
-        input_count,
-    })
 }
 
 /// Stable rejection categories for the first target-neutral AMDGPU lowering slice.
@@ -657,12 +641,14 @@ fn lower_kernel_to_llvm_ir_for_target(
         &module.required_capabilities,
         "module",
         target,
+        None,
     )?;
     let kernel_wave = validate_capabilities(
         LoweringLocation::kernel(module, kernel),
         &kernel.required_capabilities,
         "kernel",
         target,
+        None,
     )?;
 
     let workgroup_size = validate_launch(module, kernel, target)?;
@@ -674,6 +660,7 @@ fn lower_kernel_to_llvm_ir_for_target(
         &entry.required_capabilities,
         "entry function",
         target,
+        None,
     )?;
     if let Some(exact_target) = target.exact_target_binding() {
         require_exact_kernel_binding(module, kernel, entry, exact_target)?;
@@ -1065,6 +1052,67 @@ fn lower_compiler_module_to_llvm_ir_for_target(
     semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
     require_kernel: bool,
 ) -> Result<String, LoweringErrors> {
+    lower_compiler_module_with_ordered_region_context_v16(
+        module,
+        target,
+        launch_policies,
+        semantic_anchor_identity,
+        require_kernel,
+        None,
+    )
+}
+
+fn lower_compiler_module_with_ordered_region_context_v16(
+    module: &Module,
+    target: LoweringTarget,
+    launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+    semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
+    require_kernel: bool,
+    ordered_region_owner: Option<&fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV16>,
+) -> Result<String, LoweringErrors> {
+    lower_compiler_module_with_ordered_context(
+        module,
+        target,
+        launch_policies,
+        semantic_anchor_identity,
+        require_kernel,
+        ordered_region_owner.map(OrderedModuleOwner::RegionV16),
+    )
+}
+
+fn lower_compiler_module_with_ordered_program_context_v17(
+    module: &Module,
+    target: LoweringTarget,
+    launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+    semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
+    require_kernel: bool,
+    owner: Option<&fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV17>,
+) -> Result<String, LoweringErrors> {
+    lower_compiler_module_with_ordered_context(
+        module,
+        target,
+        launch_policies,
+        semantic_anchor_identity,
+        require_kernel,
+        owner.map(OrderedModuleOwner::ProgramV17),
+    )
+}
+
+// Typed and mutually exclusive contexts; no arbitrary version or Module opt-in.
+#[derive(Clone, Copy)]
+enum OrderedModuleOwner<'a> {
+    RegionV16(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV16),
+    ProgramV17(&'a fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV17),
+}
+
+fn lower_compiler_module_with_ordered_context(
+    module: &Module,
+    target: LoweringTarget,
+    launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+    semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
+    require_kernel: bool,
+    ordered_owner: Option<OrderedModuleOwner<'_>>,
+) -> Result<String, LoweringErrors> {
     if require_kernel && module.kernels.is_empty() {
         return Err(LoweringErrors::one(
             LoweringLocation::module(module),
@@ -1073,7 +1121,17 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         ));
     }
     verify_module(module).map_err(LoweringErrors::verification)?;
-    reject_unsupported_v12_module(module)?;
+    match ordered_owner {
+        Some(OrderedModuleOwner::RegionV16(owner)) => {
+            ordered_region_v16::validate_owner_context(module, target, owner)?;
+            v12_preflight::reject_unsupported_v16_module(owner)?;
+        }
+        Some(OrderedModuleOwner::ProgramV17(owner)) => {
+            ordered_program_v17::validate_owner_context(module, target, owner)?;
+            v12_preflight::reject_unsupported_v17_module(owner)?;
+        }
+        None => reject_unsupported_v12_module(module)?,
+    }
 
     if let Some(exact_target) = target.exact_target_binding() {
         for kernel in &module.kernels {
@@ -1087,6 +1145,7 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         &module.required_capabilities,
         "module",
         target,
+        ordered_owner,
     )?;
     let mut kernels = module.kernels.iter().collect::<Vec<_>>();
     kernels.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
@@ -1251,6 +1310,7 @@ fn lower_compiler_module_to_llvm_ir_for_target(
                     &function.required_capabilities,
                     "external declaration",
                     target,
+                    ordered_owner,
                 )?;
                 declarations.push(*function);
             }
@@ -1264,8 +1324,14 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         }
     }
 
-    let wave_plan =
-        infer_effective_wave_widths(module, module_wave, &kernels, &helper_definitions, target)?;
+    let wave_plan = infer_effective_wave_widths(
+        module,
+        module_wave,
+        &kernels,
+        &helper_definitions,
+        target,
+        ordered_owner,
+    )?;
 
     let mut kernel_lowerers = Vec::with_capacity(kernels.len());
     for kernel in &kernels {
@@ -1310,6 +1376,10 @@ fn lower_compiler_module_to_llvm_ir_for_target(
                     *emission
                 }),
         )?;
+        lowerer.ordered_region_v16 =
+            matches!(ordered_owner, Some(OrderedModuleOwner::RegionV16(_)));
+        lowerer.ordered_program_v17 =
+            matches!(ordered_owner, Some(OrderedModuleOwner::ProgramV17(_)));
         preflight_function(&mut lowerer)?;
         kernel_lowerers.push(lowerer);
     }
@@ -1503,6 +1573,7 @@ fn infer_effective_wave_widths(
     kernels: &[&Kernel],
     helpers: &[&Function],
     target: LoweringTarget,
+    ordered_owner: Option<OrderedModuleOwner<'_>>,
 ) -> Result<EffectiveWavePlan, LoweringErrors> {
     enforce_call_graph_limit(
         module,
@@ -1552,6 +1623,7 @@ fn infer_effective_wave_widths(
             &function.required_capabilities,
             "device function",
             target,
+            ordered_owner,
         )?;
         component_claims[component_of[index]]
             .extend([module_wave, function_wave].into_iter().flatten());
@@ -1570,12 +1642,14 @@ fn infer_effective_wave_widths(
             &kernel.required_capabilities,
             "kernel",
             target,
+            ordered_owner,
         )?;
         let entry_wave = validate_capabilities(
             LoweringLocation::function(module, kernel, entry),
             &entry.required_capabilities,
             "entry function",
             target,
+            ordered_owner,
         )?;
         let root_wave = unique_wave_width(
             LoweringLocation::function(module, kernel, entry),
@@ -2594,7 +2668,19 @@ fn emit_compiler_module(
 
     let mut output = CapacityLimitedText::try_new(module, MAX_COMPILER_MODULE_TEXT_BYTES)?;
     writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"").unwrap();
-    if let Some(data_layout) = target.data_layout() {
+    // Closed V16/V17 target paths emit directly for the pinned LLVM22 worker.
+    // The older renderer intentionally retains the Rust/frontend layout. Select
+    // the existing reviewed worker profile here, before any module text exists;
+    // never edit captured LLVM or relax the worker's exact layout validation.
+    let data_layout = if kernels
+        .iter()
+        .any(|lowerer| lowerer.ordered_region_v16 || lowerer.ordered_program_v17)
+    {
+        Some(fe2o3_amd_target::PRODUCTION_AMDHSA_LLVM22_WORKER_DATA_LAYOUT_V1)
+    } else {
+        target.data_layout()
+    };
+    if let Some(data_layout) = data_layout {
         writeln!(output, "target datalayout = \"{data_layout}\"").unwrap();
     }
     writeln!(output).unwrap();
@@ -3219,6 +3305,7 @@ fn validate_capabilities(
     capabilities: &BTreeSet<TargetCapability>,
     owner: &str,
     target: LoweringTarget,
+    ordered_owner: Option<OrderedModuleOwner<'_>>,
 ) -> Result<Option<WaveWidth>, LoweringErrors> {
     let mut wave_width = None;
     for capability in capabilities {
@@ -3236,6 +3323,17 @@ fn validate_capabilities(
                 address_space,
                 max_scope,
             } if supported_atomic_capability(*width_bits, *address_space, *max_scope) => {}
+            TargetCapability::Extension { namespace, name }
+                if target == LoweringTarget::Gfx942XnackMinusV1
+                    && namespace
+                        == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_REGION_CAPABILITY_NAMESPACE
+                    && name == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_REGION_CAPABILITY_NAME => {}
+            TargetCapability::Extension { namespace, name }
+                if target == LoweringTarget::Gfx942XnackMinusV1
+                    && matches!(ordered_owner, Some(OrderedModuleOwner::ProgramV17(_)))
+                    && namespace
+                        == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_PROGRAM_CAPABILITY_NAMESPACE
+                    && name == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_PROGRAM_CAPABILITY_NAME => {}
             TargetCapability::Extension { namespace, name }
                 if target.supports_gfx942_inline_assembly()
                     && namespace == AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE
@@ -3624,6 +3722,8 @@ struct FunctionLowerer<'a> {
     control_flow: IndexedControlFlow,
     split_edges: Vec<bool>,
     semantic_anchor_emission: SemanticAnchorEmissionV1,
+    ordered_region_v16: bool,
+    ordered_program_v17: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -3972,6 +4072,8 @@ impl<'a> FunctionLowerer<'a> {
             control_flow,
             split_edges,
             semantic_anchor_emission,
+            ordered_region_v16: false,
+            ordered_program_v17: false,
         })
     }
 
@@ -4002,6 +4104,8 @@ impl<'a> FunctionLowerer<'a> {
             control_flow,
             split_edges,
             semantic_anchor_emission,
+            ordered_region_v16: false,
+            ordered_program_v17: false,
         })
     }
 
@@ -4027,6 +4131,8 @@ impl<'a> FunctionLowerer<'a> {
             control_flow,
             split_edges,
             semantic_anchor_emission: SemanticAnchorEmissionV1::Disabled,
+            ordered_region_v16: false,
+            ordered_program_v17: false,
         })
     }
 
@@ -4128,7 +4234,12 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::Call { callee, arguments }
                 if AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments).is_some()
         );
-        let is_inline_assembly = matches!(operation.kind, OperationKind::InlineAssembly(_));
+        let is_inline_assembly = matches!(
+            operation.kind,
+            OperationKind::InlineAssembly(_)
+                | OperationKind::Gfx942OrderedRegion(_)
+                | OperationKind::Gfx942OrderedProgram(_)
+        );
         let is_matrix = matches!(operation.kind, OperationKind::Matrix(_));
         let is_gfx950_collective_or_lds_transpose = matches!(
             operation.kind,
@@ -4167,6 +4278,16 @@ impl<'a> FunctionLowerer<'a> {
                         | TargetCapability::WaveWidth(_)
                         | TargetCapability::Float16
                         | TargetCapability::BFloat16
+                ) || matches!(
+                    capability,
+                    TargetCapability::Extension { namespace, name }
+                        if namespace == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_REGION_CAPABILITY_NAMESPACE
+                            && name == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_REGION_CAPABILITY_NAME
+                ) || matches!(
+                    capability,
+                    TargetCapability::Extension { namespace, name }
+                        if namespace == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_PROGRAM_CAPABILITY_NAMESPACE
+                            && name == fe2o3_kernel_ir::AMDGPU_GFX942_ORDERED_PROGRAM_CAPABILITY_NAME
                 ) || matches!(
                     capability,
                     TargetCapability::Extension { namespace, name }
@@ -4762,6 +4883,12 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::InlineAssembly(assembly) => {
                 self.validate_inline_assembly(operation, assembly, &location)?;
             }
+            OperationKind::Gfx942OrderedRegion(_) => {
+                self.validate_ordered_region_v16(operation, &location)?;
+            }
+            OperationKind::Gfx942OrderedProgram(_) => {
+                self.validate_ordered_program_v17(operation, &location)?;
+            }
             OperationKind::Matrix(matrix) => {
                 self.validate_matrix(matrix, &location)?;
             }
@@ -5149,88 +5276,29 @@ impl<'a> FunctionLowerer<'a> {
                 "inline assembly is admitted only by the authenticated gfx942 lowering profile",
             ));
         }
-        let Some(instruction) = gfx942_assembly_instruction(&assembly.mnemonic) else {
-            return Err(LoweringErrors::one(
-                location.clone(),
-                LoweringDiagnosticCode::UnsupportedAssemblyInstruction,
-                format!(
-                    "gfx942 inline assembly does not admit instruction {:?}",
-                    assembly.mnemonic
-                ),
-            ));
-        };
-        if !assembly.declared_effects.is_empty()
-            || !assembly.options.contains(&AssemblyOption::NoMemory)
-            || assembly.options.contains(&AssemblyOption::ReadOnly)
-        {
-            return Err(LoweringErrors::one(
-                location.clone(),
-                LoweringDiagnosticCode::AssemblyEffectMismatch,
-                "the bounded gfx942 assembly subset is exactly NoMemory and effect-free",
-            ));
-        }
-        let expected_operand_count = instruction.input_count + 1;
-        if operation.results.len() != 1 || assembly.operands.len() != expected_operand_count {
-            return Err(LoweringErrors::one(
-                location.clone(),
-                LoweringDiagnosticCode::AssemblyOperandMismatch,
-                format!(
-                    "{} requires one output and {} inputs",
-                    instruction.mnemonic, instruction.input_count
-                ),
-            ));
-        }
-        let output = &assembly.operands[0];
-        if output.constraint != instruction.constraint
-            || output.kind != (AssemblyOperandKind::Output { result_index: 0 })
-        {
-            return Err(LoweringErrors::one(
-                location.clone(),
-                LoweringDiagnosticCode::AssemblyOperandMismatch,
-                format!(
-                    "{} output must be result zero with {:?} constraint",
-                    instruction.mnemonic, instruction.constraint
-                ),
-            ));
-        }
-        let result_type = &operation.results[0].ty;
-        if !is_i32_register_type(result_type) {
-            return Err(LoweringErrors::one(
-                location.clone(),
-                LoweringDiagnosticCode::AssemblyOperandMismatch,
-                format!(
-                    "{} output requires i32 or u32, found {result_type:?}",
-                    instruction.mnemonic
-                ),
-            ));
-        }
-        for (index, operand) in assembly.operands[1..].iter().enumerate() {
-            let AssemblyOperandKind::Input(value) = operand.kind else {
-                return Err(LoweringErrors::one(
-                    location.clone(),
-                    LoweringDiagnosticCode::AssemblyOperandMismatch,
-                    format!(
-                        "{} input {} must be a distinct SSA input role",
-                        instruction.mnemonic, index
-                    ),
-                ));
-            };
-            let ty = self.value_type(value);
-            if operand.constraint != instruction.constraint
-                || !is_i32_register_type(ty)
-                || ty != result_type
-            {
-                return Err(LoweringErrors::one(
-                    location.clone(),
-                    LoweringDiagnosticCode::AssemblyOperandMismatch,
-                    format!(
-                        "{} input {} requires {:?} with exact type {result_type:?}, found {:?} with {ty:?}",
-                        instruction.mnemonic, index, instruction.constraint, operand.constraint
-                    ),
-                ));
-            }
-        }
-        Ok(())
+        validate_gfx942_inline_assembly_v1(operation, |value| self.value_type(value).as_scalar())
+            .map(|_| ())
+            .map_err(|error| {
+                let code = match error {
+                    Gfx942InlineAssemblyErrorV1::NotInlineAssembly
+                    | Gfx942InlineAssemblyErrorV1::UnsupportedTarget => {
+                        LoweringDiagnosticCode::UnsupportedInlineAssembly
+                    }
+                    Gfx942InlineAssemblyErrorV1::IncompleteSourceIdentity => {
+                        LoweringDiagnosticCode::InputVerification(
+                            VerificationDiagnosticCode::InvalidInlineAssembly,
+                        )
+                    }
+                    Gfx942InlineAssemblyErrorV1::UnsupportedInstruction => {
+                        LoweringDiagnosticCode::UnsupportedAssemblyInstruction
+                    }
+                    Gfx942InlineAssemblyErrorV1::EffectMismatch => {
+                        LoweringDiagnosticCode::AssemblyEffectMismatch
+                    }
+                    _ => LoweringDiagnosticCode::AssemblyOperandMismatch,
+                };
+                LoweringErrors::one(location.clone(), code, error.to_string())
+            })
     }
 
     fn validate_call(
@@ -6981,6 +7049,12 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::InlineAssembly(assembly) => {
                 self.emit_inline_assembly(output, operation, assembly);
             }
+            OperationKind::Gfx942OrderedRegion(region) => {
+                self.emit_ordered_region_v16(output, operation, region);
+            }
+            OperationKind::Gfx942OrderedProgram(program) => {
+                self.emit_ordered_program_v17(output, operation, program);
+            }
             OperationKind::Matrix(matrix) => {
                 self.emit_matrix(output, block, operation_index, operation, matrix);
             }
@@ -7423,7 +7497,7 @@ impl<'a> FunctionLowerer<'a> {
             .map(|index| format!("${index}"))
             .collect::<Vec<_>>()
             .join(", ");
-        let register = match instruction.constraint {
+        let register = match instruction.constraint() {
             AssemblyConstraint::Sgpr32 => "s",
             AssemblyConstraint::Vgpr32 => "v",
             AssemblyConstraint::ImmediateI32 => {
@@ -7431,7 +7505,7 @@ impl<'a> FunctionLowerer<'a> {
             }
         };
         let constraints = std::iter::once(format!("={register}"))
-            .chain((0..instruction.input_count).map(|_| register.to_owned()))
+            .chain((0..instruction.input_count()).map(|_| register.to_owned()))
             .collect::<Vec<_>>()
             .join(",");
         let inputs = assembly.operands[1..]
@@ -7456,7 +7530,7 @@ impl<'a> FunctionLowerer<'a> {
             value_name(result.id),
             llvm_type(&result.ty),
             side_effect,
-            instruction.mnemonic,
+            instruction.mnemonic(),
             placeholders,
             constraints,
             inputs
@@ -8865,10 +8939,6 @@ fn supported_scalar(scalar: ScalarType, target: LoweringTarget) -> bool {
         || scalar.is_integer()
         || scalar == ScalarType::F32
         || (target.supports_narrow_float() && matches!(scalar, ScalarType::F16 | ScalarType::Bf16))
-}
-
-fn is_i32_register_type(ty: &Type) -> bool {
-    matches!(ty, Type::Scalar(ScalarType::I32 | ScalarType::U32))
 }
 
 fn direct_unsigned_constant_v1(operation: &Operation) -> Option<u64> {

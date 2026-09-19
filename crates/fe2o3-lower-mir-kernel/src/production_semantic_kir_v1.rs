@@ -76,6 +76,10 @@ use fe2o3_pliron::{
 use sha2::{Digest as _, Sha256};
 
 include!("production_pre_ranked_v1.rs");
+include!("production_ordered_region_pre_ranked_v16.rs");
+include!("production_ordered_region_inspection_v1.rs");
+include!("production_ordered_program_pre_ranked_v17.rs");
+include!("production_ordered_program_inspection_v1.rs");
 #[path = "native_source_correspondence_replay_v1.rs"]
 mod native_source_correspondence_replay_v1;
 pub use native_source_correspondence_replay_v1::*;
@@ -2923,7 +2927,12 @@ fn missing_ranked_effect_v1(
     }
 }
 
+#[path = "production_semantic_kir_v1/gfx942_inline_scalar_correspondence_v30.rs"]
+mod gfx942_inline_scalar_correspondence_v30;
+use gfx942_inline_scalar_correspondence_v30::Gfx942InlineScalarCorrespondenceV30;
+
 struct KirCorrelationIndexV1<'module> {
+    inline_scalar: Gfx942InlineScalarCorrespondenceV30<'module>,
     blocks: BTreeMap<BlockId, &'module [Operation]>,
     operations: BTreeMap<FunctionOperationLocation, &'module Operation>,
     definitions: BTreeMap<ValueId, &'module Operation>,
@@ -3432,6 +3441,7 @@ fn build_kir_correlation_index<'module>(
         }
     }
     Some(KirCorrelationIndexV1 {
+        inline_scalar: Gfx942InlineScalarCorrespondenceV30::empty(),
         blocks,
         operations,
         definitions,
@@ -4410,6 +4420,13 @@ fn normalize_kir_expression_inner_v1(
         )
     };
     Some(match &operation.kind {
+        OperationKind::InlineAssembly(_) => {
+            return kir
+                .inline_scalar
+                .normalize(operation, value, budget, |input, budget| {
+                    recurse(input, visiting, budget)
+                });
+        }
         OperationKind::Constant(constant) => {
             let (constant_scalar, bits) = normalize_kir_constant_v1(constant)?;
             if constant_scalar != scalar {
@@ -6465,7 +6482,7 @@ fn validate_mir_pliron_translation_inner_v1(
     let mut budget = UnsupportedIndexCorrelationBudgetV1 {
         remaining: work_limit,
     };
-    let kir = build_kir_correlation_index(body, max_operations, &mut budget)
+    let mut kir = build_kir_correlation_index(body, max_operations, &mut budget)
         .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
     let (correspondence_owner, semantic_function) = correspondence
         .lowered_functions()
@@ -6476,6 +6493,15 @@ fn validate_mir_pliron_translation_inner_v1(
         })
         .map(|record| (record.correspondence_owner(), record.semantic_function()))
         .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
+    kir.inline_scalar = Gfx942InlineScalarCorrespondenceV30::build(
+        semantic,
+        correspondence,
+        correspondence_owner,
+        semantic_function,
+        function,
+        &kir,
+        &mut budget,
+    )?;
     let generated_memory_effects = validate_generated_executable_effect_relations_v1(
         semantic,
         correspondence_owner,
@@ -12537,6 +12563,9 @@ fn semantic_source_argument_for_kir_parameter_v1(
 
 include!("production_semantic_kir_v1/semantic_ssa_transport_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_intrinsics_01.rs");
+include!("production_semantic_kir_v1/gfx942_inline_v30.rs");
+include!("production_semantic_kir_v1/gfx942_ordered_region_v31.rs");
+include!("production_semantic_kir_v1/gfx942_ordered_program_v32.rs");
 include!("production_semantic_kir_v1/semantic_ssa_plan_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 include!("production_execution_bindings_v1.rs");
@@ -16044,6 +16073,15 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             self.prepare_call_destination_v1(block, destination.place(), operations)?;
         let mut runtime_guard = None;
         let binding = match operation {
+            SemanticCompilerIntrinsicOperationV1::Gfx942InlineU32(assembly) => {
+                self.lower_gfx942_inline_u32_v30(block, call, *assembly, operations)?
+            }
+            SemanticCompilerIntrinsicOperationV1::Gfx942OrderedRegion(profile) => {
+                self.lower_gfx942_ordered_region_v31(block, call, *profile, operations)?
+            }
+            SemanticCompilerIntrinsicOperationV1::Gfx942OrderedProgram(program) => {
+                self.lower_gfx942_ordered_program_v32(block, call, *program, operations)?
+            }
             SemanticCompilerIntrinsicOperationV1::Gfx942Wave64ShuffleIndex { .. } => {
                 return Err(unsupported(
                     0,
@@ -26434,6 +26472,10 @@ mod shared_slice_helper_parameter_tests {
 
 #[cfg(test)]
 mod resource_tests {
+    mod gfx942_inline_scalar_correspondence_v30_tests {
+        use super::*;
+        include!("production_semantic_kir_v1/gfx942_inline_scalar_correspondence_v30_tests.rs");
+    }
     mod fixed_array_bounds_v1_tests {
         include!("production_semantic_kir_v1/fixed_array_bounds_v1_tests.rs");
         include!("production_semantic_kir_v1/dynamic_local_array_tests.rs");

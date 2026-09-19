@@ -12,6 +12,7 @@ use crate::{
     analyze_control_flow, analyze_interprocedural_effects_from_verified_v1, verify_module_ref,
 };
 
+mod gfx942_inline_u32_v30;
 mod guarded_access_v1;
 mod pointer_derivation;
 mod private_slots;
@@ -984,7 +985,14 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                         }
                     }
                 }
+                OperationKind::InlineAssembly(_)
+                    if gfx942_inline_u32_v30::has_closed_memory_effects(
+                        operation,
+                        &value_types,
+                    ) => {}
                 OperationKind::Execution(_)
+                | OperationKind::Gfx942OrderedRegion(_)
+                | OperationKind::Gfx942OrderedProgram(_)
                 | OperationKind::VerificationContract(_)
                 | OperationKind::VectorLoad(_)
                 | OperationKind::VectorStore(_)

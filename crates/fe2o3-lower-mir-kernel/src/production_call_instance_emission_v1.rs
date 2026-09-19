@@ -250,7 +250,9 @@ fn call_splice_check_callee_operation_v1(
         | Op::Matrix(_)
         | Op::Gfx950LdsTranspose(_) => Err(Error::CalleeCollective),
         Op::VerificationContract(_) => Err(Error::CalleeOrderedContract),
-        Op::InlineAssembly(_) => Err(Error::CalleeInlineAssembly),
+        Op::InlineAssembly(_) | Op::Gfx942OrderedRegion(_) | Op::Gfx942OrderedProgram(_) => {
+            Err(Error::CalleeInlineAssembly)
+        }
         Op::Intrinsic(intrinsic) => match intrinsic.kind {
             fe2o3_kernel_ir::IntrinsicKind::InvocationIndex { .. }
             | fe2o3_kernel_ir::IntrinsicKind::LaunchExtent { .. } => Ok(()),
@@ -275,6 +277,41 @@ fn call_splice_check_callee_operation_v1(
         | Op::VectorLoad(_)
         | Op::VectorStore(_)
         | Op::VectorLayoutConvert(_) => Ok(()),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn call_splice_preserves_direct_root_authoring_boundary_v1() {
+    use fe2o3_kernel_ir::{
+        AssemblySourceIdentity, Gfx942OrderedProgramRegistersV1, Gfx942OrderedProgramV1,
+        Gfx942OrderedRegionRegistersV1, Gfx942OrderedRegionV1, Gfx942U32ProgramV1,
+    };
+    let source = AssemblySourceIdentity::new([1; 32], [2; 32], [3; 32], [4; 32]);
+    let inputs = [ValueId(0), ValueId(1), ValueId(2)];
+    let region = Gfx942OrderedRegionV1::new(
+        source,
+        Gfx942OrderedRegionRegistersV1::new(32, 33, [34, 35, 36]).unwrap(),
+        inputs,
+    )
+    .unwrap();
+    let mut descriptors = [0; 16];
+    descriptors[0] = 8; // mov(out, input0)
+    let program = Gfx942OrderedProgramV1::new(
+        source,
+        Gfx942OrderedProgramRegistersV1::new(32, 33, [34, 35, 36]).unwrap(),
+        inputs,
+        Gfx942U32ProgramV1::from_descriptors(1, descriptors).unwrap(),
+    )
+    .unwrap();
+    for operation in [
+        OperationKind::Gfx942OrderedRegion(region),
+        OperationKind::Gfx942OrderedProgram(program),
+    ] {
+        assert_eq!(
+            call_splice_check_callee_operation_v1(&operation),
+            Err(CallInstanceEmissionErrorV1::CalleeInlineAssembly)
+        );
     }
 }
 

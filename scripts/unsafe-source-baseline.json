@@ -975,6 +975,10 @@
     "block": 1,
     "function": 2
   },
+  "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/wave64_capture.rs": {
+    "block": 1,
+    "function": 3
+  },
   "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs": {
     "block": 1
   },

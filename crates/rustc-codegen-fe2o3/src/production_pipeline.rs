@@ -3656,6 +3656,11 @@ impl RankedVerifiedProductionCompilation {
     }
 }
 
+pub(crate) mod ordered_program_diagnostic_v32;
+pub(crate) mod ordered_region_diagnostic_v31;
+#[cfg(test)]
+pub(crate) mod ordered_region_qualification_v31;
+
 #[cfg(test)]
 mod tests {
     include!("production_pipeline_pre_ranked_routes_tests.rs");

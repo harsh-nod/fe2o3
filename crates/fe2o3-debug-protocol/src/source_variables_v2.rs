@@ -301,6 +301,7 @@ pub enum DebugRequestAnyV2 {
     V1(DebugRequestV1),
     SourceVariablesV2(SourceVariableRequestV2),
     DiagnosisV2(DiagnosisRequestV2),
+    ResourceV1(crate::ResourceRequestV1),
 }
 
 pub fn decode_source_variable_request_line_v2(
@@ -386,6 +387,9 @@ pub fn read_request_line_any_v2<R: BufRead>(
             .map(Some),
         DIAGNOSIS_REQUEST_SCHEMA_V2 => decode_diagnosis_request_line_v2(&line, limits)
             .map(DebugRequestAnyV2::DiagnosisV2)
+            .map(Some),
+        crate::RESOURCE_REQUEST_SCHEMA_V1 => crate::decode_resource_request_line_v1(&line, limits)
+            .map(DebugRequestAnyV2::ResourceV1)
             .map(Some),
         _ => Err(ProtocolCodecErrorV1::InvalidJson),
     }

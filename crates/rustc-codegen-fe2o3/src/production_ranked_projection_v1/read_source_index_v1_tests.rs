@@ -140,7 +140,7 @@ fn read_source_index_actual_resolver_still_skips_unknown_or_invalid_statement_si
         },
     ];
     let resolver =
-        GpuSemanticExpressionResolverV2::with_ranked_reads(&types, &function, &[], &sources)
+        GpuSemanticExpressionResolverV2::with_ranked_reads(&types, &function, &[], &[], &sources)
             .unwrap();
     assert!(resolver.loads.is_empty());
     assert!(resolver.place_loads.is_empty());
@@ -207,7 +207,11 @@ fn read_source_index_actual_resolver_keeps_same_statement_operand_order() {
     for operations in [[2, 3], [3, 2], [2, 2]] {
         let sources = operations.map(|operation| indexed_read_source_v1(0, Some(0), operation));
         let resolver = GpuSemanticExpressionResolverV2::with_ranked_reads(
-            &types, &function, &blocks, &sources,
+            &types,
+            &function,
+            &[],
+            &blocks,
+            &sources,
         )
         .unwrap();
         assert_eq!(resolver.place_loads.len(), 2);
@@ -224,14 +228,20 @@ fn read_source_index_actual_resolver_preserves_cardinality_before_location_error
     let function = indexed_two_read_function_v1();
     let blocks = indexed_two_read_blocks_v1();
     let invalid = indexed_read_source_v1(0, Some(0), usize::MAX);
-    let resolver =
-        GpuSemanticExpressionResolverV2::with_ranked_reads(&types, &function, &blocks, &[invalid])
-            .unwrap();
+    let resolver = GpuSemanticExpressionResolverV2::with_ranked_reads(
+        &types,
+        &function,
+        &[],
+        &blocks,
+        &[invalid],
+    )
+    .unwrap();
     assert!(resolver.place_loads.is_empty());
     assert!(matches!(
         GpuSemanticExpressionResolverV2::with_ranked_reads(
             &types,
             &function,
+            &[],
             &blocks,
             &[invalid, indexed_read_source_v1(0, Some(0), 2)],
         ),
@@ -303,7 +313,7 @@ fn read_source_index_actual_resolver_still_skips_non_assignment_statements() {
     )]);
     let sources = [indexed_read_source_v1(0, Some(0), usize::MAX)];
     let resolver =
-        GpuSemanticExpressionResolverV2::with_ranked_reads(&types, &function, &[], &sources)
+        GpuSemanticExpressionResolverV2::with_ranked_reads(&types, &function, &[], &[], &sources)
             .unwrap();
     assert!(resolver.loads.is_empty());
     assert!(resolver.place_loads.is_empty());
@@ -348,7 +358,11 @@ fn read_source_index_actual_resolver_keeps_first_refusal_under_source_reversal()
             "a projected load correspondence does not identify one ranked read",
         ] {
             let result = GpuSemanticExpressionResolverV2::with_ranked_reads(
-                &types, &function, &blocks, &sources,
+                &types,
+                &function,
+                &[],
+                &blocks,
+                &sources,
             );
             match result {
                 Err(ProductionRankedProjectionErrorV1::Unsupported(actual)) => {

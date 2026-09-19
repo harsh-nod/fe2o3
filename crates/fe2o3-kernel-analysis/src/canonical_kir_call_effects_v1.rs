@@ -15,6 +15,9 @@ use crate::CanonicalKirInventoryV1 as Inventory;
 mod visit;
 pub use visit::*;
 
+#[path = "canonical_kir_call_effects_v1/gfx942_inline_v30.rs"]
+mod gfx942_inline_v30;
+
 /// Completeness covers physical memory and compiler ordering, including all
 /// syntactic calls and blocks. It says nothing about traps or convergence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -100,9 +103,11 @@ impl CanonicalKirCallEffectStorageV1 {
 }
 
 impl<'i, 'g> CanonicalKirCallEffectsV1<'i, 'g> {
-    /// O(functions + operations + calls), without recursive host calls or
-    /// expanded callee bodies. Every declaration, cycle dependency and opaque
-    /// assembly remains incomplete, even when its local effect list is empty.
+    /// O(functions + operations + calls), plus at most two type lookups per
+    /// bounded assembly operation, each logarithmic in inventory definitions.
+    /// No recursive host calls or expanded callee bodies. Every declaration,
+    /// cycle dependency and opaque assembly remains incomplete, even when its
+    /// local effect list is empty.
     ///
     /// Caller reserves its live graph/inventory. Work, vector initialization and
     /// requested storage are charged before use. Scratch drops before restoring
@@ -177,7 +182,14 @@ impl<'i, 'g> CanonicalKirCallEffectsV1<'i, 'g> {
                 if !operation.effects.is_empty() || !operation.compiler_ordering().is_empty() {
                     current.decision = current.decision.join(Decision::CompleteNonempty);
                 }
-                if matches!(operation.operation.kind, OperationKind::InlineAssembly(_)) {
+                if matches!(operation.operation.kind, OperationKind::InlineAssembly(_))
+                    && !gfx942_inline_v30::has_closed_effects(
+                        inventory,
+                        current.function,
+                        operation.operation,
+                        budget,
+                    )?
+                {
                     current.decision = Decision::Incomplete;
                 }
                 if !matches!(operation.operation.kind, OperationKind::Call { .. }) {

@@ -1153,7 +1153,10 @@ fn ordinary_scan_sources_export_v5_and_execute_every_cpu_observation_path() {
 
         let schedule_path = scratch.0.join(format!("{}-schedule.json", case.feature));
         let schedule_bytes = PersistedSimulationScheduleDocumentV1::encode_record(
-            admitted.input().persisted_schedule_binding(),
+            admitted
+                .input()
+                .persisted_schedule_binding()
+                .expect("existing bundle schedule binding"),
             execution.schedule_record().unwrap(),
         )
         .unwrap();
@@ -1161,7 +1164,10 @@ fn ordinary_scan_sources_export_v5_and_execute_every_cpu_observation_path() {
             PersistedSimulationScheduleDocumentV1::from_canonical_bytes(&schedule_bytes).unwrap();
         assert_eq!(
             persisted.binding(),
-            admitted.input().persisted_schedule_binding()
+            admitted
+                .input()
+                .persisted_schedule_binding()
+                .expect("existing bundle schedule binding")
         );
         assert_eq!(persisted.record(), execution.schedule_record().unwrap());
         assert_eq!(persisted.to_canonical_bytes().unwrap(), schedule_bytes);

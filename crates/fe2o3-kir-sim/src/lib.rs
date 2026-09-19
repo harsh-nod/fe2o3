@@ -7,6 +7,8 @@ mod execute;
 mod explore;
 mod f32_surface;
 mod model;
+mod ordered_program_v17;
+mod ordered_region_v16;
 mod preflight;
 mod reduce;
 mod resident;

@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn authored_instruction_terminal_inverse_preserves_exact_identity() {
+    use crate::trusted_device_items::TrustedAmdGpuInlineOperation as I;
+    for item in [
+        TrustedDeviceItem::AmdGpuInline(I::VMovB32),
+        TrustedDeviceItem::AmdGpuInline(I::VAddU32),
+        TrustedDeviceItem::AmdGpuInline(I::VSubU32),
+        TrustedDeviceItem::AmdGpuInline(I::VAndB32),
+        TrustedDeviceItem::AmdGpuInline(I::VOrB32),
+        TrustedDeviceItem::AmdGpuInline(I::VXorB32),
+        TrustedDeviceItem::AmdGpuOrderedXorAddE32,
+        TrustedDeviceItem::AmdGpuOrderedProgramE32,
+    ] {
+        let rule = ProductionSemanticTerminalRuleV1::from_trusted_device_item(item);
+        assert!(matches!(rule, ProductionSemanticTerminalRuleV1::Expand(_)));
+        assert_eq!(rule.trusted_device_item(), item);
+    }
+}
+
+#[test]
 fn fill_terminals_have_explicit_workload_neutral_expansions() {
     let cases = [
         (

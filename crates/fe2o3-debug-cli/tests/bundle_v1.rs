@@ -181,7 +181,10 @@ fn debugger_replays_a_bundle_bound_schedule_without_weakening_session_revision()
     let request = workspace_root().join("crates/fe2o3-kir-sim-cli/tutorial/fill-v1/request.json");
     let admitted =
         fe2o3_kir_sim_cli::load_debug_simulation_bundle_v1(&bundle_path, &request).unwrap();
-    let binding = admitted.input().persisted_schedule_binding();
+    let binding = admitted
+        .input()
+        .persisted_schedule_binding()
+        .expect("V1 schedule binding");
     let execution = admitted
         .input()
         .module

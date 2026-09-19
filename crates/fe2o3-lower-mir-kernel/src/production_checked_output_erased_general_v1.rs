@@ -261,4 +261,3 @@ fn erased_source_spans_v1(
     }
     Ok(traps)
 }
-

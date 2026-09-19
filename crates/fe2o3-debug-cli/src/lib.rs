@@ -1,6 +1,8 @@
 #![deny(unsafe_code, unsafe_op_in_unsafe_fn)]
 #![doc = include_str!("../README.md")]
 
+mod diagnostic_kir_v16;
+mod diagnostic_kir_v17;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[allow(unsafe_code)]
 mod hardware_linux_v2;
@@ -18,6 +20,7 @@ mod live_rocgdb_kfd_v4;
 mod live_rocgdb_v3;
 mod qualification_v1;
 pub mod reference_archive_v1;
+mod resource_queries_v1;
 #[cfg(target_os = "linux")]
 mod rocgdb_mi_parser_v3;
 #[cfg(target_os = "linux")]
@@ -46,7 +49,8 @@ use fe2o3_kernel_ir::{
     DebugSourceMapKirSiteV1, DebugSourceMapSpanV1, DebugSourceVariableBindingV2,
     DebugSourceVariableFallbackV2, IndexedControlFlow, MemoryOrdering, OperationKind, ScalarType,
     SynchronizationScope, Type, ValueId, VerifiedSimulationBundleV2, VerifiedSimulationBundleV5,
-    analyze_control_flow, simulation_debug_map_identity_v1, simulation_debug_map_identity_v2,
+    VerifiedSimulationBundleV6, analyze_control_flow, simulation_debug_map_identity_v1,
+    simulation_debug_map_identity_v2,
 };
 use fe2o3_kir_debugger::{
     DebugBreakpointV1, DebugHitConditionV1, DebugInspectionUnavailableV1, DebugInspectionV1,
@@ -70,13 +74,15 @@ use fe2o3_kir_sim_cli::{
     AdmittedSimulationInputV1, SimulationInputErrorV1, load_debug_sidecar_v1,
     load_debug_simulation_bundle_v1, load_debug_simulation_bundle_v2,
     load_debug_simulation_bundle_v3, load_debug_simulation_bundle_v4,
-    load_debug_simulation_bundle_v5, load_debug_simulation_input_bytes_v1,
-    load_debug_simulation_input_v1, load_debug_simulation_schedule_v1,
+    load_debug_simulation_bundle_v5, load_debug_simulation_bundle_v6,
+    load_debug_simulation_input_bytes_v1, load_debug_simulation_input_v1,
+    load_debug_simulation_input_v16, load_debug_simulation_input_v17,
+    load_debug_simulation_schedule_v1,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: fe2o3-debug sim ((--kir-v7 PATH | --bundle PATH | --bundle-v2 PATH | --bundle-v3 PATH | --bundle-v4 PATH | --bundle-v5 PATH) --request PATH | --kir-v7-fd FD --request-fd FD) [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug typed-layout (--bundle-v3 PATH | --bundle-v4 PATH) --request PATH\n       fe2o3-debug qualification --manifest /absolute/path/to/qualification.json\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug (live-rocgdb-kfd-v4 | live-rocgdb-kfd-v5) --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
+const USAGE: &str = "usage: fe2o3-debug sim ((--kir-v7 PATH | --diagnostic-kir-v16 PATH | --diagnostic-kir-v17 PATH | --bundle PATH | --bundle-v2 PATH | --bundle-v3 PATH | --bundle-v4 PATH | --bundle-v5 PATH | --bundle-v6 PATH) --request PATH | --kir-v7-fd FD --request-fd FD) [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug typed-layout (--bundle-v3 PATH | --bundle-v4 PATH) --request PATH\n       fe2o3-debug qualification --manifest /absolute/path/to/qualification.json\n       fe2o3-debug live-kfd --bundle-v2 PATH --request PATH --hsaco PATH [--protocol jsonl] [--wave-width 32|64] -- PROGRAM [ARG...]\n       fe2o3-debug live-rocgdb --rocgdb PATH --authorization ID [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] (--attach PID | -- PROGRAM [ARG...])\n       fe2o3-debug (live-rocgdb-kfd-v4 | live-rocgdb-kfd-v5) --rocgdb PATH --authorization ID --hsaco PATH --load-base 0xHEX --kernel NAME [--device-unique-id DECIMAL] [--protocol jsonl] [--wave-width 32|64] [--timeout-ms N] -- PROGRAM [ARG...]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
 #[cfg(target_os = "linux")]
 const MAX_SEALED_DEBUG_INPUT_BYTES_V1: usize = 16 * 1024 * 1024;
@@ -108,17 +114,21 @@ struct LiveKfdOptionsV3 {
 #[derive(Debug)]
 enum ProgramInputV1 {
     KirV7(PathBuf),
+    DiagnosticKirV16(PathBuf),
+    DiagnosticKirV17(PathBuf),
     SealedKirV7Fd(i32),
     Bundle(PathBuf),
     BundleV2(PathBuf),
     BundleV3(PathBuf),
     BundleV4(PathBuf),
     BundleV5(PathBuf),
+    BundleV6(PathBuf),
 }
 
 enum EmbeddedBundleSourceMapV1 {
     V2(VerifiedSimulationBundleV2),
     V5(VerifiedSimulationBundleV5),
+    V6(VerifiedSimulationBundleV6),
 }
 
 impl EmbeddedBundleSourceMapV1 {
@@ -126,18 +136,21 @@ impl EmbeddedBundleSourceMapV1 {
         match self {
             Self::V2(bundle) => *bundle.subject_identity(),
             Self::V5(bundle) => *bundle.subject_identity(),
+            Self::V6(bundle) => *bundle.subject_identity(),
         }
     }
     fn debug_map_identity(&self) -> [u8; 32] {
         match self {
             Self::V2(bundle) => *bundle.debug_map_identity(),
             Self::V5(bundle) => bundle.debug_map_identity(),
+            Self::V6(bundle) => bundle.debug_map_identity(),
         }
     }
     fn debug_map(&self) -> &[u8] {
         match self {
             Self::V2(bundle) => bundle.debug_map(),
             Self::V5(bundle) => bundle.debug_map(),
+            Self::V6(bundle) => bundle.debug_map(),
         }
     }
 }
@@ -2042,6 +2055,24 @@ pub fn main() -> ExitCode {
         }
     };
     let (admitted, bundle, bundle_v2) = match (&options.program, &options.request) {
+        (ProgramInputV1::DiagnosticKirV17(path), RequestInputV1::Path(request)) => {
+            match load_debug_simulation_input_v17(path, request) {
+                Ok(input) => (input, None, None),
+                Err(error) => {
+                    write_input_error(&error);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        (ProgramInputV1::DiagnosticKirV16(path), RequestInputV1::Path(request)) => {
+            match load_debug_simulation_input_v16(path, request) {
+                Ok(input) => (input, None, None),
+                Err(error) => {
+                    write_input_error(&error);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
         (ProgramInputV1::KirV7(path), RequestInputV1::Path(request)) => {
             match load_debug_simulation_input_v1(path, request) {
                 Ok(input) => (input, None, None),
@@ -2147,6 +2178,18 @@ pub fn main() -> ExitCode {
                 Ok(admitted) => {
                     let (input, bundle) = admitted.into_parts();
                     (input, None, Some(EmbeddedBundleSourceMapV1::V5(bundle)))
+                }
+                Err(error) => {
+                    write_input_error(&error);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        (ProgramInputV1::BundleV6(path), RequestInputV1::Path(request)) => {
+            match load_debug_simulation_bundle_v6(path, request) {
+                Ok(admitted) => {
+                    let (input, bundle) = admitted.into_parts();
+                    (input, None, Some(EmbeddedBundleSourceMapV1::V6(bundle)))
                 }
                 Err(error) => {
                     write_input_error(&error);
@@ -2434,12 +2477,15 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
         return Err(USAGE.to_owned());
     }
     let mut kir_v7 = None;
+    let mut diagnostic_kir_v16 = None;
+    let mut diagnostic_kir_v17 = None;
     let mut kir_v7_fd = None;
     let mut bundle = None;
     let mut bundle_v2 = None;
     let mut bundle_v3 = None;
     let mut bundle_v4 = None;
     let mut bundle_v5 = None;
+    let mut bundle_v6 = None;
     let mut request = None;
     let mut request_fd = None;
     let mut source_map = None;
@@ -2453,6 +2499,18 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             .ok_or_else(|| format!("option {option:?} requires a value; {USAGE}"))?;
         if option == OsStr::new("--kir-v7") {
             set_once(&mut kir_v7, PathBuf::from(value), "--kir-v7")?;
+        } else if option == OsStr::new("--diagnostic-kir-v16") {
+            set_once(
+                &mut diagnostic_kir_v16,
+                PathBuf::from(value),
+                "--diagnostic-kir-v16",
+            )?;
+        } else if option == OsStr::new("--diagnostic-kir-v17") {
+            set_once(
+                &mut diagnostic_kir_v17,
+                PathBuf::from(value),
+                "--diagnostic-kir-v17",
+            )?;
         } else if option == OsStr::new("--kir-v7-fd") {
             set_once(
                 &mut kir_v7_fd,
@@ -2469,6 +2527,8 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             set_once(&mut bundle_v4, PathBuf::from(value), "--bundle-v4")?;
         } else if option == OsStr::new("--bundle-v5") {
             set_once(&mut bundle_v5, PathBuf::from(value), "--bundle-v5")?;
+        } else if option == OsStr::new("--bundle-v6") {
+            set_once(&mut bundle_v6, PathBuf::from(value), "--bundle-v6")?;
         } else if option == OsStr::new("--request") {
             set_once(&mut request, PathBuf::from(value), "--request")?;
         } else if option == OsStr::new("--request-fd") {
@@ -2522,22 +2582,68 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
         ));
     }
     let program = match (
-        kir_v7, kir_v7_fd, bundle, bundle_v2, bundle_v3, bundle_v4, bundle_v5,
+        kir_v7,
+        kir_v7_fd,
+        bundle,
+        bundle_v2,
+        bundle_v3,
+        bundle_v4,
+        bundle_v5,
+        bundle_v6,
+        diagnostic_kir_v16,
+        diagnostic_kir_v17,
     ) {
-        (Some(path), None, None, None, None, None, None) => ProgramInputV1::KirV7(path),
-        (None, Some(fd), None, None, None, None, None) => ProgramInputV1::SealedKirV7Fd(fd),
-        (None, None, Some(path), None, None, None, None) => ProgramInputV1::Bundle(path),
-        (None, None, None, Some(path), None, None, None) => ProgramInputV1::BundleV2(path),
-        (None, None, None, None, Some(path), None, None) => ProgramInputV1::BundleV3(path),
-        (None, None, None, None, None, Some(path), None) => ProgramInputV1::BundleV4(path),
-        (None, None, None, None, None, None, Some(path)) => ProgramInputV1::BundleV5(path),
-        (None, None, None, None, None, None, None) => {
+        (Some(path), None, None, None, None, None, None, None, None, None) => {
+            ProgramInputV1::KirV7(path)
+        }
+        (None, Some(fd), None, None, None, None, None, None, None, None) => {
+            ProgramInputV1::SealedKirV7Fd(fd)
+        }
+        (None, None, Some(path), None, None, None, None, None, None, None) => {
+            ProgramInputV1::Bundle(path)
+        }
+        (None, None, None, Some(path), None, None, None, None, None, None) => {
+            ProgramInputV1::BundleV2(path)
+        }
+        (None, None, None, None, Some(path), None, None, None, None, None) => {
+            ProgramInputV1::BundleV3(path)
+        }
+        (None, None, None, None, None, Some(path), None, None, None, None) => {
+            ProgramInputV1::BundleV4(path)
+        }
+        (None, None, None, None, None, None, Some(path), None, None, None) => {
+            ProgramInputV1::BundleV5(path)
+        }
+        (None, None, None, None, None, None, None, Some(path), None, None) => {
+            ProgramInputV1::BundleV6(path)
+        }
+        (None, None, None, None, None, None, None, None, Some(path), None) => {
+            ProgramInputV1::DiagnosticKirV16(path)
+        }
+        (None, None, None, None, None, None, None, None, None, Some(path)) => {
+            ProgramInputV1::DiagnosticKirV17(path)
+        }
+        (None, None, None, None, None, None, None, None, None, None) => {
             return Err(format!("exactly one program input is required; {USAGE}"));
         }
         _ => {
             return Err(format!("program inputs are mutually exclusive; {USAGE}"));
         }
     };
+    if matches!(program, ProgramInputV1::DiagnosticKirV16(_)) {
+        diagnostic_kir_v16::require_supported_options(
+            wave_width,
+            source_map.is_some() || source_bundle_subject.is_some(),
+            replay_schedule.is_some(),
+        )?;
+    }
+    if matches!(program, ProgramInputV1::DiagnosticKirV17(_)) {
+        diagnostic_kir_v17::require_supported_options(
+            wave_width,
+            source_map.is_some() || source_bundle_subject.is_some(),
+            replay_schedule.is_some(),
+        )?;
+    }
     if matches!(
         program,
         ProgramInputV1::Bundle(_)
@@ -2545,6 +2651,7 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             | ProgramInputV1::BundleV3(_)
             | ProgramInputV1::BundleV4(_)
             | ProgramInputV1::BundleV5(_)
+            | ProgramInputV1::BundleV6(_)
     ) && source_map.is_some()
     {
         return Err(format!(
@@ -2914,6 +3021,10 @@ fn run_jsonl_v1<R: BufRead, W: Write>(
                 let response = backend.handle_diagnosis_v2(request);
                 write_diagnosis_response_v2(writer, &response, limits)?;
             }
+            DebugRequestAnyV2::ResourceV1(request) => {
+                let response = backend.handle_resource_queries_v1(request);
+                resource_queries_v1::write_resource_response_v1(writer, &response, limits)?;
+            }
         }
     }
     writer
@@ -3103,7 +3214,8 @@ struct SimulatorBackendV1 {
     wave_width: DebugWaveWidthV1,
     configuration_identity: OpaqueIdentityV1,
     diagnosis_dispatch: DiagnosisDispatchV2,
-    diagnosis_input: DiagnosisInputEvidenceV2,
+    resource_queries: resource_queries_v1::ResourceQueryStateV1,
+    diagnosis_input: Option<DiagnosisInputEvidenceV2>,
     diagnosis_allocations: BTreeMap<u64, Option<DiagnosisAllocationContractV2>>,
     diagnosis_source_members: Vec<AdmittedDiagnosisSourceMemberV2>,
     source_map_identity: Option<OpaqueIdentityV1>,
@@ -3159,17 +3271,53 @@ impl SimulatorBackendV1 {
         source_map_v2: Option<AdmittedSourceMapV2>,
         replay_schedule: Option<&SimulationScheduleRecordV1>,
     ) -> Result<Self, String> {
+        let diagnostic_v16 = input.module.identity().wire_version() == 16;
+        let diagnostic_v17 = input.module.identity().wire_version() == 17;
+        if diagnostic_v16 {
+            diagnostic_kir_v16::require_supported_options(
+                wave_width,
+                source_map.is_some() || source_map_v2.is_some(),
+                replay_schedule.is_some(),
+            )?;
+        }
+        if diagnostic_v17 {
+            diagnostic_kir_v17::require_supported_options(
+                wave_width,
+                source_map.is_some() || source_map_v2.is_some(),
+                replay_schedule.is_some(),
+            )?;
+        }
         let diagnosis_dispatch = DiagnosisDispatchV2 {
             launch_extent: input.request.grid.0,
             workgroup_size: input.request.workgroup.0,
         };
-        let diagnosis_allocations = diagnosis_initial_allocations_v2(&input)?;
+        let diagnosis_allocations = if diagnostic_v16 || diagnostic_v17 {
+            BTreeMap::new()
+        } else {
+            diagnosis_initial_allocations_v2(&input)?
+        };
         let capture_limits =
             SimulationDebugCaptureLimitsV1::new(64, 4_096, 16_384, 16 * 1024 * 1024)
                 .map_err(|error| error.to_string())?;
         let debugger_limits = DebuggerLimitsV1::new(1_000_000, 16_000_000, 256 * 1024 * 1024)
             .map_err(|error| error.to_string())?;
-        let base_configuration_identity = configuration_identity_for_input(&input, wave_width);
+        let base_configuration_identity = if diagnostic_v16 {
+            diagnostic_kir_v16::configuration_identity(
+                &input,
+                wave_width,
+                capture_limits,
+                debugger_limits,
+            )?
+        } else if diagnostic_v17 {
+            diagnostic_kir_v17::configuration_identity(
+                &input,
+                wave_width,
+                capture_limits,
+                debugger_limits,
+            )?
+        } else {
+            configuration_identity_for_input(&input, wave_width)
+        };
         let run = match replay_schedule {
             Some(schedule) => capture_debugger_replayed_run_v1(
                 &input.module,
@@ -3308,35 +3456,41 @@ impl SimulatorBackendV1 {
                 .map_err(|_| "diagnosis source member allocation failed".to_owned())?;
             diagnosis_source_members.extend_from_slice(&source_map.diagnosis_operation_members);
         }
-        let diagnosis_input = DiagnosisInputEvidenceV2 {
-            configuration_identity,
-            dispatch_identity,
-            dispatch_request: DiagnosisFactV2::Declared {
-                value: request_reference,
-            },
-            canonical_kir_v7: DiagnosisFactV2::Declared {
-                value: kir_reference,
-            },
-            simulation_bundle,
-            production_kir,
-            kernel_abi_identity,
-            source_lineage,
-            source_map_v2: source_map_v2_reference.map_or(
-                DiagnosisFactV2::Unavailable {
-                    reason: if source_map.is_some() {
-                        DiagnosisUnavailableReasonV2::RequiresSourceMapV2
-                    } else {
-                        DiagnosisUnavailableReasonV2::InputNotProvided
-                    },
+        // Diagnosis V2 literally labels canonical_kir_v7. Never construct that
+        // declaration for raw V16/V17, even as a transient or unavailable DTO.
+        let diagnosis_input = if diagnostic_v16 || diagnostic_v17 {
+            None
+        } else {
+            Some(DiagnosisInputEvidenceV2 {
+                configuration_identity,
+                dispatch_identity,
+                dispatch_request: DiagnosisFactV2::Declared {
+                    value: request_reference,
                 },
-                |value| DiagnosisFactV2::Declared { value },
-            ),
-            finalized_artifact: DiagnosisFactV2::Unavailable {
-                reason: DiagnosisUnavailableReasonV2::NoArtifactAuthority,
-            },
-            property_proof: DiagnosisFactV2::Unavailable {
-                reason: DiagnosisUnavailableReasonV2::NoProofAuthority,
-            },
+                canonical_kir_v7: DiagnosisFactV2::Declared {
+                    value: kir_reference,
+                },
+                simulation_bundle,
+                production_kir,
+                kernel_abi_identity,
+                source_lineage,
+                source_map_v2: source_map_v2_reference.map_or(
+                    DiagnosisFactV2::Unavailable {
+                        reason: if source_map.is_some() {
+                            DiagnosisUnavailableReasonV2::RequiresSourceMapV2
+                        } else {
+                            DiagnosisUnavailableReasonV2::InputNotProvided
+                        },
+                    },
+                    |value| DiagnosisFactV2::Declared { value },
+                ),
+                finalized_artifact: DiagnosisFactV2::Unavailable {
+                    reason: DiagnosisUnavailableReasonV2::NoArtifactAuthority,
+                },
+                property_proof: DiagnosisFactV2::Unavailable {
+                    reason: DiagnosisUnavailableReasonV2::NoProofAuthority,
+                },
+            })
         };
         let mut session = DebugSessionV1::new(run.transcript);
         let mut source_map_provenance = None;
@@ -3375,6 +3529,7 @@ impl SimulatorBackendV1 {
             wave_width,
             configuration_identity,
             diagnosis_dispatch,
+            resource_queries: resource_queries_v1::ResourceQueryStateV1::new()?,
             diagnosis_input,
             diagnosis_allocations,
             diagnosis_source_members,
@@ -3742,6 +3897,17 @@ impl SimulatorBackendV1 {
         filter: DiagnosisFilterV2,
         page: PageRequestV1,
     ) -> DiagnosisResponseV2 {
+        let Some(diagnosis_input) = self.diagnosis_input.as_ref() else {
+            return self.diagnosis_error_v2(
+                Some(request_id),
+                DebugErrorCodeV1::UnsupportedSchema,
+                if self.module.identity().wire_version() == 17 {
+                    diagnostic_kir_v17::DIAGNOSIS_UNAVAILABLE
+                } else {
+                    diagnostic_kir_v16::DIAGNOSIS_UNAVAILABLE
+                },
+            );
+        };
         let query_bytes = match serde_json::to_vec(&filter) {
             Ok(bytes) => bytes,
             Err(_) => {
@@ -3804,12 +3970,7 @@ impl SimulatorBackendV1 {
         };
         let expected_capture = expected_retained.and_then(|retained| {
             retained
-                .capture_binding_v2(
-                    &self.diagnosis_input,
-                    session,
-                    completeness,
-                    response_envelope,
-                )
+                .capture_binding_v2(diagnosis_input, session, completeness, response_envelope)
                 .ok()
         });
         let response = DiagnosisResponseV2::Ok {
@@ -5679,6 +5840,7 @@ impl SimulatorBackendV1 {
 
     fn diagnosis_view_v2(&self, fault: &DebugTerminalFaultV1) -> Option<DiagnosisViewV2> {
         use fe2o3_kir_sim::SimulationExecutionErrorKindV1 as ErrorKind;
+        let diagnosis_input = self.diagnosis_input.as_ref()?;
 
         let context = self.diagnosis_context_v2(fault.invocation);
         let kir_site = fault
@@ -5779,7 +5941,7 @@ impl SimulatorBackendV1 {
                     let mut diagnosis = DiagnosisViewV2 {
                         sequence: fault.ordinal.saturating_add(1),
                         class: DiagnosisClassV2::WorkgroupBarrierMismatch,
-                        input: self.diagnosis_input.clone(),
+                        input: diagnosis_input.clone(),
                         context,
                         site,
                         source_operation,
@@ -5836,7 +5998,7 @@ impl SimulatorBackendV1 {
         let mut diagnosis = DiagnosisViewV2 {
             sequence: fault.ordinal.saturating_add(1),
             class,
-            input: self.diagnosis_input.clone(),
+            input: diagnosis_input.clone(),
             context,
             site,
             source_operation,
@@ -5859,6 +6021,7 @@ impl SimulatorBackendV1 {
         fault: &DebugTerminalFaultV1,
     ) -> Option<DiagnosisRetainedEvidenceV2> {
         use fe2o3_kir_sim::SimulationExecutionErrorKindV1 as ErrorKind;
+        self.diagnosis_input.as_ref()?;
 
         let sequence = fault.ordinal.checked_add(1)?;
         let invocation = fault
@@ -6330,7 +6493,12 @@ impl SimulatorBackendV1 {
         execution_site: Option<&fe2o3_kir_sim::SimulationSiteV1>,
         kir_site: Option<KirSiteV1>,
     ) -> DiagnosisFactV2<DiagnosisSourceOperationV2> {
-        let map = match &self.diagnosis_input.source_map_v2 {
+        let Some(input) = self.diagnosis_input.as_ref() else {
+            return DiagnosisFactV2::Unavailable {
+                reason: DiagnosisUnavailableReasonV2::InputNotProvided,
+            };
+        };
+        let map = match &input.source_map_v2 {
             DiagnosisFactV2::Declared { value } => *value,
             DiagnosisFactV2::Unavailable { reason } => {
                 return DiagnosisFactV2::Unavailable { reason: *reason };

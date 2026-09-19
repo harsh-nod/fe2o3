@@ -602,6 +602,10 @@ pub enum OperationKind {
     Wave(WaveOperation),
     /// Source-bound target assembly whose authority was established by the frontend.
     InlineAssembly(InlineAssembly),
+    /// Indivisible closed physical region; only the additive V16 wire carries it.
+    Gfx942OrderedRegion(crate::Gfx942OrderedRegionV1),
+    /// Indivisible 1..16-step program; only the additive V17 wire carries it.
+    Gfx942OrderedProgram(crate::Gfx942OrderedProgramV1),
 }
 
 impl OperationKind {

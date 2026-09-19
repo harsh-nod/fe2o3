@@ -64,6 +64,8 @@ fn private_array_output_closed_operation_v1(kind: &OperationKind) -> bool {
         | Op::WorkgroupBarrier(_)
         | Op::WorkgroupMemory(_)
         | Op::Gfx950LdsTranspose(_)
+        | Op::Gfx942OrderedRegion(_)
+        | Op::Gfx942OrderedProgram(_)
         | Op::InlineAssembly(_) => false,
     }
 }

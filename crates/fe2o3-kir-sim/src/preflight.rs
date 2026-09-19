@@ -8,6 +8,8 @@ use fe2o3_kernel_ir::{
     ComparePredicate, Constant, F32MathFunction, Function, FunctionId, FunctionRole, Kernel,
     LaunchExtent, MemoryElementType, MemoryIntrinsicOperation, Module, Operation, OperationKind,
     ScalarType, Terminator, Type, UnaryOp, ValueId, VolatileProvenanceContract,
+    validate_gfx942_inline_assembly_v1, validate_gfx942_ordered_program_v1,
+    validate_gfx942_ordered_region_v1,
 };
 
 use crate::f32_surface::{F32ScalarOperationV1, admits_f32_scalar_operation};
@@ -72,8 +74,12 @@ pub enum UnsupportedFeatureV1 {
     Wave,
     Gfx950LdsTranspose,
     InlineAssembly,
+    OrderedRegion,
+    OrderedRegionProfile,
     UnsupportedScalarOperation,
     TargetConstantOutOfRange,
+    OrderedProgram,
+    OrderedProgramProfile,
 }
 
 /// One typed unsupported finding in the selected kernel's reachable call graph.
@@ -533,7 +539,15 @@ pub(crate) fn preflight(
     let (grid, workgroup, workgroup_count, invocations, workgroups, scheduled_slots) =
         validate_launch(kernel, request, target, limits)?;
     let (unsupported, reachable_function_indices, reachable_operations, reachable_ssa_values) =
-        scan_reachable(module, entry, dynamic.is_some(), target, limits)?;
+        scan_reachable(
+            module,
+            entry,
+            dynamic.is_some(),
+            target,
+            limits,
+            crate::ordered_region_v16::launch_profile_matches(module, kernel, request, target),
+            crate::ordered_program_v17::launch_profile_matches(module, kernel, request, target),
+        )?;
     if unsupported.total_findings() != 0 {
         return Err(SimulationPreflightErrorV1::Unsupported(unsupported));
     }
@@ -1118,6 +1132,8 @@ fn scan_reachable(
     allow_dynamic_workgroup_memory: bool,
     target: SimulationTargetV1,
     limits: SimulationLimitsV1,
+    ordered_region_launch: bool,
+    ordered_program_launch: bool,
 ) -> Result<(UnsupportedSimulationReportV1, Vec<usize>, usize, usize), SimulationPreflightErrorV1> {
     let mut functions = HashMap::new();
     functions
@@ -1149,6 +1165,14 @@ fn scan_reachable(
     while let Some(function_index) = pending.pop() {
         reachable.push(function_index);
         let function = &module.functions[function_index];
+        let ordered_region_profile = ordered_region_launch
+            && crate::ordered_region_v16::function_profile_is_consistent(
+                &function.required_capabilities,
+            );
+        let ordered_program_profile = ordered_program_launch
+            && crate::ordered_program_v17::function_profile_is_consistent(
+                &function.required_capabilities,
+            );
         scan_signature(function, target, &mut findings);
         let Some(body) = &function.body else {
             let identifier_bytes = function.id.retained_capacity_bytes().saturating_mul(2);
@@ -1194,6 +1218,8 @@ fn scan_reachable(
                     &mut findings,
                     allow_dynamic_workgroup_memory,
                     target,
+                    ordered_region_profile,
+                    ordered_program_profile,
                 )?;
             }
             scan_terminator(
@@ -1597,6 +1623,8 @@ fn scan_operation(
     findings: &mut UnsupportedCollectorV1,
     allow_dynamic_workgroup_memory: bool,
     target: SimulationTargetV1,
+    ordered_region_profile: bool,
+    ordered_program_profile: bool,
 ) -> Result<(), SimulationPreflightErrorV1> {
     let _surface = crate::capability::operation_surface_v1(&operation.kind);
     let identifier_bytes = function.id.retained_capacity_bytes();
@@ -1814,7 +1842,42 @@ fn scan_operation(
         },
         OperationKind::Wave(_) => {}
         OperationKind::Gfx950LdsTranspose(_) => {}
-        OperationKind::InlineAssembly(_) => reject!(UnsupportedFeatureV1::InlineAssembly),
+        OperationKind::Gfx942OrderedRegion(_) => {
+            if !ordered_region_profile {
+                reject!(UnsupportedFeatureV1::OrderedRegionProfile);
+            }
+            if validate_gfx942_ordered_region_v1(operation, |value| {
+                value_types.get(&value).and_then(|ty| ty.as_scalar())
+            })
+            .is_err()
+            {
+                reject!(UnsupportedFeatureV1::OrderedRegion);
+            }
+        }
+        OperationKind::Gfx942OrderedProgram(_) => {
+            if !ordered_program_profile {
+                reject!(UnsupportedFeatureV1::OrderedProgramProfile);
+            }
+            if validate_gfx942_ordered_program_v1(operation, |value| {
+                value_types.get(&value).and_then(|ty| ty.as_scalar())
+            })
+            .is_err()
+            {
+                reject!(UnsupportedFeatureV1::OrderedProgram);
+            }
+        }
+        OperationKind::InlineAssembly(_) => {
+            let admitted = validate_gfx942_inline_assembly_v1(operation, |value| {
+                value_types.get(&value).and_then(|ty| ty.as_scalar())
+            })
+            .is_ok_and(|validated| {
+                // Logical per-invocation values do not establish SGPR uniformity.
+                validated.instruction().constraint() == fe2o3_kernel_ir::AssemblyConstraint::Vgpr32
+            });
+            if !admitted {
+                reject!(UnsupportedFeatureV1::InlineAssembly);
+            }
+        }
         OperationKind::VectorLoad(_)
         | OperationKind::VectorStore(_)
         | OperationKind::VectorLayoutConvert(_)
@@ -2660,6 +2723,8 @@ mod tests {
             &mut findings,
             false,
             SimulationTargetV1::amdgpu_64(),
+            false,
+            false,
         )
         .unwrap();
 
@@ -2712,6 +2777,8 @@ mod tests {
             &mut findings,
             false,
             SimulationTargetV1::amdgpu_64(),
+            false,
+            false,
         )
         .unwrap();
 
@@ -2769,6 +2836,8 @@ mod tests {
             &mut findings,
             false,
             SimulationTargetV1::amdgpu_64(),
+            false,
+            false,
         )
         .unwrap();
 
@@ -2809,6 +2878,8 @@ mod tests {
             &mut findings,
             false,
             SimulationTargetV1::amdgpu_64(),
+            false,
+            false,
         )
         .unwrap();
         let report = findings.finish().unwrap();

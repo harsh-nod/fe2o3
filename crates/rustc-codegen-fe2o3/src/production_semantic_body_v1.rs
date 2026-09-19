@@ -302,6 +302,9 @@ pub(crate) struct ProductionSemanticBodyRequestOwnerV1<'tcx> {
     limits: SemanticMirLimitsV1,
     totals: ConstructionTotalsV1,
     callables: HashMap<Instance<'tcx>, ProductionSemanticCallableOwnerRecordV1>,
+    inline_sources: crate::production_inline_source_occurrences_v30::InlineSourceOccurrencesV30,
+    ordered_sources: crate::production_ordered_source_occurrences_v31::OrderedSourceOccurrencesV31,
+    program_sources: crate::production_ordered_program_source_occurrences_v32::OrderedProgramSourceOccurrencesV32<'tcx>,
     defined_functions: usize,
     context_entries: Vec<crate::collector::RetainedContextEntryV29>,
     function_commitments: Option<PendingFunctionCommitmentsV29<'tcx>>,
@@ -383,11 +386,56 @@ impl<'tcx> ProductionSemanticBodyRequestOwnerV1<'tcx> {
             limits,
             totals,
             callables,
+            inline_sources: Default::default(),
+            ordered_sources: Default::default(),
+            program_sources: Default::default(),
             defined_functions,
             context_entries: Vec::new(),
             function_commitments: None,
             workgroup_scopes: None,
         })
+    }
+
+    pub(crate) fn with_inline_sources_v30(
+        mut self,
+        sources: crate::production_inline_source_occurrences_v30::InlineSourceOccurrencesV30,
+    ) -> Self {
+        self.inline_sources = sources;
+        self
+    }
+
+    pub(crate) fn require_inline_sources_consumed_v30(
+        &self,
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        self.inline_sources.require_drained().map_err(table)
+    }
+
+    pub(crate) fn with_ordered_sources_v31(
+        mut self,
+        sources: crate::production_ordered_source_occurrences_v31::OrderedSourceOccurrencesV31,
+    ) -> Self {
+        self.ordered_sources = sources;
+        self
+    }
+
+    pub(crate) fn require_ordered_sources_consumed_v31(
+        &self,
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        self.ordered_sources.require_drained().map_err(table)
+    }
+
+    pub(crate) fn with_program_sources_v32(
+        mut self,
+        sources: crate::production_ordered_program_source_occurrences_v32::OrderedProgramSourceOccurrencesV32<'tcx>,
+    ) -> Self {
+        self.program_sources = sources;
+        self
+    }
+
+    pub(crate) fn require_program_sources_consumed_v32(
+        &self,
+    ) -> Result<(), ProductionSemanticBodyErrorV1> {
+        self.program_sources.require_drained().map_err(table)
     }
 
     pub(crate) fn seal_context_entries(
@@ -1639,14 +1687,125 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                         return Err(unsupported("call with executable unwind edge", block, None));
                     }
                 };
-                Ok(SemanticTerminatorKindV1::Call(
-                    SemanticDirectCallV1::new_callable(
-                        semantic_callee,
-                        arguments,
-                        destination,
-                        unwind,
-                    )?,
-                ))
+                let source = self
+                    .owner
+                    .inline_sources
+                    .take(self.function, raw_block, semantic_callee)
+                    .map_err(table)?;
+                let requires_source = self
+                    .terminal_expansions_by_raw
+                    .get(raw_block as usize)
+                    .copied()
+                    .flatten()
+                    .is_some_and(|recipe| {
+                        matches!(
+                            recipe.expansion,
+                            ProductionTerminalExpansionV1::Gfx942InlineU32(_)
+                        )
+                    });
+                if requires_source != source.is_some() {
+                    return Err(table("assembly call occurrence source binding"));
+                }
+                let requires_region = self
+                    .terminal_expansions_by_raw
+                    .get(raw_block as usize)
+                    .copied()
+                    .flatten()
+                    .is_some_and(|recipe| {
+                        recipe.expansion == ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32
+                    });
+                let registers = if requires_region {
+                    if args.len() != 8 {
+                        return Err(table("ordered region actual argument cardinality"));
+                    }
+                    Some(
+                        crate::production_ordered_region_v31::actual_registers(
+                            self.tcx,
+                            [
+                                &args[3].node,
+                                &args[4].node,
+                                &args[5].node,
+                                &args[6].node,
+                                &args[7].node,
+                            ],
+                        )
+                        .map_err(table)?,
+                    )
+                } else {
+                    None
+                };
+                let region_source = self
+                    .owner
+                    .ordered_sources
+                    .take(self.function, raw_block, semantic_callee, registers)
+                    .map_err(table)?;
+                if requires_region != region_source.is_some() {
+                    return Err(table("ordered region call occurrence source binding"));
+                }
+                let requires_program = self
+                    .terminal_expansions_by_raw
+                    .get(raw_block as usize)
+                    .copied()
+                    .flatten()
+                    .is_some_and(|recipe| {
+                        recipe.expansion == ProductionTerminalExpansionV1::Gfx942OrderedProgramE32
+                    });
+                let observed_program = if requires_program {
+                    if args.len() != 8
+                        || !destination
+                            .as_ref()
+                            .is_some_and(|destination| destination.place().projections().is_empty())
+                    {
+                        return Err(table(
+                            "ordered program actual argument or destination shape",
+                        ));
+                    }
+                    Some(
+                        crate::production_ordered_program_v32::observe_call(
+                            self.tcx,
+                            self.instance,
+                            self.body,
+                            func,
+                            [
+                                &args[0].node,
+                                &args[1].node,
+                                &args[2].node,
+                                &args[3].node,
+                                &args[4].node,
+                                &args[5].node,
+                                &args[6].node,
+                                &args[7].node,
+                            ],
+                        )
+                        .map_err(table)?,
+                    )
+                } else {
+                    None
+                };
+                let program_source = self
+                    .owner
+                    .program_sources
+                    .take(self.function, raw_block, semantic_callee, observed_program)
+                    .map_err(table)?;
+                if requires_program != program_source.is_some() {
+                    return Err(table("ordered program call occurrence source binding"));
+                }
+                let mut call = SemanticDirectCallV1::new_callable(
+                    semantic_callee,
+                    arguments,
+                    destination,
+                    unwind,
+                )?;
+                if let Some(source) = source {
+                    call = call.with_inline_assembly_source_v30(source);
+                }
+                if let Some(source) = region_source {
+                    call = call.with_ordered_region_source_v31(source);
+                }
+                if let Some(source) = program_source {
+                    call = call.with_ordered_program_source_v32(source);
+                }
+                Ok(SemanticTerminatorKindV1::Call(call))
             }
             TerminatorKind::TailCall { .. } => Err(unsupported("TailCall terminator", block, None)),
             TerminatorKind::Drop {
@@ -2705,6 +2864,11 @@ fn semantic_borrow_kind_v1(
 
 const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) -> Option<usize> {
     match expansion {
+        ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32 => Some(8),
+        ProductionTerminalExpansionV1::Gfx942OrderedProgramE32 => Some(8),
+        ProductionTerminalExpansionV1::Gfx942InlineU32(operation) => Some(
+            crate::production_inline_assembly_v30::input_count(operation),
+        ),
         ProductionTerminalExpansionV1::WorkgroupDerive
         | ProductionTerminalExpansionV1::MaskedTileIntoFragmentU32
         | ProductionTerminalExpansionV1::LaneFragmentIntoPartsU32 => Some(1),
@@ -3098,6 +3262,9 @@ mod tests {
             limits,
             totals: ConstructionTotalsV1::default(),
             callables: HashMap::new(),
+            inline_sources: Default::default(),
+            ordered_sources: Default::default(),
+            program_sources: Default::default(),
             defined_functions: 0,
             context_entries: Vec::new(),
             function_commitments: None,

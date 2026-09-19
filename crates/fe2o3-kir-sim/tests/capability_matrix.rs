@@ -62,6 +62,26 @@ fn matrix_is_complete_unique_bounded_and_authority_free() {
 }
 
 #[test]
+fn integer_assembly_is_scalar_bits_owned_with_explicit_remaining_rejection() {
+    let matrix = semantic_capability_matrix_v1();
+    let rows: Vec<_> = matrix
+        .top_level_rows
+        .iter()
+        .filter(|row| row.operation == SimulationOperationSurfaceV1::InlineAssembly)
+        .collect();
+    assert_eq!(rows.len(), 28);
+    for row in rows {
+        assert_eq!(
+            row.capability,
+            SimulationCapabilityDispositionV1::Owned {
+                owner: fe2o3_kir_sim::SimulationSemanticOwnerV1::ScalarBits,
+                typed_rejections: &[SimulationUnsupportedReasonCodeV1::InlineAssembly],
+            }
+        );
+    }
+}
+
+#[test]
 fn inert_v12_surfaces_keep_stable_ids_and_have_no_simulation_owner() {
     use SimulationOperationSurfaceV1 as Surface;
     assert_eq!(Surface::Constant as u8, 0);
@@ -81,7 +101,7 @@ fn inert_v12_surfaces_keep_stable_ids_and_have_no_simulation_owner() {
             .iter()
             .filter(|row| row.operation == surface)
             .collect();
-        assert_eq!(rows.len(), 20);
+        assert_eq!(rows.len(), 28);
         for row in rows {
             assert!(matches!(&row.capability,
                 SimulationCapabilityDispositionV1::Unsupported { reason }
@@ -120,6 +140,8 @@ fn pointer_access_restriction_is_typed_memory_owned_from_v11() {
         for version in [
             SimulationKirWireVersionV1::V11,
             SimulationKirWireVersionV1::V12,
+            SimulationKirWireVersionV1::V16,
+            SimulationKirWireVersionV1::V17,
         ] {
             assert!(matches!(
                 matrix
@@ -143,7 +165,7 @@ fn execution_v15_surface_is_additive_and_has_no_simulation_owner() {
         .iter()
         .filter(|row| row.operation == SimulationOperationSurfaceV1::Execution)
         .collect();
-    assert_eq!(rows.len(), 20);
+    assert_eq!(rows.len(), 28);
     assert!(rows.iter().all(|row| matches!(
         &row.capability,
         SimulationCapabilityDispositionV1::Unsupported {
@@ -160,7 +182,7 @@ fn v12_inherits_every_v11_disposition_without_activating_inert_carriers() {
         .iter()
         .filter(|row| row.kir_wire_version == SimulationKirWireVersionV1::V12)
         .collect::<Vec<_>>();
-    assert_eq!(inherited.len(), 152);
+    assert_eq!(inherited.len(), 160);
     for row in inherited {
         let previous = matrix
             .top_level_rows
@@ -176,6 +198,44 @@ fn v12_inherits_every_v11_disposition_without_activating_inert_carriers() {
     assert_eq!(
         serde_json::to_string(&SimulationKirWireVersionV1::V12).unwrap(),
         "\"v12\""
+    );
+}
+
+#[test]
+fn v17_extends_only_the_v12_baseline_and_never_owns_the_v16_pair() {
+    let matrix = semantic_capability_matrix_v1();
+    let rows: Vec<_> = matrix
+        .top_level_rows
+        .iter()
+        .filter(|row| row.kir_wire_version == SimulationKirWireVersionV1::V17)
+        .collect();
+    assert_eq!(rows.len(), 160);
+    for row in rows {
+        if row.operation == SimulationOperationSurfaceV1::OrderedProgram {
+            continue; // Its exact single owned profile is tested by canonical_v17.
+        }
+        let baseline = matrix
+            .top_level_rows
+            .iter()
+            .find(|previous| {
+                previous.kir_wire_version == SimulationKirWireVersionV1::V12
+                    && previous.profile == row.profile
+                    && previous.operation == row.operation
+            })
+            .unwrap();
+        assert_eq!(row.capability, baseline.capability);
+        if row.operation == SimulationOperationSurfaceV1::OrderedRegion {
+            assert_eq!(
+                row.capability,
+                SimulationCapabilityDispositionV1::Unsupported {
+                    reason: SimulationUnsupportedReasonCodeV1::OrderedRegionProfile,
+                }
+            );
+        }
+    }
+    assert_eq!(
+        serde_json::to_string(&SimulationKirWireVersionV1::V17).unwrap(),
+        "\"v17\""
     );
 }
 

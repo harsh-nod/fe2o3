@@ -33,6 +33,8 @@ pub mod lds;
 pub mod math;
 pub mod memory;
 pub mod mx;
+#[doc(hidden)]
+pub mod ordered_program;
 pub mod simd;
 pub mod sync;
 pub mod tensor;
@@ -141,6 +143,32 @@ macro_rules! amdgpu_asm {
     };
     ($($unsupported:tt)*) => {
         compile_error!("unsupported amdgpu_asm! operation; use the typed gfx942 V1 allowlist")
+    };
+}
+
+/// Authors one closed gfx942, xnack-off, wave64 XOR-e32/add-e32 region.
+///
+/// The five physical VGPR indices must be distinct literals in 0..64. The
+/// compiler checks the exact target, launch and unconditional source placement.
+/// This is one indivisible authored operation, not a surrounding memory fence.
+/// Like other device markers, it panics on a host/unrecognized compiler path.
+#[macro_export]
+macro_rules! amdgpu_ordered_region {
+    (
+        gfx942_xnack_off_wave64;
+        scratch($scratch:literal);
+        out($output:literal);
+        in($input0:literal) = $a:expr;
+        in($input1:literal) = $b:expr;
+        in($input2:literal) = $c:expr;
+        xor_add_u32_e32;
+    ) => {
+        $crate::diagnostics::__amdgpu_ordered_xor_add_e32_v1(
+            $a, $b, $c, $scratch, $output, $input0, $input1, $input2,
+        )
+    };
+    ($($unsupported:tt)*) => {
+        compile_error!("unsupported amdgpu_ordered_region! syntax; use the closed gfx942 XOR-e32/add-e32 profile with literal VGPR bindings")
     };
 }
 

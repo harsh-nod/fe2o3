@@ -160,6 +160,8 @@ fn operation_kind_exceeds_public_verifier_depth_v1<E>(
         | OperationKind::Gfx950LdsTranspose(_)
         | OperationKind::Wave(_)
         | OperationKind::InlineAssembly(_)
+        | OperationKind::Gfx942OrderedRegion(_)
+        | OperationKind::Gfx942OrderedProgram(_)
         | OperationKind::Execution(_) => None,
     };
     match ty {

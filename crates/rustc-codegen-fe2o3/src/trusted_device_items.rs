@@ -45,13 +45,13 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x46, 0xf1, 0x56, 0x15, 0xe7, 0xf9, 0x01, 0x2f, 0x31, 0x44, 0x99, 0x76, 0xf9, 0x74, 0x52, 0x60,
-    0x45, 0xd7, 0x72, 0x73, 0xc9, 0x3b, 0x2e, 0xa7, 0x41, 0x6a, 0xe1, 0x5a, 0x5d, 0xf3, 0x73, 0xc2,
+    0x47, 0x11, 0x73, 0x0b, 0xba, 0x47, 0x00, 0x7d, 0xe8, 0x8f, 0x56, 0x09, 0x3e, 0xf0, 0x78, 0x09,
+    0x4b, 0xc4, 0x23, 0x67, 0xee, 0xef, 0x5e, 0x2d, 0xde, 0xb8, 0x29, 0x66, 0x60, 0xcd, 0x9a, 0x49,
 ];
 // The pinned Cargo-produced manifest fixture is checked with the complete source tree.
 const REVIEWED_SAFE_EXECUTION_CARGO_VENDOR_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0xa8, 0xfa, 0x40, 0x2e, 0x84, 0xd7, 0x74, 0x81, 0x9e, 0xa2, 0x8c, 0x81, 0x53, 0xe8, 0x45, 0xf2,
-    0x7e, 0x0e, 0xed, 0xdb, 0xf3, 0x32, 0x19, 0x85, 0x0b, 0x2e, 0xb1, 0x11, 0xec, 0x67, 0x05, 0x65,
+    0x8d, 0xc1, 0xcf, 0x09, 0xe4, 0xda, 0xb0, 0xbe, 0x17, 0x57, 0xb8, 0xe8, 0xd8, 0xe1, 0x0b, 0x83,
+    0xb8, 0x5b, 0x92, 0x66, 0xa9, 0xaf, 0xbb, 0x28, 0xe9, 0x72, 0x77, 0xbe, 0xa5, 0x77, 0x55, 0x23,
 ];
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1: [[u8; 32]; 2] = [
     REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
@@ -173,7 +173,7 @@ pub(crate) enum TrustedHalfOperation {
     Bf16x2FusedMultiplyAdd,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum TrustedAmdGpuInlineOperation {
     VMovB32,
     VAddU32,
@@ -378,6 +378,8 @@ pub(crate) enum TrustedDeviceItem {
     DeviceMath(DeviceMathDiagnosticItem),
     HalfOperation(TrustedHalfOperation),
     AmdGpuInline(TrustedAmdGpuInlineOperation),
+    AmdGpuOrderedXorAddE32,
+    AmdGpuOrderedProgramE32,
     AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation),
     KernelContext,
     KernelContextIssue,
@@ -1338,6 +1340,16 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::Gfx950LdsTransposeTile<Gfx950Fp8E4M3>::read_mfma_fragment",
     ),
     (
+        TrustedDeviceItem::AmdGpuOrderedXorAddE32,
+        "fe2o3_device_amdgpu_ordered_xor_add_e32_v1",
+        "fe2o3_device::diagnostics::__amdgpu_ordered_xor_add_e32_v1",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuOrderedProgramE32,
+        "fe2o3_device_amdgpu_ordered_program_e32_v1",
+        "fe2o3_device::diagnostics::__amdgpu_ordered_program_e32_v1",
+    ),
+    (
         TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
         "fe2o3_device_amdgpu_v_mov_b32_v1",
         "fe2o3_device::diagnostics::__amdgpu_v_mov_b32_v1",
@@ -1623,6 +1635,32 @@ fn validate_reviewed_fe2o3_device_provider_definition_v1(
 }
 fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option<&'static str> {
     match item {
+        TrustedDeviceItem::AmdGpuOrderedXorAddE32 => {
+            Some("fe2o3_device::diagnostics::__amdgpu_ordered_xor_add_e32_v1")
+        }
+        TrustedDeviceItem::AmdGpuOrderedProgramE32 => {
+            Some("fe2o3_device::diagnostics::__amdgpu_ordered_program_e32_v1")
+        }
+        TrustedDeviceItem::AmdGpuInline(operation) => Some(match operation {
+            TrustedAmdGpuInlineOperation::VMovB32 => {
+                "fe2o3_device::diagnostics::__amdgpu_v_mov_b32_v1"
+            }
+            TrustedAmdGpuInlineOperation::VAddU32 => {
+                "fe2o3_device::diagnostics::__amdgpu_v_add_u32_v1"
+            }
+            TrustedAmdGpuInlineOperation::VSubU32 => {
+                "fe2o3_device::diagnostics::__amdgpu_v_sub_u32_v1"
+            }
+            TrustedAmdGpuInlineOperation::VAndB32 => {
+                "fe2o3_device::diagnostics::__amdgpu_v_and_b32_v1"
+            }
+            TrustedAmdGpuInlineOperation::VOrB32 => {
+                "fe2o3_device::diagnostics::__amdgpu_v_or_b32_v1"
+            }
+            TrustedAmdGpuInlineOperation::VXorB32 => {
+                "fe2o3_device::diagnostics::__amdgpu_v_xor_b32_v1"
+            }
+        }),
         TrustedDeviceItem::KernelError => Some("fe2o3_device::kernel_result::KernelError"),
         TrustedDeviceItem::DisjointSlice => Some("fe2o3_device::DisjointSlice"),
         TrustedDeviceItem::WriteOnlyDisjointSlice => Some("fe2o3_device::WriteOnlyDisjointSlice"),
@@ -3297,6 +3335,87 @@ mod tests {
     include!("trusted_device_items/materialization_v1_tests.rs");
 
     include!("trusted_device_items/wrapping_integer_v1_tests.rs");
+    include!("trusted_device_items/ordered_region_v31_tests.rs");
+    include!("trusted_device_items/ordered_program_v32_tests.rs");
+
+    #[test]
+    fn gfx942_inline_v30_providers_require_exact_reviewed_definition_and_source() {
+        let cases = [
+            (
+                TrustedAmdGpuInlineOperation::VMovB32,
+                "__amdgpu_v_mov_b32_v1",
+            ),
+            (
+                TrustedAmdGpuInlineOperation::VAddU32,
+                "__amdgpu_v_add_u32_v1",
+            ),
+            (
+                TrustedAmdGpuInlineOperation::VSubU32,
+                "__amdgpu_v_sub_u32_v1",
+            ),
+            (
+                TrustedAmdGpuInlineOperation::VAndB32,
+                "__amdgpu_v_and_b32_v1",
+            ),
+            (TrustedAmdGpuInlineOperation::VOrB32, "__amdgpu_v_or_b32_v1"),
+            (
+                TrustedAmdGpuInlineOperation::VXorB32,
+                "__amdgpu_v_xor_b32_v1",
+            ),
+        ];
+        for (operation, name) in cases {
+            let item = TrustedDeviceItem::AmdGpuInline(operation);
+            let local = format!("diagnostics::{name}");
+            let exact_path = format!("fe2o3_device::{local}");
+            assert_eq!(
+                exact_provider_compiler_definition_path_v1(item),
+                Some(exact_path.as_str())
+            );
+            let exact = semantic_definition(
+                &local,
+                super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
+                [6; 32],
+            );
+            validate_reviewed_fe2o3_device_provider_definition_v1(item, &exact).unwrap();
+            for wrong_path in [
+                format!("local::{name}"),
+                format!("diagnostics::lookalike::{name}"),
+                "diagnostics::__amdgpu_v_mov_b32_impostor_v1".to_owned(),
+            ] {
+                let changed = semantic_definition(
+                    &wrong_path,
+                    super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
+                    [6; 32],
+                );
+                assert!(
+                    validate_reviewed_fe2o3_device_provider_definition_v1(item, &changed).is_err()
+                );
+            }
+            for wrong_crate in ["local_marker", "fe2o3_device_lookalike"] {
+                let mut changed = exact.clone();
+                changed.provider.crate_name = wrong_crate.into();
+                assert!(
+                    validate_reviewed_fe2o3_device_provider_definition_v1(item, &changed).is_err()
+                );
+            }
+            let mut stale = exact.clone();
+            stale.source_closure_identity[0] ^= 1;
+            assert!(validate_reviewed_fe2o3_device_provider_definition_v1(item, &stale).is_err());
+            // A different legitimate ISA marker is not this operation's provider.
+            let other = if operation == TrustedAmdGpuInlineOperation::VMovB32 {
+                TrustedAmdGpuInlineOperation::VAddU32
+            } else {
+                TrustedAmdGpuInlineOperation::VMovB32
+            };
+            assert!(
+                validate_reviewed_fe2o3_device_provider_definition_v1(
+                    TrustedDeviceItem::AmdGpuInline(other),
+                    &exact
+                )
+                .is_err()
+            );
+        }
+    }
     include!("trusted_device_items/wrapping_shift_source_safety_v1_tests.rs");
 
     #[test]
@@ -3513,7 +3632,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("46f15615e7f9012f31449976f974526045d77273c93b2ea7416ae15a5df373c2")
+            digest("4711730bba47007de88f56093ef078094bc42367eeef5e2ddeb8296660cd9a49")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
@@ -4107,6 +4226,8 @@ mod tests {
             TrustedDeviceItem::Gfx950LdsTransposePublish,
             TrustedDeviceItem::Gfx950LdsTransposeReadB4,
             TrustedDeviceItem::Gfx950LdsTransposeReadB8,
+            TrustedDeviceItem::AmdGpuOrderedXorAddE32,
+            TrustedDeviceItem::AmdGpuOrderedProgramE32,
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VAddU32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VSubU32),

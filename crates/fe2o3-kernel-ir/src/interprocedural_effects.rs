@@ -3,13 +3,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    CompilerOrderingEffectSummaryV12, FunctionId, FunctionOperationLocation, MemoryEffect,
-    MemoryEffectSummary, Module, OperationEffectSummaryV12, OperationKind, VerificationErrors,
-    VerifiedKernelIrModuleV1, verify_module_ref,
+    AssemblyOption, CompilerOrderingEffectSummaryV12, Function, FunctionId,
+    FunctionOperationLocation, MemoryEffect, MemoryEffectSummary, Module, Operation,
+    OperationEffectSummaryV12, OperationKind, ScalarType, Type, ValueId, VerificationErrors,
+    VerifiedKernelIrModuleV1, validate_gfx942_inline_assembly_v1, verify_module_ref,
 };
 
 pub const MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1: usize = 4_096;
 pub const MAX_INTERPROCEDURAL_EFFECT_CALL_EDGES_V1: usize = 65_536;
+// Cumulative across the complete analysis, charged before allocating any
+// assembly type table. No table is retained across recursive call traversal.
+const MAX_INTERPROCEDURAL_ASSEMBLY_TYPE_WORK_V1: usize = 1_048_576;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum InterproceduralEffectIncompleteReasonV1 {
@@ -95,6 +99,10 @@ pub fn analyze_interprocedural_effects_from_verified_v1(
         decisions: BTreeMap::new(),
         visiting: BTreeSet::new(),
         call_edges: 0,
+        assembly_type_budget: AssemblyTypeBudgetV1 {
+            used: 0,
+            limit: MAX_INTERPROCEDURAL_ASSEMBLY_TYPE_WORK_V1,
+        },
     };
     if module.functions.len() > MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1 {
         let reason = InterproceduralEffectIncompleteReasonV1::ResourceLimit {
@@ -128,6 +136,7 @@ struct EffectSummaryBuilderV1<'module> {
     decisions: BTreeMap<FunctionId, InterproceduralEffectDecisionV1>,
     visiting: BTreeSet<FunctionId>,
     call_edges: usize,
+    assembly_type_budget: AssemblyTypeBudgetV1,
 }
 
 impl EffectSummaryBuilderV1<'_> {
@@ -167,9 +176,9 @@ impl EffectSummaryBuilderV1<'_> {
 
         let mut effects = BTreeSet::<MemoryEffect>::new();
         let mut compiler_ordering = CompilerOrderingEffectSummaryV12::empty();
-        let mut reasons = BTreeSet::new();
+        let mut reasons = assembly_incomplete_reasons_v30(function, &mut self.assembly_type_budget);
         for block in &body.blocks {
-            for (operation_index, operation) in block.operations.iter().enumerate() {
+            for operation in &block.operations {
                 compiler_ordering =
                     compiler_ordering.union(operation.compiler_ordering_effects_v12());
                 match &operation.kind {
@@ -198,11 +207,9 @@ impl EffectSummaryBuilderV1<'_> {
                         reasons.extend(callee.incomplete_reasons().iter().cloned());
                     }
                     OperationKind::InlineAssembly(_) => {
+                        // The nonrecursive leaf checked every assembly operation
+                        // against this function's complete actual SSA type table.
                         effects.extend(operation.memory_effects());
-                        reasons.insert(InterproceduralEffectIncompleteReasonV1::InlineAssembly {
-                            function: function_id.clone(),
-                            location: FunctionOperationLocation::new(block.id, operation_index),
-                        });
                     }
                     _ => effects.extend(operation.memory_effects()),
                 }
@@ -221,6 +228,145 @@ impl EffectSummaryBuilderV1<'_> {
         decision
     }
 }
+
+struct AssemblyTypeBudgetV1 {
+    used: usize,
+    limit: usize,
+}
+
+// Keep assembly-only iterator, map, validation, and failure temporaries out of
+// the recursive summary frame, including for long assembly-free call chains.
+// The table is discarded before following any callee; the cumulative work
+// budget and all malformed-operation reasons remain unchanged.
+#[inline(never)]
+fn assembly_incomplete_reasons_v30(
+    function: &Function,
+    budget: &mut AssemblyTypeBudgetV1,
+) -> BTreeSet<InterproceduralEffectIncompleteReasonV1> {
+    let body = function
+        .body
+        .as_ref()
+        .expect("verified definition has a body");
+    let mut reasons = BTreeSet::new();
+    if !body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.operations)
+        .any(|operation| matches!(operation.kind, OperationKind::InlineAssembly(_)))
+    {
+        return reasons;
+    }
+    let types = match collect_assembly_value_types_v1(function, budget) {
+        Ok(types) => Some(types),
+        Err(reason) => {
+            reasons.insert(reason);
+            None
+        }
+    };
+    for block in &body.blocks {
+        for (operation_index, operation) in block.operations.iter().enumerate() {
+            if matches!(operation.kind, OperationKind::InlineAssembly(_))
+                && !types
+                    .as_ref()
+                    .is_some_and(|types| is_closed_u32_assembly_effect_v30(operation, types))
+            {
+                reasons.insert(InterproceduralEffectIncompleteReasonV1::InlineAssembly {
+                    function: function.id.clone(),
+                    location: FunctionOperationLocation::new(block.id, operation_index),
+                });
+            }
+        }
+    }
+    reasons
+}
+
+impl AssemblyTypeBudgetV1 {
+    fn charge(&mut self, amount: usize) -> Result<(), InterproceduralEffectIncompleteReasonV1> {
+        self.used = self.used.saturating_add(amount);
+        if self.used > self.limit {
+            return Err(InterproceduralEffectIncompleteReasonV1::ResourceLimit {
+                resource: "inline assembly type work",
+                limit: self.limit,
+                actual: self.used,
+            });
+        }
+        Ok(())
+    }
+}
+
+fn collect_assembly_value_types_v1<'a>(
+    function: &'a Function,
+    budget: &mut AssemblyTypeBudgetV1,
+) -> Result<BTreeMap<ValueId, &'a Type>, InterproceduralEffectIncompleteReasonV1> {
+    let body = function
+        .body
+        .as_ref()
+        .expect("verified definition has a body");
+    budget.charge(body.parameters.len())?;
+    budget.charge(body.blocks.len())?;
+    for block in &body.blocks {
+        budget.charge(block.parameters.len())?;
+        budget.charge(block.operations.len())?;
+        for operation in &block.operations {
+            budget.charge(operation.results.len())?;
+        }
+    }
+    // Verification has already established unique SSA definitions, exact
+    // signature cardinality, references, and dominance. Borrow types rather
+    // than cloning arbitrarily nested type payloads into analysis storage.
+    let mut types: BTreeMap<_, _> = body
+        .parameters
+        .iter()
+        .copied()
+        .zip(function.signature.parameters.iter())
+        .collect();
+    for block in &body.blocks {
+        types.extend(block.parameters.iter().map(|value| (value.id, &value.ty)));
+        types.extend(
+            block
+                .operations
+                .iter()
+                .flat_map(|operation| &operation.results)
+                .map(|value| (value.id, &value.ty)),
+        );
+    }
+    Ok(types)
+}
+
+fn is_closed_u32_assembly_effect_v30(
+    operation: &Operation,
+    types: &BTreeMap<ValueId, &Type>,
+) -> bool {
+    let OperationKind::InlineAssembly(assembly) = &operation.kind else {
+        return false;
+    };
+    if assembly.options.len() != 1
+        || !assembly.options.contains(&AssemblyOption::NoMemory)
+        || !assembly.declared_effects.is_empty()
+    {
+        return false;
+    }
+    validate_gfx942_inline_assembly_v1(operation, |value| {
+        types.get(&value).and_then(|ty| ty.as_scalar())
+    })
+    .is_ok_and(|validated| {
+        use crate::Gfx942InlineAssemblyInstructionV1 as Instruction;
+        validated.scalar_type() == ScalarType::U32
+            && matches!(
+                validated.instruction(),
+                Instruction::VMovB32
+                    | Instruction::VAddU32
+                    | Instruction::VSubU32
+                    | Instruction::VAndB32
+                    | Instruction::VOrB32
+                    | Instruction::VXorB32
+            )
+    })
+}
+
+#[cfg(test)]
+#[path = "interprocedural_effects_gfx942_v30_tests.rs"]
+mod gfx942_v30_tests;
 
 fn incomplete(
     effects: impl IntoIterator<Item = MemoryEffect>,

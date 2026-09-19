@@ -111,6 +111,7 @@ enum TerminalIdentitySchemaV1 {
     #[cfg_attr(not(test), allow(dead_code))]
     CombinedV3,
     CombinedV4,
+    CombinedV5,
 }
 
 #[derive(Clone, Debug)]
@@ -3620,7 +3621,7 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         section.field(terminal.identities.const_generic_arguments().as_bytes())?;
         section.field(&[terminal_expansion_tag_for_schema_v1(
             terminal.expansion,
-            TerminalIdentitySchemaV1::CombinedV4,
+            terminal_identity_schema_v1(terminal.expansion),
         )])?;
         section.field(&terminal.abi.rustc_source_signature_sha256)?;
         section.field(&terminal.abi.rustc_fn_abi_sha256)?;
@@ -3714,7 +3715,7 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         section.field(&recipe.block.to_le_bytes())?;
         section.field(&[terminal_expansion_tag_for_schema_v1(
             recipe.expansion,
-            TerminalIdentitySchemaV1::CombinedV4,
+            terminal_identity_schema_v1(recipe.expansion),
         )])?;
         section.field(&recipe.arguments.to_le_bytes())?;
         section.field(recipe.identities.function().as_bytes())?;
@@ -3891,11 +3892,49 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
     terminal_expansion_tag_for_schema_v1(expansion, TerminalIdentitySchemaV1::IndependentV1)
 }
 
+const fn terminal_identity_schema_v1(
+    expansion: ProductionTerminalExpansionV1,
+) -> TerminalIdentitySchemaV1 {
+    match expansion {
+        ProductionTerminalExpansionV1::Gfx942OrderedProgramE32 => {
+            TerminalIdentitySchemaV1::CombinedV5
+        }
+        _ => TerminalIdentitySchemaV1::CombinedV4,
+    }
+}
+
 const fn terminal_expansion_tag_for_schema_v1(
     expansion: ProductionTerminalExpansionV1,
     schema: TerminalIdentitySchemaV1,
 ) -> u8 {
     match expansion {
+        ProductionTerminalExpansionV1::Gfx942OrderedProgramE32 => {
+            if matches!(schema, TerminalIdentitySchemaV1::CombinedV5) {
+                134
+            } else {
+                u8::MAX
+            }
+        }
+        ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32 => {
+            if matches!(
+                schema,
+                TerminalIdentitySchemaV1::CombinedV4 | TerminalIdentitySchemaV1::CombinedV5
+            ) {
+                133
+            } else {
+                u8::MAX
+            }
+        }
+        ProductionTerminalExpansionV1::Gfx942InlineU32(operation) => {
+            if matches!(
+                schema,
+                TerminalIdentitySchemaV1::CombinedV4 | TerminalIdentitySchemaV1::CombinedV5
+            ) {
+                crate::production_inline_assembly_v30::source_terminal_tag(operation)
+            } else {
+                u8::MAX
+            }
+        }
         // Draft allocation requested in #271; do not publish before acknowledgment.
         ProductionTerminalExpansionV1::ContextIssue => 122,
         ProductionTerminalExpansionV1::WorkgroupDerive => 123,
@@ -3991,12 +4030,16 @@ const fn terminal_expansion_tag_for_schema_v1(
         ProductionTerminalExpansionV1::WorkgroupCollectiveContextCurrent => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 104,
-            TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 111,
+            TerminalIdentitySchemaV1::CombinedV3
+            | TerminalIdentitySchemaV1::CombinedV4
+            | TerminalIdentitySchemaV1::CombinedV5 => 111,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupReduceSum => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 105,
-            TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 112,
+            TerminalIdentitySchemaV1::CombinedV3
+            | TerminalIdentitySchemaV1::CombinedV4
+            | TerminalIdentitySchemaV1::CombinedV5 => 112,
         },
         ProductionTerminalExpansionV1::RustcFabsF32 => 113,
         ProductionTerminalExpansionV1::Gfx942Wave64Shuffle(scalar) => scalar.terminal_tag(),
@@ -4009,13 +4052,13 @@ const fn terminal_expansion_tag_for_schema_v1(
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 113,
             TerminalIdentitySchemaV1::CombinedV3 => 113,
-            TerminalIdentitySchemaV1::CombinedV4 => 116,
+            TerminalIdentitySchemaV1::CombinedV4 | TerminalIdentitySchemaV1::CombinedV5 => 116,
         },
         ProductionTerminalExpansionV1::NeutralWorkgroupExclusiveScanSum => match schema {
             #[cfg(test)]
             TerminalIdentitySchemaV1::IndependentV1 | TerminalIdentitySchemaV1::CombinedV2 => 114,
             TerminalIdentitySchemaV1::CombinedV3 => 114,
-            TerminalIdentitySchemaV1::CombinedV4 => 117,
+            TerminalIdentitySchemaV1::CombinedV4 | TerminalIdentitySchemaV1::CombinedV5 => 117,
         },
         ProductionTerminalExpansionV1::WorkgroupLdsScopeCurrent => 118,
         ProductionTerminalExpansionV1::DisjointBlockComponentIndex => 119,
@@ -4027,7 +4070,9 @@ const fn terminal_expansion_tag_for_schema_v1(
                 TerminalIdentitySchemaV1::IndependentV1 => 91,
                 #[cfg(test)]
                 TerminalIdentitySchemaV1::CombinedV2 => 100,
-                TerminalIdentitySchemaV1::CombinedV3 | TerminalIdentitySchemaV1::CombinedV4 => 100,
+                TerminalIdentitySchemaV1::CombinedV3
+                | TerminalIdentitySchemaV1::CombinedV4
+                | TerminalIdentitySchemaV1::CombinedV5 => 100,
             };
             base + match conversion {
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits => 0,
@@ -4069,6 +4114,26 @@ const fn f32_math_tag_v1(function: fe2o3_kernel_ir::F32MathFunction) -> u8 {
 #[cfg(test)]
 mod tests {
     include!("rustc_semantic_plan_v1/tests.rs");
+    include!("rustc_semantic_plan_v1/ordered_program_v32_tests.rs");
+
+    #[test]
+    fn ordered_region_v31_preflight_tag_is_only_combined_v4_133() {
+        let region = ProductionTerminalExpansionV1::Gfx942OrderedXorAddE32;
+        assert_eq!(
+            terminal_expansion_tag_for_schema_v1(region, TerminalIdentitySchemaV1::CombinedV4),
+            133
+        );
+        for schema in [
+            TerminalIdentitySchemaV1::IndependentV1,
+            TerminalIdentitySchemaV1::CombinedV2,
+            TerminalIdentitySchemaV1::CombinedV3,
+        ] {
+            assert_eq!(
+                terminal_expansion_tag_for_schema_v1(region, schema),
+                u8::MAX
+            );
+        }
+    }
 
     mod source_closure_work_tests {
         include!("rustc_semantic_plan_v1/source_closure_work_tests.rs");

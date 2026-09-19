@@ -546,8 +546,8 @@ pub(crate) const fn ranked_effect_formula_replay_prelude_v2() -> &'static str {
     BITVECTOR_SEMANTICS_V2
 }
 
-pub(crate) const fn ranked_effect_ieee_congruence_declaration_v2() -> &'static str {
-    IEEE_CONGRUENCE_DECLARATION_V2
+pub(crate) const fn ranked_effect_ieee_congruence_parameter_v2() -> &'static str {
+    IEEE_CONGRUENCE_PARAMETER_V2
 }
 
 #[derive(Clone)]
@@ -759,12 +759,12 @@ impl SemanticFormulaProgramV2 {
         let mut source = BoundedVerusSourceV2::default();
         write!(
             source,
-            "use vstd::prelude::*;\n\nverus! {{\n{BITVECTOR_SEMANTICS_V2}\n{IEEE_CONGRUENCE_DECLARATION_V2}\n"
+            "use vstd::prelude::*;\n\nverus! {{\n{BITVECTOR_SEMANTICS_V2}\n"
         )
         .map_err(|_| generated_source_limit())?;
         self.write_lemma(&mut source, pairs, "fe2o3_functional_refinement_v2")?;
         source
-            .write_str("}\n\nfn main() {}\n")
+            .write_str("}\n")
             .map_err(|_| generated_source_limit())?;
         Ok(source.into_string())
     }
@@ -785,14 +785,13 @@ impl SemanticFormulaProgramV2 {
         pairs: &[(ProductionRankedValueV1, ProductionRankedValueV1)],
         lemma_name: &str,
     ) -> Result<(), FunctionalRefinementVerusExecutionErrorV2> {
-        write!(source, "    proof fn {lemma_name}(").map_err(|_| generated_source_limit())?;
-        for (index, symbol) in self.symbols.iter().enumerate() {
-            if index != 0 {
-                source
-                    .write_str(", ")
-                    .map_err(|_| generated_source_limit())?;
-            }
-            write!(source, "s{symbol}: int").map_err(|_| generated_source_limit())?;
+        write!(
+            source,
+            "    proof fn {lemma_name}({IEEE_CONGRUENCE_PARAMETER_V2}"
+        )
+        .map_err(|_| generated_source_limit())?;
+        for symbol in &self.symbols {
+            write!(source, ", s{symbol}: int").map_err(|_| generated_source_limit())?;
         }
         source
             .write_str(") {\n")
@@ -975,12 +974,10 @@ const BITVECTOR_SEMANTICS_V2: &str = r#"
     }
 "#;
 
-const IEEE_CONGRUENCE_DECLARATION_V2: &str = r#"
-    // This symbol models congruence of identical compiler-side operator DAG
-    // applications only. It grants no IEEE real-value, lowering, or target
-    // instruction semantics.
-    uninterp spec fn fe2o3_ieee_operator_congruence_v2(tag: int, a: int, b: int, c: int) -> int;
-"#;
+// Prove identical operator DAGs congruent for every interpretation, without an external body.
+// Quantifying this function supplies no IEEE, lowering, or target instruction semantics.
+const IEEE_CONGRUENCE_PARAMETER_V2: &str =
+    "fe2o3_ieee_operator_congruence_v2: spec_fn(int, int, int, int) -> int";
 
 fn render_bitvector_expression_v2(
     expression: &fe2o3_pliron::ProductionSemanticExpressionV2,
@@ -1013,7 +1010,7 @@ fn render_bitvector_expression_v2(
                 Unary::Not if *scalar == Scalar::Bool => {
                     format!("if {operand} == 0 {{ 1 }} else {{ 0 }}")
                 }
-                Unary::Not => format!("(fe2o3_bv_modulus_v2({width}) - 1) - {operand}"),
+                Unary::Not => format!("(fe2o3_bv_modulus_v2({width}) - 1) - ({operand})"),
                 Unary::Negate => format!("fe2o3_bv_norm_v2(-({operand}), {width})"),
             }
         }
@@ -1351,9 +1348,28 @@ fn validate_proved_output(
         || !observed.stderr.is_empty()
         || !valid_count
     {
-        return Err(FunctionalRefinementVerusExecutionErrorV2::new(
-            FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult,
-        ));
+        let diagnostic = |bytes: &[u8]| {
+            const LIMIT: usize = 2048;
+            format!(
+                "{:?}{}",
+                String::from_utf8_lossy(&bytes[..bytes.len().min(LIMIT)]),
+                if bytes.len() > LIMIT {
+                    " (truncated)"
+                } else {
+                    ""
+                },
+            )
+        };
+        return Err(FunctionalRefinementVerusExecutionErrorV2 {
+            kind: FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult,
+            detail: Some(format!(
+                "exit={:?}, signal={:?}, stdout={}, stderr={}",
+                observed.exit_code,
+                observed.signal,
+                diagnostic(&observed.stdout),
+                diagnostic(&observed.stderr),
+            )),
+        });
     }
     Ok(())
 }
@@ -1457,6 +1473,10 @@ impl fmt::Display for FunctionalRefinementVerusExecutionErrorV2 {
 
 impl Error for FunctionalRefinementVerusExecutionErrorV2 {}
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "functional_refinement_receipt_v2/reviewed_host_tests.rs"]
+mod reviewed_host_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1486,7 +1506,7 @@ mod tests {
         DigestV1::from_untrusted_bytes([value; 32])
     }
 
-    fn subjects() -> FunctionalRefinementSubjectsV2 {
+    pub(super) fn subjects() -> FunctionalRefinementSubjectsV2 {
         FunctionalRefinementSubjectsV2::new(
             SafeReferenceKindV2::Mir,
             digest(1),
@@ -1701,7 +1721,7 @@ mod tests {
         .unwrap()
     }
 
-    fn wrapping_bitvector_kernel(expected_bits: u64) -> ProductionRankedKernelV1 {
+    pub(super) fn wrapping_bitvector_kernel(expected_bits: u64) -> ProductionRankedKernelV1 {
         let scalar = ProductionSemanticScalarTypeV2::Integer {
             signed: false,
             bits: 8,
@@ -1772,6 +1792,23 @@ mod tests {
     }
 
     #[test]
+    fn unexpected_proof_diagnostics_are_bounded_and_escape_control_characters() {
+        let mut stderr = b"error:\n\x1b[31m".to_vec();
+        stderr.resize(4096, b'x');
+        let error = validate_proved_output(&output(1, b"", &stderr)).unwrap_err();
+        let message = error.to_string();
+        assert_eq!(
+            error.kind(),
+            FunctionalRefinementVerusExecutionErrorKindV2::UnexpectedProofResult
+        );
+        assert!(message.contains("exit=Some(1), signal=None"));
+        assert!(message.contains("error:\\n\\u{1b}[31m"));
+        assert!(message.ends_with(" (truncated)"));
+        assert!(!message.contains(['\n', '\u{1b}']));
+        assert!(message.len() < 2400);
+    }
+
+    #[test]
     fn typed_generator_derives_source_and_mutation_from_ranked_formula_dag() {
         let positive = formula_kernel(SemanticBinaryKindAttr::Add);
         let (positive_binding, positive_source) =
@@ -1814,7 +1851,8 @@ mod tests {
             generate_ranked_functional_refinement_proof_v2(&positive, 0, 2, subjects()).unwrap();
         let source = std::str::from_utf8(positive_source.source()).unwrap();
         assert!(source.contains("open spec fn fe2o3_bv_norm_v2"));
-        assert!(source.contains("uninterp spec fn fe2o3_ieee_operator_congruence_v2"));
+        assert!(source.contains(IEEE_CONGRUENCE_PARAMETER_V2));
+        assert!(!source.contains("uninterp"));
         assert!(!source.contains("fe2o3_semantic_op_v2"));
         assert!(source.contains("s7: int"));
         assert!(source.contains("fe2o3_bv_norm_v2"));

@@ -103,7 +103,24 @@ impl<'a> GpuSemanticExpressionResolverV2<'a> {
             .map_err(|_| "GPU semantic reaching-definition analysis is incomplete")?;
         let Some(definition) = definition else {
             if projections.is_empty() {
-                return self.resolve_saturating_call_local_v2(local as usize, site, depth);
+                let scalar = self
+                    .scalar_calls
+                    .get(local as usize)
+                    .is_some_and(Option::is_some);
+                let inline = self
+                    .inline_calls_v30
+                    .as_ref()
+                    .is_some_and(|roster| roster.contains_local(local as usize));
+                // The indexes select exactly one resolver. Never hide a semantic
+                // refusal by attempting the other interpretation of a call.
+                return match (scalar, inline) {
+                    (true, false) => {
+                        self.resolve_saturating_call_local_v2(local as usize, site, depth)
+                    }
+                    (false, true) => self.resolve_gfx942_inline_call_result_v30(place, depth),
+                    (true, true) => Err("GPU scalar call belongs to inconsistent callable indexes"),
+                    (false, false) => Err("GPU semantic local has no exact reaching assignment"),
+                };
             }
             return Err("GPU semantic local has no exact reaching assignment");
         };
