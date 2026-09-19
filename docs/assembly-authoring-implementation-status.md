@@ -2,15 +2,17 @@
 
 This is a working-implementation handoff for [#280](https://github.com/harsh-nod/fe2o3/issues/280),
 [#281](https://github.com/harsh-nod/fe2o3/issues/281), and
-[#282](https://github.com/harsh-nod/fe2o3/issues/282), inspected on 2026-09-18 UTC.
+[#282](https://github.com/harsh-nod/fe2o3/issues/282), inspected on 2026-09-19 UTC.
 Phase three began at integration base `353d5b91f77e415536e7333fe97e77ea42e28678`;
-its retained runs below used working-tree changes. This is not a release receipt or milestone
-signoff. Original scope, including both initial architectures and whole-kernel,
+its retained runs below used working-tree changes. Later clean-commit results
+are identified separately. This is not a protected release receipt. Original
+scope, including both initial architectures and whole-kernel,
 resource, scheduling, and curriculum requirements, remains unchanged.
 
 [First-slice commands and evidence boundaries](assembly-authoring-first-slice.md)
-describe reproduction. The implementation below makes useful progress; no
-umbrella milestone is declared complete by this document or by test counts.
+describe reproduction. The umbrella issues remain incomplete. The bounded M1
+instruction-slice exit now has the actual-source/native evidence linked below;
+this does not make later production, target or whole-kernel milestones complete.
 
 The next implementation batch adds the public ISA metadata catalog, an actual
 pinned-worker ordered-region experiment, checked local ordering, protected
@@ -42,10 +44,13 @@ The new checked bit-select materialization planner passes95library tests
 (including19new planner cases) and4documentation tests. It checks the typed
 three-operation graph, explicit names/registers and baseline byte commitment;
 general checked HIR source replacement remains unimplemented. The new native
-program runner observes12synthetic cases/80authored instruction sites, with
-parser and decoded-payload negative controls. Actual-source-to-native joining,
-ordinary source/debugger batch qualification and final publication remain
-separate checks; synthetic success supplies none of their authority.
+program runner observes 12 synthetic cases/80 authored instruction sites, with
+parser and decoded-payload negative controls. The subsequent clean-commit run
+also passes six actual source exports, 36 CPU cases, eight source refusals and
+15 CLI negatives; 36 public debugger sessions/1,224 pairs; and the independent
+source-to-native join covering 12 compilation cases/80 authored sites.
+[Exact September 19 evidence and limitations](evidence/assembly-authoring-20260919.md)
+separate these actual runs from synthetic tests and protected publication.
 
 ## Exercised evidence and implementation anchors
 
@@ -361,7 +366,7 @@ No new strict-Clippy, final native, protected proof or hardware result is claime
 | Milestone | Delivered portion | Required remaining work |
 | --- | --- | --- |
 | M0: contracts and ownership | E1/E3 freeze a bounded marker/observation profile; E10 supplies the reproducible two-architecture metadata inventory; E11 qualifies a closed inline-unit worker mechanism and observes whole-body export rejection; E16 retains one exact ordered subject across source, canonical ownership, CPU and LLVM. | Complete source/region/resource/ABI contracts, operand/effect/encoding overlays and two-target executable coverage matrix; integrate production emission and qualify whole-body support with the existing owners. |
-| M1: real-source instruction slice | E1/E2 exercise source, canonical instructions, CPU results and negative operands; E7 adds the closed checked scalar relation; E8 exercises the normal production target route; E15 qualifies actual source functional proof with opcode/constant counterexamples; E17 adds independent final-byte inspection for the bounded ordered pair. | Broader applicable correspondence, complete ownership/admission and full declared final-encoding matrix remain. A functional proof followed by ownership refusal is not source admission; test-only final-byte inspection is not protected artifact authority. |
+| M1: real-source instruction slice | The [clean September 19 qualification](evidence/assembly-authoring-20260919.md) meets this bounded exit: six real source variants cover move/add/sub/AND/OR/XOR, exact MIR32/KIR17 identities, independent CPU outputs/canaries, source/CLI refusals and final O0/O3 instruction decoding. Earlier E1/E2/E7/E8/E15/E17 remain separately scoped evidence. | No additional M1 implementation is claimed necessary for the declared integer slice. Protected ownership/admission, whole kernels and gfx950/matrix remain required by later milestones; M1 success supplies none of that authority. |
 | M2: complete basic assembly kernels | Actual generated helpers and explicit concrete source variants re-enter the frontend (E2/E3); E16/E17 qualify one actual closed XOR/ADD region and inspect final fixed-register/e32 retention; E22 adds ordinary diagnostic source/edit/export/simulation. | General ordered regions, physical allocation/lifetime ownership, labels/branches, full ABI metadata, broader helpers/specialization, whole bounded assembly kernels, source materialization and intended machine-contract roundtrips. Ordinary raw diagnostic V16 is not protected production V16 admission. |
 | M3: memory and synchronization | Existing ordinary-KIR checks remain in force around the marker slice. | Authored ISA memory/LDS/atomic/wave operations, address provenance, wait/scoreboard hazards, barrier/convergence/race obligations, descriptors, and applicable hardware checks. Ordinary surrounding loads/stores do not satisfy this milestone. |
 | M4: matrix and second architecture | No new matrix or gfx950 authoring qualification in this slice. | Reviewed matrix/low-precision semantics/layouts, exact gfx950 profile/catalog/lowering and independently qualified target cases. gfx942 integer success does not narrow the original target matrix. |
@@ -373,7 +378,7 @@ No new strict-Clippy, final native, protected proof or hardware result is claime
 | Milestone | Delivered portion | Required remaining work |
 | --- | --- | --- |
 | V0: contract and inventory | Exact stopped-state/query bindings, bounded pages, availability labels and measured CPU/browser budgets (E5/E6). | Complete backend/capture capability matrix and shared compiler/physical-resource handoff; these are not inferred from a rendered page. |
-| V1: recorded memory visualization | Real source-produced global and LDS allocation/access pages, bytes/initialization, captured-page logical-scope filtering (E5/E6/E9); E18/E19 add recorded lane/event/checkpoint navigation and exact historical-range overlays with desktop/mobile qualification. | Additional capture profiles, broader allocation views and connected producer paging. Navigation covers retained records only; producer generation 0 is not allocation-lifetime reconstruction. |
+| V1: recorded memory visualization | Real source-produced global and LDS allocation/access pages, bytes/initialization, captured-page logical-scope filtering (E5/E6/E9); E18/E19 add recorded lane/event/checkpoint navigation and exact historical-range overlays with desktop/mobile qualification. These are the bounded recorded-capture acceptance features. | Final companion-site frozen qualification/publication is recorded separately. Additional capture profiles, allocation reuse and live producer paging are later work, not extra V1 exit requirements. Navigation covers retained records only; generation 0 is not a lifetime reconstruction. |
 | V2: debugger integration | First-write watchpoint, forward/reverse stopped queries, no-future-access and stale cursor/token checks; E14 adds exact two-workgroup inventory isolation and historical-access separation. Separate interactive raw-KIR capture remains available. | Same-source loops/helpers/reuse lifecycle qualification, faults, linked source/SSA navigation and UI watchpoint/breakpoint editing/live query transport. Workgroup inventory restoration is not a lifecycle trace; the generated-helper CPU smoke is not a resource-history test. |
 | V3: compiler resource views | Exact original/edited source comparisons and independently retained logical observations (E2/E6); E17 separately measures a bounded final descriptor against an authored register high-water; E20/E21 retain the source-owned register plan and selected CPU values with their exact logical site. | Complete joined compiler resource views, allocation lifetimes, physical registers and checked cross-level lineage. A separate descriptor observation is not yet a viewer resource handoff. Call rows currently lack a callee target; the viewer does not infer call edges or cross-variant SSA correspondence. |
 | V4: target analysis and live adapters | No new hardware-session or bank-conflict model qualification. | Target-bound bank/transaction models, independent references and actual same-stop hardware adapters; unavailable physical state remains unavailable. |
