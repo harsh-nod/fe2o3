@@ -89,6 +89,8 @@ include!("production_retained_arrays_v1.rs");
 include!("production_assert_origins_v1.rs");
 #[path = "production_origin_worklist_v1.rs"]
 mod origin_worklist_v1;
+#[path = "production_scoped_slot_uses_v29.rs"]
+mod scoped_slot_uses_v29;
 #[path = "production_slice_view_v1.rs"]
 mod slice_view_v1;
 #[path = "production_value_origin_v1.rs"]

@@ -456,6 +456,13 @@ fn build_pending_scoped_root_v29(
                         if let Some(observe) = SCOPED_SLOT_OBSERVER_V29.get() {
                             observe(instances, &mut emitted, &source_slots, budget)?;
                         }
+                        scoped_slot_uses_v29::check_scoped_source_slot_uses_v29(
+                            instances,
+                            &emitted,
+                            &source_slots,
+                            limits.max_operations,
+                            budget,
+                        )?;
                         let pending = assemble_pending_scoped_root_v29(
                             instances,
                             &mut emitted,

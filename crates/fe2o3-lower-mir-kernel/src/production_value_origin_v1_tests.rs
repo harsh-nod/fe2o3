@@ -144,7 +144,9 @@ fn prepared_origins_query_sparse_values_without_rebuilding_the_worklist() {
         let floor = budget.storage();
         let start = budget.work();
         with_whole_value_origins_v1(inventory, owner, SUBJECT, budget, |origins, budget| {
-            assert_eq!(budget.work() - start, 1543);
+            let expected_preparation = 8 + 7 * 131 + 128 + 131 + 131 + 128;
+            assert_eq!(expected_preparation, 1443);
+            assert_eq!(budget.work() - start, expected_preparation);
             let retained = budget.storage();
             assert_eq!(retained - floor, 131 * std::mem::size_of::<Origin>());
             let peak = budget.peak_storage();

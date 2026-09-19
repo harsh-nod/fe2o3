@@ -1,5 +1,9 @@
 use super::*;
 
+mod slot_use_tests {
+    include!("production_scoped_slot_uses_orchestration_v29_tests.rs");
+}
+
 mod initialization_tests {
     include!("production_scoped_initialization_v29_tests.rs");
 }
