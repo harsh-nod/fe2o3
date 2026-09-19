@@ -66,14 +66,24 @@ pub(super) fn record_capacity(bytes: usize) {
 }
 
 fn with_source<R>(test: impl FnOnce(&RetainedExecutionSourceV29<'_>) -> R) -> R {
-    let (semantic, receipt) = RetainedContextEntriesV29::projection_test_fixture_v29();
+    with_execution_source(|source, _, _| test(source))
+}
+
+fn with_execution_source<R>(
+    test: impl FnOnce(
+        &RetainedExecutionSourceV29<'_>,
+        &ProductionSemanticSsaOwnerV1,
+        &ProductionSourceLaunchRosterV1,
+    ) -> R,
+) -> R {
+    let (ssa, launch, receipt) = RetainedContextEntriesV29::projection_test_fixture_v29();
     let mut work = Work::new(100_000);
     let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 1 << 20);
     let source = receipt
-        .materialization_source_v29(&semantic, &mut budget)
+        .materialization_source_v29(ssa.source_semantic(), &mut budget)
         .unwrap()
         .unwrap();
-    test(&source)
+    test(&source, &ssa, &launch)
 }
 
 fn requested_rows(source: &RetainedExecutionSourceV29<'_>) -> [usize; 3] {
@@ -90,6 +100,10 @@ fn measured_projection(source: &RetainedExecutionSourceV29<'_>) -> (usize, [usiz
     let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 1 << 20);
     with_projected_execution_source_v29(source, &mut budget, |_, _| Ok(())).unwrap();
     assert_eq!(budget.storage(), 0);
+    assert_eq!(
+        budget.work(),
+        18 + 32 * source.roots().len() + 12 * source.classes().len() + 8 * source.events().len()
+    );
     (budget.work(), guard.state().capacities)
 }
 
@@ -144,6 +158,27 @@ fn projection_capacity_preserves_consumer_output_on_success_error_and_panic() {
             assert!(budget.failed_storage().is_none());
             assert!(budget.work() > 0);
         }
+    });
+}
+
+#[test]
+fn projection_capacity_returns_owned_output_after_backing_cleanup() {
+    with_source(|source| {
+        let _guard = AllocationGuard::install([Allocation::Extra(2); 3]);
+        let mut work = Work::new(100_000);
+        let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 1 << 20);
+        budget.reserve_storage(7).unwrap();
+        let output = with_projected_execution_source_v29(source, &mut budget, |_, budget| {
+            budget.reserve_storage(11)?;
+            Ok(Box::new([42_u8; 11]))
+        })
+        .unwrap();
+        assert_eq!(*output, [42; 11]);
+        assert_eq!(budget.storage(), 18);
+        drop(output);
+        assert_eq!(budget.storage(), 18);
+        budget.release_storage(11).unwrap();
+        assert_eq!(budget.storage(), 7);
     });
 }
 
@@ -325,11 +360,12 @@ fn projection_capacity_foreign_ledger_is_untouched_and_panic_payload_survives() 
         for panic in [false, true] {
             let _guard = AllocationGuard::install([Allocation::Extra(2); 3]);
             let mut work = Work::new(100_000);
-            let mut foreign_work = Work::new(100_000);
             let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 1 << 20);
             budget.reserve_storage(7).unwrap();
-            let mut foreign =
-                CanonicalKernelIrVerificationResourceBudgetV1::new(&mut foreign_work, 101);
+            let mut foreign = CanonicalKernelIrVerificationResourceBudgetV1::new(
+                Box::leak(Box::new(Work::new(100_000))),
+                101,
+            );
             foreign.reserve_storage(101).unwrap();
             foreign.charge_work(5).unwrap();
             let mut foreign = Some(foreign);
@@ -355,6 +391,56 @@ fn projection_capacity_foreign_ledger_is_untouched_and_panic_payload_survives() 
                     ))
                 );
             }
+            assert_eq!(budget.work(), 5);
+            assert_eq!(budget.storage(), 101);
+            assert_eq!(budget.peak_storage(), 101);
+            assert!(budget.failed_storage().is_none());
+        }
+    });
+}
+
+#[test]
+fn projection_capacity_nested_root_visitor_preserves_foreign_ledger() {
+    with_execution_source(|source, ssa, launch| {
+        for panic in [false, true] {
+            let _guard = AllocationGuard::install([Allocation::Extra(2); 3]);
+            let mut work = Work::new(100_000);
+            let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 1 << 20);
+            budget.reserve_storage(7).unwrap();
+            let mut foreign = CanonicalKernelIrVerificationResourceBudgetV1::new(
+                Box::leak(Box::new(Work::new(100_000))),
+                101,
+            );
+            foreign.reserve_storage(101).unwrap();
+            foreign.charge_work(5).unwrap();
+            let mut foreign = Some(foreign);
+            let mut visits = 0;
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                with_projected_execution_source_v29(source, &mut budget, |input, budget| {
+                    with_checked_execution_source_v29(ssa, launch, input, budget, |_, budget| {
+                        visits += 1;
+                        let _original = std::mem::replace(budget, foreign.take().unwrap());
+                        if panic {
+                            std::panic::panic_any(String::from("nested ledger panic"));
+                        }
+                        Ok(())
+                    })
+                })
+            }));
+            if panic {
+                assert_eq!(
+                    *result.unwrap_err().downcast::<String>().unwrap(),
+                    "nested ledger panic"
+                );
+            } else {
+                assert_eq!(
+                    result.unwrap(),
+                    Err(ProductionContextRootErrorV29::Resource(
+                        Resource::Accounting
+                    ))
+                );
+            }
+            assert_eq!(visits, 1);
             assert_eq!(budget.work(), 5);
             assert_eq!(budget.storage(), 101);
             assert_eq!(budget.peak_storage(), 101);

@@ -8,14 +8,19 @@ mod scope_tests;
 mod projection_tests;
 
 fn projection_storage(entries: &RetainedContextEntriesV29) -> usize {
-    use fe2o3_lower_mir_kernel::{
-        ProductionContextRootInputV29, ProductionScopeCallableCandidateV29,
-        ProductionScopeEventCandidateV29,
+    let source = RetainedExecutionSourceV29 {
+        semantic_sha256: &entries.semantic_sha256,
+        roots: &entries.entries,
+        scopes: entries.scopes.as_ref().unwrap(),
     };
-    let scopes = entries.scopes.as_ref().unwrap();
-    entries.entries.len() * std::mem::size_of::<ProductionContextRootInputV29<'_>>()
-        + scopes.classes().len() * std::mem::size_of::<ProductionScopeCallableCandidateV29>()
-        + scopes.events().len() * std::mem::size_of::<ProductionScopeEventCandidateV29>()
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100_000);
+    let mut budget = VisitBudget::new(&mut work, 1 << 20);
+    crate::production_pipeline::with_projected_execution_source_v29(
+        &source,
+        &mut budget,
+        |_, budget| Ok(budget.storage()),
+    )
+    .unwrap()
 }
 
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
