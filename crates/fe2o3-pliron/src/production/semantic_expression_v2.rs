@@ -5,7 +5,7 @@
 use core::fmt;
 use std::collections::BTreeSet;
 
-use sha2::{Digest as _, Sha256};
+use super::recipe_hash_work_v1::{self as hash_work, HashMeterV1, TranscriptV1};
 
 use super::ranked::ProductionRankedValueV1;
 
@@ -663,21 +663,42 @@ impl ProductionSemanticExpressionV2 {
     }
 
     pub fn canonical_sha256(&self) -> [u8; 32] {
-        let mut digest = Sha256::new();
-        digest.update(b"fe2o3/production-semantic-expression/v2\0");
-        hash_expression(&mut digest, self, LoadCommitmentModeV2::CompleteMetadata);
-        digest.finalize().into()
+        hash_work::unmetered(|digest| {
+            self.emit_canonical_v1(digest, LoadCommitmentModeV2::CompleteMetadata)
+        })
     }
 
     pub fn canonical_transcript_sha256(
         &self,
         numerical_contract: ProductionNumericalContractV2,
     ) -> [u8; 32] {
-        let mut digest = Sha256::new();
-        digest.update(b"fe2o3/production-semantic-expression-transcript/v2\0");
-        digest.update(self.canonical_sha256());
-        hash_numerical_contract(&mut digest, numerical_contract);
-        digest.finalize().into()
+        hash_work::unmetered(|digest| self.emit_canonical_transcript_v1(digest, numerical_contract))
+    }
+
+    fn emit_canonical_v1<M: HashMeterV1>(
+        &self,
+        digest: &mut TranscriptV1<'_, M>,
+        mode: LoadCommitmentModeV2,
+    ) -> Result<(), M::Error> {
+        digest.update(b"fe2o3/production-semantic-expression/v2\0")?;
+        // Logical traversal payload, not a compiler-generated machine-stack bound.
+        let scratch = (MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 + 1)
+            * std::mem::size_of::<(&Self, usize, usize, LoadCommitmentModeV2)>();
+        digest.scratch(scratch, |digest| {
+            hash_expression(digest, self, mode, &mut 0, 1)
+        })
+    }
+
+    pub(super) fn emit_canonical_transcript_v1<M: HashMeterV1>(
+        &self,
+        digest: &mut TranscriptV1<'_, M>,
+        contract: ProductionNumericalContractV2,
+    ) -> Result<(), M::Error> {
+        digest.update(b"fe2o3/production-semantic-expression-transcript/v2\0")?;
+        digest.append_nested(|nested| {
+            self.emit_canonical_v1(nested, LoadCommitmentModeV2::CompleteMetadata)
+        })?;
+        hash_numerical_contract(digest, contract)
     }
 
     /// Commits the typed expression tree materialized in PLIRON.
@@ -691,18 +712,13 @@ impl ProductionSemanticExpressionV2 {
         &self,
         numerical_contract: ProductionNumericalContractV2,
     ) -> [u8; 32] {
-        let mut expression = Sha256::new();
-        expression.update(b"fe2o3/production-semantic-expression/v2\0");
-        hash_expression(
-            &mut expression,
-            self,
-            LoadCommitmentModeV2::MaterializedProofSymbol,
-        );
-        let mut transcript = Sha256::new();
-        transcript.update(b"fe2o3/production-semantic-expression-transcript/v2\0");
-        transcript.update(expression.finalize());
-        hash_numerical_contract(&mut transcript, numerical_contract);
-        transcript.finalize().into()
+        hash_work::unmetered(|digest| {
+            digest.update(b"fe2o3/production-semantic-expression-transcript/v2\0")?;
+            digest.append_nested(|nested| {
+                self.emit_canonical_v1(nested, LoadCommitmentModeV2::MaterializedProofSymbol)
+            })?;
+            hash_numerical_contract(digest, numerical_contract)
+        })
     }
 }
 
@@ -823,23 +839,28 @@ fn scalar_tag(scalar: ProductionSemanticScalarTypeV2) -> [u8; 4] {
     }
 }
 
-fn hash_numerical_contract(digest: &mut Sha256, contract: ProductionNumericalContractV2) {
+fn hash_numerical_contract<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
+    contract: ProductionNumericalContractV2,
+) -> Result<(), M::Error> {
+    digest.visit()?;
     match contract {
-        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => digest.update([0]),
+        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => digest.update([0])?,
         ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
             rounding,
             exceptional_values,
-        } => digest.update([1, rounding as u8, exceptional_values as u8]),
-        ProductionNumericalContractV2::Relaxed => digest.update([2]),
+        } => digest.update([1, rounding as u8, exceptional_values as u8])?,
+        ProductionNumericalContractV2::Relaxed => digest.update([2])?,
         ProductionNumericalContractV2::ErrorBounded {
             absolute_error_f64_bits,
             relative_error_f64_bits,
         } => {
-            digest.update([3]);
-            digest.update(absolute_error_f64_bits.to_le_bytes());
-            digest.update(relative_error_f64_bits.to_le_bytes());
+            digest.update([3])?;
+            digest.update(absolute_error_f64_bits.to_le_bytes())?;
+            digest.update(relative_error_f64_bits.to_le_bytes())?;
         }
-    }
+    };
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -848,39 +869,42 @@ enum LoadCommitmentModeV2 {
     MaterializedProofSymbol,
 }
 
-fn hash_expression(
-    digest: &mut Sha256,
+fn hash_expression<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
     expression: &ProductionSemanticExpressionV2,
     load_mode: LoadCommitmentModeV2,
-) {
+    nodes: &mut usize,
+    depth: usize,
+) -> Result<(), M::Error> {
+    digest.expression_node(nodes, depth)?;
     match expression {
         ProductionSemanticExpressionV2::Symbol { symbol, scalar } => {
-            digest.update([0]);
-            digest.update(scalar_tag(*scalar));
-            digest.update(symbol.to_le_bytes());
+            digest.update([0])?;
+            digest.update(scalar_tag(*scalar))?;
+            digest.update(symbol.to_le_bytes())?;
         }
         ProductionSemanticExpressionV2::Constant { scalar, bits } => {
-            digest.update([1]);
-            digest.update(scalar_tag(*scalar));
-            digest.update(bits.to_le_bytes());
+            digest.update([1])?;
+            digest.update(scalar_tag(*scalar))?;
+            digest.update(bits.to_le_bytes())?;
         }
         ProductionSemanticExpressionV2::Load(load) => match load_mode {
             LoadCommitmentModeV2::CompleteMetadata => {
-                digest.update([7]);
-                digest.update(scalar_tag(load.scalar));
-                digest.update(load.block.to_le_bytes());
-                digest.update(load.operation.to_le_bytes());
-                digest.update(load.allocation_origin.to_le_bytes());
-                hash_ranked_value(digest, load.view);
-                digest.update((load.indices.len() as u64).to_le_bytes());
+                digest.update([7])?;
+                digest.update(scalar_tag(load.scalar))?;
+                digest.update(load.block.to_le_bytes())?;
+                digest.update(load.operation.to_le_bytes())?;
+                digest.update(load.allocation_origin.to_le_bytes())?;
+                hash_ranked_value(digest, load.view)?;
+                digest.update((load.indices.len() as u64).to_le_bytes())?;
                 for index in &load.indices {
-                    hash_ranked_value(digest, *index);
+                    hash_ranked_value(digest, *index)?;
                 }
             }
             LoadCommitmentModeV2::MaterializedProofSymbol => {
-                digest.update([0]);
-                digest.update(scalar_tag(load.scalar));
-                digest.update(load.proof_symbol().to_le_bytes());
+                digest.update([0])?;
+                digest.update(scalar_tag(load.scalar))?;
+                digest.update(load.proof_symbol().to_le_bytes())?;
             }
         },
         ProductionSemanticExpressionV2::Unary {
@@ -888,9 +912,9 @@ fn hash_expression(
             scalar,
             operand,
         } => {
-            digest.update([2, *operation as u8]);
-            digest.update(scalar_tag(*scalar));
-            hash_expression(digest, operand, load_mode);
+            digest.update([2, *operation as u8])?;
+            digest.update(scalar_tag(*scalar))?;
+            hash_expression(digest, operand, load_mode, nodes, depth + 1)?;
         }
         ProductionSemanticExpressionV2::Binary {
             operation,
@@ -899,10 +923,10 @@ fn hash_expression(
             lhs,
             rhs,
         } => {
-            digest.update([3, *operation as u8, *overflow as u8]);
-            digest.update(scalar_tag(*scalar));
-            hash_expression(digest, lhs, load_mode);
-            hash_expression(digest, rhs, load_mode);
+            digest.update([3, *operation as u8, *overflow as u8])?;
+            digest.update(scalar_tag(*scalar))?;
+            hash_expression(digest, lhs, load_mode, nodes, depth + 1)?;
+            hash_expression(digest, rhs, load_mode, nodes, depth + 1)?;
         }
         ProductionSemanticExpressionV2::Compare {
             operation,
@@ -910,10 +934,10 @@ fn hash_expression(
             lhs,
             rhs,
         } => {
-            digest.update([4, *operation as u8]);
-            digest.update(scalar_tag(*operand_scalar));
-            hash_expression(digest, lhs, load_mode);
-            hash_expression(digest, rhs, load_mode);
+            digest.update([4, *operation as u8])?;
+            digest.update(scalar_tag(*operand_scalar))?;
+            hash_expression(digest, lhs, load_mode, nodes, depth + 1)?;
+            hash_expression(digest, rhs, load_mode, nodes, depth + 1)?;
         }
         ProductionSemanticExpressionV2::Select {
             scalar,
@@ -921,11 +945,11 @@ fn hash_expression(
             when_true,
             when_false,
         } => {
-            digest.update([5]);
-            digest.update(scalar_tag(*scalar));
-            hash_expression(digest, condition, load_mode);
-            hash_expression(digest, when_true, load_mode);
-            hash_expression(digest, when_false, load_mode);
+            digest.update([5])?;
+            digest.update(scalar_tag(*scalar))?;
+            hash_expression(digest, condition, load_mode, nodes, depth + 1)?;
+            hash_expression(digest, when_true, load_mode, nodes, depth + 1)?;
+            hash_expression(digest, when_false, load_mode, nodes, depth + 1)?;
         }
         ProductionSemanticExpressionV2::Cast {
             kind,
@@ -933,30 +957,36 @@ fn hash_expression(
             target,
             operand,
         } => {
-            digest.update([6, *kind as u8]);
-            digest.update(scalar_tag(*source));
-            digest.update(scalar_tag(*target));
-            hash_expression(digest, operand, load_mode);
+            digest.update([6, *kind as u8])?;
+            digest.update(scalar_tag(*source))?;
+            digest.update(scalar_tag(*target))?;
+            hash_expression(digest, operand, load_mode, nodes, depth + 1)?;
         }
-    }
+    };
+    Ok(())
 }
 
-fn hash_ranked_value(digest: &mut Sha256, value: ProductionRankedValueV1) {
+fn hash_ranked_value<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
+    value: ProductionRankedValueV1,
+) -> Result<(), M::Error> {
+    digest.visit()?;
     match value {
         ProductionRankedValueV1::Argument(argument) => {
-            digest.update([0]);
-            digest.update(argument.to_le_bytes());
+            digest.update([0])?;
+            digest.update(argument.to_le_bytes())?;
         }
         ProductionRankedValueV1::BlockArgument { block, argument } => {
-            digest.update([1]);
-            digest.update(block.to_le_bytes());
-            digest.update(argument.to_le_bytes());
+            digest.update([1])?;
+            digest.update(block.to_le_bytes())?;
+            digest.update(argument.to_le_bytes())?;
         }
         ProductionRankedValueV1::Local(identity) => {
-            digest.update([2]);
-            digest.update(identity.get().to_le_bytes());
+            digest.update([2])?;
+            digest.update(identity.get().to_le_bytes())?;
         }
-    }
+    };
+    Ok(())
 }
 
 #[cfg(test)]

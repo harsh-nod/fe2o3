@@ -6,6 +6,7 @@
 
 use std::{error::Error, fmt, ops::Range};
 
+use super::recipe_hash_work_v1::{self as hash_work, HashMeterV1, TranscriptV1};
 use dialect_gpu::{AddressSpaceAttr, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, IndexBinaryKindAttr, MemorySpaceAttr,
@@ -17,6 +18,10 @@ use fe2o3_kernel_ir::{
     TensorSymbolicMapV1, TensorTailMaskV1,
 };
 use sha2::{Digest, Sha256};
+
+#[cfg(test)]
+#[path = "recipe_hash_golden_v1_tests.rs"]
+mod recipe_hash_golden_v1_tests;
 
 // V4 keeps every pre-existing operation tag stable. New operation variants must
 // consume an unused tag so two distinct recipes can never share an identity
@@ -756,117 +761,130 @@ pub(super) fn derive_ranked_kernel_identity(
 pub(super) fn derive_functional_refinement_graph_identity_v2(
     kernel: &super::ProductionRankedKernelV1,
 ) -> [u8; SHA256_BYTES] {
-    let mut digest = Sha256::new();
-    digest.update(FUNCTIONAL_REFINEMENT_GRAPH_IDENTITY_DOMAIN_V2);
-    hash_blob(&mut digest, kernel.function_name().as_bytes());
-    hash_usize(&mut digest, kernel.argument_count());
-    hash_usize(&mut digest, kernel.blocks().len());
-    for block in kernel.blocks() {
-        digest.update(block.index_argument_count().to_le_bytes());
-        hash_usize(&mut digest, block.operations().len());
-        for operation in block.operations() {
-            hash_functional_refinement_graph_operation(&mut digest, operation);
-        }
-        hash_ranked_terminator(&mut digest, block.terminator());
-    }
-    digest.finalize().into()
+    hash_work::unmetered(|digest| emit_graph(digest, kernel, true))
 }
 
 pub(super) fn derive_exact_ranked_graph_identity_v1(
     kernel: &super::ProductionRankedKernelV1,
 ) -> [u8; SHA256_BYTES] {
-    let mut digest = Sha256::new();
-    digest.update(RANKED_KERNEL_IDENTITY_DOMAIN_V4);
-    hash_blob(&mut digest, kernel.function_name().as_bytes());
-    hash_usize(&mut digest, kernel.argument_count());
-    hash_usize(&mut digest, kernel.blocks().len());
+    hash_work::unmetered(|digest| emit_graph(digest, kernel, false))
+}
+
+pub(super) fn derive_exact_ranked_graph_identity_with_resources_v1(
+    kernel: &super::ProductionRankedKernelV1,
+    resources: &mut crate::production_analysis::ProductionAnalysisResourceContractV1,
+) -> Result<[u8; 32], crate::production_analysis::ProductionAnalysisResourceLimitV1> {
+    hash_work::metered(resources, |digest| emit_graph(digest, kernel, false))
+}
+
+fn emit_graph<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
+    kernel: &super::ProductionRankedKernelV1,
+    functional: bool,
+) -> Result<(), M::Error> {
+    digest.visit()?;
+    digest.update(if functional {
+        FUNCTIONAL_REFINEMENT_GRAPH_IDENTITY_DOMAIN_V2
+    } else {
+        RANKED_KERNEL_IDENTITY_DOMAIN_V4
+    })?;
+    hash_blob(digest, kernel.function_name().as_bytes())?;
+    hash_usize(digest, kernel.argument_count())?;
+    hash_usize(digest, kernel.blocks().len())?;
     for block in kernel.blocks() {
-        digest.update(block.index_argument_count().to_le_bytes());
-        hash_usize(&mut digest, block.operations().len());
+        digest.visit()?;
+        digest.update(block.index_argument_count().to_le_bytes())?;
+        hash_usize(digest, block.operations().len())?;
         for operation in block.operations() {
-            hash_ranked_operation(&mut digest, operation);
+            if functional {
+                hash_functional_refinement_graph_operation(digest, operation)?;
+            } else {
+                hash_ranked_operation(digest, operation)?;
+            }
         }
-        hash_ranked_terminator(&mut digest, block.terminator());
+        hash_ranked_terminator(digest, block.terminator())?;
     }
-    digest.finalize().into()
+    Ok(())
 }
 
 pub(super) fn derive_exact_ranked_operation_identity_v1(
     operation: &ProductionRankedOperationV1,
 ) -> [u8; SHA256_BYTES] {
-    let mut digest = Sha256::new();
-    digest.update(EXACT_RANKED_OPERATION_IDENTITY_DOMAIN_V1);
-    hash_ranked_operation(&mut digest, operation);
-    digest.finalize().into()
+    hash_work::unmetered(|digest| {
+        digest.update(EXACT_RANKED_OPERATION_IDENTITY_DOMAIN_V1)?;
+        hash_ranked_operation(digest, operation)
+    })
 }
 
 pub(super) fn derive_exact_ranked_terminator_identity_v1(
     terminator: &ProductionRankedTerminatorV1,
 ) -> [u8; SHA256_BYTES] {
-    let mut digest = Sha256::new();
-    digest.update(EXACT_RANKED_TERMINATOR_IDENTITY_DOMAIN_V1);
-    hash_ranked_terminator(&mut digest, terminator);
-    digest.finalize().into()
+    hash_work::unmetered(|digest| {
+        digest.update(EXACT_RANKED_TERMINATOR_IDENTITY_DOMAIN_V1)?;
+        hash_ranked_terminator(digest, terminator)
+    })
 }
 
-fn hash_functional_refinement_graph_operation(
-    digest: &mut Sha256,
+fn hash_functional_refinement_graph_operation<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
     operation: &ProductionRankedOperationV1,
-) {
-    digest.update([functional_refinement_graph_operation_tag(operation)]);
+) -> Result<(), M::Error> {
+    digest.visit()?;
+    digest.update([functional_refinement_graph_operation_tag(operation)])?;
     match operation {
         ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
             actual,
             expected,
             subjects,
         } => {
-            digest.update([250]);
-            hash_value(digest, *actual);
-            hash_value(digest, *expected);
-            hash_functional_refinement_subjects(digest, *subjects);
+            digest.update([250])?;
+            hash_value(digest, *actual)?;
+            hash_value(digest, *expected)?;
+            hash_functional_refinement_subjects(digest, *subjects)?;
         }
         ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
             actual,
             expected,
             proof,
         } => {
-            digest.update([250]);
-            hash_value(digest, *actual);
-            hash_value(digest, *expected);
-            hash_functional_refinement_subjects(digest, proof.binding().subjects());
+            digest.update([250])?;
+            hash_value(digest, *actual)?;
+            hash_value(digest, *expected)?;
+            hash_functional_refinement_subjects(digest, proof.binding().subjects())?;
         }
         ProductionRankedOperationV1::RequestEffectRefinement { contract, subjects } => {
-            digest.update([251]);
-            hash_effect_refinement_contract(digest, contract);
-            hash_functional_refinement_subjects(digest, *subjects);
+            digest.update([251])?;
+            hash_effect_refinement_contract(digest, contract)?;
+            hash_functional_refinement_subjects(digest, *subjects)?;
         }
         ProductionRankedOperationV1::RequireEffectRefinement { contract, proof } => {
-            digest.update([251]);
-            hash_effect_refinement_contract(digest, contract);
-            hash_functional_refinement_subjects(digest, proof.binding().subjects());
+            digest.update([251])?;
+            hash_effect_refinement_contract(digest, contract)?;
+            hash_functional_refinement_subjects(digest, proof.binding().subjects())?;
         }
         ProductionRankedOperationV1::RequestNumericalRefinement { contract, subjects } => {
-            digest.update([252]);
-            hash_numerical_refinement_contract(digest, *contract);
-            hash_functional_refinement_subjects(digest, *subjects);
+            digest.update([252])?;
+            hash_numerical_refinement_contract(digest, *contract)?;
+            hash_functional_refinement_subjects(digest, *subjects)?;
         }
         ProductionRankedOperationV1::RequireNumericalRefinement { contract, proof } => {
-            digest.update([252]);
-            hash_numerical_refinement_contract(digest, *contract);
-            hash_functional_refinement_subjects(digest, proof.binding().subjects());
+            digest.update([252])?;
+            hash_numerical_refinement_contract(digest, *contract)?;
+            hash_functional_refinement_subjects(digest, proof.binding().subjects())?;
         }
         ProductionRankedOperationV1::RequestTensorRefinement { contract, subjects } => {
-            digest.update([253]);
-            hash_tensor_refinement_contract(digest, contract);
-            hash_functional_refinement_subjects(digest, *subjects);
+            digest.update([253])?;
+            hash_tensor_refinement_contract(digest, contract)?;
+            hash_functional_refinement_subjects(digest, *subjects)?;
         }
         ProductionRankedOperationV1::RequireTensorRefinement { contract, proof } => {
-            digest.update([253]);
-            hash_tensor_refinement_contract(digest, contract);
-            hash_functional_refinement_subjects(digest, proof.binding().subjects());
+            digest.update([253])?;
+            hash_tensor_refinement_contract(digest, contract)?;
+            hash_functional_refinement_subjects(digest, proof.binding().subjects())?;
         }
-        _ => hash_ranked_operation(digest, operation),
-    }
+        _ => hash_ranked_operation(digest, operation)?,
+    };
+    Ok(())
 }
 
 fn functional_refinement_graph_operation_tag(operation: &ProductionRankedOperationV1) -> u8 {
@@ -915,71 +933,74 @@ fn functional_refinement_graph_operation_tag(operation: &ProductionRankedOperati
     }
 }
 
-fn hash_tensor_refinement_contract(
-    digest: &mut Sha256,
+fn hash_tensor_refinement_contract<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
     contract: &super::ProductionTensorRefinementContractV1,
-) {
-    digest.update(contract.contract_identity().to_le_bytes());
-    digest.update(contract.tensor_site().block().to_le_bytes());
-    digest.update(contract.tensor_site().operation().to_le_bytes());
-    digest.update(contract.tensor_result_root().as_bytes());
-    hash_value(digest, contract.output_view());
-    hash_value(digest, contract.actual());
-    hash_value(digest, contract.reference());
+) -> Result<(), M::Error> {
+    digest.visit()?;
+    digest.update(contract.contract_identity().to_le_bytes())?;
+    digest.update(contract.tensor_site().block().to_le_bytes())?;
+    digest.update(contract.tensor_site().operation().to_le_bytes())?;
+    digest.update(contract.tensor_result_root().as_bytes())?;
+    hash_value(digest, contract.output_view())?;
+    hash_value(digest, contract.actual())?;
+    hash_value(digest, contract.reference())?;
     match contract.component_scalar() {
-        super::ProductionSemanticScalarTypeV2::Bool => digest.update([1]),
+        super::ProductionSemanticScalarTypeV2::Bool => digest.update([1])?,
         super::ProductionSemanticScalarTypeV2::Integer { signed, bits } => {
-            digest.update([2, u8::from(signed)]);
-            digest.update(bits.to_le_bytes());
+            digest.update([2, u8::from(signed)])?;
+            digest.update(bits.to_le_bytes())?;
         }
         super::ProductionSemanticScalarTypeV2::Float { bits } => {
-            digest.update([3]);
-            digest.update(bits.to_le_bytes());
+            digest.update([3])?;
+            digest.update(bits.to_le_bytes())?;
         }
     }
     match contract.numerical_contract() {
         super::ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => {
-            digest.update([1]);
+            digest.update([1])?;
         }
         super::ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
             rounding,
             exceptional_values,
-        } => digest.update([2, rounding as u8, exceptional_values as u8]),
+        } => digest.update([2, rounding as u8, exceptional_values as u8])?,
         super::ProductionNumericalContractV2::ErrorBounded {
             absolute_error_f64_bits,
             relative_error_f64_bits,
         } => {
-            digest.update([3]);
-            digest.update(absolute_error_f64_bits.to_le_bytes());
-            digest.update(relative_error_f64_bits.to_le_bytes());
+            digest.update([3])?;
+            digest.update(absolute_error_f64_bits.to_le_bytes())?;
+            digest.update(relative_error_f64_bits.to_le_bytes())?;
         }
-        super::ProductionNumericalContractV2::Relaxed => digest.update([4]),
+        super::ProductionNumericalContractV2::Relaxed => digest.update([4])?,
     }
-    digest.update((contract.components().len() as u64).to_le_bytes());
+    digest.update((contract.components().len() as u64).to_le_bytes())?;
     for component in contract.components() {
-        digest.update(component.component().to_le_bytes());
-        digest.update(component.store_site().block().to_le_bytes());
-        digest.update(component.store_site().operation().to_le_bytes());
-        hash_values(digest, component.indices());
-        hash_value(digest, component.gpu_value());
-        hash_value(digest, component.reference_value());
+        digest.update(component.component().to_le_bytes())?;
+        digest.update(component.store_site().block().to_le_bytes())?;
+        digest.update(component.store_site().operation().to_le_bytes())?;
+        hash_values(digest, component.indices())?;
+        hash_value(digest, component.gpu_value())?;
+        hash_value(digest, component.reference_value())?;
     }
+    Ok(())
 }
 
-fn hash_effect_refinement_contract(
-    digest: &mut Sha256,
+fn hash_effect_refinement_contract<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
     contract: &super::ProductionEffectRefinementContractV2,
-) {
-    digest.update(contract.contract_identity().to_le_bytes());
-    digest.update(contract.gpu_write_site().block().to_le_bytes());
-    digest.update(contract.gpu_write_site().operation().to_le_bytes());
-    digest.update(contract.reference_output_site().argument().to_le_bytes());
-    digest.update(contract.reference_output_site().block().to_le_bytes());
-    digest.update(contract.reference_output_site().statement().to_le_bytes());
-    hash_value(digest, contract.view());
-    hash_values(digest, contract.indices());
-    hash_values(digest, contract.gpu_coordinates());
-    hash_values(digest, contract.reference_coordinates());
+) -> Result<(), M::Error> {
+    digest.visit()?;
+    digest.update(contract.contract_identity().to_le_bytes())?;
+    digest.update(contract.gpu_write_site().block().to_le_bytes())?;
+    digest.update(contract.gpu_write_site().operation().to_le_bytes())?;
+    digest.update(contract.reference_output_site().argument().to_le_bytes())?;
+    digest.update(contract.reference_output_site().block().to_le_bytes())?;
+    digest.update(contract.reference_output_site().statement().to_le_bytes())?;
+    hash_value(digest, contract.view())?;
+    hash_values(digest, contract.indices())?;
+    hash_values(digest, contract.gpu_coordinates())?;
+    hash_values(digest, contract.reference_coordinates())?;
     for value in [
         contract.gpu_domain(),
         contract.reference_domain(),
@@ -988,28 +1009,35 @@ fn hash_effect_refinement_contract(
         contract.gpu_value(),
         contract.reference_value(),
     ] {
-        hash_value(digest, value);
+        hash_value(digest, value)?;
     }
+    Ok(())
 }
 
-fn hash_numerical_refinement_contract(
-    digest: &mut Sha256,
+fn hash_numerical_refinement_contract<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
     contract: super::ProductionNumericalRefinementContractV2,
-) {
-    digest.update(contract.contract_identity().to_le_bytes());
+) -> Result<(), M::Error> {
+    digest.visit()?;
+    digest.update(contract.contract_identity().to_le_bytes())?;
     for value in [
         contract.actual(),
         contract.reference(),
         contract.domain(),
         contract.precondition(),
     ] {
-        hash_value(digest, value);
+        hash_value(digest, value)?;
     }
-    digest.update(contract.absolute_error_f64_bits().to_le_bytes());
-    digest.update(contract.relative_error_f64_bits().to_le_bytes());
+    digest.update(contract.absolute_error_f64_bits().to_le_bytes())?;
+    digest.update(contract.relative_error_f64_bits().to_le_bytes())?;
+    Ok(())
 }
 
-fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperationV1) {
+fn hash_ranked_operation<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
+    operation: &ProductionRankedOperationV1,
+) -> Result<(), M::Error> {
+    digest.visit()?;
     match operation {
         ProductionRankedOperationV1::ExecutionLayout {
             grid_identity,
@@ -1018,16 +1046,16 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             subgroup_size,
             full_physical_workgroups,
         } => {
-            digest.update([RANKED_EXECUTION_LAYOUT_TAG_V4]);
-            digest.update(grid_identity.to_le_bytes());
+            digest.update([RANKED_EXECUTION_LAYOUT_TAG_V4])?;
+            digest.update(grid_identity.to_le_bytes())?;
             for extent in global_extents {
-                digest.update(extent.to_le_bytes());
+                digest.update(extent.to_le_bytes())?;
             }
             for extent in workgroup_extents {
-                digest.update(extent.to_le_bytes());
+                digest.update(extent.to_le_bytes())?;
             }
-            digest.update(subgroup_size.to_le_bytes());
-            digest.update([u8::from(*full_physical_workgroups)]);
+            digest.update(subgroup_size.to_le_bytes())?;
+            digest.update([u8::from(*full_physical_workgroups)])?;
         }
         ProductionRankedOperationV1::View {
             result,
@@ -1038,14 +1066,14 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             allocation_origin,
             noalias_class,
         } => {
-            digest.update([1]);
-            digest.update(result.get().to_le_bytes());
-            digest.update(element_width.to_le_bytes());
-            digest.update([u8::from(*writable)]);
-            hash_u64_slice(digest, shape);
-            hash_values(digest, dynamic_extents);
-            digest.update(allocation_origin.to_le_bytes());
-            digest.update(noalias_class.to_le_bytes());
+            digest.update([1])?;
+            digest.update(result.get().to_le_bytes())?;
+            digest.update(element_width.to_le_bytes())?;
+            digest.update([u8::from(*writable)])?;
+            hash_u64_slice(digest, shape)?;
+            hash_values(digest, dynamic_extents)?;
+            digest.update(allocation_origin.to_le_bytes())?;
+            digest.update(noalias_class.to_le_bytes())?;
         }
         ProductionRankedOperationV1::ViewInSpace {
             result,
@@ -1057,15 +1085,15 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             allocation_origin,
             noalias_class,
         } => {
-            digest.update([2]);
-            digest.update(result.get().to_le_bytes());
-            digest.update(element_width.to_le_bytes());
-            digest.update([u8::from(*writable)]);
-            hash_u64_slice(digest, shape);
-            hash_values(digest, dynamic_extents);
-            digest.update([memory_space_tag(*memory_space)]);
-            digest.update(allocation_origin.to_le_bytes());
-            digest.update(noalias_class.to_le_bytes());
+            digest.update([2])?;
+            digest.update(result.get().to_le_bytes())?;
+            digest.update(element_width.to_le_bytes())?;
+            digest.update([u8::from(*writable)])?;
+            hash_u64_slice(digest, shape)?;
+            hash_values(digest, dynamic_extents)?;
+            digest.update([memory_space_tag(*memory_space)])?;
+            digest.update(allocation_origin.to_le_bytes())?;
+            digest.update(noalias_class.to_le_bytes())?;
         }
         ProductionRankedOperationV1::PipelineCreate {
             result,
@@ -1073,11 +1101,11 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             buffers,
             prefetch_distance,
         } => {
-            digest.update([38]);
-            digest.update(result.get().to_le_bytes());
-            hash_value(digest, *view);
-            digest.update(buffers.to_le_bytes());
-            digest.update(prefetch_distance.to_le_bytes());
+            digest.update([38])?;
+            digest.update(result.get().to_le_bytes())?;
+            hash_value(digest, *view)?;
+            digest.update(buffers.to_le_bytes())?;
+            digest.update(prefetch_distance.to_le_bytes())?;
         }
         ProductionRankedOperationV1::PipelineEvent {
             pipeline,
@@ -1085,10 +1113,10 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             slot,
             kind,
         } => {
-            digest.update([39]);
-            hash_value(digest, *pipeline);
-            hash_value(digest, *epoch);
-            hash_value(digest, *slot);
+            digest.update([39])?;
+            hash_value(digest, *pipeline)?;
+            hash_value(digest, *epoch)?;
+            hash_value(digest, *slot)?;
             digest.update([match kind {
                 dialect_kernel::PipelineEventKindAttr::Stage => 1,
                 dialect_kernel::PipelineEventKindAttr::Commit => 2,
@@ -1096,36 +1124,36 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
                 dialect_kernel::PipelineEventKindAttr::Consume => 4,
                 dialect_kernel::PipelineEventKindAttr::Discard => 5,
                 dialect_kernel::PipelineEventKindAttr::Release => 6,
-            }]);
+            }])?;
         }
         ProductionRankedOperationV1::IndexConstant { result, value } => {
-            digest.update([3]);
-            digest.update(result.get().to_le_bytes());
-            digest.update(value.to_le_bytes());
+            digest.update([3])?;
+            digest.update(result.get().to_le_bytes())?;
+            digest.update(value.to_le_bytes())?;
         }
         ProductionRankedOperationV1::IndexUnsignedCast {
             result,
             source,
             bit_width,
         } => {
-            digest.update([RANKED_INDEX_UNSIGNED_CAST_TAG_V4]);
-            digest.update(result.get().to_le_bytes());
-            hash_value(digest, *source);
-            digest.update(bit_width.to_le_bytes());
+            digest.update([RANKED_INDEX_UNSIGNED_CAST_TAG_V4])?;
+            digest.update(result.get().to_le_bytes())?;
+            hash_value(digest, *source)?;
+            digest.update(bit_width.to_le_bytes())?;
         }
         ProductionRankedOperationV1::IndexUnknown { result } => {
-            digest.update([22]);
-            digest.update(result.get().to_le_bytes());
+            digest.update([22])?;
+            digest.update(result.get().to_le_bytes())?;
         }
         ProductionRankedOperationV1::InvocationIndex {
             result,
             dimension,
             launch_extent,
         } => {
-            digest.update([4]);
-            digest.update(result.get().to_le_bytes());
-            digest.update(dimension.to_le_bytes());
-            digest.update(launch_extent.to_le_bytes());
+            digest.update([4])?;
+            digest.update(result.get().to_le_bytes())?;
+            digest.update(dimension.to_le_bytes())?;
+            digest.update(launch_extent.to_le_bytes())?;
         }
         ProductionRankedOperationV1::IndexBinary {
             result,
@@ -1133,19 +1161,19 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             lhs,
             rhs,
         } => {
-            digest.update([5]);
-            digest.update(result.get().to_le_bytes());
-            digest.update([index_binary_tag(*kind)]);
-            hash_value(digest, *lhs);
-            hash_value(digest, *rhs);
+            digest.update([5])?;
+            digest.update(result.get().to_le_bytes())?;
+            digest.update([index_binary_tag(*kind)])?;
+            hash_value(digest, *lhs)?;
+            hash_value(digest, *rhs)?;
         }
         ProductionRankedOperationV1::DeterministicJoin {
             result,
             dependencies,
         } => {
-            digest.update([17]);
-            digest.update(result.get().to_le_bytes());
-            hash_values(digest, dependencies);
+            digest.update([17])?;
+            digest.update(result.get().to_le_bytes())?;
+            hash_values(digest, dependencies)?;
         }
         ProductionRankedOperationV1::CheckedTiledIndex2D {
             result,
@@ -1159,17 +1187,17 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             tile_columns,
             elements_per_lane,
         } => {
-            digest.update([14]);
-            digest.update(result.get().to_le_bytes());
-            hash_value(digest, *invocation);
-            hash_value(digest, *component);
-            hash_value(digest, *rows);
-            hash_value(digest, *columns);
-            hash_value(digest, *row_stride);
-            digest.update(lanes_per_tile.to_le_bytes());
-            digest.update(tile_rows.to_le_bytes());
-            digest.update(tile_columns.to_le_bytes());
-            digest.update(elements_per_lane.to_le_bytes());
+            digest.update([14])?;
+            digest.update(result.get().to_le_bytes())?;
+            hash_value(digest, *invocation)?;
+            hash_value(digest, *component)?;
+            hash_value(digest, *rows)?;
+            hash_value(digest, *columns)?;
+            hash_value(digest, *row_stride)?;
+            digest.update(lanes_per_tile.to_le_bytes())?;
+            digest.update(tile_rows.to_le_bytes())?;
+            digest.update(tile_columns.to_le_bytes())?;
+            digest.update(elements_per_lane.to_le_bytes())?;
         }
         ProductionRankedOperationV1::CheckedRowStripedIndex2D {
             result,
@@ -1181,15 +1209,15 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             lanes_per_row,
             elements_per_lane,
         } => {
-            digest.update([18]);
-            digest.update(result.get().to_le_bytes());
-            hash_value(digest, *invocation);
-            hash_value(digest, *component);
-            hash_value(digest, *rows);
-            hash_value(digest, *columns);
-            hash_value(digest, *row_stride);
-            digest.update(lanes_per_row.to_le_bytes());
-            digest.update(elements_per_lane.to_le_bytes());
+            digest.update([18])?;
+            digest.update(result.get().to_le_bytes())?;
+            hash_value(digest, *invocation)?;
+            hash_value(digest, *component)?;
+            hash_value(digest, *rows)?;
+            hash_value(digest, *columns)?;
+            hash_value(digest, *row_stride)?;
+            digest.update(lanes_per_row.to_le_bytes())?;
+            digest.update(elements_per_lane.to_le_bytes())?;
         }
         ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D {
             result,
@@ -1205,9 +1233,9 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             tile_columns,
             elements_per_lane,
         } => {
-            digest.update([35]);
-            digest.update(result.get().to_le_bytes());
-            digest.update(success.get().to_le_bytes());
+            digest.update([35])?;
+            digest.update(result.get().to_le_bytes())?;
+            digest.update(success.get().to_le_bytes())?;
             for value in [
                 invocation,
                 component,
@@ -1216,12 +1244,12 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
                 row_stride,
                 physical_extent,
             ] {
-                hash_value(digest, *value);
+                hash_value(digest, *value)?;
             }
-            digest.update(lanes_per_tile.to_le_bytes());
-            digest.update(tile_rows.to_le_bytes());
-            digest.update(tile_columns.to_le_bytes());
-            digest.update(elements_per_lane.to_le_bytes());
+            digest.update(lanes_per_tile.to_le_bytes())?;
+            digest.update(tile_rows.to_le_bytes())?;
+            digest.update(tile_columns.to_le_bytes())?;
+            digest.update(elements_per_lane.to_le_bytes())?;
         }
         ProductionRankedOperationV1::PredicatedCheckedRowStripedIndex2D {
             result,
@@ -1235,9 +1263,9 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             lanes_per_row,
             elements_per_lane,
         } => {
-            digest.update([36]);
-            digest.update(result.get().to_le_bytes());
-            digest.update(success.get().to_le_bytes());
+            digest.update([36])?;
+            digest.update(result.get().to_le_bytes())?;
+            digest.update(success.get().to_le_bytes())?;
             for value in [
                 invocation,
                 component,
@@ -1246,30 +1274,30 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
                 row_stride,
                 physical_extent,
             ] {
-                hash_value(digest, *value);
+                hash_value(digest, *value)?;
             }
-            digest.update(lanes_per_row.to_le_bytes());
-            digest.update(elements_per_lane.to_le_bytes());
+            digest.update(lanes_per_row.to_le_bytes())?;
+            digest.update(elements_per_lane.to_le_bytes())?;
         }
         ProductionRankedOperationV1::Dimension {
             result,
             view,
             dimension,
         } => {
-            digest.update([6]);
-            digest.update(result.get().to_le_bytes());
-            hash_value(digest, *view);
-            digest.update(dimension.to_le_bytes());
+            digest.update([6])?;
+            digest.update(result.get().to_le_bytes())?;
+            hash_value(digest, *view)?;
+            digest.update(dimension.to_le_bytes())?;
         }
         ProductionRankedOperationV1::Access {
             kind,
             view,
             indices,
         } => {
-            digest.update([7]);
-            digest.update([access_kind_tag(*kind)]);
-            hash_value(digest, *view);
-            hash_values(digest, indices);
+            digest.update([7])?;
+            digest.update([access_kind_tag(*kind)])?;
+            hash_value(digest, *view)?;
+            hash_values(digest, indices)?;
         }
         ProductionRankedOperationV1::PredicatedAccess {
             kind,
@@ -1277,11 +1305,11 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             index,
             success,
         } => {
-            digest.update([37]);
-            digest.update([access_kind_tag(*kind)]);
-            hash_value(digest, *view);
-            hash_value(digest, *index);
-            hash_value(digest, *success);
+            digest.update([37])?;
+            digest.update([access_kind_tag(*kind)])?;
+            hash_value(digest, *view)?;
+            hash_value(digest, *index)?;
+            hash_value(digest, *success)?;
         }
         ProductionRankedOperationV1::ValueAccess {
             kind,
@@ -1289,11 +1317,11 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             indices,
             value,
         } => {
-            digest.update([28]);
-            digest.update([access_kind_tag(*kind)]);
-            hash_value(digest, *view);
-            hash_values(digest, indices);
-            hash_value(digest, *value);
+            digest.update([28])?;
+            digest.update([access_kind_tag(*kind)])?;
+            hash_value(digest, *view)?;
+            hash_values(digest, indices)?;
+            hash_value(digest, *value)?;
         }
         ProductionRankedOperationV1::AtomicAccess {
             kind,
@@ -1302,12 +1330,12 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             view,
             indices,
         } => {
-            digest.update([13]);
-            digest.update([access_kind_tag(*kind)]);
-            digest.update([atomic_ordering_tag(*ordering)]);
-            digest.update([atomic_scope_tag(*scope)]);
-            hash_value(digest, *view);
-            hash_values(digest, indices);
+            digest.update([13])?;
+            digest.update([access_kind_tag(*kind)])?;
+            digest.update([atomic_ordering_tag(*ordering)])?;
+            digest.update([atomic_scope_tag(*scope)])?;
+            hash_value(digest, *view)?;
+            hash_values(digest, indices)?;
         }
         ProductionRankedOperationV1::AtomicValueAccess {
             kind,
@@ -1317,31 +1345,31 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             indices,
             value,
         } => {
-            digest.update([29]);
-            digest.update([access_kind_tag(*kind)]);
-            digest.update([atomic_ordering_tag(*ordering)]);
-            digest.update([atomic_scope_tag(*scope)]);
-            hash_value(digest, *view);
-            hash_values(digest, indices);
-            hash_value(digest, *value);
+            digest.update([29])?;
+            digest.update([access_kind_tag(*kind)])?;
+            digest.update([atomic_ordering_tag(*ordering)])?;
+            digest.update([atomic_scope_tag(*scope)])?;
+            hash_value(digest, *view)?;
+            hash_values(digest, indices)?;
+            hash_value(digest, *value)?;
         }
         ProductionRankedOperationV1::OwnershipContract {
             view,
             coverage,
             partition,
         } => {
-            digest.update([RANKED_OWNERSHIP_CONTRACT_TAG_V4]);
-            hash_value(digest, *view);
+            digest.update([RANKED_OWNERSHIP_CONTRACT_TAG_V4])?;
+            hash_value(digest, *view)?;
             digest.update([match coverage {
                 dialect_kernel::OwnershipCoverageAttr::ExactView => 1,
                 dialect_kernel::OwnershipCoverageAttr::ExactEffectDomain => 2,
                 dialect_kernel::OwnershipCoverageAttr::TotalView => 3,
                 dialect_kernel::OwnershipCoverageAttr::CollectiveContributions => 4,
-            }]);
+            }])?;
             digest.update([match partition {
                 dialect_kernel::OwnershipPartitionAttr::ExactSets => 1,
                 dialect_kernel::OwnershipPartitionAttr::DenseRectangles => 2,
-            }]);
+            }])?;
         }
         ProductionRankedOperationV1::AllocationEffect {
             kind,
@@ -1349,11 +1377,11 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             allocation_origin,
             noalias_class,
         } => {
-            digest.update([18]);
-            digest.update([access_kind_tag(*kind)]);
-            digest.update([memory_space_tag(*memory_space)]);
-            digest.update(allocation_origin.to_le_bytes());
-            digest.update(noalias_class.to_le_bytes());
+            digest.update([18])?;
+            digest.update([access_kind_tag(*kind)])?;
+            digest.update([memory_space_tag(*memory_space)])?;
+            digest.update(allocation_origin.to_le_bytes())?;
+            digest.update(noalias_class.to_le_bytes())?;
         }
         ProductionRankedOperationV1::Barrier {
             execution_scope,
@@ -1361,21 +1389,21 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             address_space,
             order,
         } => {
-            digest.update([8]);
-            digest.update([hierarchy_tag(*execution_scope)]);
-            digest.update([memory_scope_tag(*memory_scope)]);
-            digest.update([address_space_tag(*address_space)]);
-            digest.update([memory_order_tag(*order)]);
+            digest.update([8])?;
+            digest.update([hierarchy_tag(*execution_scope)])?;
+            digest.update([memory_scope_tag(*memory_scope)])?;
+            digest.update([address_space_tag(*address_space)])?;
+            digest.update([memory_order_tag(*order)])?;
         }
         ProductionRankedOperationV1::Fence {
             memory_scope,
             address_space,
             order,
         } => {
-            digest.update([16]);
-            digest.update([memory_scope_tag(*memory_scope)]);
-            digest.update([address_space_tag(*address_space)]);
-            digest.update([memory_order_tag(*order)]);
+            digest.update([16])?;
+            digest.update([memory_scope_tag(*memory_scope)])?;
+            digest.update([address_space_tag(*address_space)])?;
+            digest.update([memory_order_tag(*order)])?;
         }
         ProductionRankedOperationV1::TensorLayout {
             contract,
@@ -1383,19 +1411,19 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             active_lanes,
             binding,
         } => {
-            digest.update([RANKED_TENSOR_LAYOUT_TAG_V4]);
-            hash_tensor_layout_contract(digest, contract);
+            digest.update([RANKED_TENSOR_LAYOUT_TAG_V4])?;
+            emit_tensor_layout_contract(digest, contract)?;
             digest.update([match convergence {
                 dialect_kernel::TensorConvergenceAttr::UniformSubgroup => 1,
                 dialect_kernel::TensorConvergenceAttr::Divergent => 2,
                 dialect_kernel::TensorConvergenceAttr::UniformWorkgroup => 3,
                 dialect_kernel::TensorConvergenceAttr::Opaque => 4,
-            }]);
-            digest.update(active_lanes.to_le_bytes());
+            }])?;
+            digest.update(active_lanes.to_le_bytes())?;
             match binding {
-                None => digest.update([0]),
+                None => digest.update([0])?,
                 Some(binding) => {
-                    digest.update([1]);
+                    digest.update([1])?;
                     for root in [
                         binding.context_root(),
                         binding.lane_root(),
@@ -1404,9 +1432,9 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
                         binding.accumulator_root(),
                         binding.result_root(),
                     ] {
-                        digest.update(root.as_bytes());
+                        digest.update(root.as_bytes())?;
                     }
-                    digest.update(binding.argument_count().to_le_bytes());
+                    digest.update(binding.argument_count().to_le_bytes())?;
                 }
             }
         }
@@ -1417,51 +1445,51 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             scalar,
             numerical_contract,
         } => {
-            digest.update([32]);
-            digest.update(result.get().to_le_bytes());
-            digest.update(tensor_result_root.as_bytes());
-            digest.update(component.to_le_bytes());
+            digest.update([32])?;
+            digest.update(result.get().to_le_bytes())?;
+            digest.update(tensor_result_root.as_bytes())?;
+            digest.update(component.to_le_bytes())?;
             match scalar {
-                super::ProductionSemanticScalarTypeV2::Bool => digest.update([1]),
+                super::ProductionSemanticScalarTypeV2::Bool => digest.update([1])?,
                 super::ProductionSemanticScalarTypeV2::Integer { signed, bits } => {
-                    digest.update([2, u8::from(*signed)]);
-                    digest.update(bits.to_le_bytes());
+                    digest.update([2, u8::from(*signed)])?;
+                    digest.update(bits.to_le_bytes())?;
                 }
                 super::ProductionSemanticScalarTypeV2::Float { bits } => {
-                    digest.update([3]);
-                    digest.update(bits.to_le_bytes());
+                    digest.update([3])?;
+                    digest.update(bits.to_le_bytes())?;
                 }
             }
             match numerical_contract {
                 super::ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => {
-                    digest.update([1]);
+                    digest.update([1])?;
                 }
                 super::ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
                     rounding,
                     exceptional_values,
                 } => {
-                    digest.update([2, *rounding as u8, *exceptional_values as u8]);
+                    digest.update([2, *rounding as u8, *exceptional_values as u8])?;
                 }
                 super::ProductionNumericalContractV2::ErrorBounded {
                     absolute_error_f64_bits,
                     relative_error_f64_bits,
                 } => {
-                    digest.update([3]);
-                    digest.update(absolute_error_f64_bits.to_le_bytes());
-                    digest.update(relative_error_f64_bits.to_le_bytes());
+                    digest.update([3])?;
+                    digest.update(absolute_error_f64_bits.to_le_bytes())?;
+                    digest.update(relative_error_f64_bits.to_le_bytes())?;
                 }
-                super::ProductionNumericalContractV2::Relaxed => digest.update([4]),
+                super::ProductionNumericalContractV2::Relaxed => digest.update([4])?,
             }
         }
         ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
-            digest.update([9]);
-            digest.update(result.get().to_le_bytes());
-            digest.update(symbol.to_le_bytes());
+            digest.update([9])?;
+            digest.update(result.get().to_le_bytes())?;
+            digest.update(symbol.to_le_bytes())?;
         }
         ProductionRankedOperationV1::SemanticConstant { result, value } => {
-            digest.update([10]);
-            digest.update(result.get().to_le_bytes());
-            digest.update(value.to_le_bytes());
+            digest.update([10])?;
+            digest.update(result.get().to_le_bytes())?;
+            digest.update(value.to_le_bytes())?;
         }
         ProductionRankedOperationV1::SemanticBinary {
             result,
@@ -1469,20 +1497,22 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             lhs,
             rhs,
         } => {
-            digest.update([11]);
-            digest.update(result.get().to_le_bytes());
-            digest.update([semantic_binary_tag(*kind)]);
-            hash_value(digest, *lhs);
-            hash_value(digest, *rhs);
+            digest.update([11])?;
+            digest.update(result.get().to_le_bytes())?;
+            digest.update([semantic_binary_tag(*kind)])?;
+            hash_value(digest, *lhs)?;
+            hash_value(digest, *rhs)?;
         }
         ProductionRankedOperationV1::SemanticExpression {
             result,
             expression,
             numerical_contract,
         } => {
-            digest.update([28]);
-            digest.update(result.get().to_le_bytes());
-            digest.update(expression.canonical_transcript_sha256(*numerical_contract));
+            digest.update([28])?;
+            digest.update(result.get().to_le_bytes())?;
+            digest.append_nested(|nested| {
+                expression.emit_canonical_transcript_v1(nested, *numerical_contract)
+            })?;
         }
         ProductionRankedOperationV1::CollectiveSemantics {
             contract,
@@ -1492,31 +1522,30 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             witness0,
             witness1,
         } => {
-            // V4 does not gain a coverage pass from this graph entry. This
-            // only commits the complete ranked recipe for proof correlation.
-            digest.update([30]);
+            // This commits the recipe, not a V4 coverage proof.
+            digest.update([30])?;
             digest.update([match contract.kind() {
                 super::ProductionCollectiveSemanticKindV1::FiniteFold => 1,
                 super::ProductionCollectiveSemanticKindV1::FiniteRecurrence => 2,
                 super::ProductionCollectiveSemanticKindV1::PermutationGather => 3,
-            }]);
+            }])?;
             for identity in [
                 contract.contract_identity(),
                 contract.source_domain_identity(),
                 contract.target_domain_identity(),
             ] {
                 for word in identity {
-                    digest.update(word.to_le_bytes());
+                    digest.update(word.to_le_bytes())?;
                 }
             }
-            digest.update(contract.domain_bound().to_le_bytes());
-            digest.update(contract.step_bound().to_le_bytes());
+            digest.update(contract.domain_bound().to_le_bytes())?;
+            digest.update(contract.step_bound().to_le_bytes())?;
             digest.update([match contract.order() {
                 dialect_kernel::SemanticEvaluationOrderAttr::Ascending => 1,
                 dialect_kernel::SemanticEvaluationOrderAttr::Descending => 2,
                 dialect_kernel::SemanticEvaluationOrderAttr::Lexicographic => 3,
                 dialect_kernel::SemanticEvaluationOrderAttr::Explicit => 4,
-            }]);
+            }])?;
             digest.update([match contract.numerical_contract() {
                 super::ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => 1,
                 super::ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
@@ -1525,31 +1554,31 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
                         super::ProductionIeeeExceptionalValuePolicyV2::PreserveExactBits,
                 } => 2,
                 _ => 255,
-            }]);
+            }])?;
             digest.update([match contract.coverage() {
                 dialect_kernel::SemanticCoverageBindingAttr::TotalView => 1,
                 dialect_kernel::SemanticCoverageBindingAttr::CollectiveContributions => 2,
-            }]);
+            }])?;
             for value in [view, actual, expected, witness0, witness1] {
-                hash_value(digest, *value);
+                hash_value(digest, *value)?;
             }
         }
         ProductionRankedOperationV1::RequireEquivalent { actual, expected } => {
-            digest.update([12]);
-            hash_value(digest, *actual);
-            hash_value(digest, *expected);
+            digest.update([12])?;
+            hash_value(digest, *actual)?;
+            hash_value(digest, *expected)?;
         }
         ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
             actual,
             expected,
             proof,
         } => {
-            digest.update([24]);
-            hash_value(digest, *actual);
-            hash_value(digest, *expected);
-            digest.update(proof.receipt_identity().digest().as_bytes());
+            digest.update([24])?;
+            hash_value(digest, *actual)?;
+            hash_value(digest, *expected)?;
+            digest.update(proof.receipt_identity().digest().as_bytes())?;
             let binding = proof.binding();
-            digest.update([binding.safe_reference_kind() as u8]);
+            digest.update([binding.safe_reference_kind() as u8])?;
             for identity in [
                 binding.safe_reference_identity(),
                 binding.safe_reference_source_hash(),
@@ -1558,75 +1587,77 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
                 binding.kernel_mir_hash(),
                 binding.normalized_obligation_effect_ir_hash(),
             ] {
-                digest.update(identity.as_bytes());
+                digest.update(identity.as_bytes())?;
             }
         }
         ProductionRankedOperationV1::RequireEffectRefinement { contract, proof } => {
-            digest.update([25]);
-            hash_effect_refinement_contract(digest, contract);
-            digest.update(proof.receipt_identity().digest().as_bytes());
+            digest.update([25])?;
+            hash_effect_refinement_contract(digest, contract)?;
+            digest.update(proof.receipt_identity().digest().as_bytes())?;
             digest.update(
                 proof
                     .binding()
                     .normalized_obligation_effect_ir_hash()
                     .as_bytes(),
-            );
+            )?;
         }
         ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
             actual,
             expected,
             subjects,
         } => {
-            digest.update([26]);
-            hash_value(digest, *actual);
-            hash_value(digest, *expected);
-            hash_functional_refinement_subjects(digest, *subjects);
+            digest.update([26])?;
+            hash_value(digest, *actual)?;
+            hash_value(digest, *expected)?;
+            hash_functional_refinement_subjects(digest, *subjects)?;
         }
         ProductionRankedOperationV1::RequestEffectRefinement { contract, subjects } => {
-            digest.update([27]);
-            digest.update(contract.request_shape_hash().as_bytes());
-            hash_functional_refinement_subjects(digest, *subjects);
+            digest.update([27])?;
+            digest.append_nested(|nested| contract.emit_request_shape_v1(nested))?;
+            hash_functional_refinement_subjects(digest, *subjects)?;
         }
         ProductionRankedOperationV1::RequireNumericalRefinement { contract, proof } => {
-            digest.update([28]);
-            hash_numerical_refinement_contract(digest, *contract);
-            digest.update(proof.receipt_identity().digest().as_bytes());
+            digest.update([28])?;
+            hash_numerical_refinement_contract(digest, *contract)?;
+            digest.update(proof.receipt_identity().digest().as_bytes())?;
             digest.update(
                 proof
                     .binding()
                     .normalized_obligation_effect_ir_hash()
                     .as_bytes(),
-            );
+            )?;
         }
         ProductionRankedOperationV1::RequestNumericalRefinement { contract, subjects } => {
-            digest.update([29]);
-            digest.update(contract.request_shape_hash().as_bytes());
-            hash_functional_refinement_subjects(digest, *subjects);
+            digest.update([29])?;
+            digest.append_nested(|nested| contract.emit_request_shape_v1(nested))?;
+            hash_functional_refinement_subjects(digest, *subjects)?;
         }
         ProductionRankedOperationV1::RequireTensorRefinement { contract, proof } => {
-            digest.update([33]);
-            hash_tensor_refinement_contract(digest, contract);
-            digest.update(proof.receipt_identity().digest().as_bytes());
+            digest.update([33])?;
+            hash_tensor_refinement_contract(digest, contract)?;
+            digest.update(proof.receipt_identity().digest().as_bytes())?;
             digest.update(
                 proof
                     .binding()
                     .normalized_obligation_effect_ir_hash()
                     .as_bytes(),
-            );
+            )?;
         }
         ProductionRankedOperationV1::RequestTensorRefinement { contract, subjects } => {
-            digest.update([34]);
-            hash_tensor_refinement_contract(digest, contract);
-            hash_functional_refinement_subjects(digest, *subjects);
+            digest.update([34])?;
+            hash_tensor_refinement_contract(digest, contract)?;
+            hash_functional_refinement_subjects(digest, *subjects)?;
         }
-    }
+    };
+    Ok(())
 }
 
-fn hash_functional_refinement_subjects(
-    digest: &mut Sha256,
+fn hash_functional_refinement_subjects<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
     subjects: fe2o3_functional_proof::FunctionalRefinementSubjectsV2,
-) {
-    digest.update([subjects.safe_reference_kind() as u8]);
+) -> Result<(), M::Error> {
+    digest.visit()?;
+    digest.update([subjects.safe_reference_kind() as u8])?;
     for identity in [
         subjects.safe_reference_identity(),
         subjects.safe_reference_source_hash(),
@@ -1634,99 +1665,120 @@ fn hash_functional_refinement_subjects(
         subjects.kernel_subject_identity(),
         subjects.kernel_mir_hash(),
     ] {
-        digest.update(identity.as_bytes());
+        digest.update(identity.as_bytes())?;
     }
+    Ok(())
 }
 
 pub(super) fn hash_tensor_layout_contract(digest: &mut Sha256, contract: &TensorLayoutContractV1) {
-    match contract.profile {
-        TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64 => digest.update([1]),
-        TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64 => {
-            digest.update([4])
-        }
-        TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64 => {
-            digest.update([5])
-        }
-        TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64 => {
-            digest.update([6])
-        }
-        TensorInstructionProfileV1::IncompatibleWave32 => digest.update([2]),
-        TensorInstructionProfileV1::Opaque(identity) => {
-            digest.update([3]);
-            digest.update(identity.to_le_bytes());
-        }
-    }
-    digest.update(contract.subgroup_width.to_le_bytes());
-    hash_tensor_fragment(digest, &contract.a);
-    hash_tensor_fragment(digest, &contract.b);
-    hash_tensor_fragment(digest, &contract.accumulator);
-    match contract.tail_mask {
-        TensorTailMaskV1::ExactPhysicalTile => digest.update([1]),
-        TensorTailMaskV1::ZeroFilledPredicateInputs => digest.update([2]),
-        TensorTailMaskV1::PredicateMask => digest.update([3]),
-        TensorTailMaskV1::Missing => digest.update([4]),
-        TensorTailMaskV1::Unsupported(code) => digest.update([5, code]),
-    }
+    hash_work::unmetered_into(digest, |digest| {
+        emit_tensor_layout_contract(digest, contract)
+    });
 }
 
-fn hash_tensor_fragment(digest: &mut Sha256, fragment: &TensorFragmentLayoutV1) {
+fn emit_tensor_layout_contract<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
+    contract: &TensorLayoutContractV1,
+) -> Result<(), M::Error> {
+    digest.visit()?;
+    match contract.profile {
+        TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64 => digest.update([1])?,
+        TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64 => {
+            digest.update([4])?
+        }
+        TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64 => {
+            digest.update([5])?
+        }
+        TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64 => {
+            digest.update([6])?
+        }
+        TensorInstructionProfileV1::IncompatibleWave32 => digest.update([2])?,
+        TensorInstructionProfileV1::Opaque(identity) => {
+            digest.update([3])?;
+            digest.update(identity.to_le_bytes())?;
+        }
+    }
+    digest.update(contract.subgroup_width.to_le_bytes())?;
+    hash_tensor_fragment(digest, &contract.a)?;
+    hash_tensor_fragment(digest, &contract.b)?;
+    hash_tensor_fragment(digest, &contract.accumulator)?;
+    match contract.tail_mask {
+        TensorTailMaskV1::ExactPhysicalTile => digest.update([1])?,
+        TensorTailMaskV1::ZeroFilledPredicateInputs => digest.update([2])?,
+        TensorTailMaskV1::PredicateMask => digest.update([3])?,
+        TensorTailMaskV1::Missing => digest.update([4])?,
+        TensorTailMaskV1::Unsupported(code) => digest.update([5, code])?,
+    };
+    Ok(())
+}
+
+fn hash_tensor_fragment<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
+    fragment: &TensorFragmentLayoutV1,
+) -> Result<(), M::Error> {
+    digest.visit()?;
     digest.update([match fragment.role {
         TensorOperandRoleV1::A => 1,
         TensorOperandRoleV1::B => 2,
         TensorOperandRoleV1::Accumulator => 3,
-    }]);
+    }])?;
     for extent in fragment.shape {
-        digest.update(extent.to_le_bytes());
+        digest.update(extent.to_le_bytes())?;
     }
     digest.update([match fragment.element {
         MatrixElement::Bf16 => 1,
         MatrixElement::F32 => 2,
         MatrixElement::Fp8E4M3 => 3,
         MatrixElement::Fp4E2M1 => 4,
-    }]);
-    digest.update([fragment.fragment_elements]);
+    }])?;
+    digest.update([fragment.fragment_elements])?;
     match fragment.mapping {
         TensorSymbolicMapV1::LaneComponentAffine {
             lane_modulus,
             lane_divisor,
             axes,
         } => {
-            digest.update([1]);
-            digest.update(lane_modulus.to_le_bytes());
-            digest.update(lane_divisor.to_le_bytes());
+            digest.update([1])?;
+            digest.update(lane_modulus.to_le_bytes())?;
+            digest.update(lane_divisor.to_le_bytes())?;
             for axis in axes {
-                digest.update(axis.constant.to_le_bytes());
-                digest.update(axis.lane_mod_scale.to_le_bytes());
-                digest.update(axis.lane_div_scale.to_le_bytes());
-                digest.update(axis.component_scale.to_le_bytes());
-                digest.update([u8::from(axis.tile_origin)]);
+                digest.update(axis.constant.to_le_bytes())?;
+                digest.update(axis.lane_mod_scale.to_le_bytes())?;
+                digest.update(axis.lane_div_scale.to_le_bytes())?;
+                digest.update(axis.component_scale.to_le_bytes())?;
+                digest.update([u8::from(axis.tile_origin)])?;
             }
         }
         TensorSymbolicMapV1::Opaque(identity) => {
-            digest.update([2]);
-            digest.update(identity.to_le_bytes());
+            digest.update([2])?;
+            digest.update(identity.to_le_bytes())?;
         }
-        TensorSymbolicMapV1::Gfx950Fp8M16N16K128SplitK => digest.update([3]),
+        TensorSymbolicMapV1::Gfx950Fp8M16N16K128SplitK => digest.update([3])?,
     }
     match fragment.multiplicity {
-        TensorMultiplicityV1::Unique => digest.update([1]),
-        TensorMultiplicityV1::Broadcast { factor } => digest.update([2, factor]),
+        TensorMultiplicityV1::Unique => digest.update([1])?,
+        TensorMultiplicityV1::Broadcast { factor } => digest.update([2, factor])?,
     }
     match fragment.packing {
-        TensorElementPackingV1::Bf16PairInI32 => digest.update([1]),
-        TensorElementPackingV1::F32Scalar => digest.update([2]),
-        TensorElementPackingV1::Fp8FourInI32 => digest.update([4]),
-        TensorElementPackingV1::Fp4EightInI32 => digest.update([5]),
-        TensorElementPackingV1::Unsupported(code) => digest.update([3, code]),
+        TensorElementPackingV1::Bf16PairInI32 => digest.update([1])?,
+        TensorElementPackingV1::F32Scalar => digest.update([2])?,
+        TensorElementPackingV1::Fp8FourInI32 => digest.update([4])?,
+        TensorElementPackingV1::Fp4EightInI32 => digest.update([5])?,
+        TensorElementPackingV1::Unsupported(code) => digest.update([3, code])?,
     }
     match fragment.lds_swizzle {
-        TensorLdsSwizzleV1::None => digest.update([1]),
-        TensorLdsSwizzleV1::Xor4 => digest.update([2]),
-        TensorLdsSwizzleV1::Unsupported(code) => digest.update([3, code]),
-    }
+        TensorLdsSwizzleV1::None => digest.update([1])?,
+        TensorLdsSwizzleV1::Xor4 => digest.update([2])?,
+        TensorLdsSwizzleV1::Unsupported(code) => digest.update([3, code])?,
+    };
+    Ok(())
 }
 
-fn hash_ranked_terminator(digest: &mut Sha256, terminator: &ProductionRankedTerminatorV1) {
+fn hash_ranked_terminator<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
+    terminator: &ProductionRankedTerminatorV1,
+) -> Result<(), M::Error> {
+    digest.visit()?;
     match terminator {
         ProductionRankedTerminatorV1::IndexLessThan {
             lhs,
@@ -1734,11 +1786,11 @@ fn hash_ranked_terminator(digest: &mut Sha256, terminator: &ProductionRankedTerm
             true_block,
             false_block,
         } => {
-            digest.update([1]);
-            hash_value(digest, *lhs);
-            hash_value(digest, *rhs);
-            digest.update(true_block.to_le_bytes());
-            digest.update(false_block.to_le_bytes());
+            digest.update([1])?;
+            hash_value(digest, *lhs)?;
+            hash_value(digest, *rhs)?;
+            digest.update(true_block.to_le_bytes())?;
+            digest.update(false_block.to_le_bytes())?;
         }
         ProductionRankedTerminatorV1::IndexLessThanArgs {
             lhs,
@@ -1748,13 +1800,13 @@ fn hash_ranked_terminator(digest: &mut Sha256, terminator: &ProductionRankedTerm
             true_block,
             false_block,
         } => {
-            digest.update([7]);
-            hash_value(digest, *lhs);
-            hash_value(digest, *rhs);
-            hash_values(digest, true_arguments);
-            hash_values(digest, false_arguments);
-            digest.update(true_block.to_le_bytes());
-            digest.update(false_block.to_le_bytes());
+            digest.update([7])?;
+            hash_value(digest, *lhs)?;
+            hash_value(digest, *rhs)?;
+            hash_values(digest, true_arguments)?;
+            hash_values(digest, false_arguments)?;
+            digest.update(true_block.to_le_bytes())?;
+            digest.update(false_block.to_le_bytes())?;
         }
         ProductionRankedTerminatorV1::IndexEqual {
             lhs,
@@ -1762,11 +1814,11 @@ fn hash_ranked_terminator(digest: &mut Sha256, terminator: &ProductionRankedTerm
             true_block,
             false_block,
         } => {
-            digest.update([8]);
-            hash_value(digest, *lhs);
-            hash_value(digest, *rhs);
-            digest.update(true_block.to_le_bytes());
-            digest.update(false_block.to_le_bytes());
+            digest.update([8])?;
+            hash_value(digest, *lhs)?;
+            hash_value(digest, *rhs)?;
+            digest.update(true_block.to_le_bytes())?;
+            digest.update(false_block.to_le_bytes())?;
         }
         ProductionRankedTerminatorV1::IndexEqualArgs {
             lhs,
@@ -1776,23 +1828,23 @@ fn hash_ranked_terminator(digest: &mut Sha256, terminator: &ProductionRankedTerm
             true_block,
             false_block,
         } => {
-            digest.update([9]);
-            hash_value(digest, *lhs);
-            hash_value(digest, *rhs);
-            hash_values(digest, true_arguments);
-            hash_values(digest, false_arguments);
-            digest.update(true_block.to_le_bytes());
-            digest.update(false_block.to_le_bytes());
+            digest.update([9])?;
+            hash_value(digest, *lhs)?;
+            hash_value(digest, *rhs)?;
+            hash_values(digest, true_arguments)?;
+            hash_values(digest, false_arguments)?;
+            digest.update(true_block.to_le_bytes())?;
+            digest.update(false_block.to_le_bytes())?;
         }
         ProductionRankedTerminatorV1::AnalysisSplit {
             control_dependencies,
             first_block,
             second_block,
         } => {
-            digest.update([4]);
-            hash_values(digest, control_dependencies);
-            digest.update(first_block.to_le_bytes());
-            digest.update(second_block.to_le_bytes());
+            digest.update([4])?;
+            hash_values(digest, control_dependencies)?;
+            digest.update(first_block.to_le_bytes())?;
+            digest.update(second_block.to_le_bytes())?;
         }
         ProductionRankedTerminatorV1::AnalysisSplitArgs {
             control_dependencies,
@@ -1801,31 +1853,31 @@ fn hash_ranked_terminator(digest: &mut Sha256, terminator: &ProductionRankedTerm
             first_block,
             second_block,
         } => {
-            digest.update([10]);
-            hash_values(digest, control_dependencies);
-            hash_values(digest, first_arguments);
-            hash_values(digest, second_arguments);
-            digest.update(first_block.to_le_bytes());
-            digest.update(second_block.to_le_bytes());
+            digest.update([10])?;
+            hash_values(digest, control_dependencies)?;
+            hash_values(digest, first_arguments)?;
+            hash_values(digest, second_arguments)?;
+            digest.update(first_block.to_le_bytes())?;
+            digest.update(second_block.to_le_bytes())?;
         }
         ProductionRankedTerminatorV1::Branch { target } => {
-            digest.update([2]);
-            digest.update(target.to_le_bytes());
+            digest.update([2])?;
+            digest.update(target.to_le_bytes())?;
         }
         ProductionRankedTerminatorV1::BranchArgs { arguments, target } => {
-            digest.update([5]);
-            hash_values(digest, arguments);
-            digest.update(target.to_le_bytes());
+            digest.update([5])?;
+            hash_values(digest, arguments)?;
+            digest.update(target.to_le_bytes())?;
         }
         ProductionRankedTerminatorV1::BranchArgsAdd {
             value,
             step,
             target,
         } => {
-            digest.update([6]);
-            hash_value(digest, *value);
-            hash_value(digest, *step);
-            digest.update(target.to_le_bytes());
+            digest.update([6])?;
+            hash_value(digest, *value)?;
+            hash_value(digest, *step)?;
+            digest.update(target.to_le_bytes())?;
         }
         ProductionRankedTerminatorV1::BranchArgsAddAt {
             arguments,
@@ -1833,56 +1885,82 @@ fn hash_ranked_terminator(digest: &mut Sha256, terminator: &ProductionRankedTerm
             step,
             target,
         } => {
-            digest.update([11]);
-            hash_values(digest, arguments);
-            digest.update(add_argument.to_le_bytes());
-            hash_value(digest, *step);
-            digest.update(target.to_le_bytes());
+            digest.update([11])?;
+            hash_values(digest, arguments)?;
+            digest.update(add_argument.to_le_bytes())?;
+            hash_value(digest, *step)?;
+            digest.update(target.to_le_bytes())?;
         }
-        ProductionRankedTerminatorV1::Return => digest.update([3]),
-        ProductionRankedTerminatorV1::Trap => digest.update([12]),
-    }
+        ProductionRankedTerminatorV1::Return => digest.update([3])?,
+        ProductionRankedTerminatorV1::Trap => digest.update([12])?,
+    };
+    Ok(())
 }
 
-fn hash_value(digest: &mut Sha256, value: ProductionRankedValueV1) {
+fn hash_value<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
+    value: ProductionRankedValueV1,
+) -> Result<(), M::Error> {
+    digest.visit()?;
     match value {
         ProductionRankedValueV1::Argument(index) => {
-            digest.update([1]);
-            digest.update(index.to_le_bytes());
+            digest.update([1])?;
+            digest.update(index.to_le_bytes())?;
         }
         ProductionRankedValueV1::Local(identity) => {
-            digest.update([2]);
-            digest.update(identity.get().to_le_bytes());
+            digest.update([2])?;
+            digest.update(identity.get().to_le_bytes())?;
         }
         ProductionRankedValueV1::BlockArgument { block, argument } => {
-            digest.update([3]);
-            digest.update(block.to_le_bytes());
-            digest.update(argument.to_le_bytes());
+            digest.update([3])?;
+            digest.update(block.to_le_bytes())?;
+            digest.update(argument.to_le_bytes())?;
         }
-    }
+    };
+    Ok(())
 }
 
-fn hash_values(digest: &mut Sha256, values: &[ProductionRankedValueV1]) {
-    hash_usize(digest, values.len());
+fn hash_values<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
+    values: &[ProductionRankedValueV1],
+) -> Result<(), M::Error> {
+    digest.visit()?;
+    hash_usize(digest, values.len())?;
     for value in values {
-        hash_value(digest, *value);
+        hash_value(digest, *value)?;
     }
+    Ok(())
 }
 
-fn hash_u64_slice(digest: &mut Sha256, values: &[u64]) {
-    hash_usize(digest, values.len());
+fn hash_u64_slice<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
+    values: &[u64],
+) -> Result<(), M::Error> {
+    digest.visit()?;
+    hash_usize(digest, values.len())?;
     for value in values {
-        digest.update(value.to_le_bytes());
+        digest.update(value.to_le_bytes())?;
     }
+    Ok(())
 }
 
-fn hash_blob(digest: &mut Sha256, bytes: &[u8]) {
-    hash_usize(digest, bytes.len());
-    digest.update(bytes);
+fn hash_blob<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
+    bytes: &[u8],
+) -> Result<(), M::Error> {
+    digest.visit()?;
+    hash_usize(digest, bytes.len())?;
+    digest.update(bytes)?;
+    Ok(())
 }
 
-fn hash_usize(digest: &mut Sha256, value: usize) {
-    digest.update((value as u64).to_le_bytes());
+fn hash_usize<M: HashMeterV1>(
+    digest: &mut TranscriptV1<'_, M>,
+    value: usize,
+) -> Result<(), M::Error> {
+    digest.visit()?;
+    digest.update((value as u64).to_le_bytes())?;
+    Ok(())
 }
 
 const fn access_kind_tag(value: AccessKindAttr) -> u8 {
@@ -2179,7 +2257,9 @@ mod tests {
     fn ranked_atomic_identity_binds_kind_ordering_scope_view_and_indices() {
         fn identity(operation: &ProductionRankedOperationV1) -> [u8; SHA256_BYTES] {
             let mut digest = Sha256::new();
-            hash_ranked_operation(&mut digest, operation);
+            hash_work::unmetered_into(&mut digest, |digest| {
+                hash_ranked_operation(digest, operation)
+            });
             digest.finalize().into()
         }
 
@@ -2252,7 +2332,9 @@ mod tests {
     fn ranked_trap_identity_is_distinct_from_successful_return() {
         fn identity(terminator: &ProductionRankedTerminatorV1) -> [u8; SHA256_BYTES] {
             let mut digest = Sha256::new();
-            hash_ranked_terminator(&mut digest, terminator);
+            hash_work::unmetered_into(&mut digest, |digest| {
+                hash_ranked_terminator(digest, terminator)
+            });
             digest.finalize().into()
         }
 
@@ -2266,7 +2348,9 @@ mod tests {
     fn ranked_execution_and_tensor_layouts_have_distinct_v4_variant_tags_and_identities() {
         fn identity(operation: &ProductionRankedOperationV1) -> [u8; SHA256_BYTES] {
             let mut digest = Sha256::new();
-            hash_ranked_operation(&mut digest, operation);
+            hash_work::unmetered_into(&mut digest, |digest| {
+                hash_ranked_operation(digest, operation)
+            });
             digest.finalize().into()
         }
 
@@ -2303,12 +2387,16 @@ mod tests {
     fn ranked_control_and_divide_identity_bind_every_new_recipe_field() {
         fn terminator_identity(terminator: &ProductionRankedTerminatorV1) -> [u8; SHA256_BYTES] {
             let mut digest = Sha256::new();
-            hash_ranked_terminator(&mut digest, terminator);
+            hash_work::unmetered_into(&mut digest, |digest| {
+                hash_ranked_terminator(digest, terminator)
+            });
             digest.finalize().into()
         }
         fn operation_identity(operation: &ProductionRankedOperationV1) -> [u8; SHA256_BYTES] {
             let mut digest = Sha256::new();
-            hash_ranked_operation(&mut digest, operation);
+            hash_work::unmetered_into(&mut digest, |digest| {
+                hash_ranked_operation(digest, operation)
+            });
             digest.finalize().into()
         }
 
@@ -2392,7 +2480,9 @@ mod tests {
     fn ranked_tensor_identity_binds_every_capability_root_and_argument_count() {
         fn operation_identity(operation: &ProductionRankedOperationV1) -> [u8; SHA256_BYTES] {
             let mut digest = Sha256::new();
-            hash_ranked_operation(&mut digest, operation);
+            hash_work::unmetered_into(&mut digest, |digest| {
+                hash_ranked_operation(digest, operation)
+            });
             digest.finalize().into()
         }
 
@@ -2438,7 +2528,9 @@ mod tests {
     fn tensor_component_operation_kind_substitution_changes_graph_identity() {
         fn operation_identity(operation: &ProductionRankedOperationV1) -> [u8; SHA256_BYTES] {
             let mut digest = Sha256::new();
-            hash_ranked_operation(&mut digest, operation);
+            hash_work::unmetered_into(&mut digest, |digest| {
+                hash_ranked_operation(digest, operation)
+            });
             digest.finalize().into()
         }
 

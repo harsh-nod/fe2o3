@@ -1,14 +1,16 @@
 //! Session-owned, still-pending ownership analysis. No clean-stage conversion.
 //!
 //! The analysis envelope includes occurrence bindings, structural capture and
-//! conditional analysis. Legacy root-snapshot printing and recipe rehashing
-//! remain outside that envelope, as do preexisting arena/recipe allocations.
+//! conditional analysis, including exact recipe rehashing. Legacy root-snapshot
+//! printing and initial construction hashing remain outside that envelope, as
+//! do preexisting arena/recipe allocations.
 //! This owner therefore does not establish a complete constructor resource bound.
 
 use super::*;
 use crate::production_analysis::{
     BuiltIdentityV1, IdentityCaptureFailureV1, LivePlironStructuralIdentityProviderV1,
-    PlironAnalysisManagerV1, PlironStructuralIdentityProviderV1, ProductionAnalysisResourceLimitV1,
+    PlironAnalysisManagerV1, PlironStructuralIdentityProviderV1,
+    ProductionAnalysisResourceContractV1, ProductionAnalysisResourceLimitV1,
     ProductionAnalysisResourcePhaseV1 as Phase, ProductionAnalysisResourceUpperBoundV1 as Bound,
     conditional_analysis_v1::{
         ConditionalOwnershipAnalysisErrorV1, ConditionalOwnershipPayloadV1,
@@ -308,8 +310,21 @@ impl ProductionPlironSessionV1 {
             .ranked_kernel
             .as_ref()
             .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?;
-        if Some(ProductionExactGraphIdentityV1::from_ranked(kernel)) != record.exact_graph_identity
-        {
+        let mut resources =
+            ProductionAnalysisResourceContractV1::new(self.analysis_resource_limits());
+        resources
+            .admit_retained(
+                Phase::HierarchicalOwnership,
+                self.ownership_binding_resources,
+            )
+            .map_err(resource)?;
+        let exact = middle_end_evidence_v4::derive_exact_ranked_graph_identity_with_resources_v1(
+            kernel,
+            &mut resources,
+        )
+        .map(ProductionExactGraphIdentityV1)
+        .map_err(resource)?;
+        if Some(exact) != record.exact_graph_identity {
             return Err(ProductionSessionErrorV1::RankedGraphChanged);
         }
         let function = FuncOp::from_operation(
@@ -339,13 +354,11 @@ impl ProductionPlironSessionV1 {
                 n.checked_add(std::mem::size_of::<ProductionConditionalRankedAnalysisV1>())
             })
             .ok_or_else(overflow)?;
-        let prefix = self
-            .ownership_binding_resources
-            .checked_then_retain(bound(work, retained)?, Phase::HierarchicalOwnership)
+        resources
+            .admit_retained(Phase::HierarchicalOwnership, bound(work, retained)?)
             .map_err(resource)?;
-        let capture_limits = self
-            .analysis_resource_limits()
-            .remaining_after_retained(Phase::StructuralIdentity, prefix)
+        let capture_limits = resources
+            .remaining(Phase::StructuralIdentity)
             .map_err(resource)?;
         let mut provider =
             LivePlironStructuralIdentityProviderV1::new(&self.inner.context, &function);
@@ -366,9 +379,10 @@ impl ProductionPlironSessionV1 {
                     },
                 ),
             })?;
-        let initial = prefix
-            .checked_then_retain(capture.resource_upper_bound, Phase::StructuralIdentity)
+        resources
+            .admit_retained(Phase::StructuralIdentity, capture.resource_upper_bound)
             .map_err(resource)?;
+        let initial = resources.cumulative();
         let mut analyses = PlironAnalysisManagerV1::new_with_resource_contract(
             &function,
             capture.input_census,

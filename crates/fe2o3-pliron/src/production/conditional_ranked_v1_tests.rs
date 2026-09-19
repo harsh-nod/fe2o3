@@ -430,6 +430,49 @@ fn analysis_panic_is_contained_and_consumes_the_session() {
 }
 
 #[test]
+fn pending_rehash_cannot_restart_the_inherited_work_budget() {
+    let run = |one_short: bool| {
+        let mut session = session();
+        construct(&mut session, "prior", false, true);
+        let (stage, root, sites) = construct(&mut session, "pending", false, true);
+        let inherited = session.ownership_binding_resources.work_upper_bound();
+        let replacement = recipe(true, true).0;
+        let limits = ProductionAnalysisResourceLimitsV1::production_hard_ceiling();
+        let mut calibration = ProductionAnalysisResourceContractV1::new(limits);
+        middle_end_evidence_v4::derive_exact_ranked_graph_identity_with_resources_v1(
+            &replacement,
+            &mut calibration,
+        )
+        .unwrap();
+        let hash_work = calibration.cumulative().work_upper_bound();
+        assert!(inherited > 0 && hash_work > 0);
+        // Keep the genuine live graph and recorded identity. A completed hash
+        // must find this mismatch before any later analysis can spend work.
+        session
+            .constructed_roots
+            .get_mut(&stage.identity)
+            .unwrap()
+            .ranked_kernel = Some(replacement);
+        session.analysis_resource_limits = ProductionAnalysisResourceLimitsV1::new(
+            inherited + hash_work - usize::from(one_short),
+            usize::MAX,
+        );
+        session.prepare_conditional_ranked_analysis_v1(stage, root, &sites[..1])
+    };
+    assert!(matches!(
+        run(true),
+        Err(ProductionSessionErrorV1::AnalysisResourceLimit {
+            phase: Phase::StructuralIdentity,
+            ..
+        })
+    ));
+    assert!(matches!(
+        run(false),
+        Err(ProductionSessionErrorV1::RankedGraphChanged)
+    ));
+}
+
+#[test]
 fn inherited_capture_and_exact_pending_resource_limits() {
     let run = |limits: Option<ProductionAnalysisResourceLimitsV1>| {
         let mut session = session();

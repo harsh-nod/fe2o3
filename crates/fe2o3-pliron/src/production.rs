@@ -33,6 +33,7 @@ mod mir_pliron_semantic_contract_v1;
 mod noncanonical_loop_proof_v1;
 mod parallel_reference_contract_v1;
 mod ranked;
+mod recipe_hash_work_v1;
 mod semantic_expression_v2;
 mod semantic_mir;
 mod semantic_ssa;
