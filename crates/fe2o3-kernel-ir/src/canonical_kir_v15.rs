@@ -64,7 +64,7 @@ impl CanonicalKernelIrCandidateStorageV15 {
     }
 }
 
-/// Typed failure of exact V15 canonical admission or unverified candidate copy.
+/// Typed failure of exact V15 admission, comparison or unverified candidate copy.
 #[derive(Debug)]
 pub enum CanonicalKernelIrReplayAdmissionErrorV15 {
     /// Full wire encoding or its cumulative work charge failed.

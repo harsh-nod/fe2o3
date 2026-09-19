@@ -20,7 +20,7 @@ fn exact_query_preserves_owner_and_compares_scope_tile_and_metadata() {
             .result
             .unwrap();
         let pointer = owner.canonical_bytes().as_ptr();
-        let identity = owner.identity().clone();
+        let identity = *owner.identity();
         let floor = STORAGE_PREFIX + storage.retained_storage();
         assert!(
             compare(&owner, &source, floor, LIMIT, LIMIT, false)
