@@ -8,7 +8,9 @@ use std::{
 use dialect_kernel::{
     DYNAMIC_EXTENT, IndexBinaryKindAttr, OwnershipCoverageAttr, OwnershipPartitionAttr,
 };
-use fe2o3_functional_proof::{FunctionalRefinementSubjectsV2, SafeReferenceKindV2};
+use fe2o3_functional_proof::{
+    FunctionalRefinementSubjectsV2, ImportedFunctionalRefinementProofV2, SafeReferenceKindV2,
+};
 use fe2o3_pliron::{
     ProductionConstructionV1, ProductionEffectRefinementContractV2, ProductionGpuWriteSiteV2,
     ProductionNumericalContractV2, ProductionOverflowContractV2, ProductionRankedBlockV1,
@@ -18,10 +20,13 @@ use fe2o3_pliron::{
     ProductionReferenceOutputSiteV2, ProductionReferenceProofV2,
     ProductionRefinementStagingPolicyV2, ProductionSemanticBinaryOpV2, ProductionSemanticCastV2,
     ProductionSemanticComparisonV2, ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2,
-    ProductionSemanticUnaryOpV2, ProductionSessionLimitsV1,
-    compile_ranked_kernel_with_policy_checked_refinement_staging_v2,
+    ProductionSemanticUnaryOpV2, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+    stage_ranked_kernel_with_policy_checked_refinement_v2,
 };
 use fe2o3_proof_contracts::DigestV1;
+use fe2o3_verifier::{
+    FunctionalRefinementVerusRuntimeLeaseV1, InertFunctionalRefinementReceiptSignatureV2,
+};
 
 use crate::reference_effect_bijection_v1::{
     CompilerExtractedGpuOutputEffectV1, ReferenceEffectBijectionErrorV1,
@@ -116,6 +121,21 @@ pub(crate) struct CompilerOwnedReferenceEffectRequestV2 {
     proof_timeout_seconds: u32,
 }
 
+pub(crate) struct CompilerOwnedBoundReferenceEffectV2 {
+    kernel: ProductionRankedKernelV1,
+    imported_proofs: Vec<ImportedFunctionalRefinementProofV2>,
+    policy: ProductionRefinementStagingPolicyV2,
+    signed_receipts: Vec<InertFunctionalRefinementReceiptSignatureV2>,
+    // Retain the protected closure, not just its identity, through the continuation.
+    runtime: FunctionalRefinementVerusRuntimeLeaseV1,
+}
+
+pub(crate) struct CompilerOwnedStagedReferenceEffectV2 {
+    construction: ProductionConstructionV1,
+    signed_receipts: Vec<InertFunctionalRefinementReceiptSignatureV2>,
+    runtime: FunctionalRefinementVerusRuntimeLeaseV1,
+}
+
 struct CompilerOwnedReferenceEffectSiteV2 {
     block: usize,
     operation: usize,
@@ -143,13 +163,19 @@ impl CompilerOwnedReferenceEffectRequestV2 {
     ) -> Result<
         (
             ProductionRankedKernelLoweringInputV1,
-            Vec<fe2o3_verifier::InertFunctionalRefinementReceiptSignatureV2>,
+            Vec<InertFunctionalRefinementReceiptSignatureV2>,
         ),
         ProductionReferenceEffectJoinErrorV2,
     > {
+        self.prove_and_bind()?.into_staged()?.compile()
+    }
+
+    pub(crate) fn prove_and_bind(
+        self,
+    ) -> Result<CompilerOwnedBoundReferenceEffectV2, ProductionReferenceEffectJoinErrorV2> {
         #[cfg(test)]
         prepared_observation_v1::observe_request(&self);
-        let runtime = fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1::open(
+        let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(
             RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
         )
         .map_err(|error| {
@@ -209,18 +235,116 @@ impl CompilerOwnedReferenceEffectRequestV2 {
                 .bind_functional_refinement_request_v2(block, operation, request)
                 .map_err(ProductionReferenceEffectJoinErrorV2::Recipe)?;
         }
-        let construction =
-            ProductionConstructionV1::ranked_kernel(ROOT_NAME_V2, bound).map_err(|error| {
-                ProductionReferenceEffectJoinErrorV2::Construction(format!("{error:?}"))
-            })?;
-        let lowering = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
-            construction,
-            ProductionSessionLimitsV1::default(),
+        Ok(CompilerOwnedBoundReferenceEffectV2 {
+            kernel: bound,
             imported_proofs,
             policy,
+            signed_receipts,
+            runtime,
+        })
+    }
+}
+
+impl CompilerOwnedBoundReferenceEffectV2 {
+    #[cfg(test)]
+    pub(crate) fn kernel_for_test_v1(&self) -> &ProductionRankedKernelV1 {
+        &self.kernel
+    }
+
+    #[cfg(test)]
+    pub(crate) fn signed_receipts_for_test_v1(
+        &self,
+    ) -> &[InertFunctionalRefinementReceiptSignatureV2] {
+        &self.signed_receipts
+    }
+
+    pub(crate) fn into_staged(
+        self,
+    ) -> Result<CompilerOwnedStagedReferenceEffectV2, ProductionReferenceEffectJoinErrorV2> {
+        let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V2, self.kernel)
+            .map_err(|error| {
+                ProductionReferenceEffectJoinErrorV2::Construction(format!("{error:?}"))
+            })?;
+        let construction = stage_ranked_kernel_with_policy_checked_refinement_v2(
+            construction,
+            self.imported_proofs,
+            self.policy,
         )
-        .map_err(|error| ProductionReferenceEffectJoinErrorV2::Compile(Box::new(error)))?;
-        Ok((lowering, signed_receipts))
+        .map_err(|error| {
+            ProductionReferenceEffectJoinErrorV2::Compile(Box::new(
+                ProductionRankedCompileErrorV2::Proof(error),
+            ))
+        })?;
+        Ok(CompilerOwnedStagedReferenceEffectV2 {
+            construction,
+            signed_receipts: self.signed_receipts,
+            runtime: self.runtime,
+        })
+    }
+}
+
+impl CompilerOwnedStagedReferenceEffectV2 {
+    #[cfg(test)]
+    pub(crate) fn observe_for_test_v1<R>(
+        self,
+        sites: &[fe2o3_pliron::ProductionConditionalOwnershipSiteV1],
+        observe: impl FnOnce(
+            &fe2o3_pliron::ProductionConditionalRankedAnalysisV1,
+            &[InertFunctionalRefinementReceiptSignatureV2],
+        ) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let Self {
+            construction,
+            signed_receipts,
+            runtime,
+        } = self;
+        let result = (|| {
+            let mut session = fe2o3_pliron::ProductionPlironSessionV1::new_ranked_v1(
+                ProductionSessionLimitsV1::default(),
+            )
+            .map_err(|e| format!("{e:?}"))?;
+            let registered = session
+                .register_construction(construction)
+                .map_err(|e| format!("{e:?}"))?;
+            let (stage, root) = session
+                .construct_registered(registered)
+                .map_err(|e| format!("{e:?}"))?;
+            let pending = session
+                .prepare_conditional_ranked_analysis_v1(stage, root, sites)
+                .map_err(|e| format!("{e:?}"))?;
+            observe(&pending, &signed_receipts)
+        })();
+        drop(signed_receipts);
+        drop(runtime);
+        result
+    }
+
+    fn compile(
+        self,
+    ) -> Result<
+        (
+            ProductionRankedKernelLoweringInputV1,
+            Vec<InertFunctionalRefinementReceiptSignatureV2>,
+        ),
+        ProductionReferenceEffectJoinErrorV2,
+    > {
+        let Self {
+            construction,
+            signed_receipts,
+            runtime,
+        } = self;
+        let result = compile_ranked_kernel_for_lowering_v1(
+            construction,
+            ProductionSessionLimitsV1::default(),
+        )
+        .map_err(|error| {
+            ProductionReferenceEffectJoinErrorV2::Compile(Box::new(
+                ProductionRankedCompileErrorV2::Pipeline(error),
+            ))
+        })
+        .map(|lowering| (lowering, signed_receipts));
+        drop(runtime);
+        result
     }
 }
 

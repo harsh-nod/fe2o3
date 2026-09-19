@@ -103,6 +103,20 @@ pub(super) enum ProjectedAssertionConditionV1 {
 /// isolated synthetic decision inputs explicitly.
 pub(super) trait ProjectedAssertionFactsV1 {
     #[cfg(test)]
+    fn observe_conditional_bound_for_test_v1(
+        &mut self,
+        _bound: crate::production_reference_effect_join_v2::CompilerOwnedBoundReferenceEffectV2,
+        _root: u32,
+        _rank: u8,
+        _access_sources: &[fe2o3_lower_mir_kernel::ProductionRankedAccessSourceV1],
+        _effect_sources: &[fe2o3_lower_mir_kernel::ProductionRankedExecutableEffectSourceV1],
+    ) -> Result<(), ProjectionError> {
+        Err(ProjectionError::Incomplete(
+            "post-bind observation requires a canonical owner",
+        ))
+    }
+
+    #[cfg(test)]
     fn observe_conditional_prepared_for_test_v1(
         &mut self,
         _candidate: fe2o3_lower_mir_kernel::NativeRankedSourceCandidateV1<'_>,
@@ -278,6 +292,26 @@ struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
     semantic_function: SemanticFunctionIdV1,
 }
 impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
+    #[cfg(test)]
+    fn observe_conditional_bound_for_test_v1(
+        &mut self,
+        bound: crate::production_reference_effect_join_v2::CompilerOwnedBoundReferenceEffectV2,
+        root: u32,
+        rank: u8,
+        access_sources: &[fe2o3_lower_mir_kernel::ProductionRankedAccessSourceV1],
+        effect_sources: &[fe2o3_lower_mir_kernel::ProductionRankedExecutableEffectSourceV1],
+    ) -> Result<(), ProjectionError> {
+        super::conditional_bound_observation_v1_tests::observe_bound(
+            self.owner,
+            bound,
+            root,
+            rank,
+            access_sources,
+            effect_sources,
+            self.budget,
+        )
+    }
+
     #[cfg(test)]
     fn observe_conditional_prepared_for_test_v1(
         &mut self,

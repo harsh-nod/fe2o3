@@ -312,9 +312,10 @@ pub enum ProductionRankedValueV1 {
 
 /// Exact receipt and semantic binding requested by one ranked recipe operation.
 ///
-/// This cloneable request is not evidence. Only
-/// [`compile_ranked_kernel_with_policy_checked_refinement_staging_v2`] can reconcile it with a consumed,
-/// authenticated [`ImportedFunctionalRefinementProofV2`].
+/// This cloneable request is not evidence. The internal staging transition
+/// [`stage_ranked_kernel_with_policy_checked_refinement_v2`], also used by
+/// [`compile_ranked_kernel_with_policy_checked_refinement_staging_v2`], reconciles
+/// it with a consumed, authenticated [`ImportedFunctionalRefinementProofV2`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionReferenceProofV2 {
     receipt_identity: FunctionalRefinementReceiptIdentityV2,
@@ -6844,17 +6845,7 @@ fn compile_ranked_kernel_for_lowering_with_target_v1(
                 ))
             })?;
     }
-    let kernel_registration = dialect_kernel::dialect_registration()
-        .map_err(ProductionRankedCompileErrorV1::Registration)?;
-    let gpu_registration = dialect_gpu::dialect_registration()
-        .map_err(ProductionRankedCompileErrorV1::Registration)?;
-    let proof_registration = dialect_proof::dialect_registration()
-        .map_err(ProductionRankedCompileErrorV1::Registration)?;
-    let mut session = ProductionPlironSessionV1::new(
-        limits,
-        [kernel_registration, gpu_registration, proof_registration],
-    )
-    .map_err(ProductionRankedCompileErrorV1::Context)?;
+    let mut session = ProductionPlironSessionV1::new_ranked_v1(limits)?;
     if let Some(target) = atomic_target {
         session.bind_atomic_target(target);
     }
@@ -6872,21 +6863,54 @@ fn compile_ranked_kernel_for_lowering_with_target_v1(
         .map_err(ProductionRankedCompileErrorV1::Session)
 }
 
+impl ProductionPlironSessionV1 {
+    /// Creates an empty session with the production ranked dialect roster.
+    /// Registration alone grants no verification, lowering, or launch authority.
+    pub fn new_ranked_v1(
+        limits: ProductionSessionLimitsV1,
+    ) -> Result<Self, ProductionRankedCompileErrorV1> {
+        let kernel = dialect_kernel::dialect_registration()
+            .map_err(ProductionRankedCompileErrorV1::Registration)?;
+        let gpu = dialect_gpu::dialect_registration()
+            .map_err(ProductionRankedCompileErrorV1::Registration)?;
+        let proof = dialect_proof::dialect_registration()
+            .map_err(ProductionRankedCompileErrorV1::Registration)?;
+        Self::new(limits, [kernel, gpu, proof]).map_err(ProductionRankedCompileErrorV1::Context)
+    }
+}
+
 /// Stages caller-policy-checked V2 receipts against exact ranked obligations.
 ///
 /// This workspace-internal transition is deliberately non-authoritative: signatures
 /// under a caller-selected policy do not prove verifier execution. Only the private
 /// aggregate exact-formula Verus replay may grant MIR-to-live-PLIRON refinement.
 /// It grants no compiler, lowering, ISA, artifact, load, launch, or hardware authority.
+/// The returned construction still requires the complete production pipeline.
+#[cfg(feature = "internal-proof-staging")]
+pub fn stage_ranked_kernel_with_policy_checked_refinement_v2(
+    mut construction: ProductionConstructionV1,
+    imported: Vec<ImportedFunctionalRefinementProofV2>,
+    policy: ProductionRefinementStagingPolicyV2,
+) -> Result<ProductionConstructionV1, ProductionFunctionalRefinementAdmissionErrorV2> {
+    admit_functional_refinement_v2(&mut construction, imported, &policy)?;
+    Ok(construction)
+}
+
+/// Stages exact receipt obligations, then runs the complete ranked pipeline.
+///
+/// Receipt staging remains non-authoritative as described by
+/// [`stage_ranked_kernel_with_policy_checked_refinement_v2`]. No safety check or
+/// authority boundary is discharged merely by returning a staged construction.
 #[cfg(feature = "internal-proof-staging")]
 pub fn compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
-    mut construction: ProductionConstructionV1,
+    construction: ProductionConstructionV1,
     limits: ProductionSessionLimitsV1,
     imported: Vec<ImportedFunctionalRefinementProofV2>,
     policy: ProductionRefinementStagingPolicyV2,
 ) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV2> {
-    admit_functional_refinement_v2(&mut construction, imported, &policy)
-        .map_err(ProductionRankedCompileErrorV2::Proof)?;
+    let construction =
+        stage_ranked_kernel_with_policy_checked_refinement_v2(construction, imported, policy)
+            .map_err(ProductionRankedCompileErrorV2::Proof)?;
     compile_ranked_kernel_for_lowering_v1(construction, limits)
         .map_err(ProductionRankedCompileErrorV2::Pipeline)
 }

@@ -16,6 +16,8 @@ use std::process::Command;
 #[path = "production_context_source_v29_tests.rs"]
 mod context_source_v29_tests;
 
+#[path = "production_rustc_driver_conditional_bound_source_v1_tests.rs"]
+mod conditional_bound_source;
 #[path = "production_rustc_driver_conditional_coverage_v1_tests.rs"]
 mod conditional_coverage;
 #[path = "production_rustc_driver_conditional_ranked_output_v1_tests.rs"]
