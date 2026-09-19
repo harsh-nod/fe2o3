@@ -33,6 +33,7 @@ pub(crate) enum NativeOutputHandoffErrorV1 {
     Admission(Box<fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy4V1>),
     Admission5(Box<fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy5V1>),
     Admission6(Box<fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy6V1>),
+    Admission7(Box<fe2o3_lower_mir_kernel::ProductionRedundantStoreAdmissionErrorV1>),
     Source(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     Descriptor(Box<crate::compiler_descriptor::CompilerDescriptorError>),
     Native(dialect_amdgcn::NativeV12TextDescriptorReplayErrorV1),
@@ -53,6 +54,7 @@ impl fmt::Display for NativeOutputHandoffErrorV1 {
             Self::Admission(error) => write!(f, "admission: {error}"),
             Self::Admission5(error) => write!(f, "Policy5 admission: {error}"),
             Self::Admission6(error) => write!(f, "Policy6 admission: {error}"),
+            Self::Admission7(error) => write!(f, "Policy7 admission: {error}"),
             Self::Source(error) => write!(f, "source: {error}"),
             Self::Descriptor(error) => write!(f, "descriptor: {error}"),
             Self::Native(error) => write!(f, "native: {error}"),
@@ -80,6 +82,8 @@ pub(crate) enum OutputOwnerV1<'a> {
     Erased5(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy5V1),
     Direct6(&'a fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1),
     Erased6(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1),
+    Direct7(&'a fe2o3_lower_mir_kernel::ProductionOwnedRedundantStoreContinuationV1),
+    Erased7(&'a fe2o3_lower_mir_kernel::ProductionOwnedUnitLocalRedundantStoreContinuationV1),
 }
 impl<'a> OutputOwnerV1<'a> {
     pub(crate) fn output(self) -> &'a Graph {
@@ -90,6 +94,8 @@ impl<'a> OutputOwnerV1<'a> {
             Self::Erased5(v) => v.output(),
             Self::Direct6(v) => v.output(),
             Self::Erased6(v) => v.output(),
+            Self::Direct7(v) => v.output(),
+            Self::Erased7(v) => v.output(),
         }
     }
     pub(crate) fn source(self, catalog: &'a Catalog) -> R<SourceInputsV1<'a>> {
@@ -100,10 +106,22 @@ impl<'a> OutputOwnerV1<'a> {
             Self::Erased5(v) => Ok(SourceInputsV1::erased(v.erased_source(), catalog)),
             Self::Direct6(v) => SourceInputsV1::direct(v.source_semantic_kir(), catalog),
             Self::Erased6(v) => Ok(SourceInputsV1::erased(v.erased_source(), catalog)),
+            Self::Direct7(v) => SourceInputsV1::direct(v.prefix().source_semantic_kir(), catalog),
+            Self::Erased7(v) => Ok(SourceInputsV1::erased(v.prefix().erased_source(), catalog)),
         }
     }
     fn verify(self, budget: &mut Budget<'_>) -> R<()> {
         match self {
+            Self::Direct7(v) => {
+                return v
+                    .verify_equivalence(budget)
+                    .map_err(|e| E::Admission7(Box::new(e)));
+            }
+            Self::Erased7(v) => {
+                return v
+                    .verify_equivalence(budget)
+                    .map_err(|e| E::Admission7(Box::new(e)));
+            }
             Self::Direct(v) => v.verify_equivalence(budget),
             Self::Erased(v) => v.verify_equivalence(budget),
             Self::Direct5(v) => {
@@ -355,15 +373,13 @@ pub(crate) fn scoped<'work, T>(
     let floor = budget.storage();
     let ledger = budget.work_ledger_identity_v1();
     let slot = budget as *const Budget<'_> as usize;
-    let result = match catch_unwind(AssertUnwindSafe(|| next(budget))) {
-        Ok(result) => result,
-        Err(payload) => {
-            drop(payload);
-            Err(E::Panicked)
-        }
+    let (result, payload) = match catch_unwind(AssertUnwindSafe(|| next(budget))) {
+        Ok(result) => (result, None),
+        Err(payload) => (Err(E::Panicked), Some(payload)),
     };
     if slot != budget as *const Budget<'_> as usize || ledger != budget.work_ledger_identity_v1() {
         drop(result);
+        drop(payload);
         return Err(Resource::Accounting.into());
     }
     let released = budget
@@ -371,13 +387,16 @@ pub(crate) fn scoped<'work, T>(
         .checked_sub(floor)
         .ok_or(Resource::Accounting)
         .and_then(|bytes| budget.release_storage(bytes));
-    match released {
+    let result = match released {
         Ok(()) => result,
         Err(error) => {
             drop(result);
             Err(error.into())
         }
-    }
+    };
+    // A panic payload can itself panic on drop; finish valid-ledger cleanup first.
+    drop(payload);
+    result
 }
 
 fn exact(left: &[u8], right: &[u8], detail: &'static str, budget: &mut Budget<'_>) -> R<()> {
@@ -447,7 +466,7 @@ pub(crate) fn check_source_inputs_v1(
     Ok(())
 }
 
-fn check_stage(inputs: StageInputsV1<'_>, budget: &mut Budget<'_>) -> R<()> {
+pub(super) fn check_stage(inputs: StageInputsV1<'_>, budget: &mut Budget<'_>) -> R<()> {
     budget.charge_work(4 + 64)?;
     if budget.storage() < inputs.retained_floor {
         return Err(Resource::Accounting.into());
@@ -536,3 +555,7 @@ pub(crate) fn check_output_inputs_v1(
         Ok(())
     })
 }
+
+#[cfg(test)]
+#[path = "production_native_handoff_scope_v1_tests.rs"]
+mod scoped_tests;

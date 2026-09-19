@@ -363,6 +363,9 @@ fn validate_boundary_v1<'tcx>(
         || crate::production_rustc_intrinsic_v1::classify(tcx, callee)
             .map_err(|error| Error::new(error.to_string()))?
             .is_some()
+        || crate::production_safe_core_shift_v1::SafeCoreShiftV1::classify(tcx, callee)
+            .map_err(Error::new)?
+            .is_some()
     {
         return Ok(());
     }

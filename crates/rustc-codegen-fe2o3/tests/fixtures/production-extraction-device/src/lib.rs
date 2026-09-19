@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "redundant-store-policy7")]
+mod redundant_store_policy7;
+
 #[cfg(feature = "integer-identity")]
 mod integer_identity;
 
@@ -50,6 +53,7 @@ mod saturating_integer;
 mod write_only_reference;
 
 #[cfg(not(any(
+    feature = "redundant-store-policy7",
     feature = "integer-identity",
     feature = "wave64-capture",
     feature = "constant-shift",

@@ -8,10 +8,13 @@ use fe2o3_compiler_lineage::{
 };
 
 #[path = "production_native_final_receipt_joins_policy6_v1.rs"]
-mod joins;
+pub(in crate::production_pipeline) mod joins;
 #[cfg(test)]
 #[path = "production_native_final_receipts_policy6_v1_tests.rs"]
 pub(crate) mod tests;
+
+#[path = "production_native_input_association_policy6_v1.rs"]
+pub(crate) mod input_association;
 
 /// Logical owned headers and exact canonical payloads. No shared backing is
 /// accepted: the constructor below copies into the existing owned codecs.

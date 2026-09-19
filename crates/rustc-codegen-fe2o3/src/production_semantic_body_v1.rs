@@ -46,6 +46,7 @@ use crate::production_rustc_intrinsic_v1::ProductionRustcIntrinsicOperationV1;
 use crate::production_rustc_slice_metadata_v1::{
     SliceMetadataErrorV1, SliceMetadataPlanV1, SliceMetadataRewriteV1,
 };
+use crate::production_safe_core_shift_v1::NormalizedCallV1;
 use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
 
 mod function_commitments_v29;
@@ -56,6 +57,8 @@ use function_commitments_v29::{
     PendingFunctionCommitmentsV29, charge_construction_total_v1, construction_resource_error_v1,
 };
 use receiver_materialization_v1::{ReceiverLocalV1, ReceiverMaterializationV1};
+mod wrapping_materialization_v1;
+use wrapping_materialization_v1::WrappingMaterializationV1;
 
 #[cfg(test)]
 #[path = "production_semantic_body_v1/construction_work_tests.rs"]
@@ -220,7 +223,7 @@ pub(crate) struct ProductionSemanticNormalizedRustcIntrinsicRecipeV1<'tcx> {
     rustc_block: u32,
     expected_callee: Instance<'tcx>,
     expected_element_type: Ty<'tcx>,
-    operation: ProductionRustcIntrinsicOperationV1,
+    operation: NormalizedCallV1<'tcx>,
 }
 
 impl<'tcx> ProductionSemanticNormalizedRustcIntrinsicRecipeV1<'tcx> {
@@ -229,7 +232,7 @@ impl<'tcx> ProductionSemanticNormalizedRustcIntrinsicRecipeV1<'tcx> {
         rustc_block: u32,
         expected_callee: Instance<'tcx>,
         expected_element_type: Ty<'tcx>,
-        operation: ProductionRustcIntrinsicOperationV1,
+        operation: NormalizedCallV1<'tcx>,
     ) -> Self {
         Self {
             caller,
@@ -719,6 +722,7 @@ struct BodyProducerV1<'a, 'owner, 'tcx> {
     scope_events: Vec<ScopeEventV29>,
     context_entry: Option<crate::collector::BoundContextEntryV29<'tcx>>,
     receiver_reborrow: Option<ReceiverMaterializationV1<'tcx>>,
+    wrapping_shifts: Option<WrappingMaterializationV1>,
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     body: &'a Body<'tcx>,
@@ -928,7 +932,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             input.normalized_intrinsics,
             owner,
         )?;
-        let receiver_reborrow = ReceiverMaterializationV1::derive(
+        let mut receiver_reborrow = ReceiverMaterializationV1::derive(
             input,
             &blocks_by_raw,
             &call_tables,
@@ -936,10 +940,19 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             context_entry.is_some(),
             owner,
         )?;
+        let wrapping_shifts = WrappingMaterializationV1::derive(
+            input,
+            &blocks_by_raw,
+            &call_tables,
+            &type_ids,
+            &mut receiver_reborrow,
+            owner,
+        )?;
         let (locals_by_raw, locals_by_semantic) = build_local_tables_v1(
             input.body,
             input.local_bindings,
             receiver_reborrow.as_ref().map(|reborrow| reborrow.local),
+            wrapping_shifts.as_ref(),
             owner,
         )?;
         if let Some(context) = &context_entry {
@@ -997,6 +1010,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             scope_events: Vec::new(),
             context_entry,
             receiver_reborrow,
+            wrapping_shifts,
             tcx: input.tcx,
             instance: input.instance,
             body: input.body,
@@ -1116,6 +1130,19 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
         for index in 0..self.locals_by_semantic.len() {
             self.work()?;
             let Some(binding) = self.locals_by_semantic[index] else {
+                if let Some(local) = self
+                    .wrapping_shifts
+                    .as_ref()
+                    .and_then(|shifts| shifts.local(index))
+                {
+                    locals.push(SemanticLocalDeclV1::new(
+                        local.local.identity,
+                        local.ty,
+                        SemanticLocalRoleV1::Temporary,
+                        local.source,
+                    ));
+                    continue;
+                }
                 let reborrow = self
                     .receiver_reborrow
                     .as_ref()
@@ -1166,14 +1193,15 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             if binding.statement_sources.len() != data.statements.len() {
                 return Err(table("statement source table"));
             }
-            let has_normalized_intrinsic = self
+            let normalized_call = self
                 .normalized_intrinsics_by_raw
                 .get(raw_index)
-                .is_some_and(Option::is_some);
+                .copied()
+                .flatten();
             let semantic_statement_count = data
                 .statements
                 .len()
-                .checked_add(usize::from(has_normalized_intrinsic))
+                .checked_add(normalized_call.map_or(0, |call| call.operation.statement_count()))
                 .and_then(|count| {
                     count.checked_add(usize::from(
                         self.receiver_reborrow
@@ -1201,7 +1229,16 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 unsupported("basic block without a terminator", Some(raw_block), None)
             })?;
             self.work()?;
-            let kind = if has_normalized_intrinsic {
+            let kind = if normalized_call
+                .is_some_and(|call| matches!(call.operation, NormalizedCallV1::SafeCoreShift(_)))
+            {
+                self.construct_wrapping_shift(
+                    raw_block,
+                    &terminator.kind,
+                    binding.terminator_source,
+                    &mut statements,
+                )?
+            } else if normalized_call.is_some() {
                 let (statement, terminator) =
                     self.construct_normalized_intrinsic(raw_block, &terminator.kind)?;
                 statements.push(SemanticStatementV1::new(
@@ -1798,7 +1835,7 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
         if recipe.caller != self.function
             || recipe.expected_callee != resolved
             || recipe.expected_element_type != classification.element_type
-            || recipe.operation != classification.operation
+            || !matches!(recipe.operation, NormalizedCallV1::Rustc(operation) if operation == classification.operation)
             || self.direct_calls_by_raw[index].is_some()
             || self.terminal_expansions_by_raw[index].is_some()
         {
@@ -1894,8 +1931,10 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
         let address = SemanticPlaceV1::new(address_base.local(), projections, element_type)?;
         let destination = self.construct_place(*destination, block, None)?;
         let value = self.construct_operand(&args[1].node, block, None)?;
-        let (operation, access) = recipe
-            .operation
+        let NormalizedCallV1::Rustc(operation) = recipe.operation else {
+            return Err(table("normalized atomic intrinsic operation"));
+        };
+        let (operation, access) = operation
             .atomic_rmw()
             .ok_or_else(|| table("normalized atomic intrinsic operation"))?;
 
@@ -2379,6 +2418,7 @@ fn build_local_tables_v1<'a, 'tcx>(
     body: &Body<'_>,
     bindings: &'a [ProductionSemanticLocalBindingV1],
     inserted: Option<ReceiverLocalV1>,
+    wrapping: Option<&WrappingMaterializationV1>,
     owner: &mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
 ) -> Result<LocalTablesV1<'a>, ProductionSemanticBodyErrorV1> {
     if bindings.len() != body.local_decls.len() {
@@ -2388,6 +2428,7 @@ fn build_local_tables_v1<'a, 'tcx>(
     let count = bindings
         .len()
         .checked_add(usize::from(inserted.is_some()))
+        .and_then(|count| count.checked_add(wrapping.map_or(0, |wrapping| wrapping.local_count())))
         .ok_or_else(|| table("local table size"))?;
     let mut by_semantic = try_filled_vec_v1(count, None, SemanticMirResourceV1::Locals)?;
     for binding in bindings {
@@ -2408,10 +2449,17 @@ fn build_local_tables_v1<'a, 'tcx>(
                 return Err(table("occupied shared receiver slot"));
             }
             inserted.unwrap().identity
+        } else if let Some(local) = wrapping.and_then(|wrapping| wrapping.local(index)) {
+            if binding.is_some() {
+                return Err(table("occupied wrapping shift local slot"));
+            }
+            local.local.identity
         } else {
             binding.ok_or_else(|| table("local table"))?.identity
         };
-        if inserted.is_some() && previous.is_some_and(|previous| previous >= identity) {
+        if (inserted.is_some() || wrapping.is_some())
+            && previous.is_some_and(|previous| previous >= identity)
+        {
             return Err(table("noncanonical shared receiver local union"));
         }
         previous = Some(identity);

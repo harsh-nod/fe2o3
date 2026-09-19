@@ -3160,6 +3160,11 @@ impl<'tcx> DeviceCollector<'tcx> {
                 ));
             }
         };
+        let normalized_safe_core_shift =
+            crate::production_safe_core_shift_v1::SafeCoreShiftV1::classify(self.tcx, resolved)
+                .map_err(|error| {
+                    self.reachable_error(caller, error, Some(self.instance_label(resolved)))
+                })?;
         let normalized_intrinsic =
             if crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id())
                 .is_none()
@@ -3240,8 +3245,8 @@ impl<'tcx> DeviceCollector<'tcx> {
             }
         }
 
-        // Only an exact rustc diagnostic-item identity may terminate
-        // collection without traversing the callee body.
+        // Diagnostic-item terminals and the separate exact normalized-call
+        // rules below require matching recipes in the sole semantic importer.
         let registered_terminal =
             crate::production_semantic_terminal_v1::classify(self.tcx, *def_id).is_some();
         if registered_terminal {
@@ -3251,6 +3256,15 @@ impl<'tcx> DeviceCollector<'tcx> {
                     self.tcx.def_path_str(*def_id)
                 );
             }
+            return Ok(());
+        }
+
+        if normalized_safe_core_shift.is_some() {
+            // Only the exact safe core Item is summarized. Nested unchecked
+            // calls are not collector boundaries and retain their refusals.
+            self.closure_work
+                .charge(1)
+                .map_err(|error| self.reachable_error(caller, &error.to_string(), None))?;
             return Ok(());
         }
 
@@ -3291,9 +3305,8 @@ impl<'tcx> DeviceCollector<'tcx> {
             ));
         }
 
-        // Collection stops only at the workload-neutral reviewed device
-        // registry. The sole semantic importer applies each registered item's
-        // explicit expand-or-reject rule.
+        // Repeat the workload-neutral device registry check for the concrete
+        // implementation selected by rustc, after normalized-call boundaries.
         if crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id()).is_some() {
             if self.verbose {
                 eprintln!(

@@ -1,4 +1,7 @@
 //! Genuine unsigned source-owner components, never fabricated signed custody.
+use super::super::final_receipts::input_association::{
+    exercise_original_kernel_identity_substitution_v1, exercise_unsigned_original_identities_v1,
+};
 use super::*;
 use fe2o3_compiler_lineage::{
     MultiRootProofRosterInputsV3, MultiRootProofRosterRootInputV3 as RootInput,
@@ -187,6 +190,15 @@ pub(crate) fn exercise_unsigned_component_v1(
         assert_eq!(kernel, again_kernel);
         assert_eq!(formal, again_formal);
         check_case(inputs, ranked, typed, &kernel, &formal, None, budget);
+        // These exact bytes already passed the strict original-N component.
+        // This tests identity joins only, never a signed V4 association.
+        exercise_unsigned_original_identities_v1(
+            source.semantic.canonical_encoding(),
+            &kernel,
+            &formal,
+            budget,
+        )
+        .expect("actual unsigned original-N V4 identity components");
         for other in [source.erased, Some(inputs.owner.output())]
             .into_iter()
             .flatten()
@@ -208,6 +220,8 @@ pub(crate) fn exercise_unsigned_component_v1(
                     Some("original KernelIr subject"),
                     budget,
                 );
+                exercise_original_kernel_identity_substitution_v1(&kernel, &changed, budget)
+                    .expect("actual E/I cannot substitute for original-N identity");
             }
         }
         Ok(())
@@ -230,6 +244,29 @@ pub(crate) fn exercise_hostile_component_v1(
         assert_eq!(ranked.root_count(), 2);
         assert!(source.erased.is_none());
         let (kernel, formal) = wires(inputs, ranked, &reports, Fault::None);
+        let mut reordered = typed.to_vec();
+        reordered.reverse();
+        check_case(inputs, ranked, &reordered, &kernel, &formal, None, budget);
+        let first_export = ranked.roots()[0].export_symbol();
+        for (is_first, expected) in [
+            (true, "unique original receipt root join"),
+            (false, "complete original receipt root join"),
+        ] {
+            let repeated = typed
+                .iter()
+                .find(|row| (row.entry_symbol().as_bytes() == first_export) == is_first)
+                .unwrap();
+            let duplicate = vec![repeated.clone(); typed.len()];
+            check_case(
+                inputs,
+                ranked,
+                &duplicate,
+                &kernel,
+                &formal,
+                Some(expected),
+                budget,
+            );
+        }
         assert_eq!(typed.len(), wrong_names.len());
         for (expected, wrong) in typed.iter().zip(wrong_names) {
             assert_eq!(expected.entry_symbol(), wrong.entry_symbol());
