@@ -171,6 +171,7 @@ fn check_receipt(
 }
 
 fn stop_after_check(
+    _source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     receipt: &OwnedScopedSourceSlotsV29,
@@ -259,6 +260,7 @@ fn reject_mutation(
 }
 
 fn mutation_check(
+    _source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     receipt: &OwnedScopedSourceSlotsV29,
@@ -407,6 +409,7 @@ fn source_slot_creation_has_exact_work_and_peak_storage_boundaries() {
 #[test]
 fn source_slot_receipt_does_not_authorize_frame_splicing() {
     fn observe(
+        _source: &ExecutionLifecycleSourceV29<'_>,
         instances: &ExecutionInstancesV29<'_>,
         emitted: &mut [Option<LoweredFunctionResultV1>],
         receipt: &OwnedScopedSourceSlotsV29,
@@ -518,6 +521,7 @@ fn assert_resource(error: &ProductionSemanticKirErrorV1, work: bool) {
 #[test]
 fn source_slot_rederivation_has_its_own_storage_and_work_boundaries() {
     fn observe(
+        _source: &ExecutionLifecycleSourceV29<'_>,
         instances: &ExecutionInstancesV29<'_>,
         emitted: &mut [Option<LoweredFunctionResultV1>],
         receipt: &OwnedScopedSourceSlotsV29,

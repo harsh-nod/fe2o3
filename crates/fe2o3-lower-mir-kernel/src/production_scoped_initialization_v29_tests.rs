@@ -34,6 +34,7 @@ fn initialized_rows(summary: &ScopedRetainedInitializationV29) -> Vec<(u32, Vec<
 }
 
 fn observe_initialization(
+    _source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     receipt: &OwnedScopedSourceSlotsV29,
@@ -254,13 +255,14 @@ fn reject_custody_mutation(
 #[test]
 fn retained_initialization_custody_rejects_foreign_headers_and_malformed_rows() {
     fn observe(
+        source: &ExecutionLifecycleSourceV29<'_>,
         instances: &ExecutionInstancesV29<'_>,
         emitted: &mut [Option<LoweredFunctionResultV1>],
         receipt: &OwnedScopedSourceSlotsV29,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         assert!(is_stopped(&observe_initialization(
-            instances, emitted, receipt, budget
+            source, instances, emitted, receipt, budget
         )));
         let indices: Vec<_> = receipt
             .slots
@@ -338,13 +340,14 @@ fn retained_initialization_custody_rejects_foreign_headers_and_malformed_rows() 
 #[test]
 fn retained_initialization_capture_has_independent_exact_resource_limits() {
     fn observe<const EXACT: bool>(
+        source: &ExecutionLifecycleSourceV29<'_>,
         instances: &ExecutionInstancesV29<'_>,
         emitted: &mut [Option<LoweredFunctionResultV1>],
         receipt: &OwnedScopedSourceSlotsV29,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         assert!(is_stopped(&observe_initialization(
-            instances, emitted, receipt, budget
+            source, instances, emitted, receipt, budget
         )));
         let slot = receipt.slots[0];
         let output = emitted[slot.instance.index()].as_ref().unwrap();
@@ -435,6 +438,7 @@ fn retained_initialization_capture_has_independent_exact_resource_limits() {
 #[test]
 fn partial_array_writes_do_not_create_whole_array_initialization() {
     fn observe(
+        _source: &ExecutionLifecycleSourceV29<'_>,
         instances: &ExecutionInstancesV29<'_>,
         emitted: &mut [Option<LoweredFunctionResultV1>],
         receipt: &OwnedScopedSourceSlotsV29,

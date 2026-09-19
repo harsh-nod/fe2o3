@@ -2,6 +2,7 @@ use super::*;
 use crate::production_semantic_kir_v1::scoped_slot_uses_v29;
 
 fn stop_after_uses(
+    _source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     receipt: &OwnedScopedSourceSlotsV29,
@@ -71,6 +72,7 @@ fn real_source_scalar_array_diamond_and_loop_slot_uses_pass() {
 }
 
 fn observe_source_alias(
+    source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     receipt: &OwnedScopedSourceSlotsV29,
@@ -166,7 +168,7 @@ fn observe_source_alias(
         );
     }
     assert_eq!(helpers, 2);
-    stop_after_uses(instances, emitted, receipt, budget)
+    stop_after_uses(source, instances, emitted, receipt, budget)
 }
 
 #[test]
@@ -188,6 +190,7 @@ fn real_source_initialized_address_of_load_reuses_each_instance_slot() {
 }
 
 fn inject_observation(
+    _source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     receipt: &OwnedScopedSourceSlotsV29,
@@ -244,6 +247,7 @@ fn production_pre_splice_hook_rejects_slot_identity_observation_after_capture() 
 }
 
 fn replace_initial_store_with_read(
+    _source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     receipt: &OwnedScopedSourceSlotsV29,
@@ -305,6 +309,7 @@ fn production_physical_history_does_not_trust_source_initialization_summaries() 
 }
 
 fn mutate_allocation(
+    _source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     receipt: &OwnedScopedSourceSlotsV29,
@@ -351,6 +356,7 @@ fn slot_use_check_revalidates_live_allocations_after_the_original_census() {
 }
 
 fn check_foreign_ledger(
+    _source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     receipt: &OwnedScopedSourceSlotsV29,

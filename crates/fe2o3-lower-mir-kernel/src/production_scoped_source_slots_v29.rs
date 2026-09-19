@@ -2,6 +2,7 @@
 // independent checks before helper-frame storage may be removed or reused.
 #[cfg(test)]
 type ScopedSlotObserverV29 = fn(
+    &ExecutionLifecycleSourceV29<'_>,
     &ExecutionInstancesV29<'_>,
     &mut [Option<LoweredFunctionResultV1>],
     &OwnedScopedSourceSlotsV29,

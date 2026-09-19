@@ -454,7 +454,7 @@ fn build_pending_scoped_root_v29(
                         )?;
                         #[cfg(test)]
                         if let Some(observe) = SCOPED_SLOT_OBSERVER_V29.get() {
-                            observe(instances, &mut emitted, &source_slots, budget)?;
+                            observe(source, instances, &mut emitted, &source_slots, budget)?;
                         }
                         scoped_slot_uses_v29::check_scoped_source_slot_uses_v29(
                             instances,

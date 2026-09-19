@@ -4,6 +4,7 @@ use crate::production_semantic_kir_v1::scoped_slot_uses_v29;
 const LIMIT: usize = 10_000_000;
 
 fn inspect_rollback(
+    lifecycle_source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     slots: &OwnedScopedSourceSlotsV29,
@@ -29,6 +30,13 @@ fn inspect_rollback(
                 instances,
                 instance,
                 FunctionId::new("checked_slot_probe"),
+                placement,
+                budget,
+            )?;
+            let mut producer = ExecutionLifecycleProducerV29::new(
+                lifecycle_source,
+                instances,
+                instance,
                 placement,
                 budget,
             )?;
@@ -63,7 +71,7 @@ fn inspect_rollback(
                     Some(budget),
                     placement,
                     Some(cursor),
-                    None,
+                    Some(&mut producer),
                 )?;
                 let block_id = SemanticBlockIdV1::from_index(0);
                 let mut block = BasicBlock::new(placement.block(0)?);
@@ -139,7 +147,7 @@ fn inspect_rollback(
         work.push(budget.work() - before);
     }
     assert!(work[1] > work[0]);
-    observe(instances, emitted, slots, budget)
+    observe(lifecycle_source, instances, emitted, slots, budget)
 }
 
 #[test]
@@ -155,6 +163,7 @@ fn checked_failure_truncates_anchors_but_retains_capacity_and_restores_frames() 
 }
 
 fn inspect_array_move(
+    lifecycle_source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     slots: &OwnedScopedSourceSlotsV29,
@@ -227,7 +236,7 @@ fn inspect_array_move(
         ));
     }
     assert_eq!(helpers, 2);
-    observe(instances, emitted, slots, budget)
+    observe(lifecycle_source, instances, emitted, slots, budget)
 }
 
 #[test]
@@ -245,6 +254,7 @@ fn whole_and_projected_array_moves_keep_distinct_original_ssa_occurrences() {
 }
 
 fn observe(
+    _source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     slots: &OwnedScopedSourceSlotsV29,
@@ -316,6 +326,7 @@ fn source_kills_reject_alias_reads_after_zero_operation_invalidations_and_moves(
 }
 
 fn inspect_self_move(
+    lifecycle_source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     slots: &OwnedScopedSourceSlotsV29,
@@ -374,7 +385,7 @@ fn inspect_self_move(
         );
     }
     assert_eq!(pointers.len(), 2);
-    observe(instances, emitted, slots, budget)
+    observe(lifecycle_source, instances, emitted, slots, budget)
 }
 
 #[test]
@@ -392,6 +403,7 @@ fn self_move_reads_then_invalidates_then_reinitializes_each_instance() {
 }
 
 fn inspect_same_gap(
+    lifecycle_source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     slots: &OwnedScopedSourceSlotsV29,
@@ -440,7 +452,7 @@ fn inspect_same_gap(
         );
     }
     assert_eq!(helpers, 2);
-    observe(instances, emitted, slots, budget)
+    observe(lifecycle_source, instances, emitted, slots, budget)
 }
 
 #[test]
@@ -456,6 +468,7 @@ fn separate_source_kills_at_one_gap_are_not_collapsed() {
 }
 
 fn inspect_alias_move(
+    lifecycle_source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     slots: &OwnedScopedSourceSlotsV29,
@@ -514,7 +527,7 @@ fn inspect_alias_move(
         }
     }
     assert_eq!(helpers, 2);
-    observe(instances, emitted, slots, budget)
+    observe(lifecycle_source, instances, emitted, slots, budget)
 }
 
 #[test]
@@ -533,6 +546,7 @@ thread_local! {
 }
 
 fn mutate(
+    lifecycle_source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
     slots: &OwnedScopedSourceSlotsV29,
@@ -541,7 +555,7 @@ fn mutate(
     if MUTATION.get() == 11 {
         assert!(slots.instances[0].slots.is_empty());
         emitted[0].as_mut().unwrap().scoped_memory_anchors = None;
-        return observe(instances, emitted, slots, budget);
+        return observe(lifecycle_source, instances, emitted, slots, budget);
     }
     let item = slots
         .instances
@@ -607,7 +621,7 @@ fn mutate(
         }
         _ => unreachable!(),
     }
-    observe(instances, emitted, slots, budget)
+    observe(lifecycle_source, instances, emitted, slots, budget)
 }
 
 #[test]
