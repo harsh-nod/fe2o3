@@ -212,7 +212,7 @@ fn source_initialized_read_is_required_even_when_optimizer_reports_no_load_rows(
         assert!(checked.load_forwarding_rows().is_empty());
         budget.reserve_storage(checked.retained_storage()).unwrap();
         let floor = budget.storage();
-        let result = retained_load_fault_v1_tests::with_exact_sites(&site, || {
+        let result = retained_load_fault_v1_tests::with_exact_replays(&site, 2, || {
             Final5::try_admit_v1(source, bound, checked, &mut budget)
         });
         assert!(matches!(

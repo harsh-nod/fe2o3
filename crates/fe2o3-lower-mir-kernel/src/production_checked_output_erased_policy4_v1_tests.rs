@@ -271,7 +271,7 @@ fn final_erased_policy4_retains_source_lifetime_kill_refusals_after_erasure() {
             final_fixture_from(original, None)
         });
         // Corrupt only the independent re-emission, not the later history check.
-        let result = retained_load_fault_v1_tests::with_exact_sites(&site, || {
+        let result = retained_load_fault_v1_tests::with_exact_replays(&site, 2, || {
             final_admit(input, WORK, STORAGE).0
         });
         assert!(matches!(
