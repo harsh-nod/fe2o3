@@ -291,7 +291,7 @@ fn two_slot_and_slot_external_selects_cannot_hide_conflicting_origins() {
 }
 
 #[test]
-fn return_call_store_and_identity_observation_reject_candidate_addresses() {
+fn address_escape_and_already_invalid_identity_observation_reject() {
     for case in 0..4 {
         let mut function = fixture();
         let body = function.body.as_mut().unwrap();
@@ -322,7 +322,20 @@ fn return_call_store_and_identity_observation_reject_candidate_addresses() {
             )),
             _ => unreachable!(),
         }
-        verified(&function);
+        if case == 3 {
+            // Pointer comparison is already invalid KIR; preserve that boundary
+            // while also testing the pre-verification operand-role rejection.
+            let mut module = Module::new("invalid-pointer-comparison");
+            module.functions.push(function.clone());
+            let error = verify_module(&module).unwrap_err();
+            assert_eq!(error.diagnostics.len(), 1);
+            assert_eq!(
+                error.diagnostics[0].code,
+                fe2o3_kernel_ir::DiagnosticCode::InvalidOperandType
+            );
+        } else {
+            verified(&function);
+        }
         assert_eq!(
             detail(&run(&function, LIMIT, LIMIT).0),
             "scoped source-slot address escapes through an unsupported operand"
@@ -544,6 +557,54 @@ fn simple_slot_use_fixture_has_independently_counted_resource_limits() {
             )
         )
     ));
+}
+
+#[test]
+fn assembly_operands_without_values_are_charged_for_each_scan() {
+    use fe2o3_kernel_ir::{
+        AssemblyConstraint, AssemblyOperand, AssemblyOperandKind, AssemblySourceIdentity,
+        InlineAssembly, InlineAssemblyTarget,
+    };
+    let mut previous = None;
+    for count in [0, 17] {
+        let mut function = fixture();
+        // Inert metering-only payload, not an admitted assembly/source fixture.
+        function.body.as_mut().unwrap().blocks[0]
+            .operations
+            .push(Operation::new(
+                vec![],
+                OperationKind::InlineAssembly(InlineAssembly {
+                    target: InlineAssemblyTarget::AmdGpuGfx942,
+                    source: AssemblySourceIdentity::new([1; 32], [2; 32], [3; 32], [4; 32]),
+                    mnemonic: "metering-only".into(),
+                    operands: vec![
+                        AssemblyOperand {
+                            kind: AssemblyOperandKind::ImmediateI32(7),
+                            constraint: AssemblyConstraint::ImmediateI32,
+                        };
+                        count
+                    ],
+                    options: BTreeSet::new(),
+                    declared_effects: BTreeSet::new(),
+                }),
+            ));
+        let (result, work, peak) = run(&function, LIMIT, LIMIT);
+        result.unwrap();
+        if let Some((old_work, old_peak)) = previous {
+            assert_eq!(work - old_work, 2 * count);
+            assert_eq!(peak, old_peak);
+            run(&function, work, peak).0.unwrap();
+            assert!(matches!(
+                run(&function, work - 1, peak).0,
+                Err(
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Work(_)
+                    )
+                )
+            ));
+        }
+        previous = Some((work, peak));
+    }
 }
 
 #[test]
