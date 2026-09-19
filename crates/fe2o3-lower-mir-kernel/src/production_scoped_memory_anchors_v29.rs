@@ -8,6 +8,37 @@ struct ScopedMemorySpanV29 {
     end: usize,
 }
 
+fn scoped_memory_operand_role_v29(
+    role: ExecutionOperandV29,
+) -> Result<bool, ProductionSemanticKirErrorV1> {
+    Ok(match role {
+        ExecutionOperandV29::RvalueOperand(_)
+        | ExecutionOperandV29::StoreValue
+        | ExecutionOperandV29::AtomicValue
+        | ExecutionOperandV29::AtomicExpected
+        | ExecutionOperandV29::AtomicReplacement
+        | ExecutionOperandV29::Assume
+        | ExecutionOperandV29::CallArgument(_)
+        | ExecutionOperandV29::TailCallArgument(_)
+        | ExecutionOperandV29::SwitchDiscriminant
+        | ExecutionOperandV29::AssertCondition
+        | ExecutionOperandV29::AssertMessage(_) => true,
+        ExecutionOperandV29::RvaluePlace
+        | ExecutionOperandV29::Destination
+        | ExecutionOperandV29::StoreDestination
+        | ExecutionOperandV29::AtomicAddress
+        | ExecutionOperandV29::AtomicDestination
+        | ExecutionOperandV29::CallDestinationAddress
+        | ExecutionOperandV29::DropPlace
+        | ExecutionOperandV29::ReturnValue
+        | ExecutionOperandV29::ElidedBorrowDestination
+        | ExecutionOperandV29::StatementPlace => false,
+        ExecutionOperandV29::StorageLive | ExecutionOperandV29::StorageDead => {
+            return Err(scoped_memory_error_v29());
+        }
+    })
+}
+
 fn scoped_memory_site_key_v29(site: ExecutionSiteV29) -> (u32, Option<u32>) {
     match site {
         ExecutionSiteV29::Statement { block, statement } => (block.get(), Some(statement)),
@@ -64,6 +95,21 @@ fn check_scoped_memory_anchors_v29(
                     .types()
                     .get(slots[index].origin.semantic_type.index() as usize)
                     .ok_or_else(scoped_memory_error_v29)?;
+                if event.is_reachable()
+                    && event.role() == ExecutionEventV29::BaseUse
+                    && matches!(ty.shape(), SemanticTypeShapeV1::Array { .. })
+                    && scoped_memory_operand_role_v29(event.operand())?
+                {
+                    match scoped_source_operand_v29(
+                        source.declaration(),
+                        event.site(),
+                        event.operand(),
+                    ) {
+                        Some(SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place))
+                            if place.local().index() == local => {}
+                        _ => return Err(scoped_memory_error_v29()),
+                    }
+                }
                 scoped_expected_kill_v29(
                     source.declaration(),
                     event,
@@ -89,8 +135,13 @@ fn check_scoped_memory_anchors_v29(
         lowered.terminator_operation_spans.len(),
     ])?;
     let mut spans = emission_vec_v1(count, budget)?;
-    budget.charge_work(count)?;
+    budget.charge_work(argument_product_v1(count, 3)?)?;
     for span in &lowered.statement_operation_spans {
+        if span.correspondence_owner != anchors.subject.source.root
+            || span.semantic_function != anchors.subject.function
+        {
+            return Err(scoped_memory_error_v29());
+        }
         spans.push(ScopedMemorySpanV29 {
             site: (span.semantic_block.index(), Some(span.statement_ordinal)),
             block: span.kernel_ir_block,
@@ -102,6 +153,11 @@ fn check_scoped_memory_anchors_v29(
         });
     }
     for span in &lowered.terminator_operation_spans {
+        if span.correspondence_owner != anchors.subject.source.root
+            || span.semantic_function != anchors.subject.function
+        {
+            return Err(scoped_memory_error_v29());
+        }
         spans.push(ScopedMemorySpanV29 {
             site: (span.semantic_block.index(), None),
             block: span.kernel_ir_block,
@@ -446,7 +502,6 @@ fn scoped_source_operand_v29(
                 _ => None,
             }
         }
-        _ => None,
     }
 }
 

@@ -84,6 +84,12 @@ fn pending_root_retains_scalar_instance_sidecars_and_nested_capabilities() {
                         row.parameter_bindings.as_ptr(),
                         row.source_call_instance,
                         row.next_value,
+                        row.scoped_memory_anchors.as_ref().unwrap().rows.as_ptr(),
+                        row.scoped_memory_anchors
+                            .as_ref()
+                            .unwrap()
+                            .retained_storage()
+                            .unwrap(),
                     )
                 })
                 .collect();
@@ -137,6 +143,18 @@ fn pending_root_retains_scalar_instance_sidecars_and_nested_capabilities() {
                 assert_eq!(row.parameter_bindings.as_ptr(), old.2);
                 assert_eq!(row.source_call_instance, old.3);
                 assert_eq!(row.next_value, old.4);
+                assert_eq!(
+                    row.scoped_memory_anchors.as_ref().unwrap().rows.as_ptr(),
+                    old.5
+                );
+                assert_eq!(
+                    row.scoped_memory_anchors
+                        .as_ref()
+                        .unwrap()
+                        .retained_storage()
+                        .unwrap(),
+                    old.6
+                );
             }
             pending
                 .coordinates

@@ -24,6 +24,61 @@ fn build(
     .unwrap()
 }
 
+pub(in super::super) fn initialization_array_move_owner(
+    projected: bool,
+) -> ProductionSemanticSsaOwnerV1 {
+    let original = initialization_array_owner(true);
+    let semantic = original.source_semantic();
+    let mut functions = semantic.functions().to_vec();
+    let helper = &functions[3];
+    let array = helper.locals()[2].ty();
+    let result_type = if projected { U32 } else { array };
+    let mut locals = helper.locals().to_vec();
+    locals.push(local(136, result_type, SemanticLocalRoleV1::Temporary));
+    let mut initial = helper.blocks()[0].statements().to_vec();
+    let source = if projected {
+        SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(2),
+            vec![
+                SemanticProjectionV1::new(
+                    SemanticProjectionKindV1::ConstantIndex {
+                        offset: 0,
+                        minimum_length: 2,
+                        from_end: false,
+                    },
+                    U32,
+                )
+                .unwrap(),
+            ],
+            U32,
+        )
+        .unwrap()
+    } else {
+        place(2, array)
+    };
+    initial.push(assign(
+        place(3, result_type),
+        SemanticRvalueKindV1::Use(SemanticOperandV1::Move(source)),
+    ));
+    let blocks = vec![
+        block(140, initial, helper.blocks()[0].terminator().kind().clone()),
+        block(
+            141,
+            vec![assign(
+                place(0, U32),
+                SemanticRvalueKindV1::Use(literal(99)),
+            )],
+            SemanticTerminatorKindV1::Return,
+        ),
+    ];
+    functions[3] = function(130, helper.role(), helper.abi().clone(), locals, blocks);
+    build(
+        semantic.types().to_vec(),
+        functions,
+        semantic.callables().to_vec(),
+    )
+}
+
 fn literal(value: u128) -> SemanticOperandV1 {
     SemanticOperandV1::Constant(SemanticConstantV1::new(
         U32,

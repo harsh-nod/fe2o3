@@ -3,6 +3,96 @@ use crate::production_semantic_kir_v1::scoped_slot_uses_v29;
 
 const LIMIT: usize = 10_000_000;
 
+fn inspect_array_move(
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &mut [Option<LoweredFunctionResultV1>],
+    slots: &OwnedScopedSourceSlotsV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let mut helpers = 0;
+    for item in slots
+        .instances
+        .iter()
+        .filter(|item| item.function.index() == 3)
+    {
+        helpers += 1;
+        let source = instances.instance(item.instance).unwrap().declaration();
+        let SemanticStatementKindV1::Assign(assignment) =
+            source.blocks()[0].statements().last().unwrap().kind()
+        else {
+            panic!("expected move");
+        };
+        let SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place)) = assignment.value().kind()
+        else {
+            panic!("expected move operand");
+        };
+        let projected = !place.projections().is_empty();
+        let lowered = emitted[item.instance.index()].as_ref().unwrap();
+        let anchors = lowered.scoped_memory_anchors.as_ref().unwrap();
+        let kills: Vec<_> = anchors
+            .rows
+            .iter()
+            .filter(|row| matches!(row.kind, ScopedMemoryAnchorKindV29::Kill { .. }))
+            .collect();
+        assert_eq!(kills.len(), 1);
+        let ScopedMemoryAnchorKindV29::Kill {
+            event,
+            local,
+            cause,
+        } = kills[0].kind
+        else {
+            unreachable!()
+        };
+        assert_eq!(local, 2);
+        assert_eq!(
+            cause,
+            if projected {
+                ScopedMemoryKillV29::ProjectedArrayMove
+            } else {
+                ScopedMemoryKillV29::Move
+            }
+        );
+        let original = instances.occurrences(item.instance).unwrap();
+        assert_eq!(
+            original.events()[event].role(),
+            if projected {
+                ExecutionEventV29::BaseUse
+            } else {
+                ExecutionEventV29::MoveKill
+            }
+        );
+        let block = lowered
+            .function
+            .body
+            .as_ref()
+            .unwrap()
+            .blocks
+            .iter()
+            .find(|block| block.id == kills[0].block)
+            .unwrap();
+        assert!(matches!(
+            block.operations[kills[0].position - 1].kind,
+            OperationKind::Load { .. }
+        ));
+    }
+    assert_eq!(helpers, 2);
+    observe(instances, emitted, slots, budget)
+}
+
+#[test]
+fn whole_and_projected_array_moves_keep_distinct_original_ssa_occurrences() {
+    for projected in [false, true] {
+        let (result, _, _) = run(
+            false,
+            ScopedFixture::InitializationArrayMove(projected),
+            inspect_array_move,
+            LIMIT,
+            LIMIT,
+        );
+        assert!(is_stopped(&result), "{projected}: {result:?}");
+    }
+}
+
 fn observe(
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
@@ -280,6 +370,10 @@ fn mutate(
         1 => {
             // Keep capacity unchanged; this mutation tests duplicate coverage, not allocation.
             let other = kill + 1;
+            assert!(matches!(
+                anchors.rows[other].kind,
+                ScopedMemoryAnchorKindV29::Kill { .. }
+            ));
             anchors.rows[other] = anchors.rows[kill];
         }
         2 => {
@@ -312,6 +406,13 @@ fn mutate(
         8 => {
             anchors.rows[kill].source = None;
         }
+        9 => {
+            lowered.statement_operation_spans[0].semantic_function = ROOT;
+        }
+        10 => {
+            lowered.terminator_operation_spans[0].correspondence_owner =
+                SemanticFunctionIdV1::from_index(999);
+        }
         _ => unreachable!(),
     }
     observe(instances, emitted, slots, budget)
@@ -319,11 +420,19 @@ fn mutate(
 
 #[test]
 fn source_census_rejects_missing_duplicate_foreign_or_displaced_anchors() {
-    for mutation in 0..9 {
+    for mutation in 0..11 {
         MUTATION.set(mutation);
         let (result, _, _) = run(
             false,
-            fixture(Some(InitializationKillV29::SelfMove), false, false),
+            fixture(
+                Some(if mutation == 1 {
+                    InitializationKillV29::StorageDeadLive
+                } else {
+                    InitializationKillV29::SelfMove
+                }),
+                false,
+                mutation == 1,
+            ),
             mutate,
             LIMIT,
             LIMIT,

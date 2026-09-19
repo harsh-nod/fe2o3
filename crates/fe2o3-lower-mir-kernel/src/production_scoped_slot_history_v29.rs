@@ -373,6 +373,32 @@ pub(super) fn check_with_source_kills(
     let mut cells = emission_vec_v1(capacity, budget)?;
     let mut blocks = emission_vec_v1(graph.blocks.len(), budget)?;
     let mut successors = emission_vec_v1(edges, budget)?;
+    let mut kills = emission_vec_v1(anchors.len(), budget)?;
+    budget.charge_work(anchors.len())?;
+    for (sequence, row) in anchors.iter().enumerate() {
+        let ScopedMemoryAnchorKindV29::Kill { local, .. } = row.kind else {
+            continue;
+        };
+        budget.charge_work(scoped_initialization_search_work_v29(slots.len()))?;
+        let slot = slots
+            .binary_search_by_key(&local, |slot| slot.origin.local)
+            .map_err(|_| scoped_memory_error_v29())?;
+        kills.push((
+            row.block,
+            Event {
+                cell: Cell {
+                    slot: argument_sum_v1(&[first_slot, slot])?,
+                    index: 0,
+                },
+                kind: EventKind::KillSlot,
+                operation: row.position,
+                sequence,
+            },
+        ));
+    }
+    call_splice_sort_work_v1(argument_product_v1(kills.len(), 3)?, budget).map_err(graph_error)?;
+    kills.sort_unstable_by_key(|(block, event)| (*block, event.operation, event.sequence));
+    let mut next_kill = 0;
     for (_, block) in &graph.blocks {
         budget.charge_work(argument_sum_v1(&[1, block.operations.len()])?)?;
         let start = events.len();
@@ -402,34 +428,20 @@ pub(super) fn check_with_source_kills(
             });
             cells.push(cell);
         }
-        budget.charge_work(anchors.len())?;
-        for (sequence, row) in anchors.iter().enumerate() {
-            let ScopedMemoryAnchorKindV29::Kill { local, .. } = row.kind else {
-                continue;
-            };
-            if row.block != block.id {
-                continue;
+        let kill_start = next_kill;
+        while let Some(&(id, event)) = kills.get(next_kill) {
+            budget.charge_work(2)?;
+            if id != block.id {
+                break;
             }
-            budget.charge_work(scoped_initialization_search_work_v29(slots.len()))?;
-            let slot = slots
-                .binary_search_by_key(&local, |slot| slot.origin.local)
-                .map_err(|_| scoped_memory_error_v29())?;
-            if row.position > block.operations.len() {
+            if event.operation > block.operations.len() {
                 return Err(scoped_memory_error_v29());
             }
-            let cell = Cell {
-                slot: argument_sum_v1(&[first_slot, slot])?,
-                index: 0,
-            };
-            events.push(Event {
-                cell,
-                kind: EventKind::KillSlot,
-                operation: row.position,
-                sequence,
-            });
-            cells.push(cell);
+            events.push(event);
+            cells.push(event.cell);
+            next_kill = argument_sum_v1(&[next_kill, 1])?;
         }
-        if !anchors.is_empty() {
+        if next_kill != kill_start {
             let slice = &mut events[start..];
             call_splice_sort_work_v1(argument_product_v1(slice.len(), 2)?, budget)
                 .map_err(graph_error)?;
@@ -448,6 +460,9 @@ pub(super) fn check_with_source_kills(
             events: start..events.len(),
             successors: edge_start..successors.len(),
         });
+    }
+    if next_kill != kills.len() {
+        return Err(scoped_memory_error_v29());
     }
     call_splice_sort_work_v1(cells.len(), budget).map_err(graph_error)?;
     cells.sort_unstable();
