@@ -364,7 +364,6 @@ fn owned_input_probe(
     assert_eq!(budget.storage(), MODULE_FLOOR);
     let peak = budget.peak_storage();
     let failed_storage = budget.failed_storage();
-    drop(budget);
     (
         result,
         work.work(),
@@ -449,7 +448,6 @@ fn owned_execution_input_capture_cleans_partial_allocation_at_exact_stage_limits
         })
         .unwrap();
         assert_eq!(budget.storage(), 0);
-        drop(budget);
         if mode == 3 {
             assert_eq!(work.failed_work(), Some(usize::MAX));
         }
