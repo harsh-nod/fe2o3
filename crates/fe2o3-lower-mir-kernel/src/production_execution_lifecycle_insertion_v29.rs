@@ -426,7 +426,7 @@ fn prepare_lifecycle_events_v29(
             });
         }
     }
-    if issued.is_none() {
+    if issued.is_some() != root.requires_context_issue {
         return Err(execution_lifecycle_error_v29());
     }
     call_splice_sort_work_v1(prepared.len(), budget)

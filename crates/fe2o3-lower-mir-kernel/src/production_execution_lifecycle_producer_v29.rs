@@ -11,6 +11,7 @@ use crate::{
 )]
 struct ExecutionLifecycleSourceV29<'a> {
     owner: &'a ProductionSemanticSsaOwnerV1,
+    launch: &'a crate::ProductionSourceLaunchRosterV1,
     input: ProductionExecutionSourceInputV29<'a>,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
 }
@@ -22,7 +23,7 @@ struct ExecutionLifecycleSourceV29<'a> {
 impl<'a> ExecutionLifecycleSourceV29<'a> {
     fn new(
         owner: &'a ProductionSemanticSsaOwnerV1,
-        launch: &crate::ProductionSourceLaunchRosterV1,
+        launch: &'a crate::ProductionSourceLaunchRosterV1,
         input: ProductionExecutionSourceInputV29<'a>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
@@ -33,6 +34,7 @@ impl<'a> ExecutionLifecycleSourceV29<'a> {
             })?;
         Ok(Self {
             owner,
+            launch,
             input,
             ledger: budget.work_ledger_identity_v1(),
         })

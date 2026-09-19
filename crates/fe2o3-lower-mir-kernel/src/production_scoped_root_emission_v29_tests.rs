@@ -3,6 +3,12 @@ use super::*;
 include!("production_scoped_array_v29_tests.rs");
 include!("production_execution_lifecycle_insertion_v29_tests.rs");
 
+mod module_tests {
+    use super::*;
+    include!("production_scoped_module_fixtures_v29_tests.rs");
+    include!("production_scoped_module_v29_tests.rs");
+}
+
 pub(super) mod fixtures {
     use super::*;
     include!("production_scoped_root_fixtures_v29_tests.rs");
@@ -131,6 +137,7 @@ pub(super) fn emit_checked(
             let foreign_owner = lifecycle_owner(false);
             let foreign_source = ExecutionLifecycleSourceV29 {
                 owner: &foreign_owner,
+                launch: source.launch,
                 input: source.input,
                 ledger: source.ledger,
             };

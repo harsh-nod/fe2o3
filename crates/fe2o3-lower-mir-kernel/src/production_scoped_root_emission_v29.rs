@@ -9,6 +9,7 @@ struct OwnedPendingScopedRootV29 {
     kernel: Kernel,
     private_payload: PrivateArrayPayloadV1,
     source_slots: OwnedScopedSourceSlotsV29,
+    requires_context_issue: bool,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     // Reservation on the shared emission ledger, not total heap usage. The
     // legacy emitter also has structurally bounded, separately accounted data.
@@ -156,13 +157,55 @@ fn emit_pending_scoped_root_v29(
     if !std::ptr::eq(source.owner, checked.semantic_ssa()) {
         return Err(execution_lifecycle_error_v29());
     }
+    budget.charge_work(source.launch.roots().len())?;
+    let ordinal = source
+        .launch
+        .roots()
+        .iter()
+        .position(|launch| std::ptr::eq(launch, checked.launch()))
+        .ok_or_else(execution_lifecycle_error_v29)?;
+    emit_pending_source_root_v29(
+        source,
+        ordinal,
+        limits,
+        closure,
+        private_work,
+        outer_private_payload,
+        budget,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_pending_source_root_v29(
+    source: &ExecutionLifecycleSourceV29<'_>,
+    ordinal: usize,
+    limits: ProductionSemanticKirLimitsV1,
+    closure: &mut ReachableClosureBudgetV1,
+    private_work: &mut PrivateArrayLazyBudgetV1,
+    outer_private_payload: PrivateArrayPayloadV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<OwnedPendingScopedRootV29, ProductionSemanticKirErrorV1> {
+    if source.ledger != budget.work_ledger_identity_v1() {
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
     let floor = budget.storage();
     // The attempt encloses the planner scopes too: their explicit refunds do
     // not execute during unwinding, although their Rust-owned buffers drop.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        budget.charge_work(argument_sum_v1(&[source.input.roots.len(), 1])?)?;
+        let launch = source
+            .launch
+            .roots()
+            .get(ordinal)
+            .ok_or_else(execution_lifecycle_error_v29)?;
+        let requires_context_issue = source
+            .input
+            .roots
+            .iter()
+            .any(|root| root.root == launch.selected_root());
         let (pending, kernel, private_payload, source_slots) = build_pending_scoped_root_v29(
-            checked,
             source,
+            ordinal,
             limits,
             closure,
             private_work,
@@ -178,6 +221,7 @@ fn emit_pending_scoped_root_v29(
             kernel,
             private_payload,
             source_slots,
+            requires_context_issue,
             ledger: source.ledger,
             retained_emission_storage,
         })
@@ -204,8 +248,8 @@ fn emit_pending_scoped_root_v29(
 
 #[allow(clippy::too_many_arguments)]
 fn build_pending_scoped_root_v29(
-    checked: &crate::ProductionCheckedContextRootV29<'_>,
     source: &ExecutionLifecycleSourceV29<'_>,
+    ordinal: usize,
     limits: ProductionSemanticKirLimitsV1,
     closure: &mut ReachableClosureBudgetV1,
     private_work: &mut PrivateArrayLazyBudgetV1,
@@ -220,7 +264,33 @@ fn build_pending_scoped_root_v29(
     ),
     ProductionSemanticKirErrorV1,
 > {
-    let semantic = checked.semantic_ssa().source_semantic();
+    budget.charge_work(16)?;
+    let semantic = source.owner.source_semantic();
+    let launch = source
+        .launch
+        .roots()
+        .get(ordinal)
+        .ok_or_else(execution_lifecycle_error_v29)?;
+    let root_id = launch.selected_root();
+    let root = semantic
+        .functions()
+        .get(root_id.index() as usize)
+        .ok_or_else(execution_lifecycle_error_v29)?;
+    let ssa_plan = source
+        .owner
+        .plan_for_function(root_id)
+        .ok_or_else(execution_lifecycle_error_v29)?;
+    if source.launch.semantic_sha256() != source.owner.source_semantic_sha256()
+        || semantic.roots().get(ordinal) != Some(&root_id)
+        || launch.semantic_root_identity() != root.identity()
+        || ssa_plan.function_identity() != root.identity()
+        || root
+            .kernel_entry()
+            .map(|entry| *entry.kernel_binding_identity().as_bytes())
+            != Some(launch.kernel_binding())
+    {
+        return Err(execution_lifecycle_error_v29());
+    }
     if !semantic.allocations().is_empty()
         || !semantic.statics().is_empty()
         || !semantic.vtables().is_empty()
@@ -237,20 +307,19 @@ fn build_pending_scoped_root_v29(
         semantic.functions().len(),
         limits.max_functions,
     )?;
-    for ty in checked.root().abi().source_input_types() {
+    for ty in root.abi().source_input_types() {
         if execution_cfg_nominal_count_v29(semantic.types(), *ty, budget)? != 0 {
             return Err(execution_lifecycle_error_v29());
         }
     }
     budget.charge_work(1)?;
     if !matches!(
-        semantic.types()[checked.root().abi().source_output_type().index() as usize].shape(),
+        semantic.types()[root.abi().source_output_type().index() as usize].shape(),
         SemanticTypeShapeV1::Unit
     ) {
         return Err(execution_lifecycle_error_v29());
     }
-    let entry = checked
-        .root()
+    let entry = root
         .kernel_entry()
         .ok_or_else(execution_lifecycle_error_v29)?;
     let symbol = std::str::from_utf8(entry.export_symbol().as_bytes())
@@ -264,15 +333,15 @@ fn build_pending_scoped_root_v29(
         Some(required) => InfallibleBoundsAssertAnalysisV1::analyze(
             semantic.types(),
             semantic.callables(),
-            checked.root(),
+            root,
             required,
         )?,
         None => BTreeSet::new(),
     };
     let (pending, private_payload, source_slots) =
         production_call_instances_v1::with_production_call_instances_v1(
-            checked.semantic_ssa(),
-            checked.root_id(),
+            source.owner,
+            root_id,
             budget,
             |instances, budget| {
                 Ok::<_, production_call_instances_v1::ProductionCallInstanceErrorV1>(
@@ -330,8 +399,8 @@ fn build_pending_scoped_root_v29(
                         };
                         let root_plan = kernel_entry_plan_v1(
                             semantic,
-                            checked.root_id(),
-                            checked.root_id(),
+                            root_id,
+                            root_id,
                             FunctionId::new(symbol),
                             limits.max_operations,
                             closure,
@@ -351,12 +420,12 @@ fn build_pending_scoped_root_v29(
                                 lower_one_semantic_function_with_calls_v29(
                                     semantic,
                                     &root_plan,
-                                    checked.root_plan(),
+                                    ssa_plan,
                                     &BTreeMap::new(),
                                     &signatures,
                                     required_workgroup,
                                     infallible,
-                                    checked.launch().source_rank(),
+                                    launch.source_rank(),
                                     true,
                                     position.remaining_operations,
                                     None,
@@ -424,7 +493,7 @@ fn build_pending_scoped_root_v29(
                                         &signatures,
                                         None,
                                         BTreeSet::new(),
-                                        checked.launch().source_rank(),
+                                        launch.source_rank(),
                                         false,
                                         position.remaining_operations,
                                         None,
@@ -478,15 +547,15 @@ fn build_pending_scoped_root_v29(
             },
         )
         .map_err(scoped_root_instance_error_v29)??;
-    let layout = checked.launch().layout();
+    let layout = launch.layout();
     let kernel = semantic_kernel_metadata_v1(
         symbol,
         &pending.function,
         required_workgroup,
-        checked.launch().source_rank(),
+        launch.source_rank(),
         Some(RetainedRankedLaunchRootV1 {
-            selected_root: checked.root_id(),
-            launch_rank: checked.launch().source_rank(),
+            selected_root: root_id,
+            launch_rank: launch.source_rank(),
             global_extents: layout.global_extents(),
             workgroup_extents: layout.workgroup_extents(),
             full_physical_workgroups: layout.full_physical_workgroups(),

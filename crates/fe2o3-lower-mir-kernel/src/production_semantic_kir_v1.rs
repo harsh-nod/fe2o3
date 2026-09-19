@@ -12449,6 +12449,7 @@ include!("production_scoped_memory_anchors_v29.rs");
 #[path = "production_retained_load_fault_v1_tests.rs"]
 mod retained_load_fault_v1_tests;
 include!("production_execution_lifecycle_insertion_v29.rs");
+include!("production_scoped_module_v29.rs");
 include!("production_kernel_metadata_v1.rs");
 include!("production_execution_scalar_operands_v29.rs");
 include!("production_execution_events_v29.rs");
