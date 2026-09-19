@@ -1,0 +1,28 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -I - absence '{\"binding_sha256\":\"96dc8a92478cd9b27f811a68c144d5b8de7012ccb655ff8f5cb4e9c19da6284c\",\"commit\":\"5319dd58d1b698bb6b23fc5bfbda86a693fec04e\",\"path\":\"/home/harsh/fe2o3-xgmi-peer-batch-20260918.a5a7d158aad565c5\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789802683926658347,
+  "group_absent": true,
+  "pid": 124157,
+  "started_ns": 1789802682853844830,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": "9bf8f1989b5887d1a45b73204e29b17ac04694602499f82ac7d7c16ab82f9292",
+  "stdout_sha256": "d19392574e21a085c37ad25485dad992302f18a7c3be2f39d8be5873ad24e074",
+  "timeout_seconds": 120
+}

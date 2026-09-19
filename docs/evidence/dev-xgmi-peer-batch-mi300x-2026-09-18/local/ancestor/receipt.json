@@ -1,0 +1,21 @@
+{
+  "command": [
+    "git",
+    "merge-base",
+    "--is-ancestor",
+    "71b85d9e68d3f7f1d56af8e82cb946068547b85b",
+    "5319dd58d1b698bb6b23fc5bfbda86a693fec04e"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789801852212335326,
+  "group_absent": true,
+  "pid": 63331,
+  "started_ns": 1789801852205123312,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 30
+}

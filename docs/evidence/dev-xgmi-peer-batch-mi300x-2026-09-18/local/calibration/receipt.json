@@ -1,0 +1,20 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-peer-batch-mi300x-2026-09-18/test_campaign.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789801851558339726,
+  "group_absent": true,
+  "pid": 63237,
+  "started_ns": 1789801850938211076,
+  "stderr_sha256": "7c16b11783abc5130ca3e3f220d0417d60dfca2282a126b90790d137c5f7305d",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 120
+}

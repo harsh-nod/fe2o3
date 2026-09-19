@@ -1,0 +1,20 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-peer-batch-mi300x-2026-09-18/protocol.py",
+    "/home/harsh/.codex-tmp/fe2o3-xgmi-peer-batch-20260918.w8__yp8n/source.tar.gz"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789801864678930856,
+  "group_absent": true,
+  "pid": 63465,
+  "started_ns": 1789801854265748591,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "656203d3ea323175e6bcb0be93a14ac3bde1db2800ee0f795cd157b201f143b6",
+  "timeout_seconds": 180
+}

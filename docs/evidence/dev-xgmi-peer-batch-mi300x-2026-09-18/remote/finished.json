@@ -1,0 +1,10 @@
+{
+  "failure": null,
+  "formal_refinement": false,
+  "hip_hsa_parity": false,
+  "native_execution": true,
+  "performance_acceptance": false,
+  "secondary_failures": [],
+  "source_commit": "71b85d9e68d3f7f1d56af8e82cb946068547b85b",
+  "tooling_commit": "5319dd58d1b698bb6b23fc5bfbda86a693fec04e"
+}

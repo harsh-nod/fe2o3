@@ -1,0 +1,14 @@
+{
+  "absence": true,
+  "cleaned": true,
+  "collected": true,
+  "create_attempted": true,
+  "created": true,
+  "failure": null,
+  "local_payload": "/home/harsh/.codex-tmp/fe2o3-xgmi-peer-batch-20260918.w8__yp8n",
+  "local_payload_absent": true,
+  "native_attempted": true,
+  "native_failure": null,
+  "native_success": true,
+  "secondary_failures": []
+}

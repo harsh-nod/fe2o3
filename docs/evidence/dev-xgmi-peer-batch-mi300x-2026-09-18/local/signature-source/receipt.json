@@ -1,0 +1,21 @@
+{
+  "command": [
+    "git",
+    "-c",
+    "gpg.ssh.allowedSignersFile=/home/harsh/.codex-tmp/fe2o3-logical-mux-sdma-protocol-v2-20260918/allowed-signers",
+    "verify-commit",
+    "71b85d9e68d3f7f1d56af8e82cb946068547b85b"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789801852203584569,
+  "group_absent": true,
+  "pid": 63328,
+  "started_ns": 1789801852168813557,
+  "stderr_sha256": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 30
+}
