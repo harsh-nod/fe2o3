@@ -1118,11 +1118,35 @@ fn seal_assert_occurrence_in_functions_v1(
     expected_failure: BlockId,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> AssertOriginResultV1<SemanticKirAssertConditionBindingV1> {
+    seal_assert_occurrence_in_functions_at_v1(
+        pending,
+        pending.first_operation,
+        arguments,
+        coordinate,
+        graph,
+        functions,
+        expected_failure,
+        budget,
+    )
+}
+
+// The scoped caller checks its retained relocation witness before supplying
+// this physical offset; the original source capture remains immutable.
+#[allow(clippy::too_many_arguments)]
+fn seal_assert_occurrence_in_functions_at_v1(
+    pending: &PendingAssertOriginV1,
+    first_operation: u32,
+    arguments: &[ValueId],
+    coordinate: AssertBlockCoordinateV1,
+    graph: &AssertGraphIndexV1<'_>,
+    functions: &[Function],
+    expected_failure: BlockId,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> AssertOriginResultV1<SemanticKirAssertConditionBindingV1> {
     let bad = |detail| assert_origin_invalid_v1(Some(pending.site), detail);
     budget.charge_work(1)?;
     let block = assert_origin_function_block_v1(functions, coordinate)?;
-    let end = pending
-        .first_operation
+    let end = first_operation
         .checked_add(pending.operation_count)
         .ok_or(AssertOriginResourceV1::Arithmetic)?;
     if block.id != pending.block || end as usize != block.operations.len() {

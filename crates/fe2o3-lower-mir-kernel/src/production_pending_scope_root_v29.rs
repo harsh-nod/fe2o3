@@ -99,6 +99,7 @@ struct PendingScopedRootEmissionV29 {
     function: Function,
     sidecars: InstanceRowsV1<PendingInstanceSidecarsV29>,
     coordinates: OwnedInstanceCoordinatesV1,
+    slot_relocation: Option<scoped_slot_relocation_v29::RelocationV29>,
     additional_storage_bytes: usize,
 }
 
@@ -110,6 +111,14 @@ fn pending_scope_correspondence_error_v29(
         | InstanceCorrespondenceErrorV1::Emission(CallInstanceEmissionErrorV1::Resource(error)) => {
             error.into()
         }
+        InstanceCorrespondenceErrorV1::Emission(
+            CallInstanceEmissionErrorV1::CalleeFrameAllocation,
+        ) => unsupported(
+            0,
+            None,
+            None,
+            "scoped helper frame allocation requires checked relocation",
+        ),
         _ => execution_call_error_v29(),
     }
 }
@@ -262,6 +271,16 @@ fn assemble_pending_scoped_root_v29(
     limits: ProductionSemanticKirLimitsV1,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<PendingScopedRootEmissionV29, ProductionSemanticKirErrorV1> {
+    assemble_pending_scoped_root_inner_v29(instances, emitted, limits, None, budget)
+}
+
+fn assemble_pending_scoped_root_inner_v29(
+    instances: &ProductionCallInstancePlanV1<'_>,
+    emitted: &mut [Option<LoweredFunctionResultV1>],
+    limits: ProductionSemanticKirLimitsV1,
+    frame: Option<&scoped_slot_relocation_v29::FramePermitV29<'_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<PendingScopedRootEmissionV29, ProductionSemanticKirErrorV1> {
     let floor = budget.storage();
     let mut next_block = pending_scope_preflight_v29(instances, emitted, limits, budget)?;
     let result = with_production_instance_correspondence_v1(instances, budget, |map, budget| {
@@ -301,7 +320,7 @@ fn assemble_pending_scoped_root_v29(
             if caller >= index {
                 return Err(InstanceCorrespondenceErrorV1::Source);
             }
-            let mut expanded = map.splice(
+            let mut expanded = map.splice_with_scoped_frame_v29(
                 call,
                 functions.rows[caller]
                     .take()
@@ -311,6 +330,7 @@ fn assemble_pending_scoped_root_v29(
                     .ok_or(InstanceCorrespondenceErrorV1::Source)?,
                 BlockId(next_block),
                 BlockId(next_block + 1),
+                frame,
                 budget,
             )?;
             next_block += 2;
@@ -336,6 +356,7 @@ fn assemble_pending_scoped_root_v29(
             function,
             sidecars,
             coordinates,
+            slot_relocation: None,
             additional_storage_bytes,
         })
     });

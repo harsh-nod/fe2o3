@@ -284,6 +284,16 @@ fn call_splice_check_body_v1(
     callee: bool,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<usize, CallInstanceEmissionErrorV1> {
+    call_splice_check_body_with_scoped_frame_v29(function, index, callee, None, budget)
+}
+
+fn call_splice_check_body_with_scoped_frame_v29(
+    function: &Function,
+    index: &CallSpliceIndexV1<'_>,
+    callee: bool,
+    frame: Option<scoped_slot_relocation_v29::CallFrameV29<'_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<usize, CallInstanceEmissionErrorV1> {
     let body = function
         .body
         .as_ref()
@@ -295,9 +305,15 @@ fn call_splice_check_body_v1(
     budget.charge_work(body.blocks.len())?;
     for block in &body.blocks {
         budget.charge_work(block.operations.len())?;
-        for operation in &block.operations {
+        for (ordinal, operation) in block.operations.iter().enumerate() {
             if callee {
-                call_splice_check_callee_operation_v1(&operation.kind)?;
+                if let Some(frame) =
+                    frame.filter(|_| matches!(operation.kind, OperationKind::Alloca { .. }))
+                {
+                    frame.check(block.id, ordinal, operation, budget)?;
+                } else {
+                    call_splice_check_callee_operation_v1(&operation.kind)?;
+                }
             }
             if let OperationKind::InlineAssembly(assembly) = &operation.kind {
                 budget.charge_work(assembly.operands.len())?;
@@ -392,11 +408,31 @@ fn call_splice_disjoint_v1<T: Ord>(
 }
 
 fn splice_production_call_instance_v1(
+    caller: Function,
+    callee: Function,
+    site: FunctionOperationLocation,
+    entry: BlockId,
+    continuation: BlockId,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<SplicedCallInstanceV1, CallInstanceEmissionErrorV1> {
+    splice_production_call_instance_with_scoped_frame_v29(
+        caller,
+        callee,
+        site,
+        entry,
+        continuation,
+        None,
+        budget,
+    )
+}
+
+fn splice_production_call_instance_with_scoped_frame_v29(
     mut caller: Function,
     mut callee: Function,
     site: FunctionOperationLocation,
     entry: BlockId,
     continuation: BlockId,
+    frame: Option<scoped_slot_relocation_v29::CallFrameV29<'_, '_>>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<SplicedCallInstanceV1, CallInstanceEmissionErrorV1> {
     let mut scratch = 0_usize;
@@ -434,7 +470,13 @@ fn splice_production_call_instance_v1(
                 }
             }
             call_splice_check_body_v1(&caller, &caller_index, false, budget)?;
-            let returns = call_splice_check_body_v1(&callee, &callee_index, true, budget)?;
+            let returns = call_splice_check_body_with_scoped_frame_v29(
+                &callee,
+                &callee_index,
+                true,
+                frame,
+                budget,
+            )?;
             let caller_body = caller.body.as_ref().unwrap();
             let callee_body = callee.body.as_ref().unwrap();
             budget.charge_work(caller_body.blocks.len())?;

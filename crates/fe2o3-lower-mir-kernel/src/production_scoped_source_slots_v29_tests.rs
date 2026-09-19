@@ -20,6 +20,10 @@ mod call_memory_tests {
     include!("production_scoped_call_memory_v29_tests.rs");
 }
 
+mod relocation_tests {
+    include!("production_scoped_slot_relocation_v29_tests.rs");
+}
+
 const STOP: &str = "test stopped after scoped source-slot validation";
 thread_local! {
     static OBSERVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -438,7 +442,20 @@ fn source_slot_receipt_does_not_authorize_frame_splicing() {
                 Err(CallInstanceEmissionErrorV1::CalleeFrameAllocation)
             ));
         }
-        Ok(())
+        let result = assemble_pending_scoped_root_v29(
+            instances,
+            emitted,
+            ProductionSemanticKirLimitsV1::default(),
+            budget,
+        );
+        assert!(matches!(
+            result,
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                detail: "scoped helper frame allocation requires checked relocation",
+                ..
+            })
+        ));
+        Err(unsupported(0, None, None, STOP))
     }
     for fixture in [ScopedFixture::Arrays, ScopedFixture::RepeatedSlots] {
         let (result, _, _) = run(false, fixture, observe, 10_000_000, 10_000_000);
@@ -447,14 +464,7 @@ fn source_slot_receipt_does_not_authorize_frame_splicing() {
             1,
             "frame refusal must occur after slot validation"
         );
-        assert!(matches!(
-            result,
-            Err(ProductionSemanticKirErrorV1::Unsupported {
-                detail: "execution call parameters differ from their source instance",
-                ..
-            })
-        ));
-        assert!(!is_stopped(&result));
+        assert!(is_stopped(&result));
     }
 }
 

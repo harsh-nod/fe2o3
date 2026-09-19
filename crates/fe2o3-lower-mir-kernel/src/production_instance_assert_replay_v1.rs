@@ -126,12 +126,16 @@ fn replay_pending_instance_asserts_v1(
                     first: recorded.first_operation,
                     count: recorded.operation_count,
                 };
+                let relocated = match &pending.slot_relocation {
+                    Some(relocation) => relocation.assertion_span(physical, budget)?,
+                    None => physical,
+                };
                 if spans.next().is_some()
                     || mapped.removed_call.is_some()
                     || origin.kernel_ir_block != physical.block
                     || origin.first_operation_ordinal != physical.first
                     || origin.operation_count != physical.count
-                    || mapped.segments != [Some(physical), None]
+                    || mapped.segments != [Some(relocated), None]
                 {
                     return Err(bad().into());
                 }
@@ -209,8 +213,9 @@ fn replay_pending_instance_asserts_v1(
                 }
                 let coordinate = graph.block(root_coordinate, recorded.block, budget)?;
                 // Returned coordinates are local scratch, never sealed bindings.
-                seal_assert_occurrence_in_functions_v1(
+                seal_assert_occurrence_in_functions_at_v1(
                     recorded,
+                    relocated.first,
                     &capture.arguments,
                     coordinate,
                     &graph,

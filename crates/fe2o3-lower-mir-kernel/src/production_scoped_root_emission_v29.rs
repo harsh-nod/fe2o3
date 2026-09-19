@@ -456,19 +456,14 @@ fn build_pending_scoped_root_v29(
                         if let Some(observe) = SCOPED_SLOT_OBSERVER_V29.get() {
                             observe(source, instances, &mut emitted, &source_slots, budget)?;
                         }
-                        scoped_slot_uses_v29::check_scoped_source_slot_uses_v29(
+                        let relocation = scoped_slot_relocation_v29::prepare(
                             instances,
-                            &emitted,
+                            &mut emitted,
                             &source_slots,
                             limits.max_operations,
                             budget,
                         )?;
-                        let pending = assemble_pending_scoped_root_v29(
-                            instances,
-                            &mut emitted,
-                            limits,
-                            budget,
-                        )?;
+                        let pending = relocation.assemble(limits, budget)?;
                         let slot_bytes = argument_product_v1(
                             emitted.capacity(),
                             std::mem::size_of::<Option<LoweredFunctionResultV1>>(),
