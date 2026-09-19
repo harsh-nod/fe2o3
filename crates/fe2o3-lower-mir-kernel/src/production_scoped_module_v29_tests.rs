@@ -56,6 +56,7 @@ fn check_scoped_module(
         let is_context = !matches!(kind, ModuleFixture::Ordinary) && ordinal == 1;
         assert_eq!(root.requires_context_issue, is_context);
         assert_eq!(root.insertions.len(), if is_context { 3 } else { 0 });
+        check_module_physical_payload(root, function, is_context);
         for sidecar in &root.sidecars.rows {
             assert!(sidecar.diagnostic_declarations.is_empty());
             assert!(sidecar.float_declarations.is_empty());
@@ -113,6 +114,79 @@ fn check_scoped_module(
         assert_eq!(
             owner.roots[1].private_payload.capacity,
             owner.roots[2].private_payload.capacity
+        );
+    }
+}
+
+fn check_module_physical_payload(
+    root: &ScopedModuleRootV29,
+    function: &Function,
+    is_context: bool,
+) {
+    let body = function.body.as_ref().unwrap();
+    let entry = &body.blocks[0];
+    let mut allocations = BTreeMap::new();
+    for block in &body.blocks {
+        for operation in &block.operations {
+            if let OperationKind::Alloca { count, .. } = &operation.kind {
+                assert_eq!(block.id, entry.id);
+                assert!(
+                    allocations
+                        .insert(operation.results[0].id, *count)
+                        .is_none()
+                );
+            }
+        }
+    }
+    assert_eq!(allocations.len(), root.source_slots.slots.len());
+    for slot in &root.source_slots.slots {
+        assert_eq!(
+            allocations.get(&slot.origin.pointer),
+            Some(&slot.count.map(|row| row.0))
+        );
+        if let Some((value, _)) = slot.count {
+            let operation = entry
+                .operations
+                .iter()
+                .find(|operation| {
+                    operation
+                        .results
+                        .first()
+                        .is_some_and(|result| result.id == value)
+                })
+                .unwrap();
+            assert_eq!(
+                operation.kind,
+                OperationKind::Constant(Constant::Index(slot.length))
+            );
+        }
+    }
+    if !is_context {
+        let sidecar = &root.sidecars.rows[0];
+        assert_eq!(
+            sidecar
+                .instance_assert_origins
+                .as_ref()
+                .unwrap()
+                .records
+                .len(),
+            1
+        );
+        assert_eq!(sidecar.synthetic_operation_spans.len(), 1);
+        let failure = &sidecar.synthetic_operation_spans[0];
+        assert_eq!(
+            failure.rule,
+            SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap
+        );
+        let block = body
+            .blocks
+            .iter()
+            .find(|block| block.id == failure.kernel_ir_block)
+            .unwrap();
+        assert_eq!(block.terminator, Some(Terminator::Unreachable));
+        assert_eq!(
+            block.operations,
+            vec![AmdGpuDiagnosticOperation::Trap.operation(None)]
         );
     }
 }
@@ -227,6 +301,11 @@ fn complete_module_obeys_exact_and_one_short_resources() {
                 ))
                 | ScopedModuleErrorV29::Canonical(
                     fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15::Resource(error),
+                )
+                | ScopedModuleErrorV29::Canonical(
+                    fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15::Decode(
+                        fe2o3_kernel_ir::KernelIrDecodeError::Resource(error),
+                    ),
                 ) => error,
                 other => panic!("expected typed resource refusal: {other:?}"),
             };
@@ -247,7 +326,7 @@ fn complete_module_obeys_exact_and_one_short_resources() {
 
 #[test]
 fn complete_module_rejects_root_and_declaration_substitution() {
-    for fault in 0..10 {
+    for fault in 0..11 {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
         let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
         budget.reserve_storage(MODULE_FLOOR).unwrap();
@@ -268,11 +347,13 @@ fn complete_module_rejects_root_and_declaration_substitution() {
                     emitted[2].root.pending.function.id = entry;
                 }
                 4 => {
-                    emitted[2].root.pending.coordinates.ssa =
-                        module_fixture_owner(ModuleFixture::Mixed).identity()
+                    let different = module_fixture_owner(ModuleFixture::Array).identity();
+                    assert_ne!(different, source.owner.identity());
+                    emitted[2].root.pending.coordinates.ssa = different;
                 }
                 _ => {
                     let root_id = emitted[0].root.pending.function.id.clone();
+                    let body = emitted[0].root.pending.function.body.clone();
                     let map = &mut emitted[2].root.pending.sidecars.rows[0].diagnostic_declarations;
                     let (mut key, mut declaration) = map.pop_first().unwrap();
                     match fault {
@@ -291,6 +372,7 @@ fn complete_module_rejects_root_and_declaration_substitution() {
                             key = root_id.clone();
                             declaration.id = root_id;
                         }
+                        10 => declaration.body = body,
                         _ => unreachable!(),
                     }
                     map.insert(key, declaration);
@@ -335,18 +417,25 @@ fn complete_module_cannot_cross_ledgers_or_ignore_aggregate_limits() {
         assert_eq!(foreign.storage(), 0);
         assert_eq!(foreign.work(), 0);
         budget.release_storage(budget.storage() - floor).unwrap();
-        for resource in [ProductionSemanticKirResourceV1::Blocks, ProductionSemanticKirResourceV1::Operations] {
+        for resource in [ProductionSemanticKirResourceV1::Blocks, ProductionSemanticKirResourceV1::Operations, ProductionSemanticKirResourceV1::Statements] {
             let emitted = scoped_module_roots_v29(source, ProductionSemanticKirLimitsV1::default(), budget).unwrap();
             let counts: Vec<_> = emitted.iter().map(|row| {
                 let blocks = &row.root.pending.function.body.as_ref().unwrap().blocks;
                 if resource == ProductionSemanticKirResourceV1::Blocks { blocks.len() }
-                else { blocks.iter().map(|block| block.operations.len()).sum() }
+                else if resource == ProductionSemanticKirResourceV1::Operations { blocks.iter().map(|block| block.operations.len()).sum() }
+                else {
+                    row.root.pending.coordinates.sources.rows.iter().map(|instance| {
+                        source.owner.source_semantic().functions()[instance.function.index() as usize]
+                            .blocks().iter().map(|block| block.statements().len()).sum::<usize>()
+                    }).sum()
+                }
             }).collect();
             let maximum = *counts.iter().max().unwrap();
             assert!(counts.iter().sum::<usize>() > maximum);
             let mut limits = ProductionSemanticKirLimitsV1::default();
             if resource == ProductionSemanticKirResourceV1::Blocks { limits.max_blocks = maximum; }
-            else { limits.max_operations = maximum; }
+            else if resource == ProductionSemanticKirResourceV1::Operations { limits.max_operations = maximum; }
+            else { limits.max_statements = maximum; }
             let result = scoped_module_candidate_v29(source, emitted, limits, budget);
             assert!(matches!(result, Err(ProductionSemanticKirErrorV1::ResourceLimit { resource: found, .. }) if found == resource));
             drop(result);
@@ -385,6 +474,13 @@ fn complete_module_restores_its_floor_after_late_root_panic() {
         })
     }));
     SCOPED_SLOT_OBSERVER_V29.set(previous);
-    assert!(result.is_err());
+    let panic = match result {
+        Err(panic) => panic,
+        Ok(_) => panic!("expected late module-root unwind"),
+    };
+    assert_eq!(
+        panic.downcast_ref::<&str>(),
+        Some(&"late module-root unwind")
+    );
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }

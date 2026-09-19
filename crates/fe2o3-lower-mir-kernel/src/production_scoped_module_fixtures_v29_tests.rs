@@ -13,7 +13,11 @@ fn module_fixture_owner(kind: ModuleFixture) -> ProductionSemanticSsaOwnerV1 {
         _ => lifecycle_owner(false),
     };
     let semantic = original.source_semantic();
-    let mut types = semantic.types().to_vec();
+    let mut types = if matches!(kind, ModuleFixture::Ordinary) {
+        semantic.types()[..2].to_vec()
+    } else {
+        semantic.types().to_vec()
+    };
     let boolean = types
         .iter()
         .position(|ty| {
@@ -52,7 +56,10 @@ fn module_fixture_owner(kind: ModuleFixture) -> ProductionSemanticSsaOwnerV1 {
             vec![
                 block(
                     tag + 4,
-                    vec![],
+                    vec![assign(
+                        place(1, U32),
+                        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(1, U32))),
+                    )],
                     SemanticTerminatorKindV1::Assert {
                         condition: SemanticOperandV1::Constant(SemanticConstantV1::new(
                             boolean,
@@ -78,8 +85,7 @@ fn module_fixture_owner(kind: ModuleFixture) -> ProductionSemanticSsaOwnerV1 {
             semantic.functions()[0]
                 .kernel_entry()
                 .unwrap()
-                .source_contract()
-                .clone(),
+                .source_contract(),
         ))
     };
     let mut functions = vec![ordinary(60, b"z_ordinary")];
