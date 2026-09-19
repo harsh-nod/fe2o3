@@ -1,5 +1,7 @@
 // Physical signatures for expanded instances. Nominal bindings arrive only via
 // the scoped call seed; this plan is not producer or borrow authority.
+include!("production_execution_owner_parameter_v29.rs");
+
 fn execution_reference_abi_scalar_v29(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
@@ -141,6 +143,29 @@ fn check_execution_instance_abi_v29(
                 continue;
             }
             let shape_floor = budget.storage();
+            if let Some(direct) = execution_direct_parameter_v29(
+                semantic,
+                function_id,
+                mapped.source_argument(),
+                mapped.tuple_field(),
+                mapped.abi().ty(),
+                budget,
+            )? {
+                if mapped.ordinal() != mapped.source_argument()
+                    || mapped.local_field().is_some()
+                    || function.locals()[mapped.local().index() as usize].role()
+                        != SemanticLocalRoleV1::Argument(mapped.source_argument())
+                    || !std::ptr::eq(
+                        mapped.abi(),
+                        &abi.adjusted_arguments()[mapped.ordinal() as usize],
+                    )
+                {
+                    return Err(execution_call_error_v29());
+                }
+                drop(direct);
+                budget.release_storage(budget.storage() - shape_floor)?;
+                continue;
+            }
             prepay_argument_shape_v1(semantic, mapped.abi().ty(), budget)?;
             let (_, shape) = helper_parameter_shape_with_policy_v1(
                 semantic.types(),
@@ -341,6 +366,26 @@ fn build_execution_function_layout_v29(
             (selector.source_argument, local, selector.ty),
             budget,
         )?;
+        if let Some(direct) = execution_direct_parameter_v29(
+            semantic,
+            row.function(),
+            selector.source_argument,
+            selector.tuple_field,
+            selector.ty,
+            budget,
+        )? {
+            emission_push_v1(&mut parameter_types, direct, budget)?;
+            emission_push_v1(
+                &mut call_arguments,
+                HelperCallArgumentV1 {
+                    source_argument: selector.source_argument,
+                    tuple_field: None,
+                    component: None,
+                },
+                budget,
+            )?;
+            continue;
+        }
         let physical = execution_cfg_types_v29(semantic.types(), selector.ty, budget)?;
         let backing = argument_product_v1(physical.capacity(), std::mem::size_of::<Type>())?;
         for (component, ty) in physical.into_iter().enumerate() {

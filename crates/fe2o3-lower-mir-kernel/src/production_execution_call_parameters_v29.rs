@@ -215,6 +215,7 @@ fn prepare_execution_parameters_v29<'scope>(
         || prepared.arguments.len() != plan.parameter_values.len()
         || origin.projections.len() != plan.parameter_values.len()
         || plan.parameter_types.len() != plan.parameter_values.len()
+        || plan.call_arguments.len() != plan.parameter_values.len()
         || origin.parameter_types.len() != plan.parameter_types.len()
     {
         return Err(execution_call_error_v29());
@@ -251,6 +252,53 @@ fn prepare_execution_parameters_v29<'scope>(
             (_, None) => source,
             _ => return Err(execution_call_error_v29()),
         };
+        if let Some(expected) = execution_direct_parameter_v29(
+            instances.owner().source_semantic(),
+            row.function(),
+            selector.source_argument,
+            selector.tuple_field,
+            selector.ty,
+            budget,
+        )? {
+            let source_projection = execution_direct_projection_v29(
+                selector.source_argument,
+                &origin.projections,
+                &origin.parameter_types,
+                budget,
+            )?;
+            let plan_projection = execution_direct_projection_v29(
+                selector.source_argument,
+                &plan.call_arguments,
+                &plan.parameter_types,
+                budget,
+            )?;
+            let SemanticValueBindingV1::Value {
+                id: incoming_id,
+                ty,
+            } = binding
+            else {
+                return Err(execution_call_error_v29());
+            };
+            let id = *plan
+                .parameter_values
+                .get(next)
+                .ok_or_else(execution_call_error_v29)?;
+            if source_projection != Some((next, &expected))
+                || plan_projection != Some((next, &expected))
+                || ty != &expected
+                || prepared.arguments.get(next) != Some(incoming_id)
+                || values
+                    .last()
+                    .is_some_and(|previous: &ValueDef| previous.id.0 >= id.0)
+            {
+                return Err(execution_call_error_v29());
+            }
+            let local_type = execution_cfg_clone_type_v29(&expected, budget)?;
+            values.push(ValueDef::new(id, expected));
+            locals.push((local, SemanticValueBindingV1::Value { id, ty: local_type }));
+            next = argument_sum_v1(&[next, 1])?;
+            continue;
+        }
         let leaves = execution_call_shape_v29(types, selector.ty, binding, budget)?;
         for leaf in &leaves {
             budget.charge_work(4)?;

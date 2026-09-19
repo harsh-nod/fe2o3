@@ -193,8 +193,20 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 .emission_work
                 .as_deref_mut()
                 .ok_or(ArgumentResourceV1::Accounting)?;
-            for (binding, ty) in source_bindings.iter().zip(signature.semantic_types) {
-                execution_call_shape_v29(self.types, *ty, binding, budget)?;
+            for (index, (binding, ty)) in source_bindings
+                .iter()
+                .zip(signature.semantic_types)
+                .enumerate()
+            {
+                execution_call_argument_shape_v29(
+                    self.types,
+                    *ty,
+                    index as u32,
+                    binding,
+                    signature.projections,
+                    &signature.parameter_types,
+                    budget,
+                )?;
             }
         }
         let mut arguments = if execution.is_some() {
@@ -253,6 +265,19 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             };
             let function = self.semantic_function.index();
             let failure = |detail| unsupported(function, Some(block.index()), None, detail);
+            if execution.is_some()
+                && projection.component.is_none()
+                && execution_is_direct_owner_type_v29(&expected)
+            {
+                let SemanticValueBindingV1::Value { id, ty } = binding else {
+                    return Err(execution_call_error_v29());
+                };
+                if ty != &expected {
+                    return Err(execution_call_error_v29());
+                }
+                arguments.push(*id);
+                continue;
+            }
             let (value, actual) = match projection.component {
                 None => binding.value().map_err(failure)?,
                 Some(component) => {
