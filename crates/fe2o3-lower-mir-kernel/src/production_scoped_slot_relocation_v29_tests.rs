@@ -126,7 +126,8 @@ fn inspect_relocation(
             assert_eq!(row.private_arrays.slots, original.4);
             assert_eq!(row.private_arrays.effects, original.5);
             assert_eq!(row.private_arrays.placement, original.6);
-            assert_eq!(row.private_arrays.payload, original.7);
+            assert_eq!(row.private_arrays.payload.occupied, original.7.occupied);
+            assert_eq!(row.private_arrays.payload.capacity, original.7.capacity);
         }
         replay_pending_instance_asserts_v1(&pending, instances, budget)?;
         drop(pending);

@@ -517,6 +517,9 @@ impl RelocationV29 {
 }
 
 impl PreparedV29<'_, '_> {
+    // The enclosing root-emission attempt owns failure/panic cleanup, including
+    // the preparation reservation. A failed assembly consumes this attempt.
+    // additional_storage_bytes covers assembly only, not the prepared prefixes.
     pub(super) fn assemble(
         self,
         limits: ProductionSemanticKirLimitsV1,

@@ -99,6 +99,8 @@ struct PendingScopedRootEmissionV29 {
     function: Function,
     sidecars: InstanceRowsV1<PendingInstanceSidecarsV29>,
     coordinates: OwnedInstanceCoordinatesV1,
+    // Removed-call anchor ordinals remain pre-relocation tombstones; source
+    // spans compose this witness instead of treating them as live operations.
     slot_relocation: Option<scoped_slot_relocation_v29::RelocationV29>,
     additional_storage_bytes: usize,
 }
