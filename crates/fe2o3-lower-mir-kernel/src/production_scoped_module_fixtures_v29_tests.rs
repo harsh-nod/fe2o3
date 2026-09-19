@@ -190,128 +190,7 @@ fn with_module_fixture<'work, R>(
         })?;
     budget.reserve_storage(capture.retained_storage())?;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let semantic = owner.source_semantic();
-        let launch_inputs: Vec<_> = semantic
-            .roots()
-            .iter()
-            .enumerate()
-            .map(|(ordinal, root)| {
-                let entry = semantic.functions()[root.index() as usize]
-                    .kernel_entry()
-                    .unwrap();
-                ProductionSourceLaunchRootInputV1::new(
-                    std::str::from_utf8(entry.export_symbol().as_bytes()).unwrap(),
-                    *entry.kernel_binding_identity().as_bytes(),
-                    ProductionSourceLaunchInputV1::new(
-                        1,
-                        Some([64, 1, 1]),
-                        [ordinal as u32 + 1, 1, 1],
-                    ),
-                )
-            })
-            .collect();
-        let launch = ProductionSourceLaunchRosterV1::try_new(semantic, &launch_inputs).unwrap();
-        let mut roots = Vec::new();
-        let mut classes =
-            vec![ProductionScopeCallableCandidateV29::Ordinary; semantic.callables().len()];
-        let mut events = Vec::new();
-        if !matches!(kind, ModuleFixture::Ordinary) {
-            let SemanticTerminatorKindV1::Call(helper) =
-                semantic.functions()[1].blocks()[1].terminator().kind()
-            else {
-                panic!("helper");
-            };
-            roots.push(RootInput {
-                semantic_sha256: owner.source_semantic_sha256(),
-                root: SemanticFunctionIdV1::from_index(1),
-                root_identity: semantic.functions()[1].identity(),
-                helper: SemanticFunctionIdV1::from_index(2),
-                helper_identity: semantic.functions()[2].identity(),
-                issuer: SemanticCallableIdV1::from_index(5),
-                issuer_identity: SemanticFunctionIdentityV1::from_sha256([120; 32]),
-                context_type: CONTEXT,
-                context_identity: semantic.types()[CONTEXT.index() as usize].identity(),
-                issuance: Boundary {
-                    block: SemanticBlockIdV1::from_index(0),
-                    statement_count: 0,
-                    destination: SemanticLocalIdV1::from_index(2),
-                    destination_type: CONTEXT,
-                    target: SemanticBlockIdV1::from_index(1),
-                    unwind: SemanticUnwindActionV1::Unreachable,
-                },
-                helper_call: Boundary {
-                    block: SemanticBlockIdV1::from_index(1),
-                    statement_count: 0,
-                    destination: SemanticLocalIdV1::from_index(0),
-                    destination_type: UNIT,
-                    target: SemanticBlockIdV1::from_index(2),
-                    unwind: SemanticUnwindActionV1::Unreachable,
-                },
-                helper_context_local: SemanticLocalIdV1::from_index(2),
-                helper_arguments: helper.arguments(),
-            });
-            classes[2] = ProductionScopeCallableCandidateV29::Provider {
-                function: SemanticFunctionIdV1::from_index(2),
-                identity: semantic.functions()[2].identity(),
-            };
-            classes[6] = ProductionScopeCallableCandidateV29::Derive {
-                binding: SemanticFunctionIdentityV1::from_sha256([121; 32]),
-                operation: SemanticCompilerIntrinsicIdentityV1::from_sha256([121; 32]),
-                context: CONTEXT,
-                workgroup: semantic.functions()[3].abi().source_input_types()[0],
-            };
-            for function_index in [1, 2] {
-                for (block_index, block) in semantic.functions()[function_index]
-                    .blocks()
-                    .iter()
-                    .enumerate()
-                {
-                    let kind = match block.terminator().kind() {
-                        SemanticTerminatorKindV1::Call(call) if call.callee().index() == 2 => {
-                            ProductionScopeEventKindV29::Call {
-                                callee: call.callee(),
-                                kind: ProductionScopeCallKindV29::Provider,
-                            }
-                        }
-                        SemanticTerminatorKindV1::Call(call) if function_index == 2 => {
-                            ProductionScopeEventKindV29::Call {
-                                callee: call.callee(),
-                                kind: if call.callee().index() == 6 {
-                                    ProductionScopeCallKindV29::Derive
-                                } else {
-                                    ProductionScopeCallKindV29::Ordinary
-                                },
-                            }
-                        }
-                        SemanticTerminatorKindV1::Return if function_index == 2 => {
-                            ProductionScopeEventKindV29::Return
-                        }
-                        SemanticTerminatorKindV1::Assert { .. } if function_index == 2 => {
-                            ProductionScopeEventKindV29::Assert
-                        }
-                        _ => continue,
-                    };
-                    events.push(crate::ProductionScopeEventCandidateV29 {
-                        function: SemanticFunctionIdV1::from_index(function_index as u32),
-                        block: SemanticBlockIdV1::from_index(block_index as u32),
-                        statement_count: block.statements().len(),
-                        kind,
-                    });
-                }
-            }
-        }
-        let source = ExecutionLifecycleSourceV29::new(
-            &owner,
-            &launch,
-            ProductionExecutionSourceInputV29 {
-                semantic_sha256: owner.source_semantic_sha256(),
-                roots: &roots,
-                classes: &classes,
-                events: &events,
-            },
-            budget,
-        )?;
-        Ok::<_, ScopedModuleErrorV29>(use_source(&source, budget))
+        with_module_fixture_view(&owner, kind, budget, use_source).map(|(value, _)| value)
     }));
     drop(owner);
     budget.release_storage(capture.retained_storage())?;
@@ -319,4 +198,131 @@ fn with_module_fixture<'work, R>(
         Ok(result) => result,
         Err(payload) => std::panic::resume_unwind(payload),
     }
+}
+
+fn with_module_fixture_view<'work, R>(
+    owner: &ProductionSemanticSsaOwnerV1,
+    kind: ModuleFixture,
+    budget: &mut ArgumentBudgetV1<'work>,
+    use_source: impl FnOnce(&ExecutionLifecycleSourceV29<'_>, &mut ArgumentBudgetV1<'work>) -> R,
+) -> Result<(R, ProductionSourceLaunchRosterV1), ScopedModuleErrorV29> {
+    let semantic = owner.source_semantic();
+    let launch_inputs: Vec<_> = semantic
+        .roots()
+        .iter()
+        .enumerate()
+        .map(|(ordinal, root)| {
+            let entry = semantic.functions()[root.index() as usize]
+                .kernel_entry()
+                .unwrap();
+            ProductionSourceLaunchRootInputV1::new(
+                std::str::from_utf8(entry.export_symbol().as_bytes()).unwrap(),
+                *entry.kernel_binding_identity().as_bytes(),
+                ProductionSourceLaunchInputV1::new(1, Some([64, 1, 1]), [ordinal as u32 + 1, 1, 1]),
+            )
+        })
+        .collect();
+    let launch = ProductionSourceLaunchRosterV1::try_new(semantic, &launch_inputs).unwrap();
+    let mut roots = Vec::new();
+    let mut classes =
+        vec![ProductionScopeCallableCandidateV29::Ordinary; semantic.callables().len()];
+    let mut events = Vec::new();
+    if !matches!(kind, ModuleFixture::Ordinary) {
+        let SemanticTerminatorKindV1::Call(helper) =
+            semantic.functions()[1].blocks()[1].terminator().kind()
+        else {
+            panic!("helper");
+        };
+        roots.push(RootInput {
+            semantic_sha256: owner.source_semantic_sha256(),
+            root: SemanticFunctionIdV1::from_index(1),
+            root_identity: semantic.functions()[1].identity(),
+            helper: SemanticFunctionIdV1::from_index(2),
+            helper_identity: semantic.functions()[2].identity(),
+            issuer: SemanticCallableIdV1::from_index(5),
+            issuer_identity: SemanticFunctionIdentityV1::from_sha256([120; 32]),
+            context_type: CONTEXT,
+            context_identity: semantic.types()[CONTEXT.index() as usize].identity(),
+            issuance: Boundary {
+                block: SemanticBlockIdV1::from_index(0),
+                statement_count: 0,
+                destination: SemanticLocalIdV1::from_index(2),
+                destination_type: CONTEXT,
+                target: SemanticBlockIdV1::from_index(1),
+                unwind: SemanticUnwindActionV1::Unreachable,
+            },
+            helper_call: Boundary {
+                block: SemanticBlockIdV1::from_index(1),
+                statement_count: 0,
+                destination: SemanticLocalIdV1::from_index(0),
+                destination_type: UNIT,
+                target: SemanticBlockIdV1::from_index(2),
+                unwind: SemanticUnwindActionV1::Unreachable,
+            },
+            helper_context_local: SemanticLocalIdV1::from_index(2),
+            helper_arguments: helper.arguments(),
+        });
+        classes[2] = ProductionScopeCallableCandidateV29::Provider {
+            function: SemanticFunctionIdV1::from_index(2),
+            identity: semantic.functions()[2].identity(),
+        };
+        classes[6] = ProductionScopeCallableCandidateV29::Derive {
+            binding: SemanticFunctionIdentityV1::from_sha256([121; 32]),
+            operation: SemanticCompilerIntrinsicIdentityV1::from_sha256([121; 32]),
+            context: CONTEXT,
+            workgroup: semantic.functions()[3].abi().source_input_types()[0],
+        };
+        for function_index in [1, 2] {
+            for (block_index, block) in semantic.functions()[function_index]
+                .blocks()
+                .iter()
+                .enumerate()
+            {
+                let kind = match block.terminator().kind() {
+                    SemanticTerminatorKindV1::Call(call) if call.callee().index() == 2 => {
+                        ProductionScopeEventKindV29::Call {
+                            callee: call.callee(),
+                            kind: ProductionScopeCallKindV29::Provider,
+                        }
+                    }
+                    SemanticTerminatorKindV1::Call(call) if function_index == 2 => {
+                        ProductionScopeEventKindV29::Call {
+                            callee: call.callee(),
+                            kind: if call.callee().index() == 6 {
+                                ProductionScopeCallKindV29::Derive
+                            } else {
+                                ProductionScopeCallKindV29::Ordinary
+                            },
+                        }
+                    }
+                    SemanticTerminatorKindV1::Return if function_index == 2 => {
+                        ProductionScopeEventKindV29::Return
+                    }
+                    SemanticTerminatorKindV1::Assert { .. } if function_index == 2 => {
+                        ProductionScopeEventKindV29::Assert
+                    }
+                    _ => continue,
+                };
+                events.push(crate::ProductionScopeEventCandidateV29 {
+                    function: SemanticFunctionIdV1::from_index(function_index as u32),
+                    block: SemanticBlockIdV1::from_index(block_index as u32),
+                    statement_count: block.statements().len(),
+                    kind,
+                });
+            }
+        }
+    }
+    let source = ExecutionLifecycleSourceV29::new(
+        owner,
+        &launch,
+        ProductionExecutionSourceInputV29 {
+            semantic_sha256: owner.source_semantic_sha256(),
+            roots: &roots,
+            classes: &classes,
+            events: &events,
+        },
+        budget,
+    )?;
+    let result = use_source(&source, budget);
+    Ok((result, launch))
 }

@@ -126,13 +126,16 @@ fn scoped_module_assertion_collection_refuses_changed_root_and_capture_metadata(
 
 #[test]
 fn scoped_module_assertion_subject_refuses_local_index_and_conflicting_insertions() {
-    for fault in 0..4 {
+    for fault in 0..5 {
         with_assert_module(ModuleFixture::Mixed, |pending, source, budget| {
             let floor = budget.storage();
             let module = pending.graph.module();
             let root = &pending.roots[2];
+            let other_functions = module.functions.clone();
             let functions = if fault == 0 {
                 &module.functions[2..3]
+            } else if fault == 4 {
+                &other_functions
             } else {
                 &module.functions
             };
@@ -185,7 +188,15 @@ fn scoped_module_assertion_subject_refuses_local_index_and_conflicting_insertion
             assert!(result.is_err());
             assert_eq!(visits, usize::from(fault == 3));
             if fault == 3 {
-                assert!(format!("{:?}", result.unwrap_err()).contains("collector refused"));
+                assert!(matches!(
+                    result,
+                    Err(ProductionSemanticKirErrorV1::AssertOrigin(
+                        SemanticKirAssertOriginErrorV1::InvalidBinding {
+                            site: None,
+                            detail: "collector refused"
+                        }
+                    ))
+                ));
             }
             graph.release(budget).unwrap();
             assert_eq!(budget.storage(), floor);

@@ -56,6 +56,7 @@ struct ScopedDeclarationUseV29 {
 enum ScopedModuleErrorV29 {
     Source(ProductionSemanticKirErrorV1),
     Canonical(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15),
+    Occurrences(fe2o3_pliron::ProductionSemanticSsaOccurrenceErrorV1),
 }
 
 impl From<ProductionSemanticKirErrorV1> for ScopedModuleErrorV29 {
@@ -67,6 +68,35 @@ impl From<ProductionSemanticKirErrorV1> for ScopedModuleErrorV29 {
 impl From<ArgumentResourceV1> for ScopedModuleErrorV29 {
     fn from(error: ArgumentResourceV1) -> Self {
         Self::Source(error.into())
+    }
+}
+
+fn scoped_module_attempt_v29<T>(
+    budget: &mut ArgumentBudgetV1<'_>,
+    floor: usize,
+    build: impl FnOnce(&mut ArgumentBudgetV1<'_>) -> Result<T, ScopedModuleErrorV29>,
+) -> Result<T, ScopedModuleErrorV29> {
+    if budget.storage() < floor {
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build(budget)));
+    match result {
+        Ok(Ok(value)) => Ok(value),
+        other => {
+            let cleanup = budget
+                .storage()
+                .checked_sub(floor)
+                .ok_or(ArgumentResourceV1::Accounting)
+                .and_then(|extra| budget.release_storage(extra));
+            match other {
+                Ok(Err(error)) => {
+                    cleanup?;
+                    Err(error)
+                }
+                Err(payload) => std::panic::resume_unwind(payload),
+                Ok(Ok(_)) => unreachable!(),
+            }
+        }
     }
 }
 

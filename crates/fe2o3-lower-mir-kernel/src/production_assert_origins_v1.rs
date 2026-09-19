@@ -503,6 +503,7 @@ struct AssertDefinitionIndexV1 {
     boolean: bool,
 }
 struct AssertGraphIndexV1<'a> {
+    source_functions: &'a [Function],
     functions: Vec<(&'a str, AssertFunctionCoordinateV1)>,
     blocks: Vec<AssertBlockIndexV1>,
     definitions: Vec<AssertDefinitionIndexV1>,
@@ -522,6 +523,7 @@ impl<'a> AssertGraphIndexV1<'a> {
         budget: &mut AssertOriginBudgetV1<'_>,
     ) -> AssertOriginResultV1<Self> {
         let mut result = Self {
+            source_functions: functions,
             functions: Vec::new(),
             blocks: Vec::new(),
             definitions: Vec::new(),

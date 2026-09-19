@@ -97,6 +97,7 @@ fn replay_instance_asserts_in_functions_v1(
 }
 
 // The caller owns the full-module index and any metered rows retained by visit.
+// Visitor rows are provisional until the complete capture census succeeds.
 fn replay_checked_instance_asserts_v1(
     subject: InstanceAssertReplaySubjectV1<'_>,
     instances: &ProductionCallInstancePlanV1<'_>,
@@ -108,6 +109,9 @@ fn replay_checked_instance_asserts_v1(
     ) -> Result<(), ProductionSemanticKirErrorV1>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     let functions = subject.functions;
+    if !std::ptr::eq(functions, graph.source_functions) {
+        return Err(execution_call_error_v29());
+    }
     let function = functions
         .get(subject.function_ordinal)
         .ok_or_else(execution_call_error_v29)?;

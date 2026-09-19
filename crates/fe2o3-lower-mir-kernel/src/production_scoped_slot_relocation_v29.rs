@@ -267,6 +267,29 @@ impl FramePermitV29<'_, '_> {
 }
 
 impl RelocationV29 {
+    pub(super) fn matches_replay(
+        &self,
+        other: &Self,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<bool, ProductionSemanticKirErrorV1> {
+        let Self {
+            root,
+            root_prefix,
+            moved,
+            prefixes,
+            storage,
+        } = self;
+        budget.charge_work(size_of::<Self>())?;
+        if (*root, *root_prefix, *moved, *storage)
+            != (other.root, other.root_prefix, other.moved, other.storage)
+            || prefixes.len() != other.prefixes.len()
+        {
+            return Ok(false);
+        }
+        budget.charge_work(argument_product_v1(prefixes.len(), size_of::<PrefixV29>())?)?;
+        Ok(prefixes == &other.prefixes)
+    }
+
     fn ordinary_span(
         &self,
         span: InstancePhysicalSpanV1,
