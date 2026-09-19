@@ -11,6 +11,12 @@ python3 "${REPO_ROOT}/scripts/tests/tutorial_kernel_manifest.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_kernel_occurrences.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_kernel_identities.py"
 
+# Keep the interpreter that passed the manifest checks when isolating Cargo and
+# ROCm through FAKE_BIN. /usr/bin/python3 may be older than the required Python.
+MATRIX_TEST_PYTHON="$(python3 -I -B -c 'import sys; print(sys.executable)')"
+readonly MATRIX_TEST_PYTHON
+[[ -x ${MATRIX_TEST_PYTHON} && ${MATRIX_TEST_PYTHON} == /* ]]
+
 readonly MATRIX_SCRIPT="${REPO_ROOT}/scripts/kernel-compile-matrix.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-kernel-compile-matrix-test.XXXXXXXX")"
 readonly TEST_ROOT
@@ -32,6 +38,7 @@ mkdir -p -- \
   "${GFX950_DEVICE_LIBS}" \
   "${TEST_ROOT}/sysroot/lib" \
   "${TEST_ROOT}/tmp"
+ln -s -- "${MATRIX_TEST_PYTHON}" "${FAKE_BIN}/python3"
 for library in \
   ocml.bc \
   oclc_isa_version_942.bc \
@@ -533,7 +540,10 @@ FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT=expert-serial \
 TMPDIR="${TEST_ROOT}/tmp" \
 KERNEL_MATRIX_TEST_LOG="${LOG}" \
 KERNEL_MATRIX_TEST_SYSROOT="${TEST_ROOT}/sysroot" \
-  bash "${MATRIX_SCRIPT}" >"${success_output}" 2>&1
+  bash "${MATRIX_SCRIPT}" >"${success_output}" 2>&1 || {
+    cat "${success_output}" >&2
+    exit 1
+  }
 
 grep -F -- \
   'kernel compile matrix: target=gfx942 mode=compile-only kernels=11 hardware_observed=false' \
