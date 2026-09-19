@@ -141,6 +141,94 @@ pub(in super::super) fn initialization_owner(
     )
 }
 
+pub(in super::super) fn initialization_array_owner(whole: bool) -> ProductionSemanticSsaOwnerV1 {
+    let original = repeated_owner();
+    let semantic = original.source_semantic();
+    let mut types = semantic.types().to_vec();
+    let array = declaration(
+        &mut types,
+        SemanticTypeLayoutV1::with_exact_rustc_layout(
+            8,
+            4,
+            SemanticFieldsShapeV1::array(4, 2),
+            SemanticRustcVariantsV1::Single { index: 0 },
+            SemanticBackendReprV1::memory(true),
+            None,
+            false,
+            None,
+            8,
+            0,
+            SemanticTypeLayoutDetailsV1::None,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Array {
+            element: U32,
+            length: 2,
+        },
+        None,
+    );
+    let mut functions = semantic.functions().to_vec();
+    let helper = &functions[3];
+    let mut locals = helper.locals().to_vec();
+    locals.push(local(135, array, SemanticLocalRoleV1::Temporary));
+    let element = |offset| {
+        SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(2),
+            vec![
+                SemanticProjectionV1::new(
+                    SemanticProjectionKindV1::ConstantIndex {
+                        offset,
+                        minimum_length: 2,
+                        from_end: false,
+                    },
+                    U32,
+                )
+                .unwrap(),
+            ],
+            U32,
+        )
+        .unwrap()
+    };
+    let mut initial = vec![];
+    if whole {
+        initial.push(assign(
+            place(2, array),
+            SemanticRvalueKindV1::Aggregate(
+                SemanticAggregateRvalueV1::new(
+                    SemanticAggregateKindV1::Array,
+                    vec![literal(11), literal(12)],
+                )
+                .unwrap(),
+            ),
+        ));
+    }
+    initial.push(assign(element(0), SemanticRvalueKindV1::Use(literal(99))));
+    let blocks = vec![
+        block(
+            140,
+            initial,
+            SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+                SemanticEdgeRoleV1::Goto,
+                SemanticBlockIdV1::from_index(1),
+            )),
+        ),
+        block(
+            141,
+            vec![assign(
+                place(0, U32),
+                SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                    element(1),
+                    SemanticVolatilityV1::NonVolatile,
+                    None,
+                )),
+            )],
+            SemanticTerminatorKindV1::Return,
+        ),
+    ];
+    functions[3] = function(130, helper.role(), helper.abi().clone(), locals, blocks);
+    build(types, functions, semantic.callables().to_vec())
+}
+
 pub(in super::super) fn repeated_owner() -> ProductionSemanticSsaOwnerV1 {
     let original = lifecycle_owner(false);
     let semantic = original.source_semantic();

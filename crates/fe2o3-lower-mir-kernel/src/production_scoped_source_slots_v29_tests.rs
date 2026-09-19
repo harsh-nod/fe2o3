@@ -197,9 +197,7 @@ fn run(
     )
 }
 
-fn is_stopped(
-    result: &Result<Vec<DeferredLifecycleEventV29>, ProductionSemanticKirErrorV1>,
-) -> bool {
+fn is_stopped<T>(result: &Result<T, ProductionSemanticKirErrorV1>) -> bool {
     matches!(
         result,
         Err(ProductionSemanticKirErrorV1::Unsupported { detail: STOP, .. })

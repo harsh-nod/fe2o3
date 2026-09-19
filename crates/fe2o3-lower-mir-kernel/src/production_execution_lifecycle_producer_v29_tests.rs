@@ -320,6 +320,7 @@ enum ScopedFixture {
     Repeated,
     RepeatedSlots,
     Initialization(InitializationFixtureV29),
+    InitializationArray(bool),
     Arrays,
 }
 
@@ -355,7 +356,10 @@ fn run_lifecycle(
     let assertion = matches!(fixture, ScopedFixture::Assertion);
     let repeated = matches!(
         fixture,
-        ScopedFixture::Repeated | ScopedFixture::RepeatedSlots | ScopedFixture::Initialization(_)
+        ScopedFixture::Repeated
+            | ScopedFixture::RepeatedSlots
+            | ScopedFixture::Initialization(_)
+            | ScopedFixture::InitializationArray(_)
     );
     let mut owner = match fixture {
         ScopedFixture::Plain => lifecycle_owner(branches),
@@ -375,6 +379,10 @@ fn run_lifecycle(
         ScopedFixture::Initialization(config) => {
             assert!(!branches);
             scoped_root_tests::fixtures::initialization_owner(config)
+        }
+        ScopedFixture::InitializationArray(whole) => {
+            assert!(!branches);
+            scoped_root_tests::fixtures::initialization_array_owner(whole)
         }
     };
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);

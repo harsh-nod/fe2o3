@@ -337,7 +337,7 @@ fn retained_initialization_custody_rejects_foreign_headers_and_malformed_rows() 
 
 #[test]
 fn retained_initialization_capture_has_independent_exact_resource_limits() {
-    fn observe(
+    fn observe<const EXACT: bool>(
         instances: &ExecutionInstancesV29<'_>,
         emitted: &mut [Option<LoweredFunctionResultV1>],
         receipt: &OwnedScopedSourceSlotsV29,
@@ -386,8 +386,12 @@ fn retained_initialization_capture_has_independent_exact_resource_limits() {
         assert!(entry > old_peak);
         let before = budget.work();
         let replay = capture(budget)?;
-        let work = budget.work() - before;
-        let peak = budget.peak_storage() - entry;
+        // Four source blocks and three initialized-local entries.
+        let work = 35;
+        let peak =
+            4 * std::mem::size_of::<ScopedInitializedEntryV29>() + 3 * std::mem::size_of::<u32>();
+        assert_eq!(budget.work() - before, work);
+        assert_eq!(budget.peak_storage() - entry, peak);
         assert_eq!(replay.blocks, summary.blocks);
         assert_eq!(replay.initialized_locals, summary.initialized_locals);
         let bytes = replay.retained_storage;
@@ -411,10 +415,80 @@ fn retained_initialization_capture_has_independent_exact_resource_limits() {
             assert_eq!(budget.storage(), floor + filler);
             budget.release_storage(filler)?;
         }
-        budget.charge_work(10_000_000 - budget.work() - (work - 1))?;
-        assert_resource(&capture(budget).err().unwrap(), true);
+        budget.charge_work(10_000_000 - budget.work() - if EXACT { work } else { work - 1 })?;
+        if EXACT {
+            let replay = capture(budget)?;
+            let bytes = replay.retained_storage;
+            drop(replay);
+            budget.release_storage(bytes)?;
+            assert_eq!(budget.work(), 10_000_000);
+        } else {
+            assert_resource(&capture(budget).err().unwrap(), true);
+        }
         assert_eq!(budget.storage(), floor);
         Err(unsupported(0, None, None, STOP))
     }
-    assert!(is_stopped(&init_run(config(), observe)));
+    assert!(is_stopped(&init_run(config(), observe::<true>)));
+    assert!(is_stopped(&init_run(config(), observe::<false>)));
+}
+
+#[test]
+fn partial_array_writes_do_not_create_whole_array_initialization() {
+    fn observe(
+        instances: &ExecutionInstancesV29<'_>,
+        emitted: &mut [Option<LoweredFunctionResultV1>],
+        receipt: &OwnedScopedSourceSlotsV29,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        OBSERVED.set(OBSERVED.get() + 1);
+        assert_eq!(receipt.slots.len(), 2);
+        assert_ne!(receipt.slots[0].instance, receipt.slots[1].instance);
+        assert_ne!(
+            receipt.slots[0].origin.pointer,
+            receipt.slots[1].origin.pointer
+        );
+        for slot in &receipt.slots {
+            assert_eq!((slot.origin.local, slot.length, slot.bytes), (2, 2, 8));
+            let output = emitted[slot.instance.index()].as_ref().unwrap();
+            let summary = output.scoped_initialization.as_ref().unwrap();
+            assert_eq!(initialized_rows(summary), vec![(0, vec![]), (1, vec![2])]);
+            summary.check_custody(
+                instances,
+                slot.instance,
+                output.lifecycle_events.as_ref().unwrap(),
+                output.scoped_slot_origins.as_ref().unwrap(),
+                budget,
+            )?;
+        }
+        Err(unsupported(0, None, None, STOP))
+    }
+    let partial = run(
+        false,
+        ScopedFixture::InitializationArray(false),
+        observe,
+        10_000_000,
+        10_000_000,
+    )
+    .0;
+    assert!(
+        matches!(
+            partial,
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                detail: "retained array read requires whole-array initialization",
+                ..
+            })
+        ),
+        "{partial:?}"
+    );
+    assert_eq!(OBSERVED.get(), 0);
+    let whole = run(
+        false,
+        ScopedFixture::InitializationArray(true),
+        observe,
+        10_000_000,
+        10_000_000,
+    )
+    .0;
+    assert!(is_stopped(&whole), "{whole:?}");
+    assert_eq!(OBSERVED.get(), 1);
 }

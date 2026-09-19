@@ -157,7 +157,10 @@ pub(super) fn emit_checked(
                 outer_private,
                 budget,
             );
-            if !matches!(fixture, ScopedFixture::Arrays) {
+            if !matches!(
+                fixture,
+                ScopedFixture::Arrays | ScopedFixture::InitializationArray(_)
+            ) {
                 assert!(
                     private.active.is_none(),
                     "array-free roots keep lazy accounting inactive"
