@@ -15,7 +15,7 @@ use capture::OriginCollector;
 use pair::{PairError, ScanBudget};
 #[path = "runtime_origin_retention/collector_tests.rs"]
 mod collector_tests;
-#[path = "runtime_origin_retention/fixtures.rs"]
+#[path = "runtime_origin_retention/fixtures_tests.rs"]
 mod fixtures;
 #[path = "runtime_origin_retention/runtime_tests.rs"]
 mod runtime_tests;

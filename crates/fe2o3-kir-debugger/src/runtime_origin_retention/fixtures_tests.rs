@@ -1,4 +1,5 @@
 //! Actual interpreter inputs built from synthetic KIR, never source evidence.
+//! This leaf is compiled only through the parent's cfg(test) module.
 use super::*;
 use crate::{
     DebugKirIdentityV1, DebugTerminalFaultV1, DebugTranscriptV1, DebugWaveWidthV1,
