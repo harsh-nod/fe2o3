@@ -46,6 +46,7 @@ pub(crate) use kernel_context_auth_v1::{
 mod closure_flow_v1;
 mod kernel_context_frontend_v1;
 mod production_importer_v1;
+mod reference_custody_v1;
 
 #[cfg(test)]
 pub(crate) use production_importer_v1::check_wave64_descriptor_mutations_v1;
@@ -129,6 +130,8 @@ pub struct CollectedFunction<'tcx> {
     /// Exact safe-Rust reference/effect binding for this kernel root.
     pub(crate) reference_effect_binding:
         Option<crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1>,
+    /// Live reference instance retained until semantic import rederives the binding.
+    reference_instance: Option<Instance<'tcx>>,
     /// Compiler-private observation derived from this exact monomorphized MIR.
     pub(crate) dead_branches: Option<crate::monomorphization_dead::CompilerDeadBranchObservationV1>,
     closure_observation: Option<Box<crate::closure_profile_v1::CompilerClosureObservationV2>>,
@@ -413,8 +416,13 @@ fn collect_device_functions<'tcx>(
         }
     }
 
-    for root in kernel_roots(tcx, cgus, &collector.context_producers.declarations)
-        .map_err(CollectError::from)?
+    for root in kernel_roots(
+        tcx,
+        cgus,
+        &collector.context_producers.declarations,
+        &mut collector.closure_work,
+    )
+    .map_err(CollectError::from)?
     {
         let instance = root.target;
         let raw_name = tcx.def_path_str(instance.def_id());
@@ -460,6 +468,7 @@ struct KernelRoot<T> {
     kernel_context_contract: Option<kernel_context_frontend_v1::BoundContextEntryV1>,
     reference_effect_binding:
         Option<crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1>,
+    reference_target: Option<T>,
 }
 
 #[derive(Clone, Debug)]
@@ -538,6 +547,7 @@ fn kernel_roots<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[CodegenUnit<'tcx>],
     context_declarations: &[kernel_context_frontend_v1::DeclaredContextEntryV1<'tcx>],
+    work: &mut crate::rustc_semantic_plan_v1::SourceClosureWorkV1,
 ) -> Result<Vec<KernelRoot<Instance<'tcx>>>, RegistrationError> {
     let mut functions_by_symbol = BTreeMap::new();
 
@@ -607,7 +617,7 @@ fn kernel_roots<'tcx>(
     let resource_records = decode_resource_contract_registrations(tcx, &functions_by_symbol)?;
     bind_resource_contract_registrations(tcx, &mut roots, resource_records)?;
     let reference_records = decode_reference_binding_registrations(tcx)?;
-    bind_reference_binding_registrations(tcx, &mut roots, reference_records)?;
+    bind_reference_binding_registrations(tcx, &mut roots, reference_records, work)?;
     kernel_context_frontend_v1::bind_v1(
         tcx,
         &functions_by_symbol,
@@ -963,65 +973,175 @@ fn bind_reference_binding_registrations<'tcx>(
     tcx: TyCtxt<'tcx>,
     roots: &mut [KernelRoot<Instance<'tcx>>],
     records: Vec<ReferenceBindingRegistrationRecord<Instance<'tcx>>>,
+    work: &mut crate::rustc_semantic_plan_v1::SourceClosureWorkV1,
 ) -> Result<(), RegistrationError> {
-    let roots_by_name = roots
-        .iter()
-        .enumerate()
-        .map(|(index, root)| (root.logical_name.clone(), index))
-        .collect::<BTreeMap<_, _>>();
-    let mut binding_counts = BTreeMap::new();
-    for record in &records {
-        *binding_counts
-            .entry(record.logical_name.as_str())
-            .or_insert(0usize) += 1;
-    }
-    if let Some((logical_name, _)) = binding_counts.iter().find(|(_, count)| **count > 1) {
-        let duplicate = records
-            .iter()
-            .find(|record| record.logical_name == *logical_name)
-            .expect("duplicate count came from one binding record");
-        return Err(RegistrationError::new(
-            &duplicate.registration_path,
-            "duplicate safe Rust reference binding for one kernel",
-        ));
-    }
+    let roots_by_name = reference_registration_maps_v1(roots, &records, work)?;
     for record in records {
-        let expected_name = format!(
-            "{}{}",
-            reserved_fe2o3_symbols::REFERENCE_BINDING_REGISTRATION_PREFIX_V1,
-            record.logical_name,
-        );
-        if record.item_name != expected_name {
-            return Err(RegistrationError::new(
-                record.registration_path,
-                "reference-binding item name disagrees with its logical kernel name",
-            ));
-        }
-        let Some(&index) = roots_by_name.get(&record.logical_name) else {
-            return Err(RegistrationError::new(
-                record.registration_path,
-                "orphan safe Rust reference binding has no registered kernel",
-            ));
-        };
+        let (index, record) = reference_registration_root_v1(&roots_by_name, record, work)?;
         let root = &mut roots[index];
+        charge_reference_registration_work_v1(work, Some(1))?;
         if root.target != record.kernel {
             return Err(RegistrationError::new(
                 record.registration_path,
                 "safe Rust reference binding does not point at the exact registered kernel instance",
             ));
         }
+        charge_reference_registration_work_v1(work, record.registration_path.len().checked_mul(2))?;
         let binding = crate::reference_effect_v1::authenticate_reference_binding_v1(
             tcx,
             record.registration_path.clone(),
             record.logical_name,
             record.kernel,
             record.reference,
+            work,
         )
-        .map_err(|error| RegistrationError::new(&record.registration_path, error.to_string()))?;
+        .map_err(|error| RegistrationError::new(record.registration_path, error.to_string()))?;
         root.reference_effect_binding = Some(binding);
+        root.reference_target = Some(record.reference);
     }
     Ok(())
 }
+
+fn reference_registration_work_overflow_v1() -> RegistrationError {
+    RegistrationError::new(
+        "<reference binding work>",
+        "reference registration work overflow",
+    )
+}
+
+fn charge_reference_registration_work_v1(
+    work: &mut crate::rustc_semantic_plan_v1::SourceClosureWorkV1,
+    amount: Option<usize>,
+) -> Result<(), RegistrationError> {
+    let amount = amount.ok_or_else(reference_registration_work_overflow_v1)?;
+    work.charge(amount).map_err(|error| {
+        // A failed debit must not clone an unbounded registration path.
+        RegistrationError::new("<reference binding work>", error.to_string())
+    })
+}
+
+fn reference_registration_search_work_v1(entries: usize, key_bytes: usize) -> Option<usize> {
+    if entries == 0 {
+        return Some(0);
+    }
+    // The pinned nightly-2026-04-03 std BTreeMap searches at most 11 keys per
+    // node, with at most bit_length(entries) levels. No key is visited twice.
+    // Recheck this envelope when changing the pinned standard library.
+    let levels = usize::try_from(usize::BITS.checked_sub(entries.leading_zeros())?).ok()?;
+    let comparisons = entries.min(levels.checked_mul(11)?);
+    comparisons.checked_mul(key_bytes.checked_add(1)?)
+}
+
+fn reference_registration_maps_v1<T>(
+    roots: &[KernelRoot<T>],
+    records: &[ReferenceBindingRegistrationRecord<T>],
+    work: &mut crate::rustc_semantic_plan_v1::SourceClosureWorkV1,
+) -> Result<BTreeMap<String, usize>, RegistrationError> {
+    // Debits cover logical entry payloads, copied string bytes and comparison
+    // work, not std allocator pages/node slack or rustc query internals. Each
+    // string allocation and its copy are counted separately before cloning.
+    charge_reference_registration_work_v1(work, Some(1))?;
+    let mut roots_by_name = BTreeMap::new();
+    for (index, root) in roots.iter().enumerate() {
+        let amount = root
+            .logical_name
+            .len()
+            .checked_mul(2)
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<(String, usize)>()))
+            .and_then(|bytes| bytes.checked_add(1))
+            .and_then(|bytes| {
+                bytes.checked_add(reference_registration_search_work_v1(
+                    roots_by_name.len(),
+                    root.logical_name.len(),
+                )?)
+            });
+        charge_reference_registration_work_v1(work, amount)?;
+        roots_by_name.insert(root.logical_name.clone(), index);
+    }
+    let mut binding_counts = BTreeMap::new();
+    for record in records {
+        let amount = std::mem::size_of::<(&str, usize)>()
+            .checked_add(1)
+            .and_then(|bytes| {
+                bytes.checked_add(reference_registration_search_work_v1(
+                    binding_counts.len(),
+                    record.logical_name.len(),
+                )?)
+            });
+        charge_reference_registration_work_v1(work, amount)?;
+        let count = binding_counts
+            .entry(record.logical_name.as_str())
+            .or_insert(0usize);
+        *count = count
+            .checked_add(1)
+            .ok_or_else(reference_registration_work_overflow_v1)?;
+    }
+    charge_reference_registration_work_v1(work, Some(binding_counts.len()))?;
+    if let Some((logical_name, _)) = binding_counts.iter().find(|(_, count)| **count > 1) {
+        for record in records {
+            charge_reference_registration_work_v1(
+                work,
+                record
+                    .logical_name
+                    .len()
+                    .min(logical_name.len())
+                    .checked_add(1),
+            )?;
+            if record.logical_name == *logical_name {
+                charge_reference_registration_work_v1(
+                    work,
+                    record.registration_path.len().checked_mul(2),
+                )?;
+                return Err(RegistrationError::new(
+                    &record.registration_path,
+                    "duplicate safe Rust reference binding for one kernel",
+                ));
+            }
+        }
+        unreachable!("duplicate count came from one binding record");
+    }
+    Ok(roots_by_name)
+}
+
+fn reference_registration_root_v1<T>(
+    roots_by_name: &BTreeMap<String, usize>,
+    record: ReferenceBindingRegistrationRecord<T>,
+    work: &mut crate::rustc_semantic_plan_v1::SourceClosureWorkV1,
+) -> Result<(usize, ReferenceBindingRegistrationRecord<T>), RegistrationError> {
+    let prefix = reserved_fe2o3_symbols::REFERENCE_BINDING_REGISTRATION_PREFIX_V1;
+    let amount = prefix
+        .len()
+        .checked_add(record.logical_name.len())
+        .and_then(|bytes| {
+            bytes
+                .checked_mul(2)
+                .and_then(|payload| payload.checked_add(bytes.min(record.item_name.len())))
+                .and_then(|payload| payload.checked_add(1))
+        });
+    charge_reference_registration_work_v1(work, amount)?;
+    let expected_name = format!("{prefix}{}", record.logical_name);
+    if record.item_name != expected_name {
+        return Err(RegistrationError::new(
+            record.registration_path,
+            "reference-binding item name disagrees with its logical kernel name",
+        ));
+    }
+    charge_reference_registration_work_v1(
+        work,
+        reference_registration_search_work_v1(roots_by_name.len(), record.logical_name.len()),
+    )?;
+    let Some(&index) = roots_by_name.get(&record.logical_name) else {
+        return Err(RegistrationError::new(
+            record.registration_path,
+            "orphan safe Rust reference binding has no registered kernel",
+        ));
+    };
+    Ok((index, record))
+}
+
+#[cfg(test)]
+#[path = "collector/reference_registration_work_v1_tests.rs"]
+mod reference_registration_work_v1_tests;
 
 fn decode_frontend_contract_registrations<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -2178,6 +2298,7 @@ fn validate_registration_records<T: Copy>(
             frontend_contract: None,
             kernel_context_contract: None,
             reference_effect_binding: None,
+            reference_target: None,
         });
     }
 
@@ -2458,6 +2579,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 kernel_binding: None,
                 frontend_contract: None,
                 reference_effect_binding: None,
+                reference_instance: None,
                 dead_branches: None,
                 closure_observation: None,
                 kernel_context_contract: None,
@@ -2476,6 +2598,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             frontend_contract,
             kernel_context_contract,
             reference_effect_binding,
+            reference_target: reference_instance,
         } = root;
         if !self.used_export_names.insert(export_name.clone()) {
             return Err(CollectError {
@@ -2502,6 +2625,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                 kernel_binding,
                 frontend_contract,
                 reference_effect_binding,
+                reference_instance,
                 dead_branches: None,
                 closure_observation: None,
                 kernel_context_contract,
@@ -3392,6 +3516,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             kernel_binding: None,
             frontend_contract: None,
             reference_effect_binding: None,
+            reference_instance: None,
             dead_branches: None,
             closure_observation: None,
             kernel_context_contract: None,

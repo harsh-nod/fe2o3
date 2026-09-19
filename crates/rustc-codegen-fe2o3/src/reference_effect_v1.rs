@@ -12,8 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use rustc_abi::ExternAbi;
-use rustc_hir::intravisit::{self, Visitor};
-use rustc_hir::{BlockCheckMode, ExprKind, Mutability, Safety, UnsafeSource};
+use rustc_hir::{Mutability, Safety};
 use rustc_middle::mir::{
     AssertMessage, BinOp, Body, CastKind, Operand, Place, ProjectionElem, Rvalue, StatementKind,
     TerminatorKind, UnOp, UnwindAction,
@@ -21,6 +20,31 @@ use rustc_middle::mir::{
 use rustc_middle::ty::{Instance, Ty, TyCtxt, TyKind, TypingEnv};
 use rustc_span::Spanned;
 use sha2::{Digest as _, Sha256};
+
+#[path = "reference_extraction_work_v1.rs"]
+mod reference_extraction_work_v1;
+#[path = "reference_loop_work_v1.rs"]
+mod reference_loop_work_v1;
+#[path = "reference_raw_source_work_v1.rs"]
+mod reference_raw_source_work_v1;
+use crate::rustc_semantic_plan_v1::SourceClosureWorkV1;
+use reference_extraction_work_v1::ReferenceExtractionWorkV1;
+use reference_raw_source_work_v1::{
+    authenticate_safe_local_reference_v1, charge_reference_source_v1,
+};
+
+#[path = "reference_signature_preimage_v1.rs"]
+pub(crate) mod reference_signature_preimage_v1;
+
+#[path = "reference_binding_census_v1.rs"]
+mod reference_binding_census_v1;
+pub(crate) use reference_binding_census_v1::equivalent_bindings_v1;
+
+pub(crate) use reference_signature_preimage_v1::ReferenceLogicalSignaturePreimageV1;
+use reference_signature_preimage_v1::{
+    ReferenceCarrierV1, ReferencePointeeV1, ReferenceRegionV1, ReferenceReturnShapeV1,
+    ReferenceSignatureErrorV1, ReferenceSignatureInputV1,
+};
 
 use crate::rustc_semantic_adapter_v1::{
     canonical_function_identities_v1, rustc_mir_body_sha256_v1,
@@ -388,7 +412,8 @@ impl ReferenceEffectIrV1 {
     pub(crate) fn resolved_bounds_checks_v1(
         &self,
     ) -> Result<Vec<ResolvedReferenceBoundsCheckV1>, ReferenceBindingErrorV1> {
-        let resolver = ReferenceExpressionResolverV1::new(self)?;
+        let meter = &ReferenceExtractionWorkV1::Inspection;
+        let resolver = ReferenceExpressionResolverV1::new(meter, self)?;
         let mut checks = Vec::new();
         for block in &self.blocks {
             let ReferenceTerminatorV1::Assert {
@@ -404,18 +429,21 @@ impl ReferenceEffectIrV1 {
                 block: block.block,
                 expected: *expected,
                 condition: resolver.resolve_operand_inner_v1(
+                    meter,
                     condition,
                     &mut BTreeSet::new(),
                     &mut 0,
                     1,
                 )?,
                 index: resolver.resolve_operand_inner_v1(
+                    meter,
                     &bounds_check.index,
                     &mut BTreeSet::new(),
                     &mut 0,
                     1,
                 )?,
                 length: resolver.resolve_operand_inner_v1(
+                    meter,
                     &bounds_check.length,
                     &mut BTreeSet::new(),
                     &mut 0,
@@ -428,9 +456,11 @@ impl ReferenceEffectIrV1 {
 
     fn observable_output_writes_v1(
         &self,
+        meter: &ReferenceExtractionWorkV1<'_>,
     ) -> Result<Vec<ReferenceOutputWriteV1>, ReferenceBindingErrorV1> {
-        let guards = reference_block_path_predicates_v1(self)?;
-        let resolver = ReferenceExpressionResolverV1::new(self)?;
+        meter.rows::<ReferenceEffectExpressionV1>(self.relations.len())?;
+        let guards = reference_block_path_predicates_v1(meter, self)?;
+        let resolver = ReferenceExpressionResolverV1::new(meter, self)?;
         let point_coordinates = self
             .relations
             .iter()
@@ -444,6 +474,7 @@ impl ReferenceEffectIrV1 {
             .into_boxed_slice();
         let mut writes = Vec::new();
         for relation in &self.relations {
+            meter.charge(1)?;
             let (argument, coordinate_output) = match relation {
                 ReferenceArgumentRelationV1::DisjointOutputSlice { argument, .. } => {
                     (*argument, false)
@@ -455,21 +486,21 @@ impl ReferenceEffectIrV1 {
                 | ReferenceArgumentRelationV1::SharedSliceInput { .. }
                 | ReferenceArgumentRelationV1::PointCoordinate { .. } => continue,
             };
+            meter.charge(self.relations.len())?;
             let local = self
                 .reference_argument_for_kernel_argument_v1(argument)?
                 .checked_add(1)
                 .ok_or_else(|| ReferenceBindingErrorV1::new("reference local index overflowed"))?;
             for block in &self.blocks {
-                let guard = guards
-                    .get(block.block as usize)
-                    .ok_or_else(|| {
-                        ReferenceBindingErrorV1::new("reference block identity is out of bounds")
-                    })?
-                    .clone();
+                meter.charge(1)?;
+                let guard = guards.get(block.block as usize).ok_or_else(|| {
+                    ReferenceBindingErrorV1::new("reference block identity is out of bounds")
+                })?;
                 if guard.is_unreachable_v1() {
                     continue;
                 }
                 for assignment in &block.assignments {
+                    meter.charge(1)?;
                     if assignment.destination.local != local {
                         continue;
                     }
@@ -479,15 +510,17 @@ impl ReferenceEffectIrV1 {
                             if point_coordinates.is_empty() {
                                 ReferenceOutputCoordinateV1::SingleCoordinate
                             } else {
+                                meter
+                                    .rows::<ReferenceEffectExpressionV1>(point_coordinates.len())?;
                                 ReferenceOutputCoordinateV1::LogicalPoint(point_coordinates.clone())
                             }
                         }
                         [
                             ReferencePlaceProjectionV1::Dereference,
                             ReferencePlaceProjectionV1::Index(index),
-                        ] if !coordinate_output => {
-                            ReferenceOutputCoordinateV1::Dynamic(resolver.resolve_local_v1(*index)?)
-                        }
+                        ] if !coordinate_output => ReferenceOutputCoordinateV1::Dynamic(
+                            resolver.resolve_local_v1(meter, *index)?,
+                        ),
                         [
                             ReferencePlaceProjectionV1::Dereference,
                             ReferencePlaceProjectionV1::ConstantIndex {
@@ -508,13 +541,16 @@ impl ReferenceEffectIrV1 {
                             )));
                         }
                     };
+                    meter.clone_predicate(guard)?;
+                    meter.charge(meter.value(&assignment.value)?)?;
+                    meter.grow::<ReferenceOutputWriteV1>(writes.len())?;
                     writes.push(ReferenceOutputWriteV1 {
                         argument,
                         block: block.block,
                         statement: assignment.statement,
                         coordinate,
                         guard: guard.clone(),
-                        rhs: resolver.resolve_value_v1(&assignment.value)?,
+                        rhs: resolver.resolve_value_v1(meter, &assignment.value)?,
                         value: assignment.value.clone(),
                     });
                 }
@@ -672,47 +708,60 @@ impl ReferenceSymbolicWorkBudgetV2 {
 
     fn charge_expression_v2(
         &mut self,
+        meter: &ReferenceExtractionWorkV1<'_>,
         expression: &ReferenceEffectExpressionV1,
     ) -> Result<(), ReferenceBindingErrorV1> {
-        self.charge_v2(symbolic_expression_nodes_v2(expression)?)
+        meter.clone_expression(expression)?;
+        self.charge_v2(symbolic_expression_nodes_v2(meter, expression)?)
     }
 
     fn charge_environment_v2(
         &mut self,
+        meter: &ReferenceExtractionWorkV1<'_>,
         environment: &ReferenceSymbolicEnvironmentV2,
     ) -> Result<(), ReferenceBindingErrorV1> {
-        self.charge_v2(symbolic_environment_nodes_v2(environment)?)
+        meter.charge(meter.environment_units(environment)?)?;
+        self.charge_v2(symbolic_environment_nodes_v2(meter, environment)?)
     }
 
     fn charge_predicate_v2(
         &mut self,
+        meter: &ReferenceExtractionWorkV1<'_>,
         predicate: &ReferencePathPredicateV1,
     ) -> Result<(), ReferenceBindingErrorV1> {
-        self.charge_v2(symbolic_predicate_nodes_v2(predicate)?)
+        meter.clone_predicate(predicate)?;
+        self.charge_v2(symbolic_predicate_nodes_v2(meter, predicate)?)
     }
 
     fn charge_state_clone_v2(
         &mut self,
+        meter: &ReferenceExtractionWorkV1<'_>,
         state: &ReferenceSymbolicStateV2,
     ) -> Result<(), ReferenceBindingErrorV1> {
-        self.charge_v2(symbolic_state_nodes_v2(state)?)
+        meter.charge(meter.state_units(state)?)?;
+        self.charge_v2(symbolic_state_nodes_v2(meter, state)?)
     }
 }
 
 impl ReferenceEffectIrV1 {
     fn observable_output_writes_with_loops_v2(
         &self,
+        meter: &ReferenceExtractionWorkV1<'_>,
         backedges: &BTreeSet<(u32, u32)>,
     ) -> Result<(Vec<ReferenceOutputWriteV1>, Vec<ReferenceLoopSummaryV2>), ReferenceBindingErrorV1>
     {
-        let loop_nodes = reference_natural_loop_nodes_v2(self, backedges)?;
+        let loop_nodes = reference_natural_loop_nodes_v2(meter, self, backedges)?;
+        meter.product(backedges.len(), backedges.len())?;
+        meter.rows::<u32>(backedges.len())?;
         let loop_headers = backedges
             .iter()
             .map(|(_, header)| *header)
             .collect::<BTreeSet<_>>();
         let mut initial_environment = BTreeMap::new();
+        meter.charge(self.relations.len())?;
         let point_count = self.point_coordinate_count_v1()?;
         for relation in &self.relations {
+            meter.tree::<(u32, ReferenceSymbolicValueV2)>(initial_environment.len())?;
             match relation {
                 ReferenceArgumentRelationV1::PointCoordinate {
                     reference_argument,
@@ -746,6 +795,8 @@ impl ReferenceEffectIrV1 {
                 | ReferenceArgumentRelationV1::DisjointOutputCoordinate { .. } => {}
             }
         }
+        meter.rows::<ReferenceSymbolicStateV2>(1)?;
+        meter.rows::<ReferenceGuardClauseV1>(1)?;
         let mut pending = VecDeque::from([ReferenceSymbolicStateV2 {
             block: 0,
             environment: initial_environment,
@@ -756,8 +807,10 @@ impl ReferenceEffectIrV1 {
         let mut completed_traces = Vec::new();
         let mut steps = 0_usize;
         let mut work_budget = ReferenceSymbolicWorkBudgetV2::default();
-        work_budget.charge_environment_v2(&pending[0].environment)?;
+        work_budget.charge_environment_v2(meter, &pending[0].environment)?;
         while let Some(mut state) = pending.pop_front() {
+            meter.charge(1)?;
+            meter.tree::<u32>(loop_headers.len())?;
             steps = steps.checked_add(1).ok_or_else(|| {
                 ReferenceBindingErrorV1::new("reference symbolic execution step count overflowed")
             })?;
@@ -768,8 +821,9 @@ impl ReferenceEffectIrV1 {
             }
             if loop_headers.contains(&state.block) {
                 for (latch, header) in backedges {
+                    meter.tree::<((u32, u32), ReferenceLoopTraceV2)>(state.traces.len())?;
                     if *header == state.block && !state.traces.contains_key(&(*header, *latch)) {
-                        work_budget.charge_environment_v2(&state.environment)?;
+                        work_budget.charge_environment_v2(meter, &state.environment)?;
                         state.traces.insert(
                             (*header, *latch),
                             ReferenceLoopTraceV2 {
@@ -793,21 +847,26 @@ impl ReferenceEffectIrV1 {
                 ))
             })?;
             for assignment in &block.assignments {
+                meter.charge(1)?;
                 if let Some((argument, coordinate_output)) =
-                    self.output_relation_for_local_v2(assignment.destination.local)?
+                    self.output_relation_for_local_v2(meter, assignment.destination.local)?
                 {
                     let coordinate = self.symbolic_output_coordinate_v2(
+                        meter,
                         &state.environment,
                         &assignment.destination,
                         coordinate_output,
                     )?;
                     let rhs = symbolic_scalar_v2(symbolic_value_v2(
+                        meter,
                         &state.environment,
                         &assignment.value,
                     )?)?;
-                    require_symbolic_expression_budget_v2(&rhs)?;
-                    work_budget.charge_expression_v2(&rhs)?;
-                    work_budget.charge_predicate_v2(&state.guard)?;
+                    require_symbolic_expression_budget_v2(meter, &rhs)?;
+                    work_budget.charge_expression_v2(meter, &rhs)?;
+                    work_budget.charge_predicate_v2(meter, &state.guard)?;
+                    meter.charge(meter.value(&assignment.value)?)?;
+                    meter.grow::<ReferenceOutputWriteV1>(writes.len())?;
                     if writes.len() >= MAX_REFERENCE_STATEMENTS_V1 {
                         return Err(ReferenceBindingErrorV1::new(format!(
                             "reference symbolic execution exceeds {MAX_REFERENCE_STATEMENTS_V1} retained output writes",
@@ -830,19 +889,24 @@ impl ReferenceEffectIrV1 {
                         assignment.destination.local, assignment.destination.projection,
                     )));
                 }
-                let value = symbolic_value_v2(&state.environment, &assignment.value)?;
-                require_symbolic_value_budget_v2(&value)?;
-                work_budget.charge_v2(symbolic_value_nodes_v2(&value)?)?;
+                let value = symbolic_value_v2(meter, &state.environment, &assignment.value)?;
+                require_symbolic_value_budget_v2(meter, &value)?;
+                work_budget.charge_v2(symbolic_value_nodes_v2(meter, &value)?)?;
+                meter.tree::<(u32, ReferenceSymbolicValueV2)>(state.environment.len())?;
                 state
                     .environment
                     .insert(assignment.destination.local, value);
             }
             match &block.terminator {
                 ReferenceTerminatorV1::Return => {
-                    completed_traces.extend(state.traces.into_values());
+                    for trace in state.traces.into_values() {
+                        meter.grow::<ReferenceLoopTraceV2>(completed_traces.len())?;
+                        completed_traces.push(trace);
+                    }
                 }
                 ReferenceTerminatorV1::Goto { target } => {
                     dispatch_symbolic_edge_v2(
+                        meter,
                         &mut pending,
                         state,
                         block.block,
@@ -860,6 +924,7 @@ impl ReferenceEffectIrV1 {
                 } => {
                     if bounds_check.is_some() {
                         dispatch_symbolic_edge_v2(
+                            meter,
                             &mut pending,
                             state,
                             block.block,
@@ -870,9 +935,12 @@ impl ReferenceEffectIrV1 {
                         )?;
                         continue;
                     }
-                    let expression =
-                        symbolic_scalar_v2(symbolic_operand_v2(&state.environment, condition)?)?;
-                    let actual = reference_constant_bits_v2(&expression)
+                    let expression = symbolic_scalar_v2(symbolic_operand_v2(
+                        meter,
+                        &state.environment,
+                        condition,
+                    )?)?;
+                    let actual = reference_constant_bits_v2(meter, &expression)?
                         .filter(|(scalar, _)| *scalar == ReferenceScalarTypeV1::Bool)
                         .map(|(_, bits)| bits != 0)
                         .ok_or_else(|| {
@@ -888,6 +956,7 @@ impl ReferenceEffectIrV1 {
                         )));
                     }
                     dispatch_symbolic_edge_v2(
+                        meter,
                         &mut pending,
                         state,
                         block.block,
@@ -902,24 +971,32 @@ impl ReferenceEffectIrV1 {
                     values,
                     otherwise,
                 } => {
-                    let expression =
-                        symbolic_scalar_v2(symbolic_operand_v2(&state.environment, discriminant)?)?;
+                    let expression = symbolic_scalar_v2(symbolic_operand_v2(
+                        meter,
+                        &state.environment,
+                        discriminant,
+                    )?)?;
+                    meter.tree::<u32>(loop_headers.len())?;
                     if loop_headers.contains(&block.block) {
+                        meter.charge(state.traces.len())?;
                         for trace in state
                             .traces
                             .values_mut()
                             .filter(|trace| trace.header == block.block)
                         {
-                            work_budget.charge_expression_v2(&expression)?;
+                            work_budget.charge_expression_v2(meter, &expression)?;
+                            meter.grow::<ReferenceEffectExpressionV1>(trace.variants.len())?;
                             trace.variants.push(expression.clone());
                         }
                     }
-                    if let Some((_, bits)) = reference_constant_bits_v2(&expression) {
+                    if let Some((_, bits)) = reference_constant_bits_v2(meter, &expression)? {
+                        meter.charge(values.len())?;
                         let target = values
                             .iter()
                             .find_map(|(value, target)| (*value == bits).then_some(*target))
                             .unwrap_or(*otherwise);
                         dispatch_symbolic_edge_v2(
+                            meter,
                             &mut pending,
                             state,
                             block.block,
@@ -929,8 +1006,10 @@ impl ReferenceEffectIrV1 {
                             &mut work_budget,
                         )?;
                     } else {
+                        meter.tree::<u32>(loop_headers.len())?;
                         if loop_headers.contains(&block.block) {
                             if let Some(summary) = self.summarize_dynamic_counted_loop_v2(
+                                meter,
                                 block,
                                 discriminant,
                                 values,
@@ -938,12 +1017,19 @@ impl ReferenceEffectIrV1 {
                                 &state,
                                 &loop_nodes,
                             )? {
+                                meter.tree::<(u32, ReferenceSymbolicValueV2)>(
+                                    state.environment.len(),
+                                )?;
+                                meter.clone_expression(&summary.final_induction)?;
                                 state.environment.insert(
                                     summary.induction_local,
                                     ReferenceSymbolicValueV2::Scalar(
                                         summary.final_induction.clone(),
                                     ),
                                 );
+                                meter.tree::<((u32, u32), ReferenceLoopTraceV2)>(
+                                    state.traces.len(),
+                                )?;
                                 let trace = state
                                     .traces
                                     .get_mut(&(block.block, summary.latch))
@@ -955,10 +1041,16 @@ impl ReferenceEffectIrV1 {
                                 trace.exit = Some(summary.exit);
                                 trace.exact_iterations = None;
                                 trace.maximum_iterations = Some(summary.maximum_iterations);
+                                work_budget.charge_environment_v2(meter, &state.environment)?;
+                                meter.grow::<ReferenceSymbolicEnvironmentV2>(
+                                    trace.transitions.len(),
+                                )?;
+                                meter.grow::<ReferenceEffectExpressionV1>(trace.variants.len())?;
                                 trace.transitions.push(state.environment.clone());
                                 trace.variants.push(expression);
                                 state.block = summary.exit;
-                                work_budget.charge_state_clone_v2(&state)?;
+                                work_budget.charge_state_clone_v2(meter, &state)?;
+                                meter.grow::<ReferenceSymbolicStateV2>(pending.len())?;
                                 pending.push_back(state);
                                 continue;
                             }
@@ -968,15 +1060,21 @@ impl ReferenceEffectIrV1 {
                             )));
                         }
                         let mut by_target = BTreeMap::<u32, Vec<u128>>::new();
+                        meter.rows::<u128>(values.len())?;
                         let mut all_values = Vec::with_capacity(values.len());
                         for (value, target) in values {
-                            by_target.entry(*target).or_default().push(*value);
+                            meter.tree::<(u32, Vec<u128>)>(by_target.len())?;
+                            let accepted = by_target.entry(*target).or_default();
+                            meter.grow::<u128>(accepted.len())?;
+                            accepted.push(*value);
                             all_values.push(*value);
                         }
                         for (target, accepted) in by_target {
-                            work_budget.charge_state_clone_v2(&state)?;
+                            work_budget.charge_state_clone_v2(meter, &state)?;
+                            meter.clone_expression(&expression)?;
                             let mut branch = state.clone();
                             branch.guard = reference_predicate_and_atom_v1(
+                                meter,
                                 &branch.guard,
                                 ReferenceGuardAtomV1::SwitchValueSet {
                                     discriminant: expression.clone(),
@@ -984,8 +1082,9 @@ impl ReferenceEffectIrV1 {
                                     inside_set: true,
                                 },
                             )?;
-                            work_budget.charge_predicate_v2(&branch.guard)?;
+                            work_budget.charge_predicate_v2(meter, &branch.guard)?;
                             dispatch_symbolic_edge_v2(
+                                meter,
                                 &mut pending,
                                 branch,
                                 block.block,
@@ -996,6 +1095,7 @@ impl ReferenceEffectIrV1 {
                             )?;
                         }
                         state.guard = reference_predicate_and_atom_v1(
+                            meter,
                             &state.guard,
                             ReferenceGuardAtomV1::SwitchValueSet {
                                 discriminant: expression,
@@ -1003,8 +1103,9 @@ impl ReferenceEffectIrV1 {
                                 inside_set: false,
                             },
                         )?;
-                        work_budget.charge_predicate_v2(&state.guard)?;
+                        work_budget.charge_predicate_v2(meter, &state.guard)?;
                         dispatch_symbolic_edge_v2(
+                            meter,
                             &mut pending,
                             state,
                             block.block,
@@ -1022,12 +1123,33 @@ impl ReferenceEffectIrV1 {
                 "bounded reference loop has no successful return path",
             ));
         }
+        meter.rows::<ReferenceLoopSummaryV2>(completed_traces.len())?;
         let mut summaries = completed_traces
             .iter()
-            .map(reference_loop_summary_v2)
+            .map(|trace| reference_loop_summary_v2(meter, trace))
             .collect::<Result<Vec<_>, _>>()?;
+        let mut summary_units = 0_usize;
+        for summary in &summaries {
+            meter.charge(1)?;
+            summary_units = reference_extraction_work_v1::add(
+                summary_units,
+                std::mem::size_of::<ReferenceLoopSummaryV2>(),
+            )?;
+            summary_units = reference_extraction_work_v1::add(
+                summary_units,
+                summary
+                    .carried_locals
+                    .len()
+                    .checked_mul(std::mem::size_of::<u32>())
+                    .ok_or_else(|| {
+                        ReferenceBindingErrorV1::new("reference loop summary work overflow")
+                    })?,
+            )?;
+        }
+        meter.sort(summaries.len(), summary_units)?;
         summaries.sort();
         summaries.dedup();
+        meter.sort(writes.len(), meter.effects(&writes)?)?;
         writes.sort_by(|lhs, rhs| {
             (
                 lhs.argument,
@@ -1059,8 +1181,10 @@ impl ReferenceEffectIrV1 {
 
     fn output_relation_for_local_v2(
         &self,
+        meter: &ReferenceExtractionWorkV1<'_>,
         local: u32,
     ) -> Result<Option<(u32, bool)>, ReferenceBindingErrorV1> {
+        meter.product(self.relations.len(), 2)?;
         let point_count = self.point_coordinate_count_v1()?;
         Ok(self.relations.iter().find_map(|relation| {
             let (argument, coordinate_output) = match relation {
@@ -1079,6 +1203,7 @@ impl ReferenceEffectIrV1 {
 
     fn summarize_dynamic_counted_loop_v2(
         &self,
+        meter: &ReferenceExtractionWorkV1<'_>,
         header: &ReferenceBlockV1,
         discriminant: &ReferenceOperandV1,
         values: &[(u128, u32)],
@@ -1086,6 +1211,7 @@ impl ReferenceEffectIrV1 {
         state: &ReferenceSymbolicStateV2,
         loop_nodes: &BTreeMap<(u32, u32), BTreeSet<u32>>,
     ) -> Result<Option<DynamicReferenceLoopSummaryV2>, ReferenceBindingErrorV1> {
+        meter.charge(1)?;
         let (ReferenceOperandV1::Copy(discriminant) | ReferenceOperandV1::Move(discriminant)) =
             discriminant
         else {
@@ -1094,6 +1220,7 @@ impl ReferenceEffectIrV1 {
         if !discriminant.projection.is_empty() {
             return Ok(None);
         }
+        meter.rows::<&ReferenceAssignmentV1>(header.assignments.len())?;
         let assignments = header
             .assignments
             .iter()
@@ -1121,8 +1248,10 @@ impl ReferenceEffectIrV1 {
         if !induction.projection.is_empty() {
             return Ok(None);
         }
+        meter.charge(meter.place(induction)?)?;
         let mut induction = induction.clone();
         for _ in 0..fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
+            meter.rows::<&ReferenceAssignmentV1>(header.assignments.len())?;
             let aliases = header
                 .assignments
                 .iter()
@@ -1143,11 +1272,17 @@ impl ReferenceEffectIrV1 {
             if !source.projection.is_empty() || source.local == induction.local {
                 break;
             }
+            meter.charge(meter.place(source)?)?;
             induction = source.clone();
         }
         let [(0, exit)] = values else {
             return Ok(None);
         };
+        for nodes in loop_nodes.values() {
+            meter.charge(1)?;
+            meter.tree::<u32>(nodes.len())?;
+            meter.tree::<u32>(nodes.len())?;
+        }
         let mut matching_loops = loop_nodes.iter().filter(|((_, loop_header), nodes)| {
             *loop_header == header.block && nodes.contains(&otherwise) && !nodes.contains(exit)
         });
@@ -1157,20 +1292,23 @@ impl ReferenceEffectIrV1 {
         if matching_loops.next().is_some() {
             return Ok(None);
         }
+        meter.tree::<(u32, ReferenceSymbolicValueV2)>(state.environment.len())?;
         let initial = state.environment.get(&induction.local);
         let Some(ReferenceSymbolicValueV2::Scalar(initial)) = initial else {
             return Err(ReferenceBindingErrorV1::new(
                 "dynamic counted loop has no scalar initial induction value",
             ));
         };
-        let Some((initial_scalar, 0)) = reference_constant_bits_v2(initial) else {
+        let Some((initial_scalar, 0)) = reference_constant_bits_v2(meter, initial)? else {
             return Err(ReferenceBindingErrorV1::new(
                 "dynamic counted loop induction is not initialized to unsigned zero",
             ));
         };
-        let final_induction = symbolic_scalar_v2(symbolic_operand_v2(&state.environment, bound)?)?;
+        let final_induction =
+            symbolic_scalar_v2(symbolic_operand_v2(meter, &state.environment, bound)?)?;
         let maximum_iterations = match &final_induction {
             ReferenceEffectExpressionV1::KernelScalarArgument { argument } => {
+                meter.charge(self.relations.len())?;
                 let scalar = self.relations.iter().find_map(|relation| match relation {
                     ReferenceArgumentRelationV1::ScalarInput {
                         argument: actual,
@@ -1199,23 +1337,29 @@ impl ReferenceEffectIrV1 {
         };
         let mut induction_assignments = Vec::new();
         for node in nodes {
+            // This also prepays the later increment and overflow scans.
+            meter.charge(2)?;
             for assignment in &self.blocks[*node as usize].assignments {
+                meter.charge(2)?;
                 if !assignment.destination.projection.is_empty() {
                     return Err(ReferenceBindingErrorV1::new(
                         "dynamic counted loop contains a projected memory effect",
                     ));
                 }
-                if state
-                    .traces
-                    .get(&(header.block, latch))
-                    .is_some_and(|trace| trace.initial.contains_key(&assignment.destination.local))
-                    && assignment.destination.local != induction.local
-                {
+                meter.tree::<((u32, u32), ReferenceLoopTraceV2)>(state.traces.len())?;
+                let carried = if let Some(trace) = state.traces.get(&(header.block, latch)) {
+                    meter.tree::<(u32, ReferenceSymbolicValueV2)>(trace.initial.len())?;
+                    trace.initial.contains_key(&assignment.destination.local)
+                } else {
+                    false
+                };
+                if carried && assignment.destination.local != induction.local {
                     return Err(ReferenceBindingErrorV1::new(
                         "dynamic counted loop mutates another loop-carried local",
                     ));
                 }
                 if assignment.destination.local == induction.local {
+                    meter.grow::<&ReferenceAssignmentV1>(induction_assignments.len())?;
                     induction_assignments.push(assignment);
                 }
             }
@@ -1308,12 +1452,15 @@ impl ReferenceEffectIrV1 {
 
     fn symbolic_output_coordinate_v2(
         &self,
+        meter: &ReferenceExtractionWorkV1<'_>,
         environment: &ReferenceSymbolicEnvironmentV2,
         destination: &ReferencePlaceV1,
         coordinate_output: bool,
     ) -> Result<ReferenceOutputCoordinateV1, ReferenceBindingErrorV1> {
+        meter.charge(1)?;
         match destination.projection.as_ref() {
             [ReferencePlaceProjectionV1::Dereference] if coordinate_output => {
+                meter.rows::<ReferenceEffectExpressionV1>(self.relations.len())?;
                 let axes = self
                     .relations
                     .iter()
@@ -1334,13 +1481,17 @@ impl ReferenceEffectIrV1 {
             [
                 ReferencePlaceProjectionV1::Dereference,
                 ReferencePlaceProjectionV1::Index(index),
-            ] if !coordinate_output => Ok(ReferenceOutputCoordinateV1::Dynamic(
-                symbolic_scalar_v2(environment.get(index).cloned().ok_or_else(|| {
+            ] if !coordinate_output => {
+                meter.tree::<(u32, ReferenceSymbolicValueV2)>(environment.len())?;
+                let value = environment.get(index).ok_or_else(|| {
                     ReferenceBindingErrorV1::new(format!(
                         "reference output index local _{index} has no loop-carried value",
                     ))
-                })?)?,
-            )),
+                })?;
+                Ok(ReferenceOutputCoordinateV1::Dynamic(symbolic_scalar_v2(
+                    meter.clone_symbolic(value)?,
+                )?))
+            }
             [
                 ReferencePlaceProjectionV1::Dereference,
                 ReferencePlaceProjectionV1::ConstantIndex {
@@ -1379,43 +1530,50 @@ fn unsigned_reference_scalar_maximum_v2(scalar: ReferenceScalarTypeV1) -> Option
 }
 
 fn symbolic_value_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     environment: &ReferenceSymbolicEnvironmentV2,
     value: &ReferenceValueV1,
 ) -> Result<ReferenceSymbolicValueV2, ReferenceBindingErrorV1> {
+    meter.rows::<ReferenceEffectExpressionV1>(2)?;
     match value {
-        ReferenceValueV1::Use(operand) => symbolic_operand_v2(environment, operand),
+        ReferenceValueV1::Use(operand) => symbolic_operand_v2(meter, environment, operand),
         ReferenceValueV1::Binary {
             operation,
             lhs,
             rhs,
             checked,
         } => {
-            let lhs = symbolic_scalar_v2(symbolic_operand_v2(environment, lhs)?)?;
-            let rhs = symbolic_scalar_v2(symbolic_operand_v2(environment, rhs)?)?;
+            let lhs = symbolic_scalar_v2(symbolic_operand_v2(meter, environment, lhs)?)?;
+            let rhs = symbolic_scalar_v2(symbolic_operand_v2(meter, environment, rhs)?)?;
+            let overflowed = if *checked {
+                reference_checked_overflow_v2(meter, *operation, &lhs, &rhs)?
+            } else {
+                None
+            };
             let expression = ReferenceEffectExpressionV1::Binary {
                 operation: *operation,
-                lhs: Box::new(lhs.clone()),
-                rhs: Box::new(rhs.clone()),
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
                 checked: *checked,
             };
-            let folded = reference_fold_constant_v2(&expression).unwrap_or(expression);
+            let folded = reference_fold_constant_v2(meter, &expression)?.unwrap_or(expression);
             if *checked {
                 Ok(ReferenceSymbolicValueV2::CheckedPair {
                     value: folded,
-                    overflowed: reference_checked_overflow_v2(*operation, &lhs, &rhs),
+                    overflowed,
                 })
             } else {
                 Ok(ReferenceSymbolicValueV2::Scalar(folded))
             }
         }
         ReferenceValueV1::Unary { operation, operand } => {
-            let operand = symbolic_scalar_v2(symbolic_operand_v2(environment, operand)?)?;
+            let operand = symbolic_scalar_v2(symbolic_operand_v2(meter, environment, operand)?)?;
             let expression = ReferenceEffectExpressionV1::Unary {
                 operation: *operation,
                 operand: Box::new(operand),
             };
             Ok(ReferenceSymbolicValueV2::Scalar(
-                reference_fold_constant_v2(&expression).unwrap_or(expression),
+                reference_fold_constant_v2(meter, &expression)?.unwrap_or(expression),
             ))
         }
         ReferenceValueV1::Cast {
@@ -1424,7 +1582,7 @@ fn symbolic_value_v2(
             target,
             operand,
         } => {
-            let operand = symbolic_scalar_v2(symbolic_operand_v2(environment, operand)?)?;
+            let operand = symbolic_scalar_v2(symbolic_operand_v2(meter, environment, operand)?)?;
             Ok(ReferenceSymbolicValueV2::Scalar(
                 ReferenceEffectExpressionV1::Cast {
                     kind: *kind,
@@ -1450,23 +1608,30 @@ fn symbolic_value_v2(
                     "authenticated helper summary argument count changed",
                 ));
             }
+            meter.rows::<ReferenceEffectExpressionV1>(arguments.len())?;
             let arguments = arguments
                 .iter()
-                .map(|argument| symbolic_scalar_v2(symbolic_operand_v2(environment, argument)?))
+                .map(|argument| {
+                    symbolic_scalar_v2(symbolic_operand_v2(meter, environment, argument)?)
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             let mut work = 0;
-            let expression = substitute_helper_summary_v2(summary, &arguments, &mut work, 0)?;
+            let expression =
+                substitute_helper_summary_v2(meter, summary, &arguments, &mut work, 0)?;
             Ok(ReferenceSymbolicValueV2::Scalar(
-                reference_fold_constant_v2(&expression).unwrap_or(expression),
+                reference_fold_constant_v2(meter, &expression)?.unwrap_or(expression),
             ))
         }
     }
 }
 
 fn symbolic_operand_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     environment: &ReferenceSymbolicEnvironmentV2,
     operand: &ReferenceOperandV1,
 ) -> Result<ReferenceSymbolicValueV2, ReferenceBindingErrorV1> {
+    meter.charge(1)?;
+    meter.tree::<(u32, ReferenceSymbolicValueV2)>(environment.len())?;
     match operand {
         ReferenceOperandV1::Constant(constant) => Ok(ReferenceSymbolicValueV2::Scalar(
             ReferenceEffectExpressionV1::Constant(constant.clone()),
@@ -1474,12 +1639,13 @@ fn symbolic_operand_v2(
         ReferenceOperandV1::Copy(place) | ReferenceOperandV1::Move(place)
             if place.projection.is_empty() =>
         {
-            environment.get(&place.local).cloned().ok_or_else(|| {
+            let value = environment.get(&place.local).ok_or_else(|| {
                 ReferenceBindingErrorV1::new(format!(
                     "loop-carried reference local _{} has no symbolic value",
                     place.local,
                 ))
-            })
+            })?;
+            meter.clone_symbolic(value)
         }
         ReferenceOperandV1::Copy(place) | ReferenceOperandV1::Move(place)
             if matches!(
@@ -1489,6 +1655,7 @@ fn symbolic_operand_v2(
         {
             match environment.get(&place.local) {
                 Some(ReferenceSymbolicValueV2::CheckedPair { value, .. }) => {
+                    meter.clone_expression(value)?;
                     Ok(ReferenceSymbolicValueV2::Scalar(value.clone()))
                 }
                 _ => Err(ReferenceBindingErrorV1::new(format!(
@@ -1518,11 +1685,13 @@ fn symbolic_operand_v2(
                     "safe reference load uses the return-place local as its base",
                 )
             })?;
-            let index = environment.get(index).cloned().ok_or_else(|| {
+            let index = environment.get(index).ok_or_else(|| {
                 ReferenceBindingErrorV1::new(format!(
                     "safe reference load index _{index} has no symbolic value",
                 ))
             })?;
+            let index = meter.clone_symbolic(index)?;
+            meter.rows::<ReferenceEffectExpressionV1>(1)?;
             Ok(ReferenceSymbolicValueV2::Scalar(
                 ReferenceEffectExpressionV1::InputLoad {
                     reference_argument,
@@ -1578,28 +1747,33 @@ fn symbolic_scalar_v2(
 }
 
 fn require_symbolic_value_budget_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     value: &ReferenceSymbolicValueV2,
 ) -> Result<(), ReferenceBindingErrorV1> {
     match value {
         ReferenceSymbolicValueV2::Scalar(expression)
         | ReferenceSymbolicValueV2::CheckedPair {
             value: expression, ..
-        } => require_symbolic_expression_budget_v2(expression),
+        } => require_symbolic_expression_budget_v2(meter, expression),
     }
 }
 
 fn require_symbolic_expression_budget_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     expression: &ReferenceEffectExpressionV1,
 ) -> Result<(), ReferenceBindingErrorV1> {
-    symbolic_expression_nodes_v2(expression).map(|_| ())
+    symbolic_expression_nodes_v2(meter, expression).map(|_| ())
 }
 
 fn symbolic_expression_nodes_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     expression: &ReferenceEffectExpressionV1,
 ) -> Result<usize, ReferenceBindingErrorV1> {
+    meter.rows::<(&ReferenceEffectExpressionV1, usize)>(1)?;
     let mut pending = vec![(expression, 0_usize)];
     let mut nodes = 0_usize;
     while let Some((expression, depth)) = pending.pop() {
+        meter.charge(1)?;
         if depth > fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
             return Err(ReferenceBindingErrorV1::new(format!(
                 "reference symbolic expression exceeds depth {}",
@@ -1616,12 +1790,14 @@ fn symbolic_expression_nodes_v2(
         }
         match expression {
             ReferenceEffectExpressionV1::Binary { lhs, rhs, .. } => {
+                meter.grow::<(&ReferenceEffectExpressionV1, usize)>(pending.len())?;
                 pending.push((lhs, depth + 1));
                 pending.push((rhs, depth + 1));
             }
             ReferenceEffectExpressionV1::Unary { operand, .. }
             | ReferenceEffectExpressionV1::Cast { operand, .. }
             | ReferenceEffectExpressionV1::InputLoad { index: operand, .. } => {
+                meter.grow::<(&ReferenceEffectExpressionV1, usize)>(pending.len())?;
                 pending.push((operand, depth + 1));
             }
             ReferenceEffectExpressionV1::PointCoordinate { .. }
@@ -1634,22 +1810,25 @@ fn symbolic_expression_nodes_v2(
 }
 
 fn symbolic_value_nodes_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     value: &ReferenceSymbolicValueV2,
 ) -> Result<usize, ReferenceBindingErrorV1> {
     match value {
         ReferenceSymbolicValueV2::Scalar(expression)
         | ReferenceSymbolicValueV2::CheckedPair {
             value: expression, ..
-        } => symbolic_expression_nodes_v2(expression),
+        } => symbolic_expression_nodes_v2(meter, expression),
     }
 }
 
 fn symbolic_environment_nodes_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     environment: &ReferenceSymbolicEnvironmentV2,
 ) -> Result<usize, ReferenceBindingErrorV1> {
+    meter.charge(environment.len())?;
     environment.values().try_fold(0_usize, |total, value| {
         total
-            .checked_add(symbolic_value_nodes_v2(value)?)
+            .checked_add(symbolic_value_nodes_v2(meter, value)?)
             .ok_or_else(|| {
                 ReferenceBindingErrorV1::new("reference symbolic environment node count overflowed")
             })
@@ -1657,16 +1836,19 @@ fn symbolic_environment_nodes_v2(
 }
 
 fn symbolic_predicate_nodes_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     predicate: &ReferencePathPredicateV1,
 ) -> Result<usize, ReferenceBindingErrorV1> {
+    meter.charge(predicate.clauses.len())?;
     predicate.clauses.iter().try_fold(0_usize, |total, clause| {
+        meter.charge(clause.atoms.len())?;
         clause.atoms.iter().try_fold(total, |total, atom| {
             let expression = match atom {
                 ReferenceGuardAtomV1::SwitchValueSet { discriminant, .. } => discriminant,
                 ReferenceGuardAtomV1::Assert { condition, .. } => condition,
             };
             total
-                .checked_add(symbolic_expression_nodes_v2(expression)?)
+                .checked_add(symbolic_expression_nodes_v2(meter, expression)?)
                 .ok_or_else(|| {
                     ReferenceBindingErrorV1::new(
                         "reference symbolic predicate node count overflowed",
@@ -1676,18 +1858,23 @@ fn symbolic_predicate_nodes_v2(
     })
 }
 
-fn symbolic_trace_nodes_v2(trace: &ReferenceLoopTraceV2) -> Result<usize, ReferenceBindingErrorV1> {
-    let mut nodes = symbolic_environment_nodes_v2(&trace.initial)?;
+fn symbolic_trace_nodes_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
+    trace: &ReferenceLoopTraceV2,
+) -> Result<usize, ReferenceBindingErrorV1> {
+    meter.charge(trace.transitions.len())?;
+    meter.charge(trace.variants.len())?;
+    let mut nodes = symbolic_environment_nodes_v2(meter, &trace.initial)?;
     for environment in &trace.transitions {
         nodes = nodes
-            .checked_add(symbolic_environment_nodes_v2(environment)?)
+            .checked_add(symbolic_environment_nodes_v2(meter, environment)?)
             .ok_or_else(|| {
                 ReferenceBindingErrorV1::new("reference symbolic trace node count overflowed")
             })?;
     }
     for expression in &trace.variants {
         nodes = nodes
-            .checked_add(symbolic_expression_nodes_v2(expression)?)
+            .checked_add(symbolic_expression_nodes_v2(meter, expression)?)
             .ok_or_else(|| {
                 ReferenceBindingErrorV1::new("reference symbolic trace node count overflowed")
             })?;
@@ -1696,16 +1883,18 @@ fn symbolic_trace_nodes_v2(trace: &ReferenceLoopTraceV2) -> Result<usize, Refere
 }
 
 fn symbolic_state_nodes_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     state: &ReferenceSymbolicStateV2,
 ) -> Result<usize, ReferenceBindingErrorV1> {
-    let mut nodes = symbolic_environment_nodes_v2(&state.environment)?
-        .checked_add(symbolic_predicate_nodes_v2(&state.guard)?)
+    meter.charge(state.traces.len())?;
+    let mut nodes = symbolic_environment_nodes_v2(meter, &state.environment)?
+        .checked_add(symbolic_predicate_nodes_v2(meter, &state.guard)?)
         .ok_or_else(|| {
             ReferenceBindingErrorV1::new("reference symbolic state node count overflowed")
         })?;
     for trace in state.traces.values() {
         nodes = nodes
-            .checked_add(symbolic_trace_nodes_v2(trace)?)
+            .checked_add(symbolic_trace_nodes_v2(meter, trace)?)
             .ok_or_else(|| {
                 ReferenceBindingErrorV1::new("reference symbolic state node count overflowed")
             })?;
@@ -1714,6 +1903,7 @@ fn symbolic_state_nodes_v2(
 }
 
 fn dispatch_symbolic_edge_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     pending: &mut VecDeque<ReferenceSymbolicStateV2>,
     mut state: ReferenceSymbolicStateV2,
     source: u32,
@@ -1722,13 +1912,16 @@ fn dispatch_symbolic_edge_v2(
     loop_nodes: &BTreeMap<(u32, u32), BTreeSet<u32>>,
     work_budget: &mut ReferenceSymbolicWorkBudgetV2,
 ) -> Result<(), ReferenceBindingErrorV1> {
+    meter.tree::<(u32, u32)>(backedges.len())?;
     if backedges.contains(&(source, target)) {
+        meter.tree::<((u32, u32), ReferenceLoopTraceV2)>(state.traces.len())?;
         let trace = state.traces.get_mut(&(target, source)).ok_or_else(|| {
             ReferenceBindingErrorV1::new(format!(
                 "reference backedge {source}->{target} has no canonical loop trace",
             ))
         })?;
-        work_budget.charge_environment_v2(&state.environment)?;
+        work_budget.charge_environment_v2(meter, &state.environment)?;
+        meter.grow::<ReferenceSymbolicEnvironmentV2>(trace.transitions.len())?;
         trace.transitions.push(state.environment.clone());
         if trace.transitions.len() > MAX_REFERENCE_LOOP_ITERATIONS_V2 {
             return Err(ReferenceBindingErrorV1::new(format!(
@@ -1736,24 +1929,29 @@ fn dispatch_symbolic_edge_v2(
             )));
         }
     }
+    meter.charge(state.traces.len())?;
     if let Some(trace) = state
         .traces
         .values_mut()
         .find(|trace| trace.header == source)
     {
+        meter.tree::<((u32, u32), BTreeSet<u32>)>(loop_nodes.len())?;
         let nodes = loop_nodes
             .get(&(trace.latch, trace.header))
             .ok_or_else(|| ReferenceBindingErrorV1::new("reference natural-loop nodes vanished"))?;
+        meter.tree::<u32>(nodes.len())?;
         if !nodes.contains(&target) {
             trace.exit = Some(target);
         }
     }
     state.block = target;
+    meter.grow::<ReferenceSymbolicStateV2>(pending.len())?;
     pending.push_back(state);
     Ok(())
 }
 
 fn reference_cfg_backedges_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     effect_ir: &ReferenceEffectIrV1,
 ) -> Result<BTreeSet<(u32, u32)>, ReferenceBindingErrorV1> {
     let count = effect_ir.blocks.len();
@@ -1762,36 +1960,57 @@ fn reference_cfg_backedges_v2(
             "reference effect IR has no entry block",
         ));
     }
+    meter.rows::<usize>(count)?;
+    meter.rows::<usize>(
+        count
+            .checked_mul(count)
+            .ok_or_else(|| ReferenceBindingErrorV1::new("reference dominator storage overflow"))?,
+    )?;
+    meter.rows::<BTreeSet<usize>>(count)?;
+    meter.rows::<Vec<usize>>(count)?;
     let all = (0..count).collect::<BTreeSet<_>>();
     let mut dominators = vec![all.clone(); count];
     dominators[0] = BTreeSet::from([0]);
     let mut predecessors = vec![Vec::new(); count];
     for block in &effect_ir.blocks {
+        meter.charge(1)?;
         for successor in reference_successors_v1(&block.terminator) {
+            meter.charge(1)?;
             let successor = successor as usize;
             if successor >= count {
                 return Err(ReferenceBindingErrorV1::new(
                     "reference CFG successor is outside the block table",
                 ));
             }
+            meter.grow::<usize>(predecessors[successor].len())?;
             predecessors[successor].push(block.block as usize);
         }
     }
     loop {
+        meter.charge(1)?;
         let mut changed = false;
         for block in 1..count {
+            meter.charge(1)?;
             let mut next = if let Some(first) = predecessors[block].first() {
+                meter.rows::<usize>(dominators[*first].len())?;
                 dominators[*first].clone()
             } else {
                 BTreeSet::new()
             };
             for predecessor in predecessors[block].iter().skip(1) {
+                meter.product(
+                    reference_extraction_work_v1::add(next.len(), 1)?,
+                    reference_extraction_work_v1::add(dominators[*predecessor].len(), 1)?,
+                )?;
+                meter.rows::<usize>(next.len().min(dominators[*predecessor].len()))?;
                 next = next
                     .intersection(&dominators[*predecessor])
                     .copied()
                     .collect();
             }
+            meter.tree::<usize>(next.len())?;
             next.insert(block);
+            meter.charge(next.len())?;
             if next != dominators[block] {
                 dominators[block] = next;
                 changed = true;
@@ -1803,8 +2022,11 @@ fn reference_cfg_backedges_v2(
     }
     let mut backedges = BTreeSet::new();
     for block in &effect_ir.blocks {
+        meter.charge(1)?;
         for successor in reference_successors_v1(&block.terminator) {
+            meter.tree::<usize>(dominators[block.block as usize].len())?;
             if dominators[block.block as usize].contains(&(successor as usize)) {
+                meter.tree::<(u32, u32)>(backedges.len())?;
                 backedges.insert((block.block, successor));
             }
         }
@@ -1813,46 +2035,54 @@ fn reference_cfg_backedges_v2(
 }
 
 fn reference_natural_loop_nodes_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     effect_ir: &ReferenceEffectIrV1,
     backedges: &BTreeSet<(u32, u32)>,
 ) -> Result<BTreeMap<(u32, u32), BTreeSet<u32>>, ReferenceBindingErrorV1> {
+    meter.rows::<Vec<u32>>(effect_ir.blocks.len())?;
     let mut predecessors = vec![Vec::new(); effect_ir.blocks.len()];
     for block in &effect_ir.blocks {
+        meter.charge(1)?;
         for successor in reference_successors_v1(&block.terminator) {
-            predecessors
-                .get_mut(successor as usize)
-                .ok_or_else(|| {
-                    ReferenceBindingErrorV1::new(
-                        "reference loop successor is outside the block table",
-                    )
-                })?
-                .push(block.block);
+            meter.charge(1)?;
+            let incoming = predecessors.get_mut(successor as usize).ok_or_else(|| {
+                ReferenceBindingErrorV1::new("reference loop successor is outside the block table")
+            })?;
+            meter.grow::<u32>(incoming.len())?;
+            incoming.push(block.block);
         }
     }
     let mut result = BTreeMap::new();
     for (latch, header) in backedges {
+        meter.rows::<u32>(3)?;
         let mut nodes = BTreeSet::from([*header, *latch]);
         let mut pending = vec![*latch];
         while let Some(block) = pending.pop() {
+            meter.charge(1)?;
             for predecessor in &predecessors[block as usize] {
+                meter.tree::<u32>(nodes.len())?;
                 if nodes.insert(*predecessor) && *predecessor != *header {
+                    meter.grow::<u32>(pending.len())?;
                     pending.push(*predecessor);
                 }
             }
         }
+        meter.tree::<((u32, u32), BTreeSet<u32>)>(result.len())?;
         result.insert((*latch, *header), nodes);
     }
     Ok(result)
 }
 
 fn validate_reference_loop_shapes_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     effect_ir: &ReferenceEffectIrV1,
     backedges: &BTreeSet<(u32, u32)>,
 ) -> Result<(), ReferenceBindingErrorV1> {
     let mut headers = BTreeSet::new();
-    let loop_nodes = reference_natural_loop_nodes_v2(effect_ir, backedges)?;
-    reject_overlapping_reference_loops_v2(&loop_nodes)?;
+    let loop_nodes = reference_natural_loop_nodes_v2(meter, effect_ir, backedges)?;
+    reject_overlapping_reference_loops_v2(meter, &loop_nodes)?;
     for (latch, header) in backedges {
+        meter.tree::<u32>(headers.len())?;
         if !headers.insert(*header) {
             return Err(ReferenceBindingErrorV1::new(format!(
                 "reference loop header {header} has multiple latches; only one canonical recurrence is supported",
@@ -1880,16 +2110,19 @@ fn validate_reference_loop_shapes_v2(
                 "reference loop latch {latch} is not one unconditional edge to header {header}",
             )));
         }
+        meter.tree::<((u32, u32), BTreeSet<u32>)>(loop_nodes.len())?;
         let nodes = &loop_nodes[&(*latch, *header)];
-        let exits = nodes
-            .iter()
-            .flat_map(|node| {
-                reference_successors_v1(&effect_ir.blocks[*node as usize].terminator)
-                    .into_iter()
-                    .filter(|target| !nodes.contains(target))
-                    .map(|target| (*node, target))
-            })
-            .collect::<BTreeSet<_>>();
+        let mut exits = BTreeSet::new();
+        for node in nodes {
+            meter.charge(1)?;
+            for target in reference_successors_v1(&effect_ir.blocks[*node as usize].terminator) {
+                meter.tree::<u32>(nodes.len())?;
+                if !nodes.contains(&target) {
+                    meter.tree::<(u32, u32)>(exits.len())?;
+                    exits.insert((*node, target));
+                }
+            }
+        }
         let Some((exit_source, _)) = exits.iter().next().copied() else {
             return Err(ReferenceBindingErrorV1::new(format!(
                 "reference loop <header={header}, latch={latch}> has no finite exit",
@@ -1905,11 +2138,18 @@ fn validate_reference_loop_shapes_v2(
 }
 
 fn reject_overlapping_reference_loops_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     loop_nodes: &BTreeMap<(u32, u32), BTreeSet<u32>>,
 ) -> Result<(), ReferenceBindingErrorV1> {
+    meter.rows::<(&(u32, u32), &BTreeSet<u32>)>(loop_nodes.len())?;
     let loops = loop_nodes.iter().collect::<Vec<_>>();
     for (left_index, (left_identity, left_nodes)) in loops.iter().enumerate() {
+        meter.charge(1)?;
         for (right_identity, right_nodes) in loops.iter().skip(left_index + 1) {
+            meter.product(
+                reference_extraction_work_v1::add(left_nodes.len(), 1)?,
+                reference_extraction_work_v1::add(right_nodes.len(), 1)?,
+            )?;
             if !left_nodes.is_disjoint(right_nodes) {
                 return Err(ReferenceBindingErrorV1::new(format!(
                     "reference loops <header={}, latch={}> and <header={}, latch={}> overlap or nest; activation-specific recurrence summaries are not implemented",
@@ -1922,15 +2162,26 @@ fn reject_overlapping_reference_loops_v2(
 }
 
 fn reference_loop_summary_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     trace: &ReferenceLoopTraceV2,
 ) -> Result<ReferenceLoopSummaryV2, ReferenceBindingErrorV1> {
+    let units = meter.trace_units(trace)?;
+    let passes = trace
+        .initial
+        .len()
+        .checked_add(1)
+        .and_then(|n| n.checked_mul(2))
+        .ok_or_else(|| ReferenceBindingErrorV1::new("reference loop summary work overflow"))?;
+    meter.product(passes, units)?;
+    meter.rows::<u32>(trace.initial.len())?;
     let exit = trace.exit.ok_or_else(|| {
         ReferenceBindingErrorV1::new(format!(
             "reference loop <header={}, latch={}> has no authenticated exit",
             trace.header, trace.latch,
         ))
     })?;
-    let mut carried_locals = trace
+    // Filtering BTreeMap keys preserves the canonical carried-local order.
+    let carried_locals = trace
         .initial
         .iter()
         .filter_map(|(local, initial)| {
@@ -1942,7 +2193,6 @@ fn reference_loop_summary_v2(
                 .then_some(*local)
         })
         .collect::<Vec<_>>();
-    carried_locals.sort_unstable();
     let mut initial_digest = Sha256::new();
     initial_digest.update(b"fe2o3/reference-loop-initial/v2\0");
     let mut transition_digest = Sha256::new();
@@ -2005,9 +2255,37 @@ fn digest_symbolic_value_v2(digest: &mut Sha256, value: &ReferenceSymbolicValueV
 }
 
 fn reference_constant_bits_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
+    expression: &ReferenceEffectExpressionV1,
+) -> Result<Option<(ReferenceScalarTypeV1, u128)>, ReferenceBindingErrorV1> {
+    meter.product(4, meter.expression(expression)?)?;
+    Ok(reference_constant_bits_prepaid_v2(expression))
+}
+
+fn reference_fold_constant_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
+    expression: &ReferenceEffectExpressionV1,
+) -> Result<Option<ReferenceEffectExpressionV1>, ReferenceBindingErrorV1> {
+    // Bound recursion and prepay all folding visits before evaluating the tree.
+    meter.product(4, meter.expression(expression)?)?;
+    Ok(reference_fold_constant_prepaid_v2(expression))
+}
+
+fn reference_checked_overflow_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
+    operation: ReferenceBinaryOpV1,
+    lhs: &ReferenceEffectExpressionV1,
+    rhs: &ReferenceEffectExpressionV1,
+) -> Result<Option<bool>, ReferenceBindingErrorV1> {
+    meter.product(4, meter.expression(lhs)?)?;
+    meter.product(4, meter.expression(rhs)?)?;
+    Ok(reference_checked_overflow_prepaid_v2(operation, lhs, rhs))
+}
+
+fn reference_constant_bits_prepaid_v2(
     expression: &ReferenceEffectExpressionV1,
 ) -> Option<(ReferenceScalarTypeV1, u128)> {
-    let folded = reference_fold_constant_v2(expression)?;
+    let folded = reference_fold_constant_prepaid_v2(expression)?;
     let ReferenceEffectExpressionV1::Constant(ReferenceConstantV1::Scalar { scalar, bits }) =
         folded
     else {
@@ -2016,7 +2294,7 @@ fn reference_constant_bits_v2(
     Some((scalar, bits))
 }
 
-fn reference_fold_constant_v2(
+fn reference_fold_constant_prepaid_v2(
     expression: &ReferenceEffectExpressionV1,
 ) -> Option<ReferenceEffectExpressionV1> {
     match expression {
@@ -2027,8 +2305,8 @@ fn reference_fold_constant_v2(
             rhs,
             ..
         } => {
-            let (lhs_scalar, lhs) = reference_constant_bits_v2(lhs)?;
-            let (rhs_scalar, rhs) = reference_constant_bits_v2(rhs)?;
+            let (lhs_scalar, lhs) = reference_constant_bits_prepaid_v2(lhs)?;
+            let (rhs_scalar, rhs) = reference_constant_bits_prepaid_v2(rhs)?;
             if lhs_scalar != rhs_scalar {
                 return None;
             }
@@ -2082,7 +2360,7 @@ fn reference_fold_constant_v2(
             ))
         }
         ReferenceEffectExpressionV1::Unary { operation, operand } => {
-            let (scalar, bits) = reference_constant_bits_v2(operand)?;
+            let (scalar, bits) = reference_constant_bits_prepaid_v2(operand)?;
             let mask = reference_scalar_mask_v2(scalar)?;
             let bits = match operation {
                 ReferenceUnaryOpV1::Not => (!bits) & mask,
@@ -2100,13 +2378,13 @@ fn reference_fold_constant_v2(
     }
 }
 
-fn reference_checked_overflow_v2(
+fn reference_checked_overflow_prepaid_v2(
     operation: ReferenceBinaryOpV1,
     lhs: &ReferenceEffectExpressionV1,
     rhs: &ReferenceEffectExpressionV1,
 ) -> Option<bool> {
-    let (lhs_scalar, lhs) = reference_constant_bits_v2(lhs)?;
-    let (rhs_scalar, rhs) = reference_constant_bits_v2(rhs)?;
+    let (lhs_scalar, lhs) = reference_constant_bits_prepaid_v2(lhs)?;
+    let (rhs_scalar, rhs) = reference_constant_bits_prepaid_v2(rhs)?;
     if lhs_scalar != rhs_scalar {
         return None;
     }
@@ -2152,9 +2430,16 @@ pub(crate) struct AuthenticatedReferenceEffectBindingV1 {
     pub(crate) logical_kernel_name: String,
     pub(crate) kernel: ReferenceFunctionIdentityV1,
     pub(crate) reference: ReferenceFunctionIdentityV1,
+    pub(crate) signature_preimage: ReferenceLogicalSignaturePreimageV1,
     pub(crate) effect_ir_sha256: [u8; 32],
     pub(crate) effect_ir: ReferenceEffectIrV1,
     pub(crate) observable_output_writes: Box<[ReferenceOutputWriteV1]>,
+}
+
+impl AuthenticatedReferenceEffectBindingV1 {
+    pub(crate) fn signature_preimage(&self) -> &ReferenceLogicalSignaturePreimageV1 {
+        &self.signature_preimage
+    }
 }
 
 #[derive(Debug, Default)]
@@ -2178,7 +2463,7 @@ impl AuthenticatedReferenceEffectBindingsV1 {
 pub(crate) struct ReferenceBindingErrorV1(String);
 
 impl ReferenceBindingErrorV1 {
-    fn new(reason: impl Into<String>) -> Self {
+    pub(crate) fn new(reason: impl Into<String>) -> Self {
         Self(reason.into())
     }
 
@@ -2208,12 +2493,17 @@ pub(crate) fn authenticate_reference_binding_v1<'tcx>(
     logical_kernel_name: String,
     kernel: Instance<'tcx>,
     reference: Instance<'tcx>,
+    work: &mut SourceClosureWorkV1,
 ) -> Result<AuthenticatedReferenceEffectBindingV1, ReferenceBindingErrorV1> {
-    authenticate_safe_local_reference(tcx, reference)?;
-    let relations = logical_abi_relation_v1(tcx, kernel, reference)?;
-    let effect_ir = lower_reference_effect_ir_v1(tcx, reference, relations)?;
+    let meter = &ReferenceExtractionWorkV1::borrowed(work);
+    authenticate_safe_local_reference_v1(meter, tcx, reference)?;
+    let (signature_preimage, relations) = logical_abi_relation_v1(meter, tcx, kernel, reference)?;
+    let effect_ir = lower_reference_effect_ir_v1(meter, tcx, reference, relations)?;
+    meter.ir_hash(&effect_ir)?;
     let effect_ir_sha256 = effect_ir.canonical_sha256_v1();
+    meter.charge(meter.effects(&effect_ir.observable_output_effects)?)?;
     let observable_output_writes = effect_ir.observable_output_effects.clone();
+    meter.charge(effect_ir.relations.len())?;
     if effect_ir.relations.iter().any(|relation| {
         matches!(
             relation,
@@ -2226,11 +2516,13 @@ pub(crate) fn authenticate_reference_binding_v1<'tcx>(
             "safe Rust reference has a logical output but reference-effect V1 found no observable output write",
         ));
     }
+    meter.rows::<AuthenticatedReferenceEffectBindingV1>(1)?;
     Ok(AuthenticatedReferenceEffectBindingV1 {
         registration_path,
         logical_kernel_name,
-        kernel: function_identity_v1(tcx, kernel),
-        reference: function_identity_v1(tcx, reference),
+        kernel: function_identity_v1(meter, tcx, kernel)?,
+        reference: function_identity_v1(meter, tcx, reference)?,
+        signature_preimage,
         effect_ir_sha256,
         effect_ir,
         observable_output_writes,
@@ -2238,11 +2530,13 @@ pub(crate) fn authenticate_reference_binding_v1<'tcx>(
 }
 
 fn function_identity_v1<'tcx>(
+    meter: &ReferenceExtractionWorkV1<'_>,
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
-) -> ReferenceFunctionIdentityV1 {
+) -> Result<ReferenceFunctionIdentityV1, ReferenceBindingErrorV1> {
+    charge_reference_source_v1(tcx, instance, meter)?;
     let identities = canonical_function_identities_v1(tcx, instance);
-    ReferenceFunctionIdentityV1 {
+    Ok(ReferenceFunctionIdentityV1 {
         def_path_hash: tcx.def_path_hash(instance.def_id()).0.to_le_bytes(),
         function_sha256: *identities.function().as_bytes(),
         item_definition_sha256: *identities.item_definition().as_bytes(),
@@ -2250,73 +2544,10 @@ fn function_identity_v1<'tcx>(
         generic_type_arguments_sha256: *identities.generic_type_arguments().as_bytes(),
         const_generic_arguments_sha256: *identities.const_generic_arguments().as_bytes(),
         rustc_mir_body_sha256: rustc_mir_body_sha256_v1(tcx, instance),
-    }
+    })
 }
 
-#[derive(Default)]
-struct UnsafeBlockVisitorV1 {
-    first_span: Option<rustc_span::Span>,
-}
-
-impl<'tcx> Visitor<'tcx> for UnsafeBlockVisitorV1 {
-    fn visit_block(&mut self, block: &'tcx rustc_hir::Block<'tcx>) {
-        if matches!(
-            block.rules,
-            BlockCheckMode::UnsafeBlock(UnsafeSource::UserProvided)
-        ) {
-            self.first_span.get_or_insert(block.span);
-        }
-        intravisit::walk_block(self, block);
-    }
-
-    fn visit_expr(&mut self, expression: &'tcx rustc_hir::Expr<'tcx>) {
-        if !matches!(expression.kind, ExprKind::Closure(_)) {
-            intravisit::walk_expr(self, expression);
-        }
-    }
-}
-
-fn authenticate_safe_local_reference<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    reference: Instance<'tcx>,
-) -> Result<(), ReferenceBindingErrorV1> {
-    let signature = instantiated_signature(tcx, reference);
-    if signature.safety != Safety::Safe {
-        return Err(ReferenceBindingErrorV1::new(format!(
-            "safe Rust reference '{}' is declared unsafe",
-            tcx.def_path_str(reference.def_id()),
-        )));
-    }
-    if signature.abi != ExternAbi::Rust || signature.c_variadic {
-        return Err(ReferenceBindingErrorV1::new(format!(
-            "safe Rust reference '{}' must use the non-variadic Rust ABI",
-            tcx.def_path_str(reference.def_id()),
-        )));
-    }
-    let Some(local) = reference.def_id().as_local() else {
-        return Err(ReferenceBindingErrorV1::new(format!(
-            "safe Rust reference '{}' must be local so unsafe-block absence is authenticated",
-            tcx.def_path_str(reference.def_id()),
-        )));
-    };
-    let Some(body) = tcx.hir_maybe_body_owned_by(local) else {
-        return Err(ReferenceBindingErrorV1::new(
-            "safe Rust reference has no local HIR body",
-        ));
-    };
-    let mut visitor = UnsafeBlockVisitorV1::default();
-    visitor.visit_body(body);
-    if let Some(span) = visitor.first_span {
-        return Err(ReferenceBindingErrorV1::new(format!(
-            "safe Rust reference '{}' contains a user-provided unsafe block at {}",
-            tcx.def_path_str(reference.def_id()),
-            tcx.sess.source_map().span_to_diagnostic_string(span),
-        )));
-    }
-    Ok(())
-}
-
-fn instantiated_signature<'tcx>(
+pub(crate) fn instantiated_signature<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
 ) -> rustc_middle::ty::FnSig<'tcx> {
@@ -2327,111 +2558,170 @@ fn instantiated_signature<'tcx>(
 }
 
 fn logical_abi_relation_v1<'tcx>(
+    meter: &ReferenceExtractionWorkV1<'_>,
     tcx: TyCtxt<'tcx>,
     kernel: Instance<'tcx>,
     reference: Instance<'tcx>,
-) -> Result<Vec<ReferenceArgumentRelationV1>, ReferenceBindingErrorV1> {
+) -> Result<
+    (
+        ReferenceLogicalSignaturePreimageV1,
+        Vec<ReferenceArgumentRelationV1>,
+    ),
+    ReferenceBindingErrorV1,
+> {
     let kernel_signature = instantiated_signature(tcx, kernel);
     let reference_signature = instantiated_signature(tcx, reference);
-    if reference_signature.output() != tcx.types.unit {
+    let preimage = extract_reference_signature_preimage_metered_v1(
+        meter,
+        tcx,
+        kernel_signature,
+        reference_signature,
+    )?;
+    meter.charge(preimage.reference_inputs().len())?;
+    let derived = preimage.derive_relations_v1().map_err(|error| {
+        reference_signature_error_v1(error, kernel_signature, reference_signature)
+    })?;
+    let mut relations = reserve_reference_signature_rows_v1(meter, derived.len())?;
+    for raw in 0..derived.len() {
+        let raw = u32::try_from(raw)
+            .map_err(|_| ReferenceBindingErrorV1::new("reference argument index exceeds u32"))?;
+        meter.charge(1)?;
+        relations.push(derived.relation_at_raw_argument_v1(raw).ok_or_else(|| {
+            ReferenceBindingErrorV1::new("checked reference signature relation lost an argument")
+        })?);
+    }
+    Ok((preimage, relations))
+}
+
+/// Descriptive signature fields, not source/provider authority.
+fn extract_reference_signature_preimage_metered_v1<'tcx>(
+    meter: &ReferenceExtractionWorkV1<'_>,
+    tcx: TyCtxt<'tcx>,
+    kernel: rustc_middle::ty::FnSig<'tcx>,
+    reference: rustc_middle::ty::FnSig<'tcx>,
+) -> Result<ReferenceLogicalSignaturePreimageV1, ReferenceBindingErrorV1> {
+    meter.charge(1)?;
+    use fe2o3_mir_model::semantic_mir_v1::{SemanticExternAbiV1, SemanticFunctionSafetyV1};
+
+    if reference.abi != ExternAbi::Rust {
         return Err(ReferenceBindingErrorV1::new(
-            "safe Rust reference must return unit in V1; use explicit mutable outputs",
+            ReferenceSignatureErrorV1::InvalidReferenceAbi.to_string(),
         ));
     }
-    if reference_signature.inputs().len() < kernel_signature.inputs().len() {
-        return Err(ReferenceBindingErrorV1::new(format!(
-            "safe Rust reference logical ABI has {} arguments but kernel has {}; a point reference may only add leading usize coordinate arguments",
-            reference_signature.inputs().len(),
-            kernel_signature.inputs().len(),
-        )));
-    }
-    let point_axis_count = reference_signature.inputs().len() - kernel_signature.inputs().len();
-    if point_axis_count > MAX_REFERENCE_POINT_AXES_V1 {
-        return Err(ReferenceBindingErrorV1::new(format!(
-            "safe Rust point reference has {point_axis_count} coordinate axes; maximum is {MAX_REFERENCE_POINT_AXES_V1}",
-        )));
-    }
-    let mut relations = Vec::with_capacity(reference_signature.inputs().len());
-    for (axis, reference_ty) in reference_signature
-        .inputs()
-        .iter()
-        .copied()
-        .take(point_axis_count)
-        .enumerate()
-    {
-        if !matches!(
-            reference_ty.kind(),
-            TyKind::Uint(rustc_middle::ty::UintTy::Usize)
-        ) {
-            return Err(ReferenceBindingErrorV1::new(format!(
-                "safe Rust point-reference coordinate argument {} must be usize, found '{reference_ty}'",
-                axis + 1,
-            )));
-        }
-        relations.push(ReferenceArgumentRelationV1::PointCoordinate {
-            reference_argument: u32::try_from(axis).map_err(|_| {
-                ReferenceBindingErrorV1::new("reference coordinate argument exceeds u32")
+    let result = if reference.output() == tcx.types.unit {
+        ReferenceReturnShapeV1::Unit
+    } else {
+        ReferenceReturnShapeV1::NonUnit
+    };
+    let safety = match reference.safety {
+        Safety::Safe => SemanticFunctionSafetyV1::Safe,
+        Safety::Unsafe => SemanticFunctionSafetyV1::Unsafe,
+    };
+    let axes = ReferenceLogicalSignaturePreimageV1::check_header_v1(
+        kernel.inputs().len(),
+        reference.inputs().len(),
+        result,
+        SemanticExternAbiV1::Rust,
+        safety,
+        reference.c_variadic,
+    )
+    .map_err(|error| reference_signature_error_v1(error, kernel, reference))?;
+
+    let mut kernel_inputs = reserve_reference_signature_rows_v1(meter, kernel.inputs().len())?;
+    for (argument, ty) in kernel.inputs().iter().copied().enumerate() {
+        meter.charge(1)?;
+        kernel_inputs.push(
+            extract_reference_signature_input_v1(tcx, ty).map_err(|reason| {
+                ReferenceBindingErrorV1::new(format!(
+                    "kernel argument {} type '{ty}' has no reference ABI relation: {reason}",
+                    argument + 1,
+                ))
             })?,
-            axis: u32::try_from(axis).map_err(|_| {
-                ReferenceBindingErrorV1::new("reference coordinate axis exceeds u32")
-            })?,
-        });
+        );
     }
-    for (index, (kernel_ty, reference_ty)) in kernel_signature
-        .inputs()
-        .iter()
-        .copied()
-        .zip(
-            reference_signature
-                .inputs()
-                .iter()
-                .copied()
-                .skip(point_axis_count),
-        )
-        .enumerate()
-    {
-        let argument = u32::try_from(index)
-            .map_err(|_| ReferenceBindingErrorV1::new("reference argument index exceeds u32"))?;
-        if let Some(scalar) = scalar_type_v1(kernel_ty) {
-            if kernel_ty != reference_ty {
-                return Err(logical_abi_mismatch(index, kernel_ty, reference_ty));
+    let mut reference_inputs =
+        reserve_reference_signature_rows_v1(meter, reference.inputs().len())?;
+    for (argument, ty) in reference.inputs().iter().copied().enumerate() {
+        meter.charge(1)?;
+        reference_inputs.push(extract_reference_signature_input_v1(tcx, ty).map_err(|reason| {
+            if argument < axes {
+                ReferenceBindingErrorV1::new(format!(
+                    "safe Rust point-reference coordinate argument {} must be usize, found '{ty}': {reason}",
+                    argument + 1,
+                ))
+            } else {
+                ReferenceBindingErrorV1::new(format!(
+                    "safe Rust reference logical ABI mismatch at argument {}: kernel '{}', reference '{ty}': {reason}",
+                    argument - axes + 1,
+                    kernel.inputs()[argument - axes],
+                ))
             }
-            relations.push(ReferenceArgumentRelationV1::ScalarInput { argument, scalar });
-            continue;
-        }
-        if let Some(element) = shared_slice_element_v1(kernel_ty) {
-            if kernel_ty != reference_ty {
-                return Err(logical_abi_mismatch(index, kernel_ty, reference_ty));
-            }
-            relations.push(ReferenceArgumentRelationV1::SharedSliceInput { argument, element });
-            continue;
-        }
-        if let Some((element_ty, element)) = disjoint_slice_element_v1(tcx, kernel_ty) {
-            match *reference_ty.kind() {
-                TyKind::Ref(_, pointee, Mutability::Mut) if matches!(*pointee.kind(), TyKind::Slice(actual) if actual == element_ty) =>
-                {
-                    relations.push(ReferenceArgumentRelationV1::DisjointOutputSlice {
-                        argument,
-                        element,
-                    });
-                    continue;
-                }
-                TyKind::Ref(_, pointee, Mutability::Mut) if pointee == element_ty => {
-                    relations.push(ReferenceArgumentRelationV1::DisjointOutputCoordinate {
-                        argument,
-                        element,
-                    });
-                    continue;
-                }
-                _ => return Err(logical_abi_mismatch(index, kernel_ty, reference_ty)),
-            }
-        }
-        return Err(ReferenceBindingErrorV1::new(format!(
-            "kernel argument {} type '{kernel_ty}' has no reference ABI relation",
-            index + 1,
-        )));
+        })?);
     }
-    Ok(relations)
+    ReferenceLogicalSignaturePreimageV1::new(
+        kernel_inputs.into_boxed_slice(),
+        reference_inputs.into_boxed_slice(),
+        result,
+        SemanticExternAbiV1::Rust,
+        safety,
+        reference.c_variadic,
+    )
+    .map_err(|error| reference_signature_error_v1(error, kernel, reference))
+}
+
+fn reserve_reference_signature_rows_v1<T>(
+    meter: &ReferenceExtractionWorkV1<'_>,
+    count: usize,
+) -> Result<Vec<T>, ReferenceBindingErrorV1> {
+    meter.rows::<T>(count)?;
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(count).map_err(|_| {
+        ReferenceBindingErrorV1::new("reference logical signature row allocation failed")
+    })?;
+    if rows.capacity() != count {
+        return Err(ReferenceBindingErrorV1::new(
+            "reference logical signature row allocation exceeded requested capacity",
+        ));
+    }
+    Ok(rows)
+}
+
+fn reference_signature_error_v1<'tcx>(
+    error: ReferenceSignatureErrorV1,
+    kernel: rustc_middle::ty::FnSig<'tcx>,
+    reference: rustc_middle::ty::FnSig<'tcx>,
+) -> ReferenceBindingErrorV1 {
+    match error {
+        ReferenceSignatureErrorV1::InvalidPointCoordinate { reference_argument } => {
+            if let Some(ty) = reference.inputs().get(reference_argument) {
+                return ReferenceBindingErrorV1::new(format!(
+                    "safe Rust point-reference coordinate argument {} must be usize, found '{ty}'",
+                    reference_argument + 1,
+                ));
+            }
+        }
+        ReferenceSignatureErrorV1::ArgumentMismatch {
+            kernel_argument,
+            reference_argument,
+        } => {
+            if let (Some(kernel_ty), Some(reference_ty)) = (
+                kernel.inputs().get(kernel_argument),
+                reference.inputs().get(reference_argument),
+            ) {
+                return logical_abi_mismatch(kernel_argument, *kernel_ty, *reference_ty);
+            }
+        }
+        ReferenceSignatureErrorV1::UnsupportedKernelArgument { argument } => {
+            if let Some(ty) = kernel.inputs().get(argument) {
+                return ReferenceBindingErrorV1::new(format!(
+                    "kernel argument {} type '{ty}' has no reference ABI relation",
+                    argument + 1,
+                ));
+            }
+        }
+        _ => {}
+    }
+    ReferenceBindingErrorV1::new(error.to_string())
 }
 
 fn logical_abi_mismatch(
@@ -2465,35 +2755,61 @@ fn scalar_type_v1(ty: Ty<'_>) -> Option<ReferenceScalarTypeV1> {
     })
 }
 
-fn shared_slice_element_v1(ty: Ty<'_>) -> Option<ReferenceScalarTypeV1> {
-    let TyKind::Ref(_, pointee, Mutability::Not) = *ty.kind() else {
-        return None;
-    };
-    let TyKind::Slice(element) = *pointee.kind() else {
-        return None;
-    };
-    scalar_type_v1(element)
-}
-
-fn disjoint_slice_element_v1<'tcx>(
+fn extract_reference_signature_input_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
-) -> Option<(Ty<'tcx>, ReferenceScalarTypeV1)> {
-    let TyKind::Adt(definition, arguments) = *ty.kind() else {
-        return None;
-    };
-    // Both wrappers use output-only relations; reference loads still require a shared input.
-    if !matches!(
-        trusted_device_items::classify(tcx, definition.did()),
-        Some(TrustedDeviceItem::DisjointSlice | TrustedDeviceItem::WriteOnlyDisjointSlice)
-    ) {
-        return None;
+) -> Result<ReferenceSignatureInputV1, &'static str> {
+    use fe2o3_mir_model::semantic_mir_v1::SemanticMutabilityV1;
+
+    if let Some(scalar) = scalar_type_v1(ty) {
+        return Ok(ReferenceSignatureInputV1::Scalar(scalar));
     }
-    let element = arguments.first()?.as_type()?;
-    Some((element, scalar_type_v1(element)?))
+    if let TyKind::Ref(region, pointee, mutability) = *ty.kind() {
+        let pointee = if let TyKind::Slice(element) = *pointee.kind() {
+            ReferencePointeeV1::Slice(
+                scalar_type_v1(element).ok_or("unsupported reference slice element")?,
+            )
+        } else {
+            ReferencePointeeV1::Scalar(
+                scalar_type_v1(pointee).ok_or("unsupported reference pointee")?,
+            )
+        };
+        let region = match region.kind() {
+            rustc_middle::ty::ReErased => ReferenceRegionV1::Erased,
+            rustc_middle::ty::ReStatic => ReferenceRegionV1::Static,
+            _ => {
+                return Err("reference region cannot be represented without losing exact equality");
+            }
+        };
+        return Ok(ReferenceSignatureInputV1::Reference {
+            region,
+            mutability: match mutability {
+                Mutability::Not => SemanticMutabilityV1::Immutable,
+                Mutability::Mut => SemanticMutabilityV1::Mutable,
+            },
+            pointee,
+        });
+    }
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return Err("unsupported logical signature input type");
+    };
+    let carrier = match trusted_device_items::classify(tcx, definition.did()) {
+        Some(TrustedDeviceItem::DisjointSlice) => ReferenceCarrierV1::DisjointSlice,
+        Some(TrustedDeviceItem::WriteOnlyDisjointSlice) => {
+            ReferenceCarrierV1::WriteOnlyDisjointSlice
+        }
+        _ => return Err("nominal type is not an authenticated reference output carrier"),
+    };
+    let element = arguments
+        .first()
+        .and_then(|argument| argument.as_type())
+        .and_then(scalar_type_v1)
+        .ok_or("unsupported nominal output element")?;
+    Ok(ReferenceSignatureInputV1::NominalOutput { carrier, element })
 }
 
 fn lower_reference_effect_ir_v1<'tcx>(
+    meter: &ReferenceExtractionWorkV1<'_>,
     tcx: TyCtxt<'tcx>,
     reference: Instance<'tcx>,
     relations: Vec<ReferenceArgumentRelationV1>,
@@ -2505,6 +2821,7 @@ fn lower_reference_effect_ir_v1<'tcx>(
             body.basic_blocks.len(),
         )));
     }
+    meter.charge(body.basic_blocks.len())?;
     let statement_count = body
         .basic_blocks
         .iter()
@@ -2517,6 +2834,10 @@ fn lower_reference_effect_ir_v1<'tcx>(
         )));
     }
     for (local, declaration) in body.local_decls.iter_enumerated() {
+        meter.charge(1)?;
+        if let TyKind::Tuple(fields) = declaration.ty.kind() {
+            meter.charge(fields.len())?;
+        }
         if !supported_local_type_v1(declaration.ty) {
             return Err(ReferenceBindingErrorV1::new(format!(
                 "unsupported safe Rust reference local _{} type '{}'; V1 accepts unit, scalar values, scalar tuples, and references or slices of scalars",
@@ -2525,20 +2846,24 @@ fn lower_reference_effect_ir_v1<'tcx>(
             )));
         }
     }
+    meter.rows::<ReferenceBlockV1>(body.basic_blocks.len())?;
     let mut blocks = Vec::with_capacity(body.basic_blocks.len());
     for (block_id, block) in body.basic_blocks.iter_enumerated() {
+        meter.charge(1)?;
         let block_index = block_id.as_usize();
         let mut assignments = Vec::new();
         for (statement_index, statement) in block.statements.iter().enumerate() {
+            meter.charge(1)?;
             match &statement.kind {
                 StatementKind::Assign(assignment) => {
                     let (destination, value) = &**assignment;
+                    meter.grow::<ReferenceAssignmentV1>(assignments.len())?;
                     assignments.push(ReferenceAssignmentV1 {
                         statement: u32::try_from(statement_index).map_err(|_| {
                             ReferenceBindingErrorV1::new("reference statement index exceeds u32")
                         })?,
-                        destination: lower_place_v1(tcx, body, *destination, block_index)?,
-                        value: lower_rvalue_v1(tcx, body, value, block_index)?,
+                        destination: lower_place_v1(meter, tcx, body, *destination, block_index)?,
+                        value: lower_rvalue_v1(meter, tcx, body, value, block_index)?,
                     });
                 }
                 StatementKind::StorageLive(_)
@@ -2556,20 +2881,24 @@ fn lower_reference_effect_ir_v1<'tcx>(
                 }
             }
         }
+        meter.charge(1)?;
         let terminator = match &block.terminator().kind {
             TerminatorKind::Return => ReferenceTerminatorV1::Return,
             TerminatorKind::Goto { target } => ReferenceTerminatorV1::Goto {
                 target: target.as_u32(),
             },
-            TerminatorKind::SwitchInt { discr, targets } => ReferenceTerminatorV1::Switch {
-                discriminant: lower_operand_v1(tcx, body, discr, block_index)?,
-                values: targets
-                    .iter()
-                    .map(|(value, target)| (value, target.as_u32()))
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-                otherwise: targets.otherwise().as_u32(),
-            },
+            TerminatorKind::SwitchInt { discr, targets } => {
+                meter.rows::<(u128, u32)>(targets.iter().len())?;
+                ReferenceTerminatorV1::Switch {
+                    discriminant: lower_operand_v1(meter, tcx, body, discr, block_index)?,
+                    values: targets
+                        .iter()
+                        .map(|(value, target)| (value, target.as_u32()))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                    otherwise: targets.otherwise().as_u32(),
+                }
+            }
             TerminatorKind::Assert {
                 cond,
                 expected,
@@ -2579,13 +2908,13 @@ fn lower_reference_effect_ir_v1<'tcx>(
             } => {
                 let bounds_check = match &**msg {
                     AssertMessage::BoundsCheck { len, index } => Some(ReferenceBoundsCheckV1 {
-                        index: lower_operand_v1(tcx, body, index, block_index)?,
-                        length: lower_operand_v1(tcx, body, len, block_index)?,
+                        index: lower_operand_v1(meter, tcx, body, index, block_index)?,
+                        length: lower_operand_v1(meter, tcx, body, len, block_index)?,
                     }),
                     _ => None,
                 };
                 ReferenceTerminatorV1::Assert {
-                    condition: lower_operand_v1(tcx, body, cond, block_index)?,
+                    condition: lower_operand_v1(meter, tcx, body, cond, block_index)?,
                     expected: *expected,
                     success: target.as_u32(),
                     bounds_check,
@@ -2599,7 +2928,9 @@ fn lower_reference_effect_ir_v1<'tcx>(
                 unwind: UnwindAction::Continue | UnwindAction::Unreachable,
                 ..
             } => {
+                meter.grow::<ReferenceAssignmentV1>(assignments.len())?;
                 assignments.push(lower_safe_scalar_helper_call_v2(
+                    meter,
                     tcx,
                     reference,
                     ReferenceHelperCallSiteV2 {
@@ -2652,13 +2983,15 @@ fn lower_reference_effect_ir_v1<'tcx>(
         loop_summaries: Box::default(),
         observable_output_effects: Box::default(),
     };
-    let backedges = reference_cfg_backedges_v2(&effect_ir)?;
+    let backedges = reference_cfg_backedges_v2(meter, &effect_ir)?;
     if backedges.is_empty() {
-        effect_ir.observable_output_effects =
-            effect_ir.observable_output_writes_v1()?.into_boxed_slice();
+        effect_ir.observable_output_effects = effect_ir
+            .observable_output_writes_v1(meter)?
+            .into_boxed_slice();
     } else {
-        validate_reference_loop_shapes_v2(&effect_ir, &backedges)?;
-        let (effects, summaries) = effect_ir.observable_output_writes_with_loops_v2(&backedges)?;
+        validate_reference_loop_shapes_v2(meter, &effect_ir, &backedges)?;
+        let (effects, summaries) =
+            effect_ir.observable_output_writes_with_loops_v2(meter, &backedges)?;
         effect_ir.observable_output_effects = effects.into_boxed_slice();
         effect_ir.loop_summaries = summaries.into_boxed_slice();
     }
@@ -2673,6 +3006,7 @@ struct ReferenceHelperCallSiteV2<'a, 'tcx> {
 }
 
 fn lower_safe_scalar_helper_call_v2<'tcx>(
+    meter: &ReferenceExtractionWorkV1<'_>,
     tcx: TyCtxt<'tcx>,
     caller: Instance<'tcx>,
     site: ReferenceHelperCallSiteV2<'_, 'tcx>,
@@ -2721,7 +3055,7 @@ fn lower_safe_scalar_helper_call_v2<'tcx>(
             "recursive safe reference helpers are unsupported",
         ));
     }
-    authenticate_safe_local_reference(tcx, helper)?;
+    authenticate_safe_local_reference_v1(meter, tcx, helper)?;
     let signature = instantiated_signature(tcx, helper);
     if signature.inputs().len() > MAX_REFERENCE_HELPER_ARGUMENTS_V2 {
         return Err(ReferenceBindingErrorV1::at(
@@ -2742,6 +3076,7 @@ fn lower_safe_scalar_helper_call_v2<'tcx>(
             "safe helper MIR argument count disagrees with its instantiated signature",
         ));
     }
+    meter.rows::<ReferenceScalarTypeV1>(arguments.len())?;
     let parameters = signature
         .inputs()
         .iter()
@@ -2749,6 +3084,7 @@ fn lower_safe_scalar_helper_call_v2<'tcx>(
         .zip(arguments)
         .enumerate()
         .map(|(index, (expected, argument))| {
+            meter.charge(1)?;
             let scalar = scalar_type_v1(expected).ok_or_else(|| {
                 ReferenceBindingErrorV1::at(
                     tcx,
@@ -2792,17 +3128,19 @@ fn lower_safe_scalar_helper_call_v2<'tcx>(
             "safe helper return destination type disagrees with its instantiated signature",
         ));
     }
-    let summary = lower_safe_scalar_helper_summary_v2(tcx, helper, &parameters)?;
+    let summary = lower_safe_scalar_helper_summary_v2(meter, tcx, helper, &parameters)?;
+    meter.rows::<ReferenceOperandV1>(arguments.len())?;
+    meter.rows::<ReferenceEffectExpressionV1>(1)?;
     Ok(ReferenceAssignmentV1 {
         statement,
-        destination: lower_place_v1(tcx, body, destination, block)?,
+        destination: lower_place_v1(meter, tcx, body, destination, block)?,
         value: ReferenceValueV1::SafeHelperCall {
-            helper: function_identity_v1(tcx, helper),
+            helper: function_identity_v1(meter, tcx, helper)?,
             parameters: parameters.into_boxed_slice(),
             result,
             arguments: arguments
                 .iter()
-                .map(|argument| lower_operand_v1(tcx, body, &argument.node, block))
+                .map(|argument| lower_operand_v1(meter, tcx, body, &argument.node, block))
                 .collect::<Result<Vec<_>, _>>()?
                 .into_boxed_slice(),
             summary: Box::new(summary),
@@ -2811,17 +3149,12 @@ fn lower_safe_scalar_helper_call_v2<'tcx>(
 }
 
 fn lower_safe_scalar_helper_summary_v2<'tcx>(
+    meter: &ReferenceExtractionWorkV1<'_>,
     tcx: TyCtxt<'tcx>,
     helper: Instance<'tcx>,
     parameters: &[ReferenceScalarTypeV1],
 ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
     let body = tcx.instance_mir(helper.def);
-    reject_cycles_v1(tcx, body).map_err(|_| {
-        ReferenceBindingErrorV1::new(format!(
-            "safe helper '{}' contains a loop; helper summaries must be acyclic",
-            tcx.def_path_str(helper.def_id()),
-        ))
-    })?;
     if body.basic_blocks.len() > MAX_REFERENCE_BLOCKS_V1 {
         return Err(ReferenceBindingErrorV1::new(format!(
             "safe helper '{}' has {} MIR blocks; maximum is {MAX_REFERENCE_BLOCKS_V1}",
@@ -2829,6 +3162,9 @@ fn lower_safe_scalar_helper_summary_v2<'tcx>(
             body.basic_blocks.len(),
         )));
     }
+    // Preserve shared-work exhaustion instead of relabeling it as a loop refusal.
+    reject_cycles_v1(meter, tcx, body)?;
+    meter.charge(body.basic_blocks.len())?;
     let statement_count = body
         .basic_blocks
         .iter()
@@ -2842,6 +3178,10 @@ fn lower_safe_scalar_helper_summary_v2<'tcx>(
         )));
     }
     for (local, declaration) in body.local_decls.iter_enumerated() {
+        meter.charge(1)?;
+        if let TyKind::Tuple(fields) = declaration.ty.kind() {
+            meter.charge(fields.len())?;
+        }
         if !supported_local_type_v1(declaration.ty) {
             return Err(ReferenceBindingErrorV1::new(format!(
                 "safe helper '{}' local _{} type '{}' is unsupported",
@@ -2851,20 +3191,24 @@ fn lower_safe_scalar_helper_summary_v2<'tcx>(
             )));
         }
     }
+    meter.rows::<ReferenceBlockV1>(body.basic_blocks.len())?;
     let mut blocks = Vec::with_capacity(body.basic_blocks.len());
     for (block_id, block) in body.basic_blocks.iter_enumerated() {
+        meter.charge(1)?;
         let block_index = block_id.as_usize();
         let mut assignments = Vec::new();
         for (statement_index, statement) in block.statements.iter().enumerate() {
+            meter.charge(1)?;
             match &statement.kind {
                 StatementKind::Assign(assignment) => {
                     let (destination, value) = &**assignment;
+                    meter.grow::<ReferenceAssignmentV1>(assignments.len())?;
                     assignments.push(ReferenceAssignmentV1 {
                         statement: u32::try_from(statement_index).map_err(|_| {
                             ReferenceBindingErrorV1::new("safe helper statement index exceeds u32")
                         })?,
-                        destination: lower_place_v1(tcx, body, *destination, block_index)?,
-                        value: lower_rvalue_v1(tcx, body, value, block_index)?,
+                        destination: lower_place_v1(meter, tcx, body, *destination, block_index)?,
+                        value: lower_rvalue_v1(meter, tcx, body, value, block_index)?,
                     });
                 }
                 StatementKind::StorageLive(_)
@@ -2880,6 +3224,7 @@ fn lower_safe_scalar_helper_summary_v2<'tcx>(
                 }
             }
         }
+        meter.charge(1)?;
         let terminator = match &block.terminator().kind {
             TerminatorKind::Return => ReferenceTerminatorV1::Return,
             TerminatorKind::Goto { target } => ReferenceTerminatorV1::Goto {
@@ -2903,7 +3248,7 @@ fn lower_safe_scalar_helper_summary_v2<'tcx>(
                 ) =>
             {
                 ReferenceTerminatorV1::Assert {
-                    condition: lower_operand_v1(tcx, body, cond, block_index)?,
+                    condition: lower_operand_v1(meter, tcx, body, cond, block_index)?,
                     expected: *expected,
                     success: target.as_u32(),
                     bounds_check: None,
@@ -2958,6 +3303,7 @@ fn lower_safe_scalar_helper_summary_v2<'tcx>(
             terminator,
         });
     }
+    meter.rows::<ReferenceArgumentRelationV1>(parameters.len())?;
     let relations = parameters
         .iter()
         .copied()
@@ -2980,7 +3326,7 @@ fn lower_safe_scalar_helper_summary_v2<'tcx>(
         loop_summaries: Box::default(),
         observable_output_effects: Box::default(),
     };
-    ReferenceExpressionResolverV1::new(&effect_ir)?.resolve_local_v1(0)
+    ReferenceExpressionResolverV1::new(meter, &effect_ir)?.resolve_local_v1(meter, 0)
 }
 
 struct ReferenceExpressionResolverV1<'a> {
@@ -2990,11 +3336,17 @@ struct ReferenceExpressionResolverV1<'a> {
 }
 
 impl<'a> ReferenceExpressionResolverV1<'a> {
-    fn new(effect_ir: &'a ReferenceEffectIrV1) -> Result<Self, ReferenceBindingErrorV1> {
+    fn new(
+        meter: &ReferenceExtractionWorkV1<'_>,
+        effect_ir: &'a ReferenceEffectIrV1,
+    ) -> Result<Self, ReferenceBindingErrorV1> {
+        meter.charge(1)?;
         let mut definitions = BTreeMap::new();
         let mut ambiguous_definitions = BTreeSet::new();
         for block in &effect_ir.blocks {
+            meter.charge(1)?;
             for assignment in &block.assignments {
+                meter.charge(1)?;
                 if !assignment.destination.projection.is_empty() {
                     continue;
                 }
@@ -3006,6 +3358,8 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                         assignment.destination.local,
                     )));
                 }
+                meter.tree::<(u32, &ReferenceValueV1)>(definitions.len())?;
+                meter.tree::<u32>(ambiguous_definitions.len())?;
                 if definitions
                     .insert(assignment.destination.local, &assignment.value)
                     .is_some()
@@ -3023,19 +3377,25 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
 
     fn resolve_local_v1(
         &self,
+        meter: &ReferenceExtractionWorkV1<'_>,
         local: u32,
     ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
-        self.resolve_local_inner_v1(local, &mut BTreeSet::new(), &mut 0, 0)
+        self.resolve_local_inner_v1(meter, local, &mut BTreeSet::new(), &mut 0, 0)
     }
 
     fn resolve_value_v1(
         &self,
+        meter: &ReferenceExtractionWorkV1<'_>,
         value: &ReferenceValueV1,
     ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
-        self.resolve_value_inner_v1(value, &mut BTreeSet::new(), &mut 0, 0)
+        self.resolve_value_inner_v1(meter, value, &mut BTreeSet::new(), &mut 0, 0)
     }
 
-    fn charge_node_v1(work: &mut usize) -> Result<(), ReferenceBindingErrorV1> {
+    fn charge_node_v1(
+        meter: &ReferenceExtractionWorkV1<'_>,
+        work: &mut usize,
+    ) -> Result<(), ReferenceBindingErrorV1> {
+        meter.rows::<ReferenceEffectExpressionV1>(2)?;
         *work = work
             .checked_add(1)
             .ok_or_else(|| ReferenceBindingErrorV1::new("reference expression work overflowed"))?;
@@ -3059,13 +3419,18 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
 
     fn resolve_local_inner_v1(
         &self,
+        meter: &ReferenceExtractionWorkV1<'_>,
         local: u32,
         visiting: &mut BTreeSet<u32>,
         work: &mut usize,
         depth: usize,
     ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
         Self::require_depth_v1(depth)?;
-        Self::charge_node_v1(work)?;
+        Self::charge_node_v1(meter, work)?;
+        meter.product(self.effect_ir.relations.len(), 3)?;
+        meter.tree::<u32>(self.ambiguous_definitions.len())?;
+        meter.tree::<(u32, &ReferenceValueV1)>(self.definitions.len())?;
+        meter.tree::<u32>(visiting.len())?;
         if local > 0 && local <= self.effect_ir.argument_count {
             let reference_argument = local - 1;
             if let Some((axis, _)) =
@@ -3129,28 +3494,32 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                 "reference effect local _{local} has a cyclic scalar definition",
             )));
         }
-        let resolved = self.resolve_value_inner_v1(value, visiting, work, depth);
+        let resolved = self.resolve_value_inner_v1(meter, value, visiting, work, depth);
         visiting.remove(&local);
         resolved
     }
 
     fn resolve_operand_inner_v1(
         &self,
+        meter: &ReferenceExtractionWorkV1<'_>,
         operand: &ReferenceOperandV1,
         visiting: &mut BTreeSet<u32>,
         work: &mut usize,
         depth: usize,
     ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
         Self::require_depth_v1(depth)?;
+        meter.charge(meter.operand(operand)?)?;
+        meter.tree::<(u32, &ReferenceValueV1)>(self.definitions.len())?;
+        meter.product(self.effect_ir.relations.len(), 2)?;
         match operand {
             ReferenceOperandV1::Constant(constant) => {
-                Self::charge_node_v1(work)?;
+                Self::charge_node_v1(meter, work)?;
                 Ok(ReferenceEffectExpressionV1::Constant(constant.clone()))
             }
             ReferenceOperandV1::Copy(place) | ReferenceOperandV1::Move(place)
                 if place.projection.is_empty() =>
             {
-                self.resolve_local_inner_v1(place.local, visiting, work, depth)
+                self.resolve_local_inner_v1(meter, place.local, visiting, work, depth)
             }
             ReferenceOperandV1::Copy(place) | ReferenceOperandV1::Move(place)
                 if matches!(
@@ -3166,7 +3535,7 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                 })?;
                 match value {
                     ReferenceValueV1::Binary { checked: true, .. } => {
-                        self.resolve_value_inner_v1(value, visiting, work, depth + 1)
+                        self.resolve_value_inner_v1(meter, value, visiting, work, depth + 1)
                     }
                     _ => Err(ReferenceBindingErrorV1::new(format!(
                         "reference field projection {:?} is not the value field of one checked scalar operation",
@@ -3213,10 +3582,11 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                         "safe reference load base is not a shared-slice input",
                     ));
                 }
-                Self::charge_node_v1(work)?;
+                Self::charge_node_v1(meter, work)?;
                 Ok(ReferenceEffectExpressionV1::InputLoad {
                     reference_argument,
                     index: Box::new(self.resolve_local_inner_v1(
+                        meter,
                         *index,
                         visiting,
                         work,
@@ -3235,16 +3605,17 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
 
     fn resolve_value_inner_v1(
         &self,
+        meter: &ReferenceExtractionWorkV1<'_>,
         value: &ReferenceValueV1,
         visiting: &mut BTreeSet<u32>,
         work: &mut usize,
         depth: usize,
     ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
         Self::require_depth_v1(depth)?;
-        Self::charge_node_v1(work)?;
+        Self::charge_node_v1(meter, work)?;
         match value {
             ReferenceValueV1::Use(operand) => {
-                self.resolve_operand_inner_v1(operand, visiting, work, depth + 1)
+                self.resolve_operand_inner_v1(meter, operand, visiting, work, depth + 1)
             }
             ReferenceValueV1::Binary {
                 operation,
@@ -3253,14 +3624,27 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                 checked,
             } => Ok(ReferenceEffectExpressionV1::Binary {
                 operation: *operation,
-                lhs: Box::new(self.resolve_operand_inner_v1(lhs, visiting, work, depth + 1)?),
-                rhs: Box::new(self.resolve_operand_inner_v1(rhs, visiting, work, depth + 1)?),
+                lhs: Box::new(self.resolve_operand_inner_v1(
+                    meter,
+                    lhs,
+                    visiting,
+                    work,
+                    depth + 1,
+                )?),
+                rhs: Box::new(self.resolve_operand_inner_v1(
+                    meter,
+                    rhs,
+                    visiting,
+                    work,
+                    depth + 1,
+                )?),
                 checked: *checked,
             }),
             ReferenceValueV1::Unary { operation, operand } => {
                 Ok(ReferenceEffectExpressionV1::Unary {
                     operation: *operation,
                     operand: Box::new(self.resolve_operand_inner_v1(
+                        meter,
                         operand,
                         visiting,
                         work,
@@ -3278,6 +3662,7 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                 source: *source,
                 target: *target,
                 operand: Box::new(self.resolve_operand_inner_v1(
+                    meter,
                     operand,
                     visiting,
                     work,
@@ -3300,34 +3685,38 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                         "authenticated safe helper summary argument count changed",
                     ));
                 }
+                meter.rows::<ReferenceEffectExpressionV1>(arguments.len())?;
                 let arguments = arguments
                     .iter()
                     .map(|argument| {
-                        self.resolve_operand_inner_v1(argument, visiting, work, depth + 1)
+                        self.resolve_operand_inner_v1(meter, argument, visiting, work, depth + 1)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                substitute_helper_summary_v2(summary, &arguments, work, depth + 1)
+                substitute_helper_summary_v2(meter, summary, &arguments, work, depth + 1)
             }
         }
     }
 }
 
 fn substitute_helper_summary_v2(
+    meter: &ReferenceExtractionWorkV1<'_>,
     expression: &ReferenceEffectExpressionV1,
     arguments: &[ReferenceEffectExpressionV1],
     work: &mut usize,
     depth: usize,
 ) -> Result<ReferenceEffectExpressionV1, ReferenceBindingErrorV1> {
     ReferenceExpressionResolverV1::require_depth_v1(depth)?;
-    ReferenceExpressionResolverV1::charge_node_v1(work)?;
+    ReferenceExpressionResolverV1::charge_node_v1(meter, work)?;
     Ok(match expression {
         ReferenceEffectExpressionV1::KernelScalarArgument { argument } => {
-            arguments.get(*argument as usize).cloned().ok_or_else(|| {
+            let argument = arguments.get(*argument as usize).ok_or_else(|| {
                 ReferenceBindingErrorV1::new(format!(
                     "safe helper summary refers to missing argument {}",
                     argument + 1,
                 ))
-            })?
+            })?;
+            meter.clone_expression(argument)?;
+            argument.clone()
         }
         ReferenceEffectExpressionV1::PointCoordinate { .. } => {
             return Err(ReferenceBindingErrorV1::new(
@@ -3355,12 +3744,14 @@ fn substitute_helper_summary_v2(
         } => ReferenceEffectExpressionV1::Binary {
             operation: *operation,
             lhs: Box::new(substitute_helper_summary_v2(
+                meter,
                 lhs,
                 arguments,
                 work,
                 depth + 1,
             )?),
             rhs: Box::new(substitute_helper_summary_v2(
+                meter,
                 rhs,
                 arguments,
                 work,
@@ -3372,6 +3763,7 @@ fn substitute_helper_summary_v2(
             ReferenceEffectExpressionV1::Unary {
                 operation: *operation,
                 operand: Box::new(substitute_helper_summary_v2(
+                    meter,
                     operand,
                     arguments,
                     work,
@@ -3389,6 +3781,7 @@ fn substitute_helper_summary_v2(
             source: *source,
             target: *target,
             operand: Box::new(substitute_helper_summary_v2(
+                meter,
                 operand,
                 arguments,
                 work,
@@ -3399,26 +3792,34 @@ fn substitute_helper_summary_v2(
 }
 
 fn reference_block_path_predicates_v1(
+    meter: &ReferenceExtractionWorkV1<'_>,
     effect_ir: &ReferenceEffectIrV1,
 ) -> Result<Vec<ReferencePathPredicateV1>, ReferenceBindingErrorV1> {
     let block_count = effect_ir.blocks.len();
+    meter.charge(1)?;
     if block_count == 0 {
         return Err(ReferenceBindingErrorV1::new(
             "reference effect IR has no entry block",
         ));
     }
     for (index, block) in effect_ir.blocks.iter().enumerate() {
+        meter.charge(1)?;
         if block.block as usize != index {
             return Err(ReferenceBindingErrorV1::new(
                 "reference effect block identities are not contiguous",
             ));
         }
     }
-    let resolver = ReferenceExpressionResolverV1::new(effect_ir)?;
+    let resolver = ReferenceExpressionResolverV1::new(meter, effect_ir)?;
+    meter.rows::<BTreeSet<usize>>(block_count)?;
+    meter.rows::<usize>(block_count)?;
     let mut successors = vec![BTreeSet::new(); block_count];
     let mut indegree = vec![0_usize; block_count];
     for block in &effect_ir.blocks {
+        meter.charge(1)?;
         for target in reference_successors_v1(&block.terminator) {
+            meter.charge(1)?;
+            meter.tree::<usize>(successors[block.block as usize].len())?;
             let target_index = target as usize;
             if target_index >= block_count {
                 return Err(ReferenceBindingErrorV1::new(
@@ -3433,29 +3834,43 @@ fn reference_block_path_predicates_v1(
             }
         }
     }
+    meter.rows::<usize>(indegree.len())?;
     let mut pending = indegree
         .iter()
         .enumerate()
         .filter_map(|(block, degree)| (*degree == 0).then_some(block))
         .collect::<VecDeque<_>>();
+    meter.rows::<ReferencePathPredicateV1>(block_count)?;
+    meter.rows::<ReferenceGuardClauseV1>(1)?;
     let mut predicates = vec![ReferencePathPredicateV1::unreachable_v1(); block_count];
     predicates[0] = ReferencePathPredicateV1::unconditional_v1();
     let mut visited = 0_usize;
     while let Some(block_index) = pending.pop_front() {
+        meter.charge(1)?;
         visited += 1;
+        meter.clone_predicate(&predicates[block_index])?;
         let source = predicates[block_index].clone();
         for (target, atom) in
-            reference_guarded_edges_v1(&effect_ir.blocks[block_index].terminator, &resolver)?
+            reference_guarded_edges_v1(meter, &effect_ir.blocks[block_index].terminator, &resolver)?
         {
             let contribution = match atom {
-                Some(atom) => reference_predicate_and_atom_v1(&source, atom)?,
-                None => source.clone(),
+                Some(atom) => reference_predicate_and_atom_v1(meter, &source, atom)?,
+                None => {
+                    meter.clone_predicate(&source)?;
+                    source.clone()
+                }
             };
-            reference_predicate_or_assign_v1(&mut predicates[target as usize], contribution)?;
+            reference_predicate_or_assign_v1(
+                meter,
+                &mut predicates[target as usize],
+                contribution,
+            )?;
         }
         for target in &successors[block_index] {
+            meter.charge(1)?;
             indegree[*target] -= 1;
             if indegree[*target] == 0 {
+                meter.grow::<usize>(pending.len())?;
                 pending.push_back(*target);
             }
         }
@@ -3468,25 +3883,24 @@ fn reference_block_path_predicates_v1(
     Ok(predicates)
 }
 
-fn reference_successors_v1(terminator: &ReferenceTerminatorV1) -> Vec<u32> {
-    match terminator {
-        ReferenceTerminatorV1::Return => Vec::new(),
-        ReferenceTerminatorV1::Goto { target } => vec![*target],
+fn reference_successors_v1(terminator: &ReferenceTerminatorV1) -> impl Iterator<Item = u32> + '_ {
+    let (values, tail): (&[(u128, u32)], Option<u32>) = match terminator {
+        ReferenceTerminatorV1::Return => (&[], None),
+        ReferenceTerminatorV1::Goto { target } => (&[], Some(*target)),
         ReferenceTerminatorV1::Switch {
             values, otherwise, ..
-        } => values
-            .iter()
-            .map(|(_, target)| *target)
-            .chain(std::iter::once(*otherwise))
-            .collect(),
-        ReferenceTerminatorV1::Assert { success, .. } => vec![*success],
-    }
+        } => (values, Some(*otherwise)),
+        ReferenceTerminatorV1::Assert { success, .. } => (&[], Some(*success)),
+    };
+    values.iter().map(|(_, target)| *target).chain(tail)
 }
 
 fn reference_guarded_edges_v1(
+    meter: &ReferenceExtractionWorkV1<'_>,
     terminator: &ReferenceTerminatorV1,
     resolver: &ReferenceExpressionResolverV1<'_>,
 ) -> Result<Vec<(u32, Option<ReferenceGuardAtomV1>)>, ReferenceBindingErrorV1> {
+    meter.rows::<(u32, Option<ReferenceGuardAtomV1>)>(1)?;
     match terminator {
         ReferenceTerminatorV1::Return => Ok(Vec::new()),
         ReferenceTerminatorV1::Goto { target } => Ok(vec![(*target, None)]),
@@ -3502,6 +3916,7 @@ fn reference_guarded_edges_v1(
             } else {
                 Some(ReferenceGuardAtomV1::Assert {
                     condition: resolver.resolve_operand_inner_v1(
+                        meter,
                         condition,
                         &mut BTreeSet::new(),
                         &mut 0,
@@ -3516,18 +3931,31 @@ fn reference_guarded_edges_v1(
             values,
             otherwise,
         } => {
-            let expression =
-                resolver.resolve_operand_inner_v1(discriminant, &mut BTreeSet::new(), &mut 0, 1)?;
+            let expression = resolver.resolve_operand_inner_v1(
+                meter,
+                discriminant,
+                &mut BTreeSet::new(),
+                &mut 0,
+                1,
+            )?;
             let mut by_target = BTreeMap::<u32, Vec<u128>>::new();
+            meter.rows::<u128>(values.len())?;
             let mut all_values = Vec::with_capacity(values.len());
             for (value, target) in values {
-                by_target.entry(*target).or_default().push(*value);
+                meter.tree::<(u32, Vec<u128>)>(by_target.len())?;
+                let accepted = by_target.entry(*target).or_default();
+                meter.grow::<u128>(accepted.len())?;
+                accepted.push(*value);
                 all_values.push(*value);
             }
+            meter.sort(all_values.len(), all_values.len())?;
             all_values.sort_unstable();
             all_values.dedup();
+            meter.rows::<(u32, Option<ReferenceGuardAtomV1>)>(by_target.len() + 1)?;
             let mut edges = Vec::with_capacity(by_target.len() + 1);
             for (target, mut accepted) in by_target {
+                meter.sort(accepted.len(), accepted.len())?;
+                meter.clone_expression(&expression)?;
                 accepted.sort_unstable();
                 accepted.dedup();
                 edges.push((
@@ -3553,11 +3981,21 @@ fn reference_guarded_edges_v1(
 }
 
 fn reference_predicate_and_atom_v1(
+    meter: &ReferenceExtractionWorkV1<'_>,
     predicate: &ReferencePathPredicateV1,
     atom: ReferenceGuardAtomV1,
 ) -> Result<ReferencePathPredicateV1, ReferenceBindingErrorV1> {
+    meter.rows::<ReferenceGuardClauseV1>(predicate.clauses.len())?;
+    let atom_units = meter.atom(&atom)?;
     let mut clauses = Vec::with_capacity(predicate.clauses.len());
     for clause in &predicate.clauses {
+        let units = reference_extraction_work_v1::add(
+            meter.clauses(std::slice::from_ref(clause))?,
+            atom_units,
+        )?;
+        meter.charge(units)?;
+        meter.grow::<ReferenceGuardAtomV1>(clause.atoms.len())?;
+        meter.sort(clause.atoms.len() + 1, units)?;
         let mut atoms = clause.atoms.to_vec();
         atoms.push(atom.clone());
         atoms.sort();
@@ -3566,22 +4004,29 @@ fn reference_predicate_and_atom_v1(
             atoms: atoms.into_boxed_slice(),
         });
     }
-    reference_normalize_predicate_v1(clauses)
+    reference_normalize_predicate_v1(meter, clauses)
 }
 
 fn reference_predicate_or_assign_v1(
+    meter: &ReferenceExtractionWorkV1<'_>,
     target: &mut ReferencePathPredicateV1,
     source: ReferencePathPredicateV1,
 ) -> Result<(), ReferenceBindingErrorV1> {
+    meter.clone_predicate(target)?;
+    let count = reference_extraction_work_v1::add(target.clauses.len(), source.clauses.len())?;
+    meter.rows::<ReferenceGuardClauseV1>(count)?;
     let mut clauses = target.clauses.to_vec();
     clauses.extend(source.clauses);
-    *target = reference_normalize_predicate_v1(clauses)?;
+    *target = reference_normalize_predicate_v1(meter, clauses)?;
     Ok(())
 }
 
 fn reference_normalize_predicate_v1(
+    meter: &ReferenceExtractionWorkV1<'_>,
     mut clauses: Vec<ReferenceGuardClauseV1>,
 ) -> Result<ReferencePathPredicateV1, ReferenceBindingErrorV1> {
+    let units = meter.clauses(&clauses)?;
+    meter.sort(clauses.len(), units)?;
     clauses.sort();
     clauses.dedup();
     if clauses.len() > MAX_REFERENCE_GUARD_CLAUSES_V1 {
@@ -3590,6 +4035,7 @@ fn reference_normalize_predicate_v1(
             clauses.len(),
         )));
     }
+    meter.charge(clauses.len())?;
     let atoms = clauses.iter().try_fold(0_usize, |total, clause| {
         total.checked_add(clause.atoms.len())
     });
@@ -3603,15 +4049,23 @@ fn reference_normalize_predicate_v1(
     })
 }
 
-fn reject_cycles_v1(tcx: TyCtxt<'_>, body: &Body<'_>) -> Result<(), ReferenceBindingErrorV1> {
+fn reject_cycles_v1(
+    meter: &ReferenceExtractionWorkV1<'_>,
+    tcx: TyCtxt<'_>,
+    body: &Body<'_>,
+) -> Result<(), ReferenceBindingErrorV1> {
+    meter.rows::<usize>(body.basic_blocks.len())?;
     let mut indegree = vec![0_usize; body.basic_blocks.len()];
     for block in body.basic_blocks.iter() {
+        meter.charge(1)?;
         for successor in block.terminator().successors() {
+            meter.charge(1)?;
             indegree[successor.as_usize()] = indegree[successor.as_usize()]
                 .checked_add(1)
                 .ok_or_else(|| ReferenceBindingErrorV1::new("reference CFG indegree overflowed"))?;
         }
     }
+    meter.rows::<usize>(indegree.len())?;
     let mut pending = indegree
         .iter()
         .enumerate()
@@ -3619,19 +4073,23 @@ fn reject_cycles_v1(tcx: TyCtxt<'_>, body: &Body<'_>) -> Result<(), ReferenceBin
         .collect::<VecDeque<_>>();
     let mut visited = 0_usize;
     while let Some(block) = pending.pop_front() {
+        meter.charge(1)?;
         visited += 1;
         for successor in body.basic_blocks[rustc_middle::mir::BasicBlock::from_usize(block)]
             .terminator()
             .successors()
         {
+            meter.charge(1)?;
             let degree = &mut indegree[successor.as_usize()];
             *degree -= 1;
             if *degree == 0 {
+                meter.grow::<usize>(pending.len())?;
                 pending.push_back(successor.as_usize());
             }
         }
     }
     if visited != body.basic_blocks.len() {
+        meter.charge(indegree.len())?;
         let cyclic = indegree
             .iter()
             .enumerate()
@@ -3641,14 +4099,16 @@ fn reject_cycles_v1(tcx: TyCtxt<'_>, body: &Body<'_>) -> Result<(), ReferenceBin
             tcx,
             body,
             cyclic,
-            "cyclic control flow is outside the acyclic helper-summary boundary",
+            "cyclic control flow is outside the metered acyclic reference/helper extraction boundary",
         ));
     }
     Ok(())
 }
 
 fn supported_local_type_v1(ty: Ty<'_>) -> bool {
-    if ty.is_unit() || scalar_type_v1(ty).is_some() {
+    // Rustc can retain unused never temporaries for ordinary loops. They carry
+    // no value; lower_place_v1 rejects every executable access to such a local.
+    if ty.is_unit() || ty.is_never() || scalar_type_v1(ty).is_some() {
         return true;
     }
     match *ty.kind() {
@@ -3662,13 +4122,29 @@ fn supported_local_type_v1(ty: Ty<'_>) -> bool {
 }
 
 fn lower_place_v1<'tcx>(
+    meter: &ReferenceExtractionWorkV1<'_>,
     tcx: TyCtxt<'tcx>,
     body: &Body<'tcx>,
     place: Place<'tcx>,
     block: usize,
 ) -> Result<ReferencePlaceV1, ReferenceBindingErrorV1> {
+    meter.charge(1)?;
+    let declaration = body
+        .local_decls
+        .get(place.local)
+        .ok_or_else(|| ReferenceBindingErrorV1::new("reference place local is absent"))?;
+    if declaration.ty.is_never() {
+        return Err(ReferenceBindingErrorV1::at(
+            tcx,
+            body,
+            block,
+            "reference value access to an uninhabited local is unsupported",
+        ));
+    }
+    meter.rows::<ReferencePlaceProjectionV1>(place.projection.len())?;
     let mut projection = Vec::with_capacity(place.projection.len());
     for element in place.projection {
+        meter.charge(1)?;
         projection.push(match element {
             ProjectionElem::Deref => ReferencePlaceProjectionV1::Dereference,
             ProjectionElem::Field(field, _) => ReferencePlaceProjectionV1::Field(field.as_u32()),
@@ -3701,17 +4177,19 @@ fn lower_place_v1<'tcx>(
 }
 
 fn lower_operand_v1<'tcx>(
+    meter: &ReferenceExtractionWorkV1<'_>,
     tcx: TyCtxt<'tcx>,
     body: &Body<'tcx>,
     operand: &Operand<'tcx>,
     block: usize,
 ) -> Result<ReferenceOperandV1, ReferenceBindingErrorV1> {
+    meter.rows::<ReferenceOperandV1>(1)?;
     match operand {
         Operand::Copy(place) => Ok(ReferenceOperandV1::Copy(lower_place_v1(
-            tcx, body, *place, block,
+            meter, tcx, body, *place, block,
         )?)),
         Operand::Move(place) => Ok(ReferenceOperandV1::Move(lower_place_v1(
-            tcx, body, *place, block,
+            meter, tcx, body, *place, block,
         )?)),
         Operand::Constant(constant) => {
             let ty = constant.const_.ty();
@@ -3747,14 +4225,16 @@ fn lower_operand_v1<'tcx>(
 }
 
 fn lower_rvalue_v1<'tcx>(
+    meter: &ReferenceExtractionWorkV1<'_>,
     tcx: TyCtxt<'tcx>,
     body: &Body<'tcx>,
     value: &Rvalue<'tcx>,
     block: usize,
 ) -> Result<ReferenceValueV1, ReferenceBindingErrorV1> {
+    meter.rows::<ReferenceValueV1>(1)?;
     match value {
         Rvalue::Use(operand) => Ok(ReferenceValueV1::Use(lower_operand_v1(
-            tcx, body, operand, block,
+            meter, tcx, body, operand, block,
         )?)),
         Rvalue::BinaryOp(operation, operands) => {
             let checked = matches!(
@@ -3773,8 +4253,8 @@ fn lower_rvalue_v1<'tcx>(
                         ),
                     )
                 })?,
-                lhs: lower_operand_v1(tcx, body, lhs, block)?,
-                rhs: lower_operand_v1(tcx, body, rhs, block)?,
+                lhs: lower_operand_v1(meter, tcx, body, lhs, block)?,
+                rhs: lower_operand_v1(meter, tcx, body, rhs, block)?,
                 checked,
             })
         }
@@ -3805,7 +4285,7 @@ fn lower_rvalue_v1<'tcx>(
                 UnOp::Neg => ReferenceUnaryOpV1::Negate,
                 UnOp::PtrMetadata => unreachable!(),
             },
-            operand: lower_operand_v1(tcx, body, operand, block)?,
+            operand: lower_operand_v1(meter, tcx, body, operand, block)?,
         }),
         Rvalue::Cast(kind, operand, target) => {
             let source = scalar_type_v1(operand.ty(body, tcx)).ok_or_else(|| {
@@ -3844,7 +4324,7 @@ fn lower_rvalue_v1<'tcx>(
                 kind,
                 source,
                 target,
-                operand: lower_operand_v1(tcx, body, operand, block)?,
+                operand: lower_operand_v1(meter, tcx, body, operand, block)?,
             })
         }
         Rvalue::Ref(..) => Err(ReferenceBindingErrorV1::at(
@@ -4282,8 +4762,9 @@ mod tests {
 
     #[test]
     fn derives_point_coordinate_guard_and_rhs_from_reference_ir() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let effect_ir = guarded_point_reference_ir(vec![ReferencePlaceProjectionV1::Dereference]);
-        let writes = effect_ir.observable_output_writes_v1().unwrap();
+        let writes = effect_ir.observable_output_writes_v1(meter).unwrap();
         assert_eq!(writes.len(), 1);
         assert_eq!(
             writes[0].coordinate,
@@ -4315,6 +4796,7 @@ mod tests {
 
     #[test]
     fn target_only_output_relations_preserve_constant_writes() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let coordinate = guarded_point_reference_ir(vec![ReferencePlaceProjectionV1::Dereference]);
         let mut slice = guarded_point_reference_ir(vec![
             ReferencePlaceProjectionV1::Dereference,
@@ -4325,7 +4807,7 @@ mod tests {
             element: ReferenceScalarTypeV1::U32,
         };
         for effect_ir in [coordinate, slice] {
-            let writes = effect_ir.observable_output_writes_v1().unwrap();
+            let writes = effect_ir.observable_output_writes_v1(meter).unwrap();
             assert_eq!(writes.len(), 1);
             assert_eq!(writes[0].argument, 1);
             assert_eq!(
@@ -4337,6 +4819,7 @@ mod tests {
 
     #[test]
     fn target_only_output_coordinate_rejects_reference_reads() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let mut effect_ir =
             guarded_point_reference_ir(vec![ReferencePlaceProjectionV1::Dereference]);
         effect_ir.blocks[1].assignments[0].value =
@@ -4344,12 +4827,13 @@ mod tests {
                 local: 3,
                 projection: vec![ReferencePlaceProjectionV1::Dereference].into_boxed_slice(),
             }));
-        let error = effect_ir.observable_output_writes_v1().unwrap_err();
+        let error = effect_ir.observable_output_writes_v1(meter).unwrap_err();
         assert!(error.to_string().contains("unsupported place projection"));
     }
 
     #[test]
     fn target_only_output_slice_rejects_reference_reads() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let projection = vec![
             ReferencePlaceProjectionV1::Dereference,
             ReferencePlaceProjectionV1::Index(1),
@@ -4364,17 +4848,18 @@ mod tests {
                 local: 3,
                 projection: projection.into_boxed_slice(),
             }));
-        let error = effect_ir.observable_output_writes_v1().unwrap_err();
+        let error = effect_ir.observable_output_writes_v1(meter).unwrap_err();
         assert!(error.to_string().contains("not a shared-slice input"));
     }
 
     #[test]
     fn refuses_to_omit_an_unsupported_observable_output_projection() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let effect_ir = guarded_point_reference_ir(vec![
             ReferencePlaceProjectionV1::Dereference,
             ReferencePlaceProjectionV1::Field(0),
         ]);
-        let error = effect_ir.observable_output_writes_v1().unwrap_err();
+        let error = effect_ir.observable_output_writes_v1(meter).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -4384,6 +4869,7 @@ mod tests {
 
     #[test]
     fn derives_multiple_observable_output_effects_without_collapsing_arguments() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let effect_ir = ReferenceEffectIrV1 {
             argument_count: 3,
             local_count: 4,
@@ -4431,7 +4917,7 @@ mod tests {
             loop_summaries: Box::default(),
             observable_output_effects: Box::default(),
         };
-        let writes = effect_ir.observable_output_writes_v1().unwrap();
+        let writes = effect_ir.observable_output_writes_v1(meter).unwrap();
         assert_eq!(writes.len(), 2);
         assert_eq!(
             writes
@@ -4481,19 +4967,20 @@ mod tests {
 
     #[test]
     fn reference_expression_resolution_enforces_128_level_depth_budget() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let boundary = alias_chain_reference_ir(128);
         assert_eq!(
-            ReferenceExpressionResolverV1::new(&boundary)
+            ReferenceExpressionResolverV1::new(meter, &boundary)
                 .unwrap()
-                .resolve_local_v1(1)
+                .resolve_local_v1(meter, 1)
                 .unwrap(),
             ReferenceEffectExpressionV1::Constant(scalar_constant(17)),
         );
         for depth in [129, 4_096] {
             let overdeep = alias_chain_reference_ir(depth);
-            let error = ReferenceExpressionResolverV1::new(&overdeep)
+            let error = ReferenceExpressionResolverV1::new(meter, &overdeep)
                 .unwrap()
-                .resolve_local_v1(1)
+                .resolve_local_v1(meter, 1)
                 .unwrap_err();
             assert!(error.to_string().contains("exceeds 128 resolution levels"));
         }
@@ -4654,12 +5141,45 @@ mod tests {
     }
 
     #[test]
+    fn counted_loop_uses_inherited_work_without_changing_effects() {
+        use fe2o3_mir_model::semantic_mir_v1::HARD_MAX_VALIDATION_WORK_V1;
+        let ir = counted_loop_reference_ir(scalar_operand(4));
+        let derive = |meter: &ReferenceExtractionWorkV1<'_>| {
+            let backedges = reference_cfg_backedges_v2(meter, &ir)?;
+            validate_reference_loop_shapes_v2(meter, &ir, &backedges)?;
+            ir.observable_output_writes_with_loops_v2(meter, &backedges)
+        };
+        let expected = derive(&ReferenceExtractionWorkV1::Inspection).unwrap();
+        let mut measured = SourceClosureWorkV1::default();
+        measured.charge(17).unwrap();
+        assert_eq!(
+            derive(&ReferenceExtractionWorkV1::borrowed(&mut measured)).unwrap(),
+            expected
+        );
+        let cost = measured.validation_work_for_test() - 17;
+        assert!(cost > 0 && cost < HARD_MAX_VALIDATION_WORK_V1);
+        for remaining in [cost, cost - 1, 0] {
+            let mut work = SourceClosureWorkV1::default();
+            work.charge((HARD_MAX_VALIDATION_WORK_V1 - remaining) as usize)
+                .unwrap();
+            let result = derive(&ReferenceExtractionWorkV1::borrowed(&mut work));
+            if remaining == cost {
+                assert_eq!(result.unwrap(), expected);
+                assert_eq!(work.validation_work_for_test(), HARD_MAX_VALIDATION_WORK_V1);
+            } else {
+                assert!(result.unwrap_err().to_string().contains("ValidationWork"));
+            }
+        }
+    }
+
+    #[test]
     fn exact_counted_loop_derives_loop_carried_value_and_recurrence_identity() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let effect_ir = counted_loop_reference_ir(scalar_operand(4));
-        let backedges = reference_cfg_backedges_v2(&effect_ir).unwrap();
+        let backedges = reference_cfg_backedges_v2(meter, &effect_ir).unwrap();
         assert_eq!(backedges, BTreeSet::from([(4, 1)]));
         let (writes, summaries) = effect_ir
-            .observable_output_writes_with_loops_v2(&backedges)
+            .observable_output_writes_with_loops_v2(meter, &backedges)
             .unwrap();
         assert_eq!(writes.len(), 1);
         assert_eq!(
@@ -4676,10 +5196,11 @@ mod tests {
 
     #[test]
     fn dynamic_loop_with_additional_carried_state_fails_closed() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let effect_ir = counted_loop_reference_ir(local(1));
-        let backedges = reference_cfg_backedges_v2(&effect_ir).unwrap();
+        let backedges = reference_cfg_backedges_v2(meter, &effect_ir).unwrap();
         let error = effect_ir
-            .observable_output_writes_with_loops_v2(&backedges)
+            .observable_output_writes_with_loops_v2(meter, &backedges)
             .unwrap_err();
         assert!(
             error
@@ -4691,6 +5212,7 @@ mod tests {
 
     #[test]
     fn dynamic_induction_only_loop_uses_the_unsigned_type_bound() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let effect_ir = ReferenceEffectIrV1 {
             argument_count: 2,
             local_count: 6,
@@ -4776,9 +5298,9 @@ mod tests {
             loop_summaries: Box::default(),
             observable_output_effects: Box::default(),
         };
-        let backedges = reference_cfg_backedges_v2(&effect_ir).unwrap();
+        let backedges = reference_cfg_backedges_v2(meter, &effect_ir).unwrap();
         let (writes, summaries) = effect_ir
-            .observable_output_writes_with_loops_v2(&backedges)
+            .observable_output_writes_with_loops_v2(meter, &backedges)
             .unwrap();
         assert_eq!(
             writes[0].rhs,
@@ -4790,6 +5312,7 @@ mod tests {
 
     #[test]
     fn helper_summary_substitutes_exact_call_arguments() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let mut effect_ir = alias_chain_reference_ir(2);
         effect_ir.blocks[0].assignments[0].value = ReferenceValueV1::SafeHelperCall {
             helper: ReferenceFunctionIdentityV1 {
@@ -4812,9 +5335,9 @@ mod tests {
             }),
         };
         assert_eq!(
-            ReferenceExpressionResolverV1::new(&effect_ir)
+            ReferenceExpressionResolverV1::new(meter, &effect_ir)
                 .unwrap()
-                .resolve_local_v1(1)
+                .resolve_local_v1(meter, 1)
                 .unwrap(),
             ReferenceEffectExpressionV1::Binary {
                 operation: ReferenceBinaryOpV1::Add,
@@ -4827,6 +5350,7 @@ mod tests {
 
     #[test]
     fn projected_slice_read_retains_its_exact_argument_and_index() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let environment = BTreeMap::from([(
             2,
             ReferenceSymbolicValueV2::Scalar(ReferenceEffectExpressionV1::PointCoordinate {
@@ -4834,6 +5358,7 @@ mod tests {
             }),
         )]);
         let value = symbolic_operand_v2(
+            meter,
             &environment,
             &ReferenceOperandV1::Copy(ReferencePlaceV1 {
                 local: 1,
@@ -4856,6 +5381,7 @@ mod tests {
 
     #[test]
     fn unproved_checked_overflow_is_rejected() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let mut environment = BTreeMap::new();
         environment.insert(
             3,
@@ -4864,7 +5390,7 @@ mod tests {
                 overflowed: None,
             },
         );
-        let error = symbolic_operand_v2(&environment, &checked_field(3, 1)).unwrap_err();
+        let error = symbolic_operand_v2(meter, &environment, &checked_field(3, 1)).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -4874,6 +5400,7 @@ mod tests {
 
     #[test]
     fn loop_iteration_resource_bound_fails_closed() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let mut state = ReferenceSymbolicStateV2 {
             block: 4,
             environment: BTreeMap::new(),
@@ -4893,6 +5420,7 @@ mod tests {
             )]),
         };
         let error = dispatch_symbolic_edge_v2(
+            meter,
             &mut VecDeque::new(),
             state.clone(),
             4,
@@ -4908,21 +5436,23 @@ mod tests {
 
     #[test]
     fn overlapping_or_nested_loop_regions_fail_before_symbolic_execution() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let mut overlapping = BTreeMap::new();
         overlapping.insert((2, 1), BTreeSet::from([1, 2, 3]));
         overlapping.insert((4, 3), BTreeSet::from([3, 4]));
-        let error = reject_overlapping_reference_loops_v2(&overlapping).unwrap_err();
+        let error = reject_overlapping_reference_loops_v2(meter, &overlapping).unwrap_err();
         assert!(error.to_string().contains("overlap or nest"));
 
         let disjoint = BTreeMap::from([
             ((2, 1), BTreeSet::from([1, 2])),
             ((4, 3), BTreeSet::from([3, 4])),
         ]);
-        reject_overlapping_reference_loops_v2(&disjoint).unwrap();
+        reject_overlapping_reference_loops_v2(meter, &disjoint).unwrap();
     }
 
     #[test]
     fn symbolic_unrolling_checks_depth_before_recursive_hashing() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let mut expression = ReferenceEffectExpressionV1::Constant(ReferenceConstantV1::Scalar {
             scalar: ReferenceScalarTypeV1::U64,
             bits: 1,
@@ -4933,7 +5463,7 @@ mod tests {
                 operand: Box::new(expression),
             };
         }
-        let error = require_symbolic_expression_budget_v2(&expression).unwrap_err();
+        let error = require_symbolic_expression_budget_v2(meter, &expression).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -4943,11 +5473,15 @@ mod tests {
 
     #[test]
     fn symbolic_execution_has_one_cumulative_expression_work_budget() {
+        let meter = &ReferenceExtractionWorkV1::Inspection;
         let mut budget = ReferenceSymbolicWorkBudgetV2 {
             charged_nodes: MAX_REFERENCE_SYMBOLIC_WORK_NODES_V2,
         };
         let error = budget
-            .charge_expression_v2(&ReferenceEffectExpressionV1::Constant(scalar_constant(1)))
+            .charge_expression_v2(
+                meter,
+                &ReferenceEffectExpressionV1::Constant(scalar_constant(1)),
+            )
             .unwrap_err();
         assert!(
             error

@@ -1648,6 +1648,46 @@ mod tests {
                 logical_kernel_name: "test".to_owned(),
                 kernel: identity,
                 reference: identity,
+                signature_preimage: {
+                    use crate::reference_effect_v1::reference_signature_preimage_v1::{
+                        ReferenceCarrierV1, ReferenceLogicalSignaturePreimageV1,
+                        ReferencePointeeV1, ReferenceRegionV1, ReferenceReturnShapeV1,
+                        ReferenceSignatureInputV1,
+                    };
+                    use fe2o3_mir_model::semantic_mir_v1::{
+                        SemanticExternAbiV1, SemanticFunctionSafetyV1, SemanticMutabilityV1,
+                    };
+
+                    let shared = ReferenceSignatureInputV1::Reference {
+                        region: ReferenceRegionV1::Erased,
+                        mutability: SemanticMutabilityV1::Immutable,
+                        pointee: ReferencePointeeV1::Slice(ReferenceScalarTypeV1::U32),
+                    };
+                    ReferenceLogicalSignaturePreimageV1::new(
+                        vec![
+                            shared,
+                            ReferenceSignatureInputV1::NominalOutput {
+                                carrier: ReferenceCarrierV1::DisjointSlice,
+                                element: ReferenceScalarTypeV1::U32,
+                            },
+                        ]
+                        .into_boxed_slice(),
+                        vec![
+                            shared,
+                            ReferenceSignatureInputV1::Reference {
+                                region: ReferenceRegionV1::Erased,
+                                mutability: SemanticMutabilityV1::Mutable,
+                                pointee: ReferencePointeeV1::Scalar(ReferenceScalarTypeV1::U32),
+                            },
+                        ]
+                        .into_boxed_slice(),
+                        ReferenceReturnShapeV1::Unit,
+                        SemanticExternAbiV1::Rust,
+                        SemanticFunctionSafetyV1::Safe,
+                        false,
+                    )
+                    .unwrap()
+                },
                 effect_ir_sha256: [8; 32],
                 effect_ir,
                 observable_output_writes: vec![outputs[0].clone(); output_count].into_boxed_slice(),
