@@ -52,6 +52,7 @@ use creation::{SdmaCreationEscrowV1, SdmaCreationProfileV1};
 mod xgmi_creation;
 pub use xgmi_creation::Gfx942NativeXgmiSdmaQueueCreationRootV1;
 mod xgmi_diagnostic;
+mod xgmi_retirement;
 #[cfg(feature = "hardware-diagnostic")]
 pub use xgmi_diagnostic::Gfx942XgmiCopyCallDiagnosticsV1;
 use xgmi_diagnostic::{CallTimer as XgmiCallTimer, Phase as XgmiCallPhase};
@@ -65,6 +66,7 @@ pub use persistent_wait_diagnostic::{
     Gfx942SdmaPersistentDiagnosticSleepCeilingV1, Gfx942SdmaPersistentWaitCountersV1,
     Gfx942SdmaPersistentWaitCpuV1, Gfx942SdmaPersistentWaitDiagnosticsV1,
 };
+mod owner_release;
 pub(crate) mod retained_release;
 mod single_copy;
 use multi_queue::next_striped_owner;
@@ -3729,6 +3731,7 @@ impl Gfx942SdmaQueueOwnerV1 {
 pub struct Gfx942NativeXgmiSdmaQueueV1 {
     route: crate::topology::Gfx942XgmiRouteV1,
     owner: Option<Gfx942SdmaQueueOwnerV1>,
+    retirement: xgmi_retirement::RetirementRoot,
 }
 
 /// Owner-free diagnostic. Terminal custody remains in the caller's creation root.
@@ -4081,6 +4084,18 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         self.owner.as_ref().map(Gfx942SdmaQueueOwnerV1::observation)
     }
 
+    fn require_live_queue_state_v1(&self) -> Result<(), Gfx942SdmaErrorV1> {
+        if !self.retirement.is_vacant() {
+            return Err(Gfx942SdmaErrorV1::Contract(
+                "XGMI retirement root is occupied",
+            ));
+        }
+        self.owner
+            .as_ref()
+            .ok_or(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA queue owner"))?
+            .require_live()
+    }
+
     /// Begins a bounded measurement/submission scope.
     ///
     /// Exact directional topology is freshly rediscovered here and again by
@@ -4093,6 +4108,7 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         source: &'a mut SharedGttMemorySessionV1,
         destination: &'a mut SharedGttMemorySessionV1,
     ) -> Result<Gfx942NativeXgmiSdmaBatchV1<'a>, Gfx942SdmaErrorV1> {
+        self.require_live_queue_state_v1()?;
         source.validate_gfx942_xgmi_route_with_peer(destination, self.route)?;
         self.owner
             .as_ref()
@@ -4141,6 +4157,13 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         copy_bytes: u32,
         currentness: XgmiRouteCurrentnessV1,
     ) -> Result<Gfx942SdmaCopyTicketV1, Gfx942XgmiCopyFailureV1> {
+        if let Err(error) = self.require_live_queue_state_v1() {
+            return Err(Gfx942XgmiCopyFailureV1::Recoverable {
+                error,
+                source,
+                destination,
+            });
+        }
         let mut source = Some(source);
         let mut destination = Some(destination);
         let preflight = (|| {
@@ -4290,6 +4313,9 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         currentness: XgmiRouteCurrentnessV1,
         timer: &mut XgmiCallTimer<DIAGNOSTIC>,
     ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, Gfx942XgmiBatchSubmissionFailureV1> {
+        if let Err(error) = self.require_live_queue_state_v1() {
+            return Err(Gfx942XgmiBatchSubmissionFailureV1::Recoverable { error, requests });
+        }
         if let Err(error) = timer.measure(XgmiCallPhase::Opening, || {
             Self::validate_route_currentness(
                 source_session,
@@ -4383,6 +4409,9 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         ticket: Gfx942SdmaCopyTicketV1,
         timer: &mut XgmiCallTimer<DIAGNOSTIC>,
     ) -> Result<Gfx942XgmiCopyPollV1, Gfx942XgmiCopyFailureV1> {
+        if let Err(error) = self.require_live_queue_state_v1() {
+            return Err(Gfx942XgmiCopyFailureV1::Retained { error, ticket });
+        }
         if let Err(error) = timer.measure(XgmiCallPhase::Opening, || {
             Self::validate_route_currentness(
                 source_session,
@@ -4429,6 +4458,7 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         destination_session: &mut SharedGttMemorySessionV1,
         tickets: &[Gfx942SdmaCopyTicketV1],
     ) -> Result<Gfx942SdmaQueueProgressObservationV1, Gfx942SdmaErrorV1> {
+        self.require_live_queue_state_v1()?;
         Self::validate_route_currentness(
             source_session,
             destination_session,
@@ -4513,6 +4543,9 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         timeout: Duration,
         currentness: XgmiRouteCurrentnessV1,
     ) -> Result<Vec<Gfx942XgmiCompletedCopyV1>, Gfx942XgmiBatchWaitFailureV1> {
+        if let Err(error) = self.require_live_queue_state_v1() {
+            return Err(Gfx942XgmiBatchWaitFailureV1::Retained { error, tickets });
+        }
         if let Err(error) = Self::validate_route_currentness(
             source_session,
             destination_session,
@@ -4558,6 +4591,9 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         timeout: Duration,
         currentness: XgmiRouteCurrentnessV1,
     ) -> Result<Gfx942XgmiCompletedCopyV1, Gfx942XgmiWaitFailureV1> {
+        if let Err(error) = self.require_live_queue_state_v1() {
+            return Err(Gfx942XgmiWaitFailureV1::Retained { error, ticket });
+        }
         if let Err(error) = Self::validate_route_currentness(
             source_session,
             destination_session,
@@ -4634,28 +4670,21 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
 
     /// Destroys the native queue and releases its retained resources.
     ///
-    /// Borrows the queue until native destruction succeeds. The subsequent
-    /// resource-release path still consumes the owner: errors or unwinds during
-    /// partial release do not guarantee exact retained custody and require
-    /// process teardown. The creation-root guarantee does not cover retirement.
+    /// Retains the owner and partial cleanup receipts through both directional
+    /// route checks. A terminal error or unwind requires process teardown;
+    /// dropping a queue with terminal retirement custody aborts. A structurally
+    /// valid live queue with pending work is rejected before any effects.
     pub fn destroy_and_release(
         &mut self,
         source: &mut SharedGttMemorySessionV1,
         destination: &mut SharedGttMemorySessionV1,
     ) -> Result<(), Gfx942SdmaErrorV1> {
-        source.validate_gfx942_xgmi_route_with_peer(destination, self.route)?;
-        self.owner
-            .as_mut()
-            .ok_or(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA queue owner"))?
-            .destroy_queue(source)?;
-        let owner = self
-            .owner
-            .take()
-            .ok_or(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA queue owner"))?;
-        owner.release_resources(source)?;
-        source
-            .validate_gfx942_xgmi_route_with_peer(destination, self.route)
-            .map_err(Into::into)
+        xgmi_retirement::retire(self, source, destination)
+    }
+
+    /// Observes terminal custody without granting retry or resource authority.
+    pub const fn has_terminal_retirement_v1(&self) -> bool {
+        !self.retirement.is_vacant()
     }
 }
 

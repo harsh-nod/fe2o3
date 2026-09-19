@@ -169,12 +169,19 @@ impl PrimaryReleaseMemoryV1 for Memory {
 }
 
 impl crate::sdma::retained_release::SdmaReleaseMemoryV1 for Memory {
-    fn sdma_release_currentness(&mut self) -> Result<(), MemorySessionError> {
-        memory_step("sdma-currentness")?;
-        self.primary_currentness()
-    }
     fn sdma_release_topology(&mut self) -> Result<(), MemorySessionError> {
         memory_step("sdma-topology")?;
+        self.primary_currentness()
+    }
+    fn sdma_release_poison(&mut self) {
+        self.primary_quarantine_release_v1();
+        trace().borrow_mut().poison = true;
+    }
+}
+
+impl crate::sdma::retained_release::SdmaOwnerReleaseMemoryV1 for Memory {
+    fn sdma_release_currentness(&mut self) -> Result<(), MemorySessionError> {
+        memory_step("sdma-currentness")?;
         self.primary_currentness()
     }
     fn sdma_destroy(
@@ -235,10 +242,6 @@ impl crate::sdma::retained_release::SdmaReleaseMemoryV1 for Memory {
         crate::queue_linux::doorbell_release_tests::release_local_doorbell(
             doorbell, progress, fault,
         )
-    }
-    fn sdma_release_poison(&mut self) {
-        self.primary_quarantine_release_v1();
-        trace().borrow_mut().poison = true;
     }
 }
 

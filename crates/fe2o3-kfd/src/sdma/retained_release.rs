@@ -2,67 +2,29 @@
 
 #![forbid(unsafe_code)]
 
+use super::owner_release::OwnerProgressV1;
+pub(crate) use super::owner_release::SdmaOwnerReleaseMemoryV1;
 use super::*;
+#[cfg(test)]
 use crate::queue_linux::LinuxDoorbellReleaseProgressV1;
-use crate::shared_memory::SdmaResourceCleanupCustodyV1;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 #[cfg(test)]
 pub(crate) mod fixture;
 
-pub(crate) trait SdmaReleaseMemoryV1 {
-    fn sdma_release_currentness(&mut self) -> Result<(), MemorySessionError>;
+pub(crate) trait SdmaReleaseMemoryV1: SdmaOwnerReleaseMemoryV1 {
     fn sdma_release_topology(&mut self) -> Result<(), MemorySessionError>;
-    fn sdma_destroy(
-        &mut self,
-        args: &mut KfdIoctlDestroyQueueArgs,
-    ) -> Result<(), rustix::io::Errno>;
-    fn sdma_release_doorbell(
-        &mut self,
-        doorbell: &mut LinuxDoorbellSliceV1,
-        progress: &mut LinuxDoorbellReleaseProgressV1,
-    ) -> Result<(), crate::queue_linux::LinuxDoorbellErrorV1> {
-        doorbell.release_retaining_v1(progress)
-    }
-    fn sdma_release_resources(
-        &mut self,
-        resources: &mut SdmaResourceCleanupCustodyV1,
-    ) -> Result<(), MemorySessionError>;
     fn sdma_release_poison(&mut self);
 }
 
 impl SdmaReleaseMemoryV1 for SharedGttMemorySessionV1 {
-    fn sdma_release_currentness(&mut self) -> Result<(), MemorySessionError> {
-        self.check_queue_currentness()
-    }
     fn sdma_release_topology(&mut self) -> Result<(), MemorySessionError> {
         self.check_gfx942_sdma_topology_capability_currentness()
-    }
-    fn sdma_destroy(
-        &mut self,
-        args: &mut KfdIoctlDestroyQueueArgs,
-    ) -> Result<(), rustix::io::Errno> {
-        destroy_queue(self.kfd_fd(), args)
-    }
-    fn sdma_release_resources(
-        &mut self,
-        resources: &mut SdmaResourceCleanupCustodyV1,
-    ) -> Result<(), MemorySessionError> {
-        self.release_queue_resources_in_place_v1(resources)
     }
     fn sdma_release_poison(&mut self) {
         let _ = self.quarantine_queue_composition("terminal retained SDMA release");
         permanently_poison_process_global_kfd_runtime_gate_v1();
     }
-}
-
-#[derive(Default)]
-struct OwnerProgressV1 {
-    request: Option<KfdIoctlDestroyQueueArgs>,
-    attempted: bool,
-    result: Option<Result<(), rustix::io::Errno>>,
-    doorbell: LinuxDoorbellReleaseProgressV1,
-    resources: Option<SdmaResourceCleanupCustodyV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -367,30 +329,9 @@ impl RetainedSdmaReleaseCustodyV1 {
             for index in profile.destroy_indices() {
                 let owner = &mut owners[index];
                 let progress = &mut self.progress[index];
-                memory.sdma_release_currentness()?;
-                let original = KfdIoctlDestroyQueueArgs::new(owner.queue_id);
-                progress.request = Some(original);
-                owner.poisoned = true;
-                progress.attempted = true;
-                // The actual ioctl argument is rooted even if the call unwinds.
-                let result =
-                    memory.sdma_destroy(progress.request.as_mut().expect("retained request"));
-                progress.result = Some(result);
-                result.map_err(|_| Gfx942SdmaErrorV1::QueueDestroyIndeterminate)?;
-                if progress.request != Some(original) {
-                    return Err(Gfx942SdmaErrorV1::Contract(
-                        "kernel changed immutable SDMA DESTROY_QUEUE inputs",
-                    ));
-                }
-                memory
-                    .sdma_release_doorbell(
-                        owner.doorbell.as_mut().expect("preflight doorbell"),
-                        &mut progress.doorbell,
-                    )
-                    .map_err(|_| Gfx942SdmaErrorV1::Contract("SDMA doorbell release"))?;
-                owner.destroyed = true;
-                memory.sdma_release_currentness()?;
-                owner.poisoned = false;
+                progress.destroy_in_place(owner, memory, |_| {
+                    Gfx942SdmaErrorV1::Contract("SDMA doorbell release")
+                })?;
                 self.destroyed += 1;
             }
             if profile.requires_topology() {
@@ -430,24 +371,7 @@ impl RetainedSdmaReleaseCustodyV1 {
             };
             for index in profile.resource_indices() {
                 let owner = &mut owners[index];
-                // All owners were checked before destruction; extraction is pure and infallible.
-                self.progress[index].resources = Some(SdmaResourceCleanupCustodyV1::new_sdma(
-                    owner.completions.take().expect("preflight completions"),
-                    owner
-                        .control
-                        .take()
-                        .expect("preflight control")
-                        .into_token(),
-                    owner.ring.take().expect("preflight ring").into_token(),
-                ));
-                let resources = self.progress[index]
-                    .resources
-                    .as_mut()
-                    .expect("rooted resources");
-                memory.sdma_release_resources(resources)?;
-                if !resources.is_complete() {
-                    return Err(Gfx942SdmaErrorV1::Contract("incomplete SDMA resources"));
-                }
+                self.progress[index].release_resources_in_place(owner, memory)?;
                 self.released += 1;
             }
             Ok(())

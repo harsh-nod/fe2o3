@@ -91,6 +91,7 @@ impl Gfx942NativeXgmiSdmaQueueCreationRootV1 {
         Gfx942NativeXgmiSdmaQueueV1 {
             route,
             owner: Some(owner),
+            retirement: xgmi_retirement::RetirementRoot::new(),
         }
     }
 }

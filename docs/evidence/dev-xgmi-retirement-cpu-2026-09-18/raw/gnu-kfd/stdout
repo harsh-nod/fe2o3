@@ -1,0 +1,85 @@
+
+running 75 tests
+test queue::live::construction_primary::integration_tests::release_cases::combined_sdma_cases::constructed_combined_release_orders_all_counts_and_refunds_both_sets ... ok
+test queue::live::construction_primary::integration_tests::release_cases::combined_sdma_cases::constructed_combined_release_rejects_wrong_profiles_and_cross_set_ids ... ok
+test queue::live::construction_primary::integration_tests::release_cases::combined_sdma_cases::constructed_combined_release_preflights_every_field_in_both_sets ... ok
+test queue::live::construction_primary::integration_tests::release_cases::combined_sdma_cases::constructed_combined_release_retains_real_late_cleanup_at_set_boundary ... ok
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_failures_keep_original_owner_and_completed_prefix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_late_native_resource_failure_keeps_real_prefix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_orders_original_owner_and_refunds_all_backing ... ok
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_rejects_malformed_or_pending_owner_without_effects ... ok
+test queue::live::construction_primary::integration_tests::release_cases::combined_sdma_cases::constructed_combined_release_retains_both_sets_at_every_callback_failure has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::release_cases::generic_sdma_cases::constructed_generic_release_retains_mutated_destroy_argument_and_raw_outcome ... ok
+test queue::live::construction_primary::integration_tests::release_cases::logical_mux_sdma_cases::constructed_logical_mux_release_checks_every_field_on_both_physical_owners ... ok
+test queue::live::construction_primary::integration_tests::release_cases::logical_mux_sdma_cases::constructed_logical_mux_release_keeps_real_late_cleanup_prefix_for_both_owners ... ok
+test queue::live::construction_primary::integration_tests::release_cases::combined_sdma_cases::constructed_combined_release_retains_both_sets_at_every_callback_failure ... ok
+test queue::live::construction_primary::integration_tests::release_cases::logical_mux_sdma_cases::constructed_logical_mux_release_orders_two_physical_owners_for_all_lane_counts ... ok
+test queue::live::construction_primary::integration_tests::release_cases::logical_mux_sdma_cases::constructed_logical_mux_release_poison_retains_completed_siblings_on_primary_failure ... ok
+test queue::live::construction_primary::integration_tests::release_cases::logical_mux_sdma_cases::constructed_logical_mux_release_rejects_malformed_rosters_and_metadata_without_effects ... ok
+test queue::live::construction_primary::integration_tests::release_cases::logical_mux_sdma_cases::constructed_logical_mux_release_retains_mutated_destroy_inputs_on_both_owners ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_failures_keep_prefix_and_do_not_complete_primary ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_late_native_resource_failure_keeps_real_prefix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_orders_original_owners_and_refunds_all_backing ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_rejects_bad_second_owner_before_any_effect ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_cases::constructed_directional_release_retains_mutated_destroy_argument_and_raw_outcome ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_attempt_panic_wins_retake_and_poison_with_doorbell_rooted ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_every_profile_retains_its_original_roster ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_first_panic_survives_retake_and_final_poison_panics ... ok
+test queue::live::construction_primary::integration_tests::release_cases::logical_mux_sdma_cases::constructed_logical_mux_release_retains_every_callback_failure_prefix has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_lower_failure_retains_attempted_owner_and_error_precedence ... ok
+test queue::live::construction_primary::integration_tests::release_cases::logical_mux_sdma_cases::constructed_logical_mux_release_retains_every_callback_failure_prefix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_native_success_fills_and_extracts_every_profile ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_no_output_and_lower_panic_do_not_invent_custody ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_opaque_unwind_preserves_profile_without_inventing_queue ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_ownerless_failure_distinguishes_retryable_from_transport ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_real_reclaim_rejection_retains_exact_custody ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_retake_faults_retain_exact_single_and_combined_owners ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_retryable_failure_and_occupied_preflight_are_inert ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_roots_before_metadata_drop_and_preserves_retake_panic ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_success_preserves_owner_and_normal_teardown ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_native_attempt_faults_retain_exact_mutated_arguments_and_resources has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_unwind_retains_every_profile_prefix_before_poison has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_native_attempt_faults_retain_exact_mutated_arguments_and_resources ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::sdma_creation_all_six_public_profiles_use_rooted_production_settlement ... ok
+test queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_checks_every_last_owner_field_before_effects ... ok
+test queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_keeps_real_late_cleanup_prefix_for_every_owner ... ok
+test queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_orders_all_balanced_counts_and_refunds_backing ... ok
+test queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_rejects_malformed_rosters_without_effects ... ok
+test queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_retains_every_callback_failure_prefix has been running for over 60 seconds
+test queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_retains_every_callback_failure_prefix ... ok
+test queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::constructed_striped_release_retains_mutated_destroy_inputs ... ok
+test queue::live::construction_primary::integration_tests::release_cases::striped_sdma_cases::retained_striped_release_custody_has_bounded_inline_size ... ok
+test queue_linux::tests::terminal_creation_arm_poisons_on_drop_or_unwind_and_disarms_only_on_success ... ok
+test sdma::tests::creation_guards_cover_the_first_memory_operation_and_xgmi_route_scope ... ok
+test sdma::tests::sdma_copy_manifest_digest_is_frozen ... ok
+test sdma::tests::xgmi_creation_failure_marks_terminal_without_requiring_queue_roster ... ok
+test sdma::tests::xgmi_destroy_borrows_queue_until_native_destroy_succeeds ... ok
+test sdma::tests::xgmi_post_completion_currentness_failure_retains_both_mappings ... ok
+test sdma::tests::xgmi_timeout_failure_retains_the_exact_ticket ... ok
+test sdma::xgmi_creation::tests::diagnostic_formatting_and_drop_leave_confirmed_custody_in_the_root ... ok
+test sdma::xgmi_creation::tests::independent_terminalizers_preserve_original_panic_and_forget_secondary_payloads ... ok
+test sdma::xgmi_creation::tests::native_prefix_errors_and_panics_preserve_exact_attempt_and_doorbell ... ok
+test sdma::xgmi_creation::tests::occupied_root_drop_aborts_without_native_cleanup ... ok
+test sdma::xgmi_creation::tests::preflight_errors_and_panics_leave_vacant_reusable_roots ... ok
+test sdma::xgmi_creation::tests::route_key_opaque_and_confirmed_failures_retain_custody ... ok
+test sdma::xgmi_creation::tests::vacant_root_is_small_inline_and_diagnostic_only ... ok
+test sdma::xgmi_diagnostic::tests::disabled_timer_runs_each_operation_once_without_recording ... ok
+test sdma::xgmi_diagnostic::tests::duplicate_or_unavailable_measurement_cannot_become_valid_again ... ok
+test sdma::xgmi_diagnostic::tests::enabled_timer_preserves_results_and_phase_order ... ok
+test sdma::xgmi_diagnostic::tests::unwinding_operation_is_never_retried_or_replaced ... ok
+test sdma::xgmi_retirement::tests::all_five_pending_classes_reject_before_preparation_or_route_validation ... ok
+test sdma::xgmi_retirement::tests::all_terminalizers_run_and_original_panic_wins_over_hostile_secondaries ... ok
+test sdma::xgmi_retirement::tests::every_effectful_callback_error_and_panic_retains_exact_custody_and_prefix ... ok
+test sdma::xgmi_retirement::tests::incomplete_resource_success_cannot_vacate_root_or_reach_closing ... ok
+test sdma::xgmi_retirement::tests::invalid_engine_and_inactive_doorbell_are_not_masked_by_pending ... ok
+test sdma::xgmi_retirement::tests::malformed_or_poisoned_owners_terminalize_without_native_teardown ... ok
+test sdma::xgmi_retirement::tests::mutated_destroy_arguments_and_raw_outcomes_remain_rooted ... ok
+test sdma::xgmi_retirement::tests::occupied_root_drop_aborts_even_after_complete_cleanup_or_during_unwind ... ok
+test sdma::xgmi_retirement::tests::preparation_errors_and_panics_leave_live_owner_unchanged_and_retryable ... ok
+test sdma::xgmi_retirement::tests::public_operation_families_guard_before_effectful_route_validation ... ok
+test sdma::xgmi_retirement::tests::real_resource_cleanup_errors_and_panics_retain_every_native_prefix ... ok
+test sdma::xgmi_retirement::tests::success_retires_both_route_directions_and_clears_only_after_closing ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_unwind_retains_every_profile_prefix_before_poison ... ok
+
+test result: ok. 75 passed; 0 failed; 0 ignored; 0 measured; 1391 filtered out; finished in 623.50s
+

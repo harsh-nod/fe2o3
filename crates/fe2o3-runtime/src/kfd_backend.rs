@@ -7747,6 +7747,32 @@ pub struct KfdNativeXgmiRuntimeBackendV1 {
     dependency_waiters: HashMap<u64, Vec<u64>>,
 }
 
+fn settle_xgmi_queue_retirement<Q, E>(
+    queues: &mut [Option<Q>; 2],
+    terminal: &mut bool,
+    direction: usize,
+    retire: impl FnOnce(&mut Q) -> Result<(), E>,
+) -> Result<(), E> {
+    let Some(queue) = queues[direction].as_mut() else {
+        return Ok(());
+    };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| retire(queue))) {
+        Ok(Ok(())) => {
+            // Only a fully retired shell may leave the runtime's owner slot.
+            queues[direction].take();
+            Ok(())
+        }
+        Ok(Err(error)) => {
+            *terminal = true;
+            Err(error)
+        }
+        Err(payload) => {
+            *terminal = true;
+            std::panic::resume_unwind(payload)
+        }
+    }
+}
+
 fn settle_xgmi_queue_creation<R, Q, E>(
     roots: &mut [R; 2],
     queues: &mut [Option<Q>; 2],
@@ -9296,6 +9322,11 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 .queue_creation_roots
                 .iter()
                 .any(|root| !root.is_vacant())
+            || self
+                .queues
+                .iter()
+                .flatten()
+                .any(Gfx942NativeXgmiSdmaQueueV1::has_terminal_retirement_v1)
         {
             return Err(RuntimeBackendFailureV1::Terminal(
                 KfdRuntimeBackendErrorV1::new(
@@ -10176,14 +10207,16 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             ));
         }
         for direction in (0..2).rev() {
-            if let Some(mut queue) = self.queues[direction].take() {
-                let (source, destination) = Self::session_pair(&mut self.sessions, direction);
-                queue
-                    .destroy_and_release(source, destination)
-                    .map_err(|error| {
-                        self.terminal_error(format!("XGMI queue teardown: {error}"))
-                    })?;
-            }
+            settle_xgmi_queue_retirement(
+                &mut self.queues,
+                &mut self.terminal,
+                direction,
+                |queue| {
+                    let (source, destination) = Self::session_pair(&mut self.sessions, direction);
+                    queue.destroy_and_release(source, destination)
+                },
+            )
+            .map_err(|error| self.terminal_error(format!("XGMI queue teardown: {error}")))?;
         }
         self.shutdown = true;
         Ok(())
@@ -11212,6 +11245,11 @@ impl Drop for KfdNativeXgmiRuntimeBackendV1 {
                 .queue_creation_roots
                 .iter()
                 .any(|root| !root.is_vacant())
+            || self
+                .queues
+                .iter()
+                .flatten()
+                .any(Gfx942NativeXgmiSdmaQueueV1::has_terminal_retirement_v1)
             || !self.streams.is_empty()
             || !self.allocations.is_empty()
             || !self.submissions.is_empty()
@@ -11234,11 +11272,22 @@ impl Drop for KfdNativeXgmiRuntimeBackendV1 {
             std::process::abort();
         }
         for direction in (0..2).rev() {
-            if let Some(mut queue) = self.queues[direction].take() {
-                let (source, destination) = Self::session_pair(&mut self.sessions, direction);
-                if queue.destroy_and_release(source, destination).is_err() {
-                    std::process::abort();
-                }
+            // Never let Drop unwind into field destruction: sessions precede
+            // queues in the struct and must remain rooted until the abort.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                settle_xgmi_queue_retirement(
+                    &mut self.queues,
+                    &mut self.terminal,
+                    direction,
+                    |queue| {
+                        let (source, destination) =
+                            Self::session_pair(&mut self.sessions, direction);
+                        queue.destroy_and_release(source, destination)
+                    },
+                )
+            }));
+            if !matches!(result, Ok(Ok(()))) {
+                std::process::abort();
             }
         }
     }
@@ -12901,6 +12950,7 @@ mod tests {
     #[cfg(feature = "hardware-diagnostic")]
     mod directional_wait_diagnostic_tests;
     mod native_xgmi_creation_tests;
+    mod native_xgmi_retirement_tests;
     mod sdma_allocation_tests;
     mod sdma_demotion_tests;
     mod sdma_host_read_tests;
