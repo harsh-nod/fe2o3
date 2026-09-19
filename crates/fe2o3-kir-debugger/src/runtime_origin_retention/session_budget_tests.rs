@@ -12,10 +12,12 @@ fn zero_work_and_failed_registration_or_seek_preserve_semantic_state() {
     let record = &session.view().transcript().records()[0];
     let focus = record.invocation;
     let bp = breakpoint(1, record.site, focus);
-    assert_eq!(
-        session.add_breakpoint(bp.clone(), &mut ReplayWork::new(0).unwrap()),
-        Err(SessionError::WorkLimit)
-    );
+    let rejected = session
+        .add_breakpoint(bp.clone(), &mut ReplayWork::new(0).unwrap())
+        .unwrap_err();
+    assert_eq!(rejected.error(), &SessionError::WorkLimit);
+    let (_, returned) = rejected.into_parts();
+    assert_eq!(returned, bp);
     assert!(session.view().breakpoints().is_empty());
     assert_eq!(session.view().cursor_record_index(), None);
     session.add_breakpoint(bp, &mut work()).unwrap();
@@ -177,10 +179,12 @@ fn filters_are_bounded_and_disabled_capture_does_not_gain_identity() {
         bp.enabled = false;
         session.add_breakpoint(bp, &mut work()).unwrap();
     }
-    assert_eq!(
-        session.add_breakpoint(breakpoint(99, site, focus), &mut work()),
-        Err(SessionError::FilterLimit)
-    );
+    let rejected = session
+        .add_breakpoint(breakpoint(99, site, focus), &mut work())
+        .unwrap_err();
+    assert_eq!(rejected.error(), &SessionError::FilterLimit);
+    let (_, returned) = rejected.into_parts();
+    assert_eq!(returned.id, 99);
     assert_eq!(
         session
             .continue_to_stop(Direction::Forward, &mut work())

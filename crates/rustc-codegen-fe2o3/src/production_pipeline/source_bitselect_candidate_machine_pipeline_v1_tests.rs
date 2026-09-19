@@ -5,6 +5,12 @@ use fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV17;
 #[path = "source_bitselect_candidate_machine_simulation_v1_tests.rs"]
 mod simulation;
 
+pub(super) fn whole_kernel_oracle(
+    owner: &VerifiedCanonicalKernelIrModuleV17,
+) -> Result<Value, String> {
+    simulation::observe(owner)
+}
+
 fn edited_registers() -> Gfx942OrderedProgramRegistersV1 {
     Gfx942OrderedProgramRegistersV1::new(32, 33, [34, 35, 36])
         .expect("fixed distinct edited registers")

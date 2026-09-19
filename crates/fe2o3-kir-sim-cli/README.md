@@ -1,5 +1,38 @@
 # fe2o3-kir-sim
 
+## Read-only ordered-program inspector
+
+Build or install the normal diagnostic inspection command:
+
+    cargo build --locked -p fe2o3-kir-sim-cli --bin fe2o3-program-inspect
+    cargo install --locked --path crates/fe2o3-kir-sim-cli --bin fe2o3-program-inspect
+    fe2o3-program-inspect --help
+    fe2o3-program-inspect kernel-v17.kir request.json
+
+The input must be an exact diagnostic KIR V17 export and matching ordinary
+simulation request. See the existing
+[ordered-program workflow](../../../docs/ordered-program-authoring-v1.md).
+One gfx942:xnack- Wave64 kernel, a 64x1x1 request, and one supported ordered
+program are required. Input admission, CPU eligibility preflight and bounded
+inspection run; the kernel does not execute and no compiler/GPU is invoked.
+
+Output gives the current canonical identity, exact operation coordinates and
+SSA IDs, declared registers and instruction descriptors. Declared register
+bindings are not physical values, a register-lifetime proof or an occupancy
+observation. Source authentication, source maps, instruction microsteps and
+production continuation remain unavailable.
+
+The existing `inspect_diagnostic_ordered_program_v17` example is a thin wrapper
+around this same implementation. Its JSON shape and historical
+`diagnostic_ordered_program_inspection_example` kind are intentionally preserved;
+this packaging adds no registered transport. Output is at most 8 KiB. The
+64 KiB inspection profile is checked after existing secure canonical admission;
+shared admission, CPU resident and inspection bounds are separate, not an RSS
+cap. Unsupported versions/requests, redirected inputs and exceeded bounds fail
+without output. The command only reads files and writes stdout/stderr.
+
+## Simulator
+
 fe2o3-kir-sim is the standalone, Linux-only command-line boundary for bounded
 deterministic CPU execution of supported exact verified canonical Kernel IR:
 

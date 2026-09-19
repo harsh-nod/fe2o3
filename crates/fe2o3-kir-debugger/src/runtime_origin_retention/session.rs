@@ -11,6 +11,33 @@ use fe2o3_kir_sim::{
 pub(super) const MAX_FILTERS: usize = 8;
 pub(super) const MAX_WORK: usize = 1_000_000_000;
 
+/// Move-only refusal. Formatting is bounded and never traverses the payload.
+/// Returning ownership does not bound the caller's eventual recursive Drop.
+pub(super) struct RejectedBreakpoint {
+    error: SessionError,
+    breakpoint: DebugBreakpointV1,
+}
+impl std::fmt::Debug for RejectedBreakpoint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RejectedBreakpoint")
+            .field("error", &self.error)
+            .field("payload", &"caller-owned; not inspected")
+            .finish()
+    }
+}
+impl RejectedBreakpoint {
+    pub(super) fn error(&self) -> &SessionError {
+        &self.error
+    }
+    pub(super) fn into_parts(self) -> (SessionError, DebugBreakpointV1) {
+        (self.error, self.breakpoint)
+    }
+}
+
+#[path = "session_registration.rs"]
+mod registration;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Direction {
     Forward,
@@ -193,32 +220,6 @@ impl ObservedSession {
     ) -> Result<DebugNavigationV1, SessionError> {
         self.charge_seek(None, work)?;
         Ok(self.session.seek_entry())
-    }
-    pub(super) fn add_breakpoint(
-        &mut self,
-        breakpoint: DebugBreakpointV1,
-        work: &mut ReplayWork,
-    ) -> Result<(), SessionError> {
-        if self.session.breakpoints.len() == MAX_FILTERS {
-            return Err(SessionError::FilterLimit);
-        }
-        // Two validations and one bounded count walk; invalid input cannot
-        // trigger the count recursion until the legacy validator accepts it.
-        work.charge(3 * (MAX_DEBUGGER_PREDICATE_NODES_V1 + 1) + MAX_FILTERS)?;
-        breakpoint
-            .predicate
-            .validate()
-            .map_err(SessionError::Debugger)?;
-        let count = nodes(&breakpoint.predicate);
-        for record in &self.session.transcript.records[..self.session.cursor_prefix_len()] {
-            work.charge(predicate_work(record, count)?)?;
-        }
-        let index = self.session.breakpoints.len();
-        self.session
-            .add_breakpoint(breakpoint)
-            .map_err(SessionError::Debugger)?;
-        self.predicate_nodes[index] = count;
-        Ok(())
     }
     pub(super) fn add_watchpoint(
         &mut self,

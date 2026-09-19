@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod ordered_program_inspection;
+pub use ordered_program_inspection::run_ordered_program_inspector;
+
 #[cfg(target_os = "linux")]
 mod linux;
 mod schema;

@@ -18,9 +18,44 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
 
     fn observe_fresh_source_bitselect_candidate_with<R>(
         self,
-        mut input: RetainedInput,
+        input: RetainedInput,
         expected_registers: Gfx942OrderedProgramRegistersV1,
         observe: impl FnOnce(&fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV17) -> Result<R, String>,
+    ) -> Result<(Value, R), String> {
+        self.observe_fresh_source_bitselect_candidate_owner_with(
+            input,
+            expected_registers,
+            |owner| observe(owner.materialized().executable()),
+        )
+    }
+
+    // Test-only read-only join. Old APIs keep precisely their original callback.
+    pub(crate) fn observe_fresh_source_bitselect_candidate_debug_with<R>(
+        self,
+        input: RetainedInput,
+        expected_registers: Gfx942OrderedProgramRegistersV1,
+        observe: impl FnOnce(
+            &crate::production_pipeline::ordered_program_diagnostic_v32::OrderedProgramObservationOwnerV32,
+        ) -> Result<R, String>,
+    ) -> Result<(Value, (Value, R)), String> {
+        self.observe_fresh_source_bitselect_candidate_owner_with(
+            input,
+            expected_registers,
+            |owner| {
+                let oracle = machine::whole_kernel_oracle(owner.materialized().executable())?;
+                let additional = observe(owner)?;
+                Ok((oracle, additional))
+            },
+        )
+    }
+
+    fn observe_fresh_source_bitselect_candidate_owner_with<R>(
+        self,
+        mut input: RetainedInput,
+        expected_registers: Gfx942OrderedProgramRegistersV1,
+        observe: impl FnOnce(
+            &crate::production_pipeline::ordered_program_diagnostic_v32::OrderedProgramObservationOwnerV32,
+        ) -> Result<R, String>,
     ) -> Result<(Value, R), String> {
         let mut meter = ScanMeter::default();
         let header = fresh_header(self.stage.tcx, &self.stage.closure, &input, &mut meter)?;
@@ -171,7 +206,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             }
             checked += 1;
         }
-        let additional = observe(executable)?;
+        let additional = observe(&owner)?;
         input.recheck()?;
         Ok((
             json!({

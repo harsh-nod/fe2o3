@@ -2,6 +2,8 @@
 use super::*;
 use fe2o3_kernel_ir::Gfx942OrderedProgramRegistersV1;
 
+#[path = "source_candidate_debug_join_driver_v17_tests.rs"]
+mod debug_join;
 #[path = "source_bitselect_candidate_machine_fixture_v1_tests.rs"]
 mod fixture_cases;
 #[path = "source_bitselect_candidate_machine_ladder_v1_tests.rs"]
