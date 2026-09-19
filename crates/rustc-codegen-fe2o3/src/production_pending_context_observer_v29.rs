@@ -112,16 +112,28 @@ mod tests {
                 })
             }));
             match mode {
-                0 => assert!(matches!(
-                    result.unwrap(),
-                    Err(ProductionPipelineError::PendingScopedObservationIncomplete)
-                )),
-                1 => assert!(matches!(
-                    result.unwrap(),
-                    Err(ProductionPipelineError::ContextHandoff(
-                        ProductionContextRootErrorV29::Arguments
-                    ))
-                )),
+                0 => {
+                    let result = result.unwrap();
+                    assert!(
+                        matches!(
+                            result,
+                            Err(ProductionPipelineError::PendingScopedObservationIncomplete)
+                        ),
+                        "{result:?}"
+                    );
+                }
+                1 => {
+                    let result = result.unwrap();
+                    assert!(
+                        matches!(
+                            result,
+                            Err(ProductionPipelineError::ContextHandoff(
+                                ProductionContextRootErrorV29::Arguments
+                            ))
+                        ),
+                        "{result:?}"
+                    );
+                }
                 _ => assert_eq!(
                     *result.unwrap_err().downcast::<String>().unwrap(),
                     "pending observer panic"
@@ -146,12 +158,15 @@ mod tests {
             Ok(())
         })
         .unwrap_err();
-        assert!(matches!(
-            error,
-            ProductionPipelineError::ContextHandoff(ProductionContextRootErrorV29::Resource(
-                Resource::Accounting
-            ))
-        ));
+        assert!(
+            matches!(
+                error,
+                ProductionPipelineError::ContextHandoff(ProductionContextRootErrorV29::Resource(
+                    Resource::Accounting
+                ))
+            ),
+            "{error:?}"
+        );
         assert_eq!(budget.storage(), remaining);
     }
 
@@ -200,10 +215,14 @@ mod tests {
         let mut work = Work::new(1_000_000_000);
         let mut budget = Budget::new(&mut work, 64 * 1024 * 1024);
         budget.reserve_storage(7).unwrap();
-        assert!(matches!(
-            observe_pending_v29(&entries, ssa, launch, &mut budget, |_, _| Ok(())),
-            Err(ProductionPipelineError::PendingScopedObservationIncomplete)
-        ));
+        let first = observe_pending_v29(&entries, ssa, launch, &mut budget, |_, _| Ok(()));
+        assert!(
+            matches!(
+                first,
+                Err(ProductionPipelineError::PendingScopedObservationIncomplete)
+            ),
+            "{first:?}"
+        );
         let exact_work = budget.work();
         let exact_storage = budget.peak_storage() - 7;
         for (work_limit, storage_limit, success) in [
