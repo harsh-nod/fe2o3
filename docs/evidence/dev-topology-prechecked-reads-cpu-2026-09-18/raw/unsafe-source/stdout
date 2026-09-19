@@ -1,0 +1,11 @@
+
+running 6 tests
+test additions_removals_and_moves_require_baseline_review ... ok
+test all_constructs_and_macro_templates_are_counted ... ok
+test comments_literals_and_documentation_do_not_count ... ok
+test refresh_reviewed_unsafe_inventory ... ignored, explicit maintenance command; review the resulting baseline diff
+test malformed_tokens_fail_closed ... ok
+test unsafe_source_matches_reviewed_inventory ... ok
+
+test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 11.26s
+

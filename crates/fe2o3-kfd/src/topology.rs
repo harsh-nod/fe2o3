@@ -6,9 +6,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::fs::{self, File, Metadata};
+use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -1301,6 +1301,8 @@ fn io_error(operation: &'static str, path: &Path, source: io::Error) -> Topology
 }
 
 fn inspect(path: &Path) -> Result<Metadata, TopologyError> {
+    #[cfg(test)]
+    tests::prechecked_reads::record_inspect(path);
     fs::symlink_metadata(path).map_err(|source| io_error("inspect", path, source))
 }
 
@@ -1318,7 +1320,12 @@ fn ensure_directory(path: &Path) -> Result<FileIdentity, TopologyError> {
     Ok(FileIdentity::from_metadata(&metadata))
 }
 
-fn read_bounded_regular(path: &Path, maximum: usize) -> Result<Vec<u8>, TopologyError> {
+struct RegularFileObservation<'a> {
+    path: &'a Path,
+    identity: FileIdentity,
+}
+
+fn inspect_regular(path: &Path) -> Result<RegularFileObservation<'_>, TopologyError> {
     let before = inspect(path)?;
     if before.file_type().is_symlink() {
         return Err(TopologyError::Symlink(path.to_path_buf()));
@@ -1329,12 +1336,37 @@ fn read_bounded_regular(path: &Path, maximum: usize) -> Result<Vec<u8>, Topology
             expected: "regular file",
         });
     }
-    let expected = FileIdentity::from_metadata(&before);
-    let mut file = File::open(path).map_err(|source| io_error("open", path, source))?;
+    Ok(RegularFileObservation {
+        path,
+        identity: FileIdentity::from_metadata(&before),
+    })
+}
+
+fn open_observed_regular(path: &Path) -> Result<File, TopologyError> {
+    // A replacement must neither redirect the final component nor block on a FIFO.
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|source| {
+            if source.raw_os_error() == Some(libc::ELOOP) {
+                TopologyError::Symlink(path.to_path_buf())
+            } else {
+                io_error("open", path, source)
+            }
+        })
+}
+
+fn read_bounded_regular(
+    before: RegularFileObservation<'_>,
+    maximum: usize,
+) -> Result<Vec<u8>, TopologyError> {
+    let RegularFileObservation { path, identity } = before;
+    let mut file = open_observed_regular(path)?;
     let opened = file
         .metadata()
         .map_err(|source| io_error("inspect opened file", path, source))?;
-    if FileIdentity::from_metadata(&opened) != expected {
+    if FileIdentity::from_metadata(&opened) != identity {
         return Err(TopologyError::ChangedDuringRead(path.to_path_buf()));
     }
     let mut bytes = Vec::with_capacity(maximum.min(1024));
@@ -1342,6 +1374,8 @@ fn read_bounded_regular(path: &Path, maximum: usize) -> Result<Vec<u8>, Topology
         .take((maximum + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|source| io_error("read", path, source))?;
+    #[cfg(test)]
+    tests::prechecked_reads::after_regular_read(path);
     if bytes.len() > maximum {
         return Err(TopologyError::FileTooLarge {
             path: path.to_path_buf(),
@@ -1351,14 +1385,22 @@ fn read_bounded_regular(path: &Path, maximum: usize) -> Result<Vec<u8>, Topology
     let after = file
         .metadata()
         .map_err(|source| io_error("reinspect opened file", path, source))?;
-    if FileIdentity::from_metadata(&after) != expected {
+    if FileIdentity::from_metadata(&after) != identity {
         return Err(TopologyError::ChangedDuringRead(path.to_path_buf()));
     }
     Ok(bytes)
 }
 
 fn read_text(path: &Path, maximum: usize) -> Result<String, TopologyError> {
-    String::from_utf8(read_bounded_regular(path, maximum)?)
+    read_text_prechecked(inspect_regular(path)?, maximum)
+}
+
+fn read_text_prechecked(
+    before: RegularFileObservation<'_>,
+    maximum: usize,
+) -> Result<String, TopologyError> {
+    let path = before.path;
+    String::from_utf8(read_bounded_regular(before, maximum)?)
         .map_err(|_| TopologyError::InvalidUtf8(path.to_path_buf()))
 }
 
@@ -1782,7 +1824,15 @@ fn parse_named_properties(
     path: &Path,
     allowed: &[(&'static str, u64, u64)],
 ) -> Result<BTreeMap<String, u64>, TopologyError> {
-    let text = read_text(path, MAX_PROPERTY_BYTES)?;
+    parse_named_properties_prechecked(inspect_regular(path)?, allowed)
+}
+
+fn parse_named_properties_prechecked(
+    before: RegularFileObservation<'_>,
+    allowed: &[(&'static str, u64, u64)],
+) -> Result<BTreeMap<String, u64>, TopologyError> {
+    let path = before.path;
+    let text = read_text_prechecked(before, MAX_PROPERTY_BYTES)?;
     if !text.ends_with('\n') {
         return Err(TopologyError::MalformedPropertyLine {
             path: path.to_path_buf(),
@@ -1994,18 +2044,9 @@ fn parse_topology_links(
         if contents.len() != 1 || contents[0].0 != "properties" {
             return Err(TopologyError::UnexpectedLinkEntry(path));
         }
-        let properties_metadata = inspect(&contents[0].1)?;
-        if properties_metadata.file_type().is_symlink() {
-            return Err(TopologyError::Symlink(contents[0].1.clone()));
-        }
-        if !properties_metadata.is_file() {
-            return Err(TopologyError::UnexpectedFileType {
-                path: contents[0].1.clone(),
-                expected: "regular file",
-            });
-        }
-        let properties = parse_named_properties(
-            &contents[0].1,
+        let properties_observation = inspect_regular(&contents[0].1)?;
+        let properties = parse_named_properties_prechecked(
+            properties_observation,
             &[
                 ("type", 0, u32::MAX as u64),
                 ("version_major", 0, u32::MAX as u64),
@@ -2514,6 +2555,8 @@ fn discover_topology_at(root: &Path) -> Result<TopologySnapshot, TopologyError> 
 
 #[cfg(test)]
 pub(crate) mod tests {
+    pub(super) mod prechecked_reads;
+
     use super::*;
     use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicU64, Ordering};
