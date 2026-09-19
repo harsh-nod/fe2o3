@@ -220,3 +220,42 @@ pub(in super::super) fn array_owner(branches: bool) -> ProductionSemanticSsaOwne
     }
     build(types, functions, semantic.callables().to_vec())
 }
+
+pub(in super::super) fn repeated_slot_owner() -> ProductionSemanticSsaOwnerV1 {
+    let original = repeated_owner();
+    let semantic = original.source_semantic();
+    let mut functions = semantic.functions().to_vec();
+    let helper = &functions[3];
+    let mut locals = helper.locals().to_vec();
+    locals.push(local(135, U32, SemanticLocalRoleV1::Temporary));
+    let mut statements = helper.blocks()[0].statements().to_vec();
+    statements.push(SemanticStatementV1::new(
+        SemanticSourceProvenanceV1::unavailable(),
+        SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+            place(2, U32),
+            SemanticOperandV1::Copy(place(0, U32)),
+            SemanticVolatilityV1::NonVolatile,
+            None,
+        )),
+    ));
+    statements.push(assign(
+        place(0, U32),
+        SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+            place(2, U32),
+            SemanticVolatilityV1::NonVolatile,
+            None,
+        )),
+    ));
+    functions[3] = function(
+        130,
+        helper.role(),
+        helper.abi().clone(),
+        locals,
+        vec![block(134, statements, SemanticTerminatorKindV1::Return)],
+    );
+    build(
+        semantic.types().to_vec(),
+        functions,
+        semantic.callables().to_vec(),
+    )
+}

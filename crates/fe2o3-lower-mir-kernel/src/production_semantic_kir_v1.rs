@@ -10964,13 +10964,15 @@ fn lower_one_semantic_function_with_calls_v29(
             bindings: std::mem::take(&mut lowering.semantic_ssa_bindings),
         });
     drop(lowering.emission_work.take());
-    let scoped_slot_origins = source_call_instance
-        .map(|_| capture_scoped_slot_origins_v29(&lowering.retained_local_slots, call_budget))
-        .transpose()?;
+    let retained_local_slots = lowering.retained_local_slots;
     let infallible_asserts = lowering.infallible_asserts;
     let generated_terminator_values = lowering.generated_terminator_values;
     let mut call_returns = lowering.call_returns;
     let private_arrays = lowering.private_arrays.into_rows()?;
+    let scoped_slot_origins = source_call_instance
+        .map(|_| capture_scoped_slot_origins_v29(&retained_local_slots, call_budget))
+        .transpose()?;
+    drop(retained_local_slots);
     // The shared emitter's final blocks are still untouched. Capture with the
     // same now-reborrowable ledger, before any helper expansion changes placement.
     if let Some(origins) = &mut instance_assert_origins {

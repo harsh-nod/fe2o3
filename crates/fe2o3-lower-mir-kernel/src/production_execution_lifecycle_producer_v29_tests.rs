@@ -301,6 +301,7 @@ enum ScopedFixture {
     Plain,
     Assertion,
     Repeated,
+    RepeatedSlots,
     Arrays,
 }
 
@@ -334,7 +335,10 @@ fn run_lifecycle(
         _ => ScopedFixture::Plain,
     };
     let assertion = matches!(fixture, ScopedFixture::Assertion);
-    let repeated = matches!(fixture, ScopedFixture::Repeated);
+    let repeated = matches!(
+        fixture,
+        ScopedFixture::Repeated | ScopedFixture::RepeatedSlots
+    );
     let mut owner = match fixture {
         ScopedFixture::Plain => lifecycle_owner(branches),
         ScopedFixture::Assertion => {
@@ -344,6 +348,10 @@ fn run_lifecycle(
         ScopedFixture::Repeated => {
             assert!(!branches);
             scoped_root_tests::fixtures::repeated_owner()
+        }
+        ScopedFixture::RepeatedSlots => {
+            assert!(!branches);
+            scoped_root_tests::fixtures::repeated_slot_owner()
         }
         ScopedFixture::Arrays => scoped_root_tests::fixtures::array_owner(branches),
     };

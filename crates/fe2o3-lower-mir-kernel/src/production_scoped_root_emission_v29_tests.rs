@@ -574,3 +574,6 @@ fn checked_root_orchestration_bounds_whole_expansion_before_emission() {
         );
     }
 }
+mod source_slot_tests {
+    include!("production_scoped_source_slots_v29_tests.rs");
+}
