@@ -1,0 +1,21 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-pair-comparison-mi300x-2026-09-18/protocol.py",
+    "baseline",
+    "/home/harsh/.codex-tmp/fe2o3-xgmi-pair-comparison-20260918.45f43uw7/source-baseline.tar.gz"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789789079532108714,
+  "group_absent": true,
+  "pid": 3177088,
+  "started_ns": 1789789069169223737,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "20bbd2eb8049c74da05b8a43947fd00af92dad3cd4b1d23ae34ccb67854deeab",
+  "timeout_seconds": 180
+}

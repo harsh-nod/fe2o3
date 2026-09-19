@@ -1,0 +1,19 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-retirement-cpu-2026-09-18/verify.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789789066220879859,
+  "group_absent": true,
+  "pid": 3176854,
+  "started_ns": 1789789066053494718,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "4647ca29a6ef6077d0091081a1ae479d3646c7f65310aed534305578edbbd048",
+  "timeout_seconds": 60
+}

@@ -1,0 +1,35 @@
+{
+  "command": [
+    "/home/harsh/fe2o3-xgmi-pair-comparison-20260918.cba5aae4db1d667d/target-baseline/release/examples/gfx942-runtime-xgmi-peer-benchmark",
+    "0xab83d2ffef0d3cdf",
+    "0xd2e26fef80cf5c33",
+    "1048576",
+    "1",
+    "10",
+    "30"
+  ],
+  "cwd": "/home/harsh/fe2o3-xgmi-pair-comparison-20260918.cba5aae4db1d667d/source-baseline",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/home/harsh/fe2o3-xgmi-pair-comparison-20260918.cba5aae4db1d667d/target-baseline",
+    "CARGO_TERM_COLOR": "never",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/opt/rocm/bin:/usr/bin:/bin",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
+    "TMPDIR": "/home/harsh/fe2o3-xgmi-pair-comparison-20260918.cba5aae4db1d667d/tmp",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789789690461664507,
+  "group_absent": true,
+  "pid": 2567371,
+  "started_ns": 1789789648223792991,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "667da2f98cc56cf4fb17b893b780ee15d3e981353494df6e9737c1a4724ea3a6",
+  "timeout_seconds": 120
+}

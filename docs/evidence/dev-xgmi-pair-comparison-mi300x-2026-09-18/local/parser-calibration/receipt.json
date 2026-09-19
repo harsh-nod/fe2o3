@@ -1,0 +1,19 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-retirement-attribution-mi300x-2026-09-18/test_campaign.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789789065830775636,
+  "group_absent": true,
+  "pid": 3176836,
+  "started_ns": 1789789065562919992,
+  "stderr_sha256": "beeba86ee18dd66055752b44f1d75cf1c5a51b3e51a40e3dac1409136c34566a",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 60
+}

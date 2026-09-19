@@ -1,0 +1,33 @@
+{
+  "command": [
+    "scp",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "/home/harsh/.codex-tmp/fe2o3-xgmi-pair-comparison-20260918.45f43uw7/protocol.py",
+    "/home/harsh/.codex-tmp/fe2o3-xgmi-pair-comparison-20260918.45f43uw7/campaign.py",
+    "/home/harsh/.codex-tmp/fe2o3-xgmi-pair-comparison-20260918.45f43uw7/attribution.py",
+    "/home/harsh/.codex-tmp/fe2o3-xgmi-pair-comparison-20260918.45f43uw7/base.py",
+    "/home/harsh/.codex-tmp/fe2o3-xgmi-pair-comparison-20260918.45f43uw7/source-baseline.tar.gz",
+    "/home/harsh/.codex-tmp/fe2o3-xgmi-pair-comparison-20260918.45f43uw7/source-candidate.tar.gz",
+    "/home/harsh/.codex-tmp/fe2o3-xgmi-pair-comparison-20260918.45f43uw7/binding.json",
+    "mi300x:/home/harsh/fe2o3-xgmi-pair-comparison-20260918.cba5aae4db1d667d/"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789789096256302514,
+  "group_absent": true,
+  "pid": 3179318,
+  "started_ns": 1789789091868233407,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 300
+}

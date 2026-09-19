@@ -1,0 +1,28 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -I - inventory '{\"binding_sha256\":\"fc41fa959bd99b2b053ea1aea914051aa38745323dba694e6c3a326493fe9ca3\",\"commit\":\"2d58fb516ba966d1779847c3165453bbbca2698b\",\"path\":\"/home/harsh/fe2o3-xgmi-pair-comparison-20260918.cba5aae4db1d667d\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789789868388536474,
+  "group_absent": true,
+  "pid": 3246198,
+  "started_ns": 1789789864146400455,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": "d976b39c8133f33a55773dbe9088d7453942cd1819a4bb1d4de721f3ee55d626",
+  "stdout_sha256": "554f9f48ccf6ad531a8becb1547b51eb1221a9872a89033d3e5db52ed4b64dd8",
+  "timeout_seconds": 120
+}
