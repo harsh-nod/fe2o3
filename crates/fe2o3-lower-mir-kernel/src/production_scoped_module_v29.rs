@@ -37,6 +37,10 @@ enum ScopedDeclarationKindV29 {
 }
 
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "Scoped source replay remains gated")
+)]
 struct ScopedDeclarationUseV29 {
     instance: usize,
     kind: ScopedDeclarationKindV29,
@@ -45,6 +49,10 @@ struct ScopedDeclarationUseV29 {
 }
 
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "Scoped source replay remains gated")
+)]
 enum ScopedModuleErrorV29 {
     Source(ProductionSemanticKirErrorV1),
     Canonical(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV15),
