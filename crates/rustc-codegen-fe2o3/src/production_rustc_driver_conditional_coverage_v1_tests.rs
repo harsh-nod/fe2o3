@@ -305,11 +305,13 @@ fn check(response: &Path, expected_roots: &[&str], conditional: bool) {
             .as_ref()
             .expect("exact source simulations");
         assert_eq!(scenarios.len(), 5);
-        for (scenario, length) in scenarios.iter().zip([0, 1, 63, 64, 65]) {
+        let extent = usize::try_from(scenarios[0].global_x).unwrap();
+        assert!(extent >= 64);
+        for (scenario, length) in scenarios.iter().zip([0, 1, extent - 1, extent, extent + 1]) {
             assert_eq!(scenario.length, length);
-            assert_eq!(scenario.global_x, 64);
-            assert_eq!(scenario.expected_written_elements, length.min(64));
-            assert_eq!(scenario.expected_total_output, length <= 64);
+            assert_eq!(scenario.global_x, extent as u64);
+            assert_eq!(scenario.expected_written_elements, length.min(extent));
+            assert_eq!(scenario.expected_total_output, length <= extent);
         }
     } else {
         assert!(result.simulation.is_none());
@@ -329,7 +331,17 @@ fn ordinary_fill_has_conditional_total_output_coverage() {
             false,
             Some(SourceObserver {
                 child_test: CHILD,
-                check: |path, roots| check(path, roots, true),
+                check: |path, roots| {
+                    check(path, roots, true);
+                    let result: Result<CoverageObservation, String> =
+                        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+                    for scenario in result.unwrap().simulation.unwrap() {
+                        assert_eq!(
+                            scenario.global_x, 64,
+                            "original fill counterexample geometry"
+                        );
+                    }
+                },
             }),
         );
     }

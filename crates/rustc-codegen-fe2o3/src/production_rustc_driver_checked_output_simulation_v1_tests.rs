@@ -133,15 +133,16 @@ pub(super) fn observe_conditional_fill_prefix(
     }
     let kernel = require_abi(&module, Case::Fill)?;
     let (grid, workgroup) = launch(kernel, 64)?;
-    if grid != [64, 1, 1] {
+    let extent = usize::try_from(grid[0]).map_err(failure)?;
+    if extent == 0 || grid[0] > limits.max_invocations {
         return Err(failure(
-            "coverage counterexample requires exactly 64 invocations",
+            "source coverage launch exceeds the finite probe's invocation cap",
         ));
     }
     let mut observations = Vec::new();
-    for length in [0, 1, 63, 64, 65] {
+    for length in [0, 1, extent - 1, extent, extent + 1] {
         let scenario = elementwise(Case::Fill, length, 0)?;
-        let written_elements = length.min(64);
+        let written_elements = length.min(extent);
         let mut expected_values = vec![SENTINEL; length];
         expected_values[..written_elements].fill(42.5);
         let expected = vec![guarded_buffer(0, &expected_values, AccessMode::ReadWrite)?.1];
