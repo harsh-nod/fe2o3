@@ -45,11 +45,13 @@ aggregate invalidates an enabled capture rather than silently omitting calls.
 ## Admission Cost
 
 Ready-index validation uses fallibly allocated sorted copies of the two ready
-queues. The execution queues retain FIFO order. With `Q` ready IDs and `A`
-active records, duplicate and ready-membership checks take
-`O(Q log Q + A log(Q + 1))` time and `O(Q)` temporary storage, instead of
-quadratic ready-backlog scans. In-flight indexes are validated as sorted before
-binary-search membership checks. This is not allocation-free admission.
+queues. The execution queues retain FIFO order. With `Q` ready IDs, `A` active
+records and active-table capacity `H`, duplicate and ready-membership checks
+take `O(Q log(Q + 1) + H + A log(Q + 1))` time and `O(Q)` temporary storage,
+instead of quadratic ready-backlog scans. This assumes expected constant-time
+hash lookups and excludes dependency readiness checks. In-flight indexes are
+validated as sorted before binary-search membership checks. This is not
+allocation-free admission.
 
 Invalid request shape (empty, over 63, or duplicate IDs) is rejected before
 scratch allocation. Scratch allocation failure is a pre-effect `Capacity`
@@ -58,10 +60,29 @@ allocation, global corruption still takes precedence over unknown-request or
 subset errors. No native authority or scheduling state changes during these
 checks.
 
+Reverse-dependency validation uses one fallibly allocated sorted table of the
+requested IDs and their dependencies. A single pass over active dependency
+edges counts each dependent record once per relevant ID, including when an
+unrelated malformed record repeats that ID. Existing waiter membership, strict
+waiter ordering, retain counts and selected-record dependency checks are
+unchanged.
+
+With `T` raw relevant IDs, `K` distinct relevant IDs and `E` active dependency
+edges, preparation and counting take `O(T log(T + 1) + H + E log(K + 1))` time
+and `O(T)` scratch storage, plus the existing waiter and selected-record checks.
+The `H` term accounts for traversal of empty hash-table buckets as well as live
+records. Healthy input has at most `63 * (1 + 256) = 16,191` raw IDs. A checked
+length or scratch reservation failure is a pre-effect `Capacity` rejection.
+The earlier custody checks for completion capacity, directional counts and
+stream-owner cardinality still precede that allocation; later dependency, depth
+and allocation checks follow it. Logical corruption still terminalizes the
+backend.
+
 Full admission remains backlog-dependent: readiness checks inspect dependencies,
-and custody validation still performs repeated reverse-dependency scans. The
-bounded allocation-owner checks are also unchanged. CPU admission timings do
-not measure those later checks, native copies, or HIP/HSA performance.
+and custody validation still checks all active stream owners and dependency
+depths. The bounded allocation-owner checks are also unchanged. CPU timings of
+an individual validator do not measure full admission, native copies or HIP/HSA
+performance.
 
 ## Measurement
 

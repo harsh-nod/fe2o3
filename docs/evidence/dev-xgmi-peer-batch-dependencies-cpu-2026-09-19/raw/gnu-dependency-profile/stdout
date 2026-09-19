@@ -1,0 +1,11 @@
+
+running 1 test
+test kfd_backend::xgmi_batch::tests::dependency_scaling::dependency_scaling_profile_rows ... schema=fe2o3.xgmi-dependency-index-scaling.v1 case=one-empty-64 active=64 requested=1 requested_dependency_edges=0 blocked_waiters=63 reference_ns=20889 candidate_ns=47300 result=valid
+schema=fe2o3.xgmi-dependency-index-scaling.v1 case=one-four-4096 active=4096 requested=1 requested_dependency_edges=4 blocked_waiters=4095 reference_ns=347511 candidate_ns=188719 result=valid
+schema=fe2o3.xgmi-dependency-index-scaling.v1 case=sixty-three-empty-4096 active=4096 requested=63 requested_dependency_edges=0 blocked_waiters=4033 reference_ns=2345229 candidate_ns=205060 result=valid
+schema=fe2o3.xgmi-dependency-index-scaling.v1 case=sixty-three-four-16384 active=16384 requested=63 requested_dependency_edges=252 blocked_waiters=16321 reference_ns=74433268 candidate_ns=3116797 result=valid
+schema=fe2o3.xgmi-dependency-index-scaling.v1 case=sixty-three-four-65536 active=65536 requested=63 requested_dependency_edges=252 blocked_waiters=65473 reference_ns=not-run candidate_ns=29662971 result=valid
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1175 filtered out; finished in 0.26s
+

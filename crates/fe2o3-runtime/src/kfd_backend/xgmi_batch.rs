@@ -184,20 +184,104 @@ enum Input<R, T> {
     Published(Vec<T>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DependencyScratchCapacity;
+
+struct DependencyUseCount {
+    id: u64,
+    records: usize,
+    last_record: usize,
+}
+
+fn count_dependency_uses<'a>(
+    relevant: &mut [DependencyUseCount],
+    records: impl Iterator<Item = &'a XgmiRuntimeSubmissionV1>,
+) -> bool {
+    for (ordinal, record) in records.enumerate() {
+        for dependency in &record.dependencies {
+            let Ok(slot) = relevant.binary_search_by_key(dependency, |entry| entry.id) else {
+                continue;
+            };
+            let entry = &mut relevant[slot];
+            // Match contains-per-record semantics, including malformed duplicate
+            // edges in an unrelated record. Rows start with the MAX sentinel.
+            if entry.last_record != ordinal {
+                let Some(count) = entry.records.checked_add(1) else {
+                    return false;
+                };
+                entry.records = count;
+                entry.last_record = ordinal;
+            }
+        }
+    }
+    true
+}
+
 fn valid_dependency_indexes(
     ids: &[u64],
     active: &HashMap<u64, XgmiRuntimeSubmissionV1>,
     completed: &HashMap<u64, SubmissionRecordV1>,
     dependency_waiters: &HashMap<u64, Vec<u64>>,
     retain_counts: &HashMap<u64, usize>,
-) -> bool {
+) -> Result<bool, DependencyScratchCapacity> {
+    valid_dependency_indexes_with_reservation(
+        ids,
+        active,
+        completed,
+        dependency_waiters,
+        retain_counts,
+        Vec::try_reserve_exact,
+    )
+}
+
+fn valid_dependency_indexes_with_reservation(
+    ids: &[u64],
+    active: &HashMap<u64, XgmiRuntimeSubmissionV1>,
+    completed: &HashMap<u64, SubmissionRecordV1>,
+    dependency_waiters: &HashMap<u64, Vec<u64>>,
+    retain_counts: &HashMap<u64, usize>,
+    mut reserve: impl FnMut(
+        &mut Vec<DependencyUseCount>,
+        usize,
+    ) -> Result<(), std::collections::TryReserveError>,
+) -> Result<bool, DependencyScratchCapacity> {
+    if ids.is_empty() {
+        return Ok(true);
+    }
+    let raw_len = ids
+        .iter()
+        .try_fold(ids.len(), |length, id| {
+            length.checked_add(active[id].dependencies.len())
+        })
+        .ok_or(DependencyScratchCapacity)?;
+    let mut relevant = Vec::new();
+    reserve(&mut relevant, raw_len).map_err(|_| DependencyScratchCapacity)?;
+    relevant.extend(
+        ids.iter()
+            .chain(ids.iter().flat_map(|id| &active[id].dependencies))
+            .map(|id| DependencyUseCount {
+                id: *id,
+                records: 0,
+                last_record: usize::MAX,
+            }),
+    );
+    relevant.sort_unstable_by_key(|entry| entry.id);
+    relevant.dedup_by_key(|entry| entry.id);
+    if !count_dependency_uses(&mut relevant, active.values()) {
+        return Ok(false);
+    }
+    let uses = |id: &u64| {
+        relevant
+            .binary_search_by_key(id, |entry| entry.id)
+            .ok()
+            .map(|slot| relevant[slot].records)
+    };
     for id in ids {
         let record = &active[id];
         let waiters = dependency_waiters.get(id).map_or(&[][..], Vec::as_slice);
-        let expected_waiters = active
-            .values()
-            .filter(|record| record.dependencies.contains(id))
-            .count();
+        let Some(expected_waiters) = uses(id) else {
+            return Ok(false);
+        };
         if waiters.len() != expected_waiters
             || retain_counts.get(id).copied().unwrap_or(0) != expected_waiters
             || waiters.iter().enumerate().any(|(index, waiter)| {
@@ -207,7 +291,7 @@ fn valid_dependency_indexes(
                         .is_none_or(|record| !record.dependencies.contains(id))
             })
         {
-            return false;
+            return Ok(false);
         }
         for (index, dependency) in record.dependencies.iter().enumerate() {
             if *dependency >= *id
@@ -216,19 +300,15 @@ fn valid_dependency_indexes(
                     .get(dependency)
                     .is_none_or(|record| record.status != BackendPollV1::Succeeded)
                 || dependency_waiters.contains_key(dependency)
-                || retain_counts.get(dependency).is_none_or(|count| {
-                    *count
-                        != active
-                            .values()
-                            .filter(|record| record.dependencies.contains(dependency))
-                            .count()
-                })
+                || retain_counts
+                    .get(dependency)
+                    .is_none_or(|count| uses(dependency) != Some(*count))
             {
-                return false;
+                return Ok(false);
             }
         }
     }
-    true
+    Ok(true)
 }
 
 enum Operation<R, T, C, E> {
@@ -335,7 +415,11 @@ impl Scope for Gfx942NativeXgmiSdmaBatchV1<'_> {
 }
 
 impl KfdNativeXgmiRuntimeBackendV1 {
-    fn batch_custody_is_valid(&self, ids: &[u64], admission: Admission) -> bool {
+    fn batch_custody_is_valid(
+        &self,
+        ids: &[u64],
+        admission: Admission,
+    ) -> Result<bool, DependencyScratchCapacity> {
         if self.completion_reservations != self.active.len()
             || self
                 .submissions
@@ -351,27 +435,29 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                         .count()
             })
             || self.active_stream_owners.len() != self.active.len()
-            || !valid_dependency_indexes(
-                ids,
-                &self.active,
-                &self.submissions,
-                &self.dependency_waiters,
-                &self.dependency_retain_counts,
-            )
         {
-            return false;
+            return Ok(false);
+        }
+        if !valid_dependency_indexes(
+            ids,
+            &self.active,
+            &self.submissions,
+            &self.dependency_waiters,
+            &self.dependency_retain_counts,
+        )? {
+            return Ok(false);
         }
         for (id, record) in &self.active {
             let Ok(depth) =
                 next_xgmi_dependency_depth_v1(&self.dependency_depths, &record.dependencies)
             else {
-                return false;
+                return Ok(false);
             };
             if self.active_stream_owners.get(&record.stream) != Some(id)
                 || self.streams.get(&record.stream) != Some(&(1 - record.direction))
                 || self.dependency_depths.get(id) != Some(&depth)
             {
-                return false;
+                return Ok(false);
             }
         }
         for id in ids {
@@ -381,7 +467,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 || active.byte_len == 0
                 || active.dependency_cursor > active.dependencies.len()
             {
-                return false;
+                return Ok(false);
             }
             for (allocation, device, offset) in [
                 (active.source, admission.direction, active.source_offset),
@@ -392,7 +478,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 ),
             ] {
                 let Some(record) = self.allocations.get(&allocation) else {
-                    return false;
+                    return Ok(false);
                 };
                 if record.device != device
                     || offset
@@ -407,19 +493,19 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                         Some(XgmiAllocationAuthorityV1::QuarantinedMapped(_)) => true,
                     }
                 {
-                    return false;
+                    return Ok(false);
                 }
                 let Some(owners) = self.active_allocation_owners.get(&allocation) else {
-                    return false;
+                    return Ok(false);
                 };
                 if !owners.contains(id) {
-                    return false;
+                    return Ok(false);
                 }
                 // Later dependency-blocked copies may share this allocation.
                 // They are not part of the admitted native frontier.
                 for (index, owner) in owners.iter().enumerate() {
                     let Some(other) = self.active.get(owner) else {
-                        return false;
+                        return Ok(false);
                     };
                     if owners[..index].contains(owner)
                         || ![other.source, other.destination].contains(&allocation)
@@ -428,12 +514,12 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                                 || other.ticket.is_some()
                                 || !other.dependencies.contains(id))
                     {
-                        return false;
+                        return Ok(false);
                     }
                 }
             }
         }
-        true
+        Ok(true)
     }
 
     fn batch_quarantine(&mut self, direction: usize) {
@@ -762,7 +848,15 @@ impl RuntimePeerCopyBatchBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
                 "XGMI aggregate ready-index storage",
             ),
         })?;
-        if !self.batch_custody_is_valid(requested, admission) {
+        let custody_is_valid = self
+            .batch_custody_is_valid(requested, admission)
+            .map_err(|_| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Capacity,
+                    "XGMI aggregate dependency-index storage",
+                )
+            })?;
+        if !custody_is_valid {
             return Err(self.terminal_error("XGMI aggregate custody corruption"));
         }
         let mut ids = Vec::new();

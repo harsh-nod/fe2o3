@@ -1,0 +1,155 @@
+{
+  "commands": 23,
+  "dependency_profiles": {
+    "gnu": {
+      "rows": [
+        {
+          "active": 64,
+          "blocked_waiters": 63,
+          "candidate_ns": 47300,
+          "case": "one-empty-64",
+          "reference_ns": 20889,
+          "requested": 1,
+          "requested_dependency_edges": 0,
+          "result": "valid"
+        },
+        {
+          "active": 4096,
+          "blocked_waiters": 4095,
+          "candidate_ns": 188719,
+          "case": "one-four-4096",
+          "reference_ns": 347511,
+          "requested": 1,
+          "requested_dependency_edges": 4,
+          "result": "valid"
+        },
+        {
+          "active": 4096,
+          "blocked_waiters": 4033,
+          "candidate_ns": 205060,
+          "case": "sixty-three-empty-4096",
+          "reference_ns": 2345229,
+          "requested": 63,
+          "requested_dependency_edges": 0,
+          "result": "valid"
+        },
+        {
+          "active": 16384,
+          "blocked_waiters": 16321,
+          "candidate_ns": 3116797,
+          "case": "sixty-three-four-16384",
+          "reference_ns": 74433268,
+          "requested": 63,
+          "requested_dependency_edges": 252,
+          "result": "valid"
+        },
+        {
+          "active": 65536,
+          "blocked_waiters": 65473,
+          "candidate_ns": 29662971,
+          "case": "sixty-three-four-65536",
+          "reference_ns": null,
+          "requested": 63,
+          "requested_dependency_edges": 252,
+          "result": "valid"
+        }
+      ],
+      "stdout_sha256": "3cd7e22f8946b3be152d7bae680252fe31c4c145bee0f5812513b468276db21f"
+    },
+    "musl": {
+      "rows": [
+        {
+          "active": 64,
+          "blocked_waiters": 63,
+          "candidate_ns": 34586,
+          "case": "one-empty-64",
+          "reference_ns": 27693,
+          "requested": 1,
+          "requested_dependency_edges": 0,
+          "result": "valid"
+        },
+        {
+          "active": 4096,
+          "blocked_waiters": 4095,
+          "candidate_ns": 268220,
+          "case": "one-four-4096",
+          "reference_ns": 485193,
+          "requested": 1,
+          "requested_dependency_edges": 4,
+          "result": "valid"
+        },
+        {
+          "active": 4096,
+          "blocked_waiters": 4033,
+          "candidate_ns": 425620,
+          "case": "sixty-three-empty-4096",
+          "reference_ns": 3221410,
+          "requested": 63,
+          "requested_dependency_edges": 0,
+          "result": "valid"
+        },
+        {
+          "active": 16384,
+          "blocked_waiters": 16321,
+          "candidate_ns": 3087009,
+          "case": "sixty-three-four-16384",
+          "reference_ns": 71530790,
+          "requested": 63,
+          "requested_dependency_edges": 252,
+          "result": "valid"
+        },
+        {
+          "active": 65536,
+          "blocked_waiters": 65473,
+          "candidate_ns": 22016598,
+          "case": "sixty-three-four-65536",
+          "reference_ns": null,
+          "requested": 63,
+          "requested_dependency_edges": 252,
+          "result": "valid"
+        }
+      ],
+      "stdout_sha256": "a9b6672526927d58abdf8d38f659b21e81fb5d6a12069d5f8bed44093fac76e6"
+    }
+  },
+  "document": {
+    "path": "docs/runtime-xgmi-peer-batch-v1.md",
+    "sha256": "569bf6a6b28b2d5255f7caba73f576f6ef0a52ef11adbe686a61250975e18ee6"
+  },
+  "execution_root": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "rosters": {
+    "example": {
+      "count": 6,
+      "sha256": "f97bac104dde54255660dccb9b3a330fc325da8b02d1a1488544b1d393a8bb5a"
+    },
+    "kfd": {
+      "count": 6,
+      "sha256": "219af10efb8d78f0154a5d9dd2ec5e3a908e87e94f94d4c41ef100846c88fbd0"
+    },
+    "runtime": {
+      "count": 268,
+      "sha256": "678ca1c1fe00e68f8f96b1b266cf22927e8e7f9c0d033a10782b418b779b50b4"
+    }
+  },
+  "schema": "fe2o3.xgmi-peer-batch-dependencies-cpu.v1",
+  "source_base": "d29afddf7dc971ac58ccbad43585291f31ec29e8",
+  "source_files": 5580,
+  "source_snapshot_sha256": "878af56d713f8b8f8f9bef9322c2e15a44dd13af0f039d3cfebde6a161595f18",
+  "toolchain": {
+    "cargo_stdout_sha256": "ec757dbb82aca77f9d653bc3a3f1e69665ac3ea072fcfba984595bf479b17fcc",
+    "rustc_stdout_sha256": "580dbecb7627e4e8ad67fd0b1d539727ba8d2651d04035c907b406d83200b4e2"
+  },
+  "tools": {
+    "docs/evidence/dev-sdma-direct-readback-cpu-2026-09-18/source.py": "a7a8b8e73aa1a0817e13f9e575369403ece42f4eb702fd1ec04d9bc57fcff953",
+    "docs/evidence/dev-xgmi-host-attribution-cpu-2026-09-18/accept.py": "be5998bbd3bde933c48d4ae3d6e12ae8231da62cffd254abdb7c7ebe3f7dc8bd",
+    "docs/evidence/dev-xgmi-host-attribution-cpu-2026-09-18/qualify.py": "43397a7a269a21dd317ba0e0d8137943800441f6e17eacbeee4e3766c684e7a3",
+    "docs/evidence/dev-xgmi-pair-currentness-cpu-2026-09-18/qualify.py": "06f5d1e8ba5f8e8afee3c7a3dce2373a64b9c1cb9621314613ef2eaa7da38686",
+    "docs/evidence/dev-xgmi-peer-batch-cpu-2026-09-18/qualify.py": "8cafe8b1e1944b2a06bfd20f5a85e830f466cf0fd0246c9db2bbd507f69e25de",
+    "docs/evidence/dev-xgmi-peer-batch-cpu-2026-09-18/test_verify.py": "d635c53753462bd2528f6a8040a9aa0a90abe4d59a95ca7723ff9eaaec22dcf8",
+    "docs/evidence/dev-xgmi-peer-batch-cpu-2026-09-18/verify.py": "c4f19d2bc23396dc585ebc29e391bfcc96cbabf2e54705e5bb034cf1fcf20442",
+    "docs/evidence/dev-xgmi-peer-batch-dependencies-cpu-2026-09-19/qualify.py": "7d9770ddfadbf2d8f66ee822372abf11e8313bbe9dbf5f276a2c927654df2b83",
+    "docs/evidence/dev-xgmi-peer-batch-dependencies-cpu-2026-09-19/test_verify.py": "1f253990674a00600db2816c12a2a106f9f7d5fa1fe86944934da5c9a1a43150",
+    "docs/evidence/dev-xgmi-peer-batch-dependencies-cpu-2026-09-19/verify.py": "d0720459bcb6c61273ba62a70b95559b4aba67f10126aa4ca31d62353d9bc863",
+    "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/native.py": "df740a80c83c94af02f7e7dfb1203dcf7c1eafbde0010e41219e4aac40b34bb7"
+  }
+}

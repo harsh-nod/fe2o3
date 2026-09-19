@@ -1,0 +1,8 @@
+sdma::tests::xgmi_batch_wait::completion_observation_panic_preserves_every_mapping_and_payload: test
+sdma::tests::xgmi_batch_wait::expired_absolute_deadline_completes_an_all_ready_roster: test
+sdma::tests::xgmi_batch_wait::expired_absolute_deadline_retains_a_ready_prefix_then_retry_completes: test
+sdma::tests::xgmi_batch_wait::malformed_ticket_rosters_are_rejected_without_consuming_records: test
+sdma::tests::xgmi_batch_wait::relative_zero_deadline_keeps_the_existing_one_scan_semantics: test
+sdma::tests::xgmi_batch_wait::unexpected_completion_poisons_the_owner_and_retains_every_mapping: test
+
+6 tests, 0 benchmarks

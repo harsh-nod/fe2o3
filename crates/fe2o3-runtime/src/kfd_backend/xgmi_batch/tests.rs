@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 mod admission_scaling;
+mod dependency_scaling;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Fault {
@@ -439,7 +440,7 @@ fn dependency_indexes_retain_and_wake_blocked_successors_exactly() {
         }
         assert_eq!(
             valid_dependency_indexes(&[2], &active, &completed, &waiters, &counts),
-            fault == 0,
+            Ok(fault == 0),
             "fault {fault}"
         );
     }
