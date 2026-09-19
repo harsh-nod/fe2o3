@@ -1,0 +1,21 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-peer-hot-controls-cpu-2026-09-19/cpu.py",
+    "--live"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789807651643092160,
+  "group_absent": true,
+  "pid": 542914,
+  "started_ns": 1789807651071922263,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "5ab32e5c8fe1b09eeff9f582056e45310d62f611c74447b0b917952de8b41aeb",
+  "timeout_seconds": 120
+}

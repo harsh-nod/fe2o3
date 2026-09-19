@@ -1,0 +1,20 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-peer-hot-mi300x-2026-09-19/test_campaign.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789807656150899317,
+  "group_absent": true,
+  "pid": 542997,
+  "started_ns": 1789807651964667617,
+  "stderr_sha256": "e66881f85aa0a3b43877bcc5d7ae77f8b917ff88c8eab7576d78b913dfae5342",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 60
+}

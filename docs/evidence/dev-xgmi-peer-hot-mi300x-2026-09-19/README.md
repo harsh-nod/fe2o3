@@ -4,6 +4,50 @@ Development comparison of the KFD runtime facade, HIP, and HSA on MI300X.
 This packet is not a HIP/HSA parity certificate, formal refinement, an exclusive
 GPU reservation, or evidence of equivalent physical copy-engine scheduling.
 
+## Results
+
+All six processes completed successfully against signed source
+`2db05385c9f558cb56a37bccad5b8ce5dd07ef00`, published to both remotes before
+execution. The verifier replays 55 remote commands, 36 endpoint observations,
+all source/toolchain/ELF identities, six result rows, collection, and cleanup.
+CPU and native Rust/Cargo version outputs match exactly.
+
+Each entry below is one process's median of thirty directional samples, not a
+pooled statistic or a confidence interval. Times are microseconds.
+
+| Trial | Forward p50 (us) | Reverse p50 (us) |
+| --- | ---: | ---: |
+| 1 KFD | 14327.907 | 14345.553 |
+| 2 HSA | 29.904 | 29.955 |
+| 3 HIP | 37.796 | 36.464 |
+| 4 HIP | 37.776 | 36.374 |
+| 5 HSA | 30.065 | 29.985 |
+| 6 KFD | 14321.477 | 14297.872 |
+
+This workload is **not at copy-performance parity**. Matching preparation,
+guarded payloads, priming, depth, and hot repetition does not remove the large
+end-to-end gap. These observations are not physical copy-engine throughput or a
+statistical performance acceptance result. Raw p95 and rounded GB/s values are
+retained in each process transcript and `remote/validated-results.json`.
+
+The owned remote directory
+`/home/harsh/fe2o3-xgmi-peer-hot-20260919.833aa05ff0e3f703` was removed only after
+byte-exact collection; path and process absence were confirmed. The local source
+transport was also removed. No foreign files or processes were changed.
+
+## Next Attribution
+
+Source inspection identifies two full pair-currentness observations per timed
+KFD batch, each including fresh topology discovery. Additional publication
+boundaries and bounded roster allocations also execute inside the timer. This is
+a source-level explanation to investigate, not a measured breakdown of 14 ms.
+
+The next step is phase-level host attribution, followed by measured scratch reuse
+or an explicitly bounded multi-operation currentness scope. Silently caching
+topology observations would weaken the existing freshness contract. The existing
+whole-active-record scans are constant-sized at this benchmark's depth one and
+must not be credited as the cause without attribution.
+
 ## Workload
 
 - Physical GPUs 1 and 2, correlated by PCI address and unique ID before every
@@ -70,6 +114,6 @@ python3 -I -B docs/evidence/dev-xgmi-peer-hot-mi300x-2026-09-19/verify.py --seal
 
 `campaign.py` refuses to overwrite an existing attempt. A new hardware campaign
 requires a new packet location and reviewed protocol, not deletion of prior raw
-evidence. Once recorded, `verify.py` without `--seal` replays the archive and seal;
-it does not rerun the GPU workload. Native results are pending in this protocol
-commit. Any later results must retain the API-boundary and shared-host caveats.
+evidence. `verify.py` without `--seal` replays this recorded archive and seal;
+it does not rerun the GPU workload. Any later results must retain the API-boundary
+and shared-host caveats.

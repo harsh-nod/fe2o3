@@ -1,0 +1,5 @@
+{
+  "target/release/examples/gfx942-runtime-xgmi-peer-benchmark": "b53b3e46b3037e67ba4009839fdaf82f6d03f16e833e076b36087300553d3406",
+  "xgmi-peer-hip": "94ef30e25ce55c5577c7397fd99e76c5516475fbb5c4a0156ab5fa4f64d17165",
+  "xgmi-peer-hsa": "8326d812252434ab7c25ea55dc1c36df0c5cf0e9460509cd5e47e21c041c71c1"
+}

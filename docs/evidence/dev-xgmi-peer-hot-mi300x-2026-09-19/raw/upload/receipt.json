@@ -1,0 +1,31 @@
+{
+  "command": [
+    "scp",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "/home/harsh/.codex-tmp/fe2o3-peer-hot-payload-445v_bom/native.py",
+    "/home/harsh/.codex-tmp/fe2o3-peer-hot-payload-445v_bom/results.py",
+    "/home/harsh/.codex-tmp/fe2o3-peer-hot-payload-445v_bom/base.py",
+    "/home/harsh/.codex-tmp/fe2o3-peer-hot-payload-445v_bom/source.tar.gz",
+    "/home/harsh/.codex-tmp/fe2o3-peer-hot-payload-445v_bom/binding.json",
+    "mi300x:/home/harsh/fe2o3-xgmi-peer-hot-20260919.833aa05ff0e3f703/"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789807681417981903,
+  "group_absent": true,
+  "pid": 544078,
+  "started_ns": 1789807672760475816,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 300
+}

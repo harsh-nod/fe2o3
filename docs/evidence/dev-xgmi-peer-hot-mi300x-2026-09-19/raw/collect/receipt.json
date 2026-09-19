@@ -1,0 +1,28 @@
+{
+  "command": [
+    "scp",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "-r",
+    "mi300x:/home/harsh/fe2o3-xgmi-peer-hot-20260919.833aa05ff0e3f703/results",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-peer-hot-mi300x-2026-09-19/remote"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789808030725073195,
+  "group_absent": true,
+  "pid": 568364,
+  "started_ns": 1789808007911574869,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 300
+}
