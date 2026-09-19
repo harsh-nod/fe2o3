@@ -208,7 +208,7 @@ fn consuming_staging_and_compile_wrapper_preserve_exact_admission_errors() {
                     Error::DuplicateReceiptClaim(identity)
                 }
                 Failure::Missing => {
-                    fixture.imports.remove(0);
+                    drop(fixture.imports.remove(0));
                     Error::MissingImportedReceipt(identity)
                 }
                 Failure::Unused => {
