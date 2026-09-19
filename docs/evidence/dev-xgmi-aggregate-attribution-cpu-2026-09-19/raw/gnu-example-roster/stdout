@@ -1,0 +1,12 @@
+tests::aggregate_and_ordinary_depth_bounds_are_distinct: test
+tests::aggregate_classification_includes_all_aggregate_modes: test
+tests::aggregate_diagnostic_call_roster_is_bounded_before_native_open: test
+tests::aggregate_hot_only_requires_depth_one: test
+tests::canaries_bind_the_exact_inner_copy_region: test
+tests::diagnostic_submission_roster_is_bounded_before_native_open: test
+tests::existing_modes_preserve_both_phases_and_report_schemas: test
+tests::patterns_distinguish_round_slot_and_direction: test
+tests::percentile_uses_nearest_rank: test
+tests::progress_flags_are_explicit_and_mutually_exclusive_before_native_open: test
+
+10 tests, 0 benchmarks

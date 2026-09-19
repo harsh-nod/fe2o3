@@ -1,0 +1,7 @@
+{
+  "docs/evidence/dev-sdma-direct-readback-cpu-2026-09-18/source.py": "a7a8b8e73aa1a0817e13f9e575369403ece42f4eb702fd1ec04d9bc57fcff953",
+  "docs/evidence/dev-xgmi-aggregate-attribution-cpu-2026-09-19/PROTOCOL.md": "5bdf8e408fcff1f6d6d0936b5dc5e58044320df202accdeb9fa044e8aa4d630a",
+  "docs/evidence/dev-xgmi-aggregate-attribution-cpu-2026-09-19/cpu.py": "a0b39f6821352fa3f62c9fc72484519cd7a27b4c65d54e1f77f13c44a6b23686",
+  "docs/evidence/dev-xgmi-aggregate-attribution-cpu-2026-09-19/test_cpu.py": "fe836678f75b5d69dc693223ae2ce4ccfc2694cbbe86231977d4ebce12efff87",
+  "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/native.py": "df740a80c83c94af02f7e7dfb1203dcf7c1eafbde0010e41219e4aac40b34bb7"
+}

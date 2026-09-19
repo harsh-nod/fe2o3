@@ -94,12 +94,17 @@ mod compute_state;
 mod directional_wait_diagnostic;
 mod drain_capture;
 mod xgmi_batch;
+mod xgmi_batch_diagnostic;
 #[cfg(feature = "hardware-diagnostic")]
 pub use directional_wait_diagnostic::KfdRuntimeDirectionalWaitObservationV1;
 #[cfg(feature = "hardware-diagnostic")]
 mod xgmi_diagnostic;
 #[cfg(test)]
 pub(crate) use drain_capture::tests::counted as counted_allocations_for_test_v1;
+#[cfg(feature = "hardware-diagnostic")]
+pub use xgmi_batch_diagnostic::{
+    KfdRuntimeXgmiAggregateCallDiagnosticsV1, KfdRuntimeXgmiAggregateCallObservationV1,
+};
 #[cfg(feature = "hardware-diagnostic")]
 pub use xgmi_diagnostic::{KfdRuntimeXgmiCallObservationV1, KfdRuntimeXgmiDiagnosticCallV1};
 mod generated_adoption;
@@ -7734,6 +7739,8 @@ pub struct KfdNativeXgmiRuntimeBackendV1 {
     queue_creation_roots: [Gfx942NativeXgmiSdmaQueueCreationRootV1; 2],
     #[cfg(feature = "hardware-diagnostic")]
     xgmi_diagnostic: Option<xgmi_diagnostic::Recorder>,
+    #[cfg(feature = "hardware-diagnostic")]
+    xgmi_aggregate_diagnostic: Option<xgmi_batch_diagnostic::Recorder>,
     terminal: bool,
     shutdown: bool,
     next_handle: u64,
@@ -9277,6 +9284,8 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             ],
             #[cfg(feature = "hardware-diagnostic")]
             xgmi_diagnostic: None,
+            #[cfg(feature = "hardware-diagnostic")]
+            xgmi_aggregate_diagnostic: None,
             terminal: false,
             shutdown: false,
             next_handle: 1,
@@ -9839,6 +9848,10 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         if batch_len == 0 {
             return Ok(XgmiBatchPublicationOutcomeV1::NoReadyWork);
         }
+        #[cfg(feature = "hardware-diagnostic")]
+        if let Some(recorder) = self.xgmi_aggregate_diagnostic.as_mut() {
+            recorder.invalidate();
+        }
         let mut active_batch = Vec::new();
         let mut requests = Vec::new();
         active_batch.try_reserve_exact(batch_len).map_err(|_| {
@@ -10024,6 +10037,10 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         mut active: XgmiRuntimeSubmissionV1,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if let Some(ticket) = active.ticket.take() {
+            #[cfg(feature = "hardware-diagnostic")]
+            if let Some(recorder) = self.xgmi_aggregate_diagnostic.as_mut() {
+                recorder.invalidate();
+            }
             #[cfg(feature = "hardware-diagnostic")]
             let diagnostic_id = xgmi_diagnostic::CallIdentity {
                 direction: active.direction,

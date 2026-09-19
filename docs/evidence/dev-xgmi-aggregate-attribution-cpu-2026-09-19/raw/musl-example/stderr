@@ -1,0 +1,2 @@
+    Finished `test` profile [optimized] target(s) in 0.23s
+     Running unittests examples/gfx942-runtime-xgmi-peer-benchmark.rs (target/x86_64-unknown-linux-musl/debug/examples/gfx942_runtime_xgmi_peer_benchmark-214d065a00134f14)

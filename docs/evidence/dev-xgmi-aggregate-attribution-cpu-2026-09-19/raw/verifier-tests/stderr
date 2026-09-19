@@ -1,0 +1,12 @@
+test_binding_and_source_reject_rebased_mutations (__main__.CpuEvidenceTests.test_binding_and_source_reject_rebased_mutations) ... ok
+test_exact_commands_and_profile (__main__.CpuEvidenceTests.test_exact_commands_and_profile) ... ok
+test_inventory_and_seal_reject_unaccounted_files (__main__.CpuEvidenceTests.test_inventory_and_seal_reject_unaccounted_files) ... ok
+test_json_rejects_duplicates_and_nonfinite_values (__main__.CpuEvidenceTests.test_json_rejects_duplicates_and_nonfinite_values) ... ok
+test_list_rosters_reject_omission_substitution_and_duplicates (__main__.CpuEvidenceTests.test_list_rosters_reject_omission_substitution_and_duplicates) ... ok
+test_receipts_reject_type_confusion_tampering_and_reordering (__main__.CpuEvidenceTests.test_receipts_reject_type_confusion_tampering_and_reordering) ... ok
+test_success_output_rejects_false_success_and_wrong_counts (__main__.CpuEvidenceTests.test_success_output_rejects_false_success_and_wrong_counts) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 1.453s
+
+OK

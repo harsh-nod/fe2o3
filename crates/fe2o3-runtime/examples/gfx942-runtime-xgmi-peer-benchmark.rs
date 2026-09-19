@@ -14,7 +14,7 @@ use fe2o3_runtime::{
 const CANARY_BYTES: usize = 32;
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_DEPTH: usize = 32;
-const USAGE: &str = "usage: gfx942-runtime-xgmi-peer-benchmark <unique-id-0> <unique-id-1> <bytes> <depth> <warmups> <samples> [--diagnose-xgmi|--aggregate-peer-batch|--aggregate-peer-batch-hot-only]";
+const USAGE: &str = "usage: gfx942-runtime-xgmi-peer-benchmark <unique-id-0> <unique-id-1> <bytes> <depth> <warmups> <samples> [--diagnose-xgmi|--aggregate-peer-batch|--aggregate-peer-batch-hot-only|--aggregate-peer-batch-hot-diagnose]";
 
 type BenchmarkResult<T> = Result<T, Box<dyn Error>>;
 type XgmiContextV1 = RuntimeContextV1<KfdNativeXgmiRuntimeBackendV1>;
@@ -31,6 +31,7 @@ enum ProgressModeV1 {
     Diagnostic,
     AggregatePeerBatch,
     AggregatePeerBatchHotOnly,
+    AggregatePeerBatchHotDiagnostic,
 }
 
 fn facade_error(error: impl Debug) -> Box<dyn Error> {
@@ -77,6 +78,12 @@ fn progress_mode(args: &[String]) -> BenchmarkResult<ProgressModeV1> {
         "--diagnose-xgmi" => Err("--diagnose-xgmi requires the hardware-diagnostic feature".into()),
         "--aggregate-peer-batch" => Ok(ProgressModeV1::AggregatePeerBatch),
         "--aggregate-peer-batch-hot-only" => Ok(ProgressModeV1::AggregatePeerBatchHotOnly),
+        "--aggregate-peer-batch-hot-diagnose" if cfg!(feature = "hardware-diagnostic") => {
+            Ok(ProgressModeV1::AggregatePeerBatchHotDiagnostic)
+        }
+        "--aggregate-peer-batch-hot-diagnose" => Err(
+            "--aggregate-peer-batch-hot-diagnose requires the hardware-diagnostic feature".into(),
+        ),
         _ => Err(USAGE.into()),
     }
 }
@@ -85,7 +92,8 @@ fn valid_depth(mode: ProgressModeV1, depth: usize) -> bool {
     let maximum = match mode {
         ProgressModeV1::Ordinary | ProgressModeV1::Diagnostic => MAX_DEPTH,
         ProgressModeV1::AggregatePeerBatch => MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1,
-        ProgressModeV1::AggregatePeerBatchHotOnly => 1,
+        ProgressModeV1::AggregatePeerBatchHotOnly
+        | ProgressModeV1::AggregatePeerBatchHotDiagnostic => 1,
     };
     depth != 0 && depth <= maximum
 }
@@ -93,18 +101,24 @@ fn valid_depth(mode: ProgressModeV1, depth: usize) -> bool {
 fn is_aggregate_mode(mode: ProgressModeV1) -> bool {
     matches!(
         mode,
-        ProgressModeV1::AggregatePeerBatch | ProgressModeV1::AggregatePeerBatchHotOnly
+        ProgressModeV1::AggregatePeerBatch
+            | ProgressModeV1::AggregatePeerBatchHotOnly
+            | ProgressModeV1::AggregatePeerBatchHotDiagnostic
     )
 }
 
 fn includes_remap_phase(mode: ProgressModeV1) -> bool {
-    mode != ProgressModeV1::AggregatePeerBatchHotOnly
+    !matches!(
+        mode,
+        ProgressModeV1::AggregatePeerBatchHotOnly | ProgressModeV1::AggregatePeerBatchHotDiagnostic
+    )
 }
 
 fn report_schema(mode: ProgressModeV1) -> &'static str {
     match mode {
         ProgressModeV1::AggregatePeerBatch => "fe2o3.xgmi-peer-aggregate-benchmark.v1",
-        ProgressModeV1::AggregatePeerBatchHotOnly => {
+        ProgressModeV1::AggregatePeerBatchHotOnly
+        | ProgressModeV1::AggregatePeerBatchHotDiagnostic => {
             "fe2o3.xgmi-peer-aggregate-hot-only-benchmark.v1"
         }
         ProgressModeV1::Ordinary | ProgressModeV1::Diagnostic => "fe2o3.xgmi-peer-benchmark.v1",
@@ -123,9 +137,29 @@ fn diagnostic_submission_count(rounds: usize, depth: usize) -> BenchmarkResult<u
         .ok_or_else(|| "XGMI diagnostic submission count exceeds the bounded roster".into())
 }
 
+#[cfg(any(feature = "hardware-diagnostic", test))]
+fn aggregate_diagnostic_call_count(rounds: usize, depth: usize) -> BenchmarkResult<usize> {
+    if depth != 1 {
+        return Err("XGMI aggregate diagnostics require depth 1".into());
+    }
+    rounds
+        .checked_add(1)
+        .and_then(|n| n.checked_mul(2))
+        .filter(|n| *n <= 40_000)
+        .ok_or_else(|| "XGMI aggregate diagnostic call count exceeds the bounded roster".into())
+}
+
 fn diagnostic_label(enabled: bool) -> &'static str {
     if enabled {
         " diagnostic=xgmi-host-stages-v1"
+    } else {
+        ""
+    }
+}
+
+fn aggregate_diagnostic_label(mode: ProgressModeV1) -> &'static str {
+    if mode == ProgressModeV1::AggregatePeerBatchHotDiagnostic {
+        " diagnostic=aggregate-host-attribution"
     } else {
         ""
     }
@@ -159,7 +193,7 @@ fn report_measurement(
         .ok_or("XGMI bytes per round overflow")?;
     if is_aggregate_mode(mode) {
         println!(
-            "backend=kfd schema={} surface=runtime-facade unique_ids={:016x},{:016x} target=gfx942:xnack- bytes={} depth={} queue_depth={} batch_size={} direction=forward-then-reverse outstanding_depth={} engine_parallelism=ordered-single-sdma warmups={} samples={} measurement={} peer_access=topology-xgmi mapping_lifetime={} prime_batches={} doorbells_per_batch=1 progress=explicit-exact-roster-aggregate-wait aggregate_roster=exact-round-submissions background_progress=false forward_engine=topology-selected reverse_engine=topology-selected forward_p50_ns={} forward_p95_ns={} forward_p50_GBps={:.3} reverse_p50_ns={} reverse_p95_ns={} reverse_p50_GBps={:.3} canaries=pass teardown=explicit timing=facade-enqueue-through-aggregate-close",
+            "backend=kfd schema={} surface=runtime-facade unique_ids={:016x},{:016x} target=gfx942:xnack- bytes={} depth={} queue_depth={} batch_size={} direction=forward-then-reverse outstanding_depth={} engine_parallelism=ordered-single-sdma warmups={} samples={} measurement={} peer_access=topology-xgmi mapping_lifetime={} prime_batches={} doorbells_per_batch=1 progress=explicit-exact-roster-aggregate-wait aggregate_roster=exact-round-submissions background_progress=false forward_engine=topology-selected reverse_engine=topology-selected forward_p50_ns={} forward_p95_ns={} forward_p50_GBps={:.3} reverse_p50_ns={} reverse_p95_ns={} reverse_p50_GBps={:.3} canaries=pass teardown=explicit timing=facade-enqueue-through-aggregate-close{}",
             report_schema(mode),
             unique_ids[0],
             unique_ids[1],
@@ -179,6 +213,7 @@ fn report_measurement(
             reverse_p50,
             reverse_p95,
             bytes_per_round as f64 / reverse_p50 as f64,
+            aggregate_diagnostic_label(mode),
         );
     } else {
         println!(
@@ -464,6 +499,8 @@ fn main() -> BenchmarkResult<()> {
     let mode = progress_mode(&args)?;
     #[cfg(feature = "hardware-diagnostic")]
     let diagnostic = mode == ProgressModeV1::Diagnostic;
+    #[cfg(feature = "hardware-diagnostic")]
+    let aggregate_diagnostic = mode == ProgressModeV1::AggregatePeerBatchHotDiagnostic;
     let aggregate = is_aggregate_mode(mode);
     let unique_ids = [parse_unique_id(&args[0])?, parse_unique_id(&args[1])?];
     let copy_bytes: usize = args[2].parse()?;
@@ -485,6 +522,12 @@ fn main() -> BenchmarkResult<()> {
     } else {
         None
     };
+    #[cfg(feature = "hardware-diagnostic")]
+    let aggregate_diagnostic_calls = if aggregate_diagnostic {
+        Some(aggregate_diagnostic_call_count(rounds, depth)?)
+    } else {
+        None
+    };
     let total_bytes = copy_bytes
         .checked_add(2 * CANARY_BYTES)
         .and_then(|value| u64::try_from(value).ok())
@@ -497,6 +540,11 @@ fn main() -> BenchmarkResult<()> {
         if let Some(expected) = diagnostic_submissions {
             backend
                 .enable_xgmi_copy_diagnostics_v1(expected, 40_000)
+                .map_err(facade_error)?;
+        }
+        if let Some(expected) = aggregate_diagnostic_calls {
+            backend
+                .enable_xgmi_aggregate_diagnostics_v1(expected)
                 .map_err(facade_error)?;
         }
         backend
@@ -635,6 +683,33 @@ fn main() -> BenchmarkResult<()> {
         }
     }
 
+    #[cfg(feature = "hardware-diagnostic")]
+    if aggregate_diagnostic {
+        let records = backend
+            .finish_xgmi_aggregate_diagnostics_v1()
+            .map_err(facade_error)?;
+        for (index, record) in records.into_iter().enumerate() {
+            let ns = |value: Option<u64>| {
+                value.map_or_else(|| "unavailable".to_owned(), |n| n.to_string())
+            };
+            println!(
+                "schema=fe2o3.xgmi-aggregate-host-attribution.v1 backend=kfd ordinal={} backend_submission={} source_uid={:016x} destination_uid={:016x} admission_validation_ns={} preparation_ns={} opening_currentness_ns={} submission_ns={} wait_ns={} closing_currentness_ns={} settlement_ns={} total_ns={} authority=none teardown=explicit timing=backend-aggregate-progress-host-only",
+                index,
+                record.backend_submission,
+                record.source_device,
+                record.destination_device,
+                ns(record.host.admission_validation_ns),
+                ns(record.host.preparation_ns),
+                ns(record.host.opening_currentness_ns),
+                ns(record.host.submission_ns),
+                ns(record.host.wait_ns),
+                ns(record.host.closing_currentness_ns),
+                ns(record.host.settlement_ns),
+                ns(record.host.total_ns),
+            );
+        }
+    }
+
     if let Some((remap_forward_ns, remap_reverse_ns)) = remap_measurements {
         report_measurement(
             unique_ids,
@@ -724,6 +799,19 @@ mod tests {
             progress_mode(&args).unwrap(),
             ProgressModeV1::AggregatePeerBatchHotOnly
         );
+        args[6] = "--aggregate-peer-batch-hot-diagnose".into();
+        let aggregate_diagnostic = progress_mode(&args);
+        if cfg!(feature = "hardware-diagnostic") {
+            assert_eq!(
+                aggregate_diagnostic.unwrap(),
+                ProgressModeV1::AggregatePeerBatchHotDiagnostic
+            );
+        } else {
+            assert_eq!(
+                aggregate_diagnostic.unwrap_err().to_string(),
+                "--aggregate-peer-batch-hot-diagnose requires the hardware-diagnostic feature"
+            );
+        }
         args.push("--diagnose-xgmi".into());
         assert!(progress_mode(&args).is_err());
         args.swap(6, 7);
@@ -754,17 +842,25 @@ mod tests {
 
     #[test]
     fn aggregate_hot_only_requires_depth_one() {
-        assert!(valid_depth(ProgressModeV1::AggregatePeerBatchHotOnly, 1));
-        assert!(!valid_depth(ProgressModeV1::AggregatePeerBatchHotOnly, 0));
-        assert!(!valid_depth(ProgressModeV1::AggregatePeerBatchHotOnly, 2));
+        for mode in [
+            ProgressModeV1::AggregatePeerBatchHotOnly,
+            ProgressModeV1::AggregatePeerBatchHotDiagnostic,
+        ] {
+            assert!(valid_depth(mode, 1));
+            assert!(!valid_depth(mode, 0));
+            assert!(!valid_depth(mode, 2));
+        }
     }
 
     #[test]
-    fn aggregate_classification_includes_both_aggregate_modes() {
+    fn aggregate_classification_includes_all_aggregate_modes() {
         assert!(!is_aggregate_mode(ProgressModeV1::Ordinary));
         assert!(!is_aggregate_mode(ProgressModeV1::Diagnostic));
         assert!(is_aggregate_mode(ProgressModeV1::AggregatePeerBatch));
         assert!(is_aggregate_mode(ProgressModeV1::AggregatePeerBatchHotOnly));
+        assert!(is_aggregate_mode(
+            ProgressModeV1::AggregatePeerBatchHotDiagnostic
+        ));
     }
 
     #[test]
@@ -795,6 +891,25 @@ mod tests {
             report_schema(ProgressModeV1::AggregatePeerBatchHotOnly),
             "fe2o3.xgmi-peer-aggregate-hot-only-benchmark.v1"
         );
+        assert!(!includes_remap_phase(
+            ProgressModeV1::AggregatePeerBatchHotDiagnostic
+        ));
+        assert_eq!(
+            report_schema(ProgressModeV1::AggregatePeerBatchHotDiagnostic),
+            "fe2o3.xgmi-peer-aggregate-hot-only-benchmark.v1"
+        );
+        for mode in [
+            ProgressModeV1::Ordinary,
+            ProgressModeV1::Diagnostic,
+            ProgressModeV1::AggregatePeerBatch,
+            ProgressModeV1::AggregatePeerBatchHotOnly,
+        ] {
+            assert_eq!(aggregate_diagnostic_label(mode), "");
+        }
+        assert_eq!(
+            aggregate_diagnostic_label(ProgressModeV1::AggregatePeerBatchHotDiagnostic),
+            " diagnostic=aggregate-host-attribution"
+        );
     }
 
     #[test]
@@ -804,6 +919,16 @@ mod tests {
         assert_eq!(diagnostic_submission_count(4999, 1).unwrap(), 19998);
         for (rounds, depth) in [(40, 0), (40, 2), (5000, 1), (usize::MAX, 1)] {
             assert!(diagnostic_submission_count(rounds, depth).is_err());
+        }
+    }
+
+    #[test]
+    fn aggregate_diagnostic_call_roster_is_bounded_before_native_open() {
+        assert_eq!(aggregate_diagnostic_call_count(40, 1).unwrap(), 82);
+        assert_eq!(aggregate_diagnostic_call_count(1, 1).unwrap(), 4);
+        assert_eq!(aggregate_diagnostic_call_count(19_999, 1).unwrap(), 40_000);
+        for (rounds, depth) in [(40, 0), (40, 2), (20_000, 1), (usize::MAX, 1)] {
+            assert!(aggregate_diagnostic_call_count(rounds, depth).is_err());
         }
     }
 }

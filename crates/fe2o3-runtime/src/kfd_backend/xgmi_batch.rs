@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+use super::xgmi_batch_diagnostic::{CallTimer, Phase};
 use super::*;
 use crate::{
     MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1, RuntimePeerCopyBatchBackendV1,
@@ -344,17 +345,27 @@ type ScopedOperation<S> = Operation<
     <S as Scope>::Error,
 >;
 
+#[cfg(test)]
 fn execute<S: Scope>(
-    mut scope: S,
+    scope: S,
     input: Input<S::Request, S::Ticket>,
     deadline: Instant,
 ) -> (ScopedOperation<S>, Result<(), S::Error>) {
+    execute_profiled::<S, false>(scope, input, deadline, &mut CallTimer::new())
+}
+
+fn execute_profiled<S: Scope, const PROFILE: bool>(
+    mut scope: S,
+    input: Input<S::Request, S::Ticket>,
+    deadline: Instant,
+    timer: &mut CallTimer<PROFILE>,
+) -> (ScopedOperation<S>, Result<(), S::Error>) {
     let tickets = match input {
-        Input::Ready(requests) => scope.submit(requests),
+        Input::Ready(requests) => timer.measure(Phase::Submission, || scope.submit(requests)),
         Input::Published(tickets) => Ok(tickets),
     };
     let operation = match tickets {
-        Ok(tickets) => scope.wait(tickets, deadline),
+        Ok(tickets) => timer.measure(Phase::Wait, || scope.wait(tickets, deadline)),
         Err(operation) => operation,
     };
     let terminal = match &operation {
@@ -363,7 +374,7 @@ fn execute<S: Scope>(
         Operation::Unpublished { .. } | Operation::Completed(_) => false,
     };
     // Custody in `operation` remains local and unobservable until full close.
-    let closing = scope.finish(terminal);
+    let closing = timer.measure(Phase::Closing, || scope.finish(terminal));
     (operation, closing)
 }
 
@@ -610,14 +621,17 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         }
     }
 
-    fn run_admitted_peer_batch(
+    #[allow(clippy::too_many_arguments)]
+    fn run_admitted_peer_batch<const PROFILE: bool>(
         &mut self,
         admission: Admission,
         ids: Vec<u64>,
         mut requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
         tickets: Vec<Gfx942SdmaCopyTicketV1>,
         deadline: Instant,
+        timer: &mut CallTimer<PROFILE>,
     ) -> Result<RuntimePeerCopyBatchPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let preparation_start = timer.start();
         let direction = admission.direction;
         self.ensure_queue(direction)?;
         if !admission.published {
@@ -681,13 +695,14 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 ));
             }
         }
+        timer.end(Phase::Preparation, preparation_start);
         let result = {
             let (source, destination) = Self::session_pair(&mut self.sessions, direction);
             let queue = self.queues[direction]
                 .as_mut()
                 .unwrap_or_else(|| std::process::abort());
-            match queue.begin_batch(source, destination) {
-                Ok(scope) => Ok(execute(
+            match timer.measure(Phase::Opening, || queue.begin_batch(source, destination)) {
+                Ok(scope) => Ok(execute_profiled::<_, PROFILE>(
                     scope,
                     if admission.published {
                         Input::Published(tickets)
@@ -695,6 +710,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                         Input::Ready(requests)
                     },
                     deadline,
+                    timer,
                 )),
                 Err(error) => Err((error, requests)),
             }
@@ -709,7 +725,8 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 return Err(self.terminal_error(format!("XGMI aggregate opening: {error}")));
             }
         };
-        match operation {
+        let settlement_start = timer.start();
+        let outcome = match operation {
             Operation::PublicationIndeterminate { error, tickets } => {
                 self.install_batch_tickets(&ids, tickets, admission);
                 self.batch_quarantine(direction);
@@ -756,7 +773,9 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             Operation::Indeterminate { error, completed } => {
                 self.finish_batch_completions(&ids, completed, direction, Some(error))
             }
-        }
+        };
+        timer.end(Phase::Settlement, settlement_start);
+        outcome
     }
 
     fn fail_batch_preparation(
@@ -819,12 +838,14 @@ impl KfdNativeXgmiRuntimeBackendV1 {
     }
 }
 
-impl RuntimePeerCopyBatchBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
-    fn progress_peer_copy_batch_v1(
+impl KfdNativeXgmiRuntimeBackendV1 {
+    fn progress_peer_copy_batch_profiled<const PROFILE: bool>(
         &mut self,
         requested: &[u64],
         deadline: Instant,
-    ) -> Result<RuntimePeerCopyBatchPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        timer: &mut CallTimer<PROFILE>,
+    ) -> Result<RuntimePeerCopyBatchPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let admission_start = timer.start();
         self.require_live()?;
         let admission = admit(
             requested,
@@ -887,13 +908,66 @@ impl RuntimePeerCopyBatchBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
         if self.in_flight_by_direction[admission.direction].capacity() < ids.len() {
             return Err(self.terminal_error("XGMI aggregate lacks reserved in-flight slots"));
         }
+        timer.end(Phase::Admission, admission_start);
         #[cfg(feature = "hardware-diagnostic")]
         if let Some(recorder) = self.xgmi_diagnostic.as_mut() {
             recorder.invalidate();
         }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.run_admitted_peer_batch(admission, ids, requests, tickets, deadline)
+            self.run_admitted_peer_batch::<PROFILE>(
+                admission, ids, requests, tickets, deadline, timer,
+            )
         }));
         finish_native_attempt(result, &mut self.terminal)
+    }
+}
+
+impl RuntimePeerCopyBatchBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
+    fn progress_peer_copy_batch_v1(
+        &mut self,
+        requested: &[u64],
+        deadline: Instant,
+    ) -> Result<RuntimePeerCopyBatchPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        #[cfg(feature = "hardware-diagnostic")]
+        if self.xgmi_aggregate_diagnostic.is_some() {
+            // This lookup identifies a diagnostic candidate only. Operational
+            // admission below still validates the complete roster and custody.
+            let identity = match requested {
+                [id] => self
+                    .active
+                    .get(id)
+                    .map(|active| xgmi_batch_diagnostic::CallIdentity {
+                        direction: active.direction,
+                        submission: *id,
+                        published: active.ticket.is_some(),
+                    }),
+                _ => None,
+            };
+            let recorder = self
+                .xgmi_aggregate_diagnostic
+                .as_mut()
+                .expect("armed recorder");
+            let armed = match identity {
+                Some(identity) => recorder.begin(identity, requested.len()),
+                None => {
+                    recorder.invalidate();
+                    false
+                }
+            };
+            if armed {
+                let start = Instant::now();
+                let mut timer = CallTimer::<true>::new();
+                let result =
+                    self.progress_peer_copy_batch_profiled(requested, deadline, &mut timer);
+                let observed = matches!(result, Ok(RuntimePeerCopyBatchPollV1::Succeeded))
+                    .then(|| timer.finish(start));
+                self.xgmi_aggregate_diagnostic
+                    .as_mut()
+                    .expect("armed recorder")
+                    .finish(identity.expect("armed identity"), observed);
+                return result;
+            }
+        }
+        self.progress_peer_copy_batch_profiled(requested, deadline, &mut CallTimer::<false>::new())
     }
 }

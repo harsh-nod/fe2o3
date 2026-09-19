@@ -39,8 +39,11 @@ their dependency, stream and allocation custody. Caller subsets are rejected.
   formatting diagnostics or dropping the panic payload in the abort handler.
   This is an explicit process-exit profile, not resumable unwind recovery.
 
-Single-packet host-attribution diagnostics do not cover aggregate calls. An
-aggregate invalidates an enabled capture rather than silently omitting calls.
+The original single-packet host-attribution recorder does not cover aggregate
+calls; an aggregate invalidates that capture rather than silently omitting calls.
+A separate opt-in [aggregate host recorder](runtime-xgmi-aggregate-diagnostics-v1.md)
+supports first-attempt, successful depth-one calls with ascending submission IDs.
+The two recorders are mutually exclusive and add no execution authority.
 
 ## Admission Cost
 

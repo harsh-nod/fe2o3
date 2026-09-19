@@ -1,0 +1,14 @@
+
+running 9 tests
+test kfd_backend::xgmi_diagnostic::tests::admission_and_unsupported_shape_are_bounded ... ok
+test kfd_backend::xgmi_diagnostic::tests::errors_unwinds_and_wrong_identity_never_yield_a_complete_capture ... ok
+test kfd_backend::xgmi_diagnostic::tests::exact_two_direction_roster_preserves_identity_without_reallocation ... ok
+test kfd_backend::xgmi_diagnostic::tests::extraction_requires_shutdown_quiescence_and_is_single_use ... ok
+test kfd_backend::xgmi_diagnostic::tests::invalid_duration_is_not_zero_or_silently_accepted ... ok
+test kfd_backend::xgmi_diagnostic::tests::pending_exhaustion_and_foreign_poll_invalidate_without_growing_storage ... ok
+test kfd_backend::xgmi_diagnostic::tests::real_unwind_leaves_pending_and_cannot_be_rehabilitated ... ok
+test kfd_backend::xgmi_diagnostic::tests::unsupported_aggregate_invalidates_even_a_previously_complete_capture ... ok
+test kfd_backend::xgmi_diagnostic::tests::production_records_only_after_all_native_custody_branches_settle ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1180 filtered out; finished in 0.00s
+

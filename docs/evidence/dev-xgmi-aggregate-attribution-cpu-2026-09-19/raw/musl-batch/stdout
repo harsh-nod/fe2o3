@@ -1,0 +1,43 @@
+
+running 38 tests
+test kfd_backend::xgmi_batch::tests::admission_leaves_dependency_blocked_successors_outside_the_batch ... ok
+test kfd_backend::xgmi_batch::tests::admission_requires_an_exact_set_but_preserves_native_fifo_order ... ok
+test kfd_backend::xgmi_batch::tests::admission_scaling::bounded_metadata_mutations_match_the_frozen_reference ... ok
+test kfd_backend::xgmi_batch::tests::admission_scaling::bounded_ready_permutations_match_the_frozen_reference ... ok
+test kfd_backend::xgmi_batch::tests::admission_scaling::either_scratch_reservation_failure_precedes_later_classification ... ok
+test kfd_backend::xgmi_batch::tests::admission_scaling::injected_success_reserves_both_indexes_and_matches_the_reference ... ok
+test kfd_backend::xgmi_batch::tests::admission_scaling::late_index_corruption_precedes_subset_or_foreign_caller_errors ... ok
+test kfd_backend::xgmi_batch::tests::admission_scaling::malformed_requests_are_invalid_before_any_scratch_reservation ... ok
+test kfd_backend::xgmi_batch::tests::admission_scaling::sixty_five_thousand_active_blocked_records_preserve_rosters ... ok
+test kfd_backend::xgmi_batch::tests::admission_separates_caller_errors_from_corrupt_indexes ... ok
+test kfd_backend::xgmi_batch::tests::dependency_indexes_retain_and_wake_blocked_successors_exactly ... ok
+test kfd_backend::xgmi_batch::tests::dependency_scaling::asymmetric_dependency_predicates_and_requested_order_match_the_reference ... ok
+test kfd_backend::xgmi_batch::tests::admission_scaling::admission_scaling_profile_rows ... ok
+test kfd_backend::xgmi_batch::tests::dependency_scaling::dependency_use_count_overflow_is_reported_without_wrapping ... ok
+test kfd_backend::xgmi_batch::tests::dependency_scaling::empty_selection_is_valid_without_scratch_reservation ... ok
+test kfd_backend::xgmi_batch::tests::dependency_scaling::late_waiter_and_count_corruptions_match_the_reference ... ok
+test kfd_backend::xgmi_batch::tests::dependency_scaling::dependency_scaling_profile_rows ... ok
+test kfd_backend::xgmi_batch::tests::dependency_scaling::maximum_healthy_requested_dependency_breadth_is_accepted ... ok
+test kfd_backend::xgmi_batch::tests::dependency_scaling::one_active_scan_counts_each_source_record_once_for_relevant_duplicates ... ok
+test kfd_backend::xgmi_batch::tests::dependency_scaling::scratch_capacity_precedes_predicate_mismatch_without_mutating_inputs ... ok
+test kfd_backend::xgmi_batch::tests::dependency_scaling::selected_and_unselected_duplicate_dependencies_preserve_reference_semantics ... ok
+test kfd_backend::xgmi_batch::tests::every_typed_operation_outcome_closes_before_returning_custody ... ok
+test kfd_backend::xgmi_batch::tests::dependency_scaling::successful_scratch_reservation_is_single_and_nonmutating ... ok
+test kfd_backend::xgmi_batch::tests::profile_equivalence::profiling_preserves_every_typed_outcome_close_error_and_custody_order ... ok
+test kfd_backend::xgmi_batch::tests::profile_equivalence::profiling_preserves_submit_wait_and_close_panic_payload_identity ... ok
+test kfd_backend::xgmi_batch::tests::profile_equivalence::profiling_preserves_timeout_retry_without_resubmission_or_deadline_extension ... ok
+test kfd_backend::xgmi_batch::tests::ready_submits_once_and_retry_only_waits_with_the_original_deadline ... ok
+test kfd_backend::xgmi_batch_diagnostic::tests::disabled_timer_runs_each_operation_once_without_recording ... ok
+test kfd_backend::xgmi_batch_diagnostic::tests::duplicate_phase_is_permanently_unavailable ... ok
+test kfd_backend::xgmi_batch_diagnostic::tests::enabled_missing_or_duplicate_span_is_permanently_unavailable ... ok
+test kfd_backend::xgmi_batch_diagnostic::tests::enabled_timer_preserves_results_and_all_phase_slots ... ok
+test kfd_backend::xgmi_batch_diagnostic::tests::errors_wrong_identity_and_incomplete_calls_never_record_success ... ok
+test kfd_backend::xgmi_batch_diagnostic::tests::extraction_requires_complete_teardown_and_is_single_use ... ok
+test kfd_backend::xgmi_batch_diagnostic::tests::missing_overflow_and_impossible_totals_are_invalid ... ok
+test kfd_backend::xgmi_batch_diagnostic::tests::recorder_preallocates_exact_roster_and_preserves_identity_order ... ok
+test kfd_backend::xgmi_batch_diagnostic::tests::recorder_rejects_unsupported_or_noncanonical_calls ... ok
+test kfd_backend::xgmi_batch_diagnostic::tests::timer_preserves_error_and_original_panic_identity ... ok
+test kfd_backend::xgmi_batch::tests::native_attempt_unwind_aborts_without_dropping_the_panic_payload ... ok
+
+test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 1151 filtered out; finished in 0.43s
+

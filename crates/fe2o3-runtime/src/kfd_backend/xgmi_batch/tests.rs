@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 mod admission_scaling;
 mod dependency_scaling;
+mod profile_equivalence;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Fault {

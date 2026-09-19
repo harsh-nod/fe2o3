@@ -1,0 +1,29 @@
+{
+  "command": [
+    "rustfmt",
+    "--edition",
+    "2024",
+    "--check",
+    "--config",
+    "skip_children=true",
+    "crates/fe2o3-runtime/examples/gfx942-runtime-xgmi-peer-benchmark.rs",
+    "crates/fe2o3-runtime/src/kfd_backend.rs",
+    "crates/fe2o3-runtime/src/kfd_backend/xgmi_batch.rs",
+    "crates/fe2o3-runtime/src/kfd_backend/xgmi_batch/tests.rs",
+    "crates/fe2o3-runtime/src/kfd_backend/xgmi_diagnostic.rs",
+    "crates/fe2o3-runtime/src/kfd_backend/xgmi_batch_diagnostic.rs",
+    "crates/fe2o3-runtime/src/kfd_backend/xgmi_batch/tests/profile_equivalence.rs"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789810085941940583,
+  "group_absent": true,
+  "pid": 728036,
+  "started_ns": 1789810085220711241,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 180
+}
