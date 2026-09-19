@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "redundant-store-policy7")]
+mod redundant_store_policy7;
+
 #[cfg(feature = "integer-identity")]
 mod integer_identity;
 
@@ -83,6 +86,7 @@ mod ordered_region_v31;
 mod ordered_program_v32;
 
 #[cfg(not(any(
+    feature = "redundant-store-policy7",
     feature = "integer-identity",
     feature = "wave64-capture",
     feature = "constant-shift",

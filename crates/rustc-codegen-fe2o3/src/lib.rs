@@ -43,6 +43,7 @@ mod production_rustc_driver_v1;
 mod production_rustc_drop_v1;
 mod production_rustc_intrinsic_v1;
 mod production_rustc_slice_metadata_v1;
+mod production_safe_core_shift_v1;
 mod production_semantic_body_v1;
 mod production_semantic_debug_v1;
 mod production_semantic_fn_abi_v1;
@@ -99,6 +100,7 @@ pub use production_rustc_driver_v1::{
     run_production_amdgpu_llvm_extraction_driver_v1, run_production_extraction_driver_v1,
     run_production_fixed_checked_output_extraction_driver_v1,
     run_production_fixed_checked_output_policy6_extraction_driver_v1,
+    run_production_fixed_checked_output_policy7_extraction_driver_v1,
     run_production_gfx942_compiler_handoff_extraction_driver_v1,
     run_production_gfx942_llvm_extraction_driver_v1, run_production_ranked_extraction_driver_v1,
     run_production_simulation_bundle_extraction_driver_v1,

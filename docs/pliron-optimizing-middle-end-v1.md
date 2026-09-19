@@ -761,12 +761,15 @@ approved-runtime qualification or protected/default-pipeline activation.
 ## Private scalar-borrow transport
 
 The ranked source projector can retain a same-block mutable reference to a
-once-initialized private fixed-width integer temporary. A complete, prepaid
-source census checks the original borrow, each exact read occurrence, storage
-lifetime and nonescape before mapping it to the original private allocation.
+private fixed-width integer temporary initialized before its unique borrow.
+Repeated direct writes before that borrow are eligible only in the same live
+storage epoch; a kill or restart cannot be repaired by a later overwrite.
+A complete, prepaid source census checks the original borrow, each exact read
+occurrence, storage lifetime and nonescape before mapping it to the original
+private allocation.
 The existing provenance result remains an independent requirement. Shared/raw
 references, projections, reborrows, alias copies, calls, cross-block uses,
-reinitialization and premature storage death do not gain admission.
+writes after the borrow and premature storage death do not gain admission.
 
 The census is linear in locals, blocks, statements and operand uses, followed
 by constant-time occurrence queries. Borrowed source identities and the caller
@@ -909,6 +912,18 @@ shift coordinates. Query errors preserve their resource or semantic refusal;
 no query or scratch allocation escapes the scope. This does not establish
 retained-helper template or final native correspondence admission.
 
+Safe core `wrapping_shl` and `wrapping_shr` calls have a separate, closed
+normalization recipe for signed/unsigned 8/16/32/64-bit integers. The collector
+and closure traversal authenticate the actual inherent core item, monomorphic
+signature, body and FnAbi before accepting this recipe. Source construction
+reobserves those subjects and lowers the call to typed value capture, a full-U32
+count mask, a shift and its original successor. Synthetic locals join the
+canonical raw/receiver-local order and source coordinates remain attached.
+Mixed-call scans and remapping use the same cumulative work ledger. This is
+a reviewed pinned-core semantic summary, not a proof of arbitrary library
+implementations; it adds no exemption for direct unchecked, unsafe or panic
+calls and no semantic wire opcode.
+
 ## Checked integer continuation
 
 Policy6 consumes the existing checked Policy5 result rather than rerunning
@@ -992,8 +1007,17 @@ evidence; all other incomplete reasons and conflicts remain errors. Private
 sorted root/call indices bound repeated joins without changing report coordinates.
 Borrowed receipt backing remains in the caller's accounting domain, while new
 decoded scratch and witness headers are charged locally. This borrowed relation
-neither associates the consuming V4 input proof nor serializes the complete
-final-output chain.
+does not itself associate an input proof or serialize the final-output chain.
+
+The separate consuming V4 association requires a genuine signed native owner,
+its checked final-I receipts, original-N formal evidence and the five typed
+digest/length identities for semantic MIR, middle-end evidence, original native
+N, correspondence and original formal evidence. It also compares the complete
+retained Verus roster bytes. Equal bytes in different identity domains are not
+interchangeable. Original/final root joins use bounded, metered name indexes;
+they retain independent physical root ordinals and exact duplicate refusal.
+This in-process type is not a new F2NOUT frame, a signed-positive qualification
+or permission to reinterpret the existing scalar-only transcript.
 
 The integer continuation's observation goldens live under
 `crates/fe2o3-kernel-opt/tests/integer-continuation-golden/`. They cover an
@@ -1030,11 +1054,45 @@ owner; fresh J reports are checked, not reused as old I evidence.
 
 The consuming source-owned continuation retains the whole Direct or UnitLocal
 Policy6 prefix once, actual J and its fresh formal reports. Replay rederives
-those reports from J and rejects historical I reports in their place. Its
+those reports from J and rejects stale external-access coordinates. A private-only
+deletion may leave empty external obligations byte-identical to I; exact equality
+with fresh J is required, not a rule that every report must change. Its
 storage receipt covers only added J, metadata and report rows; inherited caller
 reservations, including separately reserved B, remain caller-owned on all exits.
 
-This service is not in the fixed production schedule and is not general DSE.
-Fresh J native artifacts/receipts and ordinary-source native/simulator
-qualification remain required. Existing ordered-store preservation checks are
-not weakened to admit this separate relation.
+This exact-slot service is not general DSE. Existing ordered-store preservation
+checks are not weakened to admit its separate relation.
+
+## Fixed Policy7 and final J
+
+The distinct Policy7 schedule consumes the complete Policy6 prefix once and
+runs one checked redundant-private-Store continuation from I to J. It prepares
+fresh J LLVM, descriptors, formal reports and worker artifacts; it does not
+emit I merely to obtain the prefix. Its sealed execution record binds the full
+Policy6 record, I/J identities and every deleted/retained operation row.
+Direct and genuine UnitLocal source paths keep original N, optional erased E,
+historical I and final J distinct.
+
+The literal fixed7 extraction driver uses one live phase budget through
+preparation, replay, consuming extraction and output cleanup. Invocation-local
+optional census observes that same transaction; it cannot select a policy or
+change its result. Extracted J artifacts and descriptors retain a conservative
+source-history floor through their callback lifetime. Metadata comparisons are
+charged before use, and cleanup checks the actual budget slot and work ledger.
+This is an extraction API, not default or protected publication activation.
+
+A separate native7 owner consumes that unsigned stage and the genuine signed
+original-source lineage. Typed consuming endpoints then associate final-J
+receipts and original-N V4 evidence. They reuse private fixed-version checkers,
+but final-J admission accepts only actual Direct7/Erased7 owners and fresh J
+reports. N association borrows the sole retained prefix as source evidence;
+it never uses historical I as final-J evidence. Each endpoint replays the full
+Policy7 witness, moves existing owners and preserves cumulative accounting.
+Missing signed source evidence remains an error, not an unsigned fallback.
+
+Complete heterogeneous wire composition, final graph proof execution,
+native-V12 protected host replay and default activation remain separate work.
+Constructed source/receipt component tests do not establish genuine signed
+end-to-end qualification. The fixed7 census/route tests are also not evidence
+that ordinary Rust retains a redundant private Store: that qualification must
+observe an actual I-to-J mutation, fresh J native output and simulator agreement.

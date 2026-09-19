@@ -329,6 +329,46 @@ fn masked_shift_roster_joins_exact_ids_in_either_canonical_order() {
     assert!(unique_root_ordinals([ROOTS[0], ROOTS[1], ROOTS[0]]).is_err());
 }
 
+// Inert framing rows only, shared by protocol tests. This does not invoke a
+// simulator, construct a compiler owner or qualify any source invocation.
+pub(in super::super) fn inert_report_framing(
+    batch: Batch,
+    output_digest: [u8; 32],
+) -> SimulationObservation {
+    SimulationObservation {
+        case: Case::MaskedShift(batch),
+        native_output_digest: output_digest,
+        simulator_digest: output_digest,
+        simulator_wire_version: 12,
+        canonical_bytes: 1,
+        numerical_policy: NUMERICAL_POLICY.into(),
+        scenarios: scenarios(batch)
+            .unwrap()
+            .into_iter()
+            .map(|scenario| {
+                let grid = expected_grid(scenario.active);
+                ScenarioObservation {
+                    label: scenario.label,
+                    grid,
+                    workgroup: [64, 1, 1],
+                    output_elements: scenario.output_elements,
+                    written_elements: scenario.written_elements,
+                    checked_backing_bytes: scenario
+                        .expected
+                        .iter()
+                        .map(|row| row.buffer.bytes().len())
+                        .sum(),
+                    steps: 1,
+                    invocations: grid[0],
+                    deterministic_replays: 2,
+                    conflicts: Assessment::NoObserved,
+                    races: Assessment::NoObserved,
+                }
+            })
+            .collect(),
+    }
+}
+
 #[test]
 fn masked_shift_report_requires_exact_grid_and_workgroup_for_every_batch() {
     for (active, extent) in [(0, 64), (1, 64), (63, 64), (64, 64), (65, 128)] {
@@ -336,39 +376,7 @@ fn masked_shift_report_requires_exact_grid_and_workgroup_for_every_batch() {
     }
     for batch in Batch::all() {
         let case = Case::MaskedShift(batch);
-        // Inert framing rows only; no compiler or execution owner is fabricated.
-        let report = SimulationObservation {
-            case,
-            native_output_digest: [1; 32],
-            simulator_digest: [1; 32],
-            simulator_wire_version: 12,
-            canonical_bytes: 1,
-            numerical_policy: NUMERICAL_POLICY.into(),
-            scenarios: scenarios(batch)
-                .unwrap()
-                .into_iter()
-                .map(|scenario| {
-                    let grid = expected_grid(scenario.active);
-                    ScenarioObservation {
-                        label: scenario.label,
-                        grid,
-                        workgroup: [64, 1, 1],
-                        output_elements: scenario.output_elements,
-                        written_elements: scenario.written_elements,
-                        checked_backing_bytes: scenario
-                            .expected
-                            .iter()
-                            .map(|row| row.buffer.bytes().len())
-                            .sum(),
-                        steps: 1,
-                        invocations: grid[0],
-                        deterministic_replays: 2,
-                        conflicts: Assessment::NoObserved,
-                        races: Assessment::NoObserved,
-                    }
-                })
-                .collect(),
-        };
+        let report = inert_report_framing(batch, [1; 32]);
         check_report(&report, [1; 32], case).unwrap();
         let json = serde_json::to_value(&report).unwrap();
         for mutation in 0..6 {

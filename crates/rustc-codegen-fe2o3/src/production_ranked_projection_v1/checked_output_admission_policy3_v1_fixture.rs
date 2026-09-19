@@ -89,6 +89,19 @@ fn with_backend_checked_ranked_bound_v1(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ),
 ) {
+    with_backend_checked_ranked_bound_stores_v1(profile, None, next)
+}
+
+fn with_backend_checked_ranked_bound_stores_v1(
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    stores: Option<usize>,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionMaterializedRankedModuleReceiptV1,
+        fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
     use fe2o3_kernel_ir::{
         CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
         CanonicalKernelIrWorkBudgetV1 as Work, VerifiedCanonicalKernelIrModuleV12,
@@ -138,11 +151,27 @@ fn with_backend_checked_ranked_bound_v1(
                 SemanticBlockIdV1::from_index(0),
                 vec![block(
                     90 + i as u8,
-                    vec![typed_assignment(
-                        2,
-                        scalar,
-                        SemanticRvalueKindV1::Use(typed_constant(scalar, 7 + i as u128, 4)),
-                    )],
+                    if let Some(count) = stores {
+                        assert!((1..=2).contains(&count));
+                        (0..count)
+                            .map(|_| {
+                                statement(SemanticStatementKindV1::Store(
+                                    SemanticMemoryStoreV1::new(
+                                        typed_place(2, scalar),
+                                        typed_constant(scalar, 7 + i as u128, 4),
+                                        SemanticVolatilityV1::NonVolatile,
+                                        None,
+                                    ),
+                                ))
+                            })
+                            .collect()
+                    } else {
+                        vec![typed_assignment(
+                            2,
+                            scalar,
+                            SemanticRvalueKindV1::Use(typed_constant(scalar, 7 + i as u128, 4)),
+                        )]
+                    },
                     SemanticTerminatorKindV1::Return,
                 )],
             )

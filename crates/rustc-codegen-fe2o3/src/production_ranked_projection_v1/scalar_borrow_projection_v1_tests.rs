@@ -6,6 +6,9 @@ use scalar_borrow_projection_v1::with_scalar_private_borrows_v1 as scope;
 
 include!("scalar_borrow_fixture_v1_tests.rs");
 
+#[path = "scalar_borrow_reinitialization_v1_tests.rs"]
+mod reinitialization;
+
 #[test]
 fn scalar_borrow_normal_projector_reaches_nonidentity_policy5_and_native_output() {
     for profile in [

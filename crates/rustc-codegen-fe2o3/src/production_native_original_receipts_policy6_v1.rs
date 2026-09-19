@@ -210,29 +210,9 @@ fn same_bytes(
     Ok(())
 }
 
-fn unique_index<'a>(
-    names: impl Iterator<Item = &'a str>,
-    wanted: &str,
-    budget: &mut Budget<'_>,
-) -> Result<usize> {
-    let mut found = None;
-    for (index, name) in names.enumerate() {
-        budget.charge_work(
-            name.len()
-                .checked_add(wanted.len())
-                .and_then(|n| n.checked_add(2))
-                .ok_or(Resource::Arithmetic)?,
-        )?;
-        if name == wanted && found.replace(index).is_some() {
-            return Err(Error::Mismatch("unique original receipt root join"));
-        }
-    }
-    found.ok_or(Error::Mismatch("complete original receipt root join"))
-}
-
 /// Private unsigned component reused by the genuine signed-native endpoint.
 /// Its source path is closed to the retained Policy6 Direct/Erased owner.
-fn check_component(
+pub(super) fn check_component(
     owner: OutputOwnerV1<'_>,
     catalog: &Catalog,
     ranked: &Ranked,

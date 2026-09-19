@@ -9,16 +9,21 @@ const BASE: &str = "crates/rustc-codegen-fe2o3/tests/fixtures/production-extract
 const BINDING: &str = "FE2O3_EXTRACT_CRATE_BINDING_PATH_V1";
 const STALE: &[u8] = b"{\"runId\":\"stale-sentinel\",\"extractionSucceeded\":true}\n";
 
+#[path = "production_rustc_driver_fixed7_census_lifecycle_v1_tests.rs"]
+mod policy7;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 enum Policy {
     Five,
     Six,
+    Seven,
 }
 impl Policy {
     fn number(self) -> u16 {
         match self {
             Self::Five => 5,
             Self::Six => 6,
+            Self::Seven => 7,
         }
     }
     fn run(self, args: &[String], output: &Path) -> Result<(), String> {
@@ -27,6 +32,9 @@ impl Policy {
                 crate::run_production_fixed_checked_output_extraction_driver_v1(args, output)
             }
             Self::Six => crate::run_production_fixed_checked_output_policy6_extraction_driver_v1(
+                args, output,
+            ),
+            Self::Seven => crate::run_production_fixed_checked_output_policy7_extraction_driver_v1(
                 args, output,
             ),
         }

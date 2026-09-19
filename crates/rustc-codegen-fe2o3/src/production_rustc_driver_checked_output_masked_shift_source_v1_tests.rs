@@ -133,24 +133,24 @@ impl Config {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct RootObservation {
-    root: String,
-    source_function: [u8; 32],
-    source_binding: [u8; 32],
-    original_entry: String,
-    original_operation_owner: String,
-    entry: String,
-    operation_owner: String,
-    native_symbol: String,
+pub(super) struct RootObservation {
+    pub(super) root: String,
+    pub(super) source_function: [u8; 32],
+    pub(super) source_binding: [u8; 32],
+    pub(super) original_entry: String,
+    pub(super) original_operation_owner: String,
+    pub(super) entry: String,
+    pub(super) operation_owner: String,
+    pub(super) native_symbol: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct ShiftObservation {
-    batch: Batch,
-    source_digest: [u8; 32],
-    original_digest: [u8; 32],
-    output_digest: [u8; 32],
-    roots: Vec<RootObservation>,
+    pub(super) batch: Batch,
+    pub(super) source_digest: [u8; 32],
+    pub(super) original_digest: [u8; 32],
+    pub(super) output_digest: [u8; 32],
+    pub(super) roots: Vec<RootObservation>,
 }
 
 pub(super) fn check_actual(
@@ -169,6 +169,27 @@ pub(super) fn check_actual(
     let source = direct.output().source_semantic_kir();
     let semantic = stage.semantic();
     assert!(std::ptr::eq(semantic, source.semantic().semantic()));
+    observe_subjects(
+        semantic,
+        source.module(),
+        *source.canonical_kernel_ir_identity().digest(),
+        stage.output().module(),
+        *stage.output().canonical().identity().digest(),
+        batch,
+    )
+    .map(Some)
+}
+
+// Test-only borrowed observations. Each caller independently obtains these
+// subjects from its actual retained stage; this function creates no authority.
+pub(super) fn observe_subjects(
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    original: &fe2o3_kernel_ir::Module,
+    original_digest: [u8; 32],
+    output: &fe2o3_kernel_ir::Module,
+    output_digest: [u8; 32],
+    batch: Batch,
+) -> Result<ShiftObservation, SourceFailure> {
     let source_digest = *semantic.semantic_sha256().as_bytes();
     assert_eq!(
         <[u8; 32]>::from(Sha256::digest(semantic.canonical_encoding())),
@@ -197,13 +218,12 @@ pub(super) fn check_actual(
             .collect::<std::collections::BTreeSet<_>>(),
         ROOTS.into_iter().collect::<std::collections::BTreeSet<_>>()
     );
-    let output = stage.output().module();
     let observation_failure =
         |error: SourceFailure| SourceFailure::new(SourceStage::Observation, error.detail);
-    simulation::constant_shift::check_preserved_root_order(source.module(), output)
+    simulation::constant_shift::check_preserved_root_order(original, output)
         .map_err(observation_failure)?;
-    let original_owners = simulation::masked_shift::check_graph(source.module(), batch)
-        .map_err(observation_failure)?;
+    let original_owners =
+        simulation::masked_shift::check_graph(original, batch).map_err(observation_failure)?;
     let owners =
         simulation::masked_shift::check_graph(output, batch).map_err(observation_failure)?;
     let roots = output
@@ -211,7 +231,7 @@ pub(super) fn check_actual(
         .iter()
         .map(|kernel| {
             let root = kernel.id.as_str();
-            let original = simulation::constant_shift::kernel_for_root(source.module(), root)
+            let original = simulation::constant_shift::kernel_for_root(original, root)
                 .map_err(observation_failure)?;
             let owner = owners[root].clone();
             Ok(RootObservation {
@@ -230,13 +250,13 @@ pub(super) fn check_actual(
             })
         })
         .collect::<Result<Vec<_>, SourceFailure>>()?;
-    Ok(Some(ShiftObservation {
+    Ok(ShiftObservation {
         batch,
         source_digest,
-        original_digest: *source.canonical_kernel_ir_identity().digest(),
-        output_digest: *stage.output().canonical().identity().digest(),
+        original_digest,
+        output_digest,
         roots,
-    }))
+    })
 }
 
 fn check_native_body(batch: Batch, ordinal: usize, body: &str) -> Result<(), SourceFailure> {

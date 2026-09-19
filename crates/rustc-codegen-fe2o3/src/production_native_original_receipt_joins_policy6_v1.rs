@@ -1,5 +1,18 @@
 //! Exact N/root/formal joins, never a caller-selected original/final mode.
+use super::super::root_index::{ExactRootNameIndexV1, RootNameMatchV1};
 use super::*;
+
+fn unique_index(
+    index: &ExactRootNameIndexV1<'_>,
+    wanted: &str,
+    budget: &mut Budget<'_>,
+) -> Result<usize> {
+    match index.find(wanted, budget)? {
+        RootNameMatchV1::Unique(ordinal) => Ok(ordinal),
+        RootNameMatchV1::Missing => Err(Error::Mismatch("complete original receipt root join")),
+        RootNameMatchV1::Duplicate => Err(Error::Mismatch("unique original receipt root join")),
+    }
+}
 
 pub(super) fn check_roots(
     source: SourceInputsV1<'_>,
@@ -42,6 +55,16 @@ pub(super) fn check_roots(
     budget.reserve_storage(MAX_ROOTS.checked_mul(2).ok_or(Resource::Arithmetic)?)?;
     let mut source_seen = [false; MAX_ROOTS];
     let mut typed_seen = [false; MAX_ROOTS];
+    let source_index = ExactRootNameIndexV1::build(
+        source
+            .original
+            .module()
+            .kernels
+            .iter()
+            .map(|k| k.id.as_str()),
+        budget,
+    )?;
+    let typed_index = ExactRootNameIndexV1::build(typed.iter().map(|k| k.entry_symbol()), budget)?;
     for (ordinal, root) in ranked.roots().iter().enumerate() {
         budget.charge_work(120)?;
         let row = roster
@@ -49,23 +72,14 @@ pub(super) fn check_roots(
             .ok_or(Error::Mismatch("original formal semantic root"))?;
         let export = std::str::from_utf8(root.export_symbol())
             .map_err(|_| Error::Mismatch("original root export encoding"))?;
-        let index = unique_index(
-            source
-                .original
-                .module()
-                .kernels
-                .iter()
-                .map(|k| k.id.as_str()),
-            export,
-            budget,
-        )?;
-        let typed_index = unique_index(typed.iter().map(|k| k.entry_symbol()), export, budget)?;
+        let index = unique_index(&source_index, export, budget)?;
+        let typed_ordinal = unique_index(&typed_index, export, budget)?;
         let original = &source.original.module().kernels[index];
         let report = &reports.kernels()[index];
         let launch = source.launch.roots()[ordinal];
-        let descriptor = &typed[typed_index];
+        let descriptor = &typed[typed_ordinal];
         if source_seen[index]
-            || typed_seen[typed_index]
+            || typed_seen[typed_ordinal]
             || source.semantic.roots()[ordinal] != root.semantic_root()
             || launch.selected_root() != root.semantic_root()
             || launch.semantic_root_identity() != root.semantic_root_identity()
@@ -87,7 +101,7 @@ pub(super) fn check_roots(
             return Err(Error::Mismatch("exact original receipt root axes"));
         }
         source_seen[index] = true;
-        typed_seen[typed_index] = true;
+        typed_seen[typed_ordinal] = true;
         let temporary = MAX_FORMAL_MEMORY_RECEIPT_BYTES_V1
             .checked_add(size_of::<Formal>())
             .ok_or(Resource::Arithmetic)?;

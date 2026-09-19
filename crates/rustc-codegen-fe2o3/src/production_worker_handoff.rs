@@ -174,6 +174,9 @@ pub(crate) use checked_output_policy5::*;
 #[path = "production_worker_checked_output_policy6_v1.rs"]
 mod checked_output_policy6;
 pub(crate) use checked_output_policy6::*;
+#[path = "production_worker_checked_output_policy7_v1.rs"]
+mod checked_output_policy7;
+pub(crate) use checked_output_policy7::*;
 
 enum CheckedOutputOwnerRefV1<'a> {
     Direct(&'a fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy4V1),
@@ -182,6 +185,8 @@ enum CheckedOutputOwnerRefV1<'a> {
     Erased5(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy5V1),
     Direct6(&'a fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1),
     Erased6(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1),
+    Direct7(&'a fe2o3_lower_mir_kernel::ProductionOwnedRedundantStoreContinuationV1),
+    Erased7(&'a fe2o3_lower_mir_kernel::ProductionOwnedUnitLocalRedundantStoreContinuationV1),
 }
 
 impl CheckedOutputOwnerRefV1<'_> {
@@ -193,6 +198,8 @@ impl CheckedOutputOwnerRefV1<'_> {
             Self::Erased5(owner) => owner.output(),
             Self::Direct6(owner) => owner.output(),
             Self::Erased6(owner) => owner.output(),
+            Self::Direct7(owner) => owner.output(),
+            Self::Erased7(owner) => owner.output(),
         }
     }
 
@@ -200,6 +207,18 @@ impl CheckedOutputOwnerRefV1<'_> {
         // The Direct6 handoff keeps the established compatibility-source digest
         // convention. It is not the facade's actual pre-ranked V12 N identity.
         match self {
+            Self::Direct7(owner) => *owner
+                .prefix()
+                .source_semantic_kir()
+                .canonical_kernel_ir_identity()
+                .digest(),
+            Self::Erased7(owner) => *owner
+                .prefix()
+                .original_source()
+                .executable()
+                .canonical()
+                .identity()
+                .digest(),
             Self::Direct6(owner) => *owner
                 .source_semantic_kir()
                 .canonical_kernel_ir_identity()
@@ -243,6 +262,24 @@ impl CheckedOutputOwnerRefV1<'_> {
     {
         use crate::compiler_descriptor::checked_output_policy3_v1 as descriptors;
         match self {
+            Self::Direct7(owner) => {
+                descriptors::policy7::construct_checked_output_policy7_descriptor_source_v1(
+                    envelope,
+                    compiler_module,
+                    typed_roots,
+                    owner,
+                    budget,
+                )
+            }
+            Self::Erased7(owner) => {
+                descriptors::policy7::construct_erased_checked_output_policy7_descriptor_source_v1(
+                    envelope,
+                    compiler_module,
+                    typed_roots,
+                    owner,
+                    budget,
+                )
+            }
             Self::Direct6(owner) => {
                 descriptors::policy6::construct_checked_output_policy6_descriptor_source_v1(
                     envelope,

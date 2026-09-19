@@ -240,6 +240,29 @@ pub(crate) fn exercise_permuted_root_component_v1(
     );
     drop(decoded);
     check_case(inputs, ranked, typed, &kernel, &formal, None, budget);
+    let mut reordered = typed.to_vec();
+    reordered.reverse();
+    check_case(inputs, ranked, &reordered, &kernel, &formal, None, budget);
+    let first_export = ranked.roots()[0].export_symbol();
+    for (is_first, expected) in [
+        (true, "unique final receipt root join"),
+        (false, "complete final receipt root join"),
+    ] {
+        let repeated = typed
+            .iter()
+            .find(|row| (row.entry_symbol().as_bytes() == first_export) == is_first)
+            .unwrap();
+        let duplicate = vec![repeated.clone(); typed.len()];
+        check_case(
+            inputs,
+            ranked,
+            &duplicate,
+            &kernel,
+            &formal,
+            Some(expected),
+            budget,
+        );
+    }
     for (fault, expected) in [
         (
             Fault::DescriptorPermutation,

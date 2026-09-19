@@ -47,6 +47,16 @@ fn borrow_source_fixture() -> (
     Vec<ProductionRankedRootInputV1>,
     usize,
 ) {
+    borrow_source_fixture_with_initializations(&[7])
+}
+
+fn borrow_source_fixture_with_initializations(
+    initializations: &[u32],
+) -> (
+    fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    Vec<ProductionRankedRootInputV1>,
+    usize,
+) {
     let (seed, inputs) = erased_backend_materialized_fixture_v1(true, 1);
     let semantic = seed.semantic_ssa().source_semantic();
     let mut types = semantic.types().to_vec();
@@ -129,23 +139,29 @@ fn borrow_source_fixture() -> (
     let old = root.blocks()[1].statements();
     let mut blocks = root.blocks().to_vec();
     let body = &blocks[1];
-    blocks[1] = SemanticBasicBlockV1::new(
-        body.identity(),
-        body.source(),
-        vec![
+    let mut statements = initializations
+        .iter()
+        .map(|value| {
             typed_assignment(
                 3,
                 A_U32,
-                SemanticRvalueKindV1::Use(typed_constant(A_U32, 7, 4)),
-            ),
-            borrowed,
-            root.blocks()[2].statements()[0].clone(),
-            read.clone(),
-            read,
-            old[2].clone(),
-            old[3].clone(),
-            old[4].clone(),
-        ],
+                SemanticRvalueKindV1::Use(typed_constant(A_U32, u128::from(*value), 4)),
+            )
+        })
+        .collect::<Vec<_>>();
+    statements.extend([
+        borrowed,
+        root.blocks()[2].statements()[0].clone(),
+        read.clone(),
+        read,
+        old[2].clone(),
+        old[3].clone(),
+        old[4].clone(),
+    ]);
+    blocks[1] = SemanticBasicBlockV1::new(
+        body.identity(),
+        body.source(),
+        statements,
         body.terminator().clone(),
     )
     .unwrap();

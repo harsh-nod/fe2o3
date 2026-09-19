@@ -24,6 +24,8 @@ mod fixed_census_observation;
 mod helper_reference_source;
 #[path = "production_rustc_driver_integer_identity_source_v1_tests.rs"]
 mod integer_identity_source;
+#[path = "production_rustc_driver_redundant_store_source_v1_tests.rs"]
+mod redundant_store_source;
 #[path = "production_rustc_driver_wave64_capture_source_v1_tests.rs"]
 mod wave64_capture_source;
 

@@ -38,6 +38,7 @@ use crate::production_rustc_intrinsic_v1::{
 use crate::production_rustc_slice_metadata_v1::{
     SliceMetadataErrorV1, SliceMetadataPlanV1, SliceMetadataRewriteV1,
 };
+use crate::production_safe_core_shift_v1::{NormalizedCallV1, SafeCoreShiftV1};
 use crate::production_semantic_body_v1::receiver_materialization_v1::ReceiverLocalV1;
 use crate::production_semantic_body_v1::receiver_reborrow_v1::{
     ReceiverReborrowErrorV1, ReceiverReborrowV1, derive_fn_receiver_reborrow_v1,
@@ -47,11 +48,12 @@ use crate::production_semantic_terminal_v1::{
 };
 use crate::rustc_semantic_adapter_v1::{
     CanonicalFunctionIdentitiesV1, CanonicalSourceProvenanceV1, SemanticIdentityDigestV1,
-    canonical_function_identities_v1, canonical_source_provenance_and_debug_files_v1,
-    canonical_source_provenance_v1, rustc_block_identity_v1, rustc_fn_abi_sha256_v1,
-    rustc_fn_signature_sha256_v1, rustc_local_identity_v1, rustc_mir_body_sha256_v1,
-    rustc_semantic_fn_abi_identity_v1, rustc_semantic_fn_abi_layout_identity_v1,
-    rustc_semantic_layout_identity_v1, rustc_type_identity_v1, rustc_type_layout_sha256_v1,
+    borrowed_rustc_mir_body_sha256_v1, canonical_function_identities_v1,
+    canonical_source_provenance_and_debug_files_v1, canonical_source_provenance_v1,
+    rustc_block_identity_v1, rustc_fn_abi_sha256_v1, rustc_fn_signature_sha256_v1,
+    rustc_local_identity_v1, rustc_mir_body_sha256_v1, rustc_semantic_fn_abi_identity_v1,
+    rustc_semantic_fn_abi_layout_identity_v1, rustc_semantic_layout_identity_v1,
+    rustc_type_identity_v1, rustc_type_layout_sha256_v1,
 };
 
 #[cfg(test)]
@@ -405,7 +407,7 @@ pub(crate) struct TerminalExpansionRecipeV1<'tcx> {
 pub(crate) struct NormalizedRustcIntrinsicRecipeV1<'tcx> {
     pub(crate) caller: SemanticFunctionIdV1,
     pub(crate) block: u32,
-    pub(crate) operation: ProductionRustcIntrinsicOperationV1,
+    pub(crate) operation: NormalizedCallV1<'tcx>,
     pub(crate) element_type: Ty<'tcx>,
     pub(crate) instance: Instance<'tcx>,
     pub(crate) identities: CanonicalFunctionIdentitiesV1,
@@ -818,6 +820,7 @@ pub(crate) fn build_production_semantic_preflight_plan_with_work_v1<'tcx>(
     let mut terminal_expansions = Vec::new();
     let mut context_issuances = 0;
     let mut normalized_intrinsics = Vec::new();
+    let mut has_safe_core_shift = false;
     let mut first_rejection = None;
     for (index, function) in functions.iter().enumerate() {
         let function_id = SemanticFunctionIdV1::from_index(index as u32);
@@ -849,6 +852,37 @@ pub(crate) fn build_production_semantic_preflight_plan_with_work_v1<'tcx>(
             };
             match resolve_direct_call_v1(tcx, function.instance, body, func) {
                 Ok(resolved) => {
+                    match SafeCoreShiftV1::classify(tcx, resolved) {
+                        Ok(Some(shift)) => {
+                            has_safe_core_shift = true;
+                            if args.len() != 2 {
+                                remember_rejection(
+                                    &mut first_rejection,
+                                    "safe core wrapping shift call arity",
+                                    site,
+                                );
+                                continue;
+                            }
+                            counts.charge(SemanticMirResourceV1::Locals, 2, limits)?;
+                            counts.charge(SemanticMirResourceV1::Statements, 3, limits)?;
+                            counts.charge(SemanticMirResourceV1::Operands, 5, limits)?;
+                            counts.charge(SemanticMirResourceV1::ValidationWork, 1, limits)?;
+                            normalized_intrinsics.push(NormalizedRustcIntrinsicRecipeV1 {
+                                caller: function_id,
+                                block: block.index() as u32,
+                                operation: NormalizedCallV1::SafeCoreShift(shift),
+                                element_type: shift.value_type(),
+                                instance: resolved,
+                                identities: canonical_function_identities_v1(tcx, resolved),
+                            });
+                            continue;
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            remember_rejection(&mut first_rejection, error, site);
+                            continue;
+                        }
+                    }
                     match crate::production_semantic_terminal_v1::classify(tcx, resolved.def_id()) {
                         Some(ProductionSemanticTerminalRuleV1::Expand(expansion)) => {
                             context_issuances += usize::from(
@@ -942,7 +976,9 @@ pub(crate) fn build_production_semantic_preflight_plan_with_work_v1<'tcx>(
                                     normalized_intrinsics.push(NormalizedRustcIntrinsicRecipeV1 {
                                         caller: function_id,
                                         block: block.index() as u32,
-                                        operation: classification.operation,
+                                        operation: NormalizedCallV1::Rustc(
+                                            classification.operation,
+                                        ),
                                         element_type: classification.element_type,
                                         instance: resolved,
                                         identities: canonical_function_identities_v1(tcx, resolved),
@@ -1198,6 +1234,7 @@ pub(crate) fn build_production_semantic_preflight_plan_with_work_v1<'tcx>(
         source_producers,
         types,
         receiver_reborrows,
+        has_safe_core_shift.then_some(normalized_intrinsics.as_slice()),
         (&mut counts, &mut debug_counts, limits),
     )?;
     let debug_capture_gap = bodies.iter().find_map(|body| body.debug_capture_gap);
@@ -2703,6 +2740,7 @@ fn build_canonical_producer_tables_v1<'tcx>(
     source_producers: Vec<RetainedRawBodySourceProducerV1>,
     types: BTreeMap<SemanticTypeIdentityV1, Ty<'tcx>>,
     receiver_reborrows: Vec<Option<ReceiverReborrowV1<'tcx>>>,
+    normalized_calls: Option<&[NormalizedRustcIntrinsicRecipeV1<'tcx>]>,
     (counts, debug_counts, limits): (
         &mut RawMirPreflightCountsV1,
         &mut RawMirPreflightCountsV1,
@@ -2872,7 +2910,7 @@ fn build_canonical_producer_tables_v1<'tcx>(
         } else {
             None
         };
-        let (debug_scopes, debug_variables, debug_capture_gap) =
+        let (debug_scopes, mut debug_variables, debug_capture_gap) =
             receiver_debug_v1::convert_receiver_debug_sources_v2(
                 function_id,
                 function_identity,
@@ -2890,6 +2928,21 @@ fn build_canonical_producer_tables_v1<'tcx>(
                     .remap(*local)
                     .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
             }
+        }
+
+        if let Some(normalized_calls) = normalized_calls {
+            wrapping_locals_v1::remap_v1(
+                function_id,
+                function_identity,
+                mir_body_sha256,
+                &locals,
+                inserted,
+                normalized_calls,
+                &mut raw_to_semantic_locals,
+                &mut debug_variables,
+                counts,
+                limits,
+            )?;
         }
 
         bodies.push(RetainedSemanticBodyProducerV1 {
@@ -2930,6 +2983,7 @@ fn build_canonical_producer_tables_v1<'tcx>(
 }
 
 mod receiver_debug_v1;
+mod wrapping_locals_v1;
 
 fn convert_debug_sources_v2(
     function: SemanticFunctionIdV1,
@@ -3687,13 +3741,24 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         section.field(&recipe.caller.index().to_le_bytes())?;
         section.field(&recipe.block.to_le_bytes())?;
         section.field(&[recipe.operation.operation_tag()])?;
-        let (operation, access) = recipe
-            .operation
-            .atomic_rmw()
-            .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
-        section.field(&[atomic_rmw_operation_tag_v1(operation)])?;
-        section.field(&[atomic_ordering_tag_v1(access.ordering())])?;
-        section.field(&[atomic_scope_tag_v1(access.scope())])?;
+        match recipe.operation {
+            NormalizedCallV1::Rustc(operation) => {
+                let (operation, access) = operation
+                    .atomic_rmw()
+                    .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+                section.field(&[atomic_rmw_operation_tag_v1(operation)])?;
+                section.field(&[atomic_ordering_tag_v1(access.ordering())])?;
+                section.field(&[atomic_scope_tag_v1(access.scope())])?;
+            }
+            NormalizedCallV1::SafeCoreShift(shift) => {
+                section.field(b"fe2o3/safe-core-wrapping-shift/recipe/v1")?;
+                section.field(&[shift.width()])?;
+                let signature = source_signature_v1(tcx, recipe.instance)
+                    .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+                section.field(&rustc_fn_signature_sha256_v1(tcx, signature))?;
+                section.field(&rustc_fn_abi_sha256_v1(tcx, shift.abi()))?;
+            }
+        }
         section.field(rustc_type_identity_v1(tcx, recipe.element_type).as_bytes())?;
         section.field(recipe.identities.function().as_bytes())?;
         section.field(recipe.identities.item_definition().as_bytes())?;
@@ -3733,7 +3798,14 @@ fn normalized_intrinsic_definition_sha256_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     recipe: &NormalizedRustcIntrinsicRecipeV1<'tcx>,
 ) -> [u8; 32] {
-    rustc_intrinsic_definition_sha256_v1(tcx, recipe.instance, recipe.identities)
+    match recipe.operation {
+        NormalizedCallV1::Rustc(_) => {
+            rustc_intrinsic_definition_sha256_v1(tcx, recipe.instance, recipe.identities)
+        }
+        NormalizedCallV1::SafeCoreShift(shift) => {
+            borrowed_rustc_mir_body_sha256_v1(tcx, recipe.instance, shift.body())
+        }
+    }
 }
 
 fn terminal_definition_sha256_v1<'tcx>(

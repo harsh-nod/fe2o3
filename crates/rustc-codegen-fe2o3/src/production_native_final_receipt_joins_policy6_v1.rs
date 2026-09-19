@@ -1,5 +1,6 @@
 //! Private receipt-to-owner component. The consuming caller first replays its
 //! complete signed native owner. Component success alone grants no such custody.
+use super::super::root_index::{ExactRootNameIndexV1, RootNameMatchV1};
 use super::*;
 use fe2o3_compiler_lineage::{
     InertNativeNeutralSubjectV1 as Subject, MAX_MULTI_ROOT_PROOF_ROSTER_ROOTS_V3 as MAX_ROOTS,
@@ -34,26 +35,16 @@ fn same_bytes(left: &[u8], right: &[u8], budget: &mut Budget<'_>, field: &'stati
     Ok(())
 }
 
-/// The maximum is a format invariant (128), not a caller-selected allowance.
-/// Every scan is charged, including rejected candidates and duplicate matches.
-fn unique_index<'a>(
-    names: impl Iterator<Item = &'a str>,
+fn unique_index(
+    index: &ExactRootNameIndexV1<'_>,
     wanted: &str,
     budget: &mut Budget<'_>,
 ) -> R<usize> {
-    let mut found = None;
-    for (index, name) in names.enumerate() {
-        budget.charge_work(
-            name.len()
-                .checked_add(wanted.len())
-                .and_then(|n| n.checked_add(2))
-                .ok_or(Resource::Arithmetic)?,
-        )?;
-        if name == wanted && found.replace(index).is_some() {
-            return Err(E::Mismatch("unique final receipt root join"));
-        }
+    match index.find(wanted, budget)? {
+        RootNameMatchV1::Unique(ordinal) => Ok(ordinal),
+        RootNameMatchV1::Missing => Err(E::Mismatch("complete final receipt root join")),
+        RootNameMatchV1::Duplicate => Err(E::Mismatch("unique final receipt root join")),
     }
-    found.ok_or(E::Mismatch("complete final receipt root join"))
 }
 
 pub(super) fn reports<'a>(owner: OutputOwnerV1<'a>) -> R<&'a [FormalMemoryObligations]> {
@@ -71,6 +62,33 @@ pub(super) fn check(
     typed: &[TypedDescriptorRootV1],
     budget: &mut Budget<'_>,
 ) -> R<()> {
+    check_fixed(inputs, ranked, receipts, typed, FixedOutput::I, budget)
+}
+
+/// Fixed Policy7 entry: report custody comes only from the actual J owner.
+pub(in crate::production_pipeline) fn check_policy7(
+    inputs: OutputInputsV1<'_>,
+    ranked: &Ranked,
+    receipts: &NativeFinalOutputReceiptsPolicy6V1,
+    typed: &[TypedDescriptorRootV1],
+    budget: &mut Budget<'_>,
+) -> R<()> {
+    check_fixed(inputs, ranked, receipts, typed, FixedOutput::J, budget)
+}
+
+enum FixedOutput {
+    I,
+    J,
+}
+
+fn check_fixed(
+    inputs: OutputInputsV1<'_>,
+    ranked: &Ranked,
+    receipts: &NativeFinalOutputReceiptsPolicy6V1,
+    typed: &[TypedDescriptorRootV1],
+    fixed: FixedOutput,
+    budget: &mut Budget<'_>,
+) -> R<()> {
     scoped(budget, |budget| {
         budget.charge_work(8)?;
         if budget.storage() < receipts.retained {
@@ -78,7 +96,22 @@ pub(super) fn check(
         }
         let output = inputs.owner.output();
         let source = inputs.owner.source(inputs.catalog)?;
-        let reports = reports(inputs.owner)?;
+        let (reports, receipt_error, payload_error) = match fixed {
+            FixedOutput::I => (
+                reports(inputs.owner)?,
+                "fresh final-I formal receipt",
+                "fresh final-I formal payload",
+            ),
+            FixedOutput::J => (
+                match inputs.owner {
+                    OutputOwnerV1::Direct7(owner) => owner.kernels(),
+                    OutputOwnerV1::Erased7(owner) => owner.kernels(),
+                    _ => return Err(E::Mismatch("fixed Policy7 receipt owner")),
+                },
+                "fresh final-J formal receipt",
+                "fresh final-J formal payload",
+            ),
+        };
         let wire = receipts.kernel_ir.canonical_preimage();
         budget.charge_work(112)?;
         let envelope = NativeNeutralModuleRefV1::decode(wire)
@@ -147,6 +180,25 @@ pub(super) fn check(
         let mut input_seen = [false; MAX_ROOTS];
         let mut output_seen = [false; MAX_ROOTS];
         let mut descriptor_seen = [false; MAX_ROOTS];
+        let input_names = ExactRootNameIndexV1::build(
+            source
+                .original
+                .module()
+                .kernels
+                .iter()
+                .map(|k| k.id.as_str()),
+            budget,
+        )?;
+        let output_names = ExactRootNameIndexV1::build(
+            output.module().kernels.iter().map(|k| k.id.as_str()),
+            budget,
+        )?;
+        let descriptor_names = ExactRootNameIndexV1::build(
+            descriptor_rows.iter().map(|k| k.entry_name().as_str()),
+            budget,
+        )?;
+        let typed_names =
+            ExactRootNameIndexV1::build(typed.iter().map(|k| k.entry_symbol()), budget)?;
         for (ordinal, root) in ranked.roots().iter().enumerate() {
             budget.charge_work(160)?;
             let row = roster
@@ -155,27 +207,10 @@ pub(super) fn check(
             let launch = source.launch.roots()[ordinal];
             let export = std::str::from_utf8(root.export_symbol())
                 .map_err(|_| E::Mismatch("final root export encoding"))?;
-            let input_index = unique_index(
-                source
-                    .original
-                    .module()
-                    .kernels
-                    .iter()
-                    .map(|k| k.id.as_str()),
-                export,
-                budget,
-            )?;
-            let output_index = unique_index(
-                output.module().kernels.iter().map(|k| k.id.as_str()),
-                export,
-                budget,
-            )?;
-            let descriptor_index = unique_index(
-                descriptor_rows.iter().map(|k| k.entry_name().as_str()),
-                export,
-                budget,
-            )?;
-            let typed_index = unique_index(typed.iter().map(|k| k.entry_symbol()), export, budget)?;
+            let input_index = unique_index(&input_names, export, budget)?;
+            let output_index = unique_index(&output_names, export, budget)?;
+            let descriptor_index = unique_index(&descriptor_names, export, budget)?;
+            let typed_index = unique_index(&typed_names, export, budget)?;
             let actual = &output.module().kernels[output_index];
             let original = &source.original.module().kernels[input_index];
             let report = &reports[output_index];
@@ -212,19 +247,19 @@ pub(super) fn check(
             input_seen[input_index] = true;
             output_seen[output_index] = true;
             descriptor_seen[descriptor_index] = true;
-            // Compare actual fresh I payload, including effect coordinates. Do
-            // not substitute original N or Policy5 O obligations after DCE.
+            // The fixed entry selects actual fresh final-graph obligations,
+            // never original N or any historical optimization-stage reports.
             let temporary = MAX_FORMAL_MEMORY_RECEIPT_BYTES_V1
                 .checked_add(size_of::<Formal>())
                 .ok_or(Resource::Arithmetic)?;
             budget.reserve_storage(temporary)?;
-            let expected = Formal::from_current_obligations(report)
-                .map_err(|_| E::Mismatch("fresh final-I formal receipt"))?;
+            let expected =
+                Formal::from_current_obligations(report).map_err(|_| E::Mismatch(receipt_error))?;
             same_bytes(
                 row.payload(),
                 expected.canonical_bytes(),
                 budget,
-                "fresh final-I formal payload",
+                payload_error,
             )?;
             drop(expected);
             budget.release_storage(temporary)?;

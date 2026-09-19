@@ -37,7 +37,7 @@ struct Local {
     root_alias: Option<usize>,
     candidate: Option<Candidate>,
     initialized: bool,
-    defined_once: bool,
+    ever_initialized: bool,
     alias_alive: bool,
     blocked: bool,
 }
@@ -335,7 +335,7 @@ impl<'a> Scan<'a, '_, '_> {
     }
 
     fn initialize(&mut self, place: &'a SemanticPlaceV1) -> R<()> {
-        charge(self.facts, 5)?;
+        charge(self.facts, 6)?;
         let index = place.local().index() as usize;
         let row = *self.census.locals.get(index).ok_or_else(malformed)?;
         let Some(alias) = row.root_alias else {
@@ -345,11 +345,13 @@ impl<'a> Scan<'a, '_, '_> {
         if !place.projections().is_empty()
             || self.block != candidate.block
             || self.statement.is_none_or(|i| i >= candidate.statement)
-            || row.defined_once
+            // Repeated writes are allowed only in the original live epoch.
+            // A lifetime kill/restart clears initialized but never this history.
+            || (row.ever_initialized && !row.initialized)
         {
             return Ok(());
         }
-        self.census.locals[index].defined_once = true;
+        self.census.locals[index].ever_initialized = true;
         self.census.locals[index].initialized = true;
         self.allowed_destination = Some(place);
         Ok(())
@@ -435,11 +437,11 @@ impl<'a> Scan<'a, '_, '_> {
             return Ok(());
         }
         let current = &mut self.census.locals[index];
-        if live && (current.defined_once || current.alias_alive) {
+        if live && (current.ever_initialized || current.alias_alive) {
             current.blocked = true;
         }
         if !live
-            && ((current.root_alias.is_some() && !current.defined_once)
+            && ((current.root_alias.is_some() && !current.ever_initialized)
                 || (current.candidate.is_some() && !current.alias_alive))
         {
             current.blocked = true;

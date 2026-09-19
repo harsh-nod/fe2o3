@@ -18,6 +18,18 @@ fn erased_backend_materialized_mode_v1(
     fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
     Vec<ProductionRankedRootInputV1>,
 ) {
+    erased_backend_materialized_stores_v1(expected, root_count, load_forwarding, false)
+}
+
+fn erased_backend_materialized_stores_v1(
+    expected: bool,
+    root_count: usize,
+    load_forwarding: bool,
+    duplicate_store: bool,
+) -> (
+    fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    Vec<ProductionRankedRootInputV1>,
+) {
     assert!((1..=2).contains(&root_count));
     let seed = materialized_unit_local_helper_v1();
     let semantic = seed.semantic_ssa().source_semantic();
@@ -149,11 +161,29 @@ fn erased_backend_materialized_mode_v1(
             SemanticVolatilityV1::NonVolatile,
             None,
         )));
-        let (private_statements, final_statements) = if load_forwarding {
-            (vec![store, global, load.clone(), load, store_loaded, index, predicate], vec![])
+        let duplicate = store.clone();
+        let (mut private_statements, final_statements) = if load_forwarding {
+            (
+                vec![
+                    store,
+                    global,
+                    load.clone(),
+                    load,
+                    store_loaded,
+                    index,
+                    predicate,
+                ],
+                vec![],
+            )
         } else {
-            (vec![store, load, store_loaded, index, predicate], vec![global])
+            (
+                vec![store, load, store_loaded, index, predicate],
+                vec![global],
+            )
         };
+        if duplicate_store {
+            private_statements.insert(1, duplicate);
+        }
         let root = assertion_root_with_access(
             vec![
                 (A_UNIT, SemanticLocalRoleV1::Return),
@@ -317,11 +347,29 @@ fn with_backend_erased_roster_mode_v1(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ),
 ) {
+    with_backend_erased_store_roster_v1(expected, roots, profile, load_forwarding, false, next)
+}
+
+pub(crate) fn with_backend_erased_store_roster_v1(
+    expected: bool,
+    roots: usize,
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    load_forwarding: bool,
+    duplicate_store: bool,
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionUnitLocalErasedSourceOwnerV1,
+        fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
     use fe2o3_kernel_ir::{
         CanonicalKernelIrVerificationResourceBudgetV1 as B, CanonicalKernelIrWorkBudgetV1 as W,
         VerifiedCanonicalKernelIrModuleV12 as V,
     };
-    let (source, inputs) = if load_forwarding {
+    let (source, inputs) = if duplicate_store {
+        erased_backend_materialized_stores_v1(expected, roots, load_forwarding, true)
+    } else if load_forwarding {
         erased_backend_materialized_mode_v1(expected, roots, true)
     } else {
         erased_backend_materialized_fixture_v1(expected, roots)

@@ -9,6 +9,8 @@ use simulation::integer_identity::{Batch, Integer, ROOTS};
 
 #[path = "production_rustc_driver_integer_identity_graph_v1_tests.rs"]
 mod graph;
+#[path = "production_rustc_driver_masked_shift_fixed6_source_v1_tests.rs"]
+mod masked;
 
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::integer_identity_source::integer_identity_source_child";
 const REQUEST: &str = "FE2O3_TEST_POLICY6_SOURCE_REQUEST_V1";
@@ -50,6 +52,45 @@ impl Case {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+enum FixtureCase {
+    IntegerIdentity(Case),
+    MaskedShift(masked::Case),
+}
+
+impl From<Case> for FixtureCase {
+    fn from(case: Case) -> Self {
+        Self::IntegerIdentity(case)
+    }
+}
+
+impl FixtureCase {
+    fn name(self) -> String {
+        match self {
+            Self::IntegerIdentity(case) => case.name(),
+            Self::MaskedShift(case) => case.name(),
+        }
+    }
+    fn target(self) -> Target {
+        match self {
+            Self::IntegerIdentity(case) => case.target,
+            Self::MaskedShift(case) => case.target,
+        }
+    }
+    fn source_leaf(self) -> &'static str {
+        match self {
+            Self::IntegerIdentity(_) => "integer_identity.rs",
+            Self::MaskedShift(_) => "masked_shift.rs",
+        }
+    }
+    fn roots(self) -> &'static [&'static str] {
+        match self {
+            Self::IntegerIdentity(_) => &ROOTS,
+            Self::MaskedShift(_) => &simulation::masked_shift::ROOTS,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 enum Mode {
     Observe,
     Extract,
@@ -67,7 +108,7 @@ struct FileStamp {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
-    case: Case,
+    case: FixtureCase,
     mode: Mode,
     args_sha256: [u8; 32],
     source: Vec<FileStamp>,
@@ -83,6 +124,7 @@ struct Report {
 #[derive(Debug, Deserialize, Serialize)]
 enum Outcome {
     Observed(Box<Observation6>),
+    ObservedMasked(Box<masked::Observation6>),
     Extracted {
         llvm_sha256: [u8; 32],
         llvm_bytes: usize,
@@ -133,12 +175,12 @@ fn canonical_v12_digest(bytes: &[u8]) -> [u8; 32] {
     hash.finalize().into()
 }
 
-fn source_stamps(workspace: &Path) -> Vec<FileStamp> {
+fn source_stamps(workspace: &Path, case: FixtureCase) -> Vec<FileStamp> {
     [
         "Cargo.lock".into(),
         format!("{BASE}/Cargo.toml"),
         format!("{BASE}/src/lib.rs"),
-        format!("{BASE}/src/integer_identity.rs"),
+        format!("{BASE}/src/{}", case.source_leaf()),
     ]
     .into_iter()
     .map(|relative: String| {
@@ -151,14 +193,14 @@ fn source_stamps(workspace: &Path) -> Vec<FileStamp> {
     .collect()
 }
 
-fn active_fixture_hash(source: &[FileStamp]) -> Result<[u8; 32], String> {
-    let exact_suffix = PathBuf::from(format!("{BASE}/src/integer_identity.rs"));
+fn active_fixture_hash(source: &[FileStamp], case: FixtureCase) -> Result<[u8; 32], String> {
+    let exact_suffix = PathBuf::from(format!("{BASE}/src/{}", case.source_leaf()));
     let matching = source
         .iter()
         .filter(|row| row.path.ends_with(&exact_suffix))
         .collect::<Vec<_>>();
     let [active] = matching.as_slice() else {
-        return Err("source stamps lack one exact active integer-identity fixture".into());
+        return Err("source stamps lack one exact active fixed6 fixture".into());
     };
     Ok(active.sha256)
 }
@@ -177,6 +219,7 @@ fn check_request(request: &Request, args: &[String]) -> Result<(), String> {
     if unique.len() != request.source.len() {
         return Err("duplicate source stamp".into());
     }
+    active_fixture_hash(&request.source, request.case)?;
     for row in &request.source {
         if digest(&std::fs::read(&row.path).map_err(|e| e.to_string())?) != row.sha256 {
             return Err(format!(
@@ -351,13 +394,17 @@ fn observe(tcx: TyCtxt<'_>, request: &Request, artifact: &Path) -> Result<Outcom
     let stage = ranked
         .lower_fixed_checked_output_policy6_v1()
         .map_err(|e| format!("Policy6: {e:?}"))?;
-    if stage.kernels().len() != ROOTS.len() {
+    if stage.kernels().len() != request.case.roots().len() {
         return Err("Policy6 fresh formal-kernel roster differs from exact source roots".into());
     }
     if request.mode == Mode::MissingProof {
         return probe_missing_proof(stage);
     }
-    let roots = graph::observe(&stage, request.case)?;
+    let case = match request.case {
+        FixtureCase::IntegerIdentity(case) => case,
+        FixtureCase::MaskedShift(case) => return masked::observe(stage, case, artifact),
+    };
+    let roots = graph::observe(&stage, case)?;
     let replay_work = replay_actual_continuation(&stage)?;
     let before_digest = *stage
         .checked_output()
@@ -367,11 +414,11 @@ fn observe(tcx: TyCtxt<'_>, request: &Request, artifact: &Path) -> Result<Outcom
         .identity()
         .digest();
     let output_digest = *stage.output().canonical().identity().digest();
-    if request.case.opt0 && before_digest == output_digest {
+    if case.opt0 && before_digest == output_digest {
         return Err("opt0 requires genuine Policy6 O-to-I mutation, not pre-folded MIR".into());
     }
     let passes = stage.checked_output().continuation().report().passes();
-    if request.case.opt0 && !passes[0].changed() {
+    if case.opt0 && !passes[0].changed() {
         return Err("actual surviving identities did not change in the integer pass".into());
     }
     let mut report = Observation6 {
@@ -398,7 +445,7 @@ fn observe(tcx: TyCtxt<'_>, request: &Request, artifact: &Path) -> Result<Outcom
                 .canonical_bytes(),
         ),
         replay_work,
-        simulation: simulation::observe(stage.output().canonical(), request.case.simulation())
+        simulation: simulation::observe(stage.output().canonical(), case.simulation())
             .map_err(|e| format!("{e:?}"))?,
         llvm_sha256: [0; 32],
         llvm_bytes: 0,
@@ -413,7 +460,7 @@ fn observe(tcx: TyCtxt<'_>, request: &Request, artifact: &Path) -> Result<Outcom
         .into_worker_handoff_extraction_v1()
         .map_err(|e| format!("final-I extraction: {e:?}"))?;
     let target =
-        fe2o3_compiler_ffi::DeviceTargetV1::parse(&format!("{}:xnack-", request.case.target.cpu()))
+        fe2o3_compiler_ffi::DeviceTargetV1::parse(&format!("{}:xnack-", case.target.cpu()))
             .map_err(|e| format!("{e:?}"))?;
     if handoff.target() != target
         || handoff.code_object_version() != fe2o3_compiler_ffi::CodeObjectVersion::V6
@@ -421,10 +468,7 @@ fn observe(tcx: TyCtxt<'_>, request: &Request, artifact: &Path) -> Result<Outcom
         || descriptor.grants_load_authority()
         || descriptor.grants_launch_authority()
         || descriptor.table().producer().version().as_str()
-            != format!(
-                "production-policy6-checked-{}-cov6-v1",
-                request.case.target.cpu()
-            )
+            != format!("production-policy6-checked-{}-cov6-v1", case.target.cpu())
         || descriptor.table().kernels().len() != ROOTS.len()
     {
         return Err("actual final-I native target/descriptor/authority changed".into());
@@ -443,7 +487,7 @@ fn observe(tcx: TyCtxt<'_>, request: &Request, artifact: &Path) -> Result<Outcom
         }
     }
     let llvm = std::str::from_utf8(handoff.module_bytes()).map_err(|e| e.to_string())?;
-    graph::check_native(request.case, &report.roots, llvm)?;
+    graph::check_native(case, &report.roots, llvm)?;
     report.llvm_sha256 = digest(handoff.module_bytes());
     report.llvm_bytes = handoff.module_bytes().len();
     report.descriptor_roots = descriptor.table().kernels().len();
@@ -454,7 +498,7 @@ fn observe(tcx: TyCtxt<'_>, request: &Request, artifact: &Path) -> Result<Outcom
         .open(artifact)
         .and_then(|mut file| file.write_all(handoff.module_bytes()))
         .map_err(|e| e.to_string())?;
-    validate_observation(request.case, &report)?;
+    validate_observation(case, &report)?;
     Ok(Outcome::Observed(Box::new(report)))
 }
 
@@ -600,11 +644,18 @@ fn decode_report(
     }
     let result = report.result?;
     if !matches!(
-        (&result, expected.mode),
-        (Outcome::Observed(_), Mode::Observe)
-            | (Outcome::Extracted { .. }, Mode::Extract)
-            | (Outcome::Extracted { .. }, Mode::ExtractCensus)
-            | (Outcome::MissingProof { .. }, Mode::MissingProof)
+        (&result, expected.mode, expected.case),
+        (
+            Outcome::Observed(_),
+            Mode::Observe,
+            FixtureCase::IntegerIdentity(_)
+        ) | (
+            Outcome::ObservedMasked(_),
+            Mode::Observe,
+            FixtureCase::MaskedShift(_)
+        ) | (Outcome::Extracted { .. }, Mode::Extract, _)
+            | (Outcome::Extracted { .. }, Mode::ExtractCensus, _)
+            | (Outcome::MissingProof { .. }, Mode::MissingProof, _)
     ) {
         return Err("Policy6 child substituted a different mode/outcome".into());
     }
@@ -720,7 +771,7 @@ fn child(
             &captured.args,
             &captured.cwd,
             6,
-            &format!("{}:xnack-", request.case.target.cpu()),
+            &format!("{}:xnack-", request.case.target().cpu()),
             &census_id,
             true,
         )
@@ -728,7 +779,7 @@ fn child(
         census::check_selected(
             &report,
             source_roots,
-            &[active_fixture_hash(&request.source).unwrap()],
+            &[active_fixture_hash(&request.source, request.case).unwrap()],
         )
         .unwrap();
     } else {
@@ -737,8 +788,116 @@ fn child(
     (result, artifact)
 }
 
+fn observed_subjects(
+    case: FixtureCase,
+    outcome: &Outcome,
+) -> Result<([u8; 32], usize, Vec<census::SourceRoot>), String> {
+    match (case, outcome) {
+        (FixtureCase::IntegerIdentity(case), Outcome::Observed(report)) => {
+            validate_observation(case, report)?;
+            Ok((
+                report.llvm_sha256,
+                report.llvm_bytes,
+                graph::census_roots(&report.roots),
+            ))
+        }
+        (FixtureCase::MaskedShift(case), Outcome::ObservedMasked(report)) => {
+            masked::validate_observation(case, report)?;
+            Ok((
+                report.llvm_sha256,
+                report.llvm_bytes,
+                report.source_roots.clone(),
+            ))
+        }
+        _ => Err("fixed6 observed outcome belongs to another fixture family".into()),
+    }
+}
+
+fn qualify_case(
+    captured: &corpus_cargo::Captured,
+    directory: &Path,
+    request: Request,
+) -> (Outcome, usize) {
+    assert_eq!(request.mode, Mode::Observe);
+    let (observed, native) = child(captured, directory, request.clone());
+    let (observed_digest, observed_bytes, expected_roots) =
+        observed_subjects(request.case, &observed).unwrap();
+    let mut compiler_children = 1;
+    let (extracted, independent) = child(
+        captured,
+        directory,
+        Request {
+            mode: Mode::Extract,
+            ..request.clone()
+        },
+    );
+    let Outcome::Extracted {
+        llvm_sha256,
+        llvm_bytes,
+        source_roots,
+    } = extracted
+    else {
+        unreachable!()
+    };
+    compiler_children += 1;
+    let actual = std::fs::read(native).unwrap();
+    let emitted = std::fs::read(independent).unwrap();
+    assert_eq!(actual, emitted, "independent real final-I extractor bytes");
+    assert_eq!(digest(&actual), observed_digest);
+    assert_eq!((llvm_sha256, llvm_bytes), (observed_digest, observed_bytes));
+    let subjects = |roots: &[census::SourceRoot]| {
+        roots
+            .iter()
+            .map(|root| (root.name.clone(), (root.function, root.body)))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    assert_eq!(subjects(&source_roots), subjects(&expected_roots));
+    let (enabled, enabled_path) = child(
+        captured,
+        directory,
+        Request {
+            mode: Mode::ExtractCensus,
+            ..request.clone()
+        },
+    );
+    let Outcome::Extracted {
+        llvm_sha256: enabled_digest,
+        llvm_bytes: enabled_len,
+        source_roots: enabled_roots,
+    } = enabled
+    else {
+        unreachable!()
+    };
+    compiler_children += 1;
+    assert_eq!(
+        std::fs::read(enabled_path).unwrap(),
+        emitted,
+        "optional census changed actual public fixed6 extraction bytes"
+    );
+    assert_eq!((enabled_digest, enabled_len), (llvm_sha256, llvm_bytes));
+    assert_eq!(
+        enabled_roots, source_roots,
+        "actual source owner changed with optional census"
+    );
+    let (proof, absent_artifact) = child(
+        captured,
+        directory,
+        Request {
+            mode: Mode::MissingProof,
+            ..request
+        },
+    );
+    let Outcome::MissingProof { retained_floor } = proof else {
+        unreachable!()
+    };
+    compiler_children += 1;
+    assert!(retained_floor > 0 && !absent_artifact.exists());
+    (observed, compiler_children)
+}
+
 #[test]
 fn census_requires_the_active_fixture_stamp_not_an_unrelated_known_file() {
+    let case = FixtureCase::IntegerIdentity(cases()[0]);
     let active = FileStamp {
         path: PathBuf::from(format!("/workspace/{BASE}/src/integer_identity.rs")),
         sha256: [7; 32],
@@ -748,11 +907,11 @@ fn census_requires_the_active_fixture_stamp_not_an_unrelated_known_file() {
         sha256: [8; 32],
     };
     assert_eq!(
-        active_fixture_hash(&[unrelated.clone(), active.clone()]),
+        active_fixture_hash(&[unrelated.clone(), active.clone()], case),
         Ok([7; 32])
     );
-    assert!(active_fixture_hash(&[unrelated]).is_err());
-    assert!(active_fixture_hash(&[active.clone(), active]).is_err());
+    assert!(active_fixture_hash(&[unrelated], case).is_err());
+    assert!(active_fixture_hash(&[active.clone(), active], case).is_err());
 }
 
 #[test]
@@ -772,7 +931,7 @@ fn policy6_matrix_has_exact_64_configurations_320_roots_and_32_mutation_cases() 
 #[test]
 fn policy6_child_protocol_rejects_status_missing_malformed_foreign_and_wrong_outcome() {
     let request = Request {
-        case: cases()[0],
+        case: cases()[0].into(),
         mode: Mode::MissingProof,
         args_sha256: [7; 32],
         source: Vec::new(),
@@ -810,7 +969,7 @@ fn policy6_child_protocol_rejects_status_missing_malformed_foreign_and_wrong_out
             ..request.clone()
         },
         Request {
-            case: cases()[1],
+            case: cases()[1].into(),
             ..request.clone()
         },
         Request {
@@ -830,13 +989,13 @@ fn ordinary_rust_integer_identities_reach_final_i_native_and_sim_both_profiles()
         .canonicalize()
         .unwrap();
     let scratch = crate::test_temp_dir::TestTempDir::create("fe2o3-policy6-integer-source");
-    let source = source_stamps(&workspace);
+    let source = source_stamps(&workspace, cases()[0].into());
     let mut completed = 0;
     let mut roots = 0;
     let mut mutations = 0;
     let mut compiler_children = 0;
     for case in cases() {
-        assert_eq!(source_stamps(&workspace), source);
+        assert_eq!(source_stamps(&workspace, case.into()), source);
         let directory = scratch.path().join(case.name());
         std::fs::create_dir(&directory).unwrap();
         let mut captured = corpus_cargo::capture(
@@ -854,91 +1013,18 @@ fn ordinary_rust_integer_identities_reach_final_i_native_and_sim_both_profiles()
             captured.args.push("-Zmir-opt-level=0".into())
         }
         let request = Request {
-            case,
+            case: case.into(),
             mode: Mode::Observe,
             source: source.clone(),
             args_sha256: digest(&serde_json::to_vec(&captured.args).unwrap()),
         };
-        let (observed, native) = child(&captured, &directory, request.clone());
-        compiler_children += 1;
+        let (observed, children) = qualify_case(&captured, &directory, request);
+        compiler_children += children;
         let Outcome::Observed(observed) = observed else {
             unreachable!()
         };
         validate_observation(case, &observed).unwrap();
-        let (extracted, independent) = child(
-            &captured,
-            &directory,
-            Request {
-                mode: Mode::Extract,
-                ..request.clone()
-            },
-        );
-        let Outcome::Extracted {
-            llvm_sha256,
-            llvm_bytes,
-            source_roots,
-        } = extracted
-        else {
-            unreachable!()
-        };
-        compiler_children += 1;
-        let actual = std::fs::read(native).unwrap();
-        let emitted = std::fs::read(independent).unwrap();
-        assert_eq!(actual, emitted, "independent real final-I extractor bytes");
-        assert_eq!(digest(&actual), observed.llvm_sha256);
-        assert_eq!(
-            (llvm_sha256, llvm_bytes),
-            (observed.llvm_sha256, observed.llvm_bytes)
-        );
-        let expected_roots = graph::census_roots(&observed.roots);
-        let subjects = |roots: &[census::SourceRoot]| {
-            roots
-                .iter()
-                .map(|root| (root.name.clone(), (root.function, root.body)))
-                .collect::<std::collections::BTreeMap<_, _>>()
-        };
-        assert_eq!(subjects(&source_roots), subjects(&expected_roots));
-        let (enabled, enabled_path) = child(
-            &captured,
-            &directory,
-            Request {
-                mode: Mode::ExtractCensus,
-                ..request.clone()
-            },
-        );
-        let Outcome::Extracted {
-            llvm_sha256: enabled_digest,
-            llvm_bytes: enabled_len,
-            source_roots: enabled_roots,
-        } = enabled
-        else {
-            unreachable!()
-        };
-        compiler_children += 1;
-        assert_eq!(
-            std::fs::read(enabled_path).unwrap(),
-            emitted,
-            "optional census changed actual public fixed6 extraction bytes"
-        );
-        assert_eq!((enabled_digest, enabled_len), (llvm_sha256, llvm_bytes));
-        assert_eq!(
-            enabled_roots, source_roots,
-            "actual source owner changed with optional census"
-        );
-        let (proof, absent_artifact) = child(
-            &captured,
-            &directory,
-            Request {
-                mode: Mode::MissingProof,
-                ..request
-            },
-        );
-        let Outcome::MissingProof { retained_floor } = proof else {
-            unreachable!()
-        };
-        compiler_children += 1;
-        assert!(retained_floor > 0 && !absent_artifact.exists());
-        assert_eq!(source_stamps(&workspace), source);
+        assert_eq!(source_stamps(&workspace, case.into()), source);
         completed += 1;
         roots += observed.roots.len();
         mutations += usize::from(case.opt0);
