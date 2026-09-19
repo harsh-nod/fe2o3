@@ -151,17 +151,14 @@ fn owner_parameter_crosses_the_real_source_lifecycle_boundary() {
         peak - 1,
     )
     .0;
-    assert!(
-        matches!(
-            short_storage,
-            Err(
-                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
-                    ArgumentResourceV1::Storage(_)
-                )
-            )
-        ),
-        "{short_storage:?}"
-    );
+    let Err(ProductionSemanticKirErrorV1::AssertOrigin(SemanticKirAssertOriginErrorV1::Resource(
+        ArgumentResourceV1::Storage(limit),
+    ))) = short_storage
+    else {
+        panic!("{short_storage:?}");
+    };
+    assert_eq!(limit.actual(), peak);
+    assert_eq!(limit.limit(), peak - 1);
 }
 
 #[test]
