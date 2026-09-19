@@ -25,6 +25,7 @@ pub(super) struct AuthenticatedClosureFlowV1<'tcx> {
     bodies: Box<[[u8; 32]]>,
     graph: CallGraphV1,
     work: SourceClosureWorkV1,
+    references: super::reference_custody_v1::RetainedReferenceInputsV1<'tcx>,
 }
 
 fn charge(work: &mut SourceClosureWorkV1, amount: usize) -> Result<(), Error> {
@@ -93,6 +94,9 @@ pub(super) fn authenticate_v1<'tcx>(
         function.closure_observation = admission.map(|value| Box::new(value.into_observation()));
     }
     charge(&mut work, functions.len())?;
+    let references =
+        super::reference_custody_v1::RetainedReferenceInputsV1::capture(tcx, functions, &mut work)
+            .map_err(|error| Error::new(error.to_string()))?;
     Ok(AuthenticatedClosureFlowV1 {
         functions: functions.iter().map(|f| (f.instance, f.role)).collect(),
         bodies: functions
@@ -101,10 +105,23 @@ pub(super) fn authenticate_v1<'tcx>(
             .collect(),
         graph,
         work,
+        references,
     })
 }
 
 impl<'tcx> AuthenticatedClosureFlowV1<'tcx> {
+    pub(super) fn rederive_reference_bindings_v1(
+        &mut self,
+        tcx: TyCtxt<'tcx>,
+        collection: &CollectionResult<'tcx>,
+    ) -> Result<
+        crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+        crate::reference_effect_v1::ReferenceBindingErrorV1,
+    > {
+        self.references
+            .rederive(tcx, &collection.functions, &mut self.work)
+    }
+
     pub(super) fn revalidate_for_import_v1(
         mut self,
         tcx: TyCtxt<'tcx>,

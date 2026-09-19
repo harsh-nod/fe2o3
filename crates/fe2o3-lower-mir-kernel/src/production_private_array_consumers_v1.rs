@@ -46,13 +46,13 @@ fn private_array_ranked_definition_v1(
 }
 
 fn private_array_ranked_index_v1<'a>(
-    lowering: &'a ProductionRankedKernelLoweringInputV1,
+    recipe: &'a fe2o3_pliron::ProductionRankedKernelV1,
     max_operations: usize,
     work: &mut PrivateArrayCorrelationWorkV1<'_>,
 ) -> Result<Vec<PrivateArrayRankedDefinitionV1<'a>>, ProductionMirPlironTranslationErrorV1> {
     let mut count = 0usize;
     let mut operations = 0usize;
-    for block in lowering.kernel().blocks() {
+    for block in recipe.blocks() {
         work.charge_private_array_work(1)?;
         for operation in block.operations() {
             work.charge_private_array_work(3)?;
@@ -77,7 +77,7 @@ fn private_array_ranked_index_v1<'a>(
     let mut rows = Vec::new();
     rows.try_reserve_exact(count)
         .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-    for block in lowering.kernel().blocks() {
+    for block in recipe.blocks() {
         work.charge_private_array_work(1)?;
         for operation in block.operations() {
             work.charge_private_array_work(1)?;
@@ -133,7 +133,7 @@ impl<'a> PrivateArrayFinalRelationV1<'a> {
         owner: SemanticFunctionIdV1,
         function_id: SemanticFunctionIdV1,
         actual: &'a Function,
-        lowering: &'a ProductionRankedKernelLoweringInputV1,
+        recipe: &'a fe2o3_pliron::ProductionRankedKernelV1,
         max_operations: usize,
         budget: &mut UnsupportedIndexCorrelationBudgetV1,
     ) -> Result<Option<Self>, ProductionMirPlironTranslationErrorV1> {
@@ -186,7 +186,7 @@ impl<'a> PrivateArrayFinalRelationV1<'a> {
             .get(instance.effect_start..instance.effect_end)
             .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
         let ranked_definitions =
-            private_array_ranked_index_v1(lowering, max_operations, &mut work)?;
+            private_array_ranked_index_v1(recipe, max_operations, &mut work)?;
         Ok(Some(Self {
             owner,
             function_id,
@@ -255,7 +255,7 @@ impl<'a> PrivateArrayFinalRelationV1<'a> {
 
     fn check(
         &self,
-        lowering: &ProductionRankedKernelLoweringInputV1,
+        recipe: &fe2o3_pliron::ProductionRankedKernelV1,
         source: &IndexedRankedAccessSourceV1,
         consumer: KirMemoryConsumerV1,
         site: SemanticAccessSiteV1,
@@ -313,8 +313,7 @@ impl<'a> PrivateArrayFinalRelationV1<'a> {
             _ => mismatch(),
         })?;
         work.charge_private_array_work(3)?;
-        let operation = lowering
-            .kernel()
+        let operation = recipe
             .blocks()
             .get(source.ranked_block as usize)
             .and_then(|block| block.operations().get(source.ranked_operation as usize))

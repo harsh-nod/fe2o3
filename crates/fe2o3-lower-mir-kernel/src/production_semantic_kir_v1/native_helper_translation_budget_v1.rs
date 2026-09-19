@@ -41,6 +41,31 @@ fn validate_mir_pliron_translation_with_semantic_and_budget_v1(
     max_operations: usize,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<ProductionMirPlironTranslationValidationV1, ProductionMirPlironTranslationErrorV1> {
+    validate_mir_pliron_recipe_translation_with_semantic_and_budget_v1(
+        semantic,
+        module,
+        correspondence,
+        kernel_id,
+        lowering.kernel(),
+        sources,
+        executable_effect_sources,
+        max_operations,
+        budget,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_mir_pliron_recipe_translation_with_semantic_and_budget_v1(
+    semantic: Option<&AdmittedInertSemanticMirV1>,
+    module: &Module,
+    correspondence: &SemanticKirCorrespondenceV1,
+    kernel_id: &str,
+    recipe: &fe2o3_pliron::ProductionRankedKernelV1,
+    sources: &[ProductionRankedAccessSourceV1],
+    executable_effect_sources: &[ProductionRankedExecutableEffectSourceV1],
+    max_operations: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<ProductionMirPlironTranslationValidationV1, ProductionMirPlironTranslationErrorV1> {
     native_helper_value_expansion_v1::with_native_value_expansion_v1(
         semantic,
         module,
@@ -53,7 +78,7 @@ fn validate_mir_pliron_translation_with_semantic_and_budget_v1(
                 module,
                 correspondence,
                 kernel_id,
-                lowering,
+                recipe,
                 sources,
                 executable_effect_sources,
                 max_operations,

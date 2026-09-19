@@ -8,6 +8,19 @@ struct ContractV1 {
     partition: OwnershipPartitionAttr,
 }
 
+struct PreparedOwnershipContractsV1 {
+    inventory: std::sync::Arc<
+        crate::production_analysis::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
+    >,
+    contracts: Vec<ContractV1>,
+    coverage_summary: HierarchicalCoverageProofSummaryV1,
+}
+
+struct PreparedOwnershipPrerequisitesV1 {
+    grid: u64,
+    mandatory_bounds_failure: Option<String>,
+}
+
 #[cfg(test)]
 pub(crate) fn run_pliron_hierarchical_ownership_check_v1(
     context: &Context,
@@ -22,11 +35,41 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
 ) -> HierarchicalOwnershipReportV1 {
+    let prepared = match prepare_ownership_contracts_v1(context, function, analyses) {
+        Ok(prepared) => prepared,
+        Err(report) => return report,
+    };
+    let prerequisites =
+        match prepare_ownership_prerequisites_v1(context, function, analyses, &prepared) {
+            Ok(prerequisites) => prerequisites,
+            Err(report) => return report,
+        };
+    let PreparedOwnershipContractsV1 {
+        inventory,
+        contracts,
+        coverage_summary,
+    } = prepared;
+    run_prepared_ownership_v1(
+        context,
+        function,
+        analyses,
+        &inventory,
+        contracts,
+        coverage_summary,
+        prerequisites,
+    )
+}
+
+fn prepare_ownership_contracts_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+) -> Result<PreparedOwnershipContractsV1, HierarchicalOwnershipReportV1> {
     analyses.prepare_function_inventory(context, function);
     let inventory = match analyses.function_inventory_handle() {
         Ok(inventory) => inventory,
         Err(failure) => {
-            return one(
+            return Err(one(
                 HierarchicalOwnershipFindingV1::SparseIndexAnalysisIncomplete {
                     detail: format!(
                         "bounded function inventory {} count {} exceeds limit {}",
@@ -35,44 +78,59 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
                         failure.limit(),
                     ),
                 },
-            );
+            ));
         }
     };
     let contracts = match collect_contracts(context, &inventory) {
-        Ok(contracts) if contracts.is_empty() => return clean(),
+        Ok(contracts) if contracts.is_empty() => return Err(clean()),
         Ok(contracts) => contracts,
-        Err(finding) => return one(*finding),
+        Err(finding) => return Err(one(*finding)),
     };
-    let mut coverage_summary = declared_coverage_summary(&contracts);
+    let coverage_summary = declared_coverage_summary(&contracts);
+    Ok(PreparedOwnershipContractsV1 {
+        inventory,
+        contracts,
+        coverage_summary,
+    })
+}
 
+fn prepare_ownership_prerequisites_v1(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    prepared: &PreparedOwnershipContractsV1,
+) -> Result<PreparedOwnershipPrerequisitesV1, HierarchicalOwnershipReportV1> {
+    let contracts = &prepared.contracts;
+    let inventory = &prepared.inventory;
+    let coverage_summary = prepared.coverage_summary;
     analyses.prepare_execution_layout(context, function);
     let layout = match analyses.execution_layout() {
         Ok(Some(layout)) => layout,
         Ok(None) => {
-            return one_with_summary(
+            return Err(one_with_summary(
                 HierarchicalOwnershipFindingV1::ExecutionLayoutIncomplete {
                     detail: "kernel.ownership_contract requires gpu.execution_layout".to_owned(),
                 },
                 coverage_summary,
-            );
+            ));
         }
         Err(failure) => {
-            return one_with_summary(
+            return Err(one_with_summary(
                 HierarchicalOwnershipFindingV1::ExecutionLayoutIncomplete {
                     detail: trace_failure_detail(failure),
                 },
                 coverage_summary,
-            );
+            ));
         }
     };
     analyses.prepare_sparse_indices(context, function);
     if let Err(failure) = analyses.sparse_indices() {
-        return one_with_summary(
+        return Err(one_with_summary(
             HierarchicalOwnershipFindingV1::SparseIndexAnalysisIncomplete {
                 detail: format!("{failure:?}"),
             },
             coverage_summary,
-        );
+        ));
     }
     let needs_effect_domain = contracts
         .iter()
@@ -94,10 +152,10 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
                 bounds.findings(),
             );
             if needs_effect_domain {
-                return one_with_summary(
+                return Err(one_with_summary(
                     HierarchicalOwnershipFindingV1::EffectDomainIncomplete { detail },
                     coverage_summary,
-                );
+                ));
             }
             mandatory_bounds_failure = Some(detail);
         }
@@ -105,12 +163,12 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
     if needs_effect_domain {
         let race = run_pliron_ranked_race_check_with_analyses_v1(context, function, analyses);
         if !race.is_clean() {
-            return one_with_summary(
+            return Err(one_with_summary(
                 HierarchicalOwnershipFindingV1::EffectDomainIncomplete {
                     detail: bounded_nested_findings_detail_v1("", race.findings()),
                 },
                 coverage_summary,
-            );
+            ));
         }
     }
     let needs_total_output = contracts
@@ -118,11 +176,36 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
         .any(|contract| contract.coverage == OwnershipCoverageAttr::TotalView);
     if needs_total_output
         && let Some(finding) =
-            first_unmodeled_or_aliasing_observable_write(context, &inventory, &contracts)
+            first_unmodeled_or_aliasing_observable_write(context, inventory, contracts)
     {
-        return one_with_summary(finding, coverage_summary);
+        return Err(one_with_summary(finding, coverage_summary));
     }
-    let needs_exact_trace = contracts.iter().any(|contract| {
+    Ok(PreparedOwnershipPrerequisitesV1 {
+        grid: layout.grid,
+        mandatory_bounds_failure,
+    })
+}
+
+// V1 consumes the original vector, preserving per-contract name drops. The
+// separately prepaid pending analysis borrows its roster through the same loop.
+fn run_prepared_ownership_v1<C>(
+    context: &Context,
+    function: &FuncOp,
+    analyses: &mut PlironAnalysisManagerV1,
+    inventory: &crate::production_analysis::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
+    contracts: C,
+    mut coverage_summary: HierarchicalCoverageProofSummaryV1,
+    prerequisites: PreparedOwnershipPrerequisitesV1,
+) -> HierarchicalOwnershipReportV1
+where
+    C: AsRef<[ContractV1]> + IntoIterator,
+    C::Item: std::borrow::Borrow<ContractV1>,
+{
+    let PreparedOwnershipPrerequisitesV1 {
+        grid,
+        mandatory_bounds_failure,
+    } = prerequisites;
+    let needs_exact_trace = contracts.as_ref().iter().any(|contract| {
         matches!(
             contract.coverage,
             OwnershipCoverageAttr::ExactView
@@ -155,9 +238,10 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
     let mut findings = Vec::new();
     let mut regions = Vec::new();
     for contract in contracts {
+        let contract: &ContractV1 = std::borrow::Borrow::borrow(&contract);
         let (extents, element_count) = match contract.coverage {
             OwnershipCoverageAttr::ExactView | OwnershipCoverageAttr::TotalView => {
-                let extents = match resolve_extents(context, sparse, &contract) {
+                let extents = match resolve_extents(context, sparse, contract) {
                     Ok(extents) => extents,
                     Err(finding) => {
                         findings.push(*finding);
@@ -174,7 +258,7 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
                 (Some(extents), Some(element_count))
             }
             OwnershipCoverageAttr::CollectiveContributions => {
-                let extents = match resolve_extents(context, sparse, &contract) {
+                let extents = match resolve_extents(context, sparse, contract) {
                     Ok(extents) => extents,
                     Err(finding) => {
                         findings.push(*finding);
@@ -184,7 +268,7 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
                 (Some(extents), None)
             }
             OwnershipCoverageAttr::ExactEffectDomain => {
-                if let Err(finding) = validate_effect_domain_site(context, &inventory, &contract) {
+                if let Err(finding) = validate_effect_domain_site(context, inventory, contract) {
                     findings.push(*finding);
                 }
                 continue;
@@ -193,11 +277,11 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
         let finding_count = findings.len();
         analyze_contract(
             context,
-            &contract,
+            contract,
             extents.as_deref(),
             element_count,
             traces.expect("whole-domain contracts prepared exact traces"),
-            layout.grid,
+            grid,
             &mut findings,
             &mut regions,
         );

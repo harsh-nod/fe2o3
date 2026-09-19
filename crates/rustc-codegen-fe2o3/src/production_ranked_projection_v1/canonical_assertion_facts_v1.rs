@@ -108,6 +108,16 @@ pub(super) enum ProjectedAssertionConditionV1 {
 /// origin view and exact borrowed graph report below. Tests must identify any
 /// isolated synthetic decision inputs explicitly.
 pub(super) trait ProjectedAssertionFactsV1 {
+    #[cfg(test)]
+    fn observe_conditional_prepared_for_test_v1(
+        &mut self,
+        _candidate: fe2o3_lower_mir_kernel::NativeRankedSourceCandidateV1<'_>,
+    ) -> Result<(), ProjectionError> {
+        Err(ProjectionError::Incomplete(
+            "conditional observation requires a canonical owner",
+        ))
+    }
+
     // The historical route has no added guard contract. The distinct strict
     // decorator consumes its exact source/N row before the existing proof mark.
     fn require_guarded_source_progress_v1(
@@ -299,6 +309,18 @@ pub(super) struct CanonicalSourceAssertionFactsV1<'r, 'i, 'g, 'b, 'w> {
     masked: Option<&'r MaskedSourceAssertionTableV1<'g>>,
 }
 impl ProjectedAssertionFactsV1 for CanonicalSourceAssertionFactsV1<'_, '_, '_, '_, '_> {
+    #[cfg(test)]
+    fn observe_conditional_prepared_for_test_v1(
+        &mut self,
+        candidate: fe2o3_lower_mir_kernel::NativeRankedSourceCandidateV1<'_>,
+    ) -> Result<(), ProjectionError> {
+        super::conditional_output_observation_v1_tests::observe_candidate(
+            self.owner,
+            candidate,
+            self.budget,
+        )
+    }
+
     fn masked_assertion_source_proved_v1(
         &mut self,
         function: &super::SemanticFunctionDeclV1,

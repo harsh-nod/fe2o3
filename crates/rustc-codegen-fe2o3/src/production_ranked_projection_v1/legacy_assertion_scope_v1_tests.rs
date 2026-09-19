@@ -387,6 +387,7 @@ mod legacy_scope_tests {
                             AccessKindAttr::Read
                         },
                         source: SemanticSourceProvenanceV1::unavailable(),
+                        output_extent: None,
                         semantic_site: Some(ProjectedSemanticAccessSiteV1 {
                             block: 0,
                             statement: Some(2),
@@ -493,6 +494,7 @@ mod legacy_scope_tests {
                     access: AccessKindAttr::Write,
                     memory_space: MemorySpaceAttr::Private,
                     source: SemanticSourceProvenanceV1::unavailable(),
+                    output_extent: None,
                     semantic_site: Some(ProjectedSemanticAccessSiteV1 {
                         block: 0,
                         statement: Some(statement),
@@ -565,6 +567,7 @@ mod legacy_scope_tests {
                 },
                 memory_space: MemorySpaceAttr::Private,
                 source: SemanticSourceProvenanceV1::unavailable(),
+                output_extent: None,
                 semantic_site: Some(ProjectedSemanticAccessSiteV1 {
                     block: 0,
                     statement: Some(1),

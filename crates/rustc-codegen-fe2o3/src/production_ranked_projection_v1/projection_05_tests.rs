@@ -701,6 +701,7 @@
             access: AccessKindAttr::AtomicReadModifyWrite,
             memory_space: MemorySpaceAttr::Global,
             source: SemanticSourceProvenanceV1::unavailable(),
+            output_extent: None,
             semantic_site: None,
         };
         let atomic = ProjectedSemanticBlockV1 {

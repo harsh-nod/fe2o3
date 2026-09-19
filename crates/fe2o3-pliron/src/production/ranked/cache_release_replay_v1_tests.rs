@@ -34,6 +34,24 @@ fn cache_release_replay_limits(
     crate::production_analysis::ProductionAnalysisResourceLimitsV1::new(work, peak)
 }
 
+fn cache_release_session_limits(
+    capture: crate::production_analysis::ProductionAnalysisResourceUpperBoundV1,
+    pipeline: crate::production_analysis::ProductionAnalysisResourceLimitsV1,
+) -> crate::production_analysis::ProductionAnalysisResourceLimitsV1 {
+    // The capture owner coexists with both runs; their public receipt remains
+    // pipeline-only. Count the session prefix once, not once per replay.
+    let work = capture
+        .work_upper_bound()
+        .checked_add(pipeline.max_work())
+        .unwrap();
+    let peak = capture
+        .retained_storage_upper_bound()
+        .checked_add(pipeline.max_peak_storage())
+        .unwrap()
+        .max(capture.peak_storage_upper_bound());
+    crate::production_analysis::ProductionAnalysisResourceLimitsV1::new(work, peak)
+}
+
 #[test]
 fn pipeline_cache_release_actual_two_run_replay_retains_exact_report_and_envelope() {
     let (baseline, stage, _) = cache_release_verified_session(
@@ -42,7 +60,8 @@ fn pipeline_cache_release_actual_two_run_replay_retains_exact_report_and_envelop
     let run = baseline.constructed_roots[&stage.identity]
         .production_analysis_resource_upper_bound
         .unwrap();
-    let exact = cache_release_replay_limits(run);
+    let pipeline = cache_release_replay_limits(run);
+    let exact = cache_release_session_limits(baseline.ownership_binding_resources, pipeline);
     drop(baseline);
     let (session, stage, root) = cache_release_verified_session(exact);
     let record = &session.constructed_roots[&stage.identity];
@@ -61,11 +80,11 @@ fn pipeline_cache_release_actual_two_run_replay_retains_exact_report_and_envelop
     );
     assert_eq!(
         prepared.production_analysis_work_upper_bound_v1(),
-        exact.max_work()
+        pipeline.max_work()
     );
     assert_eq!(
         prepared.production_analysis_peak_storage_upper_bound_v1(),
-        exact.max_peak_storage()
+        pipeline.max_peak_storage()
     );
     assert_eq!(
         prepared.production_analysis_retained_storage_upper_bound_v1(),
@@ -80,7 +99,10 @@ fn pipeline_cache_release_actual_two_run_replay_rejects_one_under_limits() {
     let run = baseline.constructed_roots[&stage.identity]
         .production_analysis_resource_upper_bound
         .unwrap();
-    let exact = cache_release_replay_limits(run);
+    let exact = cache_release_session_limits(
+        baseline.ownership_binding_resources,
+        cache_release_replay_limits(run),
+    );
     drop(baseline);
     for (limits, resource) in [
         (

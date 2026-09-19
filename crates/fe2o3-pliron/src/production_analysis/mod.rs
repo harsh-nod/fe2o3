@@ -36,6 +36,7 @@ mod pliron_switch_verification_v1;
 mod pliron_tensor_layout;
 mod pliron_workgroup_memory;
 
+pub(crate) use pliron_analysis_manager::PlironAnalysisManagerV1;
 #[cfg(test)]
 pub(crate) use pliron_analysis_manager::panic_next_analysis_manager_prepare_for_test_v1;
 pub use pliron_analysis_witness::*;

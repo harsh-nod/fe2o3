@@ -3,6 +3,13 @@
 #[path = "compiler_descriptor_checked_output_policy3_v1.rs"]
 pub(crate) mod checked_output_policy3_v1;
 
+#[path = "compiler_descriptor_conditional_output_binding_v1.rs"]
+pub(crate) mod conditional_output_binding_v1;
+#[cfg(test)]
+pub(crate) use conditional_output_binding_v1::{
+    CompilerConditionalOutputDescriptorErrorV1, bind_conditional_output_descriptor_v1,
+};
+
 use crate::collector::{CollectedFunction, TypedArgumentListV1};
 use crate::kernel_ir_codegen::InertCompilerModuleTextV1;
 use crate::rust_type_layout_v3::{

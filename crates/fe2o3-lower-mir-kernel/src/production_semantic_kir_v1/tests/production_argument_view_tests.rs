@@ -3,6 +3,9 @@ use super::*;
 #[path = "production_atomic_argument_view_tests.rs"]
 mod atomic_view_tests;
 
+#[path = "../../production_conditional_output_binding_v1_tests.rs"]
+mod conditional_output_binding_tests;
+
 #[test]
 fn atomic_argument_child_preserves_wide_source_indices() {
     // Test the production selector directly; do not pretend to visit billions of nodes.

@@ -1258,6 +1258,13 @@ fn fmt_semantic_source_location_v1(
 ///
 /// This is compiler-internal correspondence, not proof authority. It is
 /// revalidated against all three retained IR owners before formal admission.
+///
+/// Optional output extent provenance is in-memory only. Reconstructing the five
+/// legacy coordinate fields (including a legacy payload decode) uses `new` and
+/// loses that proposal. Existing codecs/digests must not serialize it under an
+/// old version. Eq/Ord compare the complete in-memory row, including the proposal;
+/// neither trait is a wire identity or an authentication check. Existing source
+/// replay validates the base coordinates, not this optional extent meaning.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ProductionRankedAccessSourceV1 {
     semantic_block: u32,
@@ -1265,6 +1272,54 @@ pub struct ProductionRankedAccessSourceV1 {
     semantic_access_ordinal: u32,
     ranked_block: u32,
     ranked_operation: u32,
+    output_extent: Option<ProductionRankedOutputExtentSourceV1>,
+}
+
+/// Inert rank-one checked-view provenance, retained with its access occurrence.
+///
+/// The argument is the original semantic source argument, not a ranked operand
+/// ordinal or a CPU-reference argument. Construction is not authentication;
+/// canonical rederivation and existing source replay remain required.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ProductionRankedOutputExtentSourceV1 {
+    source_argument: u32,
+    view: ProductionRankedValueV1,
+    extent: ProductionRankedValueV1,
+    index: ProductionRankedValueV1,
+}
+
+impl ProductionRankedOutputExtentSourceV1 {
+    /// Describes the checked view's sole dimension as its receiver slice length.
+    pub const fn new(
+        source_argument: u32,
+        view: ProductionRankedValueV1,
+        extent: ProductionRankedValueV1,
+        index: ProductionRankedValueV1,
+    ) -> Self {
+        Self {
+            source_argument,
+            view,
+            extent,
+            index,
+        }
+    }
+
+    /// Original source argument supplying the receiver allocation.
+    pub const fn source_argument(self) -> u32 {
+        self.source_argument
+    }
+    /// Exact rank-one checked view operand.
+    pub const fn view(self) -> ProductionRankedValueV1 {
+        self.view
+    }
+    /// Exact dynamic extent operand, with no meaning inferred from its ordinal.
+    pub const fn extent(self) -> ProductionRankedValueV1 {
+        self.extent
+    }
+    /// Exact checked index retained at construction.
+    pub const fn index(self) -> ProductionRankedValueV1 {
+        self.index
+    }
 }
 
 /// Provenance class for one compiler-generated executable effect.
@@ -1343,7 +1398,8 @@ impl ProductionRankedExecutableEffectSourceV1 {
 }
 
 impl ProductionRankedAccessSourceV1 {
-    /// Constructs one compiler-projected access correspondence record.
+    /// Constructs one base correspondence record with no extent proposal.
+    /// Legacy decoding must retain this conservative absence.
     #[doc(hidden)]
     pub const fn new(
         semantic_block: u32,
@@ -1358,7 +1414,22 @@ impl ProductionRankedAccessSourceV1 {
             semantic_access_ordinal,
             ranked_block,
             ranked_operation,
+            output_extent: None,
         }
+    }
+
+    /// Attaches an inert checked-view proposal; does not validate its meaning.
+    pub const fn with_output_extent(
+        mut self,
+        extent: ProductionRankedOutputExtentSourceV1,
+    ) -> Self {
+        self.output_extent = Some(extent);
+        self
+    }
+
+    /// Retained checked-view provenance, absent for legacy or unsupported recipes.
+    pub const fn output_extent(self) -> Option<ProductionRankedOutputExtentSourceV1> {
+        self.output_extent
     }
 
     /// Returns the exact source semantic block.
@@ -1453,6 +1524,14 @@ impl ProductionRankedSemanticProjectionRootV1 {
     /// Returns the exact ranked function name.
     pub fn function_name(&self) -> &str {
         self.lowering.kernel().function_name()
+    }
+
+    /// Exact retained access rows, including optional inert extent provenance.
+    /// Their inline storage is part of the existing access-row allocation.
+    /// Moving or borrowing this root preserves proposals; base-field wire
+    /// reconstruction does not and cannot authenticate a conditional extent.
+    pub fn access_sources(&self) -> &[ProductionRankedAccessSourceV1] {
+        &self.access_sources
     }
 }
 
@@ -1609,7 +1688,7 @@ pub fn validate_borrowed_ranked_semantic_projection_candidate_with_generated_eff
             "ranked projection receipt has empty diagnostic IR",
         ));
     }
-    if !ranked_access_sources_are_well_formed(lowering, access_sources) {
+    if !ranked_access_sources_are_well_formed(lowering.kernel(), access_sources) {
         return Err(unsupported(
             0,
             None,
@@ -1617,7 +1696,10 @@ pub fn validate_borrowed_ranked_semantic_projection_candidate_with_generated_eff
             "ranked projection receipt has invalid access correspondence",
         ));
     }
-    if !ranked_executable_effect_sources_are_well_formed(lowering, executable_effect_sources) {
+    if !ranked_executable_effect_sources_are_well_formed(
+        lowering.kernel(),
+        executable_effect_sources,
+    ) {
         return Err(unsupported(
             0,
             None,
@@ -2256,11 +2338,11 @@ impl ProductionSemanticKirOwnerV1 {
                 })
                 || !mandatory_generic_checks_are_clean(&generic_checks.lowering)
                 || !ranked_access_sources_are_well_formed(
-                    &generic_checks.lowering,
+                    generic_checks.lowering.kernel(),
                     &generic_checks.access_sources,
                 )
                 || !ranked_executable_effect_sources_are_well_formed(
-                    &generic_checks.lowering,
+                    generic_checks.lowering.kernel(),
                     &generic_checks.executable_effect_sources,
                 )
             {
@@ -2738,7 +2820,7 @@ fn operation_span_contains_v1(
 }
 
 fn ranked_access_sources_are_well_formed(
-    lowering: &ProductionRankedKernelLoweringInputV1,
+    recipe: &fe2o3_pliron::ProductionRankedKernelV1,
     sources: &[ProductionRankedAccessSourceV1],
 ) -> bool {
     if sources.len() > DEFAULT_MAX_OPERATIONS_V1 {
@@ -2747,8 +2829,7 @@ fn ranked_access_sources_are_well_formed(
     let mut ranked_locations = BTreeSet::new();
     let mut source_ordinals = BTreeMap::<(u32, Option<u32>), BTreeSet<u32>>::new();
     for source in sources {
-        let Some(operation) = lowering
-            .kernel()
+        let Some(operation) = recipe
             .blocks()
             .get(source.ranked_block as usize)
             .and_then(|block| block.operations().get(source.ranked_operation as usize))
@@ -2784,7 +2865,7 @@ fn ranked_access_sources_are_well_formed(
 }
 
 fn ranked_executable_effect_sources_are_well_formed(
-    lowering: &ProductionRankedKernelLoweringInputV1,
+    recipe: &fe2o3_pliron::ProductionRankedKernelV1,
     sources: &[ProductionRankedExecutableEffectSourceV1],
 ) -> bool {
     if sources.len() > DEFAULT_MAX_OPERATIONS_V1 {
@@ -2793,8 +2874,7 @@ fn ranked_executable_effect_sources_are_well_formed(
     let mut locations = BTreeSet::new();
     let mut ordinals = BTreeMap::<u32, BTreeSet<u32>>::new();
     for source in sources {
-        let Some(operation) = lowering
-            .kernel()
+        let Some(operation) = recipe
             .blocks()
             .get(source.ranked_block as usize)
             .and_then(|block| block.operations().get(source.ranked_operation as usize))
@@ -3152,7 +3232,8 @@ fn unsupported_indices_match_ranked_sources_result(
             "unsupported-index correlation could not index semantic access sites",
         ));
     };
-    let Some(ranked) = index_ranked_correlation(lowering, sources, max_operations, &mut budget)
+    let Some(ranked) =
+        index_ranked_correlation(lowering.kernel(), sources, max_operations, &mut budget)
     else {
         return Err(ProductionMemoryDischargeFailureV1::stage(
             "unsupported-index correlation could not index ranked access receipts",
@@ -3166,7 +3247,7 @@ fn unsupported_indices_match_ranked_sources_result(
         correspondence_owner,
         semantic_function,
         function,
-        lowering,
+        lowering.kernel(),
         max_operations,
         &mut budget,
     )
@@ -3274,7 +3355,7 @@ fn unsupported_indices_match_ranked_sources_result(
             {
                 private_array_relation.as_ref().ok_or_else(|| ProductionMemoryDischargeFailureV1::access(
                     consumer.location, "private array access has no producer-owned relation"))?
-                    .check(lowering, source, *consumer, *site, &mut budget)
+                    .check(lowering.kernel(), source, *consumer, *site, &mut budget)
                     .map_err(|_| ProductionMemoryDischargeFailureV1::access(consumer.location,
                         "private array access differs from its exact source, allocation, or index"))?;
                 true
@@ -3931,7 +4012,7 @@ fn index_semantic_access_span(
 }
 
 fn index_ranked_correlation(
-    lowering: &ProductionRankedKernelLoweringInputV1,
+    recipe: &fe2o3_pliron::ProductionRankedKernelV1,
     sources: &[ProductionRankedAccessSourceV1],
     max_operations: usize,
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
@@ -3942,7 +4023,7 @@ fn index_ranked_correlation(
     let mut operation_count = 0_usize;
     let mut view_definitions = BTreeMap::new();
     let mut semantic_expressions = BTreeMap::new();
-    for block in lowering.kernel().blocks() {
+    for block in recipe.blocks() {
         budget.charge()?;
         for operation in block.operations() {
             operation_count = operation_count.checked_add(1)?;
@@ -4009,8 +4090,7 @@ fn index_ranked_correlation(
     let mut ambiguous_conservative_statements = BTreeSet::new();
     for source in sources {
         budget.charge()?;
-        let operation = lowering
-            .kernel()
+        let operation = recipe
             .blocks()
             .get(source.ranked_block as usize)?
             .operations()
@@ -4195,7 +4275,7 @@ mod helper_source_fixture_v1 {
 
 fn normalize_ranked_expression_v1(
     expression: &ProductionSemanticExpressionV2,
-    lowering: &ProductionRankedKernelLoweringInputV1,
+    recipe: &fe2o3_pliron::ProductionRankedKernelV1,
     ranked: &RankedCorrelationIndexV1,
     depth: usize,
     budget: &mut UnsupportedIndexCorrelationBudgetV1,
@@ -4241,8 +4321,7 @@ fn normalize_ranked_expression_v1(
             {
                 return None;
             }
-            let operation = lowering
-                .kernel()
+            let operation = recipe
                 .blocks()
                 .get(load.block as usize)?
                 .operations()
@@ -4270,7 +4349,7 @@ fn normalize_ranked_expression_v1(
             operation: *operation,
             scalar: *scalar,
             operand: Box::new(normalize_ranked_expression_v1(
-                operand, lowering, ranked, next, budget,
+                operand, recipe, ranked, next, budget,
             )?),
         },
         ProductionSemanticExpressionV2::Binary {
@@ -4284,10 +4363,10 @@ fn normalize_ranked_expression_v1(
             scalar: *scalar,
             overflow: *overflow,
             lhs: Box::new(normalize_ranked_expression_v1(
-                lhs, lowering, ranked, next, budget,
+                lhs, recipe, ranked, next, budget,
             )?),
             rhs: Box::new(normalize_ranked_expression_v1(
-                rhs, lowering, ranked, next, budget,
+                rhs, recipe, ranked, next, budget,
             )?),
         },
         ProductionSemanticExpressionV2::Compare {
@@ -4299,10 +4378,10 @@ fn normalize_ranked_expression_v1(
             operation: *operation,
             operand_scalar: *operand_scalar,
             lhs: Box::new(normalize_ranked_expression_v1(
-                lhs, lowering, ranked, next, budget,
+                lhs, recipe, ranked, next, budget,
             )?),
             rhs: Box::new(normalize_ranked_expression_v1(
-                rhs, lowering, ranked, next, budget,
+                rhs, recipe, ranked, next, budget,
             )?),
         },
         ProductionSemanticExpressionV2::Select {
@@ -4313,13 +4392,13 @@ fn normalize_ranked_expression_v1(
         } => NormalizedScalarExpressionV1::Select {
             scalar: *scalar,
             condition: Box::new(normalize_ranked_expression_v1(
-                condition, lowering, ranked, next, budget,
+                condition, recipe, ranked, next, budget,
             )?),
             when_true: Box::new(normalize_ranked_expression_v1(
-                when_true, lowering, ranked, next, budget,
+                when_true, recipe, ranked, next, budget,
             )?),
             when_false: Box::new(normalize_ranked_expression_v1(
-                when_false, lowering, ranked, next, budget,
+                when_false, recipe, ranked, next, budget,
             )?),
         },
         ProductionSemanticExpressionV2::Cast {
@@ -4328,7 +4407,7 @@ fn normalize_ranked_expression_v1(
             target,
             operand,
         } => {
-            let operand = normalize_ranked_expression_v1(operand, lowering, ranked, next, budget)?;
+            let operand = normalize_ranked_expression_v1(operand, recipe, ranked, next, budget)?;
             if source == target {
                 operand
             } else {
@@ -5116,6 +5195,12 @@ struct ValidatedGeneratedMemoryEffectV1 {
     semantic_effect_ordinal: u32,
     ranked_block: u32,
     ranked_operation: u32,
+}
+
+#[derive(Default)]
+struct ValidatedGeneratedEffectsV1 {
+    memory: BTreeMap<(FunctionOperationLocation, u32), ValidatedGeneratedMemoryEffectV1>,
+    locations: BTreeSet<(u32, u32)>,
 }
 
 fn exact_operation_result_v1(operation: &Operation, ty: &Type) -> Option<ValueId> {
@@ -6261,13 +6346,10 @@ fn validate_generated_executable_effect_relations_v1(
     semantic_function: SemanticFunctionIdV1,
     body: &FunctionBody,
     correspondence: &SemanticKirCorrespondenceV1,
-    lowering: &ProductionRankedKernelLoweringInputV1,
+    recipe: &fe2o3_pliron::ProductionRankedKernelV1,
     sources: &[ProductionRankedExecutableEffectSourceV1],
     kir: &KirCorrelationIndexV1<'_>,
-) -> Result<
-    BTreeMap<(FunctionOperationLocation, u32), ValidatedGeneratedMemoryEffectV1>,
-    ProductionMirPlironTranslationErrorV1,
-> {
+) -> Result<ValidatedGeneratedEffectsV1, ProductionMirPlironTranslationErrorV1> {
     let contracts = match semantic {
         Some(semantic) => neutral_workgroup_recipe_contracts_v1(
             semantic,
@@ -6275,7 +6357,7 @@ fn validate_generated_executable_effect_relations_v1(
             correspondence_owner,
             semantic_function,
         )?,
-        None if sources.is_empty() => return Ok(BTreeMap::new()),
+        None if sources.is_empty() => return Ok(ValidatedGeneratedEffectsV1::default()),
         None => {
             return Err(
                 ProductionMirPlironTranslationErrorV1::GeneratedEffectRecipeMismatch {
@@ -6349,8 +6431,7 @@ fn validate_generated_executable_effect_relations_v1(
                 return Err(mismatch(ordinal));
             }
             previous_ranked = Some((source.ranked_block, source.ranked_operation));
-            let ranked_operation = lowering
-                .kernel()
+            let ranked_operation = recipe
                 .blocks()
                 .get(source.ranked_block as usize)
                 .and_then(|block| block.operations().get(source.ranked_operation as usize))
@@ -6404,7 +6485,7 @@ fn validate_generated_executable_effect_relations_v1(
             }
         }
     }
-    for (block, contents) in lowering.kernel().blocks().iter().enumerate() {
+    for (block, contents) in recipe.blocks().iter().enumerate() {
         for (operation, effect) in contents.operations().iter().enumerate() {
             let ProductionRankedOperationV1::AllocationEffect {
                 allocation_origin,
@@ -6434,7 +6515,10 @@ fn validate_generated_executable_effect_relations_v1(
             }
         }
     }
-    Ok(generated_memory)
+    Ok(ValidatedGeneratedEffectsV1 {
+        memory: generated_memory,
+        locations: used_ranked_locations,
+    })
 }
 
 #[cfg(test)]
@@ -6464,7 +6548,7 @@ fn validate_mir_pliron_translation_inner_v1(
     module: &Module,
     correspondence: &SemanticKirCorrespondenceV1,
     kernel_id: &str,
-    lowering: &ProductionRankedKernelLoweringInputV1,
+    recipe: &fe2o3_pliron::ProductionRankedKernelV1,
     sources: &[ProductionRankedAccessSourceV1],
     executable_effect_sources: &[ProductionRankedExecutableEffectSourceV1],
     max_operations: usize,
@@ -6519,7 +6603,7 @@ fn validate_mir_pliron_translation_inner_v1(
         semantic_function,
         body,
         correspondence,
-        lowering,
+        recipe,
         executable_effect_sources,
         &kir,
     )?;
@@ -6531,7 +6615,7 @@ fn validate_mir_pliron_translation_inner_v1(
         &mut budget,
     )
     .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-    let ranked = index_ranked_correlation(lowering, sources, max_operations, &mut budget)
+    let ranked = index_ranked_correlation(recipe, sources, max_operations, &mut budget)
         .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
     if let Some(location) = kir.unmodeled_memory_effects.first().copied() {
         return Err(
@@ -6546,7 +6630,7 @@ fn validate_mir_pliron_translation_inner_v1(
         correspondence_owner,
         semantic_function,
         function,
-        lowering,
+        recipe,
         max_operations,
         &mut budget,
     )?;
@@ -6592,8 +6676,9 @@ fn validate_mir_pliron_translation_inner_v1(
                 },
             );
         };
-        if let Some(generated) =
-            generated_memory_effects.get(&(consumer.location, consumer.operation_access_ordinal))
+        if let Some(generated) = generated_memory_effects
+            .memory
+            .get(&(consumer.location, consumer.operation_access_ordinal))
         {
             if generated.semantic_block != site.block {
                 return Err(
@@ -6740,7 +6825,7 @@ fn validate_mir_pliron_translation_inner_v1(
                     location: consumer.location,
                 },
             )?;
-            relation.check(lowering, source, *consumer, site, &mut budget)?;
+            relation.check(recipe, source, *consumer, site, &mut budget)?;
         }
         let first_logical_use =
             used_ranked_locations.insert((source.ranked_block, source.ranked_operation));
@@ -6784,18 +6869,13 @@ fn validate_mir_pliron_translation_inner_v1(
                     },
                 );
             }
-            let expected = normalize_ranked_expression_v1(
-                ranked_expression,
-                lowering,
-                &ranked,
-                0,
-                &mut budget,
-            )
-            .ok_or(
-                ProductionMirPlironTranslationErrorV1::ValueExpressionMismatch {
-                    location: consumer.location,
-                },
-            )?;
+            let expected =
+                normalize_ranked_expression_v1(ranked_expression, recipe, &ranked, 0, &mut budget)
+                    .ok_or(
+                        ProductionMirPlironTranslationErrorV1::ValueExpressionMismatch {
+                            location: consumer.location,
+                        },
+                    )?;
             let actual = normalize_kir_expression_v1(
                 function,
                 &kir,
@@ -6866,20 +6946,69 @@ fn validate_mir_pliron_translation_inner_v1(
             });
         }
     }
-    validate_effect_control_flow_v1(body, lowering.kernel(), &effect_locations, &mut budget)?;
+    // Supplied source rows cannot hide additional effects in the actual recipe.
+    // Private producer omissions retain their existing, narrower checks above.
+    for (block, contents) in recipe.blocks().iter().enumerate() {
+        budget
+            .charge()
+            .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+        for (operation, effect) in contents.operations().iter().enumerate() {
+            budget
+                .charge()
+                .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+            let space = match effect {
+                ProductionRankedOperationV1::Access { view, .. }
+                | ProductionRankedOperationV1::PredicatedAccess { view, .. }
+                | ProductionRankedOperationV1::ValueAccess { view, .. }
+                | ProductionRankedOperationV1::AtomicAccess { view, .. }
+                | ProductionRankedOperationV1::AtomicValueAccess { view, .. } => {
+                    let ProductionRankedValueV1::Local(value) = view else {
+                        return Err(ProductionMirPlironTranslationErrorV1::KernelShape);
+                    };
+                    ranked
+                        .view_definitions
+                        .get(value)
+                        .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?
+                        .memory_space
+                }
+                ProductionRankedOperationV1::AllocationEffect { memory_space, .. } => *memory_space,
+                _ => continue,
+            };
+            if space == dialect_kernel::MemorySpaceAttr::Private {
+                continue;
+            }
+            let location = (
+                u32::try_from(block)
+                    .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?,
+                u32::try_from(operation)
+                    .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?,
+            );
+            budget
+                .charge()
+                .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+            let ordinary = ranked.sites_by_ranked_location.contains_key(&location);
+            let generated = generated_memory_effects.locations.contains(&location);
+            if ordinary == generated {
+                return Err(ProductionMirPlironTranslationErrorV1::ExtraRankedEffect {
+                    ranked_block: location.0,
+                    ranked_operation: location.1,
+                });
+            }
+        }
+    }
+    validate_effect_control_flow_v1(body, recipe, &effect_locations, &mut budget)?;
 
     let kir_synchronization = kir_synchronization_contracts_v1(body)?;
-    let ranked_synchronization = ranked_synchronization_contracts_v1(lowering.kernel())?;
+    let ranked_synchronization = ranked_synchronization_contracts_v1(recipe)?;
     if kir_synchronization != ranked_synchronization {
         return Err(ProductionMirPlironTranslationErrorV1::SynchronizationMismatch);
     }
     let kir_tensors = kir_tensor_contracts_v1(body)?;
-    let ranked_tensors = ranked_tensor_contracts_v1(lowering.kernel())?;
+    let ranked_tensors = ranked_tensor_contracts_v1(recipe)?;
     if kir_tensors != ranked_tensors {
         return Err(ProductionMirPlironTranslationErrorV1::TensorContractMismatch);
     }
-    let conservative_ranked_effects = lowering
-        .kernel()
+    let conservative_ranked_effects = recipe
         .blocks()
         .iter()
         .flat_map(|block| block.operations())
@@ -8575,6 +8704,19 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
 
 include!("production_argument_correspondence_v1.rs");
 include!("production_argument_view_v1.rs");
+include!("production_conditional_output_binding_v1.rs");
+include!("production_conditional_source_translation_v1.rs");
+#[path = "production_conditional_ranked_output_v1.rs"]
+mod production_conditional_ranked_output_v1;
+pub use production_conditional_ranked_output_v1::{
+    ProductionConditionalRankedExtentV1, ProductionConditionalRankedOutputErrorV1,
+    ProductionConditionalRankedOutputV1,
+};
+#[path = "production_conditional_ranked_coverage_v1.rs"]
+mod production_conditional_ranked_coverage_v1;
+pub use production_conditional_ranked_coverage_v1::{
+    ProductionConditionalRankedCoverageErrorV1, ProductionConditionalRankedCoverageV1,
+};
 
 fn validate_operation_correspondence_layout(
     expected: &[ExpectedSemanticKirBlockCoverageV1],
@@ -33813,31 +33955,32 @@ mod resource_tests {
             ),
         ];
         assert!(ranked_executable_effect_sources_are_well_formed(
-            &lowering, &exact,
+            lowering.kernel(),
+            &exact,
         ));
 
         let mut duplicate_location = exact;
         duplicate_location[1].ranked_operation = 3;
         assert!(!ranked_executable_effect_sources_are_well_formed(
-            &lowering,
+            lowering.kernel(),
             &duplicate_location,
         ));
         let mut duplicate_ordinal = exact;
         duplicate_ordinal[1].semantic_effect_ordinal = 0;
         assert!(!ranked_executable_effect_sources_are_well_formed(
-            &lowering,
+            lowering.kernel(),
             &duplicate_ordinal,
         ));
         let mut missing_location = exact;
         missing_location[1].ranked_operation = u32::MAX;
         assert!(!ranked_executable_effect_sources_are_well_formed(
-            &lowering,
+            lowering.kernel(),
             &missing_location,
         ));
         let mut zero_recipe = exact;
         zero_recipe[1].recipe_identity = [0; 32];
         assert!(!ranked_executable_effect_sources_are_well_formed(
-            &lowering,
+            lowering.kernel(),
             &zero_recipe,
         ));
     }

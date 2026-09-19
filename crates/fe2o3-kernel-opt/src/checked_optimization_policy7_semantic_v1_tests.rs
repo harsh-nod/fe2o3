@@ -1,5 +1,7 @@
 //! Generic semantics use real consumed owners, but an inert test transcript.
 //! Actual backend producer bytes are checked separately against its real stage.
+#[path = "checked_optimization_policy8_composition_v1_tests.rs"]
+mod policy8_composition;
 use super::{STORAGE, WORK, fixture};
 use crate::*;
 use fe2o3_kernel_analysis::{

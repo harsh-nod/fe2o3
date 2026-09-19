@@ -103,6 +103,7 @@ pub(crate) enum ProductionSemanticImportErrorV1 {
     RootCustodyMismatch,
     ContextCustody(super::CollectError),
     ClosureAdmission(crate::closure_profile_v1::ClosureProfileErrorV1),
+    ReferenceCustody(crate::reference_effect_v1::ReferenceBindingErrorV1),
     LimitExceeded {
         resource: SemanticMirResourceV1,
         actual: u64,
@@ -139,6 +140,9 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
             Self::ContextCustody(error) => write!(formatter, "semantic import context custody rejected: {error}"),
             Self::ClosureAdmission(error) => write!(
                 formatter, "semantic import closure admission rejected: {error}"
+            ),
+            Self::ReferenceCustody(error) => write!(
+                formatter, "semantic import reference custody rejected: {error}"
             ),
             Self::LimitExceeded {
                 resource,
@@ -204,6 +208,7 @@ impl std::error::Error for ProductionSemanticImportErrorV1 {
             Self::BodyConstruction(error) => Some(error.as_ref()),
             Self::SemanticSchema(error) => Some(error),
             Self::ClosureAdmission(error) => Some(error),
+            Self::ReferenceCustody(error) => Some(error),
             Self::RootCustodyMismatch
             | Self::LimitExceeded { .. }
             | Self::LineageTranscriptTooLarge { .. }
@@ -290,7 +295,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         collection,
         roots,
         context_entries,
-        closure_flow,
+        mut closure_flow,
     } = closure;
     let target = match target.authenticate_import_session(tcx) {
         Ok(target) => target,
@@ -322,14 +327,9 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     let context_entries = context_entries
         .validate_for_import_v1(tcx, &collection)
         .map_err(ProductionSemanticImportErrorV1::ContextCustody)?;
-    let reference_effect_bindings =
-        crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1::new(
-            collection
-                .functions
-                .iter()
-                .filter_map(|function| function.reference_effect_binding.clone())
-                .collect(),
-        );
+    let reference_effect_bindings = closure_flow
+        .rederive_reference_bindings_v1(tcx, &collection)
+        .map_err(ProductionSemanticImportErrorV1::ReferenceCustody)?;
     let (identity_inventory, closure_work) =
         build_identity_inventory_v1(tcx, &target, &collection, &roots, closure_flow)?;
     require_lineage_transcript_bound_v3(

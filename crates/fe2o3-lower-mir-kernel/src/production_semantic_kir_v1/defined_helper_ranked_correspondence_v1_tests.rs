@@ -386,6 +386,86 @@ mod defined_helper_ranked_correspondence_v1_tests {
     }
 
     #[test]
+    fn conditional_translation_expands_actual_direct_and_nested_helpers() {
+        for nested in [false, true] {
+            for changed in [false, true] {
+                let source = source(false, 32, nested, changed);
+                let pending = conditional_pending(ranked_wrapping_recipe(
+                    &source,
+                    false,
+                    32,
+                    1,
+                    RankedMutation::None,
+                ));
+                let rows = access(0);
+                let result =
+                    conditional_check(&source, &pending, conditional_candidate(&pending, &rows));
+                if changed {
+                    assert!(matches!(
+                        result,
+                        Err(
+                            ProductionConditionalSourceTranslationErrorV1::Correspondence(
+                                ProductionSemanticKirErrorV1::MirPlironTranslation(_)
+                            )
+                        )
+                    ));
+                } else {
+                    assert_eq!(result.unwrap().value_expressions(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn conditional_translation_helper_budget_preserves_precharge_and_exact_floor() {
+        let source = source(false, 32, true, false);
+        let pending = conditional_pending(ranked_wrapping_recipe(
+            &source,
+            false,
+            32,
+            1,
+            RankedMutation::None,
+        ));
+        let rows = access(0);
+        let floor = source.retained_analysis_storage_v1() + 19;
+        let probe = |work_limit, storage_limit, twice| {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
+            let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
+            budget.charge_work(23).unwrap();
+            budget.reserve_storage(floor).unwrap();
+            let result = source.check_conditional_source_translation_v1(
+                &pending,
+                conditional_candidate(&pending, &rows),
+                &mut budget,
+            );
+            assert_eq!(budget.storage(), floor);
+            let first_ok = result.is_ok();
+            if twice {
+                let before = budget.work();
+                assert!(
+                    source
+                        .check_conditional_source_translation_v1(
+                            &pending,
+                            conditional_candidate(&pending, &rows),
+                            &mut budget
+                        )
+                        .is_err()
+                );
+                assert!(budget.work() >= before);
+                assert_eq!(budget.storage(), floor);
+            }
+            (first_ok, budget.work(), budget.peak_storage())
+        };
+        let (ok, work, peak) = probe(WORK, STORAGE, false);
+        assert!(ok);
+        assert!(work > 23);
+        assert!(peak > floor);
+        assert!(probe(work, peak, true).0);
+        assert!(!probe(work - 1, peak, false).0);
+        assert!(!probe(work, peak - 1, false).0);
+    }
+
+    #[test]
     fn budgeted_consuming_attachment_and_replay_restore_exact_floor_at_one_short_limits() {
         let probe = |work_limit, storage_limit| {
             let source = source(false, 32, true, false);

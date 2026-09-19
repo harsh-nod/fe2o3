@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "conditional-descriptor-pair")]
+mod conditional_descriptor_pair;
+
 #[cfg(any(
     feature = "loop-capture-exact",
     feature = "loop-capture-renamed",
@@ -147,6 +150,7 @@ mod ordered_program_v32;
     feature = "multi-root-ownership",
     feature = "multi-root-target-lineage",
     feature = "wrapped-fill",
+    feature = "conditional-descriptor-pair",
     feature = "private-unit-helper",
     feature = "f32-negate",
     feature = "f32-divide",

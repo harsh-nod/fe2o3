@@ -1,3 +1,6 @@
+use super::recipe_hash_work_v1::{
+    self as hash_work, HashMeterV1, RefinementTranscriptV1, TranscriptV1,
+};
 #[cfg(feature = "internal-proof-staging")]
 use fe2o3_functional_proof::ImportedFunctionalRefinementProofV2;
 use fe2o3_functional_proof::{
@@ -497,17 +500,26 @@ impl ProductionEffectRefinementContractV2 {
     /// Non-authoritative shape identity. Production admission uses the full
     /// validated-kernel transcript rather than this request-local digest.
     pub fn request_shape_hash(&self) -> DigestV1 {
-        let mut writer = CanonicalRefinementDigestV2::new(EFFECT_REFINEMENT_CONTRACT_DOMAIN_V2);
-        writer.field(1, &self.contract_identity.to_le_bytes());
-        writer.field(2, &self.gpu_write_site.block.to_le_bytes());
-        writer.field(3, &self.gpu_write_site.operation.to_le_bytes());
-        writer.field(4, &self.reference_output_site.argument.to_le_bytes());
-        writer.field(5, &self.reference_output_site.block.to_le_bytes());
-        writer.field(6, &self.reference_output_site.statement.to_le_bytes());
-        writer.value(7, self.view);
-        writer.values(8, &self.indices);
-        writer.values(9, &self.gpu_coordinates);
-        writer.values(10, &self.reference_coordinates);
+        DigestV1::from_untrusted_bytes(hash_work::unmetered(|digest| {
+            self.emit_request_shape_v1(digest)
+        }))
+    }
+
+    pub(super) fn emit_request_shape_v1<M: HashMeterV1>(
+        &self,
+        digest: &mut TranscriptV1<'_, M>,
+    ) -> Result<(), M::Error> {
+        let mut writer = RefinementTranscriptV1::new(digest, EFFECT_REFINEMENT_CONTRACT_DOMAIN_V2)?;
+        writer.field(1, &self.contract_identity.to_le_bytes())?;
+        writer.field(2, &self.gpu_write_site.block.to_le_bytes())?;
+        writer.field(3, &self.gpu_write_site.operation.to_le_bytes())?;
+        writer.field(4, &self.reference_output_site.argument.to_le_bytes())?;
+        writer.field(5, &self.reference_output_site.block.to_le_bytes())?;
+        writer.field(6, &self.reference_output_site.statement.to_le_bytes())?;
+        writer.value(7, self.view)?;
+        writer.values(8, &self.indices)?;
+        writer.values(9, &self.gpu_coordinates)?;
+        writer.values(10, &self.reference_coordinates)?;
         for (tag, value) in [
             (11, self.gpu_domain),
             (12, self.reference_domain),
@@ -516,9 +528,9 @@ impl ProductionEffectRefinementContractV2 {
             (15, self.gpu_value),
             (16, self.reference_value),
         ] {
-            writer.value(tag, value);
+            writer.value(tag, value)?;
         }
-        writer.finish()
+        Ok(())
     }
 }
 
@@ -599,19 +611,29 @@ impl ProductionNumericalRefinementContractV2 {
     }
 
     pub fn request_shape_hash(self) -> DigestV1 {
-        let mut writer = CanonicalRefinementDigestV2::new(NUMERICAL_REFINEMENT_CONTRACT_DOMAIN_V2);
-        writer.field(1, &self.contract_identity.to_le_bytes());
+        DigestV1::from_untrusted_bytes(hash_work::unmetered(|digest| {
+            self.emit_request_shape_v1(digest)
+        }))
+    }
+
+    pub(super) fn emit_request_shape_v1<M: HashMeterV1>(
+        &self,
+        digest: &mut TranscriptV1<'_, M>,
+    ) -> Result<(), M::Error> {
+        let mut writer =
+            RefinementTranscriptV1::new(digest, NUMERICAL_REFINEMENT_CONTRACT_DOMAIN_V2)?;
+        writer.field(1, &self.contract_identity.to_le_bytes())?;
         for (tag, value) in [
             (2, self.actual),
             (3, self.reference),
             (4, self.domain),
             (5, self.precondition),
         ] {
-            writer.value(tag, value);
+            writer.value(tag, value)?;
         }
-        writer.field(6, &self.absolute_error_f64_bits.to_le_bytes());
-        writer.field(7, &self.relative_error_f64_bits.to_le_bytes());
-        writer.finish()
+        writer.field(6, &self.absolute_error_f64_bits.to_le_bytes())?;
+        writer.field(7, &self.relative_error_f64_bits.to_le_bytes())?;
+        Ok(())
     }
 }
 
@@ -1251,15 +1273,16 @@ struct CanonicalRefinementDigestV2(Sha256);
 impl CanonicalRefinementDigestV2 {
     fn new(domain: &[u8]) -> Self {
         let mut digest = Sha256::new();
-        digest.update((domain.len() as u64).to_le_bytes());
-        digest.update(domain);
+        hash_work::unmetered_into(&mut digest, |digest| {
+            RefinementTranscriptV1::new(digest, domain).map(|_| ())
+        });
         Self(digest)
     }
 
     fn field(&mut self, tag: u16, bytes: &[u8]) {
-        self.0.update(tag.to_le_bytes());
-        self.0.update((bytes.len() as u64).to_le_bytes());
-        self.0.update(bytes);
+        hash_work::unmetered_into(&mut self.0, |digest| {
+            RefinementTranscriptV1::fields(digest).field(tag, bytes)
+        });
     }
 
     fn kernel_header(
@@ -1287,48 +1310,15 @@ impl CanonicalRefinementDigestV2 {
     }
 
     fn value(&mut self, tag: u16, value: ProductionRankedValueV1) {
-        let mut bytes = Vec::with_capacity(9);
-        match value {
-            ProductionRankedValueV1::Argument(index) => {
-                bytes.push(1);
-                bytes.extend_from_slice(&index.to_le_bytes());
-            }
-            ProductionRankedValueV1::BlockArgument { block, argument } => {
-                bytes.push(2);
-                bytes.extend_from_slice(&block.to_le_bytes());
-                bytes.extend_from_slice(&argument.to_le_bytes());
-            }
-            ProductionRankedValueV1::Local(identity) => {
-                bytes.push(3);
-                bytes.extend_from_slice(&identity.get().to_le_bytes());
-            }
-        }
-        self.field(tag, &bytes);
+        hash_work::unmetered_into(&mut self.0, |digest| {
+            RefinementTranscriptV1::fields(digest).value(tag, value)
+        });
     }
 
     fn values(&mut self, tag: u16, values: &[ProductionRankedValueV1]) {
-        let mut bytes = Vec::with_capacity(8 + values.len() * 9);
-        bytes.extend_from_slice(&(values.len() as u64).to_le_bytes());
-        for value in values {
-            let mut item = [0_u8; 9];
-            match value {
-                ProductionRankedValueV1::Argument(index) => {
-                    item[0] = 1;
-                    item[1..5].copy_from_slice(&index.to_le_bytes());
-                }
-                ProductionRankedValueV1::BlockArgument { block, argument } => {
-                    item[0] = 2;
-                    item[1..5].copy_from_slice(&block.to_le_bytes());
-                    item[5..9].copy_from_slice(&argument.to_le_bytes());
-                }
-                ProductionRankedValueV1::Local(identity) => {
-                    item[0] = 3;
-                    item[1..5].copy_from_slice(&identity.get().to_le_bytes());
-                }
-            }
-            bytes.extend_from_slice(&item);
-        }
-        self.field(tag, &bytes);
+        hash_work::unmetered_into(&mut self.0, |digest| {
+            RefinementTranscriptV1::fields(digest).values(tag, values)
+        });
     }
 
     fn finish(self) -> DigestV1 {
@@ -4225,6 +4215,7 @@ pub(super) struct ConstructedRootV1 {
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
     pub(super) ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
+    pub(super) ownership_occurrences: Vec<super::conditional_ranked_v1::OwnershipOccurrenceV1>,
     pub(super) policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
     pub(super) production_pipeline_report: Option<ProductionPlironPreloweringReportV2>,
     pub(super) production_analysis_resource_upper_bound:
@@ -4243,6 +4234,7 @@ pub(super) struct MaterializedConstructionV1 {
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
     pub(super) ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
+    pub(super) ownership_occurrences: Vec<super::conditional_ranked_v1::OwnershipOccurrenceV1>,
     pub(super) policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
 }
 
@@ -4445,6 +4437,7 @@ impl ProductionPlironSessionV1 {
                     ranked_function: None,
                     ranked_kernel: None,
                     ranked_view_names: BTreeMap::new(),
+                    ownership_occurrences: Vec::new(),
                     policy_checked_refinement_staging: Vec::new(),
                 })
                 .map_err(ProductionSessionErrorV1::Operation),
@@ -4526,6 +4519,8 @@ impl ProductionPlironSessionV1 {
                 ),
             ));
         }
+        let mut ownership_occurrences =
+            self.prepare_ownership_occurrence_storage_v1(&kernel, kernel.tree_work)?;
         let operation = self
             .inner
             .create_module(root_name)
@@ -4597,8 +4592,8 @@ impl ProductionPlironSessionV1 {
         let mut locals = Vec::new();
         for (block_index, recipe_block) in kernel.blocks.iter().enumerate() {
             let block = blocks[block_index];
-            for recipe in &recipe_block.operations {
-                materialize_operation(
+            for (recipe_index, recipe) in recipe_block.operations.iter().enumerate() {
+                let emitted = materialize_operation(
                     &mut self.inner.context,
                     block,
                     recipe,
@@ -4608,6 +4603,20 @@ impl ProductionPlironSessionV1 {
                     &policy_checked_refinement_staging,
                 )
                 .map_err(ProductionSessionErrorV1::RankedRecipe)?;
+                if let ProductionRankedOperationV1::OwnershipContract { view, .. } = recipe {
+                    ownership_occurrences.push(
+                        super::conditional_ranked_v1::OwnershipOccurrenceV1 {
+                            site: super::ProductionConditionalOwnershipSiteV1 {
+                                block: block_index as u32,
+                                operation: recipe_index as u32,
+                                view: *view,
+                            },
+                            operation: emitted,
+                            view: OwnershipContractOp::from_operation(emitted)
+                                .view(&self.inner.context),
+                        },
+                    );
+                }
             }
             materialize_terminator(
                 &mut self.inner.context,
@@ -4661,6 +4670,7 @@ impl ProductionPlironSessionV1 {
             ranked_function: Some(function.get_operation()),
             ranked_kernel: Some(kernel),
             ranked_view_names,
+            ownership_occurrences,
             policy_checked_refinement_staging,
         })
     }
@@ -4723,7 +4733,7 @@ impl ProductionPlironSessionV1 {
             )
         };
         self.require_live_graph_snapshot_v1(&root.operation, graph_snapshot)?;
-        let verifier_limits = self.analysis_resource_limits();
+        let verifier_limits = self.analysis_limits_after_ownership_bindings_v1()?;
         let outcome = self.run_production_pipeline_guarded(function, verifier_limits)?;
         if outcome.report.semantics().typed_root_commitments() != expected_typed_roots {
             trace_ranked_custody_rejection_v1(RankedCustodyRejectionV1::VerifyTypedRoots, None);
@@ -4825,7 +4835,7 @@ impl ProductionPlironSessionV1 {
                 crate::production_analysis::ProductionAnalysisResourcePhaseV1::PipelineVerification,
             )
             .map_err(production_analysis_resource_error_v1)?;
-        let verifier_limits = self.analysis_resource_limits();
+        let verifier_limits = self.analysis_limits_after_ownership_bindings_v1()?;
         let second_limits = verifier_limits
             .remaining_after_retained(
                 crate::production_analysis::ProductionAnalysisResourcePhaseV1::PipelineVerification,
@@ -5053,7 +5063,7 @@ fn materialize_operation(
     locals: &mut Vec<Value>,
     block_arguments: &HashMap<(u32, u32), Value>,
     policy_checked_refinement_staging: &[ProductionPolicyCheckedRefinementStagingV2],
-) -> Result<(), ProductionRankedKernelErrorV1> {
+) -> Result<Ptr<Operation>, ProductionRankedKernelErrorV1> {
     let (operation, result) = match recipe {
         ProductionRankedOperationV1::ExecutionLayout {
             grid_identity,
@@ -5840,7 +5850,7 @@ fn materialize_operation(
         }
         locals.push(value);
     }
-    Ok(())
+    Ok(operation)
 }
 
 fn semantic_numerical_policy_v1(

@@ -60,6 +60,8 @@
         project_and_verify_ranked_materialized_semantic_mir_v1(materialized, inputs, references)
     }
 
+    #[path = "conditional_generated_attribution_v1_tests.rs"]
+    mod conditional_generated_attribution_v1_tests;
     use super::*;
     use fe2o3_mir_model::SemanticOptionProducerV1;
     use fe2o3_mir_model::semantic_mir_v1::*;
@@ -219,6 +221,7 @@
                 access: AccessKindAttr::Write,
                 memory_space: MemorySpaceAttr::Global,
                 source: SemanticSourceProvenanceV1::unavailable(),
+                output_extent: None,
                 semantic_site: Some(ProjectedSemanticAccessSiteV1 {
                     block: 7,
                     statement: None,
@@ -230,6 +233,7 @@
                 access: AccessKindAttr::AtomicReadModifyWrite,
                 memory_space: MemorySpaceAttr::Global,
                 source: SemanticSourceProvenanceV1::unavailable(),
+                output_extent: None,
                 semantic_site: Some(ProjectedSemanticAccessSiteV1 {
                     block: 7,
                     statement: None,
@@ -285,6 +289,7 @@
             access: AccessKindAttr::Read,
             memory_space: MemorySpaceAttr::Global,
             source: SemanticSourceProvenanceV1::unavailable(),
+            output_extent: None,
             semantic_site: Some(ProjectedSemanticAccessSiteV1 {
                 block: 9,
                 statement: None,

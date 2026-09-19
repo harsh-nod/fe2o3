@@ -2,6 +2,7 @@
 // protected proof execution, indexed-address qualification, or launch authority.
 mod wrapping_ranked_correspondence_v1_tests {
     include!("defined_helper_ranked_correspondence_v1_tests.rs");
+    include!("conditional_source_translation_v1_tests.rs");
     use super::*;
     use crate::{
         ProductionMaterializedRankedModuleReceiptV1, ProductionPreRankedKirOwnerV1,
@@ -350,13 +351,13 @@ mod wrapping_ranked_correspondence_v1_tests {
         AccessOrdinal,
     }
 
-    fn ranked_wrapping_lowering(
+    fn ranked_wrapping_recipe(
         source: &ProductionPreRankedKirOwnerV1,
         signed: bool,
         bits: u16,
         operation: usize,
         mutation: RankedMutation,
-    ) -> ProductionRankedKernelLoweringInputV1 {
+    ) -> ProductionRankedKernelV1 {
         let (ranked_signed, ranked_bits) = match mutation {
             RankedMutation::Signedness => (!signed, bits),
             RankedMutation::Width => (signed, if bits == 64 { 32 } else { 64 }),
@@ -390,7 +391,7 @@ mod wrapping_ranked_correspondence_v1_tests {
         let numerical_contract = ProductionNumericalContractV2::exact_for_expression(&expression);
         let local = |id| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(id));
         let layout = source.source_launch().roots()[0].layout();
-        let kernel = ProductionRankedKernelV1::new(
+        ProductionRankedKernelV1::new(
             NAME,
             0,
             vec![ProductionRankedBlockV1::new(
@@ -435,7 +436,17 @@ mod wrapping_ranked_correspondence_v1_tests {
                 ProductionRankedTerminatorV1::Return,
             )],
         )
-        .unwrap();
+        .unwrap()
+    }
+
+    fn ranked_wrapping_lowering(
+        source: &ProductionPreRankedKirOwnerV1,
+        signed: bool,
+        bits: u16,
+        operation: usize,
+        mutation: RankedMutation,
+    ) -> ProductionRankedKernelLoweringInputV1 {
+        let kernel = ranked_wrapping_recipe(source, signed, bits, operation, mutation);
         let lowering = compile_ranked_kernel_for_lowering_v1(
             ProductionConstructionV1::ranked_kernel("ranked_wrapping_module", kernel).unwrap(),
             ProductionSessionLimitsV1::default(),
