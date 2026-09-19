@@ -63,6 +63,14 @@ name = "mx_numeric_api"
 path = "tests/mx_numeric_api.rs"
 
 [[test]]
+name = "ordered_program_api"
+path = "tests/ordered_program_api.rs"
+
+[[test]]
+name = "ordered_region_api"
+path = "tests/ordered_region_api.rs"
+
+[[test]]
 name = "simd_api"
 path = "tests/simd_api.rs"
 
