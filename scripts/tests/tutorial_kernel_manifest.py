@@ -140,7 +140,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "f533b0b2ff5066bad75b3fc3d6bcb1a04c5705f345f60c13c762ab0ec5407401")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "ff4cd97ecbd50615b2e01e61bd6d497008de24bfc8796317f54a9a87e21fb5e0")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)
@@ -429,7 +429,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         identities = report["kernelInventory"]
         self.assertIs(identities["runtimeCensusValidated"], False)
         self.assertEqual(identities["knownKernelIdentityCount"], 60)
-        self.assertEqual(identities["pendingDisplayItemCount"], 56)
+        self.assertEqual(identities["pendingDisplayItemCount"], 55)
         self.assertEqual(identities["negativeCaseCount"], 3)
         self.assertTrue(identities["unresolvedBindings"])
         self.assertIs(report["qualified"], False)
@@ -469,12 +469,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "45c8fdfea5b38bae698fcfbadc8d09c0179c4b018145689476f48566b4cd996f")
+                         "f6009b4973e1df02b19e7085fa520fc4f37835fdd2b4ce0eb8307224fc19aa7e")
         self.assertEqual(len(inventory["kernels"]), 60)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 74, "required-negative": 3, "conceptual": 26, "helper": 18})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 56, "source-driver-contract": 13, "fixture-source-contract": 8,
+                         {"pending": 55, "source-driver-contract": 13, "fixture-source-contract": 9,
                           "not-applicable": 44})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         self.assertTrue(all(variant["status"] == "pending" and variant["source"] is None
@@ -490,7 +490,8 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         """An eight-binding component projection, not the live website census."""
         document = copy.deepcopy(self.original)
         rows = [row for row in document["kernelInventory"]["displayItems"]
-                if row["bindingStatus"] == "fixture-source-contract"]
+                if row["bindingStatus"] == "fixture-source-contract"
+                and row["lessonId"] == "gfx950-gpt-oss-120b-megakernel"]
         self.assertEqual(len(rows), 8)
         ids = {identity for row in rows for identity in row["kernelIds"]}
         kernels = [row for row in document["kernelInventory"]["kernels"] if row["kernelId"] in ids]
@@ -513,6 +514,101 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                            {**tab, "displayedCode": (ROOT / tab["sourcePath"]).read_bytes().decode("utf-8"),
                             "sourceFragments": None} for tab in lesson["codeTabs"]]}]}
         return document, runtime
+
+    def fill_fixture_document(self):
+        """One actual-source component projection, not the live website census."""
+        document = copy.deepcopy(self.original)
+        lesson = next(row for row in document["curriculum"]["lessons"] if row["lessonId"] == "first-fill")
+        lesson["codeTabs"] = lesson["codeTabs"][:1]
+        document["curriculum"]["lessons"] = [lesson]
+        document["compilerFixtures"] = [row for row in document["compilerFixtures"]
+                                        if row["fixtureId"] == "gfx942-fill-simulation"]
+        inventory = document["kernelInventory"]
+        inventory["kernels"] = [row for row in inventory["kernels"]
+                                if row["kernelId"] == "fixture:gfx942-fill-simulation:fill"]
+        inventory["displayItems"] = [row for row in inventory["displayItems"] if row["lessonId"] == "first-fill"]
+        inventory["negativeCases"] = []
+        tab = lesson["codeTabs"][0]
+        source = (ROOT / tab["sourcePath"]).read_bytes().decode("utf-8")
+        runtime = {"schema": self.validator.SITE_INVENTORY_SCHEMA,
+                   "site": document["curriculum"]["site"], "lessons": [{
+                       "id": lesson["lessonId"], "codeTabs": [{**tab, "displayedCode": source,
+                                                               "sourceFragments": None}]}]}
+        return document, runtime
+
+    def test_first_fill_binds_published_bytes_and_keeps_evidence_pending(self):
+        document, runtime = self.fill_fixture_document()
+        tab = document["curriculum"]["lessons"][0]["codeTabs"][0]
+        row = document["kernelInventory"]["displayItems"][0]
+        self.assertEqual(tab["sourceCommit"], "a58e4bc7da39c22de24881229315418e1217039b")
+        self.assertEqual(tab["sourceSha256"], "827ea368df5dd7f429792e0f8a21df79d4d5508525061a844c190da25de54213")
+        self.assertEqual(tab["displayedSha256"], tab["sourceSha256"])
+        self.assertEqual(tab["displayedUtf8Bytes"], 308)
+        self.assertEqual(tab["sourceDigestScope"], "file")
+        self.assertIsNone(tab["sourceItem"])
+        self.assertEqual(tab["sourceItemStatus"], "pending")
+        self.assertEqual(row["functionUtf8Offset"], 148)
+        self.assertEqual(row["kernelIds"], ["fixture:gfx942-fill-simulation:fill"])
+        self.assertEqual(row["bindingStatus"], "fixture-source-contract")
+        self.validator.validate_site_inventory(document["curriculum"], runtime)
+        result = self.validator.validate_kernel_inventory(document, runtime)
+        self.assertEqual(result["unresolvedBindings"], [])
+        self.assertTrue(all(variant["status"] == "pending" and variant["source"] is None
+                            for kernel in result["kernelIdentities"] for variant in kernel["variants"]))
+        without_runtime = self.validator.validate_kernel_inventory(document, None)
+        self.assertFalse(without_runtime["inventoryComplete"])
+        self.assertIsNone(without_runtime["requiredPairCount"])
+        self.assertEqual(sum("selection" in row for row in without_runtime["unresolvedBindings"]), 1)
+
+    def test_first_fill_rejects_stale_display_and_source_bindings(self):
+        original, runtime = self.fill_fixture_document()
+        for field, value in (("sourcePath", "examples/fill/src/main.rs"),
+                             ("sourceSha256", "0" * 64), ("displayedSha256", "0" * 64),
+                             ("displayedUtf8Bytes", 307), ("sourceDigestScope", None)):
+            document = copy.deepcopy(original)
+            document["curriculum"]["lessons"][0]["codeTabs"][0][field] = value
+            with self.subTest(field=field), self.assertRaises(SystemExit):
+                self.validator.validate_kernel_inventory(document, None)
+        document = copy.deepcopy(original)
+        document["kernelInventory"]["displayItems"][0]["functionUtf8Offset"] += 1
+        with self.assertRaisesRegex(SystemExit, "exact current source occurrence"):
+            self.validator.validate_kernel_inventory(document, None)
+        runtime["lessons"][0]["codeTabs"][0]["displayedCode"] += "\n"
+        with self.assertRaisesRegex(SystemExit, "displayed bytes do not match"):
+            self.validator.validate_site_inventory(original["curriculum"], runtime)
+
+    def test_first_fill_authenticates_the_complete_physical_package_and_lock(self):
+        original, _ = self.fill_fixture_document()
+        fixture = original["compilerFixtures"][0]
+        inputs = fixture["compilerInput"]
+        paths = [path for path, _ in self.validator.package_rust_sources(ROOT, inputs["packageManifest"], "test")]
+        paths.extend([ROOT / inputs["packageManifest"], ROOT / inputs["cargoLockPath"]])
+        with tempfile.TemporaryDirectory(prefix="fe2o3-fill-binding-") as temporary:
+            root = Path(temporary)
+            for path in paths:
+                copied = root / path.relative_to(ROOT)
+                copied.parent.mkdir(parents=True, exist_ok=True)
+                copied.write_bytes(path.read_bytes())
+            self.validator.validate_kernel_inventory(original, None, repo_root=root)
+            for member, message in (("examples/fill/src/main.rs", "sourceClosureSha256 is stale"),
+                                    (inputs["cargoLockPath"], "cargoLockSha256 is stale")):
+                path = root / member
+                before = path.read_bytes()
+                path.write_bytes(before + b"\n// changed\n")
+                with self.subTest(member=member), self.assertRaisesRegex(SystemExit, message):
+                    self.validator.validate_kernel_inventory(original, None, repo_root=root)
+                path.write_bytes(before)
+            source = root / inputs["sourcePaths"][0]
+            source.write_bytes(source.read_bytes() + b"\n// changed bound source\n")
+            with self.assertRaisesRegex(SystemExit, "sourceClosureSha256 is stale"):
+                self.validator.validate_kernel_inventory(original, None, repo_root=root)
+            document = copy.deepcopy(original)
+            altered = document["compilerFixtures"][0]
+            sources = self.validator.package_rust_sources(root, inputs["packageManifest"], "test")
+            altered["compilerInput"]["sourceClosureSha256"] = self.validator.package_source_closure_sha256(root, sources)
+            altered["compilerInput"]["contractSha256"] = self.validator.fixture_input_contract_sha256(altered)
+            with self.assertRaisesRegex(SystemExit, "exact current source occurrence"):
+                self.validator.validate_kernel_inventory(document, None, repo_root=root)
 
     def test_eight_real_fixture_sources_bind_exact_display_occurrences(self):
         document, runtime = self.gpt_fixture_document()

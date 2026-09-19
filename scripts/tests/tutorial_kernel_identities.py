@@ -376,6 +376,70 @@ class FixtureDisplayTests(unittest.TestCase):
         with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "physical source validation"):
             IDENTITIES.validate_kernel_inventory(self.manifest, None, self.scanner.ordinary_rust_function_items)
 
+    def test_bare_no_std_accepts_declared_root_with_arbitrary_names(self):
+        self.library = self.path = "future_package/device/entry.rs"
+        source = '// crate header\n#![allow(dead_code)]\n#![no_std]\n#[kernel] fn future_entry() {}\n'
+        self.sources = {self.library: source}
+        inputs = self.fixture["compilerInput"]
+        inputs.update(packageManifest="future_package/Cargo.toml", sourcePaths=[self.path],
+                      cargoTarget={"kind": "lib", "name": "future_library", "sourcePath": "device/entry.rs"},
+                      features=[], kernelSymbols=["future_entry"])
+        self.fixture["fixtureId"] = "future-fixture"
+        self.manifest["kernelInventory"]["kernels"][0]["selections"][0].update(
+            fixtureId="future-fixture", kernelSymbol="future_entry")
+        self.tab.update(KernelIdentitiesTests.tab(source), sourcePath=self.path, sourceDigestScope="file",
+                        sourceSha256=hashlib.sha256(source.encode()).hexdigest(), sourceFragmentsSha256=None)
+        function = self.scanner.ordinary_rust_function_items(source)[0]
+        self.row.update(kernelSymbol=function["kernelSymbol"], functionUtf8Offset=function["functionUtf8Offset"])
+        self.runtime["lessons"][0]["codeTabs"][0].update(displayedCode=source)
+        result = self.validate()
+        self.assertEqual(result["unresolvedBindings"], [])
+        self.assertEqual(result["kernelIdentities"][0]["variants"], variants())
+        self.assertFalse(self.validate(False)["inventoryComplete"])
+
+    def test_bare_no_std_rejects_nonleading_outer_and_nonroot_attributes(self):
+        for prefix in ("#[no_std]\n", "use core::mem;\n#![no_std]\n", ";\n#![no_std]\n",
+                       "#[allow(dead_code)]\n#![no_std]\n",
+                       '#[cfg(feature = "absent")] fn disabled() {}\n#![no_std]\n'):
+            self.setUp()
+            self.sources[self.library] = prefix + "mod left;\n"
+            with self.subTest(prefix=prefix), self.assertRaisesRegex(
+                IDENTITIES.KernelInventoryError, "leading inner crate-root",
+            ):
+                self.validate(False)
+        self.setUp()
+        self.sources[self.path] = "#![no_std]\n" + self.sources[self.path]
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "leading inner crate-root"):
+            self.validate(False)
+
+    def test_bare_no_std_does_not_accept_other_attribute_forms(self):
+        for body in ("no_std()", "no_std(always)", "no_std::rewrite", 'no_std = "true"',
+                     'no_std "ignored"', "no_std[extra]", "r#no_std", "no_std /* comment */",
+                     'cfg_attr(feature = "left", no_std)', "no_core"):
+            self.setUp()
+            self.sources[self.library] = f"#![{body}]\nmod left;\n"
+            with self.subTest(body=body), self.assertRaisesRegex(
+                IDENTITIES.KernelInventoryError, "unsupported fixture selection attribute",
+            ):
+                self.validate(False)
+
+    def test_bare_no_std_preserves_full_module_refusals(self):
+        for sibling, message in (
+            ('#[cfg(test)] fn helper() {}', "cfg predicate"),
+            ('#[cfg(all(feature = "absent", unknown))] fn helper() {}', "cfg predicate"),
+            ('macro_rules! hidden { () => {} }', "unsupported fixture item"),
+            ('hidden!();', "unsupported fixture item"),
+            ('include!("extra.rs");', "unsupported fixture item"),
+            ('#[kernel] fn same() {}', "ambiguous feature-selected"),
+            ('#[kernel] fn extra() {}', "roster differs"),
+            ('mod nested;', "nested fixture modules"),
+        ):
+            self.setUp()
+            self.sources[self.library] = "#![no_std]\nmod left;\nmod sibling;\n"
+            self.sources["example/src/sibling.rs"] = sibling
+            with self.subTest(sibling=sibling), self.assertRaisesRegex(IDENTITIES.KernelInventoryError, message):
+                self.validate(False)
+
     def test_wrong_file_feature_bytes_and_occurrence_reject(self):
         for field, value in (("sourcePath", "example/src/right.rs"), ("sourceSha256", "0" * 64),
                              ("displayedSha256", "0" * 64), ("displayedUtf8Bytes", 1),

@@ -242,7 +242,7 @@ def _fixture_cfg(body: str, features: set[str], budget: _Budget) -> bool:
 
 def _fixture_declarations(
     source: str, features: set[str], scan_functions: Callable,
-    rust_syntax: Callable, budget: _Budget,
+    rust_syntax: Callable, budget: _Budget, *, is_crate_root: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Select top-level functions and ordinary external modules only."""
     _utf8(source, "fixture source")
@@ -252,9 +252,12 @@ def _fixture_declarations(
     function_index = previous_character = previous_byte = 0
     selected = []
     modules = []
+    leading_inner_attributes = True
     attribute = re.compile(r"#\s*(!?)\s*\[")
     while cursor < len(code):
         if code[cursor].isspace() or code[cursor] == ";":
+            if code[cursor] == ";":
+                leading_inner_attributes = False
             cursor += 1
             continue
         budget.rows([None], "fixture source items")
@@ -264,8 +267,13 @@ def _fixture_declarations(
             end = pairs[opening]
             body = source[opening + 1:end - 1].strip()
             masked = code[opening + 1:end - 1].strip()
+            if not match[1]:
+                leading_inner_attributes = False
             cfg = re.fullmatch(r"cfg\s*\((.*)\)", body, re.DOTALL)
-            if cfg is not None:
+            if body == "no_std":
+                if not is_crate_root or not match[1] or not leading_inner_attributes:
+                    _fail("no_std requires a leading inner crate-root attribute")
+            elif cfg is not None:
                 enabled = _fixture_cfg(cfg[1], features, budget) and enabled
             elif re.fullmatch(r'cfg_attr\s*\(\s*target_arch\s*=\s*"amdgpu"\s*,\s*no_std\s*\)', body) and match[1]:
                 pass
@@ -286,6 +294,7 @@ def _fixture_declarations(
                 cursor += 1
         if cursor == len(code):
             break
+        leading_inner_attributes = False
         start = cursor
         while cursor < len(code) and code[cursor] not in "{;":
             if code[cursor] in "([":
@@ -342,7 +351,9 @@ def _fixture_selection(fixture: dict[str, Any], load_sources: Callable, scan_fun
         budget.source_bytes += len(_utf8(source, "fixture source"))
         if budget.source_bytes > MAX_RUNTIME_BYTES:
             _fail("selected fixture source exceeds its aggregate byte bound")
-        functions, modules = _fixture_declarations(source, set(enabled), scan_functions, rust_syntax, budget)
+        functions, modules = _fixture_declarations(
+            source, set(enabled), scan_functions, rust_syntax, budget, is_crate_root=path == library,
+        )
         for function in functions:
             symbol = function["kernelSymbol"]
             if symbol in selected:
