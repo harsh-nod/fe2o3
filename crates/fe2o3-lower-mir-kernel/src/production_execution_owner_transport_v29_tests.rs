@@ -99,6 +99,14 @@ pub(in super::super) fn check_reconstructed_owner(
     assert_ne!(*id, incoming);
     assert_eq!(*id, plan.parameter_values[1]);
     assert_eq!(ty, &plan.parameter_types[1]);
+    assert_eq!(
+        *ty,
+        Type::pointer(
+            Type::Scalar(ScalarType::U32),
+            AddressSpace::Global,
+            AccessMode::ReadWrite
+        )
+    );
     assert_eq!(parameters.values[1].id, *id);
     assert_eq!(&parameters.values[1].ty, ty);
 }
@@ -122,26 +130,34 @@ fn owner_parameter_crosses_the_real_source_lifecycle_boundary() {
         .0
         .is_ok()
     );
-    assert!(
+    assert!(matches!(
         run_lifecycle(
             false,
             Fault::OwnerParameter(OwnerTransportFault::None),
             work - 1,
             peak
         )
-        .0
-        .is_err()
-    );
-    assert!(
+        .0,
+        Err(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Work(
+                _
+            ))
+        )
+    ));
+    assert!(matches!(
         run_lifecycle(
             false,
             Fault::OwnerParameter(OwnerTransportFault::None),
             work,
             peak - 1
         )
-        .0
-        .is_err()
-    );
+        .0,
+        Err(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Storage(_)
+            )
+        )
+    ));
 }
 
 #[test]

@@ -360,25 +360,31 @@ fn owner_parameter_authentication_has_exact_and_short_resource_boundaries() {
             &mut budget,
         );
         let peak = budget.peak_storage();
-        let success = result.is_ok();
-        match result {
+        let error = match result {
             Ok(Some(ty)) => {
                 assert_eq!(budget.storage(), FLOOR + std::mem::size_of::<Type>());
                 drop(ty);
                 budget.release_storage(std::mem::size_of::<Type>()).unwrap();
+                None
             }
             Ok(None) => panic!("owner was not authenticated"),
-            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(_)) => (),
+            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error)) => Some(error),
             Err(error) => panic!("unexpected classifier error: {error:?}"),
-        }
+        };
         assert_eq!(budget.storage(), FLOOR);
-        (success, work.work(), peak)
+        (error, work.work(), peak)
     };
-    let (success, work, peak) = run(10_000_000, 10_000_000);
-    assert!(success);
-    assert_eq!(run(work, peak), (true, work, peak));
-    assert!(!run(work - 1, peak).0);
-    assert!(!run(work, peak - 1).0);
+    let (error, work, peak) = run(10_000_000, 10_000_000);
+    assert!(error.is_none());
+    assert_eq!(run(work, peak), (None, work, peak));
+    assert!(matches!(
+        run(work - 1, peak).0,
+        Some(ArgumentResourceV1::Work(_))
+    ));
+    assert!(matches!(
+        run(work, peak - 1).0,
+        Some(ArgumentResourceV1::Storage(_))
+    ));
 }
 
 #[test]
