@@ -182,6 +182,10 @@ fn visit_private_slot_roots_v1<W: PrivateArrayChargeV1>(
     Ok(())
 }
 
+fn retained_move_invalidates_local_v1(place: &SemanticPlaceV1, array: bool) -> bool {
+    place.projections().is_empty() || array
+}
+
 fn kill_moved_retained_operand_v1(
     operand: &SemanticOperandV1,
     retained: &BTreeMap<u32, SemanticRetainedLocalSlotPlanV1>,
@@ -192,7 +196,7 @@ fn kill_moved_retained_operand_v1(
     if let SemanticOperandV1::Move(place) = operand
         && retained
             .get(&place.local().index())
-            .is_some_and(|slot| place.projections().is_empty() || slot.array.is_some())
+            .is_some_and(|slot| retained_move_invalidates_local_v1(place, slot.array.is_some()))
         && initialized.remove(&place.local().index())
     {
         budget.release_storage(1)?;

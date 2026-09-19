@@ -327,6 +327,11 @@ enum ScopedFixture {
     InitializationArray(bool),
     InitializationArrayMove(bool),
     CheckedSlot,
+    AssertionSlots {
+        move_condition: bool,
+        move_message: bool,
+        reinitialize: bool,
+    },
     Arrays,
 }
 
@@ -368,6 +373,7 @@ fn run_lifecycle(
             | ScopedFixture::InitializationArray(_)
             | ScopedFixture::InitializationArrayMove(_)
             | ScopedFixture::CheckedSlot
+            | ScopedFixture::AssertionSlots { .. }
     );
     let mut owner = match fixture {
         ScopedFixture::Plain => lifecycle_owner(branches),
@@ -399,6 +405,18 @@ fn run_lifecycle(
         ScopedFixture::CheckedSlot => {
             assert!(!branches);
             scoped_root_tests::fixtures::checked_slot_owner()
+        }
+        ScopedFixture::AssertionSlots {
+            move_condition,
+            move_message,
+            reinitialize,
+        } => {
+            assert!(!branches);
+            scoped_root_tests::fixtures::assertion_slots_owner(
+                move_condition,
+                move_message,
+                reinitialize,
+            )
         }
     };
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);

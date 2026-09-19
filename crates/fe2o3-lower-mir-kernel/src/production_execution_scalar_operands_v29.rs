@@ -51,7 +51,12 @@ impl SemanticFunctionLoweringV1<'_> {
             return Ok(());
         };
         if !self.execution_cfg_local_v29(place.local().index() as usize) {
-            return Ok(());
+            return self.consume_scoped_discarded_operand_v29(
+                block,
+                role,
+                operand,
+                operations.len(),
+            );
         }
         self.with_emission_budget_v1(|this, budget| {
             this.execution.as_ref().unwrap().check_ledger(budget)?;

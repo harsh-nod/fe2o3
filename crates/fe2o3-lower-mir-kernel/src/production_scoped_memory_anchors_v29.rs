@@ -606,6 +606,71 @@ fn scoped_expected_kill_v29(
 }
 
 impl SemanticFunctionLoweringV1<'_> {
+    fn consume_scoped_discarded_operand_v29(
+        &mut self,
+        block: SemanticBlockIdV1,
+        role: ExecutionOperandV29,
+        operand: &SemanticOperandV1,
+        position: usize,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.scoped_memory.is_none() {
+            return Ok(());
+        }
+        let site = execution_site_v29(block, None);
+        let invalidation = self.with_emission_budget_v1(|this, budget| {
+            budget.charge_work(argument_sum_v1(&[
+                8,
+                scoped_initialization_search_work_v29(this.retained_local_slots.len()),
+                scoped_initialization_search_work_v29(this.retained_local_initialized.len()),
+            ])?)?;
+            let cursor = this
+                .execution
+                .as_ref()
+                .ok_or_else(scoped_memory_error_v29)?;
+            cursor.check_ledger(budget)?;
+            if !matches!(
+                role,
+                ExecutionOperandV29::AssertCondition | ExecutionOperandV29::AssertMessage(_)
+            ) || !scoped_source_operand_v29(this.function, site, role)
+                .is_some_and(|source| std::ptr::eq(source, operand))
+            {
+                return Err(scoped_memory_error_v29());
+            }
+            let SemanticOperandV1::Move(place) = operand else {
+                return Ok(None);
+            };
+            let Some(slot) = this.retained_local_slots.get(&place.local().index()) else {
+                return Ok(None);
+            };
+            if !retained_move_invalidates_local_v1(place, slot.array.is_some()) {
+                return Ok(None);
+            }
+            let cause = if place.projections().is_empty() {
+                ScopedMemoryKillV29::Move
+            } else {
+                ScopedMemoryKillV29::ProjectedArrayMove
+            };
+            Ok(Some((place.local(), cause)))
+        })?;
+        let Some((local, cause)) = invalidation else {
+            return Ok(());
+        };
+        let index = self.require_local(block, None, local.index())?;
+        self.with_scoped_memory_frame_v29(
+            ScopedMemoryFrameV29 {
+                site,
+                role: Some(role),
+            },
+            |this| {
+                // Discarding a diagnostic preserves its move effect, not a physical read.
+                this.record_scoped_memory_kill_v29(local, cause, position)?;
+                this.locals[index] = None;
+                this.retained_local_initialized.remove(&local.index());
+                Ok(())
+            },
+        )
+    }
+
     fn with_scoped_memory_frame_v29<T>(
         &mut self,
         frame: ScopedMemoryFrameV29,

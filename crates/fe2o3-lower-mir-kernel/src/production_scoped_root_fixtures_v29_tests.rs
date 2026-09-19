@@ -144,6 +144,134 @@ fn literal(value: u128) -> SemanticOperandV1 {
     ))
 }
 
+pub(in super::super) fn assertion_slots_owner(
+    move_condition: bool,
+    move_message: bool,
+    reinitialize: bool,
+) -> ProductionSemanticSsaOwnerV1 {
+    let original = repeated_slot_owner();
+    let semantic = original.source_semantic();
+    let mut types = semantic.types().to_vec();
+    let boolean = declaration(
+        &mut types,
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(1),
+            1,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::integer(false, 8, 1),
+                SemanticScalarValidityRangeV1::new(0, 1),
+            )),
+            false,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool),
+        None,
+    );
+    let pointer = reference(&mut types, U32, SemanticMutabilityV1::Mutable, true);
+    let bool_pointer = reference(&mut types, boolean, SemanticMutabilityV1::Mutable, true);
+    let truth = || {
+        SemanticOperandV1::Constant(SemanticConstantV1::new(
+            boolean,
+            SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(1, 1).unwrap()),
+        ))
+    };
+    let store = |local, ty, value| {
+        SemanticStatementV1::new(
+            SemanticSourceProvenanceV1::unavailable(),
+            SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                place(local, ty),
+                value,
+                SemanticVolatilityV1::NonVolatile,
+                None,
+            )),
+        )
+    };
+    let operand = |local, ty, moved| {
+        if moved {
+            SemanticOperandV1::Move(place(local, ty))
+        } else {
+            SemanticOperandV1::Copy(place(local, ty))
+        }
+    };
+    let mut functions = semantic.functions().to_vec();
+    let helper = &functions[3];
+    let mut locals = helper.locals().to_vec();
+    assert_eq!(locals.len(), 3);
+    for (tag, ty) in [
+        (136, U32),
+        (137, boolean),
+        (138, pointer),
+        (139, pointer),
+        (140, bool_pointer),
+        (141, boolean),
+    ] {
+        locals.push(local(tag, ty, SemanticLocalRoleV1::Temporary));
+    }
+    let mut entry = helper.blocks()[0].statements()[..2].to_vec();
+    entry.push(store(3, U32, literal(99)));
+    entry.push(store(4, boolean, truth()));
+    let mut exit = vec![];
+    if reinitialize {
+        if move_message {
+            exit.extend([store(2, U32, literal(11)), store(3, U32, literal(12))]);
+        }
+        if move_condition {
+            exit.push(store(4, boolean, truth()));
+        }
+    }
+    for (slot, alias, ty, ptr, destination) in [
+        (2, 5, U32, pointer, 0),
+        (3, 6, U32, pointer, 0),
+        (4, 7, boolean, bool_pointer, 8),
+    ] {
+        exit.push(assign(
+            place(alias, ptr),
+            SemanticRvalueKindV1::AddressOf {
+                mutability: SemanticMutabilityV1::Mutable,
+                place: place(slot, ty),
+            },
+        ));
+        let dereference = SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(alias),
+            vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, ty).unwrap()],
+            ty,
+        )
+        .unwrap();
+        exit.push(assign(
+            place(destination, ty),
+            SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                dereference,
+                SemanticVolatilityV1::NonVolatile,
+                None,
+            )),
+        ));
+    }
+    let assertion = SemanticTerminatorKindV1::Assert {
+        condition: operand(4, boolean, move_condition),
+        expected: true,
+        message: SemanticAssertMessageV1::BoundsCheck {
+            length: operand(2, U32, move_message),
+            index: operand(3, U32, move_message),
+        },
+        target: SemanticControlFlowEdgeV1::new(
+            SemanticEdgeRoleV1::AssertSuccess,
+            SemanticBlockIdV1::from_index(1),
+        ),
+        unwind: SemanticUnwindActionV1::Unreachable,
+    };
+    functions[3] = function(
+        130,
+        helper.role(),
+        helper.abi().clone(),
+        locals,
+        vec![
+            block(140, entry, assertion),
+            block(141, exit, SemanticTerminatorKindV1::Return),
+        ],
+    );
+    build(types, functions, semantic.callables().to_vec())
+}
+
 pub(in super::super) fn initialization_owner(
     config: InitializationFixtureV29,
 ) -> ProductionSemanticSsaOwnerV1 {
