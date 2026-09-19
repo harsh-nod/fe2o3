@@ -11,7 +11,7 @@ resource, scheduling, and curriculum requirements, remains unchanged.
 
 [First-slice commands and evidence boundaries](assembly-authoring-first-slice.md)
 describe reproduction. The umbrella issues remain incomplete. Bounded M1
-instruction-slice and V1 recorded-memory exits now have the separate evidence
+instruction-slice, V1 recorded-memory and U1 read/select/view exits now have separate evidence
 linked below; later production, target and whole-kernel milestones remain open.
 
 The next implementation batch adds the public ISA metadata catalog, an actual
@@ -53,6 +53,28 @@ source-to-native join covering 12 compilation cases/80 authored sites.
 separate these actual runs from synthetic tests and protected publication.
 
 ## Exercised evidence and implementation anchors
+
+The latest U1 qualification uses the checked-in
+[source capture runner](../scripts/authoring-navigation-v1-smoke.mjs) at clean
+compiler commit `70b3fe0057e18e16eaa568301d2743b1ca6c252a`. It exports one
+ordinary Rust kernel, requires the same-run diagnostic source census, inspects
+12 actual KIR V11 operations, and selects the exact OR operation with live-ins
+14/15 and live-out16. Source range325..334 has two overlapping operation
+occurrences; the viewer preserves that ambiguity and requires an explicit
+choice. Complete empty local-memory effects do not imply checked trap or
+convergence facts. Missing HIR/MIR bodies, scheduled stages, final ISA, physical
+resources and runtime values remain explicitly unavailable.
+
+The actual capture SHA-256 is
+`14d3f430b9d6a394de4874d02142c33c1edc29e4ba8fa338f8c424fd85aa0556`;
+34 compiler-script controls pass. The existing site inspection page and
+[tutorial/qualification](https://github.com/harsh-nod/fe2o3-kernels/blob/8caeb8b673392ab95cfeba945238bacaf2eed37a/docs/ordinary-authoring-navigation-qualification-20260919.md)
+are published on site main `8caeb8b673392ab95cfeba945238bacaf2eed37a`.
+The final peer-preserving composite passes32 focused controls,388 unit tests,
+lint/types/build, evidence validation and72 desktop/mobile browser tests.
+These bounded U1 observations grant no edit, resume, proof, artifact or launch
+authority. The [shared integration contract](assembly-authoring-integration-contract-v1.md)
+is proposed for owner review, not accepted M0/V0/U0 signoff.
 
 | ID | Delivered portion and reproducible checks |
 | --- | --- |
@@ -389,7 +411,7 @@ No new strict-Clippy, final native, protected proof or hardware result is claime
 | Milestone | Delivered portion | Required remaining work |
 | --- | --- | --- |
 | U0: editing and ownership contract | Bounded exact selectors, stale-source checks, private proposals, explicit new-file publication and no snapshot-resume authority (E3). | Complete per-level capability matrix, semantic extraction/insertion ownership, specialization/resource boundaries, recipe semantics and shared acceptance/budget agreement. A source-map file identity is not a source-byte hash. |
-| U1: inspect and select | Actual source-produced V6/KIR V11 operations, contiguous single-block regions, live-ins/outs, scalar detail/source references and immutable comparison (E2/E3/E6); E20 adds a bounded borrowed source-to-V16-region view with explicit availability. | Genuinely available additional stage/transform lineage and resource contracts, checked cross-level navigation, remaining stale/ambiguous cases. Missing stages are not synthesized. |
+| U1: inspect and select | The qualified ordinary-source capture and integrated viewer above meet the original bounded read/select/view exit: Rust-to-KIR navigation, exact structural boundary/live values, explicit many-to-one source occurrences, stale/malformed/input-reset controls and unavailable-stage labels. Earlier E2/E3/E6/E20 remain separate evidence. | No additional U1 implementation is required for that bounded exit. Source editing, production resume, additional stage/transform lineage, physical resources and the remaining U0/U2–U4 exits are not inferred from read-only navigation. |
 | U2: promote, edit and recompile | Supported u32 bitwise/typed-marker drafts, actual ordinary-source promotion, fresh unchanged/edited helper exports and CPU cases (E2–E4); closed direct-root checked relations and actual normal target lowering are separate E7/E8 progress; E15 adds actual source-reference functional proof and mutation rejection. | General supported source-boundary integration, complete ownership/admission, applicable exact instruction/resource contract preservation and final-code inspection, invalid-resource/hidden-clobber cases, fresh final analyses/admission. EOF helper insertion alone is not semantic source replacement or proof of valid Rust. |
 | U3: replayable schedule recipes | E12 executes and independently checks two local-order preferences on actual immutable owners; existing fixed policy is unchanged. | Integrate two legal schedules of one actual source algorithm with compiler-owned applicability/anchors, pre-owner resolution and fixed composition, source-edit success and stale/ambiguous rejection, explicit rebind, fresh transformation/analysis records. Local owner coordinates and CPU interleavings are not persisted compiler recipes. |
 | U4: end-to-end qualification | Exercised small-kernel source cases, exact retained comparisons, scripts and draft lessons. | Qualified U1–U3 including tiled compute, original target/operation matrix, final artifact/resource comparisons, clean-source full gates, inspection/materialization/recipe cost measurements and normal compiler/site pinning. Resource-query timing alone does not satisfy all authoring budgets. |
