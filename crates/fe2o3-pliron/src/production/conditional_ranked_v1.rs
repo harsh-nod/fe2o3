@@ -105,6 +105,51 @@ struct PreparedConditionalAnalysisV1 {
 }
 
 impl ProductionConditionalRankedAnalysisV1 {
+    /// Borrows the exact recipe retained when this frozen owner was prepared.
+    /// This authenticates custody metadata, not a fresh graph analysis. No
+    /// mutation or session recovery is exposed, and all pipeline checks remain
+    /// pending.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_pliron::{ProductionConditionalRankedAnalysisV1, ProductionRankedKernelV1};
+    /// fn escape(owner: ProductionConditionalRankedAnalysisV1) -> &'static ProductionRankedKernelV1 {
+    ///     owner.kernel().unwrap()
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use fe2o3_pliron::{ProductionConditionalRankedAnalysisV1, ProductionRankedKernelV1};
+    /// fn mutate(owner: &mut ProductionConditionalRankedAnalysisV1) -> &mut ProductionRankedKernelV1 {
+    ///     owner.kernel().unwrap()
+    /// }
+    /// ```
+    pub fn kernel(&self) -> Result<&ProductionRankedKernelV1, ProductionSessionErrorV1> {
+        let session = &self._session;
+        if session.poisoned || session.inner.is_poisoned() {
+            return Err(ProductionSessionErrorV1::SessionPoisoned);
+        }
+        session.authenticate_owner(self._stage.owner)?;
+        session.authenticate_owner(self._root.owner)?;
+        let record = session
+            .constructed_roots
+            .get(&self._stage.identity)
+            .ok_or(ProductionSessionErrorV1::StaleStage)?;
+        if self._root.stage != self._stage.identity
+            || self._root.identity != record.identity
+            || self._root.graph_snapshot != record.graph_snapshot
+            || self._root.exact_graph_identity != record.exact_graph_identity
+        {
+            return Err(ProductionSessionErrorV1::StageRootMismatch);
+        }
+        if record.ranked_function != Some(self.analysis.payload.function()) {
+            return Err(ProductionSessionErrorV1::RankedGraphChanged);
+        }
+        record
+            .ranked_kernel
+            .as_ref()
+            .ok_or(ProductionSessionErrorV1::WrongConstructionKind)
+    }
+
     pub fn legacy_report(&self) -> &crate::HierarchicalOwnershipReportV1 {
         self.analysis.payload.legacy_report()
     }

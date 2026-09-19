@@ -2,6 +2,7 @@ use super::*;
 use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1, VerifiedCanonicalKernelIrModuleV12};
 
 include!("production_checked_output_source_roles_fixtures_v1_tests.rs");
+include!("production_conditional_source_wrapper_v1_tests.rs");
 
 #[test]
 fn selected_result_bodies_keep_exact_single_shared_and_distinct_root_roles() {

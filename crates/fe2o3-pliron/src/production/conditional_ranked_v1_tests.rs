@@ -132,6 +132,29 @@ fn construct(
 }
 
 #[test]
+fn frozen_pending_recipe_borrows_preserve_actual_custody() {
+    let prepare = || {
+        let mut session = session();
+        let (stage, root, sites) = construct(&mut session, "recipe_borrow", false, true);
+        session
+            .prepare_conditional_ranked_analysis_v1(stage, root, &sites[..1])
+            .unwrap()
+    };
+    let first = prepare();
+    let second = prepare();
+    assert_eq!(first.kernel().unwrap(), second.kernel().unwrap());
+    assert!(std::ptr::eq(
+        first.kernel().unwrap(),
+        first.kernel().unwrap()
+    ));
+    assert!(!std::ptr::eq(
+        first.kernel().unwrap(),
+        second.kernel().unwrap()
+    ));
+    assert!(!first.pending_pipeline_checks().is_empty());
+}
+
+#[test]
 fn pending_owner_keeps_every_row_without_coverage_credit() {
     let mut session = session();
     let (stage, root, sites) = construct(&mut session, "pending", false, true);
