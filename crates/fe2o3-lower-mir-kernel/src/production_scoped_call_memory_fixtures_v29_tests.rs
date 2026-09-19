@@ -1,8 +1,10 @@
 pub(in super::super) fn call_destinations_owner(
     projected: bool,
     retained_address: bool,
+    indexed: bool,
 ) -> ProductionSemanticSsaOwnerV1 {
     assert!(!retained_address || projected);
+    assert!(!indexed || !projected);
     let original = repeated_owner();
     let semantic = original.source_semantic();
     let mut types = semantic.types().to_vec();
@@ -22,7 +24,52 @@ pub(in super::super) fn call_destinations_owner(
         )
     };
     let mut setup = vec![store(0, U32, literal(0)), store(3, U32, literal(0))];
-    let destination = if projected {
+    let destination = if indexed {
+        let array = declaration(
+            &mut types,
+            SemanticTypeLayoutV1::with_exact_rustc_layout(
+                4,
+                4,
+                SemanticFieldsShapeV1::array(4, 1),
+                SemanticRustcVariantsV1::Single { index: 0 },
+                SemanticBackendReprV1::memory(true),
+                None,
+                false,
+                None,
+                4,
+                0,
+                SemanticTypeLayoutDetailsV1::None,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Array {
+                element: U32,
+                length: 1,
+            },
+            None,
+        );
+        locals.push(local(145, array, SemanticLocalRoleV1::Temporary));
+        locals.push(local(148, U32, SemanticLocalRoleV1::Temporary));
+        setup.push(store(5, U32, literal(0)));
+        setup.push(assign(
+            place(4, array),
+            SemanticRvalueKindV1::Aggregate(
+                SemanticAggregateRvalueV1::new(SemanticAggregateKindV1::Array, vec![literal(0)])
+                    .unwrap(),
+            ),
+        ));
+        SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(4),
+            vec![
+                SemanticProjectionV1::new(
+                    SemanticProjectionKindV1::Index(SemanticLocalIdV1::from_index(5)),
+                    U32,
+                )
+                .unwrap(),
+            ],
+            U32,
+        )
+        .unwrap()
+    } else if projected {
         let pointer = reference(&mut types, U32, SemanticMutabilityV1::Mutable, true);
         assert_eq!(locals.len(), 4);
         locals.push(local(145, pointer, SemanticLocalRoleV1::Temporary));

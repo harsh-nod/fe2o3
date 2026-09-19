@@ -330,6 +330,7 @@ enum ScopedFixture {
     CallDestinations {
         projected: bool,
         retained_address: bool,
+        indexed: bool,
     },
     AssertionSlots {
         move_condition: bool,
@@ -414,9 +415,14 @@ fn run_lifecycle(
         ScopedFixture::CallDestinations {
             projected,
             retained_address,
+            indexed,
         } => {
             assert!(!branches);
-            scoped_root_tests::fixtures::call_destinations_owner(projected, retained_address)
+            scoped_root_tests::fixtures::call_destinations_owner(
+                projected,
+                retained_address,
+                indexed,
+            )
         }
         ScopedFixture::AssertionSlots {
             move_condition,

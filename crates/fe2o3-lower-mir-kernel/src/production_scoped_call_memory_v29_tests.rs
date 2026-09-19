@@ -47,7 +47,7 @@ fn observe(
             .origin
             .pointer
     };
-    let retained_address = local_slots.iter().any(|row| row.origin.local == 4);
+    let indexed = local_slots.iter().any(|row| row.origin.local == 5);
     let lowered = emitted[item.instance.index()].as_ref().unwrap();
     let rows = &lowered.scoped_memory_anchors.as_ref().unwrap().rows;
     let results: Vec<_> = rows
@@ -59,7 +59,6 @@ fn observe(
         .collect();
     assert_eq!(results.len(), 3);
     for (index, row) in results.iter().enumerate() {
-        let expected = pointer(if index == 1 { 0 } else { 3 });
         let block = lowered
             .function
             .body
@@ -69,6 +68,15 @@ fn observe(
             .iter()
             .find(|block| block.id == row.block)
             .unwrap();
+        let expected = if index == 0 && indexed {
+            let gep = block.operations[..row.position].iter().rev().find(|op|
+                matches!(op.kind, OperationKind::GetElementPointer { base, .. } if base == pointer(4))
+            ).unwrap();
+            assert_eq!(gep.results.len(), 1);
+            gep.results[0].id
+        } else {
+            pointer(if index == 1 { 0 } else { 3 })
+        };
         assert_eq!(
             row.source.unwrap().site,
             execution_site_v29(SemanticBlockIdV1::from_index(index as u32), None)
@@ -105,12 +113,12 @@ fn observe(
             })
         })
         .collect();
-    assert_eq!(addresses.len(), usize::from(retained_address));
+    assert_eq!(addresses.len(), usize::from(indexed));
     if let Some(row) = addresses.first() {
         assert_eq!(
             row.kind,
             ScopedMemoryAnchorKindV29::Access {
-                pointer: pointer(4)
+                pointer: pointer(5)
             }
         );
         assert_eq!(
@@ -162,12 +170,12 @@ fn observe(
         instances, emitted, slots, 1024, budget,
     );
     assert_eq!(budget.storage(), floor);
-    if retained_address {
+    if indexed {
         assert!(
             matches!(
                 result,
                 Err(ProductionSemanticKirErrorV1::Unsupported {
-                    detail: "scoped source-slot address escapes through an unsupported operand",
+                    detail: "scoped slot cell requires an exact unsigned constant offset",
                     ..
                 })
             ),
@@ -181,10 +189,11 @@ fn observe(
 
 #[test]
 fn defined_intrinsic_and_projected_call_results_keep_distinct_source_phases() {
-    for (projected, retained_address) in [(false, false), (true, false), (true, true)] {
+    for (projected, indexed) in [(false, false), (true, false), (false, true)] {
         let fixture = ScopedFixture::CallDestinations {
             projected,
-            retained_address,
+            retained_address: false,
+            indexed,
         };
         let (result, _, _) = run(false, fixture, observe, LIMIT, LIMIT);
         assert_eq!(OBSERVED.get(), 1, "{fixture:?}: {result:?}");
@@ -259,10 +268,34 @@ fn mutate(
 #[test]
 fn result_and_address_phases_cannot_be_swapped_on_actual_memory_operations() {
     let fixture = ScopedFixture::CallDestinations {
-        projected: true,
-        retained_address: true,
+        projected: false,
+        retained_address: false,
+        indexed: true,
     };
     let (result, _, _) = run(false, fixture, mutate, LIMIT, LIMIT);
     assert_eq!(OBSERVED.get(), 1, "{result:?}");
     assert!(is_stopped(&result), "{result:?}");
+}
+
+#[test]
+fn retaining_a_private_address_still_requires_representation_refinement() {
+    let fixture = ScopedFixture::CallDestinations {
+        projected: true,
+        retained_address: true,
+        indexed: false,
+    };
+    let (result, _, _) = run(false, fixture, observe, LIMIT, LIMIT);
+    assert_eq!(OBSERVED.get(), 0);
+    assert!(
+        matches!(
+            result,
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                function: 2,
+                block: Some(0),
+                statement: Some(2),
+                detail: "retained-local value type differs from its private slot",
+            })
+        ),
+        "{result:?}"
+    );
 }

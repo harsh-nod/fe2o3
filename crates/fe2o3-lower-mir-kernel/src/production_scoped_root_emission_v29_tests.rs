@@ -161,6 +161,7 @@ pub(super) fn emit_checked(
             if !matches!(
                 fixture,
                 ScopedFixture::Arrays
+                    | ScopedFixture::CallDestinations { indexed: true, .. }
                     | ScopedFixture::InitializationArray(_)
                     | ScopedFixture::InitializationArrayMove(_)
             ) {
