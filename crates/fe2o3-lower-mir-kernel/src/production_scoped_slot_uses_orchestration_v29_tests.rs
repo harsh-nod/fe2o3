@@ -7,7 +7,43 @@ fn stop_after_uses(
     receipt: &OwnedScopedSourceSlotsV29,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
-    check_receipt(instances, emitted, receipt, budget);
+    OBSERVED.set(OBSERVED.get() + 1);
+    assert!(receipt.ledger == budget.work_ledger_identity_v1());
+    assert!(receipt.source == ExecutionCallSourceV29::from_instances(instances, budget)?);
+    assert_eq!(receipt.instances.len(), emitted.len());
+    let actual_allocations = emitted
+        .iter()
+        .flatten()
+        .flat_map(|lowered| &lowered.function.body.as_ref().unwrap().blocks)
+        .flat_map(|block| &block.operations)
+        .filter(|operation| matches!(operation.kind, OperationKind::Alloca { .. }))
+        .count();
+    assert_eq!(receipt.slots.len(), actual_allocations);
+    for slot in &receipt.slots {
+        let source = instances.instance(slot.instance).unwrap();
+        assert_eq!(
+            source.declaration().locals()[slot.origin.local as usize].ty(),
+            slot.origin.semantic_type
+        );
+        let body = emitted[slot.instance.index()]
+            .as_ref()
+            .unwrap()
+            .function
+            .body
+            .as_ref()
+            .unwrap();
+        let block = &body.blocks[slot.allocation.block_ordinal];
+        assert_eq!(block.id, slot.allocation.block);
+        let allocation = &block.operations[slot.allocation.operation];
+        assert_eq!(allocation.results[0].id, slot.origin.pointer);
+        assert!(matches!(
+            allocation.kind,
+            OperationKind::Alloca {
+                address_space: AddressSpace::Private,
+                ..
+            }
+        ));
+    }
     let floor = budget.storage();
     scoped_slot_uses_v29::check_scoped_source_slot_uses_v29(
         instances, emitted, receipt, 1024, budget,
@@ -168,7 +204,7 @@ fn check_foreign_ledger(
 }
 
 #[test]
-fn source_slot_use_checks_reject_foreign_ledgers_and_obey_full_orchestration_limits() {
+fn source_slot_use_checks_reject_foreign_ledgers_and_obey_preassembly_limits() {
     assert!(is_stopped(
         &run(
             false,

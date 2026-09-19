@@ -306,7 +306,7 @@ fn return_call_store_and_identity_observation_reject_candidate_addresses() {
             1 => body.blocks[0].operations.push(Operation::new(
                 vec![],
                 OperationKind::Call {
-                    callee: FunctionId(1),
+                    callee: FunctionId::new("sink"),
                     arguments: vec![P],
                 },
             )),
@@ -492,6 +492,58 @@ fn candidate_access_type_space_and_restriction_mutations_refuse() {
             }
         );
     }
+}
+
+#[test]
+fn a_grounded_loop_alias_cannot_escape_through_a_return() {
+    let mut function = loop_fixture(P);
+    function
+        .signature
+        .results
+        .push(pointer(AccessMode::ReadWrite));
+    function.body.as_mut().unwrap().blocks[2].terminator = Some(Terminator::Return {
+        values: vec![ValueId(100)],
+    });
+    verified(&function);
+    assert_eq!(
+        detail(&run(&function, LIMIT, LIMIT).0),
+        "scoped source-slot address escapes through an unsupported operand"
+    );
+}
+
+#[test]
+fn simple_slot_use_fixture_has_independently_counted_resource_limits() {
+    let function = fixture();
+    verified(&function);
+    // Scratch wrapper, index, body, remaining construction, solve and use checks.
+    let work = 2 + 157 + 13 + 31 + 78 + 22;
+    assert_eq!(work, 303);
+    let peak = FLOOR
+        + std::mem::size_of::<BlockId>()
+        + 7 * std::mem::size_of::<(ValueId, &Type)>()
+        + std::mem::size_of::<(BlockId, &BasicBlock)>()
+        + 14 * std::mem::size_of::<Origin>()
+        + 14 * std::mem::size_of::<usize>()
+        + 7 * std::mem::size_of::<bool>();
+    let (result, spent, actual_peak) = run(&function, work, peak);
+    result.unwrap();
+    assert_eq!((spent, actual_peak), (work, peak));
+    assert!(matches!(
+        run(&function, work - 1, peak).0,
+        Err(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Work(
+                _
+            ))
+        )
+    ));
+    assert!(matches!(
+        run(&function, work, peak - 1).0,
+        Err(
+            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                ArgumentResourceV1::Storage(_)
+            )
+        )
+    ));
 }
 
 #[test]
