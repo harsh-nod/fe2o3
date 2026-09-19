@@ -21,6 +21,7 @@ use fe2o3_kernel_ir::{
     validate_gfx942_inline_assembly_v1,
 };
 
+use crate::debug_identity_state::{FrameIdentityState, InvocationIdentityState, OperationIdentity};
 use crate::model::mask;
 use crate::preflight::{supported_cast, supports_binary, supports_compare, supports_unary};
 use crate::resident::{
@@ -48,6 +49,8 @@ use crate::{
     SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1,
 };
 
+#[path = "execute_debug_identity.rs"]
+mod debug_identity;
 #[path = "execute_ordered_program_v17.rs"]
 mod ordered_program_v17;
 #[path = "execute_ordered_region_v16.rs"]
@@ -1798,6 +1801,9 @@ struct Engine<'a, S> {
     sink: &'a mut S,
     debug_capture: SimulationDebugCaptureLimitsV1,
     debug_sink: &'a mut dyn SimulationDebugSinkV1,
+    debug_origin_requested: bool,
+    debug_identity_failed: bool,
+    debug_origin: Option<OperationIdentity>,
     debug_records: u64,
     debug_delivery_stopped: bool,
     schedule_identity: SimulationScheduleIdentityV1,
@@ -2359,7 +2365,14 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
             },
             kind,
         };
-        match self.debug_sink.record(record) {
+        let control = if self.debug_origin_requested {
+            let origin = self.operation_origin_context(&record);
+            self.debug_sink
+                .record_with_operation_origin_v1(record, origin)
+        } else {
+            self.debug_sink.record(record)
+        };
+        match control {
             SimulationDebugSinkControlV1::Continue => {
                 if let Some(next) = self.debug_records.checked_add(1) {
                     self.debug_records = next;
@@ -3396,6 +3409,8 @@ fn execute(
     workgroup_allocations
         .try_reserve_exact(plan.workgroup_allocation_sites)
         .map_err(|_| top_level_error(SimulationExecutionErrorKindV1::AllocationFailure))?;
+    let debug_origin_requested =
+        debug_capture.is_enabled() && debug_sink.wants_operation_origin_v1();
     let mut engine = Engine {
         module: &admitted.module,
         function_module_indices,
@@ -3411,6 +3426,9 @@ fn execute(
         sink,
         debug_capture,
         debug_sink,
+        debug_origin_requested,
+        debug_identity_failed: false,
+        debug_origin: None,
         debug_records: 0,
         debug_delivery_stopped: !debug_capture.is_enabled(),
         schedule_identity: schedule.identity(),
@@ -3480,7 +3498,7 @@ fn execute(
                                 workgroup_count: plan.workgroup_count,
                                 launch_extent: plan.grid,
                             };
-                            engine.invocation = Some(invocation);
+                            engine.select_debug_invocation(Some(invocation));
                             machines.push(InvocationMachine::new(
                                 &engine,
                                 invocation,
@@ -3627,7 +3645,7 @@ fn begin_workgroup_invocations<'a>(
 ) -> Result<usize, SimulationExecutionErrorV1> {
     let mut begun = 0;
     for machine in machines.iter() {
-        engine.invocation = Some(machine.invocation);
+        engine.select_debug_invocation(Some(machine.invocation));
         if let Err(mut error) =
             engine.begin_lifecycle(invocation_site, SimulationEventKindV1::InvocationBegin)
         {
@@ -3642,7 +3660,7 @@ fn begin_workgroup_invocations<'a>(
                 "workgroup contained no live invocations",
             ))
         })?;
-        engine.invocation = Some(invocation.invocation);
+        engine.select_debug_invocation(Some(invocation.invocation));
         if let Err(mut error) = observe_preexisting_allocations(engine, invocation_site) {
             abort_workgroup(engine, machines, begun, invocation_site, &mut error);
             return Err(error);
@@ -3684,7 +3702,7 @@ fn execute_cooperative_workgroup<'a>(
                     .selected(machine.invocation, phase)
                     .map_err(|error| engine.fail(schedule_prepare_error(error)))?;
                 engine.schedule_decision = schedule.current_decision() - 1;
-                engine.invocation = Some(machine.invocation);
+                engine.select_debug_invocation(Some(machine.invocation));
                 match machine.advance_until_yield(engine, phase)? {
                     MachineYield::Complete => {
                         engine.end_lifecycle(
@@ -3721,7 +3739,7 @@ fn execute_cooperative_workgroup<'a>(
                     phase,
                 )
                 .map_err(|error| {
-                    engine.invocation = None;
+                    engine.select_debug_invocation(None);
                     engine.fail(SimulationExecutionErrorKindV1::ScheduleReplay(error))
                 })?;
             for index in order.iter().copied() {
@@ -3762,7 +3780,7 @@ fn advance_runnable_machine<'a>(
         .selected(machine.invocation, phase)
         .map_err(|error| engine.fail(schedule_prepare_error(error)))?;
     engine.schedule_decision = schedule.current_decision() - 1;
-    engine.invocation = Some(machine.invocation);
+    engine.select_debug_invocation(Some(machine.invocation));
     match machine.advance_until_yield(engine, phase)? {
         MachineYield::Complete => {
             engine.end_lifecycle(
@@ -3837,7 +3855,7 @@ fn resolve_ready_waves<'a>(
         let active_mask = wave_active_mask(machines, start, width);
         let required_mask = full_wave_mask(arrival.wave.width);
         if active_mask != required_mask {
-            engine.invocation = Some(machines[representative].invocation);
+            engine.select_debug_invocation(Some(machines[representative].invocation));
             return Err(engine.at(
                 arrival.site,
                 SimulationExecutionErrorKindV1::IncompleteWave(IncompleteWaveV1 {
@@ -3862,7 +3880,7 @@ fn resolve_ready_waves<'a>(
                 Some(MachineWait::Wave(peer))
                     if peer.site == arrival.site && peer.wave == arrival.wave => {}
                 Some(MachineWait::Wave(peer)) => {
-                    engine.invocation = Some(machines[index].invocation);
+                    engine.select_debug_invocation(Some(machines[index].invocation));
                     return Err(engine.at(
                         peer.site,
                         SimulationExecutionErrorKindV1::MismatchedWave(MismatchedWaveV1 {
@@ -3872,7 +3890,7 @@ fn resolve_ready_waves<'a>(
                     ));
                 }
                 _ => {
-                    engine.invocation = Some(machines[representative].invocation);
+                    engine.select_debug_invocation(Some(machines[representative].invocation));
                     return Err(engine.at(
                         arrival.site,
                         SimulationExecutionErrorKindV1::DivergentWave(DivergentWaveV1 {
@@ -4081,7 +4099,7 @@ fn resolve_ready_waves<'a>(
             results.push((index, value));
         }
         for (index, value) in results.iter().copied() {
-            engine.invocation = Some(machines[index].invocation);
+            engine.select_debug_invocation(Some(machines[index].invocation));
             machines[index].complete_wave(engine, value)?;
         }
         resolved += 1;
@@ -4107,7 +4125,7 @@ fn resolve_ready_collectives<'a>(
         let active_mask = wave_active_mask(machines, start, width);
         let required_mask = full_wave_mask(arrival.width);
         if active_mask != required_mask {
-            engine.invocation = Some(machines[representative].invocation);
+            engine.select_debug_invocation(Some(machines[representative].invocation));
             return Err(engine.at(
                 arrival.site,
                 SimulationExecutionErrorKindV1::IncompleteWave(IncompleteWaveV1 {
@@ -4132,7 +4150,7 @@ fn resolve_ready_collectives<'a>(
                 Some(MachineWait::Collective(peer))
                     if peer.site == arrival.site && peer.operation == arrival.operation => {}
                 Some(MachineWait::Collective(peer)) => {
-                    engine.invocation = Some(machines[index].invocation);
+                    engine.select_debug_invocation(Some(machines[index].invocation));
                     return Err(engine.at(
                         peer.site,
                         SimulationExecutionErrorKindV1::MismatchedWave(MismatchedWaveV1 {
@@ -4142,7 +4160,7 @@ fn resolve_ready_collectives<'a>(
                     ));
                 }
                 _ => {
-                    engine.invocation = Some(machines[representative].invocation);
+                    engine.select_debug_invocation(Some(machines[representative].invocation));
                     return Err(engine.at(
                         arrival.site,
                         SimulationExecutionErrorKindV1::DivergentWave(DivergentWaveV1 {
@@ -4170,7 +4188,7 @@ fn resolve_ready_collectives<'a>(
                     ),
                 )
             })?;
-            engine.invocation = Some(machines[representative].invocation);
+            engine.select_debug_invocation(Some(machines[representative].invocation));
             engine.event(
                 &arrival.site,
                 SimulationEventKindV1::WorkgroupBarrierRelease {
@@ -4213,7 +4231,7 @@ fn resolve_ready_collectives<'a>(
                     ),
                 )
             })?;
-            engine.invocation = Some(machines[index].invocation);
+            engine.select_debug_invocation(Some(machines[index].invocation));
             complete_collective_lane(engine, &mut machines[index], arrival, lane as u32, input)?;
         }
         resolved += 1;
@@ -4228,6 +4246,9 @@ fn complete_collective_lane<'a>(
     lane: u32,
     input: CollectiveInput,
 ) -> Result<(), SimulationExecutionErrorV1> {
+    if let Some(frame) = machine.frames.get(machine.active_depth.saturating_sub(1)) {
+        engine.restore_debug_operation(frame, arrival.site);
+    }
     match (arrival.operation, input) {
         (
             OperationKind::Matrix(MatrixOperation {
@@ -4328,7 +4349,7 @@ fn release_workgroup_barrier<'a>(
             (false, Some(MachineWait::Barrier(_))) | (true, None)
         );
         if !valid {
-            engine.invocation = Some(machine.invocation);
+            engine.select_debug_invocation(Some(machine.invocation));
             return Err(
                 engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
                     "barrier resolution machine state",
@@ -4367,7 +4388,7 @@ fn release_workgroup_barrier<'a>(
                     ));
                 }
             };
-            engine.invocation = Some(machine.invocation);
+            engine.select_debug_invocation(Some(machine.invocation));
             return Err(engine.at(
                 arrival.site,
                 SimulationExecutionErrorKindV1::MismatchedWorkgroupBarrier(
@@ -4432,7 +4453,7 @@ fn release_workgroup_barrier<'a>(
                     exited,
                 });
         }
-        engine.invocation = Some(representative);
+        engine.select_debug_invocation(Some(representative));
         return Err(engine.at(
             expected.site,
             SimulationExecutionErrorKindV1::DivergentWorkgroupBarrier(
@@ -4450,7 +4471,7 @@ fn release_workgroup_barrier<'a>(
             SimulationExecutionErrorKindV1::InternalInvariant("workgroup participant count"),
         )
     })?;
-    engine.invocation = Some(representative);
+    engine.select_debug_invocation(Some(representative));
     engine.event(
         &expected.site,
         SimulationEventKindV1::WorkgroupBarrierRelease {
@@ -4492,7 +4513,7 @@ fn abort_workgroup<'a>(
         if machine.completed {
             continue;
         }
-        engine.invocation = Some(machine.invocation);
+        engine.select_debug_invocation(Some(machine.invocation));
         if machine.active_depth != 0 {
             machine.frames.truncate(machine.active_depth);
             unwind_frames(engine, &mut machine.frames, primary);
@@ -4831,6 +4852,7 @@ struct RuntimeFrame<'a> {
     operation: usize,
     block_entered: bool,
     active_operation: Option<CompactSite>,
+    debug_identity: Option<FrameIdentityState>,
 }
 
 #[derive(Clone, Copy)]
@@ -4861,6 +4883,7 @@ struct InvocationMachine<'a> {
     waiting: Option<MachineWait<'a>>,
     pending_wave_input: Option<WaveInput>,
     pending_collective_input: Option<CollectiveInput>,
+    debug_identity: Option<InvocationIdentityState>,
 }
 
 #[derive(Clone, Copy)]
@@ -4985,6 +5008,7 @@ impl<'a> RuntimeFrame<'a> {
             operation: 0,
             block_entered: false,
             active_operation: None,
+            debug_identity: None,
         })
     }
 
@@ -5069,6 +5093,9 @@ impl<'a> InvocationMachine<'a> {
             function,
             arguments,
         )?);
+        let (debug_identity, root_identity) =
+            debug_identity::root_identity(engine, invocation, function_index);
+        frames[0].debug_identity = root_identity;
         Ok(Self {
             invocation,
             frames,
@@ -5077,6 +5104,7 @@ impl<'a> InvocationMachine<'a> {
             waiting: None,
             pending_wave_input: None,
             pending_collective_input: None,
+            debug_identity,
         })
     }
 
@@ -5094,6 +5122,7 @@ impl<'a> InvocationMachine<'a> {
         }
 
         loop {
+            engine.debug_origin = None;
             let checkpoint_site = self.frames.get(self.active_depth - 1).and_then(|frame| {
                 if !frame.block_entered {
                     return None;
@@ -5110,6 +5139,7 @@ impl<'a> InvocationMachine<'a> {
                     .map(|_| operation_site(frame.function_index, block, frame.operation))
             });
             if let Some(site) = checkpoint_site {
+                engine.begin_debug_operation(&mut self.frames[self.active_depth - 1], site);
                 engine.debug_checkpoint(
                     &self.frames[..self.active_depth],
                     site,
@@ -5138,6 +5168,7 @@ impl<'a> InvocationMachine<'a> {
                     ))
                 })?;
                 let arrival = advance_wave_frame(engine, frame, &mut self.pending_wave_input)?;
+                engine.suspend_debug_operation(frame);
                 return Ok(MachineYield::Wave(arrival));
             }
             if self.frames[self.active_depth - 1].block_entered
@@ -5172,6 +5203,7 @@ impl<'a> InvocationMachine<'a> {
                     phase,
                     &mut self.pending_collective_input,
                 )?;
+                engine.suspend_debug_operation(frame);
                 return Ok(MachineYield::Collective(arrival));
             }
             let action = {
@@ -5207,6 +5239,7 @@ impl<'a> InvocationMachine<'a> {
                     site,
                     SimulationDebugCheckpointPhaseV1::AfterOperation,
                 );
+                engine.complete_debug_operation(&mut self.frames[self.active_depth - 1]);
             }
             match action {
                 FrameAction::Continue => {}
@@ -5218,6 +5251,7 @@ impl<'a> InvocationMachine<'a> {
                     function,
                     site,
                 } => {
+                    engine.suspend_debug_operation(&mut self.frames[self.active_depth - 1]);
                     if self.active_depth == engine.limits.max_call_depth {
                         let mut error = engine.at(
                             site,
@@ -5257,9 +5291,11 @@ impl<'a> InvocationMachine<'a> {
                         self.active_depth = 0;
                         return Err(error);
                     }
+                    self.enter_debug_frame(engine);
                     self.active_depth += 1;
                 }
                 FrameAction::Return => {
+                    engine.retire_debug_frame(&mut self.frames[self.active_depth - 1]);
                     let returned = std::mem::take(&mut self.frames[self.active_depth - 1].incoming);
                     if self.active_depth == 1 {
                         if !returned.is_empty() {
@@ -5288,6 +5324,7 @@ impl<'a> InvocationMachine<'a> {
                             "caller operation lifecycle",
                         ))
                     })?;
+                    engine.resume_debug_operation(caller, site);
                     let operation = caller
                         .function
                         .body
@@ -5339,6 +5376,7 @@ impl<'a> InvocationMachine<'a> {
                         site,
                         SimulationDebugCheckpointPhaseV1::AfterOperation,
                     );
+                    engine.complete_debug_operation(&mut self.frames[self.active_depth - 1]);
                 }
             }
         }
@@ -5362,6 +5400,7 @@ impl<'a> InvocationMachine<'a> {
                 SimulationExecutionErrorKindV1::InternalInvariant("wave runtime frame"),
             )
         })?;
+        engine.resume_debug_operation(frame, arrival.site);
         let operation = frame
             .function
             .body
@@ -5395,6 +5434,7 @@ impl<'a> InvocationMachine<'a> {
             arrival.site,
             SimulationDebugCheckpointPhaseV1::AfterOperation,
         );
+        engine.complete_debug_operation(&mut self.frames[self.active_depth - 1]);
         Ok(())
     }
 
@@ -5426,6 +5466,7 @@ impl<'a> InvocationMachine<'a> {
                 ),
             )
         })?;
+        engine.resume_debug_operation(frame, arrival.site);
         let operation = frame
             .function
             .body
@@ -5461,6 +5502,7 @@ impl<'a> InvocationMachine<'a> {
             arrival.site,
             SimulationDebugCheckpointPhaseV1::AfterOperation,
         );
+        engine.complete_debug_operation(&mut self.frames[self.active_depth - 1]);
         Ok(())
     }
 }
@@ -8704,6 +8746,9 @@ mod tests {
             sink: &mut sink,
             debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
             debug_sink: &mut debug_sink,
+            debug_origin_requested: false,
+            debug_identity_failed: false,
+            debug_origin: None,
             debug_records: 0,
             debug_delivery_stopped: true,
             schedule_identity: SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,

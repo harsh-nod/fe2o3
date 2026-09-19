@@ -3,6 +3,8 @@
 
 mod capability;
 mod debug;
+mod debug_identity_state;
+mod debug_runtime_origin;
 mod execute;
 mod explore;
 mod f32_surface;
@@ -34,6 +36,10 @@ pub use debug::{
     SimulationDebugMemoryAccessV1, SimulationDebugRecordKindV1, SimulationDebugRecordV1,
     SimulationDebugScheduleV1, SimulationDebugSinkControlV1, SimulationDebugSinkV1,
     SimulationDebugSiteV1, SimulationDebugUnavailableReasonV1, SimulationDebugValueV1,
+};
+pub use debug_runtime_origin::{
+    SimulationDebugOperationOriginV1, SimulationDebugOriginContextV1,
+    SimulationDebugOriginUnavailableV1,
 };
 pub use execute::{
     DivergentWaveV1, DivergentWorkgroupBarrierV1, DivergentWorkgroupBarrierV2, IncompleteWaveV1,
