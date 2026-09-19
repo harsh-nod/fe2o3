@@ -156,27 +156,29 @@ fn scoped_module_assertion_subject_refuses_local_index_and_conflicting_insertion
                 source.launch.roots()[2].selected_root(),
                 budget,
                 |instances, budget| {
-                    Ok(replay_instance_asserts_in_functions_v1(
-                        InstanceAssertReplaySubjectV1 {
-                            functions: &module.functions,
-                            function_ordinal: root.function_ordinal,
-                            sidecars: &root.sidecars,
-                            coordinates: &root.coordinates,
-                            slot_relocation: root.slot_relocation.as_ref(),
-                            insertions: if matches!(fault, 1 | 2) {
-                                &insertions
-                            } else {
-                                &root.insertions
+                    Ok::<_, production_call_instances_v1::ProductionCallInstanceErrorV1>(
+                        replay_instance_asserts_in_functions_v1(
+                            InstanceAssertReplaySubjectV1 {
+                                functions: &module.functions,
+                                function_ordinal: root.function_ordinal,
+                                sidecars: &root.sidecars,
+                                coordinates: &root.coordinates,
+                                slot_relocation: root.slot_relocation.as_ref(),
+                                insertions: if matches!(fault, 1 | 2) {
+                                    &insertions
+                                } else {
+                                    &root.insertions
+                                },
                             },
-                        },
-                        instances,
-                        &graph,
-                        budget,
-                        &mut |_, _| {
-                            visits += 1;
-                            Err(assert_origin_invalid_v1(None, "collector refused").into())
-                        },
-                    ))
+                            instances,
+                            &graph,
+                            budget,
+                            &mut |_, _| {
+                                visits += 1;
+                                Err(assert_origin_invalid_v1(None, "collector refused").into())
+                            },
+                        ),
+                    )
                 },
             )
             .unwrap();
