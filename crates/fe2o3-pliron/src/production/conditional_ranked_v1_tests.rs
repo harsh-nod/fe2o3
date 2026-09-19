@@ -433,7 +433,7 @@ fn analysis_panic_is_contained_and_consumes_the_session() {
 fn pending_rehash_cannot_restart_the_inherited_work_budget() {
     let run = |one_short: bool| {
         let mut session = session();
-        construct(&mut session, "prior", false, true);
+        let _prior = construct(&mut session, "prior", false, true);
         let (stage, root, sites) = construct(&mut session, "pending", false, true);
         let inherited = session.ownership_binding_resources.work_upper_bound();
         let replacement = recipe(true, true).0;
