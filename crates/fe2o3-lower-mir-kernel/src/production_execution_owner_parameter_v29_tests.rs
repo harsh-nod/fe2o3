@@ -219,8 +219,11 @@ fn selectors(s: &[HelperCallArgumentV1]) -> Vec<(u32, Option<u32>, Option<usize>
 }
 
 fn child(instances: &ExecutionInstancesV29<'_>) -> ProductionCallInstanceIdV1 {
-    instances.calls(instances.root()).unwrap()[0]
-        .child()
+    instances
+        .calls(instances.root())
+        .unwrap()
+        .iter()
+        .find_map(|call| call.child())
         .unwrap()
 }
 
