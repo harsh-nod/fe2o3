@@ -186,6 +186,49 @@ impl VerifiedCanonicalKernelIrModuleV15 {
         &self.identity
     }
 
+    /// Compares a candidate's complete V15 encoding with this immutable owner.
+    ///
+    /// This read-only query creates no graph, wire buffer or verified owner. A
+    /// match establishes exact encoding equality, not source correspondence,
+    /// rewrite validity or launch authority. Keep both inputs reserved while
+    /// they live. Only temporary encoder scratch enters this query's ledger.
+    /// Work, peak and denial history are cumulative; temporary storage returns
+    /// to the incoming floor on success, failure or unwind. Encoding errors
+    /// retain precedence over an earlier byte mismatch.
+    pub fn matches_module_with_budget_v15(
+        &self,
+        candidate: &Module,
+        budget: &mut Budget<'_>,
+    ) -> Result<bool, AdmissionError> {
+        let floor = budget.storage_checkpoint();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (_, auxiliary) = crate::wire::count_module_v15_wire_extent_with_work_v1(
+                candidate,
+                budget.work_budget_v1(),
+            )
+            .map_err(AdmissionError::Encode)?;
+            let scratch = crate::wire::decoded_tree_payload_bound_v12::<&crate::FunctionId>(
+                candidate.kernels.len(),
+            )
+            .map_err(AdmissionError::Decode)?
+            .checked_add(auxiliary)
+            .ok_or(ResourceError::Arithmetic)?;
+            budget.reserve_storage(scratch)?;
+            crate::wire::compare_module_encoding_v1(
+                candidate,
+                crate::KERNEL_IR_VERSION_V15,
+                &self.canonical_bytes,
+                Some(budget.work_budget_v1()),
+            )
+            .map_err(AdmissionError::Encode)
+        }));
+        budget.rollback_storage(floor)?;
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
     /// Freshly decodes an independent, ordinary mutable Module and checks full
     /// equality with this owner. It grants no verification or rewrite authority;
     /// a transformed candidate requires fresh admission and separate replay.

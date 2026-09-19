@@ -1,4 +1,6 @@
 use super::*;
+#[path = "canonical_kir_v15_comparison_tests.rs"]
+mod comparison;
 use crate::{
     AccessMode, AddressSpace, BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1, DiagnosticCode,
     ExecutionOperationV15 as Execution, ExecutionRoleV15 as Role, Function, Kernel, LaunchDomain,
