@@ -1,0 +1,33 @@
+{
+  "command": [
+    "env",
+    "CARGO_INCREMENTAL=0",
+    "CARGO_PROFILE_DEV_DEBUG=0",
+    "CARGO_PROFILE_TEST_DEBUG=0",
+    "CARGO_BUILD_JOBS=2",
+    "CARGO_TERM_COLOR=never",
+    "RUST_TEST_THREADS=2",
+    "CARGO_PROFILE_TEST_OPT_LEVEL=1",
+    "CARGO_PROFILE_TEST_DEBUG_ASSERTIONS=true",
+    "CARGO_PROFILE_TEST_OVERFLOW_CHECKS=true",
+    "cargo",
+    "test",
+    "--frozen",
+    "-p",
+    "cargo-fe2o3",
+    "--test",
+    "unsafe_source_policy"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789801623126713004,
+  "group_absent": true,
+  "pid": 36365,
+  "started_ns": 1789801462994092161,
+  "stderr_sha256": "9a61f6b9c934d4a88c5b6e65be31a7cff74f6d64e4af70697272efe8160ee237",
+  "stdin_sha256": null,
+  "stdout_sha256": "91759bb173b4f3f857d3d03d42d4ec60bcea82773e21437b8238eba9323339b3",
+  "timeout_seconds": 1200
+}

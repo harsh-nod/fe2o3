@@ -93,6 +93,7 @@ mod compute_state;
 #[cfg(feature = "hardware-diagnostic")]
 mod directional_wait_diagnostic;
 mod drain_capture;
+mod xgmi_batch;
 #[cfg(feature = "hardware-diagnostic")]
 pub use directional_wait_diagnostic::KfdRuntimeDirectionalWaitObservationV1;
 #[cfg(feature = "hardware-diagnostic")]
@@ -7718,6 +7719,12 @@ fn native_xgmi_execution_capabilities_v1() -> RuntimeExecutionCapabilitiesV1 {
 /// explicit unmap. It intentionally does not expose compute launch
 /// or same-device copy: the current low-level XGMI queue requires raw access to
 /// both VM sessions, while the compute adapter consumes a session into its queue.
+///
+/// The optional `RuntimePeerCopyBatchBackendV1` SPI accepts an explicit complete
+/// ready or in-flight directional roster, retaining ordinary submission IDs.
+/// Native aggregate preparation/execution unwinds are process-abort-only: they
+/// cannot return resumable ownership. Terminal aggregate outcomes permanently
+/// quarantine the queue, both sessions and the process-global KFD runtime gate.
 #[must_use = "native XGMI backends must remain owned through quiescence"]
 pub struct KfdNativeXgmiRuntimeBackendV1 {
     descriptions: [BackendDeviceDescriptionV1; 2],

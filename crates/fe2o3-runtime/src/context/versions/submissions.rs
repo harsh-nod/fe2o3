@@ -90,6 +90,69 @@ impl ContextVersionsV1 {
 }
 
 impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+    pub(in crate::context) fn validate_pending_peer_copy_roots_v1(
+        &self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Result<(), ContextVersionJournalErrorV1> {
+        use ContextVersionJournalErrorV1 as E;
+        use fe2o3_runtime_model::ContextWriterStateV1;
+        let record = self.submissions.get(&id).ok_or(E::InvalidReference)?;
+        if record.quiescent || record.status != RuntimeCompletionStatusV1::Pending {
+            return Err(E::InvalidState);
+        }
+        let Some(versions) = self.versions.as_ref() else {
+            return if record.journal_writer.is_none() && record.journal_read.is_none() {
+                Ok(())
+            } else {
+                Err(E::InvalidReference)
+            };
+        };
+        let readers = self
+            .validate_submission_readers_v1(id, SubmissionWriterDomainV1::Ordinary)?
+            .ok_or(E::InvalidReference)?;
+        let root = versions
+            .submission_writers
+            .get(&id)
+            .ok_or(E::InvalidReference)?;
+        let writer = root.writer;
+        if readers.sources.len() != 1
+            || record.journal_writer != Some(writer)
+            || root.domain != SubmissionWriterDomainV1::Ordinary
+            || root.disposal_started
+            || root.disposed_count != 0
+            || root.journal_disposed
+            || root.allocations.len() != 1
+            || root.members.len() != 1
+            || writer.key.context_generation != id.context_generation
+            || writer.key.local != id.local
+            || writer.key.kind != ContextWriterKindV1::Submission
+            || versions.retained_writer(writer)?
+                != (ContextWriterStateV1::Pending { member_count: 1 })
+        {
+            return Err(E::InvalidReference);
+        }
+        let allocation = &root.allocations[0];
+        let member = root.members[0];
+        if allocation.disposed
+            || self.allocations.get(&allocation.id) != Some(&allocation.record)
+            || !self
+                .backend_allocations
+                .contains(&allocation.record.backend_allocation)
+            || !self
+                .allocation_admission
+                .has_expected_credit(allocation.id, allocation.record.device)
+            || versions.whole_allocation(allocation.id, &allocation.record)? != member
+            || versions
+                .journal
+                .lookup_allocation(member.allocation)?
+                .pending_writer
+                != Some(writer)
+        {
+            return Err(E::InvalidAllocationReference);
+        }
+        Ok(())
+    }
+
     pub(in crate::context) fn prepare_submission_writer_v1(
         &mut self,
         destinations: &[RuntimeAllocationIdV1],

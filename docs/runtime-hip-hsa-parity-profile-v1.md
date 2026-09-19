@@ -125,8 +125,14 @@ XGMI directional set and publishes it in FIFO prefixes of at most 63. It
 synchronously completes every non-final prefix, then returns with the final
 prefix published so later host work can overlap DMA. First-prefix allocation
 failure is a prepublication rejection; recoverable failure after a completed
-prefix is quiescent and preserves retryable custody. Poll and wait remain the
-only completion-observation operations; neither publishes deferred work. There
+prefix is quiescent and preserves retryable custody. Ordinary poll and wait
+observe completion without publishing deferred work. The separate opt-in
+[`wait_peer_copy_batch`](runtime-xgmi-peer-batch-v1.md) operation can publish and
+observe an exact complete ready directional roster, or retry its exact in-flight
+roster, inside one full native currentness scope. It preserves ordinary
+submission identities, retains all tickets on timeout, and closes the scope
+before reporting success. It does not widen ordinary waits, has no Worker
+transport, and adds no formal machine-code refinement claim. There
 is no background native-publication thread. Runtime Worker V4 provides the portable
 capability, flush, async-copy, cancellation, and drain profile; Runtime Worker V5
 retains it and adds semantic contract carriage. Runtime Worker V1 does not. The XGMI benchmark labels queued work as

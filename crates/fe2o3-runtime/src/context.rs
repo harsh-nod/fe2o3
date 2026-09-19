@@ -18,6 +18,8 @@ mod drain_capture;
 mod generated_issue;
 mod generated_preparation;
 mod generated_shells;
+mod peer_batch;
+pub use peer_batch::*;
 mod unpublished;
 mod versions;
 use allocation_admission::ContextAllocationAdmissionV1;
@@ -781,6 +783,7 @@ pub enum RuntimeValidationErrorV1 {
     GeometryOverflow,
     InvalidAtomicContract,
     InvalidCollectiveContract,
+    InvalidPeerCopyBatch,
     ContextReserved,
 }
 
@@ -3560,6 +3563,7 @@ mod tests {
     mod async_journal_tests;
     mod copy_source_lease_tests;
     mod kernel_read_lease_tests;
+    mod peer_batch_tests;
     mod submission_identity_tests;
     mod version_journal_tests;
 
@@ -3707,6 +3711,9 @@ mod tests {
         wait_observation: Option<BackendPollV1>,
         first_wait_failure: MockWaitFailure,
         wait_deadlines: Vec<Instant>,
+        batch_calls: Vec<(Vec<u64>, Instant)>,
+        batch_pending: bool,
+        batch_failure: MockMemoryFailure,
     }
 
     #[test]

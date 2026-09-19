@@ -62,6 +62,10 @@ fn valid_timing(value: Gfx942XgmiCopyCallDiagnosticsV1, submit: bool) -> bool {
 }
 
 impl Recorder {
+    pub(super) fn invalidate(&mut self) {
+        self.invalid = true;
+    }
+
     fn new(devices: [u64; 2], expected: usize, limit: usize) -> Result<Self, &'static str> {
         if expected == 0 || limit > MAX_RECORDS || expected.checked_mul(2).is_none_or(|n| n > limit)
         {
@@ -313,6 +317,21 @@ mod tests {
         assert!(!recorder.begin(identity(0, 8, true), 1));
         assert!(!recorder.complete());
         assert_eq!(recorder.records.len(), 5);
+    }
+
+    #[test]
+    fn unsupported_aggregate_invalidates_even_a_previously_complete_capture() {
+        use KfdRuntimeXgmiDiagnosticCallV1::*;
+        let mut recorder = Recorder::new([71, 93], 1, 2).unwrap();
+        record(&mut recorder, identity(0, 4, true), Submit);
+        record(&mut recorder, identity(0, 4, false), Completed);
+        assert!(recorder.complete());
+        recorder.invalidate();
+        assert!(!recorder.complete());
+        assert_eq!(
+            take_records(&mut Some(recorder), false, true, true),
+            Err(KfdRuntimeBackendErrorKindV1::InvalidLaunch)
+        );
     }
 
     #[test]

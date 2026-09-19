@@ -3315,9 +3315,9 @@ impl Gfx942SdmaQueueOwnerV1 {
 
     fn wait_many_xgmi_for_in_current_scope(
         &mut self,
-        memory: &mut SharedGttMemorySessionV1,
+        memory: &mut impl SdmaSingleMemoryV1,
         tickets: &[Gfx942SdmaCopyTicketV1],
-        timeout: Duration,
+        deadline: XgmiBatchDeadlineV1,
     ) -> Result<Vec<Gfx942XgmiCompletedCopyV1>, Gfx942SdmaErrorV1> {
         self.require_live()?;
         if tickets.is_empty() || tickets.len() > GFX942_SDMA_MAX_IN_FLIGHT_V1 {
@@ -3336,9 +3336,7 @@ impl Gfx942SdmaQueueOwnerV1 {
             }
             slots.push(slot);
         }
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .ok_or(Gfx942SdmaErrorV1::Contract("XGMI SDMA batch wait deadline"))?;
+        let deadline = deadline.resolve()?;
         let mut wait = MonotonicWaitV1::until(deadline);
         let mut ready = vec![false; slots.len()];
         loop {
@@ -3799,6 +3797,23 @@ impl Gfx942NativeXgmiSdmaQueueCreationFailureV1 {
 enum XgmiRouteCurrentnessV1 {
     Full,
     BatchScoped,
+}
+
+#[derive(Clone, Copy)]
+enum XgmiBatchDeadlineV1 {
+    Relative(Duration),
+    Absolute(Instant),
+}
+
+impl XgmiBatchDeadlineV1 {
+    fn resolve(self) -> Result<Instant, Gfx942SdmaErrorV1> {
+        match self {
+            Self::Relative(timeout) => Instant::now()
+                .checked_add(timeout)
+                .ok_or(Gfx942SdmaErrorV1::Contract("XGMI SDMA batch wait deadline")),
+            Self::Absolute(deadline) => Ok(deadline),
+        }
+    }
 }
 
 /// A bounded native-XGMI submission scope with one full route check at each edge.
@@ -4530,7 +4545,7 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
             source_session,
             destination_session,
             tickets,
-            timeout,
+            XgmiBatchDeadlineV1::Relative(timeout),
             XgmiRouteCurrentnessV1::Full,
         )
     }
@@ -4540,7 +4555,7 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         source_session: &mut SharedGttMemorySessionV1,
         destination_session: &mut SharedGttMemorySessionV1,
         tickets: Vec<Gfx942SdmaCopyTicketV1>,
-        timeout: Duration,
+        deadline: XgmiBatchDeadlineV1,
         currentness: XgmiRouteCurrentnessV1,
     ) -> Result<Vec<Gfx942XgmiCompletedCopyV1>, Gfx942XgmiBatchWaitFailureV1> {
         if let Err(error) = self.require_live_queue_state_v1() {
@@ -4557,7 +4572,7 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         }
         let result = match self.owner.as_mut() {
             Some(owner) => {
-                owner.wait_many_xgmi_for_in_current_scope(source_session, &tickets, timeout)
+                owner.wait_many_xgmi_for_in_current_scope(source_session, &tickets, deadline)
             }
             None => Err(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA queue owner")),
         };
@@ -4747,19 +4762,52 @@ impl Gfx942NativeXgmiSdmaBatchV1<'_> {
             self.source,
             self.destination,
             tickets,
-            timeout,
+            XgmiBatchDeadlineV1::Relative(timeout),
+            XgmiRouteCurrentnessV1::BatchScoped,
+        )
+    }
+
+    /// Waits for the exact roster using the caller's original absolute deadline.
+    ///
+    /// An expired deadline still permits one completion scan. Timeout retains
+    /// every ticket, including already observed completions; no mapping leaves
+    /// queue custody until all tickets are ready. The caller must still finish
+    /// this scope, even after timeout, before publishing a conclusive result.
+    pub fn wait_batch_until(
+        &mut self,
+        tickets: Vec<Gfx942SdmaCopyTicketV1>,
+        deadline: Instant,
+    ) -> Result<Vec<Gfx942XgmiCompletedCopyV1>, Gfx942XgmiBatchWaitFailureV1> {
+        self.queue.wait_batch_for_with_currentness(
+            self.source,
+            self.destination,
+            tickets,
+            XgmiBatchDeadlineV1::Absolute(deadline),
             XgmiRouteCurrentnessV1::BatchScoped,
         )
     }
 
     /// Closes the scope with a fresh full directional-topology observation.
-    pub fn finish(mut self) -> Result<(), Gfx942SdmaErrorV1> {
+    pub fn finish(self) -> Result<(), Gfx942SdmaErrorV1> {
+        self.close(false)
+    }
+
+    /// Performs the closing observation, then quarantines both endpoint owners.
+    ///
+    /// Use this when an inner operation has become indeterminate. A successful
+    /// closing observation does not rehabilitate that operation or its queue.
+    pub fn finish_terminal(self) -> Result<(), Gfx942SdmaErrorV1> {
+        self.close(true)
+    }
+
+    fn close(mut self, terminal: bool) -> Result<(), Gfx942SdmaErrorV1> {
         let result = self
             .source
             .validate_gfx942_xgmi_route_with_peer(self.destination, self.queue.route)
             .map_err(Into::into);
-        if result.is_err() {
-            self.queue.poison_for_abandoned_batch();
+        if terminal || result.is_err() {
+            self.queue
+                .quarantine_batch_v1(self.source, self.destination);
         }
         self.finished = true;
         result
@@ -4771,17 +4819,38 @@ impl Drop for Gfx942NativeXgmiSdmaBatchV1<'_> {
         if self.finished {
             return;
         }
-        self.queue.poison_for_abandoned_batch();
-        let _ = self
-            .source
-            .quarantine_queue_composition("native XGMI batch was not finished");
-        let _ = self
-            .destination
-            .quarantine_queue_composition("native XGMI batch was not finished");
+        self.queue
+            .quarantine_batch_v1(self.source, self.destination);
     }
 }
 
 impl Gfx942NativeXgmiSdmaQueueV1 {
+    /// Permanently fail-closes an indeterminate batch and both endpoint sessions.
+    /// Also irreversibly poisons the process-global KFD runtime gate. A genuine
+    /// queue owner deliberately has this process-wide fail-stop authority; the
+    /// supplied sessions are not authenticated as this queue's route endpoints.
+    /// This grants no release, retry, or completion authority.
+    pub fn quarantine_batch_v1(
+        &mut self,
+        source: &mut SharedGttMemorySessionV1,
+        destination: &mut SharedGttMemorySessionV1,
+    ) {
+        self.poison_for_abandoned_batch();
+        permanently_poison_process_global_kfd_runtime_gate_v1();
+        let mut panicked = false;
+        for session in [source, destination] {
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = session.quarantine_queue_composition("native XGMI batch is terminal");
+            })) {
+                panicked = true;
+                std::mem::forget(payload);
+            }
+        }
+        if panicked {
+            std::process::abort();
+        }
+    }
+
     fn poison_for_abandoned_batch(&mut self) {
         if let Some(owner) = self.owner.as_mut() {
             owner.poisoned = true;
@@ -6143,6 +6212,7 @@ fn next_pool_generation(current: u64) -> Result<u64, Gfx942SdmaErrorV1> {
 
 #[cfg(test)]
 mod tests {
+    mod xgmi_batch_wait;
     use super::*;
     use fe2o3_runtime_model::{
         DeviceGenerationV1, DeviceKeyV1, PhysicalDeviceIdV1, QueueGenerationV1, QueueInstanceIdV1,

@@ -1,0 +1,19 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-sdma-direct-readback-cpu-2026-09-18/source.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789799082243589414,
+  "group_absent": true,
+  "pid": 4021276,
+  "started_ns": 1789799081722717206,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "d5f89cfb37c79fd1c3501fe3947aa5cd08561a79dec99b6a70ab82ab4307baee",
+  "timeout_seconds": 60
+}

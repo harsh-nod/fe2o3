@@ -5,15 +5,16 @@ use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
 use fe2o3_runtime::{
-    KfdNativeXgmiRuntimeBackendV1, RuntimeAccessV1, RuntimeAllocationIdV1, RuntimeContextV1,
-    RuntimeDeviceIdV1, RuntimeMemoryKindV1, RuntimeMemoryRegionV1, RuntimePeerCopyV1,
-    RuntimePollV1, RuntimeStreamIdV1, RuntimeSubmissionV1,
+    KfdNativeXgmiRuntimeBackendV1, MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1, RuntimeAccessV1,
+    RuntimeAllocationIdV1, RuntimeContextV1, RuntimeDeviceIdV1, RuntimeMemoryKindV1,
+    RuntimeMemoryRegionV1, RuntimePeerCopyBatchPollV1, RuntimePeerCopyV1, RuntimePollV1,
+    RuntimeStreamIdV1, RuntimeSubmissionV1,
 };
 
 const CANARY_BYTES: usize = 32;
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_DEPTH: usize = 32;
-const USAGE: &str = "usage: gfx942-runtime-xgmi-peer-benchmark <unique-id-0> <unique-id-1> <bytes> <depth> <warmups> <samples> [--diagnose-xgmi]";
+const USAGE: &str = "usage: gfx942-runtime-xgmi-peer-benchmark <unique-id-0> <unique-id-1> <bytes> <depth> <warmups> <samples> [--diagnose-xgmi|--aggregate-peer-batch]";
 
 type BenchmarkResult<T> = Result<T, Box<dyn Error>>;
 type XgmiContextV1 = RuntimeContextV1<KfdNativeXgmiRuntimeBackendV1>;
@@ -22,6 +23,13 @@ struct DirectionResourcesV1 {
     sources: Vec<RuntimeAllocationIdV1>,
     destinations: Vec<RuntimeAllocationIdV1>,
     streams: Vec<RuntimeStreamIdV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProgressModeV1 {
+    Ordinary,
+    Diagnostic,
+    AggregatePeerBatch,
 }
 
 fn facade_error(error: impl Debug) -> Box<dyn Error> {
@@ -54,17 +62,29 @@ fn percentile(values: &[u128], numerator: usize, denominator: usize) -> Option<u
     values.get(rank.checked_sub(1)?).copied()
 }
 
-fn diagnostic_mode(args: &[String]) -> BenchmarkResult<bool> {
+fn progress_mode(args: &[String]) -> BenchmarkResult<ProgressModeV1> {
     if args.len() == 6 {
-        return Ok(false);
+        return Ok(ProgressModeV1::Ordinary);
     }
-    if args.len() != 7 || args[6] != "--diagnose-xgmi" {
+    if args.len() != 7 {
         return Err(USAGE.into());
     }
-    if !cfg!(feature = "hardware-diagnostic") {
-        return Err("--diagnose-xgmi requires the hardware-diagnostic feature".into());
+    match args[6].as_str() {
+        "--diagnose-xgmi" if cfg!(feature = "hardware-diagnostic") => {
+            Ok(ProgressModeV1::Diagnostic)
+        }
+        "--diagnose-xgmi" => Err("--diagnose-xgmi requires the hardware-diagnostic feature".into()),
+        "--aggregate-peer-batch" => Ok(ProgressModeV1::AggregatePeerBatch),
+        _ => Err(USAGE.into()),
     }
-    Ok(true)
+}
+
+fn valid_depth(mode: ProgressModeV1, depth: usize) -> bool {
+    let maximum = match mode {
+        ProgressModeV1::Ordinary | ProgressModeV1::Diagnostic => MAX_DEPTH,
+        ProgressModeV1::AggregatePeerBatch => MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1,
+    };
+    depth != 0 && depth <= maximum
 }
 
 #[cfg(any(feature = "hardware-diagnostic", test))]
@@ -98,6 +118,7 @@ fn report_measurement(
     mapping_lifetime: &str,
     prime_batches: usize,
     diagnostic: bool,
+    aggregate: bool,
     mut forward_ns: Vec<u128>,
     mut reverse_ns: Vec<u128>,
 ) -> BenchmarkResult<()> {
@@ -113,28 +134,52 @@ fn report_measurement(
     let bytes_per_round = copy_bytes
         .checked_mul(depth)
         .ok_or("XGMI bytes per round overflow")?;
-    println!(
-        "backend=kfd schema=fe2o3.xgmi-peer-benchmark.v1 surface=runtime-facade unique_ids={:016x},{:016x} target=gfx942:xnack- bytes={} depth={} queue_depth={} batch_size={} direction=forward-then-reverse outstanding_depth={} engine_parallelism=ordered-single-sdma warmups={} samples={} measurement={} peer_access=topology-xgmi mapping_lifetime={} prime_batches={} doorbells_per_batch=1 progress=explicit-flush-then-wait background_progress=false forward_engine=topology-selected reverse_engine=topology-selected forward_p50_ns={} forward_p95_ns={} forward_p50_GBps={:.3} reverse_p50_ns={} reverse_p95_ns={} reverse_p50_GBps={:.3} canaries=pass teardown=explicit timing=facade-enqueue-flush-through-observed-completion{}",
-        unique_ids[0],
-        unique_ids[1],
-        copy_bytes,
-        depth,
-        depth,
-        depth,
-        depth,
-        warmups,
-        samples,
-        measurement,
-        mapping_lifetime,
-        prime_batches,
-        forward_p50,
-        forward_p95,
-        bytes_per_round as f64 / forward_p50 as f64,
-        reverse_p50,
-        reverse_p95,
-        bytes_per_round as f64 / reverse_p50 as f64,
-        diagnostic_label(diagnostic),
-    );
+    if aggregate {
+        println!(
+            "backend=kfd schema=fe2o3.xgmi-peer-aggregate-benchmark.v1 surface=runtime-facade unique_ids={:016x},{:016x} target=gfx942:xnack- bytes={} depth={} queue_depth={} batch_size={} direction=forward-then-reverse outstanding_depth={} engine_parallelism=ordered-single-sdma warmups={} samples={} measurement={} peer_access=topology-xgmi mapping_lifetime={} prime_batches={} doorbells_per_batch=1 progress=explicit-exact-roster-aggregate-wait aggregate_roster=exact-round-submissions background_progress=false forward_engine=topology-selected reverse_engine=topology-selected forward_p50_ns={} forward_p95_ns={} forward_p50_GBps={:.3} reverse_p50_ns={} reverse_p95_ns={} reverse_p50_GBps={:.3} canaries=pass teardown=explicit timing=facade-enqueue-through-aggregate-close",
+            unique_ids[0],
+            unique_ids[1],
+            copy_bytes,
+            depth,
+            depth,
+            depth,
+            depth,
+            warmups,
+            samples,
+            measurement,
+            mapping_lifetime,
+            prime_batches,
+            forward_p50,
+            forward_p95,
+            bytes_per_round as f64 / forward_p50 as f64,
+            reverse_p50,
+            reverse_p95,
+            bytes_per_round as f64 / reverse_p50 as f64,
+        );
+    } else {
+        println!(
+            "backend=kfd schema=fe2o3.xgmi-peer-benchmark.v1 surface=runtime-facade unique_ids={:016x},{:016x} target=gfx942:xnack- bytes={} depth={} queue_depth={} batch_size={} direction=forward-then-reverse outstanding_depth={} engine_parallelism=ordered-single-sdma warmups={} samples={} measurement={} peer_access=topology-xgmi mapping_lifetime={} prime_batches={} doorbells_per_batch=1 progress=explicit-flush-then-wait background_progress=false forward_engine=topology-selected reverse_engine=topology-selected forward_p50_ns={} forward_p95_ns={} forward_p50_GBps={:.3} reverse_p50_ns={} reverse_p95_ns={} reverse_p50_GBps={:.3} canaries=pass teardown=explicit timing=facade-enqueue-flush-through-observed-completion{}",
+            unique_ids[0],
+            unique_ids[1],
+            copy_bytes,
+            depth,
+            depth,
+            depth,
+            depth,
+            warmups,
+            samples,
+            measurement,
+            mapping_lifetime,
+            prime_batches,
+            forward_p50,
+            forward_p95,
+            bytes_per_round as f64 / forward_p50 as f64,
+            reverse_p50,
+            reverse_p95,
+            bytes_per_round as f64 / reverse_p50 as f64,
+            diagnostic_label(diagnostic),
+        );
+    }
     Ok(())
 }
 
@@ -243,7 +288,11 @@ fn run_direction(
     context: &mut XgmiContextV1,
     resources: &DirectionResourcesV1,
     copy_bytes: u64,
+    aggregate: bool,
 ) -> BenchmarkResult<u128> {
+    if aggregate {
+        return run_direction_aggregate(context, resources, copy_bytes);
+    }
     let mut submissions: Vec<RuntimeSubmissionV1<RuntimePeerCopyV1>> =
         Vec::with_capacity(resources.sources.len());
     let start = Instant::now();
@@ -281,6 +330,55 @@ fn run_direction(
         }
     }
     let elapsed = start.elapsed().as_nanos();
+    for submission in submissions {
+        context
+            .release_submission(submission)
+            .map_err(facade_error)?;
+    }
+    Ok(elapsed)
+}
+
+fn run_direction_aggregate(
+    context: &mut XgmiContextV1,
+    resources: &DirectionResourcesV1,
+    copy_bytes: u64,
+) -> BenchmarkResult<u128> {
+    let mut submissions: Vec<RuntimeSubmissionV1<RuntimePeerCopyV1>> =
+        Vec::with_capacity(resources.sources.len());
+    let mut aggregate_submissions: Vec<&mut RuntimeSubmissionV1<RuntimePeerCopyV1>> =
+        Vec::with_capacity(resources.sources.len());
+    let start = Instant::now();
+    for slot in 0..resources.sources.len() {
+        submissions.push(
+            context
+                .peer_copy(
+                    resources.streams[slot],
+                    RuntimeMemoryRegionV1 {
+                        allocation: resources.sources[slot],
+                        access: RuntimeAccessV1::Read,
+                        byte_offset: CANARY_BYTES as u64,
+                        byte_len: copy_bytes,
+                    },
+                    RuntimeMemoryRegionV1 {
+                        allocation: resources.destinations[slot],
+                        access: RuntimeAccessV1::Write,
+                        byte_offset: CANARY_BYTES as u64,
+                        byte_len: copy_bytes,
+                    },
+                    &[],
+                )
+                .map_err(facade_error)?,
+        );
+    }
+    aggregate_submissions.extend(submissions.iter_mut());
+    let status = context
+        .wait_peer_copy_batch(&mut aggregate_submissions, COMPLETION_TIMEOUT)
+        .map_err(facade_error)?;
+    if status != RuntimePeerCopyBatchPollV1::Succeeded {
+        return Err(format!("XGMI peer-copy aggregate did not succeed: {status:?}").into());
+    }
+    let elapsed = start.elapsed().as_nanos();
+    drop(aggregate_submissions);
     for submission in submissions {
         context
             .release_submission(submission)
@@ -338,7 +436,9 @@ fn release_direction(
 
 fn main() -> BenchmarkResult<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    let diagnostic = diagnostic_mode(&args)?;
+    let mode = progress_mode(&args)?;
+    let diagnostic = mode == ProgressModeV1::Diagnostic;
+    let aggregate = mode == ProgressModeV1::AggregatePeerBatch;
     let unique_ids = [parse_unique_id(&args[0])?, parse_unique_id(&args[1])?];
     let copy_bytes: usize = args[2].parse()?;
     let depth: usize = args[3].parse()?;
@@ -347,8 +447,7 @@ fn main() -> BenchmarkResult<()> {
     if unique_ids[0] == unique_ids[1]
         || copy_bytes == 0
         || copy_bytes > fe2o3_kfd::GFX942_SDMA_MAX_LINEAR_COPY_BYTES_V1 as usize
-        || depth == 0
-        || depth > MAX_DEPTH
+        || !valid_depth(mode, depth)
         || samples == 0
     {
         return Err("XGMI benchmark controls are out of range".into());
@@ -399,14 +498,14 @@ fn main() -> BenchmarkResult<()> {
     let mut remap_reverse_ns = Vec::with_capacity(samples);
     for round in 0..rounds {
         prepare_direction(&mut context, &forward, copy_bytes, round, 0, 0x17, 0xa5)?;
-        let elapsed = run_direction(&mut context, &forward, copy_bytes as u64)?;
+        let elapsed = run_direction(&mut context, &forward, copy_bytes as u64, aggregate)?;
         validate_direction(&mut context, &forward, copy_bytes, round, 0, 0x17, 0xa5)?;
         if round >= warmups {
             remap_forward_ns.push(elapsed);
         }
 
         prepare_direction(&mut context, &reverse, copy_bytes, round, 1, 0x71, 0x5a)?;
-        let elapsed = run_direction(&mut context, &reverse, copy_bytes as u64)?;
+        let elapsed = run_direction(&mut context, &reverse, copy_bytes as u64, aggregate)?;
         validate_direction(&mut context, &reverse, copy_bytes, round, 1, 0x71, 0x5a)?;
         if round >= warmups {
             remap_reverse_ns.push(elapsed);
@@ -435,13 +534,13 @@ fn main() -> BenchmarkResult<()> {
         0x71,
         0x5a,
     )?;
-    let _ = run_direction(&mut context, &forward, copy_bytes as u64)?;
-    let _ = run_direction(&mut context, &reverse, copy_bytes as u64)?;
+    let _ = run_direction(&mut context, &forward, copy_bytes as u64, aggregate)?;
+    let _ = run_direction(&mut context, &reverse, copy_bytes as u64, aggregate)?;
     let mut hot_forward_ns = Vec::with_capacity(samples);
     let mut hot_reverse_ns = Vec::with_capacity(samples);
     for round in 0..rounds {
-        let forward_elapsed = run_direction(&mut context, &forward, copy_bytes as u64)?;
-        let reverse_elapsed = run_direction(&mut context, &reverse, copy_bytes as u64)?;
+        let forward_elapsed = run_direction(&mut context, &forward, copy_bytes as u64, aggregate)?;
+        let reverse_elapsed = run_direction(&mut context, &reverse, copy_bytes as u64, aggregate)?;
         if round >= warmups {
             hot_forward_ns.push(forward_elapsed);
             hot_reverse_ns.push(reverse_elapsed);
@@ -515,6 +614,7 @@ fn main() -> BenchmarkResult<()> {
         "host-access-between-rounds",
         0,
         diagnostic,
+        aggregate,
         remap_forward_ns,
         remap_reverse_ns,
     )?;
@@ -528,6 +628,7 @@ fn main() -> BenchmarkResult<()> {
         "persistent-no-host-access-between-timed-rounds",
         1,
         diagnostic,
+        aggregate,
         hot_forward_ns,
         hot_reverse_ns,
     )?;
@@ -570,21 +671,53 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_controls_are_explicit_and_bounded_before_native_open() {
+    fn progress_flags_are_explicit_and_mutually_exclusive_before_native_open() {
         let mut args = vec![String::new(); 6];
-        assert!(!diagnostic_mode(&args).unwrap());
+        assert_eq!(progress_mode(&args).unwrap(), ProgressModeV1::Ordinary);
         assert_eq!(diagnostic_label(false), "");
         args.push("--diagnose-xgmi".into());
         assert_eq!(
-            diagnostic_mode(&args).is_ok(),
+            progress_mode(&args).is_ok(),
             cfg!(feature = "hardware-diagnostic")
         );
         assert_eq!(diagnostic_label(true), " diagnostic=xgmi-host-stages-v1");
         args[6] = "--unknown".into();
-        assert!(diagnostic_mode(&args).is_err());
-        args.pop();
-        args.pop();
-        assert!(diagnostic_mode(&args).is_err());
+        assert!(progress_mode(&args).is_err());
+        args[6] = "--aggregate-peer-batch".into();
+        assert_eq!(
+            progress_mode(&args).unwrap(),
+            ProgressModeV1::AggregatePeerBatch
+        );
+        args.push("--diagnose-xgmi".into());
+        assert!(progress_mode(&args).is_err());
+        args.swap(6, 7);
+        assert!(progress_mode(&args).is_err());
+        args.truncate(5);
+        assert!(progress_mode(&args).is_err());
+    }
+
+    #[test]
+    fn aggregate_and_ordinary_depth_bounds_are_distinct() {
+        assert!(valid_depth(ProgressModeV1::Ordinary, 1));
+        assert!(valid_depth(ProgressModeV1::Ordinary, MAX_DEPTH));
+        assert!(!valid_depth(ProgressModeV1::Ordinary, 0));
+        assert!(!valid_depth(ProgressModeV1::Ordinary, MAX_DEPTH + 1));
+        assert!(valid_depth(ProgressModeV1::Diagnostic, MAX_DEPTH));
+        assert!(valid_depth(ProgressModeV1::AggregatePeerBatch, 1));
+        assert!(valid_depth(
+            ProgressModeV1::AggregatePeerBatch,
+            MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1
+        ));
+        assert_eq!(MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1, 63);
+        assert!(!valid_depth(ProgressModeV1::AggregatePeerBatch, 0));
+        assert!(!valid_depth(
+            ProgressModeV1::AggregatePeerBatch,
+            MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1 + 1
+        ));
+    }
+
+    #[test]
+    fn diagnostic_submission_roster_is_bounded_before_native_open() {
         assert_eq!(diagnostic_submission_count(40, 1).unwrap(), 162);
         assert_eq!(diagnostic_submission_count(1, 1).unwrap(), 6);
         assert_eq!(diagnostic_submission_count(4999, 1).unwrap(), 19998);
