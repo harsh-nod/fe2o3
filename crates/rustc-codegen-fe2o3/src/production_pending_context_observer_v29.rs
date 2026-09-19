@@ -88,6 +88,26 @@ mod tests {
     use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
     type Budget<'a> = CanonicalKernelIrVerificationResourceBudgetV1<'a>;
 
+    fn assert_resource_error(error: &ProductionPipelineError, storage: bool) {
+        let mut cause: &(dyn std::error::Error + 'static) = error;
+        loop {
+            if let Some(resource) = cause.downcast_ref::<Resource>() {
+                assert!(
+                    if storage {
+                        matches!(resource, Resource::Storage { .. })
+                    } else {
+                        matches!(resource, Resource::Work { .. })
+                    },
+                    "{error:?}"
+                );
+                return;
+            }
+            cause = cause
+                .source()
+                .unwrap_or_else(|| panic!("not a resource refusal: {error:?}"));
+        }
+    }
+
     #[test]
     fn pending_observer_rejects_custody_only_provider_before_observation() {
         let (ssa, launch, entries) = RetainedContextEntriesV29::projection_test_fixture_v29();
@@ -273,12 +293,12 @@ mod tests {
         );
         let exact_work = budget.work();
         let exact_storage = budget.peak_storage() - 7;
-        for (work_limit, storage_limit, success) in [
-            (exact_work, exact_storage, true),
-            (exact_work - 1, exact_storage, false),
-            (exact_work, exact_storage - 1, false),
-            (0, exact_storage, false),
-            (exact_work, 0, false),
+        for (work_limit, storage_limit, failure) in [
+            (exact_work, exact_storage, None),
+            (exact_work - 1, exact_storage, Some(false)),
+            (exact_work, exact_storage - 1, Some(true)),
+            (0, exact_storage, Some(false)),
+            (exact_work, 0, Some(true)),
         ] {
             let (ssa, launch, entries) =
                 RetainedContextEntriesV29::pending_plain_test_fixture_v29();
@@ -290,15 +310,52 @@ mod tests {
                 visits += 1;
                 Ok(())
             });
-            assert_eq!(
-                matches!(
-                    result,
-                    Err(ProductionPipelineError::PendingScopedObservationIncomplete)
-                ),
-                success
-            );
-            assert_eq!(visits, usize::from(success));
+            let error = result.unwrap_err();
+            if let Some(storage) = failure {
+                assert_resource_error(&error, storage);
+            } else {
+                assert!(
+                    matches!(
+                        error,
+                        ProductionPipelineError::PendingScopedObservationIncomplete
+                    ),
+                    "{error:?}"
+                );
+            }
+            assert_eq!(visits, usize::from(failure.is_none()));
             assert_eq!(budget.storage(), 7);
+        }
+        for complete in [false, true] {
+            let mut work = Work::new(2 * exact_work - usize::from(!complete));
+            let mut budget = Budget::new(&mut work, exact_storage + 7);
+            budget.reserve_storage(7).unwrap();
+            for run in 0..2 {
+                let (ssa, launch, entries) =
+                    RetainedContextEntriesV29::pending_plain_test_fixture_v29();
+                let mut visits = 0;
+                let error = observe_pending_v29(&entries, ssa, launch, &mut budget, |_, _| {
+                    visits += 1;
+                    Ok(())
+                })
+                .unwrap_err();
+                let success = run == 0 || complete;
+                if success {
+                    assert!(
+                        matches!(
+                            error,
+                            ProductionPipelineError::PendingScopedObservationIncomplete
+                        ),
+                        "{error:?}"
+                    );
+                } else {
+                    assert_resource_error(&error, false);
+                }
+                assert_eq!(visits, usize::from(success));
+                assert_eq!(budget.storage(), 7);
+                if success {
+                    assert_eq!(budget.work(), (run + 1) * exact_work);
+                }
+            }
         }
     }
 }
