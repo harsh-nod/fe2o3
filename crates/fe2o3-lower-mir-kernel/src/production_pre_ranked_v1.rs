@@ -188,11 +188,29 @@ impl ProductionPreRankedKirOwnerV1 {
     }
 
     fn try_materialize_origins_inner_v1(
-        mut semantic_ssa: ProductionSemanticSsaOwnerV1,
+        semantic_ssa: ProductionSemanticSsaOwnerV1,
         source_launch: crate::ProductionSourceLaunchRosterV1,
         limits: ProductionSemanticKirLimitsV1,
         budget: &mut AssertOriginBudgetV1<'_>,
     ) -> Result<Self, ProductionPreRankedKirErrorV1> {
+        Self::try_materialize_origins_with_scalar_capture_v1(
+            semantic_ssa,
+            source_launch,
+            limits,
+            None,
+            budget,
+        )
+        .map(|(owner, _)| owner)
+    }
+
+    fn try_materialize_origins_with_scalar_capture_v1(
+        mut semantic_ssa: ProductionSemanticSsaOwnerV1,
+        source_launch: crate::ProductionSourceLaunchRosterV1,
+        limits: ProductionSemanticKirLimitsV1,
+        scalar_capture: Option<scalar_ssa_emission_v1::Recorder>,
+        budget: &mut AssertOriginBudgetV1<'_>,
+    ) -> Result<(Self, Option<scalar_ssa_emission_v1::Recorder>), ProductionPreRankedKirErrorV1>
+    {
         let launch_roots = materialization_launch_roots_v1(&semantic_ssa, &source_launch)?;
         budget.charge_work(2)?;
         let mut capture = match semantic_ssa.occurrence_storage() {
@@ -205,6 +223,7 @@ impl ProductionPreRankedKirOwnerV1 {
             None => HelperOccurrenceCaptureV1::Absent,
         };
         let mut emitted_origins = AssertOriginEmissionV1::new(budget);
+        emitted_origins.scalar_capture = scalar_capture;
         let PendingHelperSourceLoweringV1 {
             module,
             correspondence,
@@ -236,6 +255,7 @@ impl ProductionPreRankedKirOwnerV1 {
                 .reserve_storage(receipt.retained_storage())?;
             capture = HelperOccurrenceCaptureV1::Transferred(receipt);
         }
+        let scalar_capture = emitted_origins.scalar_capture.take();
         let assert_origins = emitted_origins.seal(&semantic_ssa, &correspondence, &executable)?;
         let subject = CanonicalCallSubjectV1 {
             semantic_ssa: &semantic_ssa,
@@ -262,18 +282,21 @@ impl ProductionPreRankedKirOwnerV1 {
         )?
         .checked_add(capture.transferred_storage())
         .ok_or(HelperMemoryResourceV1::Arithmetic)?;
-        Ok(Self {
-            semantic_ssa,
-            executable,
-            executable_storage,
-            assert_origins,
-            source_launch,
-            canonical_kernel_ir,
-            correspondence,
-            limits,
-            launch_roots,
-            helper_memory,
-        })
+        Ok((
+            Self {
+                semantic_ssa,
+                executable,
+                executable_storage,
+                assert_origins,
+                source_launch,
+                canonical_kernel_ir,
+                correspondence,
+                limits,
+                launch_roots,
+                helper_memory,
+            },
+            scalar_capture,
+        ))
     }
 
     /// Borrows the exact source and SSA plans consumed by materialization.

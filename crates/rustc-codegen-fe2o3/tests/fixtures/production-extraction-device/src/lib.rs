@@ -1,10 +1,34 @@
 #![no_std]
 
+#[cfg(any(
+    feature = "loop-capture-exact",
+    feature = "loop-capture-renamed",
+    feature = "loop-capture-generic",
+    feature = "loop-capture-multi",
+    feature = "loop-capture-u64"
+))]
+mod loop_capture;
+
 #[cfg(feature = "redundant-store-policy7")]
 mod redundant_store_policy7;
 
+#[cfg(any(
+    feature = "redundant-store-policy7-i8",
+    feature = "redundant-store-policy7-u8",
+    feature = "redundant-store-policy7-i16",
+    feature = "redundant-store-policy7-u16",
+    feature = "redundant-store-policy7-i32",
+    feature = "redundant-store-policy7-u32",
+    feature = "redundant-store-policy7-i64",
+    feature = "redundant-store-policy7-u64",
+))]
+mod redundant_store_policy7_matrix;
+
 #[cfg(feature = "integer-identity")]
 mod integer_identity;
+
+#[cfg(feature = "dominance-cse")]
+mod dominance_cse;
 
 #[cfg(feature = "wave64-capture")]
 mod wave64_capture;
@@ -86,7 +110,21 @@ mod ordered_region_v31;
 mod ordered_program_v32;
 
 #[cfg(not(any(
+    feature = "loop-capture-exact",
+    feature = "loop-capture-renamed",
+    feature = "loop-capture-generic",
+    feature = "loop-capture-multi",
+    feature = "loop-capture-u64",
+    feature = "dominance-cse",
     feature = "redundant-store-policy7",
+    feature = "redundant-store-policy7-i8",
+    feature = "redundant-store-policy7-u8",
+    feature = "redundant-store-policy7-i16",
+    feature = "redundant-store-policy7-u16",
+    feature = "redundant-store-policy7-i32",
+    feature = "redundant-store-policy7-u32",
+    feature = "redundant-store-policy7-i64",
+    feature = "redundant-store-policy7-u64",
     feature = "integer-identity",
     feature = "wave64-capture",
     feature = "constant-shift",

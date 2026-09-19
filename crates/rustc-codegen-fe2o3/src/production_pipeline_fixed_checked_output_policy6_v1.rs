@@ -170,6 +170,14 @@ impl FixedCheckedOutputProductionCompilationPolicy6V1 {
     }
 
     #[cfg(test)]
+    pub(crate) fn test_bound_owner_v1(&self) -> &Owner {
+        match &self.stage {
+            Stage::Direct(stage) => stage.output().bound(),
+            Stage::Erased(stage) => stage.output().bound(),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn original_canonical_bytes(&self) -> &[u8] {
         match &self.stage {
             Stage::Direct(stage) => direct_native_source(stage.output())

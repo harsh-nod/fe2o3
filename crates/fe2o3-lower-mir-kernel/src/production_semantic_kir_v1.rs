@@ -94,6 +94,13 @@ mod original_native_formal_v1;
 pub use original_native_formal_v1::*;
 include!("production_retained_arrays_v1.rs");
 include!("production_assert_origins_v1.rs");
+#[path = "production_scalar_ssa_emission_v1.rs"]
+mod scalar_ssa_emission_v1;
+pub use scalar_ssa_emission_v1::{
+    ProductionScalarSsaEmissionErrorV1, ProductionScalarSsaEmissionOwnerV1,
+    ProductionScalarSsaEmissionQueryV1, ProductionScalarSsaEmissionUnavailableV1,
+    ProductionU32RecurrenceConsistencyFactV1, ProductionU32RecurrenceConsistencyV1,
+};
 include!("production_masked_assertion_plan_v1.rs");
 #[path = "production_slice_view_v1.rs"]
 mod slice_view_v1;
@@ -10983,6 +10990,18 @@ fn lower_one_semantic_function_with_calls_v29<'facts>(
     }
     let emitted_operations = lowering.emitted_operations;
     let next_value = lowering.next_value;
+    if let Some(origins) = assert_origins
+        && let Some(capture) = origins.scalar_capture.as_mut()
+    {
+        capture
+            .record_function(plan, &lowering, &target_blocks, origins.budget)
+            .map_err(|error| match error {
+                scalar_ssa_emission_v1::ProductionScalarSsaEmissionErrorV1::Resource(error) => {
+                    ProductionSemanticKirErrorV1::from(error)
+                }
+                _ => ProductionSemanticKirErrorV1::CorrespondenceMismatch,
+            })?;
+    }
     #[cfg(test)]
     let execution_observation = lowering
         .execution

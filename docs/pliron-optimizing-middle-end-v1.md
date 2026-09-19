@@ -1096,3 +1096,41 @@ Constructed source/receipt component tests do not establish genuine signed
 end-to-end qualification. The fixed7 census/route tests are also not evidence
 that ordinary Rust retains a redundant private Store: that qualification must
 observe an actual I-to-J mutation, fresh J native output and simulator agreement.
+
+## Borrowed policy replay
+
+The Policy5/6/7 semantic adapters compose independent checks over the actual
+B/C/S/O/I/J subjects while borrowing their existing records and typed rows.
+Each adapter retains one prefix result rather than decoding or reconstructing
+the prefix repeatedly. A semantic relation does not authenticate execution:
+the separate execution adapters require the genuine sealed owning stage and
+match the complete records, occurrence rows and actual endpoints. Policy7's
+continuation-only checker deliberately does not verify the nested P6 semantics.
+
+`DecodedCanonicalPolicy7RowsV1` owns only bounded decoded deletion/retention
+rows and borrows the unchanged P7 record. Its claims cannot outlive either
+owner or wire. It creates no graph, execution witness or proof authority.
+Existing record formats and enclosing evidence limits are unchanged; these
+components do not define a new heterogeneous wire frame or protected decoder.
+
+## Source-bound loop analysis
+
+Scoped canonical CFG and loop analyses report actual physical edge occurrences,
+dominance/reducibility and bounded fixed-integer recurrences. Duplicate edges
+remain distinct. A recurrence is not a no-wrap, trip-count, termination or
+code-motion theorem. Analyses borrow the actual canonical owner and preserve
+the caller's work ledger and live-storage floor.
+
+`ProductionScalarSsaEmissionOwnerV1` retains the real source SSA owner, emitted
+original N and a sealed emission attachment. Its U32 query joins source
+initialization/update certificates to actual header parameters, edge arguments,
+checked-addition results and overflow coordinates. Unsupported mappings remain
+explicit; attribution alone is not a source-equivalence proof.
+
+The separate `capture_ranked_scalar_emission_v1` endpoint runs source import,
+SSA, materialization and the existing ranked projector, then permits queries
+over those already-produced reports. It is an inert capture endpoint, not a
+resumable signed production stage: authenticated bindings are not retained for
+publication. Guard/control consistency, transport through subsequent optimizer
+occurrences, fresh final checks and an owning production continuation remain
+necessary before loop rewrites or default-pipeline activation.

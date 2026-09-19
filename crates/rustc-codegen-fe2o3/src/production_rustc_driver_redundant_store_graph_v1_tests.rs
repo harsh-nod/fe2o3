@@ -5,7 +5,7 @@ use fe2o3_kernel_ir::{
     CanonicalKirFunctionCoordinateV1 as FunctionCoordinate,
     CanonicalKirOperationCoordinateV1 as Coordinate, FormalMemoryObligations,
     InertFormalMemoryReceiptFormatV4 as Formal, LaunchDomain, LaunchExtent, Module, Operation,
-    OperationKind as Kind, ScalarType, Type, WorkgroupSize,
+    OperationKind as Kind, Type, WorkgroupSize,
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Observed {
+    pub(super) case: Case,
     pub(super) source: Source,
     pub(super) original: [u8; 32],
     pub(super) input: [u8; 32],
@@ -37,14 +38,16 @@ pub(super) struct Observed {
     pub(super) sim: sim::Report,
 }
 
-fn u32_place(semantic: &AdmittedInertSemanticMirV1, place: &SemanticPlaceV1) -> bool {
+fn scalar_place(
+    semantic: &AdmittedInertSemanticMirV1,
+    place: &SemanticPlaceV1,
+    integer: Integer,
+) -> bool {
     place.projections().is_empty()
         && matches!(
             semantic.types()[place.ty().index() as usize].shape(),
-            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
-                signed: false,
-                bits: 32
-            })
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer { signed, bits })
+                if *signed == integer.signed() && u32::from(*bits) == integer.width()
         )
 }
 fn destination(kind: &SemanticStatementKindV1) -> Option<&SemanticPlaceV1> {
@@ -57,6 +60,7 @@ fn destination(kind: &SemanticStatementKindV1) -> Option<&SemanticPlaceV1> {
 fn source_pair(
     semantic: &AdmittedInertSemanticMirV1,
     active: active_source::ActiveSource,
+    case: Case,
 ) -> Result<[u32; 5], String> {
     let [root] = semantic.roots() else {
         return Err("one semantic smoke root".into());
@@ -81,7 +85,7 @@ fn source_pair(
             else {
                 continue;
             };
-            if !u32_place(semantic, place) {
+            if !scalar_place(semantic, place, case.integer()) {
                 continue;
             }
             let writes = block.statements()[..borrow_index]
@@ -168,7 +172,7 @@ fn operations(module: &Module) -> BTreeMap<Coordinate, &Operation> {
     }
     out
 }
-fn root(module: &Module) -> Result<usize, String> {
+fn root(module: &Module, case: Case) -> Result<usize, String> {
     let [kernel] = module.kernels.as_slice() else {
         return Err("exact I/J single root".into());
     };
@@ -176,13 +180,13 @@ fn root(module: &Module) -> Result<usize, String> {
         .function(&kernel.entry)
         .ok_or("actual kernel entry")?;
     let [Type::Slice(output), input] = function.signature.parameters.as_slice() else {
-        return Err("exact output/u32 source ABI".into());
+        return Err("exact output/scalar source ABI".into());
     };
-    if kernel.id.as_str() != ROOT
+    if kernel.id.as_str() != case.root()
         || output.address_space != AddressSpace::Global
         || output.access != AccessMode::ReadWrite
-        || output.element.as_ref() != &Type::Scalar(ScalarType::U32)
-        || input != &Type::Scalar(ScalarType::U32)
+        || output.element.as_ref() != &Type::Scalar(case.integer().scalar())
+        || input != &Type::Scalar(case.integer().scalar())
         || !function.signature.results.is_empty()
         || !matches!(
             kernel.domain,
@@ -233,6 +237,7 @@ fn formal(reports: &[FormalMemoryObligations]) -> Result<Vec<u8>, String> {
 pub(super) fn observe(
     view: source_observation::View<'_>,
     active: active_source::ActiveSource,
+    case: Case,
     budget: &mut Budget<'_>,
 ) -> Result<Observed, String> {
     let owner = view
@@ -240,8 +245,8 @@ pub(super) fn observe(
         .ok_or("first ordinary-source smoke requires actual Direct route")?;
     let artifacts = view.artifacts;
     let semantic = owner.prefix().source_semantic_kir().semantic().semantic();
-    let source = source(semantic)?;
-    let source_pair = source_pair(semantic, active)?;
+    let source = source(semantic, case)?;
+    let source_pair = source_pair(semantic, active, case)?;
     let i = owner.prefix().output();
     let j = owner.output();
     if !std::ptr::eq(j, artifacts.output())
@@ -264,9 +269,9 @@ pub(super) fn observe(
         return Err("actual continuation replay changed the live ledger/floor".into());
     }
     let replay_work = budget.work() - before_work;
-    let function = root(i.module())?;
-    root(artifacts.original().module())?;
-    if root(j.module())? != function
+    let function = root(i.module(), case)?;
+    root(artifacts.original().module(), case)?;
+    if root(j.module(), case)? != function
         || artifacts.original().module().kernels[0].entry != i.module().kernels[0].entry
         || i.module().kernels[0].entry != j.module().kernels[0].entry
     {
@@ -300,15 +305,16 @@ pub(super) fn observe(
     };
     if anchor != removed
         || access.address_space != AddressSpace::Private
-        || access.alignment != 4
+        || access.alignment != case.integer().width() / 8
         || access.volatile
     {
         return Err(
-            "actual I stores differ in pointer/value/access or are not aligned private u32".into(),
+            "actual I stores differ in pointer/value/access or are not aligned private scalars"
+                .into(),
         );
     }
     let allocations = before.iter().filter(|(coordinate, operation)| coordinate.block.function == row.anchor.block.function
-        && matches!(&operation.kind, Kind::Alloca { element, count: None, address_space: AddressSpace::Private, alignment: 4 } if element == &Type::Scalar(ScalarType::U32))
+        && matches!(&operation.kind, Kind::Alloca { element, count: None, address_space: AddressSpace::Private, alignment } if element == &Type::Scalar(case.integer().scalar()) && *alignment == case.integer().width() / 8)
         && matches!(operation.results.as_slice(), [result] if result.id == *pointer)).count();
     if allocations != 1 {
         return Err("actual I pair lacks its unique direct scalar Alloca".into());
@@ -355,10 +361,9 @@ pub(super) fn observe(
     else {
         return Err("exact descriptor launch".into());
     };
-    if descriptor_root.entry_name().as_str() != ROOT
+    if descriptor_root.entry_name().as_str() != case.root()
         || descriptor_root.kernel_id().as_bytes() != entry.kernel_binding_identity().as_bytes()
-        || descriptor.table().producer().version().as_str()
-            != "production-policy7-checked-gfx942-cov6-v1"
+        || descriptor.table().producer().version().as_str() != case.target().producer()
         || [size.x(), size.y(), size.z()] != [64, 1, 1]
         || descriptor_root.launch().rank() != 1
         || descriptor_root.launch().max_flat_workgroup_size() != 64
@@ -370,7 +375,10 @@ pub(super) fn observe(
         .reserve_storage(storage)
         .map_err(|e| format!("{e:?}"))?;
     {
-        let llvm = dialect_amdgcn::lower_canonical_v12_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(j).map_err(|e| format!("{e:?}"))?;
+        let llvm = match case.target() {
+            Target::Gfx942 => dialect_amdgcn::lower_canonical_v12_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(j),
+            Target::Gfx950 => dialect_amdgcn::lower_canonical_v12_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(j),
+        }.map_err(|e| format!("{e:?}"))?;
         let llvm = dialect_amdgcn::bind_production_llvm22_worker_layout_v1(&llvm)
             .map_err(|e| format!("{e:?}"))?;
         let text =
@@ -391,6 +399,7 @@ pub(super) fn observe(
         return Err("Store deletion changed private Load count".into());
     }
     let report = Observed {
+        case,
         source,
         original: *artifacts.original().canonical().identity().digest(),
         input: *i.canonical().identity().digest(),
@@ -412,17 +421,18 @@ pub(super) fn observe(
         replay_work,
         llvm_sha256: digest(artifacts.llvm_ir().as_bytes()),
         llvm_bytes: artifacts.llvm_ir().len(),
-        sim: sim::observe(j.canonical())?,
+        sim: sim::observe(j.canonical(), case)?,
     };
     if budget.storage() != floor || budget.work_ledger_identity_v1() != ledger {
         return Err("observation changed live accounting".into());
     }
-    validate(&report)?;
+    validate(&report, case)?;
     Ok(report)
 }
-pub(super) fn validate(report: &Observed) -> Result<(), String> {
-    if report.source.roots.len() != 1
-        || report.source.roots[0].name != ROOT
+pub(super) fn validate(report: &Observed, case: Case) -> Result<(), String> {
+    if report.case != case
+        || report.source.roots.len() != 1
+        || report.source.roots[0].name != case.root()
         || report.source_pair[1] >= report.source_pair[2]
         || report.source_pair[2] >= report.source_pair[3]
         || report.input == report.output
@@ -442,5 +452,5 @@ pub(super) fn validate(report: &Observed) -> Result<(), String> {
     {
         return Err("mandatory actual source/I/J mutation evidence incomplete".into());
     }
-    sim::validate(&report.sim, report.output)
+    sim::validate(&report.sim, report.output, case)
 }

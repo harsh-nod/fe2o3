@@ -3090,6 +3090,9 @@ pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(
     })
 }
 
+#[path = "production_ranked_projection_v1/scalar_emission_capture_v1.rs"]
+pub(crate) mod scalar_emission_capture_v1;
+
 fn project_ranked_roots_v1(
     source: &RankedProjectionSourceV1<'_>,
     root_inputs: &[ProductionRankedRootInputV1],

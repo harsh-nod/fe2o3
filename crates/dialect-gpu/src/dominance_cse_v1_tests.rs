@@ -3,6 +3,10 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+mod commutative_bitwise {
+    include!("commutative_bitwise_cse_v1_tests.rs");
+}
+
 use super::*;
 use crate::{
     AddressSpaceAttr,

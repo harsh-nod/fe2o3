@@ -280,7 +280,14 @@ lowering, and GPU/tensor/MFMA legalization. After formal memory admission and
 target binding, the fixed V2 Pliron optimizer runs SCCP, CFG simplification,
 select canonicalization, DCE, local pure CSE, DCE, and CFG cleanup. General loop
 unrolling, alias-driven memory optimization, global CSE, scheduling, and cost
-models remain disabled pending their legality and coordinate-map contracts.
+models remain disabled in that historical Wave 1 route pending their legality
+and coordinate-map contracts.
+
+The separately implemented checked native-V12 path has since added dominance
+CSE in Policy3, bounded private-memory forwarding in Policy4/5, and checked
+continuations. It is not the default/protected route described above. The
+[checked middle-end architecture](pliron-optimizing-middle-end-v1.md) records
+the actual fixed schedules, independent checks, and remaining activation gates.
 
 No optimization is required for semantic correctness. A pass may reject or
 leave code unchanged, but it may not select an old compiler route.

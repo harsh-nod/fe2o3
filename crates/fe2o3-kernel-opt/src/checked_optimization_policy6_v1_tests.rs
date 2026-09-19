@@ -2,6 +2,9 @@ use super::*;
 #[path = "checked_integer_continuation_golden_v1_tests.rs"]
 mod golden;
 
+#[path = "checked_optimization_policy6_semantic_v1_tests.rs"]
+mod semantic;
+
 use crate::{
     checked_load_forwarding_v1::tests::{STORAGE, WORK, with_owner},
     optimize_checked_canonical_kernel_ir_policy5_v1,

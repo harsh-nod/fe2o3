@@ -24,6 +24,8 @@ mod fixed_census_observation;
 mod helper_reference_source;
 #[path = "production_rustc_driver_integer_identity_source_v1_tests.rs"]
 mod integer_identity_source;
+#[path = "production_rustc_driver_loop_capture_source_v1_tests.rs"]
+mod loop_capture_source;
 #[path = "production_rustc_driver_redundant_store_source_v1_tests.rs"]
 mod redundant_store_source;
 #[path = "production_rustc_driver_wave64_capture_source_v1_tests.rs"]
@@ -317,6 +319,10 @@ fn checked_output_source_child() {
         return;
     };
     let args: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    if loop_capture_source::requested() {
+        loop_capture_source::run_child(&args);
+        return;
+    }
     let mut callbacks = CheckedOutputCallbacks {
         probe_missing_proof: env::var_os(CHILD_PROOF_PROBE).is_some(),
         progress: progress::CallbackProgress::from_environment(),

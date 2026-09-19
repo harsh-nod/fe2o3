@@ -2,8 +2,8 @@
 use super::*;
 use fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1 as Coordinate;
 
-pub(super) const HEADER: usize = 384;
-const ROW: usize = 24;
+pub(super) const HEADER: usize = fe2o3_kernel_opt::POLICY7_EXECUTION_HEADER_BYTES_V1;
+const ROW: usize = fe2o3_kernel_opt::POLICY7_EXECUTION_ROW_BYTES_V1;
 
 /// Sealed by one actual consuming Policy6-to-J preparation, not inert decoding.
 pub(crate) struct Policy7ExecutionWitnessV1 {

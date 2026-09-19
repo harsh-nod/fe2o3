@@ -180,11 +180,15 @@ its semantic importer or target-neutral lowerer does not support. The shared
 planner is general over the modeled semantic CFG, but this wave does not claim
 that every Rust feature can be imported, lowered, or executed on a GPU.
 
-The next proof gate is a per-pass refinement relation with explicit
-retained/replaced/merged/eliminated source and IR coordinates. Global CSE,
-alias-driven load elimination, loop transforms, GPU mapping, and scheduling
-must remain disabled until their effect, convergence, provenance, numerical,
-and resource contracts are explicit.
+For this historical Wave 1 route, the next proof gate is a per-pass refinement
+relation with explicit retained/replaced/merged/eliminated source and IR
+coordinates. Separately, the checked native-V12 Policy3 path now includes
+dominance CSE with independent coordinate checking; Policy4/5 add bounded
+private-memory forwarding. These checked extraction paths do not imply default
+or protected activation. See [the checked middle-end architecture](pliron-optimizing-middle-end-v1.md)
+for the current schedules and trust boundaries. Broader GVN, alias-driven memory
+optimization, loop transforms, GPU mapping, and scheduling still require their
+own effect, convergence, provenance, numerical, and resource contracts.
 
 ## Regression gates
 

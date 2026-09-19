@@ -1,4 +1,6 @@
 use super::*;
+#[path = "checked_optimization_policy7_semantic_v1_tests.rs"]
+mod policy7_semantic;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work, Function,
     MemoryAccess, Module, Operation, OperationKind as Kind, ScalarType, Signature, Terminator,
