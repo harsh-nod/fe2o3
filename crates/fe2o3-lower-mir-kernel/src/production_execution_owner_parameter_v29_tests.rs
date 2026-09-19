@@ -1,14 +1,17 @@
 use super::*;
+pub(super) mod transport {
+    include!("production_execution_owner_transport_v29_tests.rs");
+}
 
 #[derive(Clone, Copy, Debug)]
-enum OwnerParameterCase {
+pub(super) enum OwnerParameterCase {
     Valid,
     ByValue,
     Immutable,
     PaddedMemory,
 }
 
-fn owner_parameter_fixture(
+pub(super) fn owner_parameter_fixture(
     case: OwnerParameterCase,
 ) -> (ProductionSemanticSsaOwnerV1, SemanticTypeIdV1) {
     let original = lifecycle_owner(false);
@@ -354,6 +357,7 @@ fn owner_parameter_authentication_has_exact_and_short_resource_boundaries() {
             &mut budget,
         );
         let peak = budget.peak_storage();
+        let success = result.is_ok();
         match result {
             Ok(Some(ty)) => {
                 assert_eq!(budget.storage(), FLOOR + std::mem::size_of::<Type>());
@@ -365,12 +369,13 @@ fn owner_parameter_authentication_has_exact_and_short_resource_boundaries() {
             Err(error) => panic!("unexpected classifier error: {error:?}"),
         }
         assert_eq!(budget.storage(), FLOOR);
-        (work.work(), peak)
+        (success, work.work(), peak)
     };
-    let (work, peak) = run(10_000_000, 10_000_000);
-    assert_eq!(run(work, peak), (work, peak));
-    assert!(run(work - 1, peak).0 <= work);
-    assert!(run(work, peak - 1).1 <= peak - 1);
+    let (success, work, peak) = run(10_000_000, 10_000_000);
+    assert!(success);
+    assert_eq!(run(work, peak), (true, work, peak));
+    assert!(!run(work - 1, peak).0);
+    assert!(!run(work, peak - 1).0);
 }
 
 #[test]
@@ -392,11 +397,11 @@ fn owner_parameter_caller_rejects_mixed_duplicate_and_wrong_types() {
     };
     let component = HelperCallArgumentV1 {
         component: Some(0),
-        ..direct
+        ..direct.clone()
     };
     let tuple = HelperCallArgumentV1 {
         tuple_field: Some(0),
-        ..direct
+        ..direct.clone()
     };
     let run = |projections: &[HelperCallArgumentV1], physical: &[Type]| {
         let mut work = CanonicalKernelIrWorkBudgetV1::new(10_000_000);
@@ -411,10 +416,10 @@ fn owner_parameter_caller_rejects_mixed_duplicate_and_wrong_types() {
             &mut budget,
         )
     };
-    run(&[direct], &[expected.clone()]).unwrap();
+    run(&[direct.clone()], &[expected.clone()]).unwrap();
     for projections in [
-        vec![direct, direct],
-        vec![direct, component],
+        vec![direct.clone(), direct.clone()],
+        vec![direct.clone(), component],
         vec![tuple],
         vec![],
     ] {
@@ -439,6 +444,6 @@ fn owner_parameter_caller_rejects_mixed_duplicate_and_wrong_types() {
             AccessMode::ReadWrite,
         ),
     ] {
-        assert!(run(&[direct], &[physical]).is_err());
+        assert!(run(&[direct.clone()], &[physical]).is_err());
     }
 }

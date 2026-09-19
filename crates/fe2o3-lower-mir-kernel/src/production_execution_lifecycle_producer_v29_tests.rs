@@ -361,6 +361,7 @@ enum ScopedFixture {
 #[derive(Clone, Copy, Debug)]
 enum Fault {
     None,
+    OwnerParameter(owner_parameter_tests::transport::OwnerTransportFault),
     MissingConsumer,
     ForeignSource,
     ChangedCatalog,
@@ -400,66 +401,75 @@ fn run_lifecycle(
             | ScopedFixture::CallDestinations { .. }
             | ScopedFixture::AssertionSlots { .. }
     );
-    let mut owner = match fixture {
-        ScopedFixture::Plain => lifecycle_owner(branches),
-        ScopedFixture::Assertion => {
-            assert!(!branches);
-            scoped_root_tests::assertion_owner()
-        }
-        ScopedFixture::Repeated => {
-            assert!(!branches);
-            scoped_root_tests::fixtures::repeated_owner()
-        }
-        ScopedFixture::RepeatedSlots => {
-            assert!(!branches);
-            scoped_root_tests::fixtures::repeated_slot_owner()
-        }
-        ScopedFixture::Arrays => scoped_root_tests::fixtures::array_owner(branches),
-        ScopedFixture::RootAssertionSlot => {
-            assert!(!branches);
-            scoped_root_tests::fixtures::root_assertion_slot_owner()
-        }
-        ScopedFixture::Initialization(config) => {
-            assert!(!branches);
-            scoped_root_tests::fixtures::initialization_owner(config)
-        }
-        ScopedFixture::InitializationArray(whole) => {
-            assert!(!branches);
-            scoped_root_tests::fixtures::initialization_array_owner(whole)
-        }
-        ScopedFixture::InitializationArrayMove(projected) => {
-            assert!(!branches);
-            scoped_root_tests::fixtures::initialization_array_move_owner(projected)
-        }
-        ScopedFixture::CheckedSlot => {
-            assert!(!branches);
-            scoped_root_tests::fixtures::checked_slot_owner()
-        }
-        ScopedFixture::CallDestinations {
-            projected,
-            retained_address,
-            indexed,
-        } => {
-            assert!(!branches);
-            scoped_root_tests::fixtures::call_destinations_owner(
+    let mut owner = if matches!(fault, Fault::OwnerParameter(_)) {
+        assert!(!branches);
+        owner_parameter_tests::owner_parameter_fixture(
+            owner_parameter_tests::OwnerParameterCase::Valid,
+        )
+        .0
+    } else {
+        match fixture {
+            ScopedFixture::Plain => lifecycle_owner(branches),
+            ScopedFixture::Assertion => {
+                assert!(!branches);
+                scoped_root_tests::assertion_owner()
+            }
+            ScopedFixture::Repeated => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::repeated_owner()
+            }
+            ScopedFixture::RepeatedSlots => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::repeated_slot_owner()
+            }
+            ScopedFixture::Arrays => scoped_root_tests::fixtures::array_owner(branches),
+            ScopedFixture::RootAssertionSlot => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::root_assertion_slot_owner()
+            }
+            ScopedFixture::Initialization(config) => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::initialization_owner(config)
+            }
+            ScopedFixture::InitializationArray(whole) => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::initialization_array_owner(whole)
+            }
+            ScopedFixture::InitializationArrayMove(projected) => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::initialization_array_move_owner(projected)
+            }
+            ScopedFixture::CheckedSlot => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::checked_slot_owner()
+            }
+            ScopedFixture::CallDestinations {
                 projected,
                 retained_address,
                 indexed,
-            )
-        }
-        ScopedFixture::AssertionSlots {
-            move_condition,
-            move_message,
-            reinitialize,
-        } => {
-            assert!(!branches);
-            scoped_root_tests::fixtures::assertion_slots_owner(
+            } => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::call_destinations_owner(
+                    projected,
+                    retained_address,
+                    indexed,
+                )
+            }
+            ScopedFixture::AssertionSlots {
                 move_condition,
                 move_message,
                 reinitialize,
-            )
+            } => {
+                assert!(!branches);
+                scoped_root_tests::fixtures::assertion_slots_owner(
+                    move_condition,
+                    move_message,
+                    reinitialize,
+                )
+            }
         }
     };
+    let mut owner_fault_reached = false;
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
     let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);
     let result = (|| {
@@ -614,6 +624,12 @@ fn run_lifecycle(
                                 execution_function_signature_v29(instances, id, budget)?,
                             );
                         }
+                        if let Fault::OwnerParameter(fault) = fault {
+                            owner_fault_reached |= owner_parameter_tests::transport::mutate_caller(
+                                fault,
+                                &mut signatures,
+                            );
+                        }
                         let root_plan = kernel_entry_plan_v1(
                             semantic,
                             ROOT,
@@ -684,20 +700,35 @@ fn run_lifecycle(
                         let mut next_value = root.next_value;
                         let mut emitted = vec![None, None, None];
                         emitted[0] = Some(root);
-                        while let Some(pending) = sink.pop_pending() {
+                        while let Some(mut pending) = sink.pop_pending() {
                             let child = pending.child;
                             let row = instances.instance(child).unwrap();
                             let placement = SemanticEmissionPlacementV1 {
                                 first_block: 17 * child.index() as u32,
                                 first_value: next_value,
                             };
-                            let plan = execution_instance_plan_v29(
+                            let mut plan = execution_instance_plan_v29(
                                 instances,
                                 child,
                                 pending.kernel_ir_function,
                                 placement,
                                 budget,
                             )?;
+                            let incoming_owner = if row.function() == HELPER {
+                                if let Fault::OwnerParameter(fault) = fault {
+                                    owner_fault_reached |=
+                                        owner_parameter_tests::transport::mutate_callee(
+                                            fault,
+                                            &mut pending.arguments,
+                                            &mut plan,
+                                        );
+                                    Some(pending.arguments.arguments[1])
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
                             let (_, parameters) = prepare_execution_parameters_v29(
                                 instances,
                                 child,
@@ -705,6 +736,13 @@ fn run_lifecycle(
                                 &plan,
                                 budget,
                             )?;
+                            if let Some(incoming_owner) = incoming_owner {
+                                owner_parameter_tests::transport::check_reconstructed_owner(
+                                    &parameters,
+                                    &plan,
+                                    incoming_owner,
+                                );
+                            }
                             let mut producer = ExecutionLifecycleProducerV29::new(
                                 &source, instances, child, placement, budget,
                             )?;
@@ -796,6 +834,14 @@ fn run_lifecycle(
         outcome
     })();
     let peak = budget.peak_storage();
+    if let Fault::OwnerParameter(fault) = fault
+        && fault != owner_parameter_tests::transport::OwnerTransportFault::None
+    {
+        assert!(
+            owner_fault_reached,
+            "owner fault boundary was not reached: {fault:?}"
+        );
+    }
     (result, work.work(), peak)
 }
 
