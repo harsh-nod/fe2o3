@@ -15,7 +15,7 @@ fn check_scoped_module(
     assert_eq!(module.kernels.len(), names.len());
     assert_eq!(module.functions.len(), names.len() + 1);
     assert_eq!(owner.roots.len(), names.len());
-    assert_eq!(owner.ledger, source.ledger);
+    assert!(owner.ledger == source.ledger);
     assert!(owner.graph_storage.retained_storage() > 0);
     assert!(owner.retained_storage > owner.graph_storage.retained_storage());
     let mut events = [0; 3];
