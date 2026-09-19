@@ -3,6 +3,157 @@ use crate::production_semantic_kir_v1::scoped_slot_uses_v29;
 
 const LIMIT: usize = 10_000_000;
 
+fn inspect_rollback(
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &mut [Option<LoweredFunctionResultV1>],
+    slots: &OwnedScopedSourceSlotsV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let mut work = Vec::new();
+    for fail in [false, true] {
+        let before = budget.work();
+        let floor = budget.storage();
+        with_canonical_call_scratch_v1(budget, |budget| {
+            let placement = SemanticEmissionPlacementV1 {
+                first_block: 17,
+                first_value: 200,
+            };
+            let helper = instances
+                .instances()
+                .iter()
+                .position(|row| row.function().index() == 3)
+                .unwrap();
+            let instance = instances.id_at(helper).unwrap();
+            let row = instances.instance(instance).unwrap();
+            let plan = execution_instance_plan_v29(
+                instances,
+                instance,
+                FunctionId::new("checked_slot_probe"),
+                placement,
+                budget,
+            )?;
+            with_execution_availability_v29(instances, instance, budget, |cursor, budget| {
+                let semantic = instances.owner().source_semantic();
+                let source = row.declaration();
+                let mut lowering = SemanticFunctionLoweringV1::new_interprocedural(
+                    semantic.types(),
+                    semantic.callables(),
+                    source,
+                    row.ssa(),
+                    plan.correspondence_owner,
+                    plan.semantic_function,
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                    plan.result_types.clone(),
+                    SemanticParameterBindingsV1 {
+                        declarations: &plan.parameter_declarations,
+                        values: &plan.parameter_values,
+                        types: &plan.parameter_types,
+                        local_bindings: None,
+                    },
+                    None,
+                    Some([64, 1, 1]),
+                    BTreeSet::new(),
+                    1,
+                    false,
+                    1024,
+                    PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(1, 1024)),
+                    None,
+                    CallReturnBufferV1::empty(),
+                    Some(budget),
+                    placement,
+                    Some(cursor),
+                    None,
+                )?;
+                let block_id = SemanticBlockIdV1::from_index(0);
+                let mut block = BasicBlock::new(placement.block(0)?);
+                lowering.begin_block(block_id, &mut block)?;
+                for ordinal in 0..5 {
+                    lowering.lower_statement(
+                        block_id,
+                        Some(ordinal as u32),
+                        source.blocks()[0].statements()[ordinal].kind(),
+                        &mut block.operations,
+                    )?;
+                }
+                let recorder = lowering.scoped_memory.as_ref().unwrap();
+                let old_rows = recorder.anchors.rows.clone();
+                assert_eq!((old_rows.len(), recorder.anchors.rows.capacity()), (4, 4));
+                let old_ops = block.operations.clone();
+                let old_next = lowering.next_value;
+                let old_count = lowering.emitted_operations;
+                let old_storage = lowering.emission_work.as_deref().unwrap().storage();
+                if fail {
+                    lowering.max_operations = old_count + 1;
+                    assert!(matches!(lowering.lower_statement(block_id, Some(5),
+                        source.blocks()[0].statements()[5].kind(), &mut block.operations),
+                        Err(ProductionSemanticKirErrorV1::ResourceLimit {
+                            resource: ProductionSemanticKirResourceV1::Operations, actual, limit,
+                        }) if actual == old_count + 2 && limit == old_count + 1));
+                    assert_eq!(block.operations, old_ops);
+                    assert_eq!(
+                        (lowering.next_value, lowering.emitted_operations),
+                        (old_next, old_count)
+                    );
+                    let recorder = lowering.scoped_memory.as_ref().unwrap();
+                    assert_eq!(recorder.anchors.rows, old_rows);
+                    assert_eq!(recorder.anchors.rows.capacity(), 8);
+                    assert!(recorder.frame.is_none());
+                    assert_eq!(
+                        lowering.emission_work.as_deref().unwrap().storage() - old_storage,
+                        4 * std::mem::size_of::<ScopedMemoryAnchorV29>()
+                    );
+                    assert!(
+                        lowering.private_arrays.frame.is_none()
+                            && lowering.private_arrays.pending.is_none()
+                    );
+                }
+                let outer = ScopedMemoryFrameV29 {
+                    site: execution_site_v29(block_id, Some(0)),
+                    role: None,
+                };
+                let inner = ScopedMemoryFrameV29 {
+                    site: execution_site_v29(block_id, Some(1)),
+                    role: Some(ExecutionOperandV29::StoreValue),
+                };
+                lowering.with_scoped_memory_frame_v29(outer, |lowering| {
+                    let error: Result<(), _> = lowering
+                        .with_scoped_memory_frame_v29(inner, |_| Err(scoped_memory_error_v29()));
+                    assert!(error.is_err());
+                    assert_eq!(lowering.scoped_memory.as_ref().unwrap().frame, Some(outer));
+                    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _: Result<(), _> = lowering
+                            .with_scoped_memory_frame_v29(inner, |_| std::panic::panic_any(73_u32));
+                    }))
+                    .unwrap_err();
+                    assert_eq!(*panic.downcast::<u32>().unwrap(), 73);
+                    assert_eq!(lowering.scoped_memory.as_ref().unwrap().frame, Some(outer));
+                    Ok(())
+                })?;
+                assert!(lowering.scoped_memory.as_ref().unwrap().frame.is_none());
+                // The failed emitter is dropped, not retried with partly consumed source state.
+                Ok(())
+            })
+        })?;
+        assert_eq!(budget.storage(), floor);
+        work.push(budget.work() - before);
+    }
+    assert!(work[1] > work[0]);
+    observe(instances, emitted, slots, budget)
+}
+
+#[test]
+fn checked_failure_truncates_anchors_but_retains_capacity_and_restores_frames() {
+    let (result, _, _) = run(
+        false,
+        ScopedFixture::CheckedSlot,
+        inspect_rollback,
+        LIMIT,
+        LIMIT,
+    );
+    assert!(is_stopped(&result), "{result:?}");
+}
+
 fn inspect_array_move(
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],
@@ -317,6 +468,26 @@ fn inspect_alias_move(
         .filter(|item| item.function.index() == 3)
     {
         helpers += 1;
+        let source = instances.instance(item.instance).unwrap().declaration();
+        let statements = source.blocks()[3].statements();
+        assert_eq!(statements.len(), 3);
+        let SemanticStatementKindV1::Assign(moved) = statements[1].kind() else {
+            panic!("expected move assignment");
+        };
+        let SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place)) = moved.value().kind() else {
+            panic!("expected source Move through alias");
+        };
+        assert_eq!(place.local().index(), 5);
+        assert!(
+            matches!(place.projections(), [projection] if projection.kind() == SemanticProjectionKindV1::Dereference)
+        );
+        let SemanticStatementKindV1::Assign(read) = statements[2].kind() else {
+            panic!("expected load assignment");
+        };
+        let SemanticRvalueKindV1::Load(load) = read.value().kind() else {
+            panic!("expected subsequent source Load");
+        };
+        assert_eq!(load.source(), place);
         let lowered = emitted[item.instance.index()].as_ref().unwrap();
         let rows = &lowered.scoped_memory_anchors.as_ref().unwrap().rows;
         assert!(
@@ -325,6 +496,22 @@ fn inspect_alias_move(
         );
         let exit = item.placement.block(3)?;
         assert_eq!(rows.iter().filter(|row| row.block == exit).count(), 2);
+        let block = lowered
+            .function
+            .body
+            .as_ref()
+            .unwrap()
+            .blocks
+            .iter()
+            .find(|block| block.id == exit)
+            .unwrap();
+        let pointer = slots.slots[item.slots.start].origin.pointer;
+        for row in rows.iter().filter(|row| row.block == exit) {
+            assert_eq!(row.kind, ScopedMemoryAnchorKindV29::Access { pointer });
+            assert!(
+                matches!(block.operations[row.position].kind, OperationKind::Load { pointer: actual, .. } if actual == pointer)
+            );
+        }
     }
     assert_eq!(helpers, 2);
     observe(instances, emitted, slots, budget)
@@ -351,6 +538,11 @@ fn mutate(
     slots: &OwnedScopedSourceSlotsV29,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
+    if MUTATION.get() == 11 {
+        assert!(slots.instances[0].slots.is_empty());
+        emitted[0].as_mut().unwrap().scoped_memory_anchors = None;
+        return observe(instances, emitted, slots, budget);
+    }
     let item = slots
         .instances
         .iter()
@@ -420,7 +612,7 @@ fn mutate(
 
 #[test]
 fn source_census_rejects_missing_duplicate_foreign_or_displaced_anchors() {
-    for mutation in 0..11 {
+    for mutation in 0..12 {
         MUTATION.set(mutation);
         let (result, _, _) = run(
             false,

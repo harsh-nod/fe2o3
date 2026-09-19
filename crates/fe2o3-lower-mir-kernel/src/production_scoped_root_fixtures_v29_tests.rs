@@ -79,6 +79,64 @@ pub(in super::super) fn initialization_array_move_owner(
     )
 }
 
+pub(in super::super) fn checked_slot_owner() -> ProductionSemanticSsaOwnerV1 {
+    let original = repeated_slot_owner();
+    let semantic = original.source_semantic();
+    let mut types = semantic.types().to_vec();
+    let boolean = declaration(
+        &mut types,
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(1),
+            1,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::integer(false, 8, 1),
+                SemanticScalarValidityRangeV1::new(0, 1),
+            )),
+            false,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool),
+        None,
+    );
+    let pair = declaration(
+        &mut types,
+        SemanticTypeLayoutV1::aggregate(
+            Some(8),
+            4,
+            SemanticAggregateLayoutV1::new(vec![0, 4], vec![SemanticPaddingV1::new(5, 3).unwrap()])
+                .unwrap(),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Tuple(SemanticAggregateTypeV1::new(vec![U32, boolean]).unwrap()),
+        None,
+    );
+    let mut functions = semantic.functions().to_vec();
+    let helper = &functions[3];
+    let mut locals = helper.locals().to_vec();
+    assert_eq!(locals.len(), 3);
+    locals.push(local(136, pair, SemanticLocalRoleV1::Temporary));
+    let old = helper.blocks()[0].statements();
+    let mut statements = vec![old[0].clone()];
+    statements.extend(std::iter::repeat_n(old[1].clone(), 4));
+    statements.push(assign(
+        place(3, pair),
+        SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
+            SemanticCheckedBinaryOpV1::Add,
+            SemanticOperandV1::Copy(place(2, U32)),
+            literal(9),
+        )),
+    ));
+    statements.push(old[2].clone());
+    functions[3] = function(
+        130,
+        helper.role(),
+        helper.abi().clone(),
+        locals,
+        vec![block(140, statements, SemanticTerminatorKindV1::Return)],
+    );
+    build(types, functions, semantic.callables().to_vec())
+}
+
 fn literal(value: u128) -> SemanticOperandV1 {
     SemanticOperandV1::Constant(SemanticConstantV1::new(
         U32,

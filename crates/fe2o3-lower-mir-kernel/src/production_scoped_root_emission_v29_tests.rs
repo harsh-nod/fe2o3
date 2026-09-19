@@ -159,7 +159,9 @@ pub(super) fn emit_checked(
             );
             if !matches!(
                 fixture,
-                ScopedFixture::Arrays | ScopedFixture::InitializationArray(_)
+                ScopedFixture::Arrays
+                    | ScopedFixture::InitializationArray(_)
+                    | ScopedFixture::InitializationArrayMove(_)
             ) {
                 assert!(
                     private.active.is_none(),
