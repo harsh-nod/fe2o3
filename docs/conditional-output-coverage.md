@@ -103,6 +103,21 @@ unsupported operations reject. The result retains the exact canonical
 `SliceLength` value and address domain. A matching guard-to-write edge is not a
 dominance or complete CFG proof.
 
+The separate `check_ranked_coverage_v1` query rederives that extent and checks
+the borrowed, constructor-validated ranked recipe. It walks both truth values
+of the exact global-X/length predicate to normal returns: the true case must
+execute exactly the selected write, and the false case none. Exact literal
+conditions may exclude an edge; unknown conditions, feasible traps or cycles,
+extra effects, arithmetic/load expressions and block arguments refuse. Even
+unreachable blocks must remain inside the supported operation fragment.
+
+The constructor's definition, scope and edge checks are reused. There is no
+copied graph or heap scratch: each deterministic case takes at most the recipe's
+block count, and literal lookup scans are charged to the same inherited ledger.
+The result keeps the original owner, candidate and address-domain premise.
+It does not prove the stored value, source translation, ownership, the actual
+length/launch values or `N <= G`.
+
 The ranked candidate and its proposal are still inert input. These queries do
 not authenticate translation or establish reference-value equivalence. Existing
 source replay validates base occurrence coordinates, not the new extent meaning.
@@ -166,6 +181,25 @@ No descriptor wire-format extension is required solely to locate the slice
 length. Avoid adding a caller-authored predicate list or independent authority
 flag. Deterministic rederivation still requires the admitted exact subject.
 
+The private conditional ownership analysis now records available residual checks
+without replacing the existing V1 result. Its shared preparation preserves V1
+diagnostic order and early exits. The new result separately retains a mandatory
+bounds failure even when the legacy dynamic-trace exit masks it, checks exact
+effect-domain sites without requiring a complete trace, and runs finite
+unselected ownership checks when their prerequisites are available. Each row
+distinguishes checked, rejected, inapplicable and blocked obligations. Selected
+coverage always remains blocked on canonical coverage and source replay.
+
+Selections identify actual operations and views, not source authority. Context
+and operation identity do not supply mutation-epoch or transaction custody;
+the existing immutable-function analysis-manager contract still applies. All
+new work, retained rows and diagnostic/name storage use that caller's metered
+manager. Its conservative monotonic resource domain is distinct from the
+canonical query ledger. There is no clean-report conversion, coverage-counter
+credit or production admission path in this diagnostic result. The acyclic
+typed conditional stage and independent reference-signature/effect preimage
+remain integration requirements.
+
 Required integration negatives include `G=64, N=65`, omitted or swapped argument
 bindings, cross-kernel and stale-graph substitution, unsupported dimensions,
 and bypassed host checks. `G=64, N=64` and guarded tails with `N < G` must pass
@@ -176,7 +210,7 @@ or at reference-proof request preparation. The latter borrows the actual owner
 and prepared ranked request in the same phase ledger, then returns an explicit
 test-only `Incomplete` error before opening a proof runtime. It cannot yield a
 clean ranked program, signed receipt, handoff or artifact.
-The source tests also exercise the full descriptor and extent-query budget
+The source tests also exercise the full descriptor, extent and CFG-query budget
 boundaries; independent test measurements are not replacement production ledgers.
 Two same-typed output parameters in retained Result wrappers test exact argument
 selection without claiming that the untouched output is fully written.

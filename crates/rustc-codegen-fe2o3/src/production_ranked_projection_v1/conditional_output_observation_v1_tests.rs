@@ -9,10 +9,11 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_lower_mir_kernel::{
     NativeRankedSourceCandidateV1, ProductionConditionalOutputBindingV1,
+    ProductionConditionalRankedCoverageErrorV1 as CoverageError,
     ProductionConditionalRankedExtentV1, ProductionConditionalRankedOutputErrorV1 as Error,
     ProductionPreRankedKirOwnerV1,
 };
-use fe2o3_pliron::ProductionRankedValueV1;
+use fe2o3_pliron::{ProductionRankedTerminatorV1, ProductionRankedValueV1};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 
@@ -32,6 +33,8 @@ pub(crate) struct Observation {
     pub(crate) ranked_operation: u32,
     pub(crate) ranked_extent_argument: u32,
     pub(crate) canonical_length_value: u32,
+    pub(crate) ranked_true_exit: u32,
+    pub(crate) ranked_false_exit: u32,
     pub(crate) address_domain: String,
     pub(crate) work: usize,
 }
@@ -133,6 +136,22 @@ fn inspect(
         };
         assert_eq!(length, binding.coverage().length());
         check_extent_budget(&binding, candidate);
+        let coverage = joined
+            .check_ranked_coverage_v1(budget)
+            .map_err(|e| e.to_string())?;
+        for exit in [coverage.true_exit_block(), coverage.false_exit_block()] {
+            assert!(matches!(
+                candidate.kernel().blocks()[exit as usize].terminator(),
+                ProductionRankedTerminatorV1::Return
+            ));
+        }
+        let joined = coverage.output();
+        assert!(std::ptr::eq(joined.binding().owner(), owner));
+        assert!(std::ptr::eq(
+            joined.candidate().kernel(),
+            candidate.kernel()
+        ));
+        check_coverage_budget(&binding, candidate);
         Ok(Observation {
             kernel: kernel.id.as_str().to_owned(),
             canonical_digest: *owner.executable().canonical().identity().digest(),
@@ -144,6 +163,8 @@ fn inspect(
             ranked_operation: joined.gpu_write_site().operation(),
             ranked_extent_argument,
             canonical_length_value: length.0,
+            ranked_true_exit: coverage.true_exit_block(),
+            ranked_false_exit: coverage.false_exit_block(),
             address_domain: format!("{:?}", joined.address_domain()),
             work: budget.work() - work,
         })
@@ -193,6 +214,42 @@ fn check_extent_budget(
     assert!(matches!(
         run(exact_work, true).0,
         Err(Error::Resource(Resource::Accounting))
+    ));
+}
+
+fn check_coverage_budget(
+    binding: &ProductionConditionalOutputBindingV1<'_>,
+    candidate: NativeRankedSourceCandidateV1<'_>,
+) {
+    let floor = binding.owner().retained_analysis_storage_v1();
+    let run = |work_limit, lose_reservation| {
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, floor);
+        budget.reserve_storage(floor).unwrap();
+        budget.charge_work(17).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let joined = binding
+            .inspect_ranked_output_v1(candidate, &mut budget)
+            .unwrap();
+        if lose_reservation {
+            budget.release_storage(1).unwrap();
+        }
+        let result = joined.check_ranked_coverage_v1(&mut budget).map(|_| ());
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(budget.storage(), floor - usize::from(lose_reservation));
+        assert_eq!(budget.peak_storage(), floor);
+        (result, budget.work())
+    };
+    let (baseline, exact_work) = run(1_000_000, false);
+    baseline.unwrap();
+    run(exact_work, false).0.unwrap();
+    assert!(matches!(
+        run(exact_work - 1, false).0,
+        Err(CoverageError::Resource(Resource::Work(_)))
+    ));
+    assert!(matches!(
+        run(exact_work, true).0,
+        Err(CoverageError::Resource(Resource::Accounting))
     ));
 }
 

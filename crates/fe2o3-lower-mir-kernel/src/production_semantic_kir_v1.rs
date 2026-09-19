@@ -8616,6 +8616,11 @@ pub use production_conditional_ranked_output_v1::{
     ProductionConditionalRankedExtentV1, ProductionConditionalRankedOutputErrorV1,
     ProductionConditionalRankedOutputV1,
 };
+#[path = "production_conditional_ranked_coverage_v1.rs"]
+mod production_conditional_ranked_coverage_v1;
+pub use production_conditional_ranked_coverage_v1::{
+    ProductionConditionalRankedCoverageErrorV1, ProductionConditionalRankedCoverageV1,
+};
 
 fn validate_operation_correspondence_layout(
     expected: &[ExpectedSemanticKirBlockCoverageV1],

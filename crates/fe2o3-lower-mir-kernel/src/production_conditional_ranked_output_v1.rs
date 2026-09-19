@@ -171,6 +171,29 @@ impl<'a> ProductionConditionalRankedOutputV1<'a> {
         self.binding.coverage().address_domain()
     }
 
+    /// Checks the borrowed ranked CFG's conditional, single-write structure.
+    ///
+    /// Rederives the existing extent relation on the SAME ledger and requires
+    /// the canonical owner's retained-storage floor. Constructor validation of
+    /// definitions, scope and edges is reused; no graph is copied or created.
+    /// Each bounds case takes at most the recipe's block count. Literal branch
+    /// operands are found by prepaid bounded scans of that same recipe.
+    ///
+    /// This query has no heap scratch or retained allocation: live and peak
+    /// storage are unchanged on success, refusal, resource error and unwind.
+    /// Unknown conditions, block arguments, arithmetic/load expressions and
+    /// extra effects refuse, including in unreachable blocks. Traps and cycles
+    /// refuse when feasible; only exact supported edges establish infeasibility.
+    /// Source translation, value, ownership, reference and runtime obligations
+    /// remain external, including the unchanged address-domain premise and N <= G.
+    pub fn check_ranked_coverage_v1(
+        self,
+        budget: &mut Budget<'_>,
+    ) -> Result<ProductionConditionalRankedCoverageV1<'a>, ProductionConditionalRankedCoverageErrorV1>
+    {
+        super::production_conditional_ranked_coverage_v1::check_ranked_coverage_v1(self, budget)
+    }
+
     /// Rederives the retained rank-one extent proposal from exact canonical facts.
     ///
     /// This consumes no graph, creates no map, and allocates no heap storage.

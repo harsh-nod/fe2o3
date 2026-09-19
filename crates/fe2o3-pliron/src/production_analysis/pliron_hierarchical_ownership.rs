@@ -819,3 +819,10 @@ impl std::error::Error for HierarchicalOwnershipCheckErrorV1 {}
 include!("pliron_hierarchical_ownership/execution_v1.rs");
 include!("pliron_hierarchical_ownership/contracts_v1.rs");
 include!("pliron_hierarchical_ownership/resource_tests.rs");
+
+#[expect(
+    dead_code,
+    reason = "Conditional production-stage integration remains pending"
+)]
+#[path = "pliron_hierarchical_ownership/conditional_analysis_v1.rs"]
+pub(crate) mod conditional_analysis_v1;
