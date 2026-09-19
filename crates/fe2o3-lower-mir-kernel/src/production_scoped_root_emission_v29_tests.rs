@@ -207,6 +207,17 @@ pub(super) fn emit_checked(
                 .sum::<usize>()
     );
     assert_eq!(budget.storage() - floor, output.retained_emission_storage);
+    assert!(output.source_slots.ledger == budget.work_ledger_identity_v1());
+    assert_eq!(
+        output.source_slots.source.semantic,
+        *source.owner.source_semantic_sha256()
+    );
+    assert_eq!(output.source_slots.source.root, ROOT);
+    assert_eq!(
+        output.source_slots.instances.len(),
+        output.pending.sidecars.rows.len()
+    );
+    assert!(output.source_slots.retained_storage <= output.retained_emission_storage);
     assert!(output.pending.additional_storage_bytes <= output.retained_emission_storage);
     assert_eq!(output.kernel.entry.as_str(), "lifecycle_fixture");
     assert_eq!(output.pending.function.id, output.kernel.entry);
@@ -253,6 +264,12 @@ pub(super) fn emit_checked(
     let mut observations = Vec::new();
     let mut operations = 0;
     for (index, row) in output.pending.sidecars.rows.iter().enumerate() {
+        let slots = &output.source_slots.instances[index];
+        assert_eq!(slots.instance.index(), index);
+        assert_eq!(
+            row.scoped_slot_origins.as_ref().unwrap().len(),
+            slots.slots.len()
+        );
         assert_eq!(row.source_call_instance.unwrap().index(), index);
         assert!(row.instance_assert_origins.is_some());
         let events = row.lifecycle_events.as_ref().unwrap();

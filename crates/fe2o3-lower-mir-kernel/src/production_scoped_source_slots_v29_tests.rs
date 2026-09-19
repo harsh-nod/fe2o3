@@ -1,6 +1,9 @@
 use super::*;
 
 const STOP: &str = "test stopped after scoped source-slot validation";
+thread_local! {
+    static OBSERVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 struct ObserverGuard(Option<ScopedSlotObserverV29>);
 impl ObserverGuard {
@@ -20,6 +23,7 @@ fn check_receipt(
     receipt: &OwnedScopedSourceSlotsV29,
     budget: &mut ArgumentBudgetV1<'_>,
 ) {
+    OBSERVED.set(OBSERVED.get() + 1);
     assert!(receipt.ledger == budget.work_ledger_identity_v1());
     assert_eq!(
         receipt.source.semantic,
@@ -176,6 +180,7 @@ fn run(
     usize,
 ) {
     let _guard = ObserverGuard::install(observer);
+    OBSERVED.set(0);
     run_lifecycle(
         branches,
         Fault::Orchestrated {
@@ -382,9 +387,9 @@ fn source_slot_creation_has_exact_work_and_peak_storage_boundaries() {
         assert!(is_stopped(
             &run(false, fixture, stop_after_check, work, peak).0
         ));
-        for (work, storage) in [(work - 1, peak), (work, peak - 1)] {
+        for (work, storage, work_failure) in [(work - 1, peak, true), (work, peak - 1, false)] {
             let error = run(false, fixture, stop_after_check, work, storage).0;
-            assert!(error.is_err() && !is_stopped(&error));
+            assert_resource(error.as_ref().err().unwrap(), work_failure);
         }
     }
 }
@@ -416,9 +421,17 @@ fn source_slot_receipt_does_not_authorize_frame_splicing() {
     }
     for fixture in [ScopedFixture::Arrays, ScopedFixture::RepeatedSlots] {
         let (result, _, _) = run(false, fixture, observe, 10_000_000, 10_000_000);
+        assert_eq!(
+            OBSERVED.get(),
+            1,
+            "frame refusal must occur after slot validation"
+        );
         assert!(matches!(
             result,
-            Err(ProductionSemanticKirErrorV1::Unsupported { .. })
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                detail: "execution call parameters differ from their source instance",
+                ..
+            })
         ));
         assert!(!is_stopped(&result));
     }
@@ -463,9 +476,94 @@ fn captured_scalar_origins_have_independent_exact_resource_limits() {
                 drop(rows);
                 budget.release_storage(retained).unwrap();
             }
-            Err(_) => assert!(!success),
+            Err(error) => {
+                assert!(!success);
+                assert_resource(&error, work_limit == 8);
+            }
         }
         assert_eq!(budget.storage(), 37);
+    }
+}
+
+fn assert_resource(error: &ProductionSemanticKirErrorV1, work: bool) {
+    assert!(
+        matches!(
+            (error, work),
+            (
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Work(_)
+                ),
+                true
+            ) | (
+                ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    ArgumentResourceV1::Storage(_)
+                ),
+                false
+            )
+        ),
+        "wrong resource refusal: {error:?}"
+    );
+}
+
+#[test]
+fn source_slot_rederivation_has_its_own_storage_and_work_boundaries() {
+    fn observe(
+        instances: &ExecutionInstancesV29<'_>,
+        emitted: &mut [Option<LoweredFunctionResultV1>],
+        receipt: &OwnedScopedSourceSlotsV29,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        check_receipt(instances, emitted, receipt, budget);
+        let floor = budget.storage();
+        let available = budget.storage_limit() - floor;
+        let filler = available - 1_000_000;
+        let old_peak = budget.peak_storage();
+        budget.reserve_storage(filler)?;
+        let entry = budget.storage();
+        assert!(entry > old_peak);
+        let work_before = budget.work();
+        let replay = derive_scoped_source_slots_v29(instances, emitted, 1024, budget)?;
+        let work = budget.work() - work_before;
+        let peak = budget.peak_storage() - entry;
+        let retained = replay.retained_storage;
+        drop(replay);
+        budget.release_storage(retained + filler)?;
+        assert_eq!(budget.storage(), floor);
+        for (allowance, success) in [(peak, true), (peak - 1, false)] {
+            let filler = available - allowance;
+            budget.reserve_storage(filler)?;
+            let replay = derive_scoped_source_slots_v29(instances, emitted, 1024, budget);
+            match replay {
+                Ok(replay) => {
+                    assert!(success);
+                    assert_eq!(replay.slots, receipt.slots);
+                    let retained = replay.retained_storage;
+                    drop(replay);
+                    budget.release_storage(retained)?;
+                }
+                Err(error) => {
+                    assert!(!success);
+                    assert_resource(&error, false);
+                }
+            }
+            assert_eq!(budget.storage(), floor + filler);
+            budget.release_storage(filler)?;
+        }
+        // Exhaust only this same ledger's remaining work, not a foreign meter.
+        budget.charge_work(10_000_000 - budget.work() - (work - 1))?;
+        let replay = derive_scoped_source_slots_v29(instances, emitted, 1024, budget);
+        assert_resource(replay.err().as_ref().unwrap(), true);
+        assert_eq!(budget.storage(), floor);
+        assert!(emitted.iter().all(Option::is_some));
+        Err(unsupported(0, None, None, STOP))
+    }
+    for fixture in [
+        ScopedFixture::Plain,
+        ScopedFixture::Arrays,
+        ScopedFixture::RepeatedSlots,
+    ] {
+        let (result, _, _) = run(false, fixture, observe, 10_000_000, 10_000_000);
+        assert!(is_stopped(&result), "{fixture:?}: {result:?}");
     }
 }
 
