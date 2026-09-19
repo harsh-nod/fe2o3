@@ -10251,6 +10251,7 @@ struct LoweredFunctionResultV1 {
     source_call_instance: Option<ProductionCallInstanceIdV1>,
     scoped_slot_origins: Option<Vec<ScopedSlotOriginV29>>,
     scoped_initialization: Option<ScopedRetainedInitializationV29>,
+    scoped_memory_anchors: Option<ScopedMemoryAnchorsV29>,
     instance_assert_origins: Option<InstanceAssertCaptureV1>,
     lifecycle_events: Option<PendingLifecycleEventsV29>,
     private_arrays: PrivateArrayFunctionRowsV1,
@@ -10967,6 +10968,16 @@ fn lower_one_semantic_function_with_calls_v29(
         target_blocks.push(block);
     }
     let lifecycle_events = lowering.take_execution_lifecycle_events_v29()?;
+    let scoped_memory_anchors = lowering
+        .scoped_memory
+        .take()
+        .map(|recorder| {
+            if recorder.frame.is_some() {
+                return Err(scoped_memory_error_v29());
+            }
+            Ok(recorder.anchors)
+        })
+        .transpose()?;
     let emitted_operations = lowering.emitted_operations;
     let next_value = lowering.next_value;
     #[cfg(test)]
@@ -11088,6 +11099,7 @@ fn lower_one_semantic_function_with_calls_v29(
         source_call_instance,
         scoped_slot_origins,
         scoped_initialization,
+        scoped_memory_anchors,
         instance_assert_origins,
         lifecycle_events,
         private_arrays,
@@ -12430,6 +12442,7 @@ include!("production_execution_instance_plan_v29.rs");
 include!("production_scoped_root_emission_v29.rs");
 include!("production_scoped_source_slots_v29.rs");
 include!("production_scoped_initialization_v29.rs");
+include!("production_scoped_memory_anchors_v29.rs");
 #[cfg(test)]
 #[path = "production_retained_load_fault_v1_tests.rs"]
 mod retained_load_fault_v1_tests;
@@ -12447,6 +12460,7 @@ include!("production_semantic_kir_v1/function_construction_v1.rs");
 
 struct SemanticFunctionLoweringV1<'a> {
     emission_work: Option<&'a mut dyn SemanticEmissionBudgetV1>,
+    scoped_memory: Option<ScopedMemoryRecorderV29>,
     fixed_array_analysis: Option<FixedArrayGuardAnalysisV1<'a>>,
     private_arrays: PrivateArrayFunctionRecorderV1<'a>,
     types: &'a [SemanticTypeDeclV1],
@@ -12570,6 +12584,10 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         block: SemanticBlockIdV1,
         target: &mut BasicBlock,
     ) -> Result<SemanticBlockPrologueSpansV1, ProductionSemanticKirErrorV1> {
+        if let Some(recorder) = &mut self.scoped_memory {
+            recorder.block = Some(target.id);
+            recorder.frame = None;
+        }
         if self.execution.is_some() {
             self.with_emission_budget_v1(|this, budget| {
                 let cursor = this.execution.as_mut().unwrap();
@@ -13409,23 +13427,49 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         let checkpoint = self.private_arrays.checkpoint();
+        let memory_checkpoint = self
+            .scoped_memory
+            .as_ref()
+            .map(|recorder| recorder.anchors.rows.len());
         let operation_checkpoint = (operations.len(), self.next_value, self.emitted_operations);
-        let result = (|| {
-            self.private_arrays.begin_statement(
-                self.function,
-                block,
-                statement,
-                kind,
-                operations.len(),
-            )?;
-            self.lower_statement_inner_v1(block, statement, kind, operations)?;
-            self.private_arrays.finish_statement(operations.len())
-        })();
+        let site = execution_site_v29(block, statement);
+        let role = match kind {
+            SemanticStatementKindV1::StorageLive(_) => Some(ExecutionOperandV29::StorageLive),
+            SemanticStatementKindV1::StorageDead(_) => Some(ExecutionOperandV29::StorageDead),
+            SemanticStatementKindV1::Deinitialize(_) => Some(ExecutionOperandV29::StatementPlace),
+            _ => None,
+        };
+        if self.scoped_memory.is_some()
+            && !scoped_source_statement_v29(self.function, site)
+                .is_some_and(|source| std::ptr::eq(source, kind))
+        {
+            return Err(scoped_memory_error_v29());
+        }
+        let result =
+            self.with_scoped_memory_frame_v29(ScopedMemoryFrameV29 { site, role }, |this| {
+                this.private_arrays.begin_statement(
+                    this.function,
+                    block,
+                    statement,
+                    kind,
+                    operations.len(),
+                )?;
+                this.lower_statement_inner_v1(block, statement, kind, operations)?;
+                this.private_arrays.finish_statement(operations.len())
+            });
         if result.is_err()
             && matches!(kind, SemanticStatementKindV1::Assign(assignment)
             if matches!(assignment.value().kind(), SemanticRvalueKindV1::CheckedBinary(_)))
         {
             self.private_arrays.rollback(checkpoint);
+            if let Some(length) = memory_checkpoint {
+                self.scoped_memory
+                    .as_mut()
+                    .ok_or_else(scoped_memory_error_v29)?
+                    .anchors
+                    .rows
+                    .truncate(length);
+            }
             operations.truncate(operation_checkpoint.0);
             self.next_value = operation_checkpoint.1;
             self.emitted_operations = operation_checkpoint.2;
@@ -13480,7 +13524,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 result
             }
             SemanticStatementKindV1::Store(store) if store.atomic().is_none() => {
-                let value = self.lower_operand(block, statement, store.value(), operations)?;
+                let value = self.lower_source_operand_v29(
+                    block,
+                    statement,
+                    Some(ExecutionOperandV29::StoreValue),
+                    store.value(),
+                    operations,
+                )?;
                 self.assign_place(
                     block,
                     statement,
@@ -13492,6 +13542,15 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             }
             SemanticStatementKindV1::StorageLive(local)
             | SemanticStatementKindV1::StorageDead(local) => {
+                self.record_scoped_memory_kill_v29(
+                    *local,
+                    if matches!(kind, SemanticStatementKindV1::StorageLive(_)) {
+                        ScopedMemoryKillV29::StorageLive
+                    } else {
+                        ScopedMemoryKillV29::StorageDead
+                    },
+                    operations.len(),
+                )?;
                 if self.execution_cfg_local_v29(local.index() as usize) {
                     self.with_emission_budget_v1(|this, budget| {
                         this.execution.as_mut().unwrap().storage_kill(
@@ -13518,6 +13577,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     // Validate the same projected place without reading its contents.
                     self.retained_array_element_pointer_v1(block, statement, place, operations)?;
                 }
+                self.record_scoped_memory_kill_v29(
+                    place.local(),
+                    ScopedMemoryKillV29::Deinitialize,
+                    operations.len(),
+                )?;
                 let local = self.require_local(block, statement, place.local().index())?;
                 self.locals[local] = None;
                 self.retained_local_initialized.remove(&(local as u32));
@@ -13529,6 +13593,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         .retained_local_slots
                         .contains_key(&place.local().index()) =>
             {
+                self.record_scoped_memory_kill_v29(
+                    place.local(),
+                    ScopedMemoryKillV29::Deinitialize,
+                    operations.len(),
+                )?;
                 let local = self.require_local(block, statement, place.local().index())?;
                 self.locals[local] = None;
                 self.retained_local_initialized.remove(&(local as u32));
@@ -13622,7 +13691,13 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 "semantic atomic scope has no exact Kernel IR scope",
             )
         })?;
-        let value = self.lower_operand(block, statement, atomic.value(), operations)?;
+        let value = self.lower_source_operand_v29(
+            block,
+            statement,
+            Some(ExecutionOperandV29::AtomicValue),
+            atomic.value(),
+            operations,
+        )?;
         let (value, value_ty) = value
             .value()
             .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
@@ -13721,6 +13796,32 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     }
 
     fn lower_rvalue(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        result_type: SemanticTypeIdV1,
+        value: &SemanticRvalueKindV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        let site = execution_site_v29(block, statement);
+        let place = match value {
+            SemanticRvalueKindV1::Borrow { place, .. }
+            | SemanticRvalueKindV1::AddressOf { place, .. } => Some(place),
+            SemanticRvalueKindV1::Load(load) => Some(load.source()),
+            _ => None,
+        };
+        let role = place
+            .filter(|place| {
+                scoped_source_place_v29(self.function, site, ExecutionOperandV29::RvaluePlace)
+                    .is_some_and(|source| std::ptr::eq(source, *place))
+            })
+            .map(|_| ExecutionOperandV29::RvaluePlace);
+        self.with_scoped_memory_frame_v29(ScopedMemoryFrameV29 { site, role }, |this| {
+            this.lower_rvalue_inner_v29(block, statement, result_type, value, operations)
+        })
+    }
+
+    fn lower_rvalue_inner_v29(
         &mut self,
         block: SemanticBlockIdV1,
         statement: Option<u32>,
@@ -14043,234 +14144,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 operation,
                 left,
                 right,
-            } => {
-                let semantic_left_type = semantic_operand_type(left);
-                let semantic_right_type = semantic_operand_type(right);
-                let semantic_operands_match = semantic_left_type == semantic_right_type;
-                let semantic_lowered_type = semantic_operands_match
-                    .then(|| lower_scalar_type(self.types, semantic_left_type))
-                    .transpose()?;
-                let canonical_left = semantic_lowered_type
-                    .as_ref()
-                    .and_then(|ty| canonical_index_constant_v1(left, ty));
-                let canonical_right = semantic_lowered_type
-                    .as_ref()
-                    .and_then(|ty| canonical_index_constant_v1(right, ty));
-                let canonicalize_left = canonical_left.is_some()
-                    && canonical_right.is_none()
-                    && self.operand_transport_type(block, statement, right)? == Some(Type::INDEX);
-                let canonicalize_right = canonical_right.is_some()
-                    && canonical_left.is_none()
-                    && self.operand_transport_type(block, statement, left)? == Some(Type::INDEX);
-                let left = if canonicalize_left {
-                    self.emit(
-                        operations,
-                        Type::INDEX,
-                        OperationKind::Constant(canonical_left.expect("checked above")),
-                    )?
-                } else {
-                    self.lower_rvalue_operand_v29(block, statement, 0, left, operations)?
-                };
-                let (mut left, mut left_ty) = left
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
-                let canonical_shift_right = if !semantic_operands_match
-                    && matches!(
-                        operation,
-                        SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight
-                    ) {
-                    let semantic_right_lowered_type =
-                        lower_scalar_type(self.types, semantic_right_type)?;
-                    canonical_shift_rhs_constant_v1(
-                        *operation,
-                        right,
-                        &semantic_right_lowered_type,
-                        &left_ty,
-                    )
-                } else {
-                    None
-                };
-                let right = if let Some(constant) = canonical_shift_right {
-                    self.emit(
-                        operations,
-                        left_ty.clone(),
-                        OperationKind::Constant(constant),
-                    )?
-                } else if canonicalize_right {
-                    self.emit(
-                        operations,
-                        Type::INDEX,
-                        OperationKind::Constant(canonical_right.expect("checked above")),
-                    )?
-                } else {
-                    self.lower_rvalue_operand_v29(block, statement, 1, right, operations)?
-                };
-                let (mut right, mut right_ty) = right
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
-                if let Some((convert_left, coercion)) = index_binary_coercion_v1(
-                    semantic_operands_match,
-                    left,
-                    &left_ty,
-                    right,
-                    &right_ty,
-                ) {
-                    let converted = self.emit(operations, Type::INDEX, coercion)?;
-                    let (converted, converted_ty) = converted
-                        .value()
-                        .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
-                    if convert_left {
-                        left = converted;
-                        left_ty = converted_ty;
-                    } else {
-                        right = converted;
-                        right_ty = converted_ty;
-                    }
-                }
-                let is_shift = matches!(
-                    operation,
-                    SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight
-                );
-                if is_shift {
-                    let (Some(left_scalar), Some(right_scalar)) =
-                        (left_ty.as_scalar(), right_ty.as_scalar())
-                    else {
-                        return Err(unsupported(
-                            0,
-                            Some(block.index()),
-                            statement,
-                            "semantic shift operands are not integral scalars",
-                        ));
-                    };
-                    if !left_scalar.is_integer() || !right_scalar.is_integer() {
-                        return Err(unsupported(
-                            0,
-                            Some(block.index()),
-                            statement,
-                            "semantic shift operands are not integral scalars",
-                        ));
-                    }
-                    let cast_path =
-                        plan_integer_cast_v1(right_scalar, left_scalar).ok_or_else(|| {
-                            unsupported(
-                                0,
-                                Some(block.index()),
-                                statement,
-                                "semantic shift count has no exact Kernel IR cast rule",
-                            )
-                        })?;
-                    for (kind, target_scalar) in cast_path.into_iter().flatten() {
-                        let target = Type::Scalar(target_scalar);
-                        let converted = self.emit(
-                            operations,
-                            target.clone(),
-                            OperationKind::Cast {
-                                kind,
-                                value: right,
-                                to: target,
-                            },
-                        )?;
-                        right = converted
-                            .value()
-                            .map_err(|detail| {
-                                unsupported(0, Some(block.index()), statement, detail)
-                            })?
-                            .0;
-                    }
-                    let width = match left_scalar {
-                        ScalarType::Index => 64,
-                        scalar => scalar.bit_width().ok_or_else(|| {
-                            unsupported(
-                                0,
-                                Some(block.index()),
-                                statement,
-                                "semantic shift left operand has no fixed integer width",
-                            )
-                        })?,
-                    };
-                    let mask = integer_constant(&left_ty, u128::from(width - 1)).map_err(|_| {
-                        unsupported(
-                            0,
-                            Some(block.index()),
-                            statement,
-                            "semantic shift mask has no Kernel IR constant representation",
-                        )
-                    })?;
-                    let mask =
-                        self.emit(operations, left_ty.clone(), OperationKind::Constant(mask))?;
-                    let (mask, _) = mask
-                        .value()
-                        .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
-                    let normalized = self.emit(
-                        operations,
-                        left_ty.clone(),
-                        OperationKind::Binary {
-                            op: BinaryOp::BitAnd,
-                            lhs: right,
-                            rhs: mask,
-                        },
-                    )?;
-                    (right, right_ty) = normalized
-                        .value()
-                        .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
-                }
-                if left_ty != right_ty {
-                    return Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        statement,
-                        "semantic binary operand types differ",
-                    ));
-                }
-                if let Some(predicate) = lower_compare(*operation) {
-                    self.emit(
-                        operations,
-                        Type::BOOL,
-                        OperationKind::Compare {
-                            predicate,
-                            lhs: left,
-                            rhs: right,
-                        },
-                    )
-                } else if let Some(operation) = lower_binary(*operation) {
-                    if left_ty.as_scalar().is_some_and(ScalarType::is_integer)
-                        && let Some(checked) = match operation {
-                            BinaryOp::Add => Some(CheckedBinaryOperator::Add),
-                            BinaryOp::Subtract => Some(CheckedBinaryOperator::Subtract),
-                            BinaryOp::Multiply => Some(CheckedBinaryOperator::Multiply),
-                            _ => None,
-                        }
-                    {
-                        // Ordinary integer MIR arithmetic wraps at its declared
-                        // width. Explicit checked MIR still retains both results.
-                        let SemanticValueBindingV1::Aggregate(parts) =
-                            self.emit_checked_binary(operations, left_ty, checked, left, right)?
-                        else {
-                            unreachable!("checked binary lowering returns value and overflow");
-                        };
-                        return Ok(parts
-                            .into_iter()
-                            .next()
-                            .expect("checked binary lowering returns its value first"));
-                    }
-                    self.emit(
-                        operations,
-                        left_ty,
-                        OperationKind::Binary {
-                            op: operation,
-                            lhs: left,
-                            rhs: right,
-                        },
-                    )
-                } else {
-                    Err(unsupported(
-                        0,
-                        Some(block.index()),
-                        statement,
-                        "semantic pointer offset requires an explicit GEP rule",
-                    ))
-                }
-            }
+            } => self.lower_binary_rvalue_v29(block, statement, operation, left, right, operations),
             SemanticRvalueKindV1::CheckedBinary(checked) => {
                 let semantic_operand_ty = semantic_operand_type(checked.left());
                 if semantic_operand_ty != semantic_operand_type(checked.right()) {
@@ -14329,16 +14203,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     SemanticUncheckedBinaryOpV1::Subtract => SemanticBinaryOpV1::Subtract,
                     SemanticUncheckedBinaryOpV1::Multiply => SemanticBinaryOpV1::Multiply,
                 };
-                let checked_by_admission = SemanticRvalueKindV1::Binary {
-                    operation,
-                    left: unchecked.left().clone(),
-                    right: unchecked.right().clone(),
-                };
-                self.lower_rvalue(
+                self.lower_binary_rvalue_v29(
                     block,
                     statement,
-                    result_type,
-                    &checked_by_admission,
+                    &operation,
+                    unchecked.left(),
+                    unchecked.right(),
                     operations,
                 )
             }
@@ -14541,6 +14411,234 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         }
     }
 
+    fn lower_binary_rvalue_v29(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        operation: &SemanticBinaryOpV1,
+        left: &SemanticOperandV1,
+        right: &SemanticOperandV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        let semantic_left_type = semantic_operand_type(left);
+        let semantic_right_type = semantic_operand_type(right);
+        let semantic_operands_match = semantic_left_type == semantic_right_type;
+        let semantic_lowered_type = semantic_operands_match
+            .then(|| lower_scalar_type(self.types, semantic_left_type))
+            .transpose()?;
+        let canonical_left = semantic_lowered_type
+            .as_ref()
+            .and_then(|ty| canonical_index_constant_v1(left, ty));
+        let canonical_right = semantic_lowered_type
+            .as_ref()
+            .and_then(|ty| canonical_index_constant_v1(right, ty));
+        let canonicalize_left = canonical_left.is_some()
+            && canonical_right.is_none()
+            && self.operand_transport_type(block, statement, right)? == Some(Type::INDEX);
+        let canonicalize_right = canonical_right.is_some()
+            && canonical_left.is_none()
+            && self.operand_transport_type(block, statement, left)? == Some(Type::INDEX);
+        let left = if canonicalize_left {
+            self.emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Constant(canonical_left.expect("checked above")),
+            )?
+        } else {
+            self.lower_rvalue_operand_v29(block, statement, 0, left, operations)?
+        };
+        let (mut left, mut left_ty) = left
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+        let canonical_shift_right = if !semantic_operands_match
+            && matches!(
+                operation,
+                SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight
+            ) {
+            let semantic_right_lowered_type = lower_scalar_type(self.types, semantic_right_type)?;
+            canonical_shift_rhs_constant_v1(
+                *operation,
+                right,
+                &semantic_right_lowered_type,
+                &left_ty,
+            )
+        } else {
+            None
+        };
+        let right = if let Some(constant) = canonical_shift_right {
+            self.emit(
+                operations,
+                left_ty.clone(),
+                OperationKind::Constant(constant),
+            )?
+        } else if canonicalize_right {
+            self.emit(
+                operations,
+                Type::INDEX,
+                OperationKind::Constant(canonical_right.expect("checked above")),
+            )?
+        } else {
+            self.lower_rvalue_operand_v29(block, statement, 1, right, operations)?
+        };
+        let (mut right, mut right_ty) = right
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+        if let Some((convert_left, coercion)) =
+            index_binary_coercion_v1(semantic_operands_match, left, &left_ty, right, &right_ty)
+        {
+            let converted = self.emit(operations, Type::INDEX, coercion)?;
+            let (converted, converted_ty) = converted
+                .value()
+                .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+            if convert_left {
+                left = converted;
+                left_ty = converted_ty;
+            } else {
+                right = converted;
+                right_ty = converted_ty;
+            }
+        }
+        let is_shift = matches!(
+            operation,
+            SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight
+        );
+        if is_shift {
+            let (Some(left_scalar), Some(right_scalar)) =
+                (left_ty.as_scalar(), right_ty.as_scalar())
+            else {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    statement,
+                    "semantic shift operands are not integral scalars",
+                ));
+            };
+            if !left_scalar.is_integer() || !right_scalar.is_integer() {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    statement,
+                    "semantic shift operands are not integral scalars",
+                ));
+            }
+            let cast_path = plan_integer_cast_v1(right_scalar, left_scalar).ok_or_else(|| {
+                unsupported(
+                    0,
+                    Some(block.index()),
+                    statement,
+                    "semantic shift count has no exact Kernel IR cast rule",
+                )
+            })?;
+            for (kind, target_scalar) in cast_path.into_iter().flatten() {
+                let target = Type::Scalar(target_scalar);
+                let converted = self.emit(
+                    operations,
+                    target.clone(),
+                    OperationKind::Cast {
+                        kind,
+                        value: right,
+                        to: target,
+                    },
+                )?;
+                right = converted
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?
+                    .0;
+            }
+            let width = match left_scalar {
+                ScalarType::Index => 64,
+                scalar => scalar.bit_width().ok_or_else(|| {
+                    unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "semantic shift left operand has no fixed integer width",
+                    )
+                })?,
+            };
+            let mask = integer_constant(&left_ty, u128::from(width - 1)).map_err(|_| {
+                unsupported(
+                    0,
+                    Some(block.index()),
+                    statement,
+                    "semantic shift mask has no Kernel IR constant representation",
+                )
+            })?;
+            let mask = self.emit(operations, left_ty.clone(), OperationKind::Constant(mask))?;
+            let (mask, _) = mask
+                .value()
+                .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+            let normalized = self.emit(
+                operations,
+                left_ty.clone(),
+                OperationKind::Binary {
+                    op: BinaryOp::BitAnd,
+                    lhs: right,
+                    rhs: mask,
+                },
+            )?;
+            (right, right_ty) = normalized
+                .value()
+                .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+        }
+        if left_ty != right_ty {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "semantic binary operand types differ",
+            ));
+        }
+        if let Some(predicate) = lower_compare(*operation) {
+            self.emit(
+                operations,
+                Type::BOOL,
+                OperationKind::Compare {
+                    predicate,
+                    lhs: left,
+                    rhs: right,
+                },
+            )
+        } else if let Some(operation) = lower_binary(*operation) {
+            if left_ty.as_scalar().is_some_and(ScalarType::is_integer)
+                && let Some(checked) = match operation {
+                    BinaryOp::Add => Some(CheckedBinaryOperator::Add),
+                    BinaryOp::Subtract => Some(CheckedBinaryOperator::Subtract),
+                    BinaryOp::Multiply => Some(CheckedBinaryOperator::Multiply),
+                    _ => None,
+                }
+            {
+                // Ordinary integer MIR arithmetic wraps at its declared
+                // width. Explicit checked MIR still retains both results.
+                let SemanticValueBindingV1::Aggregate(parts) =
+                    self.emit_checked_binary(operations, left_ty, checked, left, right)?
+                else {
+                    unreachable!("checked binary lowering returns value and overflow");
+                };
+                return Ok(parts
+                    .into_iter()
+                    .next()
+                    .expect("checked binary lowering returns its value first"));
+            }
+            self.emit(
+                operations,
+                left_ty,
+                OperationKind::Binary {
+                    op: operation,
+                    lhs: left,
+                    rhs: right,
+                },
+            )
+        } else {
+            Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "semantic pointer offset requires an explicit GEP rule",
+            ))
+        }
+    }
+
     fn lower_operand(
         &mut self,
         block: SemanticBlockIdV1,
@@ -14573,6 +14671,15 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             )?;
             if matches!(operand, SemanticOperandV1::Move(_)) {
                 // A projected move invalidates the whole-slot must-initialize fact.
+                self.record_scoped_memory_kill_v29(
+                    place.local(),
+                    if place.projections().is_empty() {
+                        ScopedMemoryKillV29::Move
+                    } else {
+                        ScopedMemoryKillV29::ProjectedArrayMove
+                    },
+                    operations.len(),
+                )?;
                 self.retained_local_initialized
                     .remove(&place.local().index());
                 self.locals[place.local().index() as usize] = None;
@@ -14619,6 +14726,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     self.resolve_place(block, statement, place, operations)?
                 };
                 if let Some(local) = moved_local {
+                    self.record_scoped_memory_kill_v29(
+                        place.local(),
+                        ScopedMemoryKillV29::Move,
+                        operations.len(),
+                    )?;
                     self.locals[local] = None;
                     self.retained_local_initialized.remove(&(local as u32));
                 }
@@ -15384,6 +15496,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
     }
 
     fn lower_terminator(
+        &mut self,
+        block: SemanticBlockIdV1,
+        terminator: &SemanticTerminatorKindV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<Terminator, ProductionSemanticKirErrorV1> {
+        self.with_scoped_memory_frame_v29(
+            ScopedMemoryFrameV29 {
+                site: execution_site_v29(block, None),
+                role: None,
+            },
+            |this| this.lower_terminator_inner_v29(block, terminator, operations),
+        )
+    }
+
+    fn lower_terminator_inner_v29(
         &mut self,
         block: SemanticBlockIdV1,
         terminator: &SemanticTerminatorKindV1,
@@ -21396,6 +21523,38 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         volatility: SemanticVolatilityV1,
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let site = execution_site_v29(block, statement);
+        let role = [
+            ExecutionOperandV29::Destination,
+            ExecutionOperandV29::StoreDestination,
+            ExecutionOperandV29::AtomicDestination,
+        ]
+        .into_iter()
+        .find(|&role| {
+            scoped_source_place_v29(self.function, site, role)
+                .is_some_and(|source| std::ptr::eq(source, destination))
+        });
+        self.with_scoped_memory_frame_v29(ScopedMemoryFrameV29 { site, role }, |this| {
+            this.assign_place_inner_v29(
+                block,
+                statement,
+                destination,
+                value,
+                volatility,
+                operations,
+            )
+        })
+    }
+
+    fn assign_place_inner_v29(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        destination: &SemanticPlaceV1,
+        value: SemanticValueBindingV1,
+        volatility: SemanticVolatilityV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
         if self.retained_array_slot_v1(destination.local()).is_some() {
             self.store_retained_array_place_v1(
                 block,
@@ -23266,7 +23425,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         build: impl FnOnce() -> Operation,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
         self.reserve_operation(operations)?;
-        operations.push(build());
+        let operation = build();
+        self.record_scoped_memory_access_v29(operations.len(), &operation.kind)?;
+        operations.push(operation);
         Ok(())
     }
 
@@ -23451,6 +23612,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 .ok_or_else(|| unsupported(0, None, None, "Kernel IR SSA identity overflow"))?;
             results.push(ValueDef::new(id, ty));
         }
+        self.record_scoped_memory_access_v29(operations.len(), &kind)?;
         operations.push(Operation::new(results.clone(), kind));
         Ok(results)
     }

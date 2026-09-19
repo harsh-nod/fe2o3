@@ -302,6 +302,8 @@ enum InitializationKillV29 {
     StorageDead,
     Deinitialize,
     Move,
+    SelfMove,
+    StorageDeadLive,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -311,6 +313,7 @@ struct InitializationFixtureV29 {
     reinitialize: bool,
     copy_read: bool,
     address_read: bool,
+    alias_move: bool,
     volatile: bool,
 }
 

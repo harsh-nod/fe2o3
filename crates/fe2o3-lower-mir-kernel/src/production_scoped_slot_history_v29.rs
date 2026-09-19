@@ -1,5 +1,5 @@
-// Physical definite initialization only. Source kills, source/access correspondence,
-// implicit effects and relocation are separate obligations.
+// Physical initialization with producer-anchored source-local invalidations.
+// Full source/access equivalence, implicit effects and relocation remain separate.
 use super::*;
 
 #[cfg(test)]
@@ -18,6 +18,7 @@ type CellOrigin = OriginStateV1<Option<Cell>>;
 enum EventKind {
     Read,
     Set(bool),
+    KillSlot,
     Preserve,
 }
 
@@ -26,6 +27,17 @@ struct Event {
     cell: Cell,
     kind: EventKind,
     operation: usize,
+    sequence: usize,
+}
+
+impl Event {
+    fn reset(self, cell: Cell) -> Option<bool> {
+        match self.kind {
+            EventKind::KillSlot if self.cell.slot == cell.slot => Some(false),
+            EventKind::Set(value) if self.cell == cell => Some(value),
+            _ => None,
+        }
+    }
 }
 
 struct HistoryBlock {
@@ -224,10 +236,9 @@ fn check_history(
             return Err(invalid("scoped slot history block ranges are inconsistent"));
         }
         budget.charge_work(block.events.len())?;
-        if events[block.events.clone()]
-            .windows(2)
-            .any(|pair| pair[0].operation >= pair[1].operation)
-        {
+        if events[block.events.clone()].windows(2).any(|pair| {
+            (pair[0].operation, pair[0].sequence) >= (pair[1].operation, pair[1].sequence)
+        }) {
             return Err(invalid("scoped slot history event order is inconsistent"));
         }
         event_end = block.events.end;
@@ -248,7 +259,7 @@ fn check_history(
             budget.charge_work(events.len())?;
             let mut edges = successors.len();
             for event in events {
-                if event.cell != cell || !matches!(event.kind, EventKind::Set(_)) {
+                if event.reset(cell).is_none() {
                     edges = argument_sum_v1(&[edges, 1])?;
                 }
             }
@@ -266,10 +277,10 @@ fn check_history(
             }
             budget.charge_work(events.len())?;
             for event in events {
-                let seed = match event.kind {
-                    EventKind::Set(value) if event.cell == cell => OriginStateV1::Exact(value),
-                    _ => OriginStateV1::Pending,
-                };
+                let seed = event
+                    .reset(cell)
+                    .map(OriginStateV1::Exact)
+                    .unwrap_or(OriginStateV1::Pending);
                 work.seed_next(seed, budget).map_err(origin_error)?;
             }
             for (index, block) in blocks.iter().enumerate() {
@@ -282,7 +293,7 @@ fn check_history(
                 for event_index in block.events.clone() {
                     let node = argument_sum_v1(&[blocks.len(), event_index])?;
                     let event = events[event_index];
-                    if event.cell != cell || !matches!(event.kind, EventKind::Set(_)) {
+                    if event.reset(cell).is_none() {
                         work.add_link(previous, node, budget)
                             .map_err(origin_error)?;
                     }
@@ -311,11 +322,23 @@ fn check_history(
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn check(
     function: &Function,
     graph: &SlotUseGraphV29<'_>,
     slots: &[ScopedSourceSlotV29],
     first_slot: usize,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> UseResult<()> {
+    check_with_source_kills(function, graph, slots, first_slot, &[], budget)
+}
+
+pub(super) fn check_with_source_kills(
+    function: &Function,
+    graph: &SlotUseGraphV29<'_>,
+    slots: &[ScopedSourceSlotV29],
+    first_slot: usize,
+    anchors: &[ScopedMemoryAnchorV29],
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> UseResult<()> {
     let body = function.body.as_ref().ok_or_else(scoped_slot_error_v29)?;
@@ -345,8 +368,9 @@ pub(super) fn check(
                 Ok::<_, ProductionSemanticKirErrorV1>(())
             })?;
     }
-    let mut events = emission_vec_v1(operations, budget)?;
-    let mut cells = emission_vec_v1(operations, budget)?;
+    let capacity = argument_sum_v1(&[operations, anchors.len()])?;
+    let mut events = emission_vec_v1(capacity, budget)?;
+    let mut cells = emission_vec_v1(capacity, budget)?;
     let mut blocks = emission_vec_v1(graph.blocks.len(), budget)?;
     let mut successors = emission_vec_v1(edges, budget)?;
     for (_, block) in &graph.blocks {
@@ -374,8 +398,42 @@ pub(super) fn check(
                 cell,
                 kind,
                 operation,
+                sequence: usize::MAX,
             });
             cells.push(cell);
+        }
+        budget.charge_work(anchors.len())?;
+        for (sequence, row) in anchors.iter().enumerate() {
+            let ScopedMemoryAnchorKindV29::Kill { local, .. } = row.kind else {
+                continue;
+            };
+            if row.block != block.id {
+                continue;
+            }
+            budget.charge_work(scoped_initialization_search_work_v29(slots.len()))?;
+            let slot = slots
+                .binary_search_by_key(&local, |slot| slot.origin.local)
+                .map_err(|_| scoped_memory_error_v29())?;
+            if row.position > block.operations.len() {
+                return Err(scoped_memory_error_v29());
+            }
+            let cell = Cell {
+                slot: argument_sum_v1(&[first_slot, slot])?,
+                index: 0,
+            };
+            events.push(Event {
+                cell,
+                kind: EventKind::KillSlot,
+                operation: row.position,
+                sequence,
+            });
+            cells.push(cell);
+        }
+        if !anchors.is_empty() {
+            let slice = &mut events[start..];
+            call_splice_sort_work_v1(argument_product_v1(slice.len(), 2)?, budget)
+                .map_err(graph_error)?;
+            slice.sort_unstable_by_key(|event| (event.operation, event.sequence));
         }
         let edge_start = successors.len();
         block

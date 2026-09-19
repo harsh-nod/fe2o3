@@ -93,10 +93,17 @@ pub(in super::super) fn initialization_owner(
         changed.push(assign(place(3, U32), SemanticRvalueKindV1::Use(literal(1))));
     }
     if let Some(kill) = config.kill {
-        changed.push(match kill {
-            InitializationKillV29::StorageLive => statement(SemanticStatementKindV1::StorageLive(
+        if matches!(kill, InitializationKillV29::StorageDeadLive) {
+            changed.push(statement(SemanticStatementKindV1::StorageDead(
                 SemanticLocalIdV1::from_index(2),
-            )),
+            )));
+        }
+        changed.push(match kill {
+            InitializationKillV29::StorageLive | InitializationKillV29::StorageDeadLive => {
+                statement(SemanticStatementKindV1::StorageLive(
+                    SemanticLocalIdV1::from_index(2),
+                ))
+            }
             InitializationKillV29::StorageDead => statement(SemanticStatementKindV1::StorageDead(
                 SemanticLocalIdV1::from_index(2),
             )),
@@ -107,10 +114,21 @@ pub(in super::super) fn initialization_owner(
                 place(4, U32),
                 SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place(2, U32))),
             ),
+            InitializationKillV29::SelfMove => assign(
+                place(2, U32),
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place(2, U32))),
+            ),
         });
     }
     if config.reinitialize {
         changed.push(store());
+    }
+    if config.alias_move {
+        assert!(config.address_read);
+        exit.push(assign(
+            place(4, U32),
+            SemanticRvalueKindV1::Use(SemanticOperandV1::Move(read_place.clone())),
+        ));
     }
     let read = if config.copy_read {
         SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(2, U32)))

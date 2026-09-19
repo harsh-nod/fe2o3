@@ -16,6 +16,12 @@ fn with_emitted(
             .map(|row| {
                 row.call_returns.requested_bytes().unwrap()
                     + row.scoped_initialization.as_ref().unwrap().retained_storage
+                    + row
+                        .scoped_memory_anchors
+                        .as_ref()
+                        .unwrap()
+                        .retained_storage()
+                        .unwrap()
             })
             .sum();
         let mut slots = lowered.into_iter().map(Some).collect();

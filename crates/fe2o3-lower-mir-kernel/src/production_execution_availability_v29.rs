@@ -380,95 +380,7 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         site: ExecutionSiteV29,
         role: ExecutionOperandV29,
     ) -> Option<&SemanticOperandV1> {
-        match (site, role) {
-            (ExecutionSiteV29::Terminator { block }, ExecutionOperandV29::CallArgument(index)) => {
-                let SemanticTerminatorKindV1::Call(call) = self
-                    .function
-                    .blocks()
-                    .get(block.get() as usize)?
-                    .terminator()
-                    .kind()
-                else {
-                    return None;
-                };
-                call.arguments().get(index as usize)
-            }
-            (ExecutionSiteV29::Terminator { block }, role) => match self
-                .function
-                .blocks()
-                .get(block.get() as usize)?
-                .terminator()
-                .kind()
-            {
-                SemanticTerminatorKindV1::SwitchInt { discriminant, .. }
-                    if role == ExecutionOperandV29::SwitchDiscriminant =>
-                {
-                    Some(discriminant)
-                }
-                SemanticTerminatorKindV1::Assert {
-                    condition, message, ..
-                } => match role {
-                    ExecutionOperandV29::AssertCondition => Some(condition),
-                    ExecutionOperandV29::AssertMessage(index) => {
-                        execution_assert_operand_v29(message, index)
-                    }
-                    _ => None,
-                },
-                _ => None,
-            },
-            (
-                ExecutionSiteV29::Statement { block, statement },
-                ExecutionOperandV29::RvalueOperand(index),
-            ) => {
-                let SemanticStatementKindV1::Assign(assignment) = self
-                    .function
-                    .blocks()
-                    .get(block.get() as usize)?
-                    .statements()
-                    .get(statement as usize)?
-                    .kind()
-                else {
-                    return None;
-                };
-                match assignment.value().kind() {
-                    SemanticRvalueKindV1::Use(operand)
-                    | SemanticRvalueKindV1::Unary { operand, .. }
-                    | SemanticRvalueKindV1::Cast { operand, .. }
-                        if index == 0 =>
-                    {
-                        Some(operand)
-                    }
-                    SemanticRvalueKindV1::Binary { left, right, .. } => match index {
-                        0 => Some(left),
-                        1 => Some(right),
-                        _ => None,
-                    },
-                    SemanticRvalueKindV1::CheckedBinary(operation) => match index {
-                        0 => Some(operation.left()),
-                        1 => Some(operation.right()),
-                        _ => None,
-                    },
-                    SemanticRvalueKindV1::Aggregate(aggregate) => {
-                        aggregate.operands().get(index as usize)
-                    }
-                    _ => None,
-                }
-            }
-            (ExecutionSiteV29::Statement { block, statement }, ExecutionOperandV29::Assume) => {
-                let SemanticStatementKindV1::Assume(condition) = self
-                    .function
-                    .blocks()
-                    .get(block.get() as usize)?
-                    .statements()
-                    .get(statement as usize)?
-                    .kind()
-                else {
-                    return None;
-                };
-                Some(condition)
-            }
-            _ => None,
-        }
+        scoped_source_operand_v29(self.function, site, role)
     }
 }
 
@@ -515,6 +427,28 @@ impl SemanticFunctionLoweringV1<'_> {
         operand: &SemanticOperandV1,
         operations: &mut Vec<Operation>,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        let role = if role.is_none() && statement.is_none() && self.scoped_memory.is_some() {
+            self.with_emission_budget_v1(|this, budget| {
+                let Some(source) = this.function.blocks().get(block.index() as usize) else {
+                    return Err(scoped_memory_error_v29());
+                };
+                let SemanticTerminatorKindV1::Call(call) = source.terminator().kind() else {
+                    return Ok(None);
+                };
+                budget.charge_work(call.arguments().len())?;
+                call.arguments()
+                    .iter()
+                    .position(|original| std::ptr::eq(original, operand))
+                    .map(|index| {
+                        u32::try_from(index)
+                            .map(ExecutionOperandV29::CallArgument)
+                            .map_err(|_| ArgumentResourceV1::Arithmetic.into())
+                    })
+                    .transpose()
+            })?
+        } else {
+            role
+        };
         if let SemanticOperandV1::Move(place) | SemanticOperandV1::Copy(place) = operand
             && (self.execution_cfg_local_v29(place.local().index() as usize)
                 || self.execution_local_v29(place.local())?)
@@ -548,7 +482,14 @@ impl SemanticFunctionLoweringV1<'_> {
                 )
             })?;
         }
-        self.lower_operand_inner_v1(block, statement, operand, operations)
+        let site = execution_site_v29(block, statement);
+        let role = role.filter(|&role| {
+            scoped_source_operand_v29(self.function, site, role)
+                .is_some_and(|source| std::ptr::eq(source, operand))
+        });
+        self.with_scoped_memory_frame_v29(ScopedMemoryFrameV29 { site, role }, |this| {
+            this.lower_operand_inner_v1(block, statement, operand, operations)
+        })
     }
 }
 

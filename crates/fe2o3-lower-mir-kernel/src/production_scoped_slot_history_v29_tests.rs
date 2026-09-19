@@ -1,4 +1,30 @@
 use super::super::tests as kir;
+
+#[test]
+fn whole_slot_kills_reset_sparse_cells_and_keep_same_gap_order() {
+    let mut p = program(&[(&[W, EventKind::KillSlot, W, R], &[])]);
+    p.cells.push(Cell {
+        slot: CELL.slot,
+        index: 1 << 40,
+    });
+    for index in [0, 2, 3] {
+        p.events[index].cell = p.cells[1];
+    }
+    p.events[1].operation = 1;
+    p.events[1].sequence = 0;
+    p.events[2].operation = 1;
+    p.events[2].sequence = usize::MAX;
+    assert!(oracle(&p));
+    assert!(evaluate(&p, LIMIT, LIMIT).0.is_ok());
+    p.events[2].kind = G;
+    assert!(!oracle(&p));
+    assert!(evaluate(&p, LIMIT, LIMIT).0.is_err());
+    p.events[1].cell.slot += 1;
+    p.cells.push(p.events[1].cell);
+    p.cells.sort_unstable();
+    assert!(oracle(&p));
+    assert!(evaluate(&p, LIMIT, LIMIT).0.is_ok());
+}
 use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1;
 
@@ -33,6 +59,7 @@ fn program(spec: &[(&[EventKind], &[usize])]) -> Program {
                 cell: CELL,
                 kind,
                 operation,
+                sequence: usize::MAX,
             }));
         output.successors.extend_from_slice(successors);
         output.blocks.push(HistoryBlock {
@@ -83,11 +110,14 @@ fn oracle(program: &Program) -> bool {
             }
             let event = program.events[row.events.start + at];
             let mut next = initialized;
-            if event.cell == cell {
+            if event.cell == cell
+                || (event.kind == EventKind::KillSlot && event.cell.slot == cell.slot)
+            {
                 match event.kind {
                     EventKind::Read if !initialized => return false,
                     EventKind::Read => {}
                     EventKind::Set(value) => next = value,
+                    EventKind::KillSlot => next = false,
                     EventKind::Preserve => pending.push((block, at + 1, true)),
                 }
             }

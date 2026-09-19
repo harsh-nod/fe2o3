@@ -534,20 +534,26 @@ pub(super) fn check_scoped_source_slot_uses_v29(
                 .slots
                 .get(row.slots.clone())
                 .ok_or_else(scoped_slot_error_v29)?;
-            if candidates.is_empty() {
-                continue;
-            }
             let lowered = emitted
                 .get(row.instance.index())
                 .and_then(Option::as_ref)
                 .ok_or_else(scoped_slot_error_v29)?;
             with_canonical_call_scratch_v1(budget, |budget| {
+                check_scoped_memory_anchors_v29(instances, row, lowered, candidates, budget)?;
+                if candidates.is_empty() {
+                    return Ok(());
+                }
                 let graph = checked_graph(&lowered.function, candidates, row.slots.start, budget)?;
-                history::check(
+                history::check_with_source_kills(
                     &lowered.function,
                     &graph,
                     candidates,
                     row.slots.start,
+                    &lowered
+                        .scoped_memory_anchors
+                        .as_ref()
+                        .ok_or_else(scoped_memory_error_v29)?
+                        .rows,
                     budget,
                 )
             })

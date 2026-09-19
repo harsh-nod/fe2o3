@@ -284,6 +284,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             next_value,
             emission_placement,
             emission_work,
+            scoped_memory: execution
+                .as_ref()
+                .map(|cursor| ScopedMemoryRecorderV29::new(cursor, emission_placement)),
             execution,
             execution_calls: None,
             lifecycle,

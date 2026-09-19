@@ -242,7 +242,13 @@ fn cursor_selected_instance_cannot_be_relabelled_on_append() {
                 .scoped_initialization
                 .as_ref()
                 .unwrap()
-                .retained_storage;
+                .retained_storage
+            + caller
+                .scoped_memory_anchors
+                .as_ref()
+                .unwrap()
+                .retained_storage()
+                .unwrap();
         let rejected = with_production_instance_correspondence_v1(plan, budget, |map, budget| {
             map.append_lowered(plan.root(), &caller, budget)
         });

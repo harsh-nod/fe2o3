@@ -279,6 +279,12 @@ fn with_scalar_expansion(
             .map(|row| {
                 row.call_returns.requested_bytes().unwrap()
                     + row.scoped_initialization.as_ref().unwrap().retained_storage
+                    + row
+                        .scoped_memory_anchors
+                        .as_ref()
+                        .unwrap()
+                        .retained_storage()
+                        .unwrap()
             })
             .sum();
         with_production_instance_correspondence_v1(instances, budget, |map, budget| {
