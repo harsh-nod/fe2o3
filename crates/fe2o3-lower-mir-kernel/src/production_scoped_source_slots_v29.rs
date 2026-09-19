@@ -416,6 +416,11 @@ fn append_scoped_source_slots_v29(
     if actual_allocations != count {
         return Err(scoped_slot_error_v29());
     }
+    lowered
+        .scoped_initialization
+        .as_ref()
+        .ok_or_else(scoped_initialization_error_v29)?
+        .check_custody(instances, id, events, origins, budget)?;
     drop(candidates);
     budget.release_storage(scratch_bytes)?;
     Ok(ScopedSourceSlotInstanceV29 {

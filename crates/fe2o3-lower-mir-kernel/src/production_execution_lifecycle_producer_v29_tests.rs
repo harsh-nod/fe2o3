@@ -297,11 +297,29 @@ fn root_input(owner: &ProductionSemanticSsaOwnerV1) -> RootInput<'_> {
 }
 
 #[derive(Clone, Copy, Debug)]
+enum InitializationKillV29 {
+    StorageLive,
+    StorageDead,
+    Deinitialize,
+    Move,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct InitializationFixtureV29 {
+    looping: bool,
+    kill: Option<InitializationKillV29>,
+    reinitialize: bool,
+    copy_read: bool,
+    volatile: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
 enum ScopedFixture {
     Plain,
     Assertion,
     Repeated,
     RepeatedSlots,
+    Initialization(InitializationFixtureV29),
     Arrays,
 }
 
@@ -337,7 +355,7 @@ fn run_lifecycle(
     let assertion = matches!(fixture, ScopedFixture::Assertion);
     let repeated = matches!(
         fixture,
-        ScopedFixture::Repeated | ScopedFixture::RepeatedSlots
+        ScopedFixture::Repeated | ScopedFixture::RepeatedSlots | ScopedFixture::Initialization(_)
     );
     let mut owner = match fixture {
         ScopedFixture::Plain => lifecycle_owner(branches),
@@ -354,6 +372,10 @@ fn run_lifecycle(
             scoped_root_tests::fixtures::repeated_slot_owner()
         }
         ScopedFixture::Arrays => scoped_root_tests::fixtures::array_owner(branches),
+        ScopedFixture::Initialization(config) => {
+            assert!(!branches);
+            scoped_root_tests::fixtures::initialization_owner(config)
+        }
     };
     let mut work = CanonicalKernelIrWorkBudgetV1::new(work_limit);
     let mut budget = ArgumentBudgetV1::new(&mut work, storage_limit);

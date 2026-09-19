@@ -10246,6 +10246,7 @@ struct LoweredFunctionResultV1 {
     execution_observation: Option<ExecutionTestObservationV29>,
     source_call_instance: Option<ProductionCallInstanceIdV1>,
     scoped_slot_origins: Option<Vec<ScopedSlotOriginV29>>,
+    scoped_initialization: Option<ScopedRetainedInitializationV29>,
     instance_assert_origins: Option<InstanceAssertCaptureV1>,
     lifecycle_events: Option<PendingLifecycleEventsV29>,
     private_arrays: PrivateArrayFunctionRowsV1,
@@ -10685,6 +10686,15 @@ fn lower_one_semantic_function_with_calls_v29(
     lifecycle: Option<&mut dyn ExecutionLifecycleConsumerV29>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     let source_call_instance = execution.as_ref().map(|cursor| cursor.instance);
+    let initialization_subject = execution
+        .as_ref()
+        .map(ScopedInitializationSubjectV29::from_cursor);
+    if initialization_subject.is_some_and(|subject| {
+        subject.source.root != plan.correspondence_owner
+            || subject.function != plan.semantic_function
+    }) {
+        return Err(scoped_initialization_error_v29());
+    }
     if source_call_instance.is_some() && assert_origins.is_some() {
         return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
     }
@@ -10965,10 +10975,23 @@ fn lower_one_semantic_function_with_calls_v29(
         });
     drop(lowering.emission_work.take());
     let retained_local_slots = lowering.retained_local_slots;
+    let initialized_at_entry = lowering.control_flow_ssa.retained_initialized_at_entry;
     let infallible_asserts = lowering.infallible_asserts;
     let generated_terminator_values = lowering.generated_terminator_values;
     let mut call_returns = lowering.call_returns;
     let private_arrays = lowering.private_arrays.into_rows()?;
+    let scoped_initialization = initialization_subject
+        .map(|subject| {
+            capture_scoped_initialization_v29(
+                subject,
+                function,
+                semantic_ssa,
+                &retained_local_slots,
+                &initialized_at_entry,
+                call_budget,
+            )
+        })
+        .transpose()?;
     let scoped_slot_origins = source_call_instance
         .map(|_| capture_scoped_slot_origins_v29(&retained_local_slots, call_budget))
         .transpose()?;
@@ -11060,6 +11083,7 @@ fn lower_one_semantic_function_with_calls_v29(
         execution_observation,
         source_call_instance,
         scoped_slot_origins,
+        scoped_initialization,
         instance_assert_origins,
         lifecycle_events,
         private_arrays,
@@ -12401,6 +12425,7 @@ include!("production_execution_lifecycle_producer_v29.rs");
 include!("production_execution_instance_plan_v29.rs");
 include!("production_scoped_root_emission_v29.rs");
 include!("production_scoped_source_slots_v29.rs");
+include!("production_scoped_initialization_v29.rs");
 include!("production_execution_lifecycle_insertion_v29.rs");
 include!("production_kernel_metadata_v1.rs");
 include!("production_execution_scalar_operands_v29.rs");
@@ -14377,6 +14402,11 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         .retained_local_slots
                         .contains_key(&load.source().local().index())
                 {
+                    self.require_retained_local_initialized_v1(
+                        block,
+                        statement,
+                        load.source().local(),
+                    )?;
                     self.retained_local_pointer_binding_v1(
                         load.source().local(),
                         AccessMode::ReadWrite,
@@ -21247,14 +21277,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 operations,
             );
         }
-        if !self.retained_local_initialized.contains(&local.index()) {
-            return Err(ProductionSemanticKirErrorV1::MissingLocalDefinition {
-                function: self.semantic_function.index(),
-                block: block.index(),
-                statement,
-                local: local.index(),
-            });
-        }
+        self.require_retained_local_initialized_v1(block, statement, local)?;
         let slot = self
             .retained_local_slots
             .get(&local.index())
@@ -21280,6 +21303,24 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             ),
             error => error,
         })
+    }
+
+    fn require_retained_local_initialized_v1(
+        &self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        local: SemanticLocalIdV1,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self.retained_local_initialized.contains(&local.index()) {
+            Ok(())
+        } else {
+            Err(ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                function: self.semantic_function.index(),
+                block: block.index(),
+                statement,
+                local: local.index(),
+            })
+        }
     }
 
     fn store_retained_local_v1(

@@ -265,6 +265,10 @@ pub(super) fn emit_checked(
     let mut operations = 0;
     for (index, row) in output.pending.sidecars.rows.iter().enumerate() {
         let slots = &output.source_slots.instances[index];
+        let initialization = row.scoped_initialization.as_ref().unwrap();
+        assert_eq!(initialization.subject.instance, slots.instance);
+        assert!(initialization.subject.ledger == output.ledger);
+        assert!(initialization.subject.source == output.source_slots.source);
         assert_eq!(slots.instance.index(), index);
         assert_eq!(
             row.scoped_slot_origins.as_ref().unwrap().len(),

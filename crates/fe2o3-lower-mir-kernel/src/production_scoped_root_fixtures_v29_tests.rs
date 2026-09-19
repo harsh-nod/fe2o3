@@ -31,6 +31,116 @@ fn literal(value: u128) -> SemanticOperandV1 {
     ))
 }
 
+pub(in super::super) fn initialization_owner(
+    config: InitializationFixtureV29,
+) -> ProductionSemanticSsaOwnerV1 {
+    let original = repeated_slot_owner();
+    let semantic = original.source_semantic();
+    let mut functions = semantic.functions().to_vec();
+    let helper = &functions[3];
+    let mut locals = helper.locals().to_vec();
+    locals.push(local(136, U32, SemanticLocalRoleV1::Temporary));
+    locals.push(local(137, U32, SemanticLocalRoleV1::Temporary));
+    let edge =
+        |role, target| SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target));
+    let goto = |target| SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, target));
+    let switch = |local, left, right| SemanticTerminatorKindV1::SwitchInt {
+        discriminant: SemanticOperandV1::Copy(place(local, U32)),
+        targets: SemanticSwitchTargetsV1::new(
+            vec![SemanticSwitchTargetV1::new(
+                0,
+                edge(SemanticEdgeRoleV1::SwitchValue, left),
+            )],
+            edge(SemanticEdgeRoleV1::SwitchOtherwise, right),
+        )
+        .unwrap(),
+    };
+    let statement =
+        |kind| SemanticStatementV1::new(SemanticSourceProvenanceV1::unavailable(), kind);
+    let store = || {
+        statement(SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+            place(2, U32),
+            literal(99),
+            SemanticVolatilityV1::NonVolatile,
+            None,
+        )))
+    };
+    let mut changed = Vec::new();
+    if config.looping {
+        changed.push(store());
+        changed.push(assign(place(3, U32), SemanticRvalueKindV1::Use(literal(1))));
+    }
+    if let Some(kill) = config.kill {
+        changed.push(match kill {
+            InitializationKillV29::StorageLive => statement(SemanticStatementKindV1::StorageLive(
+                SemanticLocalIdV1::from_index(2),
+            )),
+            InitializationKillV29::StorageDead => statement(SemanticStatementKindV1::StorageDead(
+                SemanticLocalIdV1::from_index(2),
+            )),
+            InitializationKillV29::Deinitialize => {
+                statement(SemanticStatementKindV1::Deinitialize(place(2, U32)))
+            }
+            InitializationKillV29::Move => assign(
+                place(4, U32),
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Move(place(2, U32))),
+            ),
+        });
+    }
+    if config.reinitialize {
+        changed.push(store());
+    }
+    let read = if config.copy_read {
+        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(2, U32)))
+    } else {
+        SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+            place(2, U32),
+            if config.volatile {
+                SemanticVolatilityV1::Volatile
+            } else {
+                SemanticVolatilityV1::NonVolatile
+            },
+            None,
+        ))
+    };
+    let mut entry = helper.blocks()[0].statements()[..2].to_vec();
+    if config.looping {
+        entry.push(assign(place(3, U32), SemanticRvalueKindV1::Use(literal(0))));
+    }
+    let blocks = vec![
+        block(
+            140,
+            entry,
+            if config.looping {
+                goto(1)
+            } else {
+                switch(1, 1, 2)
+            },
+        ),
+        block(
+            141,
+            vec![],
+            if config.looping {
+                switch(3, 2, 3)
+            } else {
+                goto(3)
+            },
+        ),
+        block(142, changed, goto(if config.looping { 1 } else { 3 })),
+        block(
+            143,
+            vec![assign(place(0, U32), read)],
+            SemanticTerminatorKindV1::Return,
+        ),
+    ];
+    functions[3] = function(130, helper.role(), helper.abi().clone(), locals, blocks);
+    build(
+        semantic.types().to_vec(),
+        functions,
+        semantic.callables().to_vec(),
+    )
+}
+
 pub(in super::super) fn repeated_owner() -> ProductionSemanticSsaOwnerV1 {
     let original = lifecycle_owner(false);
     let semantic = original.source_semantic();

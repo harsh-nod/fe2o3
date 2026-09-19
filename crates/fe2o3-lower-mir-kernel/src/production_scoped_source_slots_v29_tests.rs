@@ -1,5 +1,9 @@
 use super::*;
 
+mod initialization_tests {
+    include!("production_scoped_initialization_v29_tests.rs");
+}
+
 const STOP: &str = "test stopped after scoped source-slot validation";
 thread_local! {
     static OBSERVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
