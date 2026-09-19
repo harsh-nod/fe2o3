@@ -59,6 +59,21 @@ MIR. These are negative-test syntax, not unsafe runtime operations. Each block
 is counted separately, and the rooted source-safety test must reject both
 before artifact export; provider authentication grants no callback exemption.
 
+The Wave64 source-capture fixture introduced in ec9a526c55f82825e17c7a507507d6cb1debf7ce
+contains one deliberately unsafe call in a macro template and three unsafe
+lookalike functions. The call is a negative case: the collector must reject the
+user helper's unsafe block before semantic capture. The three unreachable
+lookalikes have the provider's scalar signatures but different local definition
+identities; the callback mutation checks must reject them as trusted terminals.
+Their bodies only return an input. Replacing these declarations with safe
+signatures, or removing the unsafe call syntax, would remove the intended
+authentication/source-safety negatives. The inventory counts the template
+once, not once per scalar expansion. This reconciliation changes no fixture,
+source-admission rule, trusted-provider definition or runtime behavior.
+See production_rustc_driver_wave64_capture_source_v1_tests.rs and
+collector/production_wave64_shuffle_terminal_v1_tests.rs for the actual
+callback assertions; an inventory pass alone does not execute those callbacks.
+
 - Keep pure compiler, simulator, debugger-engine, and profiler-analysis modules
   unsafe-free, using `forbid(unsafe_code)` where the crate boundary supports it.
 - Prefer existing safe typed OS APIs. Keep descriptor ownership in `OwnedFd`,
