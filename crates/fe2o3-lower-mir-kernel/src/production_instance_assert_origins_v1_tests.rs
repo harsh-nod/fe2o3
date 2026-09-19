@@ -1,6 +1,53 @@
 use super::*;
 
 #[test]
+fn repeated_assertion_collector_failure_drops_partial_rows_before_refund() {
+    with_assert_pending(false, true, |pending, instances, budget| {
+        let floor = budget.storage();
+        let mut visits = 0;
+        let result = scoped_slot_attempt_v29(budget, |budget| {
+            let functions = std::slice::from_ref(&pending.function);
+            let graph = AssertGraphIndexV1::build_functions(functions, true, budget)?;
+            let mut rows = Vec::new();
+            replay_instance_asserts_in_functions_v1(
+                InstanceAssertReplaySubjectV1 {
+                    functions,
+                    function_ordinal: 0,
+                    sidecars: &pending.sidecars,
+                    coordinates: &pending.coordinates,
+                    slot_relocation: pending.slot_relocation.as_ref(),
+                    insertions: &[],
+                },
+                instances,
+                &graph,
+                budget,
+                &mut |row, budget| {
+                    assert_origin_push_v1(&mut rows, row, budget)?;
+                    visits += 1;
+                    Err(
+                        assert_origin_invalid_v1(None, "collector refused after retaining row")
+                            .into(),
+                    )
+                },
+            )?;
+            graph.release(budget)?;
+            Ok(rows)
+        });
+        assert_eq!(visits, 1);
+        assert!(matches!(
+            result,
+            Err(ProductionSemanticKirErrorV1::AssertOrigin(
+                SemanticKirAssertOriginErrorV1::InvalidBinding {
+                    site: None,
+                    detail: "collector refused after retaining row",
+                },
+            ))
+        ));
+        assert_eq!(budget.storage(), floor);
+    });
+}
+
+#[test]
 fn repeated_assertion_collection_keeps_instance_qualified_bindings() {
     for expected in [false, true] {
         for diamond in [false, true] {

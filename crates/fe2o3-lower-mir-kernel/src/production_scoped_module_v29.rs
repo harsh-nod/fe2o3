@@ -552,7 +552,7 @@ fn admit_pending_scoped_module_v29(
         return Err(ArgumentResourceV1::Accounting.into());
     }
     let floor = budget.storage();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    scoped_module_attempt_v29(budget, floor, |budget| {
         let emitted = scoped_module_roots_v29(source, limits, budget)?;
         let (candidate, roots) = scoped_module_candidate_v29(source, emitted, limits, budget)?;
         let (graph, graph_storage) =
@@ -572,21 +572,5 @@ fn admit_pending_scoped_module_v29(
             ledger: source.ledger,
             retained_storage,
         })
-    }));
-    match result {
-        Ok(Ok(owner)) => Ok(owner),
-        other => {
-            budget.release_storage(
-                budget
-                    .storage()
-                    .checked_sub(floor)
-                    .ok_or(ArgumentResourceV1::Accounting)?,
-            )?;
-            match other {
-                Ok(Err(error)) => Err(error),
-                Err(payload) => std::panic::resume_unwind(payload),
-                Ok(Ok(_)) => unreachable!(),
-            }
-        }
-    }
+    })
 }

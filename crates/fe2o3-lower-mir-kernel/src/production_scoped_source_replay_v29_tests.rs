@@ -357,6 +357,40 @@ fn scoped_source_owner_replay_rejects_metadata_changes_with_the_same_graph() {
     }
 }
 
+#[test]
+fn scoped_source_owner_replay_rejects_another_genuine_verified_graph() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    let mut first = Some(owning_source_fixture(ModuleFixture::Mixed, false, &mut budget).unwrap());
+    let mut a = SourceOwnedScopedModuleV29::try_new(
+        &mut first,
+        ProductionSemanticKirLimitsV1::default(),
+        &mut budget,
+    )
+    .unwrap();
+    let mut second = Some(owning_source_fixture(ModuleFixture::Array, false, &mut budget).unwrap());
+    let mut b = SourceOwnedScopedModuleV29::try_new(
+        &mut second,
+        ProductionSemanticKirLimitsV1::default(),
+        &mut budget,
+    )
+    .unwrap();
+    assert_ne!(a.pending.graph.identity(), b.pending.graph.identity());
+    let floor = budget.storage();
+    // Both authentic graph reservations remain live throughout the substitution.
+    std::mem::swap(&mut a.pending.graph, &mut b.pending.graph);
+    assert!(a.replay(&mut budget).is_err());
+    assert!(b.replay(&mut budget).is_err());
+    assert_eq!(budget.storage(), floor);
+    std::mem::swap(&mut a.pending.graph, &mut b.pending.graph);
+    a.replay(&mut budget).unwrap();
+    b.replay(&mut budget).unwrap();
+    let retained = a.retained_storage + b.retained_storage;
+    drop((a, b));
+    budget.release_storage(retained).unwrap();
+    assert_eq!(budget.storage(), 0);
+}
+
 thread_local! {
     static OWNING_REPLAY_ROOT_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
