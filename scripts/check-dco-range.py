@@ -17,6 +17,13 @@ DEPENDABOT_NAME = "dependabot[bot]"
 DEPENDABOT_EMAIL = "49699333+dependabot[bot]@users.noreply.github.com"
 DEPENDABOT_SIGNOFF = "Signed-off-by: dependabot[bot] <support@github.com>"
 MAX_COMMITS = 1024
+# Exact inherited exceptions approved by the maintainer on 2026-09-18.
+# See docs/dco-inherited-exceptions.md; no caller-supplied waiver is supported.
+INHERITED_EXCEPTION_REPOSITORIES = frozenset({"harsh-nod/fe2o3", "powderluv/fe2o3"})
+INHERITED_EXCEPTION_COMMITS = frozenset({
+    "3abb7b18ebe5e3cbc32002738bed0f7d72d4f745",
+    "5ed3840a90db3f03a2cded9becffc0459b737f36",
+})
 
 
 class DcoError(Exception):
@@ -106,18 +113,27 @@ def check(base: str, head: str, repo: str) -> int:
     if REPOSITORY_PATTERN.fullmatch(repo) is None:
         raise DcoError("invalid GitHub repository identity")
     missing = []
+    excepted = []
+    signed = 0
     commits = commits_in_range(base, head)
     for commit in commits:
         author, email, body = commit_identity(commit)
         expected = f"Signed-off-by: {author} <{email}>"
         if expected in body.splitlines():
+            signed += 1
             continue
         if verified_dependabot(commit, author, email, body, repo):
+            signed += 1
+            continue
+        if repo in INHERITED_EXCEPTION_REPOSITORIES and commit in INHERITED_EXCEPTION_COMMITS:
+            excepted.append(commit)
             continue
         missing.append(f"{commit}: missing exact trailer {expected}")
     if missing:
         raise DcoError("\n".join(missing))
-    print(f"DCO sign-off present on {len(commits)} commit(s)")
+    for commit in excepted:
+        print(f"DCO approved inherited exception: {repo}@{commit}")
+    print(f"DCO sign-off present on {signed} commit(s); {len(excepted)} approved inherited exception(s)")
     return len(commits)
 
 
