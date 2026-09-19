@@ -36,6 +36,10 @@ pub use fixed_checked_output_policy6_v1::run_production_fixed_checked_output_pol
 #[path = "production_rustc_driver_fixed_checked_output_policy7_v1.rs"]
 mod fixed_checked_output_policy7_v1;
 pub use fixed_checked_output_policy7_v1::run_production_fixed_checked_output_policy7_extraction_driver_v1;
+#[path = "production_rustc_driver_fixed_checked_output_policy8_v1.rs"]
+mod fixed_checked_output_policy8_v1;
+#[doc(hidden)]
+pub use fixed_checked_output_policy8_v1::run_production_fixed_checked_output_policy8_extraction_driver_v1;
 
 #[path = "production_source_census_driver_v1.rs"]
 mod source_census_driver;

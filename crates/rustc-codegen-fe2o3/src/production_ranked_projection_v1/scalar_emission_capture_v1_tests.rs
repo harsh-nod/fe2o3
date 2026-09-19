@@ -1,8 +1,7 @@
+use super::super::scalar_emission_fixture_v1_tests as fixture;
 use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 use std::cell::Cell;
-#[path = "scalar_emission_fixture_v1_tests.rs"]
-mod fixture;
 const WORK: usize = 1_000_000_000;
 const STORAGE: usize = 512 * 1024 * 1024;
 const FLOOR: usize = 23;

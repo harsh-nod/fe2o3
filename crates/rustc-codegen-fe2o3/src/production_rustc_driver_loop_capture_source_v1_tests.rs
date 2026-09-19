@@ -17,6 +17,9 @@ mod guard;
 #[path = "production_rustc_driver_loop_guard_protocol_closure_v1_tests.rs"]
 mod protocol_closure;
 
+#[path = "production_rustc_driver_guarded_loop_source_v1_tests.rs"]
+mod production_guarded;
+
 const REQUEST: &str = "FE2O3_TEST_LOOP_CAPTURE_REQUEST_V1";
 const BASE: &str = "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device";
 
@@ -499,9 +502,13 @@ impl Callbacks for LoopCallbacks {
     }
 }
 pub(super) fn requested() -> bool {
-    env::var_os(REQUEST).is_some()
+    env::var_os(REQUEST).is_some() || production_guarded::requested()
 }
 pub(super) fn run_child(args: &[String]) {
+    if production_guarded::requested() {
+        production_guarded::run_child(args);
+        return;
+    }
     let request: Request = serde_json::from_str(&env::var(REQUEST).unwrap()).unwrap();
     let path = PathBuf::from(env::var_os(CHILD_RESULT).unwrap());
     assert!(

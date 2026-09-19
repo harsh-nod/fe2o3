@@ -33,6 +33,9 @@ mod dominance_cse;
 #[cfg(feature = "commutative-cse")]
 mod commutative_cse;
 
+#[cfg(feature = "commutative-unitlocal-policy8")]
+mod commutative_unitlocal_policy8;
+
 #[cfg(feature = "wave64-capture")]
 mod wave64_capture;
 
@@ -120,6 +123,7 @@ mod ordered_program_v32;
     feature = "loop-capture-u64",
     feature = "dominance-cse",
     feature = "commutative-cse",
+    feature = "commutative-unitlocal-policy8",
     feature = "redundant-store-policy7",
     feature = "redundant-store-policy7-i8",
     feature = "redundant-store-policy7-u8",

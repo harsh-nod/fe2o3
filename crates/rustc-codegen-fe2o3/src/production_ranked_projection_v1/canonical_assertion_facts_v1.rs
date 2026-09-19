@@ -34,6 +34,7 @@ pub(crate) enum CanonicalAssertionErrorV1 {
     PrivateArray(SemanticKirPrivateArrayQueryErrorV1),
     CallEffects(fe2o3_kernel_analysis::CanonicalKirCallEffectErrorV1),
     MaskedAssertion(fe2o3_lower_mir_kernel::ProductionSemanticMaskedShiftQueryErrorV1),
+    GuardedProgress(Box<fe2o3_lower_mir_kernel::ProductionScalarSsaEmissionErrorV1>),
     Binding(&'static str),
 }
 impl fmt::Display for CanonicalAssertionErrorV1 {
@@ -47,6 +48,7 @@ impl fmt::Display for CanonicalAssertionErrorV1 {
             Self::PrivateArray(error) => error.fmt(f),
             Self::CallEffects(error) => error.fmt(f),
             Self::MaskedAssertion(error) => error.fmt(f),
+            Self::GuardedProgress(error) => error.fmt(f),
             Self::Binding(detail) => f.write_str(detail),
         }
     }
@@ -62,6 +64,7 @@ impl Error for CanonicalAssertionErrorV1 {
             Self::PrivateArray(error) => Some(error),
             Self::CallEffects(error) => Some(error),
             Self::MaskedAssertion(error) => Some(error),
+            Self::GuardedProgress(error) => Some(error.as_ref()),
             Self::Binding(_) => None,
         }
     }
@@ -105,6 +108,18 @@ pub(super) enum ProjectedAssertionConditionV1 {
 /// origin view and exact borrowed graph report below. Tests must identify any
 /// isolated synthetic decision inputs explicitly.
 pub(super) trait ProjectedAssertionFactsV1 {
+    // The historical route has no added guard contract. The distinct strict
+    // decorator consumes its exact source/N row before the existing proof mark.
+    fn require_guarded_source_progress_v1(
+        &mut self,
+        _types: &[super::SemanticTypeDeclV1],
+        _function: &super::SemanticFunctionDeclV1,
+        _induction: &super::ProjectedUniformInductionV1,
+        _entry_operations: &[super::ProductionRankedOperationV1],
+    ) -> Result<(), ProjectionError> {
+        Ok(())
+    }
+
     fn masked_assertion_source_proved_v1(
         &mut self,
         _function: &super::SemanticFunctionDeclV1,

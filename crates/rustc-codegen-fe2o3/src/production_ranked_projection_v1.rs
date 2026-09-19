@@ -3091,14 +3091,29 @@ pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(
     })
 }
 
+#[path = "production_ranked_projection_v1/guarded_source_progress_v1.rs"]
+pub(crate) mod guarded_source_progress_v1;
 #[path = "production_ranked_projection_v1/scalar_emission_capture_v1.rs"]
 pub(crate) mod scalar_emission_capture_v1;
+#[cfg(test)]
+#[path = "production_ranked_projection_v1/scalar_emission_fixture_v1_tests.rs"]
+mod scalar_emission_fixture_v1_tests;
 
 fn project_ranked_roots_v1(
     source: &RankedProjectionSourceV1<'_>,
     root_inputs: &[ProductionRankedRootInputV1],
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<Box<[ProductionRankedRootProgramV1]>, ProductionRankedProjectionErrorV1> {
+    project_ranked_roots_with_progress_v1(source, root_inputs, reference_bindings, budget, None)
+}
+
+fn project_ranked_roots_with_progress_v1(
+    source: &RankedProjectionSourceV1<'_>,
+    root_inputs: &[ProductionRankedRootInputV1],
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    mut progress: Option<&mut guarded_source_progress_v1::GuardedSourceProgressV1<'_, '_>>,
 ) -> Result<Box<[ProductionRankedRootProgramV1]>, ProductionRankedProjectionErrorV1> {
     source.require_floor(budget)?;
     source
@@ -3149,10 +3164,11 @@ fn project_ranked_roots_v1(
     with_canonical_assertions_source_budget_v1(source, budget, |session| {
         let callable_effects = session.callable_effect_summaries(source)?;
         let mut roots = Vec::with_capacity(root_inputs.len());
-        for ((input, source_root), root_references) in root_inputs
+        for (root_ordinal, ((input, source_root), root_references)) in root_inputs
             .iter()
             .zip(source_launch_roster.roots())
             .zip(root_reference_bindings.iter())
+            .enumerate()
         {
             let semantic_root = source_root.selected_root();
             let selection = semantic
@@ -3162,15 +3178,34 @@ fn project_ranked_roots_v1(
                 ))?;
             let root = session
                 .with_source_masked_assertions_v1(semantic_root, selection.body(), |facts| {
-                    project_and_verify_ranked_root_v1(
-                        semantic,
-                        &callable_effects,
-                        selection,
-                        input,
-                        *source_root,
-                        root_references,
-                        facts,
-                    )
+                    match progress.as_deref_mut() {
+                        Some(progress) => progress.with_source(
+                            root_ordinal,
+                            semantic_root,
+                            selection.body(),
+                            facts,
+                            |facts| {
+                                project_and_verify_ranked_root_v1(
+                                    semantic,
+                                    &callable_effects,
+                                    selection,
+                                    input,
+                                    *source_root,
+                                    root_references,
+                                    facts,
+                                )
+                            },
+                        ),
+                        None => project_and_verify_ranked_root_v1(
+                            semantic,
+                            &callable_effects,
+                            selection,
+                            input,
+                            *source_root,
+                            root_references,
+                            facts,
+                        ),
+                    }
                 })
                 .map_err(|error| {
                     error.with_deterministic_root_context(
@@ -20331,6 +20366,12 @@ fn build_ranked_cfg(
     let mut proved_assertions = SemanticAssertProofsV1::analyze(types, function)?;
     let body_predicates = indexed_induction_body_predicates_v1(function, uniform_inductions)?;
     for induction in uniform_inductions {
+        assertion_facts.require_guarded_source_progress_v1(
+            types,
+            function,
+            induction,
+            &entry_operations,
+        )?;
         let Some(block) = induction
             .source_progress
             .update

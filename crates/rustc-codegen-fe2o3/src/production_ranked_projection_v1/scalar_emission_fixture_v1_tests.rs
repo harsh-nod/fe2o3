@@ -1,10 +1,12 @@
-use super::*;
 use fe2o3_lower_mir_kernel::{
     ProductionSourceLaunchInputV1, ProductionSourceLaunchRootInputV1,
     ProductionSourceLaunchRosterV1,
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
-use fe2o3_pliron::{ProductionSemanticMirLimitsV1, ProductionSemanticSsaLimitsV1};
+use fe2o3_pliron::{
+    ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1, ProductionSemanticSsaLimitsV1,
+    ProductionSemanticSsaOwnerV1,
+};
 
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const U32: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
@@ -128,6 +130,19 @@ fn types() -> Vec<SemanticTypeDeclV1> {
 /// Component fixture, not rustc/source-driver qualification. All source owners,
 /// SSA plans, typed certificates and emitted N are produced by the real APIs.
 pub(super) fn source(seed: u8) -> (ProductionSemanticSsaOwnerV1, ProductionSourceLaunchRosterV1) {
+    source_with(
+        seed,
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([250; 32])),
+        |function| vec![function],
+    )
+}
+
+// Transform actual declarations only before admission and both genuine owners.
+pub(super) fn source_with(
+    seed: u8,
+    target: SemanticTargetDataLayoutV1,
+    transform: impl FnOnce(SemanticFunctionDeclV1) -> Vec<SemanticFunctionDeclV1>,
+) -> (ProductionSemanticSsaOwnerV1, ProductionSourceLaunchRosterV1) {
     let source = SemanticSourceProvenanceV1::unavailable();
     let attributes = SemanticAbiValueAttributesV1::new(
         SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
@@ -138,7 +153,7 @@ pub(super) fn source(seed: u8) -> (ProductionSemanticSsaOwnerV1, ProductionSourc
     .unwrap();
     let abi = SemanticFunctionAbiV1::from_rustc(
         SemanticAbiIdentityV1::from_sha256([seed; 32]),
-        SemanticLayoutIdentityV1::from_sha256([250; 32]),
+        target.identity(),
         SemanticCanonAbiV1::GpuKernel,
         SemanticExternAbiV1::GpuKernel,
         false,
@@ -260,14 +275,42 @@ pub(super) fn source(seed: u8) -> (ProductionSemanticSsaOwnerV1, ProductionSourc
         )
         .unwrap(),
     ));
+    let functions = transform(function);
+    let root_ids = (0..functions.len())
+        .map(|index| SemanticFunctionIdV1::from_index(index as u32))
+        .collect::<Vec<_>>();
+    let names = (0..functions.len())
+        .map(|index| {
+            if index == 0 {
+                "component".to_owned()
+            } else {
+                format!("component_{index}")
+            }
+        })
+        .collect::<Vec<_>>();
+    let launch_inputs = functions
+        .iter()
+        .enumerate()
+        .map(|(index, function)| {
+            ProductionSourceLaunchRootInputV1::new(
+                &names[index],
+                *function
+                    .kernel_entry()
+                    .unwrap()
+                    .kernel_binding_identity()
+                    .as_bytes(),
+                ProductionSourceLaunchInputV1::new(1, Some([64, 1, 1]), [1, 1, 1]),
+            )
+        })
+        .collect::<Vec<_>>();
     let admitted = InertSemanticMirRequestV1::new(
-        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([250; 32])),
+        target,
         types(),
         vec![],
         vec![],
         vec![],
-        vec![function],
-        vec![SemanticFunctionIdV1::from_index(0)],
+        functions,
+        root_ids,
     )
     .unwrap()
     .admit(SemanticMirLimitsV1::default())
@@ -278,14 +321,7 @@ pub(super) fn source(seed: u8) -> (ProductionSemanticSsaOwnerV1, ProductionSourc
     let ssa =
         ProductionSemanticSsaOwnerV1::try_new(semantic, ProductionSemanticSsaLimitsV1::default())
             .unwrap();
-    let launch = ProductionSourceLaunchRosterV1::try_new(
-        ssa.source_semantic(),
-        &[ProductionSourceLaunchRootInputV1::new(
-            "component",
-            [seed; 32],
-            ProductionSourceLaunchInputV1::new(1, Some([64, 1, 1]), [1, 1, 1]),
-        )],
-    )
-    .unwrap();
+    let launch =
+        ProductionSourceLaunchRosterV1::try_new(ssa.source_semantic(), &launch_inputs).unwrap();
     (ssa, launch)
 }

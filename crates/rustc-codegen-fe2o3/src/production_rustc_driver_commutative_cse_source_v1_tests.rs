@@ -6,6 +6,8 @@ mod checks;
 #[path = "production_rustc_driver_commutative_cse_protocol_v1_tests.rs"]
 mod protocol;
 
+#[path = "production_rustc_driver_commutative_policy8_source_v1_tests.rs"]
+mod fixed_policy8;
 #[path = "production_rustc_driver_commutative_tail_source_v1_tests.rs"]
 mod post_policy7;
 

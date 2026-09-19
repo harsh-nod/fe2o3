@@ -1,8 +1,8 @@
 //! Fixed Policy8: unchanged P7 history plus one source-checked commutative pass.
-//! Only K is emitted. No new execution wire, public driver or default route.
+//! Only K is emitted. Literal extraction is separate from protected publication.
 #![allow(
     dead_code,
-    reason = "compiled native K endpoint; public extraction/protected/default remain closed"
+    reason = "compiled native K endpoint; protected publication/default remain closed"
 )]
 use super::checked_output_artifacts_v1::{
     CheckedArtifactsOwnerRefV1, PreparedCheckedArtifactPartsV1, prepare_checked_artifact_parts_v1,
@@ -24,8 +24,13 @@ use fe2o3_lower_mir_kernel::{
 };
 use std::mem::size_of;
 
+#[path = "production_policy8_extraction_v1.rs"]
+mod extraction;
 #[path = "production_policy8_native_v1.rs"]
 pub(crate) mod native;
+#[cfg(test)]
+#[path = "production_policy8_source_observation_v1_tests.rs"]
+pub(crate) mod source_observation;
 
 #[derive(Debug)]
 pub(crate) enum CheckedOutputPolicy8StageErrorV1 {
@@ -35,6 +40,7 @@ pub(crate) enum CheckedOutputPolicy8StageErrorV1 {
     NativeSource(Box<crate::production_native_source_lineage_v1::NativeSourceLineageErrorV1>),
     InputAssociation(Box<super::native_checked_output_handoff_v1::policy6::final_receipts::input_association::NativeInputAssociationErrorPolicy6V1>),
     Execution(&'static str),
+    NativePublicationUnavailable,
 }
 impl fmt::Display for CheckedOutputPolicy8StageErrorV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

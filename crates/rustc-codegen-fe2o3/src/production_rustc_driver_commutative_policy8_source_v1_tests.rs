@@ -1,30 +1,31 @@
-//! Strict actual-source J/K qualification. Native bytes remain historical P7 J.
+//! Strict actual-source K native qualification; no signed-positive owner.
+use super::post_policy7::{compare_simulations, traps};
 use super::*;
-use crate::production_pipeline::checked_output_policy7_v1::commutative_source_observation as live;
-use fe2o3_kernel_ir::{
-    AmdGpuDiagnosticOperation as Diagnostic, BinaryOp, InertFormalMemoryReceiptFormatV4 as Formal,
-    OperationKind as Kind,
-};
+use crate::production_pipeline::checked_output_policy8_v1::source_observation as live;
+use fe2o3_kernel_ir::{BinaryOp, InertFormalMemoryReceiptFormatV4 as Formal};
 
-#[path = "production_rustc_driver_commutative_tail_protocol_v1_tests.rs"]
-mod protocol7;
+#[path = "production_rustc_driver_commutative_policy8_protocol_v1_tests.rs"]
+mod protocol8;
 
-#[path = "production_rustc_driver_commutative_tail_controls_v1_tests.rs"]
-mod controls7;
+#[path = "production_rustc_driver_commutative_policy8_controls_v1_tests.rs"]
+mod controls8;
+
+#[path = "production_rustc_driver_commutative_policy8_unit_local_v1_tests.rs"]
+mod unit_local;
 
 const SCENARIOS: usize = 3 * 6 * 10 * 2;
 
 #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Source7 {
+struct Source8 {
     semantic: [u8; 32],
     roots: Vec<census::SourceRoot>,
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Observation7 {
+struct Observation8 {
     case: Case,
-    source: Source7,
+    source: Source8,
     original: [u8; 32],
     original_bytes: u64,
     historical_i: [u8; 32],
@@ -44,113 +45,85 @@ struct Observation7 {
     k_traps: usize,
     entry_work: usize,
     stage_work: usize,
-    tail_work: usize,
+    after_replay_work: usize,
     replay_work: usize,
     stage_floor: usize,
-    tail_floor: usize,
+    after_replay_floor: usize,
     original_sim: sim::Report,
     final_sim: sim::Report,
     compared_scenarios: usize,
-    baseline_policy: u16,
-    baseline_subject: [u8; 32],
-    baseline_llvm_sha256: [u8; 32],
-    baseline_llvm_bytes: usize,
+    native_policy: u16,
+    native_subject: [u8; 32],
+    native_llvm_sha256: [u8; 32],
+    native_llvm_bytes: usize,
     grants_authority: bool,
 }
 
-fn source7(
+fn source8(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
-) -> Result<Source7, String> {
+) -> Result<Source8, String> {
     let roots = census::roots(semantic)?;
     graph::roster(roots.iter().map(|r| r.name.as_str()))?;
     let identity = *semantic.semantic_sha256().as_bytes();
     if digest(semantic.canonical_encoding()) != identity {
         return Err("retained semantic identity/bytes disagree".into());
     }
-    Ok(Source7 {
+    Ok(Source8 {
         semantic: identity,
         roots,
     })
-}
-
-pub(super) fn traps(module: &fe2o3_kernel_ir::Module) -> usize {
-    module
-        .functions
-        .iter()
-        .flat_map(|f| &f.body)
-        .flat_map(|b| &b.blocks)
-        .flat_map(|b| &b.operations)
-        .filter(|op| {
-            matches!(&op.kind,
-            Kind::Call { callee, arguments } if matches!(
-                Diagnostic::from_intrinsic_call(callee, arguments),
-                Some(Diagnostic::Trap | Diagnostic::AssertFail { .. })
-            ))
-        })
-        .count()
-}
-
-// Both independently executed actual graphs are already checked against the
-// same typed host oracle, full buffers/canaries and repeated immutable requests.
-// Bind their exact experiment roster as well; executed step counts may differ.
-pub(super) fn compare_simulations(
-    original: &sim::Report,
-    final_k: &sim::Report,
-) -> Result<usize, String> {
-    let original = serde_json::to_value(original).map_err(|e| e.to_string())?;
-    let final_k = serde_json::to_value(final_k).map_err(|e| e.to_string())?;
-    let a = original["scenarios"]
-        .as_array()
-        .ok_or("original SIM scenarios")?;
-    let b = final_k["scenarios"]
-        .as_array()
-        .ok_or("final SIM scenarios")?;
-    if a.len() != SCENARIOS || b.len() != a.len() {
-        return Err("original/final SIM experiment count changed".into());
-    }
-    for (a, b) in a.iter().zip(b) {
-        for field in [
-            "root",
-            "len",
-            "lhs",
-            "rhs",
-            "choose",
-            "grid",
-            "workgroup",
-            "invocations",
-            "checked_bytes",
-            "replays",
-        ] {
-            let (Some(a), Some(b)) = (a.get(field), b.get(field)) else {
-                return Err("original/final SIM experiment field missing".into());
-            };
-            if a != b {
-                return Err("original/final SIM experiments differ".into());
-            }
-        }
-    }
-    Ok(a.len())
 }
 
 fn observe_view(
     view: live::View<'_>,
     case: Case,
     budget: &mut Budget<'_>,
-) -> Result<Observation7, String> {
-    let live::Owner::Direct(owner) = view.owner else {
+) -> Result<Observation8, String> {
+    if !matches!(view.owner, live::Owner::Direct(_)) {
         return Err("this three-root fixture must retain its genuine Direct source route".into());
+    }
+    observe_bound_view(view, case, budget)
+}
+
+fn observe_bound_view(
+    view: live::View<'_>,
+    case: Case,
+    budget: &mut Budget<'_>,
+) -> Result<Observation8, String> {
+    let (semantic, original, i, j, k, tail, kernels, grants_authority) = match view.owner {
+        live::Owner::Direct(owner) => {
+            let prefix7 = owner.prefix();
+            let prefix6 = prefix7.prefix();
+            (
+                prefix6.source_semantic_kir().semantic().semantic(),
+                prefix6
+                    .source_semantic_kir()
+                    .pre_ranked_executable()
+                    .ok_or("actual original source N missing")?,
+                prefix6.output(),
+                prefix7.output(),
+                owner.output(),
+                owner.continuation(),
+                owner.kernels(),
+                owner.grants_artifact_or_launch_authority(),
+            )
+        }
+        live::Owner::Erased(owner) => {
+            let prefix7 = owner.prefix();
+            let prefix6 = prefix7.prefix();
+            (
+                prefix6.original_source().semantic_ssa().source_semantic(),
+                prefix6.original_source().executable(),
+                prefix6.output(),
+                prefix7.output(),
+                owner.output(),
+                owner.continuation(),
+                owner.kernels(),
+                owner.grants_artifact_or_launch_authority(),
+            )
+        }
     };
-    let prefix7 = owner.prefix();
-    let prefix6 = prefix7.prefix();
-    let semantic = prefix6.source_semantic_kir().semantic().semantic();
-    let source = source7(semantic)?;
-    let original = prefix6
-        .source_semantic_kir()
-        .pre_ranked_executable()
-        .ok_or("actual original source N missing")?;
-    let j = prefix7.output();
-    let k = owner.output();
-    let tail = owner.continuation();
+    let source = source8(semantic)?;
     if !std::ptr::eq(original, view.owner.original())
         || !std::ptr::eq(j, view.owner.historical_j())
         || !std::ptr::eq(k, view.owner.output())
@@ -159,9 +132,10 @@ fn observe_view(
         || tail.proved_pairs() != ROOTS.len()
         || !tail.execution().changed()
         || j.canonical().identity() == k.canonical().identity()
-        || owner.grants_artifact_or_launch_authority()
+        || grants_authority
         || tail.grants_authority()
-        || view.baseline_execution.policy_version() != 7
+        || view.artifacts.prefix_execution().policy_version() != 7
+        || view.artifacts.policy_version() != 8
         || view.profile.device_target() != format!("{}:xnack-", case.target.cpu())
     {
         return Err("actual source/P7/J/K custody, nonempty mutation or authority changed".into());
@@ -169,9 +143,7 @@ fn observe_view(
     let floor = budget.storage();
     let ledger = budget.work_ledger_identity_v1();
     let before = budget.work();
-    owner
-        .verify_equivalence(budget)
-        .map_err(|e| format!("actual full source/J/K replay: {e:?}"))?;
+    view.replay(budget)?;
     let replay_work = budget
         .work()
         .checked_sub(before)
@@ -189,23 +161,43 @@ fn observe_view(
         tail.occurrences().candidate(),
         case,
     )?;
-    checks::descriptor(&roots, view.baseline_descriptor.table().kernels())?;
-    if view.baseline_descriptor.grants_link_authority()
-        || view.baseline_descriptor.grants_load_authority()
-        || view.baseline_descriptor.grants_launch_authority()
-        || view
-            .baseline_descriptor
-            .table()
-            .producer()
-            .version()
-            .as_str()
-            != format!("production-policy7-checked-{}-cov6-v1", case.target.cpu())
-        || view.baseline_llvm.is_empty()
+    let descriptor = view.artifacts.descriptor_source();
+    checks::descriptor(&roots, descriptor.table().kernels())?;
+    if descriptor.grants_link_authority()
+        || descriptor.grants_load_authority()
+        || descriptor.grants_launch_authority()
+        || descriptor.table().producer().version().as_str()
+            != format!("production-policy8-checked-{}-cov6-v1", case.target.cpu())
+        || view.artifacts.llvm_ir().is_empty()
     {
-        return Err("historical J baseline descriptor/authority changed".into());
+        return Err("actual K descriptor/authority changed".into());
     }
+    // Independent test reemission is not an additional production emission.
+    budget
+        .reserve_storage(3 * dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES)
+        .map_err(|e| format!("{e:?}"))?;
+    {
+        let raw = match view.profile {
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942 => dialect_amdgcn::lower_canonical_v12_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(k),
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950 => dialect_amdgcn::lower_canonical_v12_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(k),
+        }.map_err(|e| format!("{e:?}"))?;
+        let bound = dialect_amdgcn::bind_production_llvm22_worker_layout_v1(&raw)
+            .map_err(|e| format!("{e:?}"))?;
+        let module =
+            crate::kernel_ir_codegen::retain_production_compiler_module_text_v1(k.module(), bound)
+                .map_err(|e| format!("{e:?}"))?;
+        let complete =
+            crate::kernel_ir_codegen::bind_compiler_descriptor_source_v1(module, descriptor)
+                .map_err(|e| format!("{e:?}"))?;
+        if complete.llvm_ir() != view.artifacts.llvm_ir() {
+            return Err("independent complete K LLVM/descriptor bytes differ".into());
+        }
+    }
+    budget
+        .release_storage(3 * dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES)
+        .map_err(|e| format!("{e:?}"))?;
     let mut formal = Vec::new();
-    for report in owner.kernels() {
+    for report in kernels {
         if report.accesses().is_empty() {
             return Err("fresh K formal report lost nonvacuous external effects".into());
         }
@@ -218,12 +210,12 @@ fn observe_view(
     let original_sim = sim::observe(original.canonical(), case)?;
     let final_sim = sim::observe(k.canonical(), case)?;
     let compared_scenarios = compare_simulations(&original_sim, &final_sim)?;
-    let report = Observation7 {
+    let report = Observation8 {
         case,
         source,
         original: *original.canonical().identity().digest(),
         original_bytes: original.canonical().identity().canonical_length(),
-        historical_i: *prefix6.output().canonical().identity().digest(),
+        historical_i: *i.canonical().identity().digest(),
         historical_j: *j.canonical().identity().digest(),
         historical_j_bytes: j.canonical().identity().canonical_length(),
         final_k: *k.canonical().identity().digest(),
@@ -233,31 +225,31 @@ fn observe_view(
         k_order: graph::order(k.module()),
         roots,
         fresh_k_formal: formal,
-        historical_p7_execution: digest(view.baseline_execution.canonical_bytes()),
+        historical_p7_execution: digest(view.artifacts.prefix_execution().canonical_bytes()),
         proved_pairs: tail.proved_pairs(),
         changed: tail.execution().changed(),
         j_traps: traps(j.module()),
         k_traps: traps(k.module()),
         entry_work: view.entry_work,
-        stage_work: view.stage_work,
-        tail_work: view.tail_work,
+        stage_work: view.prepared_work,
+        after_replay_work: budget.work(),
         replay_work,
-        stage_floor: view.stage_floor,
-        tail_floor: view.tail_floor,
+        stage_floor: view.prepared_floor,
+        after_replay_floor: budget.storage(),
         original_sim,
         final_sim,
         compared_scenarios,
-        baseline_policy: 7,
-        baseline_subject: *j.canonical().identity().digest(),
-        baseline_llvm_sha256: digest(view.baseline_llvm.as_bytes()),
-        baseline_llvm_bytes: view.baseline_llvm.len(),
+        native_policy: 8,
+        native_subject: *k.canonical().identity().digest(),
+        native_llvm_sha256: digest(view.artifacts.llvm_ir().as_bytes()),
+        native_llvm_bytes: view.artifacts.llvm_ir().len(),
         grants_authority: false,
     };
-    validate7(&report, case)?;
+    validate8(&report, case)?;
     Ok(report)
 }
 
-fn validate7(report: &Observation7, case: Case) -> Result<(), String> {
+fn validate8(report: &Observation8, case: Case) -> Result<(), String> {
     graph::roster(report.original_order.iter().map(String::as_str))?;
     graph::roster(report.source.roots.iter().map(|r| r.name.as_str()))?;
     graph::roster(report.roots.iter().map(|r| r.name.as_str()))?;
@@ -265,8 +257,8 @@ fn validate7(report: &Observation7, case: Case) -> Result<(), String> {
         || report.original_order != report.j_order
         || report.j_order != report.k_order
         || report.historical_j == report.final_k
-        || report.baseline_subject != report.historical_j
-        || report.baseline_policy != 7
+        || report.native_subject != report.final_k
+        || report.native_policy != 8
         || report.grants_authority
         || report.proved_pairs != ROOTS.len()
         || !report.changed
@@ -274,11 +266,11 @@ fn validate7(report: &Observation7, case: Case) -> Result<(), String> {
         || report.original_bytes == 0
         || report.historical_j_bytes == 0
         || report.final_k_bytes == 0
-        || report.baseline_llvm_bytes == 0
+        || report.native_llvm_bytes == 0
         || report.replay_work == 0
-        || !(report.entry_work < report.stage_work && report.stage_work < report.tail_work)
+        || !(report.entry_work < report.stage_work && report.stage_work < report.after_replay_work)
         || report.stage_floor == 0
-        || report.tail_floor <= report.stage_floor
+        || report.after_replay_floor != report.stage_floor
         || report.compared_scenarios != SCENARIOS
         || [
             report.source.semantic,
@@ -287,12 +279,12 @@ fn validate7(report: &Observation7, case: Case) -> Result<(), String> {
             report.historical_j,
             report.final_k,
             report.historical_p7_execution,
-            report.baseline_llvm_sha256,
+            report.native_llvm_sha256,
         ]
         .contains(&[0; 32])
     {
         return Err(
-            "actual-J report lost exact source/tail/nonempty/floor/P7-baseline evidence".into(),
+            "actual-K report lost exact source/mutation/floor/fixed8 native evidence".into(),
         );
     }
     if report
@@ -335,7 +327,7 @@ fn validate7(report: &Observation7, case: Case) -> Result<(), String> {
 }
 
 #[test]
-fn actual_j_matrix_keeps_all_widths_profiles_and_operations() {
+fn actual_k_matrix_keeps_all_widths_profiles_and_operations() {
     let values = cases();
     assert_eq!(values.len(), 16);
     for integer in Integer::ALL {

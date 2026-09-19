@@ -1,106 +1,14 @@
-//! Real public-runner controls; diagnostic failures never qualify source output.
-use super::fixed_census_observation as census;
+//! Literal fixed8 public-runner controls; old policy protocols remain unchanged.
 use super::*;
-use std::sync::{Arc, Mutex};
-
-const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::fixed_census_lifecycle::fixed_census_lifecycle_child";
-const REQUEST: &str = "FE2O3_TEST_FIXED_CENSUS_LIFECYCLE_REQUEST_V1";
-const BASE: &str = "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device";
-const BINDING: &str = "FE2O3_EXTRACT_CRATE_BINDING_PATH_V1";
-const STALE: &[u8] = b"{\"runId\":\"stale-sentinel\",\"extractionSucceeded\":true}\n";
-
-#[path = "production_rustc_driver_fixed7_census_lifecycle_v1_tests.rs"]
-mod policy7;
-#[path = "production_rustc_driver_fixed8_census_lifecycle_v1_tests.rs"]
-mod policy8;
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-enum Policy {
-    Five,
-    Six,
-    Seven,
-}
-impl Policy {
-    fn number(self) -> u16 {
-        match self {
-            Self::Five => 5,
-            Self::Six => 6,
-            Self::Seven => 7,
-        }
-    }
-    fn run(self, args: &[String], output: &Path) -> Result<(), String> {
-        match self {
-            Self::Five => {
-                crate::run_production_fixed_checked_output_extraction_driver_v1(args, output)
-            }
-            Self::Six => crate::run_production_fixed_checked_output_policy6_extraction_driver_v1(
-                args, output,
-            ),
-            Self::Seven => crate::run_production_fixed_checked_output_policy7_extraction_driver_v1(
-                args, output,
-            ),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-enum Input {
-    Fill,
-    RetainedUnit,
-    WaveRefusal,
-    ParseFatal,
-}
-impl Input {
-    fn root(self) -> &'static str {
-        match self {
-            Self::Fill => "fill",
-            Self::RetainedUnit => "private_helper_fill",
-            Self::WaveRefusal => "wave64_capture",
-            Self::ParseFatal => "no-root",
-        }
-    }
-    fn active_source(self) -> &'static str {
-        match self {
-            Self::WaveRefusal => "src/wave64_capture.rs",
-            _ => "src/lib.rs",
-        }
-    }
-    fn succeeds(self) -> bool {
-        matches!(self, Self::Fill | Self::RetainedUnit)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-enum Diagnostic {
-    Disabled,
-    Fresh,
-    InvalidRunId,
-    Stale,
-    OutputAlias,
-    BindingAlias,
-}
-impl Diagnostic {
-    const ALL: [Self; 6] = [
-        Self::Disabled,
-        Self::Fresh,
-        Self::InvalidRunId,
-        Self::Stale,
-        Self::OutputAlias,
-        Self::BindingAlias,
-    ];
-}
-
+use crate::production_pipeline::checked_output_policy8_v1::source_observation as live;
+use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+const CHILD8: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::fixed_census_lifecycle::policy8::fixed8_census_lifecycle_child";
+const REQUEST8: &str = "FE2O3_TEST_FIXED8_CENSUS_REQUEST_V1";
+#[path = "production_rustc_driver_fixed8_boundary_v1_tests.rs"]
+mod boundary;
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Stamp {
-    path: PathBuf,
-    digest: [u8; 32],
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Request {
-    policy: Policy,
+struct Request8 {
     input: Input,
     target: String,
     diagnostic: Diagnostic,
@@ -112,41 +20,104 @@ struct Request {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-enum Outcome {
-    Success,
-    AdmissionFailure(String),
-    Fatal,
+#[serde(tag = "kind", deny_unknown_fields)]
+enum Outcome8 {
+    Success {},
+    AdmissionFailure { error: String },
+    Fatal {},
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-struct Observed {
+#[serde(deny_unknown_fields)]
+struct Observed8 {
     calls: usize,
     roots: Option<Result<Vec<census::SourceRoot>, String>>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Stage8 {
+    calls: usize,
+    erased: bool,
+    original: [u8; 32],
+    output: [u8; 32],
+    llvm: [u8; 32],
+}
+
+fn stage8(
+    view: live::View<'_>,
+    input: Input,
+    target: &str,
+    budget: &mut Budget<'_>,
+) -> Result<Stage8, String> {
+    let erased = matches!(view.owner, live::Owner::Erased(_));
+    if erased != (input == Input::RetainedUnit)
+        || !input.succeeds()
+        || view.owner.pairs() != 0
+        || view.owner.historical_j().canonical().canonical_bytes()
+            != view.owner.output().canonical().canonical_bytes()
+        || view.artifacts.policy_version() != 8
+        || view.artifacts.grants_artifact_or_launch_authority()
+        || view.profile.device_target() != format!("{target}:xnack-")
+        || view
+            .artifacts
+            .descriptor_source()
+            .table()
+            .producer()
+            .version()
+            .as_str()
+            != format!("production-policy8-checked-{target}-cov6-v1")
+        || view.ranked.roots().len() != 1
+    {
+        return Err("literal fixed8 route/no-op/target/producer/source roster".into());
+    }
+    if let live::Owner::Erased(owner) = view.owner
+        && owner
+            .prefix()
+            .prefix()
+            .erased()
+            .canonical()
+            .canonical_bytes()
+            == view.owner.original().canonical().canonical_bytes()
+    {
+        return Err("retained UnitLocal source lost distinct actual N and E".into());
+    }
+    let floor = budget.storage();
+    let ledger = budget.work_ledger_identity_v1();
+    view.replay(budget)?;
+    if budget.storage() != floor || budget.work_ledger_identity_v1() != ledger {
+        return Err("literal fixed8 replay changed live ledger/floor".into());
+    }
+    Ok(Stage8 {
+        calls: 1,
+        erased,
+        original: *view.owner.original().canonical().identity().digest(),
+        output: *view.owner.output().canonical().identity().digest(),
+        llvm: digest(view.artifacts.llvm_ir().as_bytes()),
+    })
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Report {
-    request: Request,
-    outcome: Outcome,
-    observed: Observed,
+struct Report8 {
+    request: Request8,
+    outcome: Outcome8,
+    observed: Observed8,
+    stage: Stage8,
 }
 
 fn digest(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
-fn stamp(path: PathBuf) -> Stamp {
-    let path = path.canonicalize().unwrap();
-    Stamp {
-        digest: digest(&std::fs::read(&path).unwrap()),
-        path,
-    }
-}
-
-fn check_request(request: &Request, args: &[String]) -> Result<(), String> {
+fn check_request8(request: &Request8, args: &[String]) -> Result<(), String> {
     if request.args_digest != digest(&serde_json::to_vec(args).map_err(|e| e.to_string())?)
         || request.source.is_empty()
+        || !request
+            .source
+            .iter()
+            .any(|source| source.digest == request.active_hash)
+        || !matches!(request.target.as_str(), "gfx942" | "gfx950")
         || request
             .source
             .iter()
@@ -167,15 +138,15 @@ fn check_request(request: &Request, args: &[String]) -> Result<(), String> {
 
 #[test]
 #[ignore = "subprocess helper; parent binds actual Cargo arguments and lifecycle case"]
-fn fixed_census_lifecycle_child() {
+fn fixed8_census_lifecycle_child() {
     let Some(args_path) = env::var_os(CHILD_ARGS) else {
         return;
     };
     let args: Vec<String> = serde_json::from_slice(&std::fs::read(args_path).unwrap()).unwrap();
-    let request: Request = serde_json::from_str(&env::var(REQUEST).unwrap()).unwrap();
-    check_request(&request, &args).unwrap();
+    let request: Request8 = serde_json::from_str(&env::var(REQUEST8).unwrap()).unwrap();
+    check_request8(&request, &args).unwrap();
     assert!(!request.artifact.exists());
-    let observed = Arc::new(Mutex::new(Observed::default()));
+    let observed = Arc::new(Mutex::new(Observed8::default()));
     let callback = Arc::clone(&observed);
     let observer = Box::new(
         move |_: TyCtxt<'_>,
@@ -185,23 +156,51 @@ fn fixed_census_lifecycle_child() {
             report.roots = Some(census::roots(semantic));
         },
     );
-    // The actual runner transfers this Send observer into its rustc callback.
+    let stage = Arc::new(Mutex::new(Stage8::default()));
+    let stage_callback = Arc::clone(&stage);
+    let input = request.input;
+    let target = request.target.clone();
+    let stage_observer: live::Observer = Box::new(move |view, budget| {
+        let mut observed = stage_callback.lock().unwrap();
+        if observed.calls != 0 {
+            return Err("repeated fixed8 stage callback".into());
+        }
+        *observed = stage8(view, input, &target, budget)?;
+        Ok(())
+    });
+    // The actual runner transfers both Send observers into its rustc callback.
     // It is not installed in the caller thread's semantic-observer slot.
     let result =
-        super::super::fixed_census_invocation_observer_v1_tests::with_observer(observer, || {
-            rustc_driver::catch_fatal_errors(|| request.policy.run(&args, &request.artifact))
-        });
+        crate::production_rustc_driver_v1::fixed_census_invocation_observer_v1_tests::with_observer(
+            observer,
+            || {
+                live::with_observer(stage_observer, || {
+                    rustc_driver::catch_fatal_errors(|| {
+                        crate::run_production_fixed_checked_output_policy8_extraction_driver_v1(
+                            &args,
+                            &request.artifact,
+                        )
+                    })
+                })
+            },
+        );
     let outcome = match &result {
-        Ok(Ok(())) => Outcome::Success,
-        Ok(Err(error)) => Outcome::AdmissionFailure(error.clone()),
-        Err(_) => Outcome::Fatal,
+        Ok(Ok(())) => Outcome8::Success {},
+        Ok(Err(error)) => Outcome8::AdmissionFailure {
+            error: error.clone(),
+        },
+        Err(_) => Outcome8::Fatal {},
     };
-    check_request(&request, &args).unwrap();
-    let report = Report {
+    check_request8(&request, &args).unwrap();
+    let report = Report8 {
         request,
         outcome,
         observed: Arc::try_unwrap(observed)
             .expect("invocation observer dropped")
+            .into_inner()
+            .unwrap(),
+        stage: Arc::try_unwrap(stage)
+            .expect("stage observer dropped")
             .into_inner()
             .unwrap(),
     };
@@ -220,7 +219,11 @@ fn fixed_census_lifecycle_child() {
     }
 }
 
-fn check_outcome(status: Option<i32>, report: &Report, expected: &Request) -> Result<(), String> {
+fn check_outcome8(
+    status: Option<i32>,
+    report: &Report8,
+    expected: &Request8,
+) -> Result<(), String> {
     if &report.request != expected {
         return Err("foreign lifecycle report".into());
     }
@@ -228,14 +231,27 @@ fn check_outcome(status: Option<i32>, report: &Report, expected: &Request) -> Re
     if status != Some(expected_status) {
         return Err("unexpected lifecycle process status".into());
     }
+    if report.stage.calls != usize::from(expected.input.succeeds())
+        || report.stage.erased != (expected.input == Input::RetainedUnit)
+        || (expected.input.succeeds()
+            && [
+                report.stage.original,
+                report.stage.output,
+                report.stage.llvm,
+            ]
+            .contains(&[0; 32]))
+        || (!expected.input.succeeds() && report.stage != Stage8::default())
+    {
+        return Err("wrong fixed8 stage route or invocation count".into());
+    }
     match (&report.outcome, expected.input) {
-        (Outcome::Success, Input::Fill | Input::RetainedUnit) => {}
-        (Outcome::AdmissionFailure(error), Input::WaveRefusal)
+        (Outcome8::Success {}, Input::Fill | Input::RetainedUnit) => {}
+        (Outcome8::AdmissionFailure { error }, Input::WaveRefusal)
             if error.contains("production compilation pre-ranked materialization failed:")
                 && error.contains(
                     "helper parameter is not an exact by-value scalar aggregate or shared slice",
                 ) => {}
-        (Outcome::Fatal, Input::ParseFatal) => {}
+        (Outcome8::Fatal {}, Input::ParseFatal) => {}
         _ => return Err("wrong lifecycle outcome or admission boundary".into()),
     }
     if expected.input == Input::ParseFatal {
@@ -260,128 +276,24 @@ fn check_outcome(status: Option<i32>, report: &Report, expected: &Request) -> Re
     Ok(())
 }
 
-fn decode(status: Option<i32>, bytes: Option<&[u8]>, expected: &Request) -> Result<Report, String> {
-    let report: Report = serde_json::from_slice(bytes.ok_or("missing fresh lifecycle report")?)
+fn decode8(
+    status: Option<i32>,
+    bytes: Option<&[u8]>,
+    expected: &Request8,
+) -> Result<Report8, String> {
+    let report: Report8 = serde_json::from_slice(bytes.ok_or("missing fresh lifecycle report")?)
         .map_err(|e| e.to_string())?;
-    check_outcome(status, &report, expected)?;
+    check_outcome8(status, &report, expected)?;
     Ok(report)
 }
 
-struct CapturedCase {
-    captured: corpus_cargo::Captured,
-    input: Input,
-    target: String,
-    source: Vec<Stamp>,
-    active_hash: [u8; 32],
-}
-
-fn capture(workspace: &Path, scratch: &Path, input: Input, target: &str) -> CapturedCase {
-    assert_ne!(input, Input::ParseFatal);
-    let relative = format!("{BASE}/{}", input.active_source());
-    let mut source_paths = vec![format!("{BASE}/src/lib.rs")];
-    if relative != source_paths[0] {
-        source_paths.push(relative.clone());
-    }
-    let source = std::iter::once("Cargo.lock".to_owned())
-        .chain(std::iter::once(format!("{BASE}/Cargo.toml")))
-        .chain(source_paths.iter().cloned())
-        .map(|path| stamp(workspace.join(path)))
-        .collect::<Vec<_>>();
-    let hash = |path: &str| {
-        digest(&std::fs::read(workspace.join(path)).unwrap())
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    };
-    let manifest = format!("{BASE}/Cargo.toml");
-    let fixture = corpus::Fixture {
-        fixture_id: format!("census-{target}-{input:?}"),
-        target: target.into(),
-        compiler_input: corpus::CompilerInput {
-            package_manifest_sha256: hash(&manifest),
-            package_manifest: manifest,
-            cargo_lock_path: "Cargo.lock".into(),
-            cargo_lock_sha256: hash("Cargo.lock"),
-            source_paths,
-            source_closure_sha256: String::new(),
-            cargo_target: corpus::CargoTarget {
-                kind: "lib".into(),
-                name: "fe2o3_production_extraction_fixture".into(),
-                source_path: "src/lib.rs".into(),
-            },
-            default_features: false,
-            features: match input {
-                Input::Fill => vec![],
-                Input::RetainedUnit => vec!["private-unit-helper".into()],
-                Input::WaveRefusal => vec!["wave64-capture-u32".into()],
-                Input::ParseFatal => unreachable!(),
-            },
-            kernel_symbols: vec![input.root().into()],
-        },
-    };
-    let directory = scratch.join(&fixture.fixture_id);
-    std::fs::create_dir(&directory).unwrap();
-    let mut captured =
-        corpus_cargo::capture(workspace, &fixture, &directory, &scratch.join(target)).unwrap();
-    require_canonical_overflow_checks_v1(&captured.args).unwrap();
-    if input == Input::RetainedUnit {
-        captured
-            .args
-            .extend(["-Zinline-mir=no".into(), "-Zmir-opt-level=0".into()]);
-    }
-    CapturedCase {
-        captured,
-        input,
-        target: target.into(),
-        source,
-        active_hash: digest(&std::fs::read(workspace.join(relative)).unwrap()),
-    }
-}
-
-fn parse_fatal(workspace: &Path, scratch: &Path, original: &CapturedCase) -> CapturedCase {
-    let path = scratch.join("broken.rs");
-    std::fs::write(&path, "#![no_std]\npub fn broken( {\n").unwrap();
-    let original_input = workspace
-        .join(format!("{BASE}/src/lib.rs"))
-        .canonicalize()
-        .unwrap();
-    let mut args = original.captured.args.clone();
-    let inputs = args
-        .iter()
-        .enumerate()
-        .filter(|(_, arg)| !arg.starts_with('-'))
-        .filter(|(_, arg)| {
-            original.captured.cwd.join(arg).canonicalize().ok().as_ref() == Some(&original_input)
-        })
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
-    let [input] = inputs.as_slice() else {
-        panic!("exact captured root input missing or duplicated")
-    };
-    args[*input] = path.to_str().unwrap().into();
-    let broken = stamp(path);
-    CapturedCase {
-        captured: corpus_cargo::Captured {
-            args,
-            environment: original.captured.environment.clone(),
-            cwd: original.captured.cwd.clone(),
-            cfg: original.captured.cfg.clone(),
-            cargo_diagnostics: original.captured.cargo_diagnostics.clone(),
-        },
-        input: Input::ParseFatal,
-        target: original.target.clone(),
-        active_hash: broken.digest,
-        source: vec![broken],
-    }
-}
-
-struct Run {
-    report: Report,
+struct Run8 {
+    report: Report8,
     output: std::process::Output,
     bytes: Option<Vec<u8>>,
 }
 
-fn run(case: &CapturedCase, policy: Policy, diagnostic: Diagnostic, directory: &Path) -> Run {
+fn run8(case: &CapturedCase, diagnostic: Diagnostic, directory: &Path) -> Run8 {
     std::fs::create_dir(directory).unwrap();
     let artifact = directory.join("output.ll");
     let response = directory.join("result.json");
@@ -392,8 +304,7 @@ fn run(case: &CapturedCase, policy: Policy, diagnostic: Diagnostic, directory: &
         _ => directory.join("census.json"),
     };
     let run_id = census::run_id(&case.captured.args, directory.to_str().unwrap());
-    let request = Request {
-        policy,
+    let request = Request8 {
         input: case.input,
         target: case.target.clone(),
         diagnostic,
@@ -403,7 +314,7 @@ fn run(case: &CapturedCase, policy: Policy, diagnostic: Diagnostic, directory: &
         artifact: artifact.clone(),
         run_id: run_id.clone(),
     };
-    check_request(&request, &case.captured.args).unwrap();
+    check_request8(&request, &case.captured.args).unwrap();
     std::fs::write(&args_path, serde_json::to_vec(&case.captured.args).unwrap()).unwrap();
     assert!(!artifact.exists() && !response.exists() && !census_path.exists());
     if diagnostic == Diagnostic::Stale {
@@ -420,8 +331,8 @@ fn run(case: &CapturedCase, policy: Policy, diagnostic: Diagnostic, directory: &
         .env_remove(CHILD_PROOF_PROBE)
         .env(CHILD_ARGS, &args_path)
         .env(CHILD_RESULT, &response)
-        .env(REQUEST, serde_json::to_string(&request).unwrap())
-        .args(["--exact", CHILD, "--ignored", "--nocapture"]);
+        .env(REQUEST8, serde_json::to_string(&request).unwrap())
+        .args(["--exact", CHILD8, "--ignored", "--nocapture"]);
     census::configure(
         &mut command,
         match diagnostic {
@@ -436,19 +347,19 @@ fn run(case: &CapturedCase, policy: Policy, diagnostic: Diagnostic, directory: &
     progress::clear_inherited_jobserver(&mut command);
     let output = command.output().unwrap();
     let response_bytes = std::fs::read(&response);
-    let report = decode(
+    let report = decode8(
         output.status.code(),
         response_bytes.as_deref().ok(),
         &request,
     )
     .unwrap_or_else(|e| {
         panic!(
-            "{policy:?}/{:?}/{diagnostic:?}: {e}\n{}",
+            "fixed8/{:?}/{diagnostic:?}: {e}\n{}",
             case.input,
             corpus_cargo::diagnostics(&output)
         )
     });
-    check_request(&request, &case.captured.args).unwrap();
+    check_request8(&request, &case.captured.args).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     let bytes = if case.input.succeeds() {
         let bytes = std::fs::read(&artifact).unwrap();
@@ -463,7 +374,8 @@ fn run(case: &CapturedCase, policy: Policy, diagnostic: Diagnostic, directory: &
                 .count(),
             1
         );
-        assert!(stderr.contains(&format!("fixed policy {}", policy.number())));
+        assert!(stderr.contains("fixed policy 8"));
+        assert_eq!(digest(&bytes), report.stage.llvm);
         assert!(stderr.contains(if case.input == Input::RetainedUnit {
             "distinct E Some("
         } else {
@@ -484,7 +396,7 @@ fn run(case: &CapturedCase, policy: Policy, diagnostic: Diagnostic, directory: &
                 &census_report,
                 &case.captured.args,
                 &case.captured.cwd,
-                policy.number(),
+                8,
                 &format!("{}:xnack-", case.target),
                 &run_id,
                 case.input.succeeds(),
@@ -509,7 +421,7 @@ fn run(case: &CapturedCase, policy: Policy, diagnostic: Diagnostic, directory: &
                     &stale,
                     &case.captured.args,
                     &case.captured.cwd,
-                    policy.number(),
+                    8,
                     &format!("{}:xnack-", case.target),
                     &run_id,
                     case.input.succeeds()
@@ -525,14 +437,15 @@ fn run(case: &CapturedCase, policy: Policy, diagnostic: Diagnostic, directory: &
     if !matches!(diagnostic, Diagnostic::Disabled | Diagnostic::Fresh) {
         assert!(stderr.contains("fe2o3 diagnostic source census unavailable:"));
     }
-    Run {
+    Run8 {
         report,
         output,
         bytes,
     }
 }
 
-fn unchanged(baseline: &Run, candidate: &Run) {
+fn unchanged8(baseline: &Run8, candidate: &Run8) {
+    assert_eq!(baseline.report.stage, candidate.report.stage);
     assert_eq!(
         baseline.output.status, candidate.output.status,
         "diagnostics changed actual process status"
@@ -552,35 +465,42 @@ fn unchanged(baseline: &Run, candidate: &Run) {
 }
 
 #[test]
-#[ignore = "real fixed public runners, pinned nightly and AMD dependencies; 44 compiler children"]
-fn fixed5_source_routes_and_fixed5_fixed6_census_lifecycles_are_observational() {
+#[ignore = "real fixed8 public runner, pinned nightly and AMD dependencies; 26 compiler children"]
+fn fixed8_source_routes_and_census_lifecycles_are_observational() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
         .unwrap();
-    let scratch = crate::test_temp_dir::TestTempDir::create("fe2o3-fixed-census-lifecycle");
+    let scratch = crate::test_temp_dir::TestTempDir::create("fe2o3-fixed8-census-lifecycle");
     let mut direct_gfx942 = None;
     let mut completed = 0;
     for target in ["gfx942", "gfx950"] {
         for input in [Input::Fill, Input::RetainedUnit] {
             let case = capture(&workspace, scratch.path(), input, target);
-            let baseline = run(
+            let disabled = run8(
                 &case,
-                Policy::Five,
                 Diagnostic::Disabled,
                 &scratch
                     .path()
-                    .join(format!("positive-{target}-{input:?}-disabled")),
+                    .join(format!("route-{target}-{input:?}-disabled")),
             );
-            let enabled = run(
+            let enabled = run8(
                 &case,
-                Policy::Five,
                 Diagnostic::Fresh,
                 &scratch
                     .path()
-                    .join(format!("positive-{target}-{input:?}-fresh")),
+                    .join(format!("route-{target}-{input:?}-fresh")),
             );
-            unchanged(&baseline, &enabled);
+            unchanged8(&disabled, &enabled);
+            for run in [&disabled, &enabled] {
+                let stderr = String::from_utf8_lossy(&run.output.stderr);
+                assert!(
+                    stderr.contains("historical I ")
+                        && stderr.contains("historical J ")
+                        && stderr.contains("actual K ")
+                );
+                assert!(!stderr.contains("actual I "));
+            }
             completed += 2;
             if target == "gfx942" && input == Input::Fill {
                 direct_gfx942 = Some(case);
@@ -590,38 +510,32 @@ fn fixed5_source_routes_and_fixed5_fixed6_census_lifecycles_are_observational() 
     let direct = direct_gfx942.unwrap();
     let refusal = capture(&workspace, scratch.path(), Input::WaveRefusal, "gfx942");
     let fatal = parse_fatal(&workspace, scratch.path(), &direct);
-    for policy in [Policy::Five, Policy::Six] {
-        for case in [&direct, &refusal, &fatal] {
-            let mut baseline = None;
-            for diagnostic in Diagnostic::ALL {
-                let result = run(
-                    case,
-                    policy,
-                    diagnostic,
-                    &scratch.path().join(format!(
-                        "lifecycle-{policy:?}-{:?}-{diagnostic:?}",
-                        case.input
-                    )),
-                );
-                if let Some(baseline) = &baseline {
-                    unchanged(baseline, &result);
-                } else {
-                    baseline = Some(result);
-                }
-                completed += 1;
+    for case in [&direct, &refusal, &fatal] {
+        let mut baseline = None;
+        for diagnostic in Diagnostic::ALL {
+            let result = run8(
+                case,
+                diagnostic,
+                &scratch
+                    .path()
+                    .join(format!("lifecycle-{:?}-{diagnostic:?}", case.input)),
+            );
+            if let Some(baseline) = &baseline {
+                unchanged8(baseline, &result);
+            } else {
+                baseline = Some(result);
             }
+            completed += 1;
         }
     }
-    assert_eq!(completed, 44);
+    assert_eq!(completed, 26);
     eprintln!(
-        "FIXED CENSUS: 4 fixed5 source/route cases and 36 lifecycle controls; 44 actual public invocations"
+        "FIXED8 CENSUS: 4 source/route cases and 18 lifecycle controls; 26 actual public invocations; no source UnitLocal mutation claim"
     );
 }
-
 #[test]
 fn lifecycle_protocol_rejects_wrong_status_owner_count_outcome_and_foreign_request() {
-    let request = Request {
-        policy: Policy::Five,
+    let request = Request8 {
         input: Input::Fill,
         target: "gfx942".into(),
         diagnostic: Diagnostic::Fresh,
@@ -631,10 +545,17 @@ fn lifecycle_protocol_rejects_wrong_status_owner_count_outcome_and_foreign_reque
         artifact: "unused".into(),
         run_id: "current".into(),
     };
-    let exact = |request: Request, calls, outcome| Report {
+    let exact = |request: Request8, calls, outcome| Report8 {
+        stage: Stage8 {
+            calls: 1,
+            original: [5; 32],
+            output: [6; 32],
+            llvm: [7; 32],
+            ..Stage8::default()
+        },
         request,
         outcome,
-        observed: Observed {
+        observed: Observed8 {
             calls,
             roots: Some(Ok(vec![census::SourceRoot {
                 name: "fill".into(),
@@ -643,38 +564,78 @@ fn lifecycle_protocol_rejects_wrong_status_owner_count_outcome_and_foreign_reque
             }])),
         },
     };
-    let good = serde_json::to_vec(&exact(request.clone(), 1, Outcome::Success)).unwrap();
-    decode(Some(0), Some(&good), &request).unwrap();
+    let good = serde_json::to_vec(&exact(request.clone(), 1, Outcome8::Success {})).unwrap();
+    decode8(Some(0), Some(&good), &request).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&good).unwrap();
+    for pointer in ["/outcome", "/observed", "/stage", "/request"] {
+        let mut changed = value.clone();
+        changed
+            .pointer_mut(pointer)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".into(), true.into());
+        assert!(
+            decode8(
+                Some(0),
+                Some(&serde_json::to_vec(&changed).unwrap()),
+                &request
+            )
+            .is_err()
+        );
+    }
+    for change in [0, 1, 2, 3] {
+        let mut changed = value.clone();
+        match change {
+            0 => changed["outcome"]["kind"] = "UnexpectedOutcome".into(),
+            1 => changed["stage"]["calls"] = 2.into(),
+            2 => changed["stage"]["erased"] = true.into(),
+            3 => changed["stage"]["llvm"] = serde_json::json!(([0_u8; 32])),
+            _ => unreachable!(),
+        }
+        assert!(
+            decode8(
+                Some(0),
+                Some(&serde_json::to_vec(&changed).unwrap()),
+                &request
+            )
+            .is_err()
+        );
+    }
     for status in [None, Some(1), Some(101), Some(134), Some(137)] {
-        assert!(decode(status, Some(&good), &request).is_err());
+        assert!(decode8(status, Some(&good), &request).is_err());
     }
     for bytes in [None, Some(&b"{}"[..]), Some(&b"not-json"[..])] {
-        assert!(decode(Some(0), bytes, &request).is_err());
+        assert!(decode8(Some(0), bytes, &request).is_err());
     }
     for (calls, outcome) in [
-        (0, Outcome::Success),
-        (2, Outcome::Success),
-        (1, Outcome::Fatal),
-        (1, Outcome::AdmissionFailure("wrong stage".into())),
+        (0, Outcome8::Success {}),
+        (2, Outcome8::Success {}),
+        (1, Outcome8::Fatal {}),
+        (
+            1,
+            Outcome8::AdmissionFailure {
+                error: "wrong stage".into(),
+            },
+        ),
     ] {
         let bytes = serde_json::to_vec(&exact(request.clone(), calls, outcome)).unwrap();
-        assert!(decode(Some(0), Some(&bytes), &request).is_err());
+        assert!(decode8(Some(0), Some(&bytes), &request).is_err());
     }
     let mut foreign = request.clone();
-    foreign.policy = Policy::Six;
-    assert!(decode(Some(0), Some(&good), &foreign).is_err());
+    foreign.target = "gfx950".into();
+    assert!(decode8(Some(0), Some(&good), &foreign).is_err());
     foreign = request.clone();
     foreign.args_digest[0] ^= 1;
-    assert!(decode(Some(0), Some(&good), &foreign).is_err());
+    assert!(decode8(Some(0), Some(&good), &foreign).is_err());
     foreign = request;
     foreign.run_id = "stale".into();
-    assert!(decode(Some(0), Some(&good), &foreign).is_err());
+    assert!(decode8(Some(0), Some(&good), &foreign).is_err());
 }
 
 #[test]
 fn lifecycle_failure_protocol_distinguishes_admission_fatal_and_callback_panics() {
-    let mut request = Request {
-        policy: Policy::Six,
+    let mut request = Request8 {
         input: Input::WaveRefusal,
         target: "gfx942".into(),
         diagnostic: Diagnostic::Fresh,
@@ -685,10 +646,13 @@ fn lifecycle_failure_protocol_distinguishes_admission_fatal_and_callback_panics(
         run_id: "current".into(),
     };
     let refusal = "production compilation pre-ranked materialization failed: helper parameter is not an exact by-value scalar aggregate or shared slice";
-    let mut report = Report {
+    let mut report = Report8 {
+        stage: Stage8::default(),
         request: request.clone(),
-        outcome: Outcome::AdmissionFailure(refusal.into()),
-        observed: Observed {
+        outcome: Outcome8::AdmissionFailure {
+            error: refusal.into(),
+        },
+        observed: Observed8 {
             calls: 1,
             roots: Some(Ok(vec![census::SourceRoot {
                 name: "wave64_capture".into(),
@@ -697,24 +661,26 @@ fn lifecycle_failure_protocol_distinguishes_admission_fatal_and_callback_panics(
             }])),
         },
     };
-    let encode = |report: &Report| serde_json::to_vec(report).unwrap();
-    decode(Some(101), Some(&encode(&report)), &request).unwrap();
-    assert!(decode(Some(0), Some(&encode(&report)), &request).is_err());
+    let encode = |report: &Report8| serde_json::to_vec(report).unwrap();
+    decode8(Some(101), Some(&encode(&report)), &request).unwrap();
+    assert!(decode8(Some(0), Some(&encode(&report)), &request).is_err());
     for error in [
         "different source refusal",
         "rustc or callback panicked",
         "diagnostic setup failed",
     ] {
-        report.outcome = Outcome::AdmissionFailure(error.into());
-        assert!(decode(Some(101), Some(&encode(&report)), &request).is_err());
+        report.outcome = Outcome8::AdmissionFailure {
+            error: error.into(),
+        };
+        assert!(decode8(Some(101), Some(&encode(&report)), &request).is_err());
     }
     request.input = Input::ParseFatal;
     report.request = request.clone();
-    report.outcome = Outcome::Fatal;
-    assert!(decode(Some(101), Some(&encode(&report)), &request).is_err());
-    report.observed = Observed::default();
-    decode(Some(101), Some(&encode(&report)), &request).unwrap();
+    report.outcome = Outcome8::Fatal {};
+    assert!(decode8(Some(101), Some(&encode(&report)), &request).is_err());
+    report.observed = Observed8::default();
+    decode8(Some(101), Some(&encode(&report)), &request).unwrap();
     for status in [None, Some(0), Some(1), Some(134), Some(137)] {
-        assert!(decode(status, Some(&encode(&report)), &request).is_err());
+        assert!(decode8(status, Some(&encode(&report)), &request).is_err());
     }
 }
