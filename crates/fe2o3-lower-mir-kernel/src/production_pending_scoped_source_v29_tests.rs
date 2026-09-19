@@ -184,7 +184,17 @@ fn pending_scoped_api_late_reconstruction_panic_drops_before_refunding() {
                     )
                 }));
                 SCOPED_SLOT_OBSERVER_V29.set(previous);
-                assert!(result.is_err());
+                let Err(payload) = result else {
+                    panic!("expected the original reconstruction panic");
+                };
+                assert!(
+                    payload.downcast_ref::<String>().is_some_and(|message| {
+                        message.starts_with(
+                            "assertion `left != right` failed: late source replay panic",
+                        )
+                    }),
+                    "the original panic payload must survive wrapper cleanup",
+                );
                 assert_eq!(OWNING_REPLAY_ROOT_VISITS.get(), 6);
                 assert_eq!(budget.storage(), MODULE_FLOOR + capture);
                 budget.release_storage(capture).unwrap();
@@ -224,7 +234,10 @@ fn pending_scoped_api_replay_refuses_a_foreign_ledger_without_work() {
     assert_eq!(budget.storage(), 0);
 }
 
-fn pending_api_probe(preexisting: bool, allowance: Option<(usize, usize)>) -> (bool, usize, usize) {
+fn pending_api_probe(
+    preexisting: bool,
+    allowance: Option<(usize, usize)>,
+) -> (Option<ArgumentResourceV1>, usize, usize) {
     let mut work = CanonicalKernelIrWorkBudgetV1::new(MODULE_LIMIT);
     let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
     with_pending_api_input(
@@ -252,15 +265,28 @@ fn pending_api_probe(preexisting: bool, allowance: Option<(usize, usize)>) -> (b
                 ProductionSemanticKirLimitsV1::default(),
                 budget,
             );
-            let okay = result.is_ok();
-            if let Ok(owner) = result {
-                let retained = owner.adopted_storage();
-                assert_eq!(budget.storage(), entry + retained);
-                drop(owner);
-                budget.release_storage(retained).unwrap();
-            }
+            let error = match result {
+                Ok(owner) => {
+                    let retained = owner.adopted_storage();
+                    assert_eq!(budget.storage(), entry + retained);
+                    drop(owner);
+                    budget.release_storage(retained).unwrap();
+                    None
+                }
+                Err(error) => Some(owning_resource(match error {
+                    ProductionPendingScopedSourceErrorV29::Source(error) => {
+                        ScopedModuleErrorV29::Source(error)
+                    }
+                    ProductionPendingScopedSourceErrorV29::Canonical(error) => {
+                        ScopedModuleErrorV29::Canonical(error)
+                    }
+                    ProductionPendingScopedSourceErrorV29::Occurrences(error) => {
+                        ScopedModuleErrorV29::Occurrences(error)
+                    }
+                })),
+            };
             assert_eq!(budget.storage(), entry);
-            let measured = (okay, budget.work() - before, budget.peak_storage() - entry);
+            let measured = (error, budget.work() - before, budget.peak_storage() - entry);
             budget.release_storage(entry).unwrap();
             measured
         },
@@ -271,14 +297,22 @@ fn pending_api_probe(preexisting: bool, allowance: Option<(usize, usize)>) -> (b
 fn pending_scoped_api_obeys_exact_and_one_short_complete_transaction_budgets() {
     for preexisting in [false, true] {
         let measured = pending_api_probe(preexisting, None);
-        assert!(measured.0 && measured.1 > 0 && measured.2 > 0);
+        assert!(measured.0.is_none() && measured.1 > 0 && measured.2 > 0);
         assert_eq!(
             pending_api_probe(preexisting, Some((measured.1, measured.2))),
             measured
         );
-        assert!(!pending_api_probe(preexisting, Some((measured.1 - 1, measured.2))).0);
-        assert!(!pending_api_probe(preexisting, Some((measured.1, measured.2 - 1))).0);
-        assert!(!pending_api_probe(preexisting, Some((0, measured.2))).0);
-        assert!(!pending_api_probe(preexisting, Some((measured.1, 0))).0);
+        for work in [0, measured.1 - 1] {
+            assert!(matches!(
+                pending_api_probe(preexisting, Some((work, measured.2))).0,
+                Some(ArgumentResourceV1::Work(_)),
+            ));
+        }
+        for storage in [0, measured.2 - 1] {
+            assert!(matches!(
+                pending_api_probe(preexisting, Some((measured.1, storage))).0,
+                Some(ArgumentResourceV1::Storage(_)),
+            ));
+        }
     }
 }

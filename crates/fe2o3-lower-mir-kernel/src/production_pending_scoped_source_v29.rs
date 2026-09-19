@@ -53,6 +53,26 @@ impl From<ScopedModuleErrorV29> for ProductionPendingScopedSourceErrorV29 {
 ///     let _ = owner.clone();
 /// }
 /// ```
+///
+/// Detached inspection data cannot construct or mutate this owner:
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::ProductionPendingScopedSourceOwnerV29;
+/// let _ = ProductionPendingScopedSourceOwnerV29 { inner: panic!() };
+/// ```
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::ProductionPendingScopedSourceOwnerV29;
+/// fn mutate(owner: &ProductionPendingScopedSourceOwnerV29) {
+///     owner.pending_module().functions.clear();
+/// }
+/// ```
+///
+/// Pending evidence has no executable conversion:
+/// ```compile_fail
+/// use fe2o3_lower_mir_kernel::ProductionPendingScopedSourceOwnerV29;
+/// fn execute(owner: ProductionPendingScopedSourceOwnerV29) {
+///     let _ = owner.into_executable();
+/// }
+/// ```
 pub struct ProductionPendingScopedSourceOwnerV29 {
     inner: SourceOwnedScopedModuleV29,
 }
