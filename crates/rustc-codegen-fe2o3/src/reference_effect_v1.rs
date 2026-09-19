@@ -916,8 +916,7 @@ impl ReferenceEffectIrV1 {
                         meter,
                         &mut pending,
                         state,
-                        block.block,
-                        *target,
+                        (block.block, *target),
                         backedges,
                         &loop_nodes,
                         &mut work_budget,
@@ -934,8 +933,7 @@ impl ReferenceEffectIrV1 {
                             meter,
                             &mut pending,
                             state,
-                            block.block,
-                            *success,
+                            (block.block, *success),
                             backedges,
                             &loop_nodes,
                             &mut work_budget,
@@ -966,8 +964,7 @@ impl ReferenceEffectIrV1 {
                         meter,
                         &mut pending,
                         state,
-                        block.block,
-                        *success,
+                        (block.block, *success),
                         backedges,
                         &loop_nodes,
                         &mut work_budget,
@@ -1006,8 +1003,7 @@ impl ReferenceEffectIrV1 {
                             meter,
                             &mut pending,
                             state,
-                            block.block,
-                            target,
+                            (block.block, target),
                             backedges,
                             &loop_nodes,
                             &mut work_budget,
@@ -1018,9 +1014,6 @@ impl ReferenceEffectIrV1 {
                             if let Some(summary) = self.summarize_dynamic_counted_loop_v2(
                                 meter,
                                 block,
-                                discriminant,
-                                values,
-                                *otherwise,
                                 &state,
                                 &loop_nodes,
                             )? {
@@ -1094,8 +1087,7 @@ impl ReferenceEffectIrV1 {
                                 meter,
                                 &mut pending,
                                 branch,
-                                block.block,
-                                target,
+                                (block.block, target),
                                 backedges,
                                 &loop_nodes,
                                 &mut work_budget,
@@ -1115,8 +1107,7 @@ impl ReferenceEffectIrV1 {
                             meter,
                             &mut pending,
                             state,
-                            block.block,
-                            *otherwise,
+                            (block.block, *otherwise),
                             backedges,
                             &loop_nodes,
                             &mut work_budget,
@@ -1212,13 +1203,18 @@ impl ReferenceEffectIrV1 {
         &self,
         meter: &ReferenceExtractionWorkV1<'_>,
         header: &ReferenceBlockV1,
-        discriminant: &ReferenceOperandV1,
-        values: &[(u128, u32)],
-        otherwise: u32,
         state: &ReferenceSymbolicStateV2,
         loop_nodes: &BTreeMap<(u32, u32), BTreeSet<u32>>,
     ) -> Result<Option<DynamicReferenceLoopSummaryV2>, ReferenceBindingErrorV1> {
         meter.charge(1)?;
+        let ReferenceTerminatorV1::Switch {
+            discriminant,
+            values,
+            otherwise,
+        } = &header.terminator
+        else {
+            return Ok(None);
+        };
         let (ReferenceOperandV1::Copy(discriminant) | ReferenceOperandV1::Move(discriminant)) =
             discriminant
         else {
@@ -1282,7 +1278,7 @@ impl ReferenceEffectIrV1 {
             meter.charge(meter.place(source)?)?;
             induction = source.clone();
         }
-        let [(0, exit)] = values else {
+        let [(0, exit)] = values.as_ref() else {
             return Ok(None);
         };
         for nodes in loop_nodes.values() {
@@ -1291,7 +1287,7 @@ impl ReferenceEffectIrV1 {
             meter.tree::<u32>(nodes.len())?;
         }
         let mut matching_loops = loop_nodes.iter().filter(|((_, loop_header), nodes)| {
-            *loop_header == header.block && nodes.contains(&otherwise) && !nodes.contains(exit)
+            *loop_header == header.block && nodes.contains(otherwise) && !nodes.contains(exit)
         });
         let Some((&(latch, _), nodes)) = matching_loops.next() else {
             return Ok(None);
@@ -1913,8 +1909,7 @@ fn dispatch_symbolic_edge_v2(
     meter: &ReferenceExtractionWorkV1<'_>,
     pending: &mut VecDeque<ReferenceSymbolicStateV2>,
     mut state: ReferenceSymbolicStateV2,
-    source: u32,
-    target: u32,
+    (source, target): (u32, u32),
     backedges: &BTreeSet<(u32, u32)>,
     loop_nodes: &BTreeMap<(u32, u32), BTreeSet<u32>>,
     work_budget: &mut ReferenceSymbolicWorkBudgetV2,
@@ -2441,12 +2436,6 @@ pub(crate) struct AuthenticatedReferenceEffectBindingV1 {
     pub(crate) effect_ir_sha256: [u8; 32],
     pub(crate) effect_ir: ReferenceEffectIrV1,
     pub(crate) observable_output_writes: Box<[ReferenceOutputWriteV1]>,
-}
-
-impl AuthenticatedReferenceEffectBindingV1 {
-    pub(crate) fn signature_preimage(&self) -> &ReferenceLogicalSignaturePreimageV1 {
-        &self.signature_preimage
-    }
 }
 
 #[derive(Debug, Default)]
@@ -5109,8 +5098,7 @@ mod tests {
             meter,
             &mut VecDeque::new(),
             state.clone(),
-            4,
-            1,
+            (4, 1),
             &BTreeSet::from([(4, 1)]),
             &BTreeMap::from([((4, 1), BTreeSet::from([1, 4]))]),
             &mut ReferenceSymbolicWorkBudgetV2::default(),

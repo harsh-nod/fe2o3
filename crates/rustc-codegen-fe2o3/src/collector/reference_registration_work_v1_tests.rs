@@ -237,6 +237,10 @@ impl Ord for CountedKey<'_> {
 fn search_envelope_bounds_pinned_std_insert_entry_and_lookup_comparisons() {
     let comparisons = Cell::new(0);
     for order in 0..3 {
+        #[expect(
+            clippy::mutable_key_type,
+            reason = "the external comparison counter does not affect key ordering"
+        )]
         let mut map = BTreeMap::new();
         for ordinal in 0_usize..1_024 {
             let value = match order {

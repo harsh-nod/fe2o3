@@ -260,7 +260,7 @@ fn changed_helper_summary_or_arguments_are_not_hidden_by_equal_hashes() {
             panic!("fixture helper missing");
         };
         if change_summary {
-            *summary = Box::new(constant(99));
+            **summary = constant(99);
         } else {
             arguments[0] = operand(99);
         }

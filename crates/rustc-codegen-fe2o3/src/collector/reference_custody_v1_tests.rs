@@ -485,12 +485,12 @@ fn source_rederive_checks_raw_signatures_beyond_logical_projection() {
         )
         .unwrap();
         assert_eq!(
-            projected.signature_preimage(),
+            projected.signature_preimage,
             functions[0]
                 .reference_effect_binding
                 .as_ref()
                 .unwrap()
-                .signature_preimage()
+                .signature_preimage
         );
 
         for kernel in [true, false] {
@@ -551,7 +551,7 @@ fn source_rederive_rejects_stale_compiler_binding_fields() {
                         .reference_effect_binding
                         .as_ref()
                         .unwrap()
-                        .signature_preimage()
+                        .signature_preimage
                         .clone()
                 }
                 "effect digest" => binding.effect_ir_sha256[0] ^= 1,
