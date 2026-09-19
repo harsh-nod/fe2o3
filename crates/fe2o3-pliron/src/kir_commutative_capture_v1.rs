@@ -331,6 +331,7 @@ impl RewriteObserver for CommutativeCapture {
                 s.actual_mutation_seen = true;
                 ACTUAL_COMMUTATIVE_MUTATION.set(true);
                 if s.fault == 2 {
+                    // fe2o3-hygiene: allow-panic issue-271: cfg(test) post-mutation cleanup injection.
                     panic!("commutative observer after actual mutation");
                 }
                 return Err(E::Relation);
