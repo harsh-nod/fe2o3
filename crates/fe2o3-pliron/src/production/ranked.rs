@@ -4225,6 +4225,7 @@ pub(super) struct ConstructedRootV1 {
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
     pub(super) ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
+    pub(super) ownership_occurrences: Vec<super::conditional_ranked_v1::OwnershipOccurrenceV1>,
     pub(super) policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
     pub(super) production_pipeline_report: Option<ProductionPlironPreloweringReportV2>,
     pub(super) production_analysis_resource_upper_bound:
@@ -4243,6 +4244,7 @@ pub(super) struct MaterializedConstructionV1 {
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
     pub(super) ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
+    pub(super) ownership_occurrences: Vec<super::conditional_ranked_v1::OwnershipOccurrenceV1>,
     pub(super) policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
 }
 
@@ -4445,6 +4447,7 @@ impl ProductionPlironSessionV1 {
                     ranked_function: None,
                     ranked_kernel: None,
                     ranked_view_names: BTreeMap::new(),
+                    ownership_occurrences: Vec::new(),
                     policy_checked_refinement_staging: Vec::new(),
                 })
                 .map_err(ProductionSessionErrorV1::Operation),
@@ -4526,6 +4529,8 @@ impl ProductionPlironSessionV1 {
                 ),
             ));
         }
+        let mut ownership_occurrences =
+            self.prepare_ownership_occurrence_storage_v1(&kernel, kernel.tree_work)?;
         let operation = self
             .inner
             .create_module(root_name)
@@ -4597,8 +4602,8 @@ impl ProductionPlironSessionV1 {
         let mut locals = Vec::new();
         for (block_index, recipe_block) in kernel.blocks.iter().enumerate() {
             let block = blocks[block_index];
-            for recipe in &recipe_block.operations {
-                materialize_operation(
+            for (recipe_index, recipe) in recipe_block.operations.iter().enumerate() {
+                let emitted = materialize_operation(
                     &mut self.inner.context,
                     block,
                     recipe,
@@ -4608,6 +4613,20 @@ impl ProductionPlironSessionV1 {
                     &policy_checked_refinement_staging,
                 )
                 .map_err(ProductionSessionErrorV1::RankedRecipe)?;
+                if let ProductionRankedOperationV1::OwnershipContract { view, .. } = recipe {
+                    ownership_occurrences.push(
+                        super::conditional_ranked_v1::OwnershipOccurrenceV1 {
+                            site: super::ProductionConditionalOwnershipSiteV1 {
+                                block: block_index as u32,
+                                operation: recipe_index as u32,
+                                view: *view,
+                            },
+                            operation: emitted,
+                            view: OwnershipContractOp::from_operation(emitted)
+                                .view(&self.inner.context),
+                        },
+                    );
+                }
             }
             materialize_terminator(
                 &mut self.inner.context,
@@ -4661,6 +4680,7 @@ impl ProductionPlironSessionV1 {
             ranked_function: Some(function.get_operation()),
             ranked_kernel: Some(kernel),
             ranked_view_names,
+            ownership_occurrences,
             policy_checked_refinement_staging,
         })
     }
@@ -4723,7 +4743,7 @@ impl ProductionPlironSessionV1 {
             )
         };
         self.require_live_graph_snapshot_v1(&root.operation, graph_snapshot)?;
-        let verifier_limits = self.analysis_resource_limits();
+        let verifier_limits = self.analysis_limits_after_ownership_bindings_v1()?;
         let outcome = self.run_production_pipeline_guarded(function, verifier_limits)?;
         if outcome.report.semantics().typed_root_commitments() != expected_typed_roots {
             trace_ranked_custody_rejection_v1(RankedCustodyRejectionV1::VerifyTypedRoots, None);
@@ -4825,7 +4845,7 @@ impl ProductionPlironSessionV1 {
                 crate::production_analysis::ProductionAnalysisResourcePhaseV1::PipelineVerification,
             )
             .map_err(production_analysis_resource_error_v1)?;
-        let verifier_limits = self.analysis_resource_limits();
+        let verifier_limits = self.analysis_limits_after_ownership_bindings_v1()?;
         let second_limits = verifier_limits
             .remaining_after_retained(
                 crate::production_analysis::ProductionAnalysisResourcePhaseV1::PipelineVerification,
@@ -5053,7 +5073,7 @@ fn materialize_operation(
     locals: &mut Vec<Value>,
     block_arguments: &HashMap<(u32, u32), Value>,
     policy_checked_refinement_staging: &[ProductionPolicyCheckedRefinementStagingV2],
-) -> Result<(), ProductionRankedKernelErrorV1> {
+) -> Result<Ptr<Operation>, ProductionRankedKernelErrorV1> {
     let (operation, result) = match recipe {
         ProductionRankedOperationV1::ExecutionLayout {
             grid_identity,
@@ -5840,7 +5860,7 @@ fn materialize_operation(
         }
         locals.push(value);
     }
-    Ok(())
+    Ok(operation)
 }
 
 fn semantic_numerical_policy_v1(

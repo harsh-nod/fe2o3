@@ -69,7 +69,7 @@ impl From<ProductionAnalysisResourceLimitV1> for ConditionalOwnershipAnalysisErr
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ConditionalOwnershipBlockerV1 {
+pub enum ConditionalOwnershipBlockerV1 {
     Prerequisite,
     Extent,
     Trace,
@@ -79,7 +79,7 @@ pub(crate) enum ConditionalOwnershipBlockerV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ConditionalOwnershipCheckV1 {
+pub enum ConditionalOwnershipCheckV1 {
     NotApplicable,
     Checked,
     /// This local check failed; the findings retain Incomplete versus Rejected.
@@ -88,8 +88,7 @@ pub(crate) enum ConditionalOwnershipCheckV1 {
 }
 
 /// One actual contract, in inventory order. Checked is local to the named check.
-#[derive(Debug)]
-pub(crate) struct ConditionalOwnershipRowV1 {
+pub struct ConditionalOwnershipRowV1 {
     operation: Ptr<Operation>,
     location: HierarchicalOwnershipLocationV1,
     view: Value,
@@ -102,35 +101,50 @@ pub(crate) struct ConditionalOwnershipRowV1 {
     regions: Vec<HierarchicalOwnershipRegionV1>,
 }
 
+impl fmt::Debug for ConditionalOwnershipRowV1 {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        out.debug_struct("ConditionalOwnershipRowV1")
+            .field("location", &self.location)
+            .field("selected", &self.selected)
+            .field("effect_site", &self.effect_site)
+            .field("extent", &self.extent)
+            .field("trace", &self.trace)
+            .field("coverage", &self.coverage)
+            .field("findings", &self.findings)
+            .field("regions", &self.regions)
+            .finish()
+    }
+}
+
 impl ConditionalOwnershipRowV1 {
     pub(crate) const fn operation(&self) -> Ptr<Operation> {
         self.operation
     }
-    pub(crate) const fn location(&self) -> HierarchicalOwnershipLocationV1 {
+    pub const fn location(&self) -> HierarchicalOwnershipLocationV1 {
         self.location
     }
     pub(crate) const fn view(&self) -> Value {
         self.view
     }
-    pub(crate) const fn selected(&self) -> bool {
+    pub const fn selected(&self) -> bool {
         self.selected
     }
-    pub(crate) const fn effect_site(&self) -> ConditionalOwnershipCheckV1 {
+    pub const fn effect_site(&self) -> ConditionalOwnershipCheckV1 {
         self.effect_site
     }
-    pub(crate) const fn extent(&self) -> ConditionalOwnershipCheckV1 {
+    pub const fn extent(&self) -> ConditionalOwnershipCheckV1 {
         self.extent
     }
-    pub(crate) const fn trace(&self) -> ConditionalOwnershipCheckV1 {
+    pub const fn trace(&self) -> ConditionalOwnershipCheckV1 {
         self.trace
     }
-    pub(crate) const fn coverage(&self) -> ConditionalOwnershipCheckV1 {
+    pub const fn coverage(&self) -> ConditionalOwnershipCheckV1 {
         self.coverage
     }
-    pub(crate) fn findings(&self) -> &[HierarchicalOwnershipFindingV1] {
+    pub fn findings(&self) -> &[HierarchicalOwnershipFindingV1] {
         &self.findings
     }
-    pub(crate) fn regions(&self) -> &[HierarchicalOwnershipRegionV1] {
+    pub fn regions(&self) -> &[HierarchicalOwnershipRegionV1] {
         &self.regions
     }
 }
@@ -139,6 +153,13 @@ impl ConditionalOwnershipRowV1 {
 /// No clean-report conversion, established-coverage constructor or authority API.
 pub(crate) struct ConditionalOwnershipAnalysisV1<'ctx> {
     _context: &'ctx Context,
+    payload: ConditionalOwnershipPayloadV1,
+}
+
+/// Arena-relative diagnostics. Only the consuming production session may keep
+/// this payload beyond the diagnostic borrow; it must retain the same context.
+#[derive(Debug)]
+pub(crate) struct ConditionalOwnershipPayloadV1 {
     function: Ptr<Operation>,
     legacy_report: HierarchicalOwnershipReportV1,
     prerequisites: ConditionalOwnershipCheckV1,
@@ -148,17 +169,29 @@ pub(crate) struct ConditionalOwnershipAnalysisV1<'ctx> {
 
 impl fmt::Debug for ConditionalOwnershipAnalysisV1<'_> {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
-        out.debug_struct("ConditionalOwnershipAnalysisV1")
-            .field("function", &self.function)
-            .field("legacy_report", &self.legacy_report)
-            .field("prerequisites", &self.prerequisites)
-            .field("mandatory_bounds_failure", &self.mandatory_bounds_failure)
-            .field("rows", &self.rows)
-            .finish()
+        self.payload.fmt(out)
     }
 }
 
 impl ConditionalOwnershipAnalysisV1<'_> {
+    pub(crate) fn into_payload(self) -> ConditionalOwnershipPayloadV1 {
+        self.payload
+    }
+}
+
+impl std::ops::Deref for ConditionalOwnershipAnalysisV1<'_> {
+    type Target = ConditionalOwnershipPayloadV1;
+
+    fn deref(&self) -> &Self::Target {
+        &self.payload
+    }
+}
+
+impl ConditionalOwnershipPayloadV1 {
+    pub(crate) const fn function(&self) -> Ptr<Operation> {
+        self.function
+    }
+
     pub(crate) const fn legacy_report(&self) -> &HierarchicalOwnershipReportV1 {
         &self.legacy_report
     }
@@ -593,11 +626,13 @@ pub(crate) fn run_conditional_ownership_analysis_v1<'ctx>(
     }
     Ok(ConditionalOwnershipAnalysisV1 {
         _context: context,
-        function: function.get_operation(),
-        legacy_report,
-        prerequisites: prerequisite_check,
-        mandatory_bounds_failure,
-        rows,
+        payload: ConditionalOwnershipPayloadV1 {
+            function: function.get_operation(),
+            legacy_report,
+            prerequisites: prerequisite_check,
+            mandatory_bounds_failure,
+            rows,
+        },
     })
 }
 

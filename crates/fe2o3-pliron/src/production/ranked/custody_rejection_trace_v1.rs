@@ -52,6 +52,7 @@ fn ranked_custody_error_tag_v1(error: Option<&ProductionSessionErrorV1>) -> &'st
         ProductionSessionErrorV1::RankedPassPreservation(_) => "ranked_pass_preservation",
         ProductionSessionErrorV1::RankedReportValidation(_) => "ranked_report_validation",
         ProductionSessionErrorV1::Operation(_) => "operation",
+        ProductionSessionErrorV1::ConditionalOwnership(_) => "conditional-ownership",
     }
 }
 

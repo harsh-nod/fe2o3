@@ -25,6 +25,7 @@ use super::{
     OperationHandleError, OperationShapeV1, PlironSession, ShellLimits, validate_name,
 };
 
+mod conditional_ranked_v1;
 mod middle_end_evidence_v4;
 mod middle_end_evidence_v5;
 mod mir_pliron_semantic_contract_derivation_v1;
@@ -37,6 +38,7 @@ mod semantic_mir;
 mod semantic_ssa;
 mod total_output_refinement_v2;
 
+pub use conditional_ranked_v1::*;
 pub use middle_end_evidence_v4::*;
 pub use middle_end_evidence_v5::*;
 pub use mir_pliron_semantic_contract_derivation_v1::*;
@@ -278,6 +280,7 @@ pub enum ProductionSessionErrorV1 {
     RankedAtomic(crate::PlironAtomicLegalityCheckErrorV1),
     RankedRace(crate::RankedRaceCheckErrorV1),
     RankedOwnership(crate::HierarchicalOwnershipCheckErrorV1),
+    ConditionalOwnership(ProductionConditionalOwnershipErrorV1),
     RankedBarrier(crate::PlironBarrierCheckErrorV1),
     RankedPipeline(crate::PlironPipelineProtocolCheckErrorV1),
     RankedWorkgroup(crate::PlironWorkgroupMemoryCheckErrorV1),
@@ -390,6 +393,7 @@ impl fmt::Display for ProductionSessionErrorV1 {
             Self::RankedAtomic(error) => error.fmt(formatter),
             Self::RankedRace(error) => error.fmt(formatter),
             Self::RankedOwnership(error) => error.fmt(formatter),
+            Self::ConditionalOwnership(error) => error.fmt(formatter),
             Self::RankedBarrier(error) => error.fmt(formatter),
             Self::RankedPipeline(error) => error.fmt(formatter),
             Self::RankedWorkgroup(error) => error.fmt(formatter),
@@ -415,6 +419,7 @@ impl Error for ProductionSessionErrorV1 {
             Self::RankedAtomic(error) => Some(error),
             Self::RankedRace(error) => Some(error),
             Self::RankedOwnership(error) => Some(error),
+            Self::ConditionalOwnership(error) => Some(error),
             Self::RankedBarrier(error) => Some(error),
             Self::RankedPipeline(error) => Some(error),
             Self::RankedWorkgroup(error) => Some(error),
@@ -445,6 +450,7 @@ pub struct ProductionPlironSessionV1 {
     atomic_target: Option<PlironAtomicTargetContextV1>,
     limits: ProductionSessionLimitsV1,
     analysis_resource_limits: ProductionAnalysisResourceLimitsV1,
+    ownership_binding_resources: crate::production_analysis::ProductionAnalysisResourceUpperBoundV1,
     registered: BTreeMap<StageIdentityV1, ProductionConstructionV1>,
     construction_names: BTreeSet<String>,
     constructed_roots: BTreeMap<StageIdentityV1, ConstructedRootV1>,
@@ -478,6 +484,14 @@ impl ProductionPlironSessionV1 {
             atomic_target: None,
             limits,
             analysis_resource_limits,
+            ownership_binding_resources:
+                crate::production_analysis::ProductionAnalysisResourceUpperBoundV1::checked_phase(
+                    crate::ProductionAnalysisResourcePhaseV1::HierarchicalOwnership,
+                    0,
+                    0,
+                    0,
+                )
+                .expect("zero resource reservation"),
             registered: BTreeMap::new(),
             construction_names: BTreeSet::new(),
             constructed_roots: BTreeMap::new(),
@@ -622,6 +636,7 @@ impl ProductionPlironSessionV1 {
                 ranked_function: materialized.ranked_function,
                 ranked_kernel: materialized.ranked_kernel,
                 ranked_view_names: materialized.ranked_view_names,
+                ownership_occurrences: materialized.ownership_occurrences,
                 policy_checked_refinement_staging: materialized.policy_checked_refinement_staging,
                 production_pipeline_report: None,
                 production_analysis_resource_upper_bound: None,
