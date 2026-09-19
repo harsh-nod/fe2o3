@@ -72,15 +72,15 @@ fn inspect(owner: &Pending, budget: &mut Budget<'_>) -> Result<PendingObservatio
                         {
                             result.global_stores += 1
                         }
-                        OperationKind::Constant(Constant::U32(value)) => {
-                            if !result.literals[..result.literal_count].contains(value) {
-                                let slot = result
-                                    .literals
-                                    .get_mut(result.literal_count)
-                                    .ok_or_else(|| resource(ResourceError::Arithmetic))?;
-                                *slot = *value;
-                                result.literal_count += 1;
-                            }
+                        OperationKind::Constant(Constant::U32(value))
+                            if !result.literals[..result.literal_count].contains(value) =>
+                        {
+                            let slot = result
+                                .literals
+                                .get_mut(result.literal_count)
+                                .ok_or_else(|| resource(ResourceError::Arithmetic))?;
+                            *slot = *value;
+                            result.literal_count += 1;
                         }
                         _ => {}
                     }
