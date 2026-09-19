@@ -35,9 +35,16 @@ fn pending(semantic: &AdmittedInertSemanticMirV1) -> PendingWorkgroupScopesV29 {
 
 fn capture(
     semantic: &AdmittedInertSemanticMirV1,
+    change: impl FnMut(usize, &mut Vec<ScopeEventV29>),
+) -> PendingWorkgroupScopesV29 {
+    capture_with_pending(semantic, pending(semantic), change)
+}
+
+fn capture_with_pending(
+    semantic: &AdmittedInertSemanticMirV1,
+    mut pending: PendingWorkgroupScopesV29,
     mut change: impl FnMut(usize, &mut Vec<ScopeEventV29>),
 ) -> PendingWorkgroupScopesV29 {
-    let mut pending = pending(semantic);
     for (index, function) in semantic.functions().iter().enumerate() {
         let function_id = SemanticFunctionIdV1::from_index(index as u32);
         let mut events = Vec::new();
@@ -92,6 +99,19 @@ fn seal(
 
 pub(super) fn complete(semantic: &AdmittedInertSemanticMirV1) -> RetainedContextEntriesV29 {
     seal(capture(semantic, |_, _| {}), semantic).unwrap()
+}
+
+pub(super) fn complete_ordinary(
+    semantic: &AdmittedInertSemanticMirV1,
+) -> RetainedContextEntriesV29 {
+    let pending = PendingWorkgroupScopesV29::new(
+        vec![ScopeCallableV29::Ordinary; semantic.callables().len()],
+        declarations(semantic),
+        semantic.target(),
+        semantic.functions().len(),
+    )
+    .unwrap();
+    seal(capture_with_pending(semantic, pending, |_, _| {}), semantic).unwrap()
 }
 
 fn ordinary_root(root: &SemanticFunctionDeclV1) -> SemanticFunctionDeclV1 {

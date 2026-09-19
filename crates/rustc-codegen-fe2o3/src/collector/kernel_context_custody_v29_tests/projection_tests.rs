@@ -9,6 +9,17 @@ use fe2o3_lower_mir_kernel::{
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 impl RetainedContextEntriesV29 {
+    pub(crate) fn pending_plain_test_fixture_v29() -> (
+        fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1,
+        Self,
+    ) {
+        let semantic = fixture_roots(Mutation::None, 4);
+        let receipt = scope_tests::complete_ordinary(&semantic);
+        let launch = launch_roster(&semantic);
+        (ssa_owner(semantic), launch, receipt)
+    }
+
     pub(crate) fn projection_test_fixture_v29() -> (
         fe2o3_pliron::ProductionSemanticSsaOwnerV1,
         fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1,

@@ -89,9 +89,37 @@ mod tests {
     type Budget<'a> = CanonicalKernelIrVerificationResourceBudgetV1<'a>;
 
     #[test]
+    fn pending_observer_rejects_custody_only_provider_before_observation() {
+        let (ssa, launch, entries) = RetainedContextEntriesV29::projection_test_fixture_v29();
+        let mut work = Work::new(1_000_000_000);
+        let mut budget = Budget::new(&mut work, 64 * 1024 * 1024);
+        budget.reserve_storage(7).unwrap();
+        let error = observe_pending_v29(&entries, ssa, launch, &mut budget, |_, _| {
+            panic!("custody-only provider reached the pending observer")
+        })
+        .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ProductionPipelineError::PendingScopedSource(
+                    fe2o3_lower_mir_kernel::ProductionPendingScopedSourceErrorV29::Source(
+                        fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::Unsupported {
+                            detail: "execution lifecycle differs from its retained source instance",
+                            ..
+                        }
+                    )
+                )
+            ),
+            "{error:?}"
+        );
+        assert_eq!(budget.storage(), 7);
+    }
+
+    #[test]
     fn pending_observer_restores_only_owner_storage_on_success_error_and_panic() {
         for mode in 0..3 {
-            let (ssa, launch, entries) = RetainedContextEntriesV29::projection_test_fixture_v29();
+            let (ssa, launch, entries) =
+                RetainedContextEntriesV29::pending_plain_test_fixture_v29();
             let mut work = Work::new(1_000_000_000);
             let mut budget = Budget::new(&mut work, 64 * 1024 * 1024);
             budget.reserve_storage(7).unwrap();
@@ -100,6 +128,25 @@ mod tests {
                 observe_pending_v29(&entries, ssa, launch, &mut budget, |owner, budget| {
                     visits += 1;
                     assert_eq!(owner.pending_module().kernels.len(), 4);
+                    let mut issues = 0;
+                    for operation in owner
+                        .pending_module()
+                        .functions
+                        .iter()
+                        .filter_map(|function| function.body.as_ref())
+                        .flat_map(|body| &body.blocks)
+                        .flat_map(|block| &block.operations)
+                    {
+                        use fe2o3_kernel_ir::{ExecutionOperationV15 as Execution, OperationKind};
+                        match &operation.kind {
+                            OperationKind::Execution(Execution::ContextIssue) => issues += 1,
+                            OperationKind::Execution(
+                                Execution::WorkgroupDerive { .. } | Execution::ScopeEnd { .. },
+                            ) => panic!("ordinary fixture emitted a scope provider"),
+                            _ => {}
+                        }
+                    }
+                    assert_eq!(issues, 4);
                     assert_eq!(budget.storage(), 7 + owner.adopted_storage());
                     budget.reserve_storage(11).unwrap();
                     match mode {
@@ -147,7 +194,7 @@ mod tests {
 
     #[test]
     fn pending_observer_rejects_floor_theft_without_refunding_unowned_storage() {
-        let (ssa, launch, entries) = RetainedContextEntriesV29::projection_test_fixture_v29();
+        let (ssa, launch, entries) = RetainedContextEntriesV29::pending_plain_test_fixture_v29();
         let mut work = Work::new(1_000_000_000);
         let mut budget = Budget::new(&mut work, 64 * 1024 * 1024);
         budget.reserve_storage(7).unwrap();
@@ -173,7 +220,8 @@ mod tests {
     #[test]
     fn pending_observer_preserves_foreign_ledger_and_original_panic() {
         for panic in [false, true] {
-            let (ssa, launch, entries) = RetainedContextEntriesV29::projection_test_fixture_v29();
+            let (ssa, launch, entries) =
+                RetainedContextEntriesV29::pending_plain_test_fixture_v29();
             let mut work = Work::new(1_000_000_000);
             let mut budget = Budget::new(&mut work, 64 * 1024 * 1024);
             budget.reserve_storage(7).unwrap();
@@ -211,7 +259,7 @@ mod tests {
 
     #[test]
     fn pending_observer_exact_and_one_short_budgets_do_not_accept_early_refusal() {
-        let (ssa, launch, entries) = RetainedContextEntriesV29::projection_test_fixture_v29();
+        let (ssa, launch, entries) = RetainedContextEntriesV29::pending_plain_test_fixture_v29();
         let mut work = Work::new(1_000_000_000);
         let mut budget = Budget::new(&mut work, 64 * 1024 * 1024);
         budget.reserve_storage(7).unwrap();
@@ -232,7 +280,8 @@ mod tests {
             (0, exact_storage, false),
             (exact_work, 0, false),
         ] {
-            let (ssa, launch, entries) = RetainedContextEntriesV29::projection_test_fixture_v29();
+            let (ssa, launch, entries) =
+                RetainedContextEntriesV29::pending_plain_test_fixture_v29();
             let mut work = Work::new(work_limit);
             let mut budget = Budget::new(&mut work, storage_limit + 7);
             budget.reserve_storage(7).unwrap();
