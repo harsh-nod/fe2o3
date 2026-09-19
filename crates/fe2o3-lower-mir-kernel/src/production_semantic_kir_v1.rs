@@ -12452,6 +12452,7 @@ include!("production_execution_lifecycle_insertion_v29.rs");
 include!("production_scoped_module_v29.rs");
 include!("production_scoped_owned_input_v29.rs");
 include!("production_scoped_source_replay_v29.rs");
+include!("production_pending_scoped_source_v29.rs");
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "Scoped source replay remains gated")
