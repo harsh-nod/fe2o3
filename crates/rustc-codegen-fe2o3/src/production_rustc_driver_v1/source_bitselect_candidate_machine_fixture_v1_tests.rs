@@ -1,6 +1,9 @@
 //! Bounded task-owned edits. File publication alone is not source authority.
 use super::*;
 
+#[path = "source_bitselect_candidate_negatives_v1_tests.rs"]
+mod generated_negatives;
+
 const SOURCE_FILES: [&str; 10] = [
     "original.rs",
     "original-loader.rs",

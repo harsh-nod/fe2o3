@@ -19,6 +19,22 @@ mod collector_tests;
 mod fixtures;
 #[path = "runtime_origin_retention/runtime_tests.rs"]
 mod runtime_tests;
+#[path = "runtime_origin_retention/session.rs"]
+mod session;
+#[path = "runtime_origin_retention/session_budget_tests.rs"]
+mod session_budget_tests;
+#[path = "runtime_origin_retention/session_navigation.rs"]
+mod session_navigation;
+#[path = "runtime_origin_retention/session_review_tests.rs"]
+mod session_review_tests;
+#[path = "runtime_origin_retention/session_tests.rs"]
+mod session_tests;
+#[path = "runtime_origin_retention/source_cursor_fixture.rs"]
+mod source_cursor_fixture;
+#[path = "runtime_origin_retention/source_cursor_tests.rs"]
+mod source_cursor_tests;
+#[path = "runtime_origin_retention/source_cursor_topology.rs"]
+mod source_cursor_topology;
 
 const MAX_ROWS: usize = 1_000_000;
 const MAX_METADATA: usize = 32 * 1024 * 1024;
@@ -225,28 +241,4 @@ struct ObservedTranscript {
 struct Observation<'capture> {
     record: &'capture SimulationDebugRecordV1,
     row: &'capture Row,
-}
-
-impl ObservedTranscript {
-    fn origin_at(&self, index: usize) -> Result<Observation<'_>, Missing> {
-        let record = self
-            .transcript
-            .records()
-            .get(index)
-            .ok_or(Missing::NoSuchRecord)?;
-        if self.retained.coverage == Coverage::InvalidJoin {
-            return Err(Missing::InvalidJoin);
-        }
-        let Some(row) = self.retained.rows.get(index) else {
-            return Err(match self.retained.coverage {
-                Coverage::Disabled => Missing::Disabled,
-                Coverage::PrefixTruncated(reason) => Missing::PrefixTruncated(reason),
-                Coverage::Complete | Coverage::InvalidJoin => Missing::InvalidJoin,
-            });
-        };
-        match row.status {
-            Status::Available => Ok(Observation { record, row }),
-            Status::RuntimeUnavailable(reason) => Err(Missing::RuntimeUnavailable(reason)),
-        }
-    }
 }

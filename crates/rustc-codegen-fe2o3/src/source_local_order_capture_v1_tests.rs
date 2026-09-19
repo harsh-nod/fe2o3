@@ -2,6 +2,9 @@
 //! Intended child of bitselect_feasibility::retained; reuses its bounded I/O.
 use super::*;
 
+#[path = "source_local_order_recipe_codec_v1_tests.rs"]
+pub(crate) mod recipes;
+
 pub(crate) struct CapturedLocalOrder<'tcx> {
     pub(crate) identities: CanonicalFunctionIdentitiesV1,
     pub(crate) parameters: [Parameter; 4],
