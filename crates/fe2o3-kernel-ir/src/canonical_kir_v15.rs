@@ -192,6 +192,8 @@ impl VerifiedCanonicalKernelIrModuleV15 {
     /// match establishes exact encoding equality, not source correspondence,
     /// rewrite validity or launch authority. Keep both inputs reserved while
     /// they live. Only temporary encoder scratch enters this query's ledger.
+    /// That scratch follows the shared encoder's logical payload and framing
+    /// bound; it does not reconcile observed Vec capacities or measure RSS.
     /// Work, peak and denial history are cumulative; temporary storage returns
     /// to the incoming floor on success, failure or unwind. Encoding errors
     /// retain precedence over an earlier byte mismatch.

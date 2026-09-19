@@ -124,7 +124,7 @@ impl SourceOwnedScopedModuleV29 {
                 argument_product_v1(rows.len(), size_of::<ReplayedInstanceAssertV1>())?,
             ])?)?;
             let matches = rows == self.assertions;
-            assert_origin_drop_v1(rows, budget)?;
+            assert_origin_drop_v1(rows, budget).map_err(ProductionSemanticKirErrorV1::from)?;
             if !matches {
                 return Err(scoped_module_error_v29().into());
             }
