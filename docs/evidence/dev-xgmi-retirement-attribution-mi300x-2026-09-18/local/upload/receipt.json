@@ -1,0 +1,30 @@
+{
+  "command": [
+    "scp",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "/home/harsh/.codex-tmp/fe2o3-xgmi-retirement-attribution-20260918.nh_mml97/campaign.py",
+    "/home/harsh/.codex-tmp/fe2o3-xgmi-retirement-attribution-20260918.nh_mml97/base.py",
+    "/home/harsh/.codex-tmp/fe2o3-xgmi-retirement-attribution-20260918.nh_mml97/source.tar.gz",
+    "/home/harsh/.codex-tmp/fe2o3-xgmi-retirement-attribution-20260918.nh_mml97/binding.json",
+    "mi300x:/home/harsh/fe2o3-xgmi-retirement-attribution-20260918.09c211e511f24186/"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789782893195776954,
+  "group_absent": true,
+  "pid": 2660201,
+  "started_ns": 1789782889664825305,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 300
+}

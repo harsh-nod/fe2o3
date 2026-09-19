@@ -1,0 +1,28 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -I /home/harsh/fe2o3-xgmi-retirement-attribution-20260918.09c211e511f24186/campaign.py remote '{\"binding_sha256\":\"5f686ff254c7e3f9aa3160172e7eaa3b0b3dd1437636d19a285c104565f7b4ec\",\"commit\":\"84b61ee39817cee8bfe3cd68312f0a05543bc9af\",\"path\":\"/home/harsh/fe2o3-xgmi-retirement-attribution-20260918.09c211e511f24186\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789783305397182043,
+  "group_absent": true,
+  "pid": 2660312,
+  "started_ns": 1789782893197523188,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "5b3f33c64d0aad0d7b7f17870ae1cbdcd6182ec4fc403b6ff2513c127e0b5ac6",
+  "timeout_seconds": 5000
+}

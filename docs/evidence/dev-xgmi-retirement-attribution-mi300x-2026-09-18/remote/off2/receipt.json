@@ -1,0 +1,35 @@
+{
+  "command": [
+    "/home/harsh/fe2o3-xgmi-retirement-attribution-20260918.09c211e511f24186/target/release/examples/gfx942-runtime-xgmi-peer-benchmark",
+    "0xab83d2ffef0d3cdf",
+    "0xd2e26fef80cf5c33",
+    "1048576",
+    "1",
+    "10",
+    "30"
+  ],
+  "cwd": "/home/harsh/fe2o3-xgmi-retirement-attribution-20260918.09c211e511f24186/source",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/home/harsh/fe2o3-xgmi-retirement-attribution-20260918.09c211e511f24186/target",
+    "CARGO_TERM_COLOR": "never",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/opt/rocm/bin:/usr/bin:/bin",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
+    "TMPDIR": "/home/harsh/fe2o3-xgmi-retirement-attribution-20260918.09c211e511f24186/tmp",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789783273760123591,
+  "group_absent": true,
+  "pid": 2350999,
+  "started_ns": 1789783230818906740,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "1e5369e2cb15c4eadf75cc2e52cb08dd1f82dbfe1373bc01576fbddab39c6c2a",
+  "timeout_seconds": 120
+}
