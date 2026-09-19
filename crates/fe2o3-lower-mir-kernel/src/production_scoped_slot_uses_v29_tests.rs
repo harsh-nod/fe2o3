@@ -328,9 +328,9 @@ fn address_escape_and_already_invalid_identity_observation_reject() {
             let mut module = Module::new("invalid-pointer-comparison");
             module.functions.push(function.clone());
             let error = verify_module(&module).unwrap_err();
-            assert_eq!(error.diagnostics.len(), 1);
+            assert_eq!(error.diagnostics().len(), 1);
             assert_eq!(
-                error.diagnostics[0].code,
+                error.diagnostics()[0].code,
                 fe2o3_kernel_ir::DiagnosticCode::InvalidOperandType
             );
         } else {
