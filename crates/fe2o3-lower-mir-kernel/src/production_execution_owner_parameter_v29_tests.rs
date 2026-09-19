@@ -251,6 +251,16 @@ fn owner_parameter_preserves_source_roster_and_entry_local_order() {
         );
         let kept = signature_bytes(&signature);
         assert_eq!(budget.storage() - floor, kept);
+        let copied = clone_execution_function_signature_v29(&signature, budget)?;
+        let copied_bytes = signature_bytes(&copied);
+        assert_eq!(copied.parameter_types, signature.parameter_types);
+        assert_eq!(
+            selectors(&copied.call_arguments),
+            selectors(&signature.call_arguments)
+        );
+        assert_eq!(budget.storage() - floor, kept + copied_bytes);
+        drop(copied);
+        budget.release_storage(copied_bytes)?;
         let plan = execution_instance_plan_v29(
             instances,
             child(instances),

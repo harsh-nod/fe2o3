@@ -401,7 +401,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let signature = self
             .defined_function_signatures
             .get(&callee)
-            .cloned()
             .ok_or_else(|| {
                 unsupported(
                     self.semantic_function.index(),
@@ -410,6 +409,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     "defined call target has no exact KIR signature",
                 )
             })?;
+        let signature = if scoped {
+            clone_execution_function_signature_v29(
+                signature,
+                self.emission_work
+                    .as_deref_mut()
+                    .ok_or(ArgumentResourceV1::Accounting)?,
+            )?
+        } else {
+            signature.clone()
+        };
         if call.arguments().len() != signature.parameter_semantic_types.len()
             || signature.call_arguments.len() != signature.parameter_types.len()
         {

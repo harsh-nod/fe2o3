@@ -86,6 +86,36 @@ fn execution_is_direct_owner_type_v29(ty: &Type) -> bool {
     }
 }
 
+fn clone_execution_function_signature_v29(
+    signature: &LoweredFunctionSignatureV1,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<LoweredFunctionSignatureV1, ProductionSemanticKirErrorV1> {
+    budget.charge_work(argument_sum_v1(&[
+        signature.parameter_semantic_types.len(),
+        signature.call_arguments.len(),
+    ])?)?;
+    let mut parameter_semantic_types =
+        emission_vec_v1(signature.parameter_semantic_types.len(), budget)?;
+    parameter_semantic_types.extend_from_slice(&signature.parameter_semantic_types);
+    let mut call_arguments = emission_vec_v1(signature.call_arguments.len(), budget)?;
+    call_arguments.extend_from_slice(&signature.call_arguments);
+    let mut parameter_types = emission_vec_v1(signature.parameter_types.len(), budget)?;
+    for ty in &signature.parameter_types {
+        parameter_types.push(execution_cfg_clone_type_v29(ty, budget)?);
+    }
+    let mut result_types = emission_vec_v1(signature.result_types.len(), budget)?;
+    for ty in &signature.result_types {
+        result_types.push(execution_cfg_clone_type_v29(ty, budget)?);
+    }
+    Ok(LoweredFunctionSignatureV1 {
+        parameter_semantic_types,
+        call_arguments,
+        parameter_types,
+        result_types,
+        result_semantic_type: signature.result_semantic_type,
+    })
+}
+
 // Borrow the private signature; do not allocate another representation roster.
 fn execution_direct_projection_v29<'a>(
     source_argument: u32,
