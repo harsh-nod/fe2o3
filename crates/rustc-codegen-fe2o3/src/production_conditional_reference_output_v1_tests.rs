@@ -145,26 +145,42 @@ fn constant_point_effect_borrows_the_exact_output_and_supports_u32_limits() {
 
 #[test]
 fn malformed_point_effects_refuse_without_hash_or_authority_substitution() {
-    let mutations: &[fn(&mut AuthenticatedReferenceEffectBindingV1)] = &[
-        |b| b.effect_ir.relations.swap(0, 1),
-        |b| b.effect_ir.blocks[0].block = 1,
-        |b| b.effect_ir.blocks[0].assignments[1].statement = 0,
-        |b| b.effect_ir.blocks[0].assignments[0].destination.local = 1,
-        |b| b.effect_ir.blocks[0].assignments[1] = b.effect_ir.blocks[0].assignments[0].clone(),
-        |b| b.observable_output_writes[0].argument = 1,
-        |b| b.observable_output_writes[0].guard.clauses = Box::default(),
-        |b| b.effect_ir.observable_output_effects[0].statement = 1,
-        |b| b.effect_ir_sha256[0] ^= 1,
+    type Mutation = fn(&mut AuthenticatedReferenceEffectBindingV1);
+    let mutations: &[(&str, Mutation)] = &[
+        ("IR relation", |b| b.effect_ir.relations.swap(0, 1)),
+        ("CPU block", |b| b.effect_ir.blocks[0].block = 1),
+        ("statement order", |b| {
+            b.effect_ir.blocks[0].assignments[1].statement = 0
+        }),
+        ("CPU assignment", |b| {
+            b.effect_ir.blocks[0].assignments[0].destination.local = 1
+        }),
+        ("duplicate CPU store", |b| {
+            let mut second = b.effect_ir.blocks[0].assignments[0].clone();
+            second.statement = 1;
+            b.effect_ir.blocks[0].assignments[1] = second;
+        }),
+        ("CPU write identity/value", |b| {
+            b.observable_output_writes[0].argument = 1
+        }),
+        ("CPU guard", |b| {
+            b.observable_output_writes[0].guard.clauses = Box::default()
+        }),
+        ("CPU write identity/value", |b| {
+            b.effect_ir.observable_output_effects[0].statement = 1
+        }),
+        ("effect digest", |b| b.effect_ir_sha256[0] ^= 1),
     ];
-    for mutate in mutations {
+    for &(expected, mutate) in mutations {
         let mut input = fixture(17);
         mutate(&mut input);
         let mut work = Work::new(100_000);
         let mut budget = Budget::new(&mut work, 0);
-        assert!(matches!(
-            check_constant_point_effect(&input, &mut budget),
-            Err(Error::Reference(_))
-        ));
+        let result = check_constant_point_effect(&input, &mut budget).map(|_| ());
+        assert!(
+            matches!(result, Err(Error::Reference(reason)) if reason == expected),
+            "{expected}: {result:?}"
+        );
         assert_eq!(budget.storage(), 0);
     }
     let input = fixture(u128::from(u32::MAX) + 1);
@@ -193,10 +209,10 @@ fn recursive_expression_is_refused_before_recursive_hashing() {
     let mut input = fixture(17);
     for _ in 0..32 {
         let old = std::mem::replace(
-            &mut input.observable_output_writes[0].rhs,
+            &mut input.effect_ir.observable_output_effects[0].rhs,
             CpuExpr::PointCoordinate { axis: 0 },
         );
-        input.observable_output_writes[0].rhs = CpuExpr::Unary {
+        input.effect_ir.observable_output_effects[0].rhs = CpuExpr::Unary {
             operation: ReferenceUnaryOpV1::Not,
             operand: Box::new(old),
         };

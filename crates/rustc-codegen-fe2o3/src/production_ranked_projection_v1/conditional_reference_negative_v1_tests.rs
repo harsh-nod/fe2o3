@@ -24,7 +24,7 @@ pub(super) fn check(
     let [original] = source.references.as_slice() else {
         panic!("single-reference source fixture");
     };
-    let refuse = |label: &str, bindings: Vec<Binding>| {
+    let refuse = |label: &str, expected: &str, bindings: Vec<Binding>| {
         let references = AuthenticatedReferenceEffectBindingsV1::new(bindings);
         let floor = owner.retained_analysis_storage_v1();
         let mut work = Work::new(10_000_000);
@@ -46,91 +46,111 @@ pub(super) fn check(
             },
         );
         assert!(
-            matches!(result, Err(JoinError::Reference(_))),
+            matches!(result, Err(JoinError::Reference(reason)) if reason == expected),
             "{label}: {result:?}"
         );
         assert_eq!(callbacks, 0, "{label}");
         assert_eq!(budget.storage(), floor, "{label}");
         assert!(budget.work_ledger_identity_v1() == ledger);
     };
-    refuse("missing reference", vec![]);
+    refuse("missing reference", "binding count", vec![]);
     refuse(
         "duplicate reference",
+        "binding count",
         vec![original.clone(), original.clone()],
     );
-    let cases: &[(&str, fn(&mut Binding))] = &[
-        ("logical name", |b| {
+    type Mutation = fn(&mut Binding);
+    let cases: &[(&str, &str, Mutation)] = &[
+        ("logical name", "logical name", |b| {
             b.logical_kernel_name.push_str("_changed")
         }),
-        ("kernel function", |b| b.kernel.function_sha256[0] ^= 1),
-        ("kernel item", |b| b.kernel.item_definition_sha256[0] ^= 1),
-        ("kernel instantiation", |b| {
+        ("kernel function", "kernel identity", |b| {
+            b.kernel.function_sha256[0] ^= 1
+        }),
+        ("kernel item", "kernel identity", |b| {
+            b.kernel.item_definition_sha256[0] ^= 1
+        }),
+        ("kernel instantiation", "kernel identity", |b| {
             b.kernel.monomorphization_sha256[0] ^= 1
         }),
-        ("kernel type args", |b| {
+        ("kernel type args", "kernel identity", |b| {
             b.kernel.generic_type_arguments_sha256[0] ^= 1
         }),
-        ("kernel const args", |b| {
+        ("kernel const args", "kernel identity", |b| {
             b.kernel.const_generic_arguments_sha256[0] ^= 1
         }),
-        ("kernel MIR", |b| b.kernel.rustc_mir_body_sha256[0] ^= 1),
-        ("reference function", |b| {
+        ("kernel MIR", "contract subjects", |b| {
+            b.kernel.rustc_mir_body_sha256[0] ^= 1
+        }),
+        ("reference function", "contract subjects", |b| {
             b.reference.function_sha256[0] ^= 1
         }),
-        ("reference MIR", |b| {
+        ("reference MIR", "contract subjects", |b| {
             b.reference.rustc_mir_body_sha256[0] ^= 1
         }),
-        ("effect digest", |b| b.effect_ir_sha256[0] ^= 1),
-        ("missing relation", |b| {
+        ("effect digest", "effect digest", |b| {
+            b.effect_ir_sha256[0] ^= 1
+        }),
+        ("missing relation", "IR header", |b| {
             b.effect_ir.relations = Box::default()
         }),
-        ("reordered relation", |b| b.effect_ir.relations.swap(0, 1)),
-        ("raw ordinal as logical", |b| {
+        ("reordered relation", "IR relation", |b| {
+            b.effect_ir.relations.swap(0, 1)
+        }),
+        ("raw ordinal as logical", "IR relation", |b| {
             b.effect_ir.relations[1] = Relation::DisjointOutputCoordinate {
                 argument: 1,
                 element: Scalar::U32,
             };
         }),
-        ("missing store", |b| {
+        ("missing store", "output count", |b| {
             b.observable_output_writes = Box::default()
         }),
-        ("extra store", |b| {
+        ("extra store", "output count", |b| {
             b.observable_output_writes =
                 vec![b.observable_output_writes[0].clone(); 2].into_boxed_slice()
         }),
-        ("missing effect", |b| {
+        ("missing effect", "effect count", |b| {
             b.effect_ir.observable_output_effects = Box::default()
         }),
-        ("store raw ordinal", |b| {
+        ("store raw ordinal", "CPU write identity/value", |b| {
             b.observable_output_writes[0].argument = 1
         }),
-        ("store block", |b| b.observable_output_writes[0].block = 1),
-        ("store statement", |b| {
+        ("store block", "CPU write identity/value", |b| {
+            b.observable_output_writes[0].block = 1
+        }),
+        ("store statement", "CPU write identity/value", |b| {
             b.observable_output_writes[0].statement += 1
         }),
-        ("point axis", |b| {
+        ("point axis", "CPU coordinate", |b| {
             b.observable_output_writes[0].coordinate =
                 Coordinate::LogicalPoint(vec![Expr::PointCoordinate { axis: 1 }].into_boxed_slice())
         }),
-        ("missing point", |b| {
+        ("missing point", "CPU coordinate", |b| {
             b.observable_output_writes[0].coordinate = Coordinate::SingleCoordinate
         }),
-        ("false domain", |b| {
+        ("false domain", "CPU guard", |b| {
             b.observable_output_writes[0].guard.clauses = Box::default()
         }),
-        ("nonconstant RHS", |b| {
+        ("nonconstant RHS", "CPU RHS", |b| {
             b.observable_output_writes[0].rhs = Expr::KernelScalarArgument { argument: 0 }
         }),
-        ("IR argument count", |b| b.effect_ir.argument_count += 1),
-        ("IR local count", |b| b.effect_ir.local_count = 0),
-        ("IR missing block", |b| b.effect_ir.blocks = Box::default()),
-        ("IR extra block", |b| {
+        ("IR argument count", "IR header", |b| {
+            b.effect_ir.argument_count += 1
+        }),
+        ("IR local count", "IR header", |b| {
+            b.effect_ir.local_count = 0
+        }),
+        ("IR missing block", "CPU blocks", |b| {
+            b.effect_ir.blocks = Box::default()
+        }),
+        ("IR extra block", "CPU blocks", |b| {
             b.effect_ir.blocks = vec![b.effect_ir.blocks[0].clone(); 2].into_boxed_slice()
         }),
-        ("IR missing assignments", |b| {
+        ("IR missing assignments", "CPU block", |b| {
             b.effect_ir.blocks[0].assignments = Box::default()
         }),
-        ("IR output local", |b| {
+        ("IR output local", "CPU assignment", |b| {
             let write = b.effect_ir.blocks[0]
                 .assignments
                 .iter_mut()
@@ -138,7 +158,7 @@ pub(super) fn check(
                 .unwrap();
             write.destination.local = 1;
         }),
-        ("IR output projection", |b| {
+        ("IR output projection", "CPU assignment", |b| {
             let write = b.effect_ir.blocks[0]
                 .assignments
                 .iter_mut()
@@ -147,10 +167,10 @@ pub(super) fn check(
             write.destination.projection = vec![Projection::Field(0)].into_boxed_slice();
         }),
     ];
-    for &(label, mutate) in cases {
+    for &(label, expected, mutate) in cases {
         let mut changed = original.clone();
         mutate(&mut changed);
-        refuse(label, vec![changed]);
+        refuse(label, expected, vec![changed]);
     }
     let output = Input::NominalOutput {
         carrier: Carrier::DisjointSlice,
@@ -162,15 +182,22 @@ pub(super) fn check(
         mutability: Mutability::Mutable,
         pointee: Pointee::Scalar(Scalar::U32),
     };
-    for (label, kernel, reference) in [
+    for (label, expected, kernel, reference) in [
         (
             "u64 is not usize",
+            "signature relation",
             output,
             vec![Input::Scalar(Scalar::U64), cell],
         ),
-        ("missing point prefix", output, vec![cell]),
+        (
+            "missing point prefix",
+            "signature fragment",
+            output,
+            vec![cell],
+        ),
         (
             "immutable output",
+            "signature relation",
             output,
             vec![
                 point,
@@ -183,6 +210,7 @@ pub(super) fn check(
         ),
         (
             "slice is not point output",
+            "IR relation",
             output,
             vec![
                 point,
@@ -195,6 +223,7 @@ pub(super) fn check(
         ),
         (
             "different output width",
+            "signature fragment",
             Input::NominalOutput {
                 carrier: Carrier::DisjointSlice,
                 element: Scalar::U64,
@@ -221,6 +250,6 @@ pub(super) fn check(
         .unwrap();
         // The old effect hash is unchanged: signature replay is a separate check.
         assert_eq!(changed.effect_ir_sha256, original.effect_ir_sha256);
-        refuse(label, vec![changed]);
+        refuse(label, expected, vec![changed]);
     }
 }
