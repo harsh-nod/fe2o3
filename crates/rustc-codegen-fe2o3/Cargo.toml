@@ -60,6 +60,7 @@ fe2o3-runtime.workspace = true
 fe2o3-semantic-trace.workspace = true
 fe2o3-sim-differential.workspace = true
 fe2o3-sim-runtime.workspace = true
+fe2o3-source-isa-observation.workspace = true
 object = { version = "0.39.1", default-features = false, features = ["elf", "read_core"] }
 rmpv = { version = "1.3.1", default-features = false }
 

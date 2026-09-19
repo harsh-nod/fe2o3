@@ -3857,6 +3857,9 @@ pub(crate) mod ordered_region_diagnostic_v31;
 pub(crate) mod ordered_region_qualification_v31;
 
 #[cfg(test)]
+mod source_bitselect_feasibility_v1_tests;
+
+#[cfg(test)]
 mod tests {
     include!("production_pipeline_pre_ranked_routes_tests.rs");
     use super::*;
