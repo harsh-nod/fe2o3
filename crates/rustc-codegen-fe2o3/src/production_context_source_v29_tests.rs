@@ -20,6 +20,9 @@ const RESULT: &str = "FE2O3_TEST_CONTEXT_SOURCE_RESULT_V29";
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::context_source_child";
 const REPORT_BYTES: usize = 2 * 1024 * 1024;
 
+#[path = "production_pending_context_source_v29_tests.rs"]
+mod pending_source_tests;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct SourceObservation {
     source: [u8; 32],
@@ -598,6 +601,64 @@ fn actual_context_store_reaches_the_checked_root_consumer() {
 }
 
 fn check_actual_sources(cases: &[(&str, &str)], expected_derives: usize, profiles: &[(u8, u8)]) {
+    run_actual_sources::<SourceObservation>(
+        cases,
+        profiles,
+        CHILD,
+        "CONTEXT_SOURCE_OBSERVATION",
+        source,
+        |opt, mir, label, observation, observations| {
+            assert_eq!(observation.derives, expected_derives);
+            assert_eq!(observation.helper_stores, 1);
+            if opt == 3 && mir == 2 {
+                let expected = match label {
+                    "constant7" | "discarded" => Some(7),
+                    "constant11" => Some(11),
+                    _ => None,
+                };
+                assert_eq!(observation.provider_returned_u32, expected, "{label}");
+            }
+            if expected_derives != 0 {
+                assert!(observation.borrows > 0);
+                assert!(observation.promoted_context_borrows > 0);
+                assert!(observation.provider.is_some());
+                assert_eq!(observation.provider_calls, 1);
+                assert_eq!(
+                    observation.checked_provider_receivers,
+                    observation.provider_calls
+                );
+                assert_eq!(observation.provider_returns, 1);
+                assert_eq!(observation.helper_stored_u32, None);
+            } else {
+                assert_eq!(observation.promoted_context_borrows, 0);
+                assert_eq!(observation.checked_provider_receivers, 0);
+                assert_eq!(observation.provider, None);
+                assert_eq!(observation.provider_calls, 0);
+                assert_eq!(observation.provider_returns, 0);
+            }
+            if let Some(previous) = observations.get(label) {
+                assert_eq!(&observation, previous, "fresh-process source observation");
+            } else {
+                for previous in observations.values() {
+                    assert_ne!(
+                        observation.source, previous.source,
+                        "changed source cannot reuse the observation"
+                    );
+                }
+                observations.insert(label.to_owned(), observation);
+            }
+        },
+    );
+}
+
+fn run_actual_sources<T: Serialize + serde::de::DeserializeOwned + std::fmt::Debug>(
+    cases: &[(&str, &str)],
+    profiles: &[(u8, u8)],
+    child: &str,
+    tag: &str,
+    program: impl Fn(&str) -> String,
+    mut validate: impl FnMut(u8, u8, &str, T, &mut std::collections::BTreeMap<String, T>),
+) {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -673,10 +734,10 @@ fn check_actual_sources(cases: &[(&str, &str)], expected_derives: usize, profile
         let core = artifact(&messages, "core");
         let builtins = artifact(&messages, "compiler_builtins");
         for &(opt, mir) in profiles {
-            let mut observations = std::collections::BTreeMap::<&str, SourceObservation>::new();
+            let mut observations = std::collections::BTreeMap::<String, T>::new();
             for (ordinal, (label, body)) in cases.iter().enumerate() {
                 let source_path = scratch.path().join(format!("{label}.rs"));
-                std::fs::write(&source_path, source(body)).unwrap();
+                std::fs::write(&source_path, program(body)).unwrap();
                 let compiler_output = scratch
                     .path()
                     .join(format!("output-{target}-{opt}-{mir}-{ordinal}"));
@@ -743,7 +804,7 @@ fn check_actual_sources(cases: &[(&str, &str)], expected_derives: usize, profile
                 std::fs::write(&request, serde_json::to_vec(&args).unwrap()).unwrap();
                 let child = clean_command(env::current_exe().unwrap())
                     .current_dir(&workspace)
-                    .args(["--exact", CHILD, "--ignored", "--nocapture"])
+                    .args(["--exact", child, "--ignored", "--nocapture"])
                     .env(ARGS, &request)
                     .env(RESULT, &response)
                     .env("FE2O3_CONTEXT_PROTOCOL_SOURCE", &source_path)
@@ -768,53 +829,15 @@ fn check_actual_sources(cases: &[(&str, &str)], expected_derives: usize, profile
                     ));
                     continue;
                 }
-                let result: Result<SourceObservation, String> =
+                let result: Result<T, String> =
                     serde_json::from_slice(&std::fs::read(&response).unwrap()).unwrap();
                 let observation = result.unwrap();
                 eprintln!(
-                    "CONTEXT_SOURCE_OBSERVATION {target}/opt{opt}/mir{mir}/{label}: {}\n{}",
+                    "{tag} {target}/opt{opt}/mir{mir}/{label}: {}\n{}",
                     serde_json::to_string(&observation).unwrap(),
                     String::from_utf8_lossy(&child.stdout)
                 );
-                assert_eq!(observation.derives, expected_derives);
-                assert_eq!(observation.helper_stores, 1);
-                if opt == 3 && mir == 2 {
-                    let expected = match *label {
-                        "constant7" | "discarded" => Some(7),
-                        "constant11" => Some(11),
-                        _ => None,
-                    };
-                    assert_eq!(observation.provider_returned_u32, expected, "{label}");
-                }
-                if expected_derives != 0 {
-                    assert!(observation.borrows > 0);
-                    assert!(observation.promoted_context_borrows > 0);
-                    assert!(observation.provider.is_some());
-                    assert_eq!(observation.provider_calls, 1);
-                    assert_eq!(
-                        observation.checked_provider_receivers,
-                        observation.provider_calls
-                    );
-                    assert_eq!(observation.provider_returns, 1);
-                    assert_eq!(observation.helper_stored_u32, None);
-                } else {
-                    assert_eq!(observation.promoted_context_borrows, 0);
-                    assert_eq!(observation.checked_provider_receivers, 0);
-                    assert_eq!(observation.provider, None);
-                    assert_eq!(observation.provider_calls, 0);
-                    assert_eq!(observation.provider_returns, 0);
-                }
-                if let Some(previous) = observations.get(label) {
-                    assert_eq!(&observation, previous, "fresh-process source observation");
-                } else {
-                    for previous in observations.values() {
-                        assert_ne!(
-                            observation.source, previous.source,
-                            "changed source cannot reuse the observation"
-                        );
-                    }
-                    observations.insert(label, observation);
-                }
+                validate(opt, mir, label, observation, &mut observations);
             }
         }
         std::fs::remove_dir_all(&dependency_target).unwrap();

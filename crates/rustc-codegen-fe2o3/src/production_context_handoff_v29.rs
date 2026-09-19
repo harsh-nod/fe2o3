@@ -28,6 +28,10 @@ use super::ProductionPipelineError;
 #[path = "production_context_projection_capacity_v29_tests.rs"]
 mod projection_capacity_tests;
 
+#[cfg(test)]
+#[path = "production_pending_context_observer_v29.rs"]
+mod pending_observer_v29;
+
 fn project_boundary(source: &CallBoundaryV29) -> ProductionContextCallBoundaryV29 {
     let (block, statement_count) = source.location();
     let (destination, destination_type) = source.destination();
@@ -51,7 +55,21 @@ pub(crate) fn check_context_handoff_v29(
         &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ) -> Result<(), ProductionContextRootErrorV29>,
 ) -> Result<(), ProductionPipelineError> {
-    let source = entries
+    let Some(source) = execution_source_v29(entries, ssa, budget)? else {
+        return Ok(());
+    };
+    with_projected_execution_source_v29(&source, budget, |input, budget| {
+        with_checked_execution_source_v29(ssa, launch, input, budget, use_root)
+    })
+    .map_err(ProductionPipelineError::ContextHandoff)
+}
+
+fn execution_source_v29<'receipt>(
+    entries: &'receipt RetainedContextEntriesV29,
+    ssa: &ProductionSemanticSsaOwnerV1,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<Option<RetainedExecutionSourceV29<'receipt>>, ProductionPipelineError> {
+    entries
         .materialization_source_v29(ssa.source_semantic(), budget)
         .map_err(|error| match error {
             ContextRootVisitErrorV29::Source(error) => ProductionPipelineError::SemanticImport(
@@ -63,14 +81,7 @@ pub(crate) fn check_context_handoff_v29(
                 ProductionPipelineError::ContextHandoff(error.into())
             }
             ContextRootVisitErrorV29::Consumer(never) => match never {},
-        })?;
-    let Some(source) = source else {
-        return Ok(());
-    };
-    with_projected_execution_source_v29(&source, budget, |input, budget| {
-        with_checked_execution_source_v29(ssa, launch, input, budget, use_root)
-    })
-    .map_err(ProductionPipelineError::ContextHandoff)
+        })
 }
 
 fn projection_bytes<T>(count: usize) -> Result<usize, ProductionContextRootErrorV29> {
