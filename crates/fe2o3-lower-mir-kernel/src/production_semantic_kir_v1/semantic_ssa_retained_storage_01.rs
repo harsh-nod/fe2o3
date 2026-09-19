@@ -108,48 +108,59 @@ fn private_slot_candidate_locals_v1(
         .difference(promoted)
         .copied()
         .collect::<BTreeSet<_>>();
-    let mut add_root = |place: &SemanticPlaceV1| {
-        // The shared adapter marks an address-taking borrow promotable only when
-        // it proved one exact compiler-intrinsic consumer. Such a borrow
-        // transports the semantic value/capability, not a Rust stack address.
-        let local = place.local().index();
-        if !promoted.contains(&local)
-            && !matches!(
-                place
-                    .projections()
-                    .first()
-                    .map(|projection| projection.kind()),
-                Some(SemanticProjectionKindV1::Dereference),
-            )
-        {
+    visit_private_slot_roots_v1(function, &mut PrivateArrayNoWorkV1, |local, _| {
+        if !promoted.contains(&local) {
             candidates.insert(local);
         }
+        Ok(())
+    })
+    .unwrap_or_else(|never| match never {});
+    candidates
+}
+
+fn visit_private_slot_roots_v1<W: PrivateArrayChargeV1>(
+    function: &SemanticFunctionDeclV1,
+    work: &mut W,
+    mut visit: impl FnMut(u32, &mut W) -> Result<(), W::Error>,
+) -> Result<(), W::Error> {
+    let mut add_root = |place: &SemanticPlaceV1, work: &mut W| {
+        work.charge_private_array_work(3)?;
+        // Dereferences address the pointee, not a retained slot for the pointer local.
+        if !matches!(
+            place.projections().first().map(|p| p.kind()),
+            Some(SemanticProjectionKindV1::Dereference)
+        ) {
+            visit(place.local().index(), work)?;
+        }
+        Ok(())
     };
     for block in function.blocks() {
+        work.charge_private_array_work(1)?;
         for statement in block.statements() {
+            work.charge_private_array_work(1)?;
             match statement.kind() {
                 SemanticStatementKindV1::Assign(assignment) => {
                     if !assignment.destination().projections().is_empty() {
-                        add_root(assignment.destination());
+                        add_root(assignment.destination(), work)?;
                     }
                     match assignment.value().kind() {
                         SemanticRvalueKindV1::Borrow { place, .. }
-                        | SemanticRvalueKindV1::AddressOf { place, .. } => add_root(place),
-                        SemanticRvalueKindV1::Load(load) => add_root(load.source()),
+                        | SemanticRvalueKindV1::AddressOf { place, .. } => add_root(place, work)?,
+                        SemanticRvalueKindV1::Load(load) => add_root(load.source(), work)?,
                         _ => {}
                     }
                 }
-                SemanticStatementKindV1::Store(store) => add_root(store.destination()),
+                SemanticStatementKindV1::Store(store) => add_root(store.destination(), work)?,
                 SemanticStatementKindV1::AtomicRmw(operation) => {
-                    add_root(operation.address());
+                    add_root(operation.address(), work)?;
                     if !operation.destination().projections().is_empty() {
-                        add_root(operation.destination());
+                        add_root(operation.destination(), work)?;
                     }
                 }
                 SemanticStatementKindV1::AtomicCompareExchange(operation) => {
-                    add_root(operation.address());
+                    add_root(operation.address(), work)?;
                     if !operation.destination().projections().is_empty() {
-                        add_root(operation.destination());
+                        add_root(operation.destination(), work)?;
                     }
                 }
                 SemanticStatementKindV1::SetDiscriminant { .. }
@@ -160,14 +171,15 @@ fn private_slot_candidate_locals_v1(
                 | SemanticStatementKindV1::Nop => {}
             }
         }
+        work.charge_private_array_work(1)?;
         if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
             && let Some(destination) = call.destination()
             && !destination.place().projections().is_empty()
         {
-            add_root(destination.place());
+            add_root(destination.place(), work)?;
         }
     }
-    candidates
+    Ok(())
 }
 
 fn kill_moved_retained_operand_v1(

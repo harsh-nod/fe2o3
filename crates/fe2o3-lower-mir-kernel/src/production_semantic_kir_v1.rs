@@ -10245,6 +10245,7 @@ struct LoweredFunctionResultV1 {
     #[cfg(test)]
     execution_observation: Option<ExecutionTestObservationV29>,
     source_call_instance: Option<ProductionCallInstanceIdV1>,
+    scoped_slot_origins: Option<Vec<ScopedSlotOriginV29>>,
     instance_assert_origins: Option<InstanceAssertCaptureV1>,
     lifecycle_events: Option<PendingLifecycleEventsV29>,
     private_arrays: PrivateArrayFunctionRowsV1,
@@ -10963,6 +10964,9 @@ fn lower_one_semantic_function_with_calls_v29(
             bindings: std::mem::take(&mut lowering.semantic_ssa_bindings),
         });
     drop(lowering.emission_work.take());
+    let scoped_slot_origins = source_call_instance
+        .map(|_| capture_scoped_slot_origins_v29(&lowering.retained_local_slots, call_budget))
+        .transpose()?;
     let infallible_asserts = lowering.infallible_asserts;
     let generated_terminator_values = lowering.generated_terminator_values;
     let mut call_returns = lowering.call_returns;
@@ -11053,6 +11057,7 @@ fn lower_one_semantic_function_with_calls_v29(
         #[cfg(test)]
         execution_observation,
         source_call_instance,
+        scoped_slot_origins,
         instance_assert_origins,
         lifecycle_events,
         private_arrays,
@@ -12393,6 +12398,7 @@ include!("production_execution_lifecycle_consumer_v29.rs");
 include!("production_execution_lifecycle_producer_v29.rs");
 include!("production_execution_instance_plan_v29.rs");
 include!("production_scoped_root_emission_v29.rs");
+include!("production_scoped_source_slots_v29.rs");
 include!("production_execution_lifecycle_insertion_v29.rs");
 include!("production_kernel_metadata_v1.rs");
 include!("production_execution_scalar_operands_v29.rs");

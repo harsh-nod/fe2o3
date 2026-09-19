@@ -8,6 +8,7 @@ struct OwnedPendingScopedRootV29 {
     pending: PendingScopedRootEmissionV29,
     kernel: Kernel,
     private_payload: PrivateArrayPayloadV1,
+    source_slots: OwnedScopedSourceSlotsV29,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
     // Reservation on the shared emission ledger, not total heap usage. The
     // legacy emitter also has structurally bounded, separately accounted data.
@@ -159,7 +160,7 @@ fn emit_pending_scoped_root_v29(
     // The attempt encloses the planner scopes too: their explicit refunds do
     // not execute during unwinding, although their Rust-owned buffers drop.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let (pending, kernel, private_payload) = build_pending_scoped_root_v29(
+        let (pending, kernel, private_payload, source_slots) = build_pending_scoped_root_v29(
             checked,
             source,
             limits,
@@ -176,6 +177,7 @@ fn emit_pending_scoped_root_v29(
             pending,
             kernel,
             private_payload,
+            source_slots,
             ledger: source.ledger,
             retained_emission_storage,
         })
@@ -210,7 +212,12 @@ fn build_pending_scoped_root_v29(
     outer_private_payload: PrivateArrayPayloadV1,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<
-    (PendingScopedRootEmissionV29, Kernel, PrivateArrayPayloadV1),
+    (
+        PendingScopedRootEmissionV29,
+        Kernel,
+        PrivateArrayPayloadV1,
+        OwnedScopedSourceSlotsV29,
+    ),
     ProductionSemanticKirErrorV1,
 > {
     let semantic = checked.semantic_ssa().source_semantic();
@@ -262,7 +269,7 @@ fn build_pending_scoped_root_v29(
         )?,
         None => BTreeSet::new(),
     };
-    let (pending, private_payload) =
+    let (pending, private_payload, source_slots) =
         production_call_instances_v1::with_production_call_instances_v1(
             checked.semantic_ssa(),
             checked.root_id(),
@@ -439,6 +446,16 @@ fn build_pending_scoped_root_v29(
                             *slot = Some(lowered);
                         }
                         sink.finish(budget)?;
+                        let source_slots = derive_scoped_source_slots_v29(
+                            instances,
+                            &emitted,
+                            limits.max_operations,
+                            budget,
+                        )?;
+                        #[cfg(test)]
+                        if let Some(observe) = SCOPED_SLOT_OBSERVER_V29.get() {
+                            observe(instances, &mut emitted, &source_slots, budget)?;
+                        }
                         let pending = assemble_pending_scoped_root_v29(
                             instances,
                             &mut emitted,
@@ -453,7 +470,7 @@ fn build_pending_scoped_root_v29(
                         drop(signatures);
                         budget
                             .release_storage(argument_sum_v1(&[slot_bytes, signature_storage])?)?;
-                        Ok((pending, position.private_payload))
+                        Ok((pending, position.private_payload, source_slots))
                     }),
                 )
             },
@@ -473,5 +490,5 @@ fn build_pending_scoped_root_v29(
             full_physical_workgroups: layout.full_physical_workgroups(),
         }),
     )?;
-    Ok((pending, kernel, private_payload))
+    Ok((pending, kernel, private_payload, source_slots))
 }

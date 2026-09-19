@@ -9,6 +9,7 @@ struct PendingInstanceSidecarsV29 {
     #[cfg(test)]
     execution_observation: Option<ExecutionTestObservationV29>,
     source_call_instance: Option<ProductionCallInstanceIdV1>,
+    scoped_slot_origins: Option<Vec<ScopedSlotOriginV29>>,
     instance_assert_origins: Option<InstanceAssertCaptureV1>,
     lifecycle_events: Option<PendingLifecycleEventsV29>,
     private_arrays: PrivateArrayFunctionRowsV1,
@@ -36,6 +37,7 @@ impl PendingInstanceSidecarsV29 {
             #[cfg(test)]
             execution_observation,
             source_call_instance,
+            scoped_slot_origins,
             instance_assert_origins,
             lifecycle_events,
             private_arrays,
@@ -61,6 +63,7 @@ impl PendingInstanceSidecarsV29 {
                 #[cfg(test)]
                 execution_observation,
                 source_call_instance,
+                scoped_slot_origins,
                 instance_assert_origins,
                 lifecycle_events,
                 private_arrays,
