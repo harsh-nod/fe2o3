@@ -12,8 +12,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 #[cfg(target_os = "linux")]
-#[path = "candidate_fs.rs"]
-mod filesystem;
+use fe2o3_source_isa_observation::source_candidate_io_v1 as filesystem;
 
 pub(super) struct Options {
     pub selector: AuthoringRegionSelectorV1,

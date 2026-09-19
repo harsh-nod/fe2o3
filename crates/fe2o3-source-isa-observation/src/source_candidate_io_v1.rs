@@ -1,12 +1,18 @@
 //! Linux-only, retained-descriptor reads and atomic no-replace candidate publication.
 //! Requires O_TMPFILE and procfs fd links. No named temporary file is exposed.
+//!
+//! Paths are explicit bounded relative Rust-file paths, never source-map display
+//! labels. This is inert file I/O: the bytes need not be valid UTF-8 or Rust, and
+//! neither retained descriptors nor publication observations authenticate source,
+//! establish semantic equivalence, or grant proof, compiler-resume or GPU authority.
+//! Callers must independently validate their byte commitments and source edits.
 
 use std::fs::{File, Metadata};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 
-use fe2o3_source_isa_observation::source_edit_v1::{
+use crate::source_edit_v1::{
     MAX_SOURCE_EDIT_ORIGINAL_BYTES_V1, MAX_SOURCE_EDIT_OUTPUT_BYTES_V1,
     validate_source_edit_path_v1,
 };
@@ -21,7 +27,30 @@ const SOURCE_FLAGS: OFlags = OFlags::RDONLY
     .union(OFlags::NONBLOCK)
     .union(OFlags::CLOEXEC);
 
-pub(super) struct RetainedSource {
+/// Move-only original bytes and private descriptors for the opened file and parent.
+///
+/// The parent descriptor survives ancestor renames. Currentness therefore means
+/// exact bytes and the retained parent/name at a point in time, not that rewalking
+/// the original textual path reaches this file. No lock or filesystem CAS is claimed.
+///
+/// ```compile_fail
+/// use fe2o3_source_isa_observation::source_candidate_io_v1::RetainedSource;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<RetainedSource>();
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_source_isa_observation::source_candidate_io_v1::RetainedSource;
+/// let _: RetainedSource = serde_json::from_str("{}").unwrap();
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_source_isa_observation::source_candidate_io_v1::RetainedSource;
+/// fn replace_bytes(source: &mut RetainedSource) {
+///     source.original = b"substituted".to_vec();
+/// }
+/// ```
+pub struct RetainedSource {
     parent: File,
     name: String,
     file: File,
@@ -29,13 +58,21 @@ pub(super) struct RetainedSource {
     original: Vec<u8>,
 }
 
-pub(super) struct Published {
+/// Inert device/inode observation of the new candidate, not source authenticity
+/// or an owner granting access to the published file. Other writers can still
+/// modify or replace its name after publication; no continuing currentness is claimed.
+pub struct Published {
+    /// Device observed on the retained anonymous staging descriptor.
     pub device: u64,
+    /// Inode observed on the retained anonymous staging descriptor.
     pub inode: u64,
 }
 
 impl RetainedSource {
-    pub(super) fn open(path: &str) -> Result<Self, String> {
+    /// Retain a bounded regular source and its no-symlink parent traversal.
+    /// Reads at most the existing 1 MiB source limit plus one rejection byte.
+    /// UTF-8, Rust syntax, compiler identity and caller hashes are not checked here.
+    pub fn open(path: &str) -> Result<Self, String> {
         let (parent, name) = parent(path)?;
         let mut file = source_file(&parent, &name)?;
         let observed = regular_metadata(&file)?;
@@ -53,11 +90,16 @@ impl RetainedSource {
         })
     }
 
-    pub(super) fn original(&self) -> &[u8] {
+    /// Exact bytes observed during `open`; this immutable view carries no authority.
+    pub fn original(&self) -> &[u8] {
         &self.original
     }
 
-    fn verify_unchanged(&mut self) -> Result<(), String> {
+    /// Recheck exact bytes, inode/metadata and the basename in the retained parent.
+    /// This point-in-time observation is also mandatory inside [`publish`], after
+    /// candidate staging and before its atomic no-replace link. Ancestor renames
+    /// do not retarget the retained parent. Concurrent future changes remain possible.
+    pub fn recheck(&mut self) -> Result<(), String> {
         if !same_snapshot(&self.observed, &regular_metadata(&self.file)?) {
             return Err("source changed before candidate publication".into());
         }
@@ -82,7 +124,14 @@ impl RetainedSource {
     }
 }
 
-pub(super) fn publish(
+/// Create a new bounded candidate without replacing any existing destination.
+///
+/// Staging is anonymous and mode 0600; bytes are synced and read back before
+/// rechecking the retained source and atomically linking the new name. A failure
+/// before linking exposes no temporary name. A directory-sync failure after
+/// linking reports that the candidate was retained; it is never removed as an
+/// implicit rollback. No compilation, semantic check or source authentication occurs.
+pub fn publish(
     source: &mut RetainedSource,
     candidate: &str,
     bytes: &[u8],
@@ -113,7 +162,8 @@ pub(super) fn publish(
     if !metadata.is_file() || metadata.nlink() != 0 || metadata.len() != bytes.len() as u64 {
         return Err("anonymous candidate file identity changed".into());
     }
-    source.verify_unchanged()?;
+    verify_staged_bytes(&mut temporary, &metadata, bytes)?;
+    source.recheck()?;
     // linkat follows ONLY our retained anonymous fd's procfs link. The explicit
     // destination is descriptor-relative and linkat never replaces an entry.
     // Existing files, directories, hard links, and symlinks all reject atomically.
@@ -135,6 +185,34 @@ pub(super) fn publish(
         device: metadata.dev(),
         inode: metadata.ino(),
     })
+}
+
+fn verify_staged_bytes(
+    temporary: &mut File,
+    observed: &Metadata,
+    expected: &[u8],
+) -> Result<(), String> {
+    if expected.is_empty() || expected.len() > MAX_SOURCE_EDIT_OUTPUT_BYTES_V1 {
+        return Err("candidate exceeds the bounded source-output profile".into());
+    }
+    temporary
+        .seek(SeekFrom::Start(0))
+        .map_err(|error| format!("cannot rewind staged candidate for readback: {error}"))?;
+    let mut readback = Vec::with_capacity(expected.len() + 1);
+    (&mut *temporary)
+        .take(expected.len() as u64 + 1)
+        .read_to_end(&mut readback)
+        .map_err(|error| format!("cannot read back staged candidate: {error}"))?;
+    if readback != expected {
+        return Err("anonymous candidate bytes changed before publication".into());
+    }
+    let after = temporary
+        .metadata()
+        .map_err(|error| format!("cannot inspect staged candidate after readback: {error}"))?;
+    if !after.is_file() || after.nlink() != 0 || !same_snapshot(observed, &after) {
+        return Err("anonymous candidate file identity changed during readback".into());
+    }
+    Ok(())
 }
 
 fn parent(path: &str) -> Result<(File, String), String> {
@@ -196,5 +274,5 @@ fn same_snapshot(left: &Metadata, right: &Metadata) -> bool {
 }
 
 #[cfg(test)]
-#[path = "candidate_fs_tests.rs"]
+#[path = "source_candidate_io_v1_tests.rs"]
 mod tests;

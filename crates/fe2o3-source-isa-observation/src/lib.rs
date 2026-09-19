@@ -5,5 +5,7 @@ pub mod agent_v1;
 pub mod characteristic_agent_v1;
 pub mod characteristic_v1;
 pub mod multilevel_authoring_v1;
+#[cfg(target_os = "linux")]
+pub mod source_candidate_io_v1;
 pub mod source_edit_v1;
 pub mod wire_v1;
