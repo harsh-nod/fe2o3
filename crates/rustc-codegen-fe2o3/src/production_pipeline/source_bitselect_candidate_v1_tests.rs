@@ -12,6 +12,8 @@ use sha2::{Digest, Sha256};
 
 #[path = "source_bitselect_candidate_fresh_v1_tests.rs"]
 mod fresh;
+#[path = "source_local_order_pipeline_v1_tests.rs"]
+mod local_order;
 #[path = "source_bitselect_candidate_checks_v1_tests.rs"]
 mod tests;
 
