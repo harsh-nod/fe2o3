@@ -205,3 +205,38 @@ fn actual_plain_source_constructs_and_replays_pending_owner() {
 fn actual_workgroup_sources_construct_and_replay_pending_owner() {
     check_pending_sources(CALLBACK_CASES, &[(0, 0), (0, 2), (3, 0), (3, 2)]);
 }
+
+#[test]
+#[ignore = "requires pinned nightly rust-src, authentic AMD SDK dependencies and source compilation"]
+fn actual_scalar_source_constructs_and_replays_pending_owner() {
+    run_actual_sources::<PendingObservation>(
+        &[("scalar", "let _ = seed;"), ("scalar", "let _ = seed;")],
+        &[(0, 0), (0, 2), (3, 0), (3, 2)],
+        PENDING_CHILD,
+        "PENDING_SCALAR_SOURCE_OBSERVATION",
+        |body| {
+            format!(
+                r#"use fe2o3_device::{{kernel, KernelContext}};
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn callback_probe(_ctx: KernelContext<'_>, seed: u32) {{
+    {body}
+}}
+"#
+            )
+        },
+        |_, _, label, observation, observations| {
+            assert_eq!(observation.kernels, 1);
+            assert_eq!(observation.context_issues, 1);
+            assert_eq!(observation.derives, 0);
+            assert_eq!(observation.scope_ends, 0);
+            assert_eq!(observation.global_stores, 0);
+            assert!(observation.replay_storage_stable);
+            assert!(observation.canonical_bytes > 0);
+            if let Some(previous) = observations.get(label) {
+                assert_eq!(&observation, previous, "fresh-process scalar owner replay");
+            } else {
+                observations.insert(label.to_owned(), observation);
+            }
+        },
+    );
+}
