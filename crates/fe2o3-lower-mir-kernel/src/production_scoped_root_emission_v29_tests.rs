@@ -7,6 +7,7 @@ mod module_tests {
     use super::*;
     include!("production_scoped_module_fixtures_v29_tests.rs");
     include!("production_scoped_module_v29_tests.rs");
+    include!("production_scoped_owned_input_v29_tests.rs");
 }
 
 pub(super) mod fixtures {

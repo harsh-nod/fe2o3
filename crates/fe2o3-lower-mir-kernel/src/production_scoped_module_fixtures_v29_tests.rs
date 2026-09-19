@@ -174,10 +174,10 @@ fn module_fixture_owner(kind: ModuleFixture) -> ProductionSemanticSsaOwnerV1 {
     .unwrap()
 }
 
-fn with_module_fixture<R>(
+fn with_module_fixture<'work, R>(
     kind: ModuleFixture,
-    budget: &mut ArgumentBudgetV1<'_>,
-    use_source: impl FnOnce(&ExecutionLifecycleSourceV29<'_>, &mut ArgumentBudgetV1<'_>) -> R,
+    budget: &mut ArgumentBudgetV1<'work>,
+    use_source: impl FnOnce(&ExecutionLifecycleSourceV29<'_>, &mut ArgumentBudgetV1<'work>) -> R,
 ) -> Result<R, ScopedModuleErrorV29> {
     let mut owner = module_fixture_owner(kind);
     let capture = owner

@@ -138,14 +138,14 @@ impl OwnedExecutionInputV29 {
         })
     }
 
-    fn with_source<R>(
+    fn with_source<'work, R>(
         &self,
         owner: &ProductionSemanticSsaOwnerV1,
         launch: &crate::ProductionSourceLaunchRosterV1,
-        budget: &mut ArgumentBudgetV1<'_>,
+        budget: &mut ArgumentBudgetV1<'work>,
         visit: impl FnOnce(
             &ExecutionLifecycleSourceV29<'_>,
-            &mut ArgumentBudgetV1<'_>,
+            &mut ArgumentBudgetV1<'work>,
         ) -> Result<R, ScopedModuleErrorV29>,
     ) -> Result<R, ScopedModuleErrorV29> {
         if self.ledger != budget.work_ledger_identity_v1()
@@ -154,7 +154,7 @@ impl OwnedExecutionInputV29 {
             return Err(ArgumentResourceV1::Accounting.into());
         }
         budget.charge_work(argument_sum_v1(&[
-            66,
+            98,
             argument_product_v1(
                 self.launch.len(),
                 size_of::<crate::ProductionSourceLaunchRootV1>(),
