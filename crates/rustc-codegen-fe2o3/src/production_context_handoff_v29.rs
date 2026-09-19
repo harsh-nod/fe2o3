@@ -24,6 +24,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use super::ProductionPipelineError;
 
+#[cfg(test)]
+#[path = "production_context_projection_capacity_v29_tests.rs"]
+mod projection_capacity_tests;
+
 fn project_boundary(source: &CallBoundaryV29) -> ProductionContextCallBoundaryV29 {
     let (block, statement_count) = source.location();
     let (destination, destination_type) = source.destination();
@@ -75,10 +79,24 @@ fn projection_bytes<T>(count: usize) -> Result<usize, ProductionContextRootError
         .ok_or(Resource::Arithmetic.into())
 }
 
-fn projection_rows<T>(count: usize) -> Result<Vec<T>, ProductionContextRootErrorV29> {
+fn projection_rows<T>(
+    count: usize,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    charged: &mut usize,
+) -> Result<Vec<T>, ProductionContextRootErrorV29> {
+    let requested = projection_bytes::<T>(count)?;
+    #[cfg(test)]
+    let count = projection_capacity_tests::allocation_request(count)?;
     let mut rows = Vec::new();
     rows.try_reserve_exact(count)
         .map_err(|_| Resource::Allocation)?;
+    let actual = projection_bytes::<T>(rows.capacity())?;
+    #[cfg(test)]
+    projection_capacity_tests::record_capacity(actual);
+    let extra = actual.checked_sub(requested).ok_or(Resource::Accounting)?;
+    let next = charged.checked_add(extra).ok_or(Resource::Arithmetic)?;
+    budget.reserve_storage(extra)?;
+    *charged = next;
     Ok(rows)
 }
 
@@ -145,7 +163,8 @@ pub(crate) fn with_projected_execution_source_v29<R>(
         (source.events().len(), 8),
     ]
     .into_iter()
-    .try_fold(0_usize, |sum, (count, width)| {
+    // Prepay the fixed capacity reconciliation for each of the three vectors.
+    .try_fold(18_usize, |sum, (count, width)| {
         count
             .checked_mul(width)
             .and_then(|amount| sum.checked_add(amount))
@@ -153,10 +172,11 @@ pub(crate) fn with_projected_execution_source_v29<R>(
     })?;
     budget.charge_work(work)?;
     budget.reserve_storage(bytes)?;
+    let mut charged = bytes;
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut roots = projection_rows(source.roots().len())?;
-        let mut classes = projection_rows(source.classes().len())?;
-        let mut events = projection_rows(source.events().len())?;
+        let mut roots = projection_rows(source.roots().len(), budget, &mut charged)?;
+        let mut classes = projection_rows(source.classes().len(), budget, &mut charged)?;
+        let mut events = projection_rows(source.events().len(), budget, &mut charged)?;
         for entry in source.roots() {
             let (root, root_identity) = entry.root();
             let (helper, helper_identity) = entry.helper();
@@ -203,7 +223,7 @@ pub(crate) fn with_projected_execution_source_v29<R>(
     // The temporary row backing has dropped. Consumer-owned storage is not ours
     // to refund, and a replaced ledger must never receive our release.
     let cleanup = if budget.work_ledger_identity_v1() == ledger {
-        budget.release_storage(bytes)
+        budget.release_storage(charged)
     } else {
         Err(Resource::Accounting)
     };

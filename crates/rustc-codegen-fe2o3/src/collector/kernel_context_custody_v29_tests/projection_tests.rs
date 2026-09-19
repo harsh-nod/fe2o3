@@ -8,6 +8,14 @@ use fe2o3_lower_mir_kernel::{
 };
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+impl RetainedContextEntriesV29 {
+    pub(crate) fn projection_test_fixture_v29() -> (AdmittedInertSemanticMirV1, Self) {
+        let semantic = fixture_roots(Mutation::None, 4);
+        let receipt = scope_tests::complete(&semantic);
+        (semantic, receipt)
+    }
+}
+
 #[test]
 fn source_projection_restores_only_its_backing_on_success_failure_and_unwind() {
     let semantic = fixture_roots(Mutation::None, 4);
