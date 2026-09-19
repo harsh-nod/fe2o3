@@ -303,6 +303,12 @@ fn static_success_and_unrelated_alias_failure_keep_the_full_legacy_report() {
                                 dynamic_extents,
                                 noalias_class,
                                 ..
+                            }
+                            | O::ViewInSpace {
+                                shape,
+                                dynamic_extents,
+                                noalias_class,
+                                ..
                             } => {
                                 shape[0] = 4;
                                 dynamic_extents.clear();
@@ -319,6 +325,10 @@ fn static_success_and_unrelated_alias_failure_keep_the_full_legacy_report() {
             })
             .collect();
         let kernel = ProductionRankedKernelV1::new("legacy", 1, blocks).unwrap();
+        let static_views = kernel.blocks().iter().flat_map(|block| block.operations()).filter(|operation| matches!(operation,
+            O::ViewInSpace { shape, dynamic_extents, .. } if shape == &[4] && dynamic_extents.is_empty()
+        )).count();
+        assert_eq!(static_views, 2, "fixture must exercise two static outputs");
         let registered = session
             .register_construction(
                 ProductionConstructionV1::ranked_kernel("legacy", kernel).unwrap(),
@@ -332,7 +342,7 @@ fn static_success_and_unrelated_alias_failure_keep_the_full_legacy_report() {
         );
         let before =
             crate::run_pliron_hierarchical_ownership_check_v1(&session.inner.context, &function);
-        assert_eq!(before.is_clean(), !aliased);
+        assert_eq!(before.is_clean(), !aliased, "aliased={aliased}: {before:?}");
         if aliased {
             assert!(before.findings().iter().any(|finding| matches!(
                 finding,
