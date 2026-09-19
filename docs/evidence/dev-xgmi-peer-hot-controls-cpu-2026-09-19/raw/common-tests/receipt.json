@@ -1,0 +1,21 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "-B",
+    "benchmarks/runtime_gfx942/test_xgmi_peer_benchmark_common.py",
+    "-v"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789806801216056254,
+  "group_absent": true,
+  "pid": 479155,
+  "started_ns": 1789806797271899134,
+  "stderr_sha256": "0b81da384951db7c46cefb884c2fa17ec20f725bb36f0e7c48944e97aaf8ff98",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 300
+}

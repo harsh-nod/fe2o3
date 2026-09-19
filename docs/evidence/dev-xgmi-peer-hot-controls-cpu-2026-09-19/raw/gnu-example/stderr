@@ -1,0 +1,3 @@
+   Compiling fe2o3-runtime v0.1.0 (/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/crates/fe2o3-runtime)
+    Finished `test` profile [optimized] target(s) in 1.06s
+     Running unittests examples/gfx942-runtime-xgmi-peer-benchmark.rs (target/debug/examples/gfx942_runtime_xgmi_peer_benchmark-eda5ad74259eadbb)

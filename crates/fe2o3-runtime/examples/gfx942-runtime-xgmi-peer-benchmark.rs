@@ -14,7 +14,7 @@ use fe2o3_runtime::{
 const CANARY_BYTES: usize = 32;
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_DEPTH: usize = 32;
-const USAGE: &str = "usage: gfx942-runtime-xgmi-peer-benchmark <unique-id-0> <unique-id-1> <bytes> <depth> <warmups> <samples> [--diagnose-xgmi|--aggregate-peer-batch]";
+const USAGE: &str = "usage: gfx942-runtime-xgmi-peer-benchmark <unique-id-0> <unique-id-1> <bytes> <depth> <warmups> <samples> [--diagnose-xgmi|--aggregate-peer-batch|--aggregate-peer-batch-hot-only]";
 
 type BenchmarkResult<T> = Result<T, Box<dyn Error>>;
 type XgmiContextV1 = RuntimeContextV1<KfdNativeXgmiRuntimeBackendV1>;
@@ -30,6 +30,7 @@ enum ProgressModeV1 {
     Ordinary,
     Diagnostic,
     AggregatePeerBatch,
+    AggregatePeerBatchHotOnly,
 }
 
 fn facade_error(error: impl Debug) -> Box<dyn Error> {
@@ -75,6 +76,7 @@ fn progress_mode(args: &[String]) -> BenchmarkResult<ProgressModeV1> {
         }
         "--diagnose-xgmi" => Err("--diagnose-xgmi requires the hardware-diagnostic feature".into()),
         "--aggregate-peer-batch" => Ok(ProgressModeV1::AggregatePeerBatch),
+        "--aggregate-peer-batch-hot-only" => Ok(ProgressModeV1::AggregatePeerBatchHotOnly),
         _ => Err(USAGE.into()),
     }
 }
@@ -83,8 +85,30 @@ fn valid_depth(mode: ProgressModeV1, depth: usize) -> bool {
     let maximum = match mode {
         ProgressModeV1::Ordinary | ProgressModeV1::Diagnostic => MAX_DEPTH,
         ProgressModeV1::AggregatePeerBatch => MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1,
+        ProgressModeV1::AggregatePeerBatchHotOnly => 1,
     };
     depth != 0 && depth <= maximum
+}
+
+fn is_aggregate_mode(mode: ProgressModeV1) -> bool {
+    matches!(
+        mode,
+        ProgressModeV1::AggregatePeerBatch | ProgressModeV1::AggregatePeerBatchHotOnly
+    )
+}
+
+fn includes_remap_phase(mode: ProgressModeV1) -> bool {
+    mode != ProgressModeV1::AggregatePeerBatchHotOnly
+}
+
+fn report_schema(mode: ProgressModeV1) -> &'static str {
+    match mode {
+        ProgressModeV1::AggregatePeerBatch => "fe2o3.xgmi-peer-aggregate-benchmark.v1",
+        ProgressModeV1::AggregatePeerBatchHotOnly => {
+            "fe2o3.xgmi-peer-aggregate-hot-only-benchmark.v1"
+        }
+        ProgressModeV1::Ordinary | ProgressModeV1::Diagnostic => "fe2o3.xgmi-peer-benchmark.v1",
+    }
 }
 
 #[cfg(any(feature = "hardware-diagnostic", test))]
@@ -117,8 +141,7 @@ fn report_measurement(
     measurement: &str,
     mapping_lifetime: &str,
     prime_batches: usize,
-    diagnostic: bool,
-    aggregate: bool,
+    mode: ProgressModeV1,
     mut forward_ns: Vec<u128>,
     mut reverse_ns: Vec<u128>,
 ) -> BenchmarkResult<()> {
@@ -134,9 +157,10 @@ fn report_measurement(
     let bytes_per_round = copy_bytes
         .checked_mul(depth)
         .ok_or("XGMI bytes per round overflow")?;
-    if aggregate {
+    if is_aggregate_mode(mode) {
         println!(
-            "backend=kfd schema=fe2o3.xgmi-peer-aggregate-benchmark.v1 surface=runtime-facade unique_ids={:016x},{:016x} target=gfx942:xnack- bytes={} depth={} queue_depth={} batch_size={} direction=forward-then-reverse outstanding_depth={} engine_parallelism=ordered-single-sdma warmups={} samples={} measurement={} peer_access=topology-xgmi mapping_lifetime={} prime_batches={} doorbells_per_batch=1 progress=explicit-exact-roster-aggregate-wait aggregate_roster=exact-round-submissions background_progress=false forward_engine=topology-selected reverse_engine=topology-selected forward_p50_ns={} forward_p95_ns={} forward_p50_GBps={:.3} reverse_p50_ns={} reverse_p95_ns={} reverse_p50_GBps={:.3} canaries=pass teardown=explicit timing=facade-enqueue-through-aggregate-close",
+            "backend=kfd schema={} surface=runtime-facade unique_ids={:016x},{:016x} target=gfx942:xnack- bytes={} depth={} queue_depth={} batch_size={} direction=forward-then-reverse outstanding_depth={} engine_parallelism=ordered-single-sdma warmups={} samples={} measurement={} peer_access=topology-xgmi mapping_lifetime={} prime_batches={} doorbells_per_batch=1 progress=explicit-exact-roster-aggregate-wait aggregate_roster=exact-round-submissions background_progress=false forward_engine=topology-selected reverse_engine=topology-selected forward_p50_ns={} forward_p95_ns={} forward_p50_GBps={:.3} reverse_p50_ns={} reverse_p95_ns={} reverse_p50_GBps={:.3} canaries=pass teardown=explicit timing=facade-enqueue-through-aggregate-close",
+            report_schema(mode),
             unique_ids[0],
             unique_ids[1],
             copy_bytes,
@@ -158,7 +182,8 @@ fn report_measurement(
         );
     } else {
         println!(
-            "backend=kfd schema=fe2o3.xgmi-peer-benchmark.v1 surface=runtime-facade unique_ids={:016x},{:016x} target=gfx942:xnack- bytes={} depth={} queue_depth={} batch_size={} direction=forward-then-reverse outstanding_depth={} engine_parallelism=ordered-single-sdma warmups={} samples={} measurement={} peer_access=topology-xgmi mapping_lifetime={} prime_batches={} doorbells_per_batch=1 progress=explicit-flush-then-wait background_progress=false forward_engine=topology-selected reverse_engine=topology-selected forward_p50_ns={} forward_p95_ns={} forward_p50_GBps={:.3} reverse_p50_ns={} reverse_p95_ns={} reverse_p50_GBps={:.3} canaries=pass teardown=explicit timing=facade-enqueue-flush-through-observed-completion{}",
+            "backend=kfd schema={} surface=runtime-facade unique_ids={:016x},{:016x} target=gfx942:xnack- bytes={} depth={} queue_depth={} batch_size={} direction=forward-then-reverse outstanding_depth={} engine_parallelism=ordered-single-sdma warmups={} samples={} measurement={} peer_access=topology-xgmi mapping_lifetime={} prime_batches={} doorbells_per_batch=1 progress=explicit-flush-then-wait background_progress=false forward_engine=topology-selected reverse_engine=topology-selected forward_p50_ns={} forward_p95_ns={} forward_p50_GBps={:.3} reverse_p50_ns={} reverse_p95_ns={} reverse_p50_GBps={:.3} canaries=pass teardown=explicit timing=facade-enqueue-flush-through-observed-completion{}",
+            report_schema(mode),
             unique_ids[0],
             unique_ids[1],
             copy_bytes,
@@ -177,7 +202,7 @@ fn report_measurement(
             reverse_p50,
             reverse_p95,
             bytes_per_round as f64 / reverse_p50 as f64,
-            diagnostic_label(diagnostic),
+            diagnostic_label(mode == ProgressModeV1::Diagnostic),
         );
     }
     Ok(())
@@ -437,8 +462,9 @@ fn release_direction(
 fn main() -> BenchmarkResult<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let mode = progress_mode(&args)?;
+    #[cfg(feature = "hardware-diagnostic")]
     let diagnostic = mode == ProgressModeV1::Diagnostic;
-    let aggregate = mode == ProgressModeV1::AggregatePeerBatch;
+    let aggregate = is_aggregate_mode(mode);
     let unique_ids = [parse_unique_id(&args[0])?, parse_unique_id(&args[1])?];
     let copy_bytes: usize = args[2].parse()?;
     let depth: usize = args[3].parse()?;
@@ -494,23 +520,28 @@ fn main() -> BenchmarkResult<()> {
 
     let forward = allocate_direction(&mut context, devices[0], devices[1], total_bytes, depth)?;
     let reverse = allocate_direction(&mut context, devices[1], devices[0], total_bytes, depth)?;
-    let mut remap_forward_ns = Vec::with_capacity(samples);
-    let mut remap_reverse_ns = Vec::with_capacity(samples);
-    for round in 0..rounds {
-        prepare_direction(&mut context, &forward, copy_bytes, round, 0, 0x17, 0xa5)?;
-        let elapsed = run_direction(&mut context, &forward, copy_bytes as u64, aggregate)?;
-        validate_direction(&mut context, &forward, copy_bytes, round, 0, 0x17, 0xa5)?;
-        if round >= warmups {
-            remap_forward_ns.push(elapsed);
-        }
+    let remap_measurements = if includes_remap_phase(mode) {
+        let mut forward_ns = Vec::with_capacity(samples);
+        let mut reverse_ns = Vec::with_capacity(samples);
+        for round in 0..rounds {
+            prepare_direction(&mut context, &forward, copy_bytes, round, 0, 0x17, 0xa5)?;
+            let elapsed = run_direction(&mut context, &forward, copy_bytes as u64, aggregate)?;
+            validate_direction(&mut context, &forward, copy_bytes, round, 0, 0x17, 0xa5)?;
+            if round >= warmups {
+                forward_ns.push(elapsed);
+            }
 
-        prepare_direction(&mut context, &reverse, copy_bytes, round, 1, 0x71, 0x5a)?;
-        let elapsed = run_direction(&mut context, &reverse, copy_bytes as u64, aggregate)?;
-        validate_direction(&mut context, &reverse, copy_bytes, round, 1, 0x71, 0x5a)?;
-        if round >= warmups {
-            remap_reverse_ns.push(elapsed);
+            prepare_direction(&mut context, &reverse, copy_bytes, round, 1, 0x71, 0x5a)?;
+            let elapsed = run_direction(&mut context, &reverse, copy_bytes as u64, aggregate)?;
+            validate_direction(&mut context, &reverse, copy_bytes, round, 1, 0x71, 0x5a)?;
+            if round >= warmups {
+                reverse_ns.push(elapsed);
+            }
         }
-    }
+        Some((forward_ns, reverse_ns))
+    } else {
+        None
+    };
 
     // Establish one mapped, completed batch in each direction, then time only
     // repetitions with no intervening host access. Final readback validates the
@@ -604,20 +635,21 @@ fn main() -> BenchmarkResult<()> {
         }
     }
 
-    report_measurement(
-        unique_ids,
-        copy_bytes,
-        depth,
-        warmups,
-        samples,
-        "remap-per-round",
-        "host-access-between-rounds",
-        0,
-        diagnostic,
-        aggregate,
-        remap_forward_ns,
-        remap_reverse_ns,
-    )?;
+    if let Some((remap_forward_ns, remap_reverse_ns)) = remap_measurements {
+        report_measurement(
+            unique_ids,
+            copy_bytes,
+            depth,
+            warmups,
+            samples,
+            "remap-per-round",
+            "host-access-between-rounds",
+            0,
+            mode,
+            remap_forward_ns,
+            remap_reverse_ns,
+        )?;
+    }
     report_measurement(
         unique_ids,
         copy_bytes,
@@ -627,8 +659,7 @@ fn main() -> BenchmarkResult<()> {
         "persistent-hot",
         "persistent-no-host-access-between-timed-rounds",
         1,
-        diagnostic,
-        aggregate,
+        mode,
         hot_forward_ns,
         hot_reverse_ns,
     )?;
@@ -688,6 +719,11 @@ mod tests {
             progress_mode(&args).unwrap(),
             ProgressModeV1::AggregatePeerBatch
         );
+        args[6] = "--aggregate-peer-batch-hot-only".into();
+        assert_eq!(
+            progress_mode(&args).unwrap(),
+            ProgressModeV1::AggregatePeerBatchHotOnly
+        );
         args.push("--diagnose-xgmi".into());
         assert!(progress_mode(&args).is_err());
         args.swap(6, 7);
@@ -714,6 +750,51 @@ mod tests {
             ProgressModeV1::AggregatePeerBatch,
             MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1 + 1
         ));
+    }
+
+    #[test]
+    fn aggregate_hot_only_requires_depth_one() {
+        assert!(valid_depth(ProgressModeV1::AggregatePeerBatchHotOnly, 1));
+        assert!(!valid_depth(ProgressModeV1::AggregatePeerBatchHotOnly, 0));
+        assert!(!valid_depth(ProgressModeV1::AggregatePeerBatchHotOnly, 2));
+    }
+
+    #[test]
+    fn aggregate_classification_includes_both_aggregate_modes() {
+        assert!(!is_aggregate_mode(ProgressModeV1::Ordinary));
+        assert!(!is_aggregate_mode(ProgressModeV1::Diagnostic));
+        assert!(is_aggregate_mode(ProgressModeV1::AggregatePeerBatch));
+        assert!(is_aggregate_mode(ProgressModeV1::AggregatePeerBatchHotOnly));
+    }
+
+    #[test]
+    fn existing_modes_preserve_both_phases_and_report_schemas() {
+        for mode in [
+            ProgressModeV1::Ordinary,
+            ProgressModeV1::Diagnostic,
+            ProgressModeV1::AggregatePeerBatch,
+        ] {
+            assert!(includes_remap_phase(mode));
+        }
+        assert_eq!(
+            report_schema(ProgressModeV1::Ordinary),
+            "fe2o3.xgmi-peer-benchmark.v1"
+        );
+        assert_eq!(
+            report_schema(ProgressModeV1::Diagnostic),
+            "fe2o3.xgmi-peer-benchmark.v1"
+        );
+        assert_eq!(
+            report_schema(ProgressModeV1::AggregatePeerBatch),
+            "fe2o3.xgmi-peer-aggregate-benchmark.v1"
+        );
+        assert!(!includes_remap_phase(
+            ProgressModeV1::AggregatePeerBatchHotOnly
+        ));
+        assert_eq!(
+            report_schema(ProgressModeV1::AggregatePeerBatchHotOnly),
+            "fe2o3.xgmi-peer-aggregate-hot-only-benchmark.v1"
+        );
     }
 
     #[test]

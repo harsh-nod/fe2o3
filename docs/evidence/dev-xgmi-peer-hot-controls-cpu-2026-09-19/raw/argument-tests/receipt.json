@@ -1,0 +1,21 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "-B",
+    "benchmarks/runtime_gfx942/test_native_benchmark_args.py",
+    "-v"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789806802091045141,
+  "group_absent": true,
+  "pid": 479321,
+  "started_ns": 1789806801218222628,
+  "stderr_sha256": "420720e55ffb75b182a335c81e9a4725542ace696640493eb2966cad8d8da6e0",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 300
+}

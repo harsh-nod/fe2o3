@@ -1,0 +1,8 @@
+test_both_comparators_use_shared_hot_lifecycle (__main__.PeerBenchmarkCommonTests.test_both_comparators_use_shared_hot_lifecycle) ... ok
+test_checked_controls_guard_mutations_and_exact_lifecycle (__main__.PeerBenchmarkCommonTests.test_checked_controls_guard_mutations_and_exact_lifecycle) ... ok
+test_undefined_behavior_sanitizer (__main__.PeerBenchmarkCommonTests.test_undefined_behavior_sanitizer) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 3.795s
+
+OK
