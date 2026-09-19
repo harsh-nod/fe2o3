@@ -87,6 +87,8 @@ mod checked_output_guarded_formal_v1;
 pub(crate) use checked_output_guarded_formal_v1::derive_checked_output_guarded_obligations_v1;
 include!("production_retained_arrays_v1.rs");
 include!("production_assert_origins_v1.rs");
+#[path = "production_origin_worklist_v1.rs"]
+mod origin_worklist_v1;
 #[path = "production_slice_view_v1.rs"]
 mod slice_view_v1;
 #[path = "production_value_origin_v1.rs"]

@@ -12,128 +12,14 @@ type Result<T> = std::result::Result<T, Error>;
 #[path = "production_value_origin_v1_tests.rs"]
 mod tests;
 
-const NO_LINK: usize = usize::MAX;
+use super::origin_worklist_v1::{OriginStateV1, OriginWorkErrorV1, OriginWorkV1};
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum Origin {
-    Pending,
-    Exact(Definition),
-    Unknown,
-}
+type Origin = OriginStateV1<Definition>;
 
-impl Origin {
-    fn join(self, incoming: Self) -> Self {
-        match (self, incoming) {
-            (Self::Unknown, _) | (_, Self::Unknown) => Self::Unknown,
-            (Self::Pending, other) | (other, Self::Pending) => other,
-            (Self::Exact(left), Self::Exact(right)) if left == right => self,
-            (Self::Exact(_), Self::Exact(_)) => Self::Unknown,
-        }
-    }
-}
-
-struct Link {
-    target: usize,
-    next: usize,
-}
-
-struct Work {
-    origins: Vec<Origin>,
-    heads: Vec<usize>,
-    links: Vec<Link>,
-    queue: Vec<usize>,
-    queued: Vec<bool>,
-    read: usize,
-    write: usize,
-    pending: usize,
-}
-
-fn reserved<T>(count: usize, budget: &mut Budget<'_>) -> Result<Vec<T>> {
-    budget.charge_work(1)?;
-    let bytes = count
-        .checked_mul(std::mem::size_of::<T>())
-        .ok_or(Resource::Arithmetic)?;
-    budget.reserve_storage(bytes)?;
-    let mut values = Vec::new();
-    values
-        .try_reserve_exact(count)
-        .map_err(|_| Resource::Allocation)?;
-    Ok(values)
-}
-
-impl Work {
-    fn new(definitions: usize, edges: usize, budget: &mut Budget<'_>) -> Result<Self> {
-        let mut origins = reserved(definitions, budget)?;
-        let mut heads = reserved(definitions, budget)?;
-        let links = reserved(edges, budget)?;
-        let mut queue = reserved(definitions, budget)?;
-        let mut queued = reserved(definitions, budget)?;
-        budget.charge_work(definitions.checked_mul(4).ok_or(Resource::Arithmetic)?)?;
-        origins.resize(definitions, Origin::Unknown);
-        heads.resize(definitions, NO_LINK);
-        queue.resize(definitions, 0);
-        queued.resize(definitions, false);
-        Ok(Self {
-            origins,
-            heads,
-            links,
-            queue,
-            queued,
-            read: 0,
-            write: 0,
-            pending: 0,
-        })
-    }
-
-    fn enqueue(&mut self, definition: usize, budget: &mut Budget<'_>) -> Result<()> {
-        budget.charge_work(1)?;
-        let marked = self
-            .queued
-            .get_mut(definition)
-            .ok_or(Error::InconsistentOwner)?;
-        if *marked {
-            return Ok(());
-        }
-        if self.pending == self.queue.len() {
-            return Err(Error::InconsistentOwner);
-        }
-        *marked = true;
-        self.queue[self.write] = definition;
-        self.write = if self.write + 1 == self.queue.len() {
-            0
-        } else {
-            self.write + 1
-        };
-        self.pending += 1;
-        Ok(())
-    }
-
-    fn propagate(&mut self, budget: &mut Budget<'_>) -> Result<()> {
-        while self.pending != 0 {
-            budget.charge_work(1)?;
-            let source = self.queue[self.read];
-            self.read = if self.read + 1 == self.queue.len() {
-                0
-            } else {
-                self.read + 1
-            };
-            self.pending -= 1;
-            self.queued[source] = false;
-            let incoming = self.origins[source];
-            let mut link = self.heads[source];
-            while link != NO_LINK {
-                budget.charge_work(1)?;
-                let row = self.links.get(link).ok_or(Error::InconsistentOwner)?;
-                let (target, next) = (row.target, row.next);
-                let merged = self.origins[target].join(incoming);
-                if merged != self.origins[target] {
-                    self.origins[target] = merged;
-                    self.enqueue(target, budget)?;
-                }
-                link = next;
-            }
-        }
-        Ok(())
+fn origin_error(error: OriginWorkErrorV1) -> Error {
+    match error {
+        OriginWorkErrorV1::Resource(resource) => Error::Resource(resource),
+        OriginWorkErrorV1::Shape => Error::InconsistentOwner,
     }
 }
 
@@ -225,9 +111,9 @@ fn prepare_inner<'a>(
         .edge_arguments()
         .get(function_row.edge_arguments.clone())
         .ok_or(Error::InconsistentOwner)?;
-    let mut work = Work::new(definitions.len(), edges.len(), budget)?;
-    for (index, definition) in definitions.iter().enumerate() {
-        budget.charge_work(1)?;
+    let mut work =
+        OriginWorkV1::new(definitions.len(), edges.len(), budget).map_err(origin_error)?;
+    for definition in definitions {
         let (actual_function, origin) = match definition.coordinate {
             Definition::FunctionArgument { function, .. } => {
                 (function, Origin::Exact(definition.coordinate))
@@ -248,10 +134,9 @@ fn prepare_inner<'a>(
         if actual_function != function {
             return Err(Error::InconsistentOwner);
         }
-        work.origins[index] = origin;
+        work.seed_next(origin, budget).map_err(origin_error)?;
     }
     for edge in edges {
-        budget.charge_work(1)?;
         if !range.contains(&edge.incoming_definition) || !range.contains(&edge.target_definition) {
             return Err(Error::InconsistentOwner);
         }
@@ -260,37 +145,17 @@ fn prepare_inner<'a>(
         if !matches!(
             definitions[target].coordinate,
             Definition::BlockArgument { block, .. } if block.function == function
-        ) || work.links.len() == edges.len()
-        {
+        ) {
             return Err(Error::InconsistentOwner);
         }
-        let link = work.links.len();
-        work.links.push(Link {
-            target,
-            next: work.heads[source],
-        });
-        work.heads[source] = link;
+        work.add_link(source, target, budget)
+            .map_err(origin_error)?;
     }
-    for index in 0..work.origins.len() {
-        budget.charge_work(1)?;
-        if work.origins[index] != Origin::Pending {
-            work.enqueue(index, budget)?;
-        }
-    }
-    work.propagate(budget)?;
-    // An ungrounded incoming cycle cannot disappear from a partly grounded phi.
-    for index in 0..work.origins.len() {
-        budget.charge_work(1)?;
-        if work.origins[index] == Origin::Pending {
-            work.origins[index] = Origin::Unknown;
-            work.enqueue(index, budget)?;
-        }
-    }
-    work.propagate(budget)?;
+    let origins = work.solve(budget).map_err(origin_error)?;
     Ok(WholeValueOriginsV1 {
         inventory,
         function,
         definitions: range,
-        origins: work.origins,
+        origins,
     })
 }
