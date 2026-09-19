@@ -15,13 +15,13 @@ impl Drop for Reset {
 }
 
 pub(super) fn with_exact_sites<T>(sites: &[Site], build: impl FnOnce() -> T) -> T {
-    if sites.is_empty() {
-        return build();
-    }
     assert!(
         PENDING.with_borrow(Option::is_none),
         "nested load fault injection"
     );
+    if sites.is_empty() {
+        return build();
+    }
     let mut ordered = sites.to_vec();
     ordered.sort_unstable();
     assert!(!ordered.windows(2).any(|pair| pair[0] == pair[1]));
@@ -86,5 +86,10 @@ fn load_faults_are_exact_once_default_off_and_restored_after_panic() {
     );
     assert!(inject_failed_direct_load(error(site)).is_err());
     assert!(std::panic::catch_unwind(|| with_exact_sites(&[site], || ())).is_err());
+    assert!(inject_failed_direct_load(error(site)).is_err());
+    assert!(
+        std::panic::catch_unwind(|| with_exact_sites(&[site], || { with_exact_sites(&[], || ()) }))
+            .is_err()
+    );
     assert!(inject_failed_direct_load(error(site)).is_err());
 }
