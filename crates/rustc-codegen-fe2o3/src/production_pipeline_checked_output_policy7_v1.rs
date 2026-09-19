@@ -39,6 +39,10 @@ pub(crate) mod semantic;
 #[path = "production_policy7_source_observation_v1_tests.rs"]
 pub(crate) mod source_observation;
 
+#[cfg(test)]
+#[path = "production_policy7_commutative_source_observation_v1_tests.rs"]
+pub(crate) mod commutative_source_observation;
+
 #[path = "production_policy7_native_v1.rs"]
 pub(crate) mod native;
 
@@ -91,11 +95,17 @@ pub(super) fn admission(
     clippy::large_enum_variant,
     reason = "move-only source/history custody; no second Prefix6"
 )]
-enum Admitted7 {
+pub(super) enum Admitted7 {
     Direct(Direct),
     Erased(Erased),
 }
 impl Admitted7 {
+    fn borrowed(&self) -> Admitted7Ref<'_> {
+        match self {
+            Self::Direct(v) => Admitted7Ref::Direct(v),
+            Self::Erased(v) => Admitted7Ref::Erased(v),
+        }
+    }
     fn output(&self) -> &Graph {
         match self {
             Self::Direct(v) => v.output(),
@@ -148,6 +158,39 @@ impl Admitted7 {
             Self::Erased(v) => v.verify_equivalence(budget),
         }
         .map_err(admission)
+    }
+}
+
+/// Only immutable history access. It never substitutes an output owner.
+#[derive(Clone, Copy)]
+pub(super) enum Admitted7Ref<'a> {
+    Direct(&'a Direct),
+    Erased(&'a Erased),
+}
+impl<'a> Admitted7Ref<'a> {
+    fn input(self) -> &'a Graph {
+        match self {
+            Self::Direct(v) => v.prefix().output(),
+            Self::Erased(v) => v.prefix().output(),
+        }
+    }
+    fn output(self) -> &'a Graph {
+        match self {
+            Self::Direct(v) => v.output(),
+            Self::Erased(v) => v.output(),
+        }
+    }
+    fn prefix_record(self) -> &'a [u8; 256] {
+        match self {
+            Self::Direct(v) => v.prefix().checked_output().execution().canonical_bytes(),
+            Self::Erased(v) => v.prefix().checked_output().execution().canonical_bytes(),
+        }
+    }
+    fn continuation(self) -> &'a fe2o3_kernel_opt::OwnedRedundantStoreContinuationV1 {
+        match self {
+            Self::Direct(v) => v.continuation(),
+            Self::Erased(v) => v.continuation(),
+        }
     }
 }
 
@@ -234,12 +277,12 @@ impl PreparedPolicy7ArtifactsV1 {
     clippy::large_enum_variant,
     reason = "one actual move-only lowerer prefix"
 )]
-enum Prefix6 {
+pub(super) enum Prefix6 {
     Direct(fe2o3_lower_mir_kernel::ProductionCheckedOutputOwnerPolicy6V1),
     Erased(fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1),
 }
 impl Prefix6 {
-    fn minimum(&self) -> Result7<usize> {
+    pub(super) fn minimum(&self) -> Result7<usize> {
         match self {
             Self::Direct(v) => v.retained_input_storage_floor_v1(),
             Self::Erased(v) => v.retained_input_storage_floor_v1(),
@@ -265,6 +308,26 @@ impl Prefix6 {
     }
 }
 
+/// Runs the unchanged P7 prefix inside the caller's cleanup scope. Its returned
+/// J delta and execution receipt are already reserved, exactly as before the
+/// artifact call in `prepare`; no intermediate persistent header is allocated.
+pub(super) fn prepare_history_v1(
+    prefix: Prefix6,
+    budget: &mut Budget<'_>,
+) -> Result7<(Admitted7, Policy7ExecutionWitnessV1, usize)> {
+    let (admitted, added) = prefix.continue_once(budget)?;
+    budget.reserve_storage(added).map_err(resource)?;
+    let execution = Policy7ExecutionWitnessV1::prepare(&admitted, budget)?;
+    budget
+        .reserve_storage(execution.retained_storage())
+        .map_err(resource)?;
+    Ok((admitted, execution, added))
+}
+
+#[cfg(test)]
+#[path = "production_policy8_history_compatibility_v1_tests.rs"]
+mod policy8_history_compatibility;
+
 fn prepare(
     prefix: Prefix6,
     profile: Profile,
@@ -274,12 +337,7 @@ fn prepare(
 ) -> Result7<(PreparedPolicy7ArtifactsV1, Policy7ArtifactsStorageV1)> {
     let floor = budget.storage();
     scoped(prefix.minimum()?, budget, move |budget| {
-        let (admitted, added) = prefix.continue_once(budget)?;
-        budget.reserve_storage(added).map_err(resource)?;
-        let execution = Policy7ExecutionWitnessV1::prepare(&admitted, budget)?;
-        budget
-            .reserve_storage(execution.retained_storage())
-            .map_err(resource)?;
+        let (admitted, execution, added) = prepare_history_v1(prefix, budget)?;
         let (parts, artifacts) = prepare_checked_artifact_parts_v1(
             admitted.artifact_view(),
             profile,
@@ -448,7 +506,7 @@ impl CheckedOutputTargetProductionCompilationPolicy7V1 {
     }
 }
 
-fn scoped<'w, T>(
+pub(super) fn scoped<'w, T>(
     required: usize,
     budget: &mut Budget<'w>,
     run: impl FnOnce(&mut Budget<'w>) -> Result7<T>,

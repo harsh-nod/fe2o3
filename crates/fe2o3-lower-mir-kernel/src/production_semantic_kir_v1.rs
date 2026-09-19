@@ -99,6 +99,10 @@ mod scalar_ssa_emission_v1;
 pub use scalar_ssa_emission_v1::{
     ProductionScalarSsaEmissionErrorV1, ProductionScalarSsaEmissionOwnerV1,
     ProductionScalarSsaEmissionQueryV1, ProductionScalarSsaEmissionUnavailableV1,
+    ProductionU32BoundSnapshotGuardRequestV1, ProductionU32BoundSnapshotRecurrenceFactV1,
+    ProductionU32BoundSnapshotRecurrenceV1, ProductionU32GuardConsistencyFactV1,
+    ProductionU32GuardConsistencyV1, ProductionU32GuardReportV1, ProductionU32GuardRequestV1,
+    ProductionU32GuardRowV1, ProductionU32GuardStorageV1, ProductionU32GuardUnavailableV1,
     ProductionU32RecurrenceConsistencyFactV1, ProductionU32RecurrenceConsistencyV1,
 };
 include!("production_masked_assertion_plan_v1.rs");

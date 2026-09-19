@@ -1,0 +1,19 @@
+CASE: cross-block
+CHECK-BEFORE: module commutative-golden-subject kernels=0
+CHECK-BEFORE: f0 f params=[v0:I16,v1:I16] results=[I16]
+CHECK-BEFORE: f0:b0 block-id=10
+CHECK-BEFORE: f0:b0:o0 [v2:I16] BitOr v0,v1
+CHECK-BEFORE: f0:b0:term Branch block-id=20 []
+CHECK-BEFORE: f0:b1 block-id=20
+CHECK-BEFORE: f0:b1:o0 [v3:I16] BitOr v1,v0
+CHECK-BEFORE: f0:b1:term Return [v3]
+CHECK-AFTER: module commutative-golden-subject kernels=0
+CHECK-AFTER: f0 f params=[v0:I16,v1:I16] results=[I16]
+CHECK-AFTER: f0:b0 block-id=10
+CHECK-AFTER: f0:b0:o0 [v2:I16] BitOr v0,v1
+CHECK-AFTER: f0:b0:term Branch block-id=20 []
+CHECK-AFTER: f0:b1 block-id=20
+CHECK-AFTER: f0:b1:term Return [v2]
+CHECK-REMARK: proved=1 changed=true independently-checked=true authority=false
+CHECK-REMARK: f0:b0:o0 retained f0:b0:o0
+CHECK-REMARK: f0:b1:o0:r0 substituted f0:b0:o0:r0

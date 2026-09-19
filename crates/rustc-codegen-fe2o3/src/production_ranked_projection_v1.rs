@@ -35,7 +35,8 @@ pub(crate) use tests::{
     with_backend_checked_output_policy6_roster_v1, with_backend_erased_bound_v1,
     with_backend_erased_output_policy5_owned_v1, with_backend_erased_output_policy6_owned_v1,
     with_backend_erased_roster_v1, with_backend_policy7_direct_prefix_v1,
-    with_backend_policy7_erased_prefix_v1,
+    with_backend_policy7_erased_prefix_v1, with_backend_policy8_direct_prefix_v1,
+    with_backend_policy8_erased_prefix_v1,
 };
 
 use analysis_multi_split_v1::{
@@ -10816,6 +10817,7 @@ struct DeterministicScalarProjectorV1<'a> {
     ranked_constants: HashMap<u64, ProductionRankedValueV1>,
     launch_context_arguments: [Option<u32>; 6],
     reachability: DeterministicControlReachabilityV1,
+    guarded_divisor_proofs: Option<SemanticAssertProofsV1<'a>>,
 }
 
 impl<'a> DeterministicScalarProjectorV1<'a> {
@@ -10910,6 +10912,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
             ranked_constants: HashMap::new(),
             launch_context_arguments: [None; 6],
             reachability: DeterministicControlReachabilityV1::new(function.blocks().len())?,
+            guarded_divisor_proofs: None,
         })
     }
 
@@ -11024,15 +11027,19 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
                 let SemanticStatementKindV1::Assign(assignment) = value else {
                     unreachable!("indexed deterministic assignment changed kind")
                 };
-                self.resolve_rvalue(assignment.value().kind().clone())
-                    .map_err(|error| {
-                        error.with_deterministic_assignment_context(
-                            block,
-                            statement,
-                            assignment.destination().local().index(),
-                            source,
-                        )
-                    })
+                self.resolve_rvalue(
+                    assignment.value().kind().clone(),
+                    assignment.value().result_type(),
+                    ScalarAssignmentSiteV1 { block, statement },
+                )
+                .map_err(|error| {
+                    error.with_deterministic_assignment_context(
+                        block,
+                        statement,
+                        assignment.destination().local().index(),
+                        source,
+                    )
+                })
             }
             DeterministicScalarDefinitionV1::Call { block } => {
                 let terminator = self.function.blocks()[block].terminator().kind().clone();
@@ -11201,6 +11208,8 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
     fn resolve_rvalue(
         &mut self,
         rvalue: SemanticRvalueKindV1,
+        result_type: SemanticTypeIdV1,
+        site: ScalarAssignmentSiteV1,
     ) -> Result<Option<DeterministicScalarSummaryV1>, ProductionRankedProjectionErrorV1> {
         match rvalue {
             SemanticRvalueKindV1::Use(operand) => self.resolve_operand(&operand),
@@ -11213,7 +11222,7 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
                 operation,
                 left,
                 right,
-            } => self.resolve_binary(operation, &left, &right),
+            } => self.resolve_binary(operation, &left, &right, result_type, site),
             SemanticRvalueKindV1::CheckedBinary(checked) => {
                 let left = self.resolve_operand(checked.left())?;
                 let right = self.resolve_operand(checked.right())?;
@@ -11395,6 +11404,8 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
         operation: SemanticBinaryOpV1,
         left_operand: &SemanticOperandV1,
         right_operand: &SemanticOperandV1,
+        result_type: SemanticTypeIdV1,
+        site: ScalarAssignmentSiteV1,
     ) -> Result<Option<DeterministicScalarSummaryV1>, ProductionRankedProjectionErrorV1> {
         let left = self.resolve_operand(left_operand)?;
         let right = self.resolve_operand(right_operand)?;
@@ -11409,6 +11420,17 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
             IndexBinaryKindAttr::Divide | IndexBinaryKindAttr::Remainder
         ) && !matches!(right, DeterministicScalarSummaryV1::Constant(value) if value != 0)
         {
+            if self.guarded_divisor_is_total_v1(
+                site,
+                result_type,
+                operation,
+                left_operand,
+                right_operand,
+            )? {
+                // A total extension outside the guarded source path preserves
+                // dependence, not a numeric value or an entry-level division.
+                return self.derive([Some(left), Some(right)]);
+            }
             // Diagnostic allocation is fixed-size and only occurs on the
             // existing rejection path; it carries no proof or authority.
             return Err(
@@ -11642,6 +11664,8 @@ fn compiler_intrinsic_is_pure_total_scalar_dependency_v1(
             | SemanticCompilerIntrinsicOperationV1::WriteOnlyDisjointSliceLen { .. }
     )
 }
+
+include!("production_ranked_projection_v1/guarded_opaque_divisor_v1.rs");
 
 const fn deterministic_index_binary_kind_v1(
     operation: SemanticBinaryOpV1,
@@ -24671,6 +24695,7 @@ mod tests {
     include!("production_ranked_projection_v1/production_ranked_policy5_fixture_v1_tests.rs");
     include!("production_ranked_projection_v1/production_ranked_policy6_fixture_v1_tests.rs");
     include!("production_ranked_projection_v1/production_ranked_policy7_fixture_v1_tests.rs");
+    include!("production_ranked_projection_v1/production_ranked_policy8_fixture_v1_tests.rs");
 
     #[test]
     fn pipeline_scalar_rejection_trace_has_exact_bounded_numeric_fields() {
@@ -24959,6 +24984,7 @@ mod tests {
     include!("production_ranked_projection_v1/exclusive_owner_carrier_v1_tests.rs");
     include!("production_ranked_projection_v1/analysis_multi_split_v1_tests.rs");
     include!("production_ranked_projection_v1/induction_body_predicate_v1_tests.rs");
+    include!("production_ranked_projection_v1/guarded_opaque_divisor_v1_tests.rs");
     #[test]
     fn non_bounds_asserts_are_elided_only_after_exact_constant_success() {
         let unresolved = non_bounds_assert_function(tensor_operand(1));

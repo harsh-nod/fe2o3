@@ -130,6 +130,24 @@ pub(super) fn source(
     crate::ProductionSourceLaunchRosterV1,
     Certificate,
 ) {
+    let (ssa, launch, report) = source_report(seed, false);
+    assert_eq!(report.certificates().len(), 1);
+    (ssa, launch, report.certificates()[0])
+}
+
+pub(in super::super) fn source_report(
+    seed: u8,
+    snapshot: bool,
+) -> (
+    ProductionSemanticSsaOwnerV1,
+    crate::ProductionSourceLaunchRosterV1,
+    fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
+) {
+    let (ssa, launch, mut reports) = source_reports(&[(seed, snapshot)]);
+    (ssa, launch, reports.pop().unwrap())
+}
+
+fn source_function(seed: u8, snapshot: bool, symbol: &[u8]) -> SemanticFunctionDeclV1 {
     let source = SemanticSourceProvenanceV1::unavailable();
     let attributes = SemanticAbiValueAttributesV1::new(
         SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
@@ -155,6 +173,19 @@ pub(super) fn source(
     .unwrap()
     .with_source_argument_ownership(vec![SemanticSourceArgumentOwnershipV1::ByValue])
     .unwrap();
+    let mut header = Vec::new();
+    if snapshot {
+        header.push(assignment(5, U32, SemanticRvalueKindV1::Use(value(2, U32))));
+    }
+    header.push(assignment(
+        3,
+        BOOL,
+        SemanticRvalueKindV1::Binary {
+            operation: SemanticBinaryOpV1::LessThan,
+            left: value(if snapshot { 5 } else { 2 }, U32),
+            right: value(1, U32),
+        },
+    ));
     let blocks = vec![
         block(
             31,
@@ -163,15 +194,7 @@ pub(super) fn source(
         ),
         block(
             32,
-            vec![assignment(
-                3,
-                BOOL,
-                SemanticRvalueKindV1::Binary {
-                    operation: SemanticBinaryOpV1::LessThan,
-                    left: value(2, U32),
-                    right: value(1, U32),
-                },
-            )],
+            header,
             SemanticTerminatorKindV1::SwitchInt {
                 discriminant: value(3, BOOL),
                 targets: SemanticSwitchTargetsV1::new(
@@ -214,7 +237,7 @@ pub(super) fn source(
         ),
         block(35, vec![], SemanticTerminatorKindV1::Return),
     ];
-    let function = SemanticFunctionDeclV1::new(
+    SemanticFunctionDeclV1::new(
         SemanticFunctionIdentityV1::from_sha256([seed; 32]),
         SemanticFunctionRoleV1::KernelRoot,
         SemanticItemDefinitionIdentityV1::from_sha256([seed; 32]),
@@ -229,8 +252,10 @@ pub(super) fn source(
             (U32, SemanticLocalRoleV1::Temporary),
             (BOOL, SemanticLocalRoleV1::Temporary),
             (PAIR, SemanticLocalRoleV1::Temporary),
+            (U32, SemanticLocalRoleV1::Temporary),
         ]
         .into_iter()
+        .take(if snapshot { 6 } else { 5 })
         .enumerate()
         .map(|(index, (ty, role))| {
             SemanticLocalDeclV1::new(
@@ -246,7 +271,7 @@ pub(super) fn source(
     )
     .unwrap()
     .with_kernel_entry(SemanticKernelEntryV1::new(
-        SemanticLinkSymbolV1::new(b"recurrence_component".to_vec()).unwrap(),
+        SemanticLinkSymbolV1::new(symbol.to_vec()).unwrap(),
         SemanticKernelBindingIdentityV1::from_sha256([seed; 32]),
         SemanticKernelSourceContractV1::new(
             Some(
@@ -261,42 +286,71 @@ pub(super) fn source(
             None,
         )
         .unwrap(),
-    ));
+    ))
+}
+
+pub(in super::super) fn source_reports(
+    seeds: &[(u8, bool)],
+) -> (
+    ProductionSemanticSsaOwnerV1,
+    crate::ProductionSourceLaunchRosterV1,
+    Vec<fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1>,
+) {
+    assert!(!seeds.is_empty() && seeds.len() <= 2);
+    let symbols: [&[u8]; 2] = [b"recurrence_component", b"recurrence_component_other"];
+    let functions = seeds
+        .iter()
+        .enumerate()
+        .map(|(index, (seed, snapshot))| source_function(*seed, *snapshot, symbols[index]))
+        .collect();
+    let roots: Vec<_> = (0..seeds.len())
+        .map(|index| SemanticFunctionIdV1::from_index(index as u32))
+        .collect();
     let admitted = InertSemanticMirRequestV1::new(
         SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([250; 32])),
         types(),
         vec![],
         vec![],
         vec![],
-        vec![function],
-        vec![SemanticFunctionIdV1::from_index(0)],
+        functions,
+        roots,
     )
     .unwrap()
     .admit(SemanticMirLimitsV1::default())
     .unwrap();
-    let report = fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(
-        &admitted,
-        SemanticFunctionIdV1::from_index(0),
-    )
-    .unwrap();
-    let [certificate] = report.certificates() else {
-        panic!("fixture must have the existing admitted certificate")
-    };
-    let certificate = *certificate;
+    let reports = admitted
+        .roots()
+        .iter()
+        .map(|root| {
+            let report =
+                fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1(&admitted, *root)
+                    .unwrap();
+            assert_eq!(report.certificates().len(), 1);
+            report
+        })
+        .collect();
     let semantic =
         ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
             .unwrap();
     let ssa =
         ProductionSemanticSsaOwnerV1::try_new(semantic, ProductionSemanticSsaLimitsV1::default())
             .unwrap();
-    let launch = crate::ProductionSourceLaunchRosterV1::try_new(
-        ssa.source_semantic(),
-        &[crate::ProductionSourceLaunchRootInputV1::new(
-            "component",
-            [seed; 32],
-            crate::ProductionSourceLaunchInputV1::new(1, Some([64, 1, 1]), [1, 1, 1]),
-        )],
-    )
-    .unwrap();
-    (ssa, launch, certificate)
+    let inputs: Vec<_> = seeds
+        .iter()
+        .enumerate()
+        .map(|(index, (seed, _))| {
+            crate::ProductionSourceLaunchRootInputV1::new(
+                if index == 0 {
+                    "component"
+                } else {
+                    "component_other"
+                },
+                [*seed; 32],
+                crate::ProductionSourceLaunchInputV1::new(1, Some([64, 1, 1]), [1, 1, 1]),
+            )
+        })
+        .collect();
+    let launch =
+        crate::ProductionSourceLaunchRosterV1::try_new(ssa.source_semantic(), &inputs).unwrap();
+    (ssa, launch, reports)
 }

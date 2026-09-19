@@ -30,6 +30,9 @@ mod integer_identity;
 #[cfg(feature = "dominance-cse")]
 mod dominance_cse;
 
+#[cfg(feature = "commutative-cse")]
+mod commutative_cse;
+
 #[cfg(feature = "wave64-capture")]
 mod wave64_capture;
 
@@ -116,6 +119,7 @@ mod ordered_program_v32;
     feature = "loop-capture-multi",
     feature = "loop-capture-u64",
     feature = "dominance-cse",
+    feature = "commutative-cse",
     feature = "redundant-store-policy7",
     feature = "redundant-store-policy7-i8",
     feature = "redundant-store-policy7-u8",

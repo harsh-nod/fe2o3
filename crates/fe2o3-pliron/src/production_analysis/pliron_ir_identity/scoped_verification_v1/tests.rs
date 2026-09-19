@@ -230,7 +230,7 @@ fn unreachable_same_block_arguments_and_ordered_results_remain_valid() {
 }
 
 #[test]
-fn cross_unreachable_use_rejects_without_panicking() {
+fn entry_arguments_are_available_in_unreachable_blocks() {
     let context = &mut setup();
     let index = IndexType::get(context).into();
     let function = function(context, vec![index]);
@@ -240,16 +240,117 @@ fn cross_unreachable_use_rejects_without_panicking() {
     ret(context, entry);
     binary(context, unreachable, argument, argument);
     ret(context, unreachable);
-    assert!(matches!(
-        observe(context, &function),
-        Err(Failure::Dominance {
-            block: 1,
-            operation: 0,
-            operand: 0
-        })
-    ));
+    compare(context, &function, true);
     assert_eq!(TRACE.get().tree_requests, 1);
     assert_eq!(TRACE.get().cross_block_queries, 0);
+    assert_eq!(TRACE.get().operand_visits, 2);
+    assert!(captures(context, &function));
+}
+
+#[test]
+fn unreachable_entry_results_and_nonentry_arguments_are_not_entry_parameters() {
+    for nonentry_argument in [false, true] {
+        let context = &mut setup();
+        let index = IndexType::get(context).into();
+        let function = function(context, vec![index]);
+        let entry = function.get_entry_block(context);
+        let definition_block = block(context, function, vec![index]);
+        let user_block = block(context, function, vec![]);
+        let entry_argument = entry.deref(context).get_argument(0);
+        let entry_result = binary(context, entry, entry_argument, entry_argument).result(context);
+        ret(context, entry);
+        ret(context, definition_block);
+        let definition = if nonentry_argument {
+            definition_block.deref(context).get_argument(0)
+        } else {
+            entry_result
+        };
+        binary(context, user_block, definition, entry_argument);
+        ret(context, user_block);
+        compare(context, &function, false);
+        assert!(matches!(
+            observe(context, &function),
+            Err(Failure::Dominance {
+                block: 2,
+                operation: 0,
+                operand: 0
+            })
+        ));
+        assert!(!captures(context, &function));
+    }
+}
+
+#[test]
+fn unreachable_operations_still_require_strict_local_definition_order() {
+    for self_use in [false, true] {
+        let context = &mut setup();
+        let index = IndexType::get(context).into();
+        let function = function(context, vec![index]);
+        let entry = function.get_entry_block(context);
+        let unreachable = block(context, function, vec![]);
+        let argument = entry.deref(context).get_argument(0);
+        ret(context, entry);
+        let first = binary(context, unreachable, argument, argument);
+        let second = binary(context, unreachable, argument, argument);
+        ret(context, unreachable);
+        let definition = if self_use { first } else { second };
+        Operation::replace_operand(
+            first.get_operation(),
+            context,
+            1,
+            definition.result(context),
+        );
+        compare(context, &function, false);
+        assert!(matches!(
+            observe(context, &function),
+            Err(Failure::Dominance {
+                block: 1,
+                operation: 0,
+                operand: 1
+            })
+        ));
+        assert_eq!(TRACE.get().operand_visits, 2);
+        assert_eq!(TRACE.get().order_queries, 1);
+    }
+}
+
+#[test]
+fn unreachable_entry_parameter_availability_does_not_skip_type_verification() {
+    let context = &mut setup();
+    let non_index: TypeHandle = FunctionType::get(context, vec![], vec![]).into();
+    let function = function(context, vec![non_index]);
+    let entry = function.get_entry_block(context);
+    let unreachable = block(context, function, vec![]);
+    let argument = entry.deref(context).get_argument(0);
+    ret(context, entry);
+    binary(context, unreachable, argument, argument);
+    ret(context, unreachable);
+    compare(context, &function, false);
+    assert!(matches!(
+        observe(context, &function),
+        Err(Failure::Structural(_))
+    ));
+    assert_eq!(TRACE.get().tree_requests, 0);
+    assert_eq!(TRACE.get().operand_visits, 0);
+}
+
+#[test]
+fn another_function_entry_argument_is_refused_before_scoped_verification() {
+    let context = &mut setup();
+    let index = IndexType::get(context).into();
+    let foreign = function(context, vec![index]);
+    let foreign_entry = foreign.get_entry_block(context);
+    let argument = foreign_entry.deref(context).get_argument(0);
+    ret(context, foreign_entry);
+    let local = function(context, vec![]);
+    let entry = local.get_entry_block(context);
+    let unreachable = block(context, local, vec![]);
+    ret(context, entry);
+    binary(context, unreachable, argument, argument);
+    ret(context, unreachable);
+    TRACE.set(Trace::default());
+    assert!(!captures(context, &local));
+    assert_eq!(TRACE.get(), Trace::default());
 }
 
 #[test]

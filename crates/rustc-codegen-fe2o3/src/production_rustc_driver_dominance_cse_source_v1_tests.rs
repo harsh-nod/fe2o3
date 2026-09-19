@@ -2,6 +2,9 @@
 use super::*;
 use simulation::constant_shift::Integer;
 
+#[path = "production_rustc_driver_commutative_cse_source_v1_tests.rs"]
+pub(super) mod commutative;
+
 #[path = "production_rustc_driver_dominance_cse_graph_v1_tests.rs"]
 mod graph;
 #[path = "production_rustc_driver_dominance_cse_protocol_v1_tests.rs"]
@@ -240,6 +243,21 @@ fn cases() -> Vec<Case> {
         .collect()
 }
 fn fixture(workspace: &Path, case: Case) -> corpus::Fixture {
+    fixture_for(
+        workspace,
+        case,
+        "dominance-cse",
+        "dominance_cse.rs",
+        case.name(),
+    )
+}
+fn fixture_for(
+    workspace: &Path,
+    case: Case,
+    feature: &str,
+    leaf: &str,
+    fixture_id: String,
+) -> corpus::Fixture {
     let hash = |relative: &str| {
         digest(&std::fs::read(workspace.join(relative)).unwrap())
             .iter()
@@ -248,17 +266,14 @@ fn fixture(workspace: &Path, case: Case) -> corpus::Fixture {
     };
     let manifest = format!("{BASE}/Cargo.toml");
     corpus::Fixture {
-        fixture_id: case.name(),
+        fixture_id,
         target: case.target.cpu().into(),
         compiler_input: corpus::CompilerInput {
             package_manifest_sha256: hash(&manifest),
             package_manifest: manifest,
             cargo_lock_path: "Cargo.lock".into(),
             cargo_lock_sha256: hash("Cargo.lock"),
-            source_paths: vec![
-                format!("{BASE}/src/lib.rs"),
-                format!("{BASE}/src/dominance_cse.rs"),
-            ],
+            source_paths: vec![format!("{BASE}/src/lib.rs"), format!("{BASE}/src/{leaf}")],
             source_closure_sha256: String::new(),
             cargo_target: corpus::CargoTarget {
                 kind: "lib".into(),
@@ -266,7 +281,7 @@ fn fixture(workspace: &Path, case: Case) -> corpus::Fixture {
                 source_path: "src/lib.rs".into(),
             },
             default_features: false,
-            features: vec![format!("dominance-cse-{}", case.integer.name())],
+            features: vec![format!("{feature}-{}", case.integer.name())],
             kernel_symbols: ROOTS.map(str::to_owned).to_vec(),
         },
     }

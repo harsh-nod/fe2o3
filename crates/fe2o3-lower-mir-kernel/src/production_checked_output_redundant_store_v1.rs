@@ -311,6 +311,13 @@ pub use owned::{
     ProductionOwnedUnitLocalRedundantStoreContinuationV1,
 };
 
+#[path = "production_checked_output_commutative_v1.rs"]
+mod commutative;
+pub use commutative::{
+    ProductionCommutativeContinuationErrorV1, ProductionCommutativeContinuationStorageV1,
+    ProductionOwnedCommutativeContinuationV1, ProductionOwnedUnitLocalCommutativeContinuationV1,
+};
+
 #[cfg(test)]
 #[path = "production_checked_output_redundant_store_scope_v1_tests.rs"]
 mod scope_tests;

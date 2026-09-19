@@ -22,7 +22,7 @@ fn capture(budget: &mut Budget<'_>) -> Capture {
     let (ssa, launch) = fixture::source(30);
     Capture::try_materialize_with_budget_v1(ssa, launch, Default::default(), budget).unwrap()
 }
-fn project(budget: &mut Budget<'_>) -> CapturedRankedSourceV1 {
+pub(super) fn project(budget: &mut Budget<'_>) -> CapturedRankedSourceV1 {
     project_seed(budget, 30)
 }
 fn project_seed(budget: &mut Budget<'_>, seed: u8) -> CapturedRankedSourceV1 {

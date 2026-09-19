@@ -1582,6 +1582,7 @@ pub(crate) enum CompilerDescriptorError {
         Box<fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy6V1>,
     ),
     CheckedOutputPolicy7(Box<fe2o3_lower_mir_kernel::ProductionRedundantStoreAdmissionErrorV1>),
+    CheckedOutputPolicy8(Box<fe2o3_lower_mir_kernel::ProductionCommutativeContinuationErrorV1>),
     CheckedOutputTarget(dialect_amdgcn::ProductionTargetCoordinateErrorV1),
     ProductionGeometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
     ProductionDescriptorMismatch(&'static str),
@@ -1695,6 +1696,12 @@ impl fmt::Display for CompilerDescriptorError {
                 write!(
                     formatter,
                     "checked Policy6 output admission failed: {error}"
+                )
+            }
+            Self::CheckedOutputPolicy8(error) => {
+                write!(
+                    formatter,
+                    "checked Policy8 descriptor admission failed: {error}"
                 )
             }
             Self::CheckedOutputPolicy7(error) => {

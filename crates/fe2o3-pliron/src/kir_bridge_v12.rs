@@ -1173,3 +1173,4 @@ impl KirPlironGraphV12<'_> {
 }
 
 include!("kir_bridge_v12_capture_v1.rs");
+include!("kir_bridge_commutative_owner_v1.rs");

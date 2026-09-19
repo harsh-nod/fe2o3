@@ -53,6 +53,29 @@ fn erased_effect_fixture_mode(
     ProductionPreRankedKirOwnerV1,
     Vec<ProductionRankedSemanticProjectionRootV1>,
 ) {
+    erased_effect_fixture_mode_with_functions(
+        expected,
+        root_count,
+        lifetime,
+        load_forwarding,
+        integer_identity,
+        redundant_store,
+        |_| {},
+    )
+}
+
+fn erased_effect_fixture_mode_with_functions(
+    expected: bool,
+    root_count: usize,
+    lifetime: Option<SemanticStatementKindV1>,
+    load_forwarding: bool,
+    integer_identity: bool,
+    redundant_store: bool,
+    transform: impl FnOnce(&mut Vec<SemanticFunctionDeclV1>),
+) -> (
+    ProductionPreRankedKirOwnerV1,
+    Vec<ProductionRankedSemanticProjectionRootV1>,
+) {
     use fe2o3_pliron::{
         ProductionConstructionV1, ProductionNumericalContractV2, ProductionRankedBlockV1,
         ProductionRankedKernelV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
@@ -335,6 +358,7 @@ fn erased_effect_fixture_mode(
         .unwrap()
         .with_kernel_entry(entry);
     }
+    transform(&mut functions);
     let admitted = InertSemanticMirRequestV1::new(
         source.target(),
         types,

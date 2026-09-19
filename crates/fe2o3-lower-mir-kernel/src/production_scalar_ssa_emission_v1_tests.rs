@@ -2,8 +2,10 @@ use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 use std::{cell::Cell, rc::Rc};
 
+#[path = "production_scalar_ssa_bound_snapshot_query_v1_tests.rs"]
+pub(super) mod bound_snapshot_tests;
 #[path = "production_scalar_ssa_emission_fixture_v1_tests.rs"]
-mod fixture;
+pub(super) mod fixture;
 #[path = "production_scalar_ssa_emission_resources_v1_tests.rs"]
 mod resource_tests;
 

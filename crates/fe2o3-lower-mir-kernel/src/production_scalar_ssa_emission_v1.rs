@@ -31,17 +31,25 @@ use std::{
 
 #[path = "production_scalar_ssa_emission_capture_v1.rs"]
 mod capture;
+#[path = "production_scalar_ssa_guard_consistency_v1.rs"]
+mod guard_consistency;
 #[path = "production_scalar_ssa_emission_query_v1.rs"]
 mod query;
 #[path = "production_scalar_ssa_emission_replay_v1.rs"]
 mod replay;
 #[path = "production_scalar_ssa_emission_resources_v1.rs"]
 mod resources;
+pub use guard_consistency::{
+    ProductionU32BoundSnapshotGuardRequestV1, ProductionU32GuardConsistencyFactV1,
+    ProductionU32GuardConsistencyV1, ProductionU32GuardReportV1, ProductionU32GuardRequestV1,
+    ProductionU32GuardRowV1, ProductionU32GuardStorageV1, ProductionU32GuardUnavailableV1,
+};
 #[cfg(test)]
 #[path = "production_scalar_ssa_emission_v1_tests.rs"]
 mod tests;
 pub use query::{
-    ProductionScalarSsaEmissionQueryV1, ProductionU32RecurrenceConsistencyFactV1,
+    ProductionScalarSsaEmissionQueryV1, ProductionU32BoundSnapshotRecurrenceFactV1,
+    ProductionU32BoundSnapshotRecurrenceV1, ProductionU32RecurrenceConsistencyFactV1,
     ProductionU32RecurrenceConsistencyV1,
 };
 use resources::{append, charge_lookup, reserve, table_bytes};
@@ -63,6 +71,8 @@ pub enum ProductionScalarSsaEmissionErrorV1 {
     Inventory(fe2o3_kernel_analysis::CanonicalKirInventoryErrorV1),
     /// Deriving or independently replaying canonical loop facts failed.
     Loops(CanonicalKirLoopErrorV1),
+    /// The separate bound-snapshot source analyzer refused its exact model or limit.
+    BoundSnapshotAnalysis(fe2o3_mir_model::SemanticU32InductionAnalysisErrorV1),
     /// A claimed supported emission row or consistency relation disagreed.
     Mismatch(&'static str),
     /// The bounded emission inventory exceeded its row limit.

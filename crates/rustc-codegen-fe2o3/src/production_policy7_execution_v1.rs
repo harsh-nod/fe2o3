@@ -16,13 +16,13 @@ impl Policy7ExecutionWitnessV1 {
     pub(crate) fn canonical_bytes(&self) -> &[u8] {
         &self.bytes
     }
-    pub(super) fn retained_storage(&self) -> usize {
+    pub(in crate::production_pipeline) fn retained_storage(&self) -> usize {
         size_of::<Self>() + self.bytes.len()
     }
 
     pub(super) fn prepare(owner: &Admitted7, budget: &mut Budget<'_>) -> Result7<Self> {
         scoped(0, budget, |budget| {
-            let extent = extent(owner)?;
+            let extent = extent(owner.borrowed())?;
             let prepaid = extent
                 .checked_mul(2)
                 .and_then(|n| n.checked_add(size_of::<Self>()))
@@ -42,7 +42,7 @@ impl Policy7ExecutionWitnessV1 {
                 )
                 .map_err(resource)?;
             bytes.resize(extent, 0);
-            visit(owner, budget, |offset, part| {
+            visit(owner.borrowed(), budget, |offset, part| {
                 bytes
                     .get_mut(
                         offset
@@ -63,6 +63,14 @@ impl Policy7ExecutionWitnessV1 {
     }
 
     pub(super) fn check(&self, owner: &Admitted7, budget: &mut Budget<'_>) -> Result7<()> {
+        self.check_history_v1(owner.borrowed(), budget)
+    }
+
+    pub(in crate::production_pipeline) fn check_history_v1(
+        &self,
+        owner: Admitted7Ref<'_>,
+        budget: &mut Budget<'_>,
+    ) -> Result7<()> {
         if self.bytes.len() != extent(owner)? {
             return Err(execution_error("Policy7 record extent"));
         }
@@ -81,7 +89,7 @@ impl Policy7ExecutionWitnessV1 {
     }
 }
 
-fn extent(owner: &Admitted7) -> Result7<usize> {
+fn extent(owner: Admitted7Ref<'_>) -> Result7<usize> {
     extent_counts(
         owner.continuation().rows().len(),
         owner.continuation().retained_operations().len(),
@@ -107,7 +115,7 @@ fn coordinate_bytes(value: Coordinate) -> [u8; 12] {
 /// Visits every byte once in a fixed field order without another record buffer.
 /// These are exact observations; full source/actual-pair replay remains mandatory.
 fn visit(
-    owner: &Admitted7,
+    owner: Admitted7Ref<'_>,
     budget: &mut Budget<'_>,
     mut output: impl FnMut(usize, &[u8]) -> Result7<()>,
 ) -> Result7<()> {

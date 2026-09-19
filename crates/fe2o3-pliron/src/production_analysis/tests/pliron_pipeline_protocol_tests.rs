@@ -172,6 +172,20 @@ fn accepts_interleaved_independent_pipeline_lifecycles() {
 }
 
 #[test]
+fn rejects_dependency_only_pipeline_coordinate_without_numeric_identity() {
+    let (context, function) =
+        parse_fixture(include_str!("lit/pipeline_opaque_join_coordinate.pliron"));
+    let report = run_pliron_pipeline_protocol_check_v1(&context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+    assert!(report.certificates().is_empty());
+    assert!(matches!(
+        report.findings().first(),
+        Some(PlironPipelineProtocolFindingV1::InvalidSchedule { detail, .. })
+            if detail == "consuming epoch coordinates do not match the staged/consumed symbolic tile"
+    ));
+}
+
+#[test]
 fn rejects_order_reuse_slot_epoch_and_drain_failures() {
     for (case, source) in [
         include_str!("lit/pipeline_wrong_slot.pliron"),

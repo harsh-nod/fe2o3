@@ -1,0 +1,16 @@
+CASE: ordered-add
+CHECK-BEFORE: module commutative-golden-subject kernels=0
+CHECK-BEFORE: f0 f params=[v0:U32,v1:U32] results=[U32]
+CHECK-BEFORE: f0:b0 block-id=10
+CHECK-BEFORE: f0:b0:o0 [v2:U32] Add v0,v1
+CHECK-BEFORE: f0:b0:o1 [v3:U32] Add v1,v0
+CHECK-BEFORE: f0:b0:term Return [v3]
+CHECK-AFTER: module commutative-golden-subject kernels=0
+CHECK-AFTER: f0 f params=[v0:U32,v1:U32] results=[U32]
+CHECK-AFTER: f0:b0 block-id=10
+CHECK-AFTER: f0:b0:o0 [v2:U32] Add v0,v1
+CHECK-AFTER: f0:b0:o1 [v3:U32] Add v1,v0
+CHECK-AFTER: f0:b0:term Return [v3]
+CHECK-REMARK: proved=0 changed=false independently-checked=true authority=false
+CHECK-REMARK: f0:b0:o0 retained f0:b0:o0
+CHECK-REMARK: f0:b0:o1 retained f0:b0:o1

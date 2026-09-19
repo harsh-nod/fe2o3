@@ -28,6 +28,7 @@ mod checked_store_forwarding_v1;
 mod checked_u32_local_order_v1;
 mod optimization_v2;
 mod optimization_v3;
+mod owned_private_cell_promotion_v1;
 mod structural_replay_admission_v2;
 mod structural_replay_admission_v3;
 
@@ -48,5 +49,6 @@ pub use checked_store_forwarding_v1::*;
 pub use checked_u32_local_order_v1::*;
 pub use optimization_v2::*;
 pub use optimization_v3::*;
+pub use owned_private_cell_promotion_v1::*;
 pub use structural_replay_admission_v2::*;
 pub use structural_replay_admission_v3::*;

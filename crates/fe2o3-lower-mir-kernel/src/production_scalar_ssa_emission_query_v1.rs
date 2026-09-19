@@ -1,5 +1,17 @@
 use super::*;
 
+#[path = "production_scalar_ssa_bound_snapshot_query_v1.rs"]
+mod bound_snapshot;
+use bound_snapshot::CertificateSubject;
+pub use bound_snapshot::{
+    ProductionU32BoundSnapshotRecurrenceFactV1, ProductionU32BoundSnapshotRecurrenceV1,
+};
+
+enum RecurrenceParts {
+    Unavailable(ProductionScalarSsaEmissionUnavailableV1),
+    Joined(Recurrence),
+}
+
 /// Inert fixed-coordinate result borrowing only the actual source owner, not
 /// the temporary inventory, CFG, recurrence report or query resources.
 #[derive(Clone, Copy, Debug)]
@@ -228,6 +240,10 @@ impl ProductionScalarSsaEmissionOwnerV1 {
 }
 
 impl<'source> ProductionScalarSsaEmissionQueryV1<'_, 'source> {
+    pub(super) fn inventory_for_guard(&self) -> &Inventory<'source> {
+        self.inventory
+    }
+
     /// Checks an admitted U32 certificate against the actual source SSA, emission
     /// inventory, and independently replayed exact N recurrence. Unsupported
     /// mapping is distinct from malformed claimed rows. This neither reruns the
@@ -252,7 +268,23 @@ impl<'source> ProductionScalarSsaEmissionQueryV1<'_, 'source> {
             if budget.storage() != self.floor {
                 return Err(Resource::Accounting.into());
             }
-            self.check(root, *certificate, budget)
+            Ok(
+                match self.check(root, CertificateSubject::Legacy(*certificate), budget)? {
+                    RecurrenceParts::Unavailable(reason) => {
+                        ProductionU32RecurrenceConsistencyV1::Unavailable(reason)
+                    }
+                    RecurrenceParts::Joined(recurrence) => {
+                        ProductionU32RecurrenceConsistencyV1::Joined(
+                            ProductionU32RecurrenceConsistencyFactV1 {
+                                source: &self.owner.original,
+                                root,
+                                certificate: *certificate,
+                                recurrence,
+                            },
+                        )
+                    }
+                },
+            )
         })();
         if let Err(error) = &result {
             self.failure = Some(copy_query_error(error));
@@ -263,11 +295,11 @@ impl<'source> ProductionScalarSsaEmissionQueryV1<'_, 'source> {
     fn check(
         &self,
         root: SemanticFunctionIdV1,
-        certificate: Certificate,
+        certificate: CertificateSubject,
         budget: &mut Budget<'_>,
-    ) -> Result<ProductionU32RecurrenceConsistencyV1<'source>> {
+    ) -> Result<RecurrenceParts> {
         use ProductionScalarSsaEmissionUnavailableV1 as Unavailable;
-        use ProductionU32RecurrenceConsistencyV1 as Outcome;
+        use RecurrenceParts as Outcome;
         let original = &self.owner.original;
         let source = original.semantic_ssa().source_semantic();
         check_certificate_binding(original, certificate, budget)?;
@@ -462,12 +494,10 @@ impl<'source> ProductionScalarSsaEmissionQueryV1<'_, 'source> {
                 "actual checked-overflow assertion definition",
             ));
         }
-        Ok(Outcome::Joined(ProductionU32RecurrenceConsistencyFactV1 {
-            source: original,
-            root,
-            certificate,
-            recurrence,
-        }))
+        if let CertificateSubject::Snapshot(certificate) = certificate {
+            bound_snapshot::check_transport(self.owner, function, certificate, budget)?;
+        }
+        Ok(Outcome::Joined(recurrence))
     }
 }
 
@@ -483,7 +513,7 @@ fn copy_query_error(error: &Error) -> Error {
 
 fn check_certificate_binding(
     original: &ProductionPreRankedKirOwnerV1,
-    certificate: Certificate,
+    certificate: CertificateSubject,
     budget: &mut Budget<'_>,
 ) -> Result<()> {
     budget.charge_work(5)?;
@@ -561,6 +591,9 @@ fn check_certificate_binding(
         {
             return Err(Error::Mismatch("certificate statement site"));
         }
+    }
+    if let CertificateSubject::Snapshot(certificate) = certificate {
+        bound_snapshot::check_extra_binding(original, certificate, budget)?;
     }
     Ok(())
 }

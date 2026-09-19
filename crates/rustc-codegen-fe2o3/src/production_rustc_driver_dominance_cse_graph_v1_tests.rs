@@ -99,9 +99,9 @@ pub(super) fn kernel<'a>(
 }
 
 #[derive(Clone, Copy)]
-struct Binary {
-    coordinate: Coordinate,
-    result: ValueId,
+pub(super) struct Binary {
+    pub(super) coordinate: Coordinate,
+    pub(super) result: ValueId,
 }
 fn binaries(
     function: &Function,
@@ -155,7 +155,7 @@ fn binaries(
     }
     Ok(result)
 }
-fn stores(function: &Function, values: &[ValueId]) -> Result<usize, String> {
+pub(super) fn stores(function: &Function, values: &[ValueId]) -> Result<usize, String> {
     let mut seen = Vec::new();
     for operation in function
         .body
@@ -177,7 +177,10 @@ fn stores(function: &Function, values: &[ValueId]) -> Result<usize, String> {
     }
     Ok(seen.len())
 }
-fn dominated_pair(function: &Function, pair: &[Binary]) -> Result<(Binary, Binary), String> {
+pub(super) fn dominated_pair(
+    function: &Function,
+    pair: &[Binary],
+) -> Result<(Binary, Binary), String> {
     let [a, b] = pair else {
         return Err("expected two actual B expressions".into());
     };
@@ -198,7 +201,7 @@ fn dominated_pair(function: &Function, pair: &[Binary]) -> Result<(Binary, Binar
         Err("candidate expressions do not dominate one another".into())
     }
 }
-fn descendant(
+pub(super) fn descendant(
     candidate: Candidate<'_>,
     input: Coordinate,
     output: Coordinate,
@@ -233,7 +236,7 @@ fn descendant(
     }
     Ok(())
 }
-fn triple(c: Coordinate) -> [u32; 3] {
+pub(super) fn triple(c: Coordinate) -> [u32; 3] {
     [c.block.function.0, c.block.block, c.operation]
 }
 

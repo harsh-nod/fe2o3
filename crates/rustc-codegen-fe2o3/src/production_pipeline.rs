@@ -31,6 +31,8 @@ pub(crate) mod checked_output_policy5_v1;
 pub(crate) mod checked_output_policy6_v1;
 #[path = "production_pipeline_checked_output_policy7_v1.rs"]
 pub(crate) mod checked_output_policy7_v1;
+#[path = "production_pipeline_checked_output_policy8_v1.rs"]
+pub(crate) mod checked_output_policy8_v1;
 #[cfg(test)]
 #[path = "production_pipeline_checked_output_progress_v1_tests.rs"]
 pub(crate) mod checked_output_progress_v1;
@@ -99,6 +101,7 @@ pub(crate) enum ProductionPipelineError {
     CheckedOutputPolicy5Stage(checked_output_policy5_v1::CheckedOutputPolicy5StageErrorV1),
     CheckedOutputPolicy6Stage(checked_output_policy6_v1::CheckedOutputPolicy6StageErrorV1),
     CheckedOutputPolicy7Stage(checked_output_policy7_v1::CheckedOutputPolicy7StageErrorV1),
+    CheckedOutputPolicy8Stage(checked_output_policy8_v1::CheckedOutputPolicy8StageErrorV1),
     ScalarEmissionCapture(Box<fe2o3_lower_mir_kernel::ProductionScalarSsaEmissionErrorV1>),
     TargetKernelIrV8(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV8),
     TargetKernelIrV9(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV9),
@@ -135,6 +138,7 @@ impl fmt::Display for ProductionPipelineError {
             Self::CheckedOutputPolicy5Stage(error) => write!(formatter, "checked Policy5 production stage failed: {error}"),
             Self::CheckedOutputPolicy6Stage(error) => write!(formatter, "checked Policy6 production stage failed: {error}"),
             Self::CheckedOutputPolicy7Stage(error) => write!(formatter, "checked Policy7 production stage failed: {error}"),
+            Self::CheckedOutputPolicy8Stage(error) => write!(formatter, "checked Policy8 production stage failed: {error}"),
             Self::CustomLlvmConfiguration => formatter.write_str(
                 "production compilation rejects caller-selected LLVM arguments or passes before transaction construction",
             ),
@@ -335,6 +339,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::CheckedOutputPolicy5Stage(error) => Some(error),
             Self::CheckedOutputPolicy6Stage(error) => Some(error),
             Self::CheckedOutputPolicy7Stage(error) => Some(error),
+            Self::CheckedOutputPolicy8Stage(error) => Some(error),
             Self::TargetKernelIrV8(error) => Some(error),
             Self::TargetKernelIrV9(error) => Some(error),
             Self::TargetKernelIrV11(error) => Some(error),

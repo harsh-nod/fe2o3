@@ -17,6 +17,11 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
+#[path = "scalar_bound_snapshot_capture_v1.rs"]
+mod bound_snapshot;
+#[cfg(test)]
+pub(crate) use bound_snapshot::{CapturedBoundSnapshotSourceV1, SourceBoundSnapshotObservationV1};
+
 /// Owns one genuine source/N attachment and the existing projected root reports.
 /// Ranked proof authentication, guard transport and final-output admission have
 /// not occurred. No self-borrow, raw-parts constructor or Clone is provided.

@@ -58,6 +58,7 @@ enum FixtureCase {
     IntegerIdentity(Case),
     MaskedShift(masked::Case),
     DominanceCse(dominance::Case),
+    CommutativeCse(dominance::Case),
 }
 
 impl From<Case> for FixtureCase {
@@ -72,6 +73,7 @@ impl FixtureCase {
             Self::IntegerIdentity(case) => case.name(),
             Self::MaskedShift(case) => case.name(),
             Self::DominanceCse(case) => case.name(),
+            Self::CommutativeCse(case) => dominance::commutative::name(case),
         }
     }
     fn target(self) -> Target {
@@ -79,6 +81,7 @@ impl FixtureCase {
             Self::IntegerIdentity(case) => case.target,
             Self::MaskedShift(case) => case.target,
             Self::DominanceCse(case) => case.target,
+            Self::CommutativeCse(case) => case.target,
         }
     }
     fn source_leaf(self) -> &'static str {
@@ -86,6 +89,7 @@ impl FixtureCase {
             Self::IntegerIdentity(_) => "integer_identity.rs",
             Self::MaskedShift(_) => "masked_shift.rs",
             Self::DominanceCse(_) => "dominance_cse.rs",
+            Self::CommutativeCse(_) => "commutative_cse.rs",
         }
     }
     fn roots(self) -> &'static [&'static str] {
@@ -93,6 +97,7 @@ impl FixtureCase {
             Self::IntegerIdentity(_) => &ROOTS,
             Self::MaskedShift(_) => &simulation::masked_shift::ROOTS,
             Self::DominanceCse(_) => &dominance::ROOTS,
+            Self::CommutativeCse(_) => &dominance::ROOTS,
         }
     }
 }
@@ -133,6 +138,7 @@ enum Outcome {
     Observed(Box<Observation6>),
     ObservedMasked(Box<masked::Observation6>),
     ObservedDominance(Box<dominance::Observation6>),
+    ObservedCommutative(Box<dominance::commutative::Observation>),
     Extracted {
         llvm_sha256: [u8; 32],
         llvm_bytes: usize,
@@ -412,6 +418,9 @@ fn observe(tcx: TyCtxt<'_>, request: &Request, artifact: &Path) -> Result<Outcom
         FixtureCase::IntegerIdentity(case) => case,
         FixtureCase::MaskedShift(case) => return masked::observe(stage, case, artifact),
         FixtureCase::DominanceCse(case) => return dominance::observe(stage, case, artifact),
+        FixtureCase::CommutativeCse(case) => {
+            return dominance::commutative::observe(stage, case, artifact);
+        }
     };
     let roots = graph::observe(&stage, case)?;
     let replay_work = replay_actual_continuation(&stage)?;
@@ -666,6 +675,10 @@ fn decode_report(
             Outcome::ObservedDominance(_),
             Mode::Observe,
             FixtureCase::DominanceCse(_)
+        ) | (
+            Outcome::ObservedCommutative(_),
+            Mode::Observe,
+            FixtureCase::CommutativeCse(_)
         ) | (Outcome::Extracted { .. }, Mode::Extract, _)
             | (Outcome::Extracted { .. }, Mode::ExtractCensus, _)
             | (Outcome::MissingProof { .. }, Mode::MissingProof, _)
@@ -827,6 +840,14 @@ fn observed_subjects(
             Ok((
                 report.llvm_sha256,
                 report.llvm_bytes,
+                report.source_roots.clone(),
+            ))
+        }
+        (FixtureCase::CommutativeCse(case), Outcome::ObservedCommutative(report)) => {
+            dominance::commutative::validate(case, report)?;
+            Ok((
+                report.baseline_llvm_sha256,
+                report.baseline_llvm_bytes,
                 report.source_roots.clone(),
             ))
         }

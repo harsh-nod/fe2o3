@@ -1,18 +1,27 @@
 //! Strict ordinary-source capture/query only. No final output or optimizer claim.
 use super::*;
 use crate::production_pipeline::ProductionPipelineError;
-use crate::production_ranked_projection_v1::scalar_emission_capture_v1::SourceLoopObservationV1;
+use crate::production_ranked_projection_v1::scalar_emission_capture_v1::{
+    CapturedBoundSnapshotSourceV1, SourceBoundSnapshotObservationV1 as SourceLoopObservationV1,
+};
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget, CanonicalKernelIrWorkBudgetV1 as Work,
     ScalarType,
 };
-use fe2o3_lower_mir_kernel::ProductionU32RecurrenceConsistencyV1 as Consistency;
+use fe2o3_lower_mir_kernel::ProductionU32BoundSnapshotRecurrenceV1 as Consistency;
 use fe2o3_mir_model::semantic_mir_v1::{SemanticScalarTypeV1, SemanticTypeShapeV1};
+
+#[path = "production_rustc_driver_loop_guard_source_v1_tests.rs"]
+mod guard;
+
+#[path = "production_rustc_driver_loop_guard_protocol_closure_v1_tests.rs"]
+mod protocol_closure;
 
 const REQUEST: &str = "FE2O3_TEST_LOOP_CAPTURE_REQUEST_V1";
 const BASE: &str = "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device";
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 enum Case {
     Exact,
     Renamed,
@@ -44,11 +53,13 @@ impl Case {
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct Stamp {
     path: PathBuf,
     sha256: [u8; 32],
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct Request {
     case: Case,
     target: String,
@@ -56,6 +67,7 @@ struct Request {
     source: Vec<Stamp>,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 enum Stage {
     Request,
     Rustc,
@@ -63,9 +75,11 @@ enum Stage {
     Capture,
     Ranked,
     Query,
+    Guard,
     Observation,
 }
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Failure {
     stage: Stage,
     detail: String,
@@ -77,6 +91,7 @@ fn fail(stage: Stage, detail: impl std::fmt::Display) -> Failure {
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 #[allow(
     clippy::large_enum_variant,
     reason = "The test protocol keeps each complete observation in one serialized row"
@@ -99,6 +114,7 @@ enum Outcome {
     },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Row {
     root: u32,
     body: u32,
@@ -110,17 +126,21 @@ struct Row {
     checked_additions: usize,
     dynamic_u32_bound: bool,
     outcome: Outcome,
+    guard: guard::Outcome,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Observation {
     semantic: [u8; 32],
     n: [u8; 32],
     roots: Vec<u32>,
     rows: Vec<Row>,
     query_work: usize,
+    guard_work: usize,
     retained_floor: usize,
 }
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Report {
     request: Request,
     result: Result<Observation, Failure>,
@@ -211,7 +231,7 @@ fn check_request(request: &Request, args: &[String]) -> Result<(), Failure> {
     Ok(())
 }
 
-fn observe(tcx: TyCtxt<'_>, target: &str) -> Result<Observation, Failure> {
+fn observe(tcx: TyCtxt<'_>, target: &str, diagnostic: &mut String) -> Result<Observation, Failure> {
     let active_cpu = tcx
         .sess
         .opts
@@ -243,10 +263,6 @@ fn observe(tcx: TyCtxt<'_>, target: &str) -> Result<Observation, Failure> {
     if stage.grants_authority() {
         return Err(fail(Stage::Observation, "capture acquired authority"));
     }
-    let original = stage.capture().original();
-    let source = original.semantic_ssa().source_semantic();
-    let source_identity = *source.semantic_sha256().as_bytes();
-    let n_identity = *original.executable().canonical().identity().digest();
     let work_limit = usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT)
         .map_err(|e| fail(Stage::Query, e))?;
     let mut work = Work::new(work_limit);
@@ -257,6 +273,18 @@ fn observe(tcx: TyCtxt<'_>, target: &str) -> Result<Observation, Failure> {
     budget
         .reserve_storage(stage.retained_storage())
         .map_err(|e| fail(Stage::Query, e))?;
+    let stage = CapturedBoundSnapshotSourceV1::try_attach_v1(stage, &mut budget)
+        .map_err(|e| fail(Stage::Query, e))?;
+    if stage.grants_authority() {
+        return Err(fail(
+            Stage::Observation,
+            "snapshot attachment acquired authority",
+        ));
+    }
+    let original = stage.capture().original();
+    let source = original.semantic_ssa().source_semantic();
+    let source_identity = *source.semantic_sha256().as_bytes();
+    let n_identity = *original.executable().canonical().identity().digest();
     let count = stage
         .observation_count_v1(&mut budget)
         .map_err(|e| fail(Stage::Query, e))?;
@@ -301,6 +329,21 @@ fn observe(tcx: TyCtxt<'_>, target: &str) -> Result<Observation, Failure> {
         return Err(fail(Stage::Observation, "incomplete observations or floor"));
     }
     let query_work = budget.work() - before;
+    let before_guard = budget.work();
+    let ledger = budget.work_ledger_identity_v1();
+    let (guards, guard_storage) = guard::analyze(&stage, &slots, &mut budget)?;
+    if budget.storage() != floor
+        || !std::ptr::eq(guards.owner(), stage.capture())
+        || guard_storage != guards.storage()
+        || guards.authorizes_compiler_transform()
+    {
+        return Err(fail(Stage::Guard, "guard report owner, floor or authority"));
+    }
+    budget
+        .reserve_storage(guard_storage.retained_storage())
+        .map_err(|e| fail(Stage::Guard, e))?;
+    let guard_floor = budget.storage();
+    let mut next_guard = 0;
     // Serialization and strings below are test diagnostics, outside the query scope.
     let mut rows = Vec::new();
     for slot in &slots {
@@ -317,7 +360,10 @@ fn observe(tcx: TyCtxt<'_>, target: &str) -> Result<Observation, Failure> {
             || report.function_identity() != body.identity()
             || report.semantic_mir_sha256() != source.semantic_sha256()
         {
-            return Err(fail(Stage::Observation, "existing report source custody"));
+            return Err(fail(
+                Stage::Observation,
+                "bound-snapshot report source custody",
+            ));
         }
         let mut dynamic_u32_bound = false;
         let outcome = match observed.outcome() {
@@ -376,6 +422,14 @@ fn observe(tcx: TyCtxt<'_>, target: &str) -> Result<Observation, Failure> {
                 }
             }
         };
+        source_diagnostic::capture(
+            diagnostic,
+            original,
+            root,
+            report,
+            observed.certificate_ordinal(),
+            &outcome,
+        );
         rows.push(Row {
             root: root.index(),
             body: selection.body().index(),
@@ -389,8 +443,29 @@ fn observe(tcx: TyCtxt<'_>, target: &str) -> Result<Observation, Failure> {
             checked_additions: report.checked_additions_examined(),
             dynamic_u32_bound,
             outcome,
+            guard: guard::observe(
+                &stage,
+                observed,
+                guards.rows(),
+                &mut next_guard,
+                &mut budget,
+            )?,
         });
     }
+    if next_guard != guards.rows().len()
+        || budget.storage() != guard_floor
+        || budget.work_ledger_identity_v1() != ledger
+    {
+        return Err(fail(
+            Stage::Guard,
+            "complete guard requests, ledger or retained receipt",
+        ));
+    }
+    let guard_work = budget.work() - before_guard;
+    drop(guards);
+    budget
+        .release_storage(guard_storage.retained_storage())
+        .map_err(|e| fail(Stage::Guard, e))?;
     drop(slots);
     budget
         .release_storage(bytes)
@@ -407,6 +482,7 @@ fn observe(tcx: TyCtxt<'_>, target: &str) -> Result<Observation, Failure> {
         roots: source.roots().iter().map(|root| root.index()).collect(),
         rows,
         query_work,
+        guard_work,
         retained_floor: stage.retained_storage(),
     })
 }
@@ -414,10 +490,11 @@ fn observe(tcx: TyCtxt<'_>, target: &str) -> Result<Observation, Failure> {
 struct LoopCallbacks {
     target: String,
     result: Option<Result<Observation, Failure>>,
+    diagnostic: String,
 }
 impl Callbacks for LoopCallbacks {
     fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
-        self.result = Some(observe(tcx, &self.target));
+        self.result = Some(observe(tcx, &self.target, &mut self.diagnostic));
         Compilation::Stop
     }
 }
@@ -436,8 +513,13 @@ pub(super) fn run_child(args: &[String]) {
         let mut callbacks = LoopCallbacks {
             target: request.target.clone(),
             result: None,
+            diagnostic: String::new(),
         };
         rustc_driver::run_compiler(args, &mut callbacks);
+        // Print last, after rustc warning summaries, so the parent's bounded tail retains it.
+        if !callbacks.diagnostic.is_empty() {
+            eprint!("{}", callbacks.diagnostic);
+        }
         check_request(&request, args)?;
         callbacks
             .result
@@ -455,6 +537,7 @@ fn validate(request: &Request, observed: &Observation) -> Result<(), String> {
     if observed.semantic == [0; 32]
         || observed.n == [0; 32]
         || observed.query_work == 0
+        || observed.guard_work == 0
         || observed.retained_floor == 0
         || observed.roots.len() != request.case.roots()
         || unique.len() != observed.roots.len()
@@ -470,6 +553,7 @@ fn validate(request: &Request, observed: &Observation) -> Result<(), String> {
         {
             return Err("row is not bound to the actual root/report order".into());
         }
+        guard::validate(row)?;
         if request.case == Case::U64 {
             if row.ordinal.is_some()
                 || row.certificates != 0
@@ -483,7 +567,9 @@ fn validate(request: &Request, observed: &Observation) -> Result<(), String> {
             || !row.dynamic_u32_bound
             || !matches!(row.outcome, Outcome::Joined { .. })
         {
-            return Err("strict positive requires a genuine dynamic U32 source/N join".into());
+            return Err(format!(
+                "strict positive requires a genuine dynamic U32 source/N join: {row:?}"
+            ));
         }
     }
     Ok(())
@@ -552,6 +638,9 @@ fn ordinary_rust_dynamic_u32_loops_capture_and_join_both_profiles() {
     let source = stamps(&workspace);
     let mut completed = 0;
     let mut joined = 0;
+    let mut roots = 0;
+    let mut guard_joined = 0;
+    let mut no_certificate = 0;
     for target in ["gfx942", "gfx950"] {
         for case in [
             Case::Exact,
@@ -610,10 +699,21 @@ fn ordinary_rust_dynamic_u32_loops_capture_and_join_both_profiles() {
                 .iter()
                 .filter(|row| matches!(row.outcome, Outcome::Joined { .. }))
                 .count();
+            roots += observed.roots.len();
+            guard_joined += observed
+                .rows
+                .iter()
+                .filter(|row| matches!(row.guard, guard::Outcome::Joined { .. }))
+                .count();
+            no_certificate += observed
+                .rows
+                .iter()
+                .filter(|row| row.guard == guard::Outcome::NoCertificate)
+                .count();
             completed += 1;
             assert_eq!(stamps(&workspace), source);
             eprintln!(
-                "LOOP CAPTURE {} {target}: roots={}, joined={}, N={:02x?}; capture/query only",
+                "LOOP CAPTURE {} {target}: roots={}, joined={}, guard_joined={}, N={:02x?}; inert original-N queries only",
                 case.feature(),
                 observed.roots.len(),
                 observed
@@ -621,11 +721,17 @@ fn ordinary_rust_dynamic_u32_loops_capture_and_join_both_profiles() {
                     .iter()
                     .filter(|row| matches!(row.outcome, Outcome::Joined { .. }))
                     .count(),
+                observed
+                    .rows
+                    .iter()
+                    .filter(|row| matches!(row.guard, guard::Outcome::Joined { .. }))
+                    .count(),
                 observed.n
             );
         }
     }
     assert_eq!((completed, joined), (10, 10));
+    assert_eq!((roots, guard_joined, no_certificate), (12, 10, 2));
 }
 
 #[test]
@@ -655,6 +761,7 @@ fn strict_loop_observer_distinguishes_empty_unavailable_refusal_and_foreign_repo
         n: [3; 32],
         roots: vec![7],
         query_work: 1,
+        guard_work: 1,
         retained_floor: 2,
         rows: vec![Row {
             root: 7,
@@ -667,6 +774,15 @@ fn strict_loop_observer_distinguishes_empty_unavailable_refusal_and_foreign_repo
             checked_additions: 1,
             dynamic_u32_bound: true,
             outcome: joined,
+            guard: guard::Outcome::Joined {
+                header: [0, 1],
+                bound: [0, 0],
+                condition: [0, 1, 0, 0],
+                body: [0, 2],
+                exit: [0, 3],
+                then_edge: [0, 1, 0],
+                else_edge: [0, 1, 1],
+            },
         }],
     };
     let bytes = serde_json::to_vec(&Report {
@@ -689,13 +805,14 @@ fn strict_loop_observer_distinguishes_empty_unavailable_refusal_and_foreign_repo
         changed.rows[0].outcome = outcome;
         assert!(validate(&request, &changed).is_err());
     }
-    for modify in 0..4 {
+    for modify in 0..5 {
         let mut changed = observed.clone();
         match modify {
             0 => changed.rows[0].root = 8,
             1 => changed.rows[0].report_semantic = [9; 32],
             2 => changed.rows[0].dynamic_u32_bound = false,
-            _ => changed.roots.push(7),
+            3 => changed.roots.push(7),
+            _ => changed.guard_work = 0,
         }
         assert!(validate(&request, &changed).is_err());
     }
@@ -710,6 +827,7 @@ fn strict_loop_observer_distinguishes_empty_unavailable_refusal_and_foreign_repo
     assert!(decode(Some(0), Some(&refusal), &request).is_err());
     let mut unsupported = observed;
     unsupported.rows[0].outcome = Outcome::NoCertificate;
+    unsupported.rows[0].guard = guard::Outcome::NoCertificate;
     unsupported.rows[0].certificates = 0;
     unsupported.rows[0].ordinal = None;
     let mut request = request;
@@ -785,3 +903,6 @@ fn loop_request_rejects_source_substitution_and_conflicting_capture_options() {
         })
     ));
 }
+
+#[path = "production_rustc_driver_loop_capture_diagnostics_v1_tests.rs"]
+mod source_diagnostic;

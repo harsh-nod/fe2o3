@@ -69,14 +69,18 @@ pub(super) fn verify(
     #[cfg(test)]
     trace(|trace| trace.tree_requests += 1);
     let tree = dominance.get_dom_tree(context, region);
+    let entry = region.deref(context).get_head();
     for (block_index, block) in region.deref(context).iter(context).enumerate() {
         for (operation_index, operation) in block.deref(context).iter(context).enumerate() {
             let raw = operation.deref(context);
             for (operand_index, operand) in raw.operands().enumerate() {
                 #[cfg(test)]
                 trace(|trace| trace.operand_visits += 1);
-                let (definition_block, same_block) = match operand.defining_entity() {
-                    DefiningEntity::Block(definition) => (Some(definition), true),
+                let (definition_block, same_block, entry_argument) = match operand.defining_entity()
+                {
+                    DefiningEntity::Block(definition) => {
+                        (Some(definition), true, Some(definition) == entry)
+                    }
                     DefiningEntity::Op(definition) => {
                         let parent = definition.deref(context).get_parent_block();
                         let ordered = parent == Some(block) && {
@@ -84,14 +88,19 @@ pub(super) fn verify(
                             trace(|trace| trace.order_queries += 1);
                             order.strictly_precedes(definition, operation_index)
                         };
-                        (parent, ordered)
+                        (parent, ordered, false)
                     }
                 };
                 let dominates = if definition_block == Some(block) {
                     same_block
+                } else if entry_argument {
+                    // Prescan/closure admitted this exact flat region. Its entry
+                    // parameters are available even in an unreachable block;
+                    // this does not extend availability to operation results.
+                    true
                 } else {
-                    // The pinned tree indexes only entry-reachable blocks and
-                    // panics on an unequal unreachable destination query.
+                    // The tree indexes only entry-reachable blocks. Non-entry
+                    // definitions still require actual cross-block dominance.
                     tree.contains(&block)
                         && definition_block.is_some_and(|definition| {
                             #[cfg(test)]

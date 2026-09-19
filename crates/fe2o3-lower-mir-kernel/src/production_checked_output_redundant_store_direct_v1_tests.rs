@@ -1,6 +1,8 @@
 // Constructed semantic source, real materialization/P6/deletion; not Rustc input.
 use super::*;
 use crate::ProductionRedundantStoreAdmissionErrorV1 as StoreError;
+#[path = "production_checked_output_commutative_direct_v1_tests.rs"]
+mod commutative_tests;
 #[path = "production_checked_output_owned_redundant_store_direct_v1_tests.rs"]
 mod owned_tests;
 

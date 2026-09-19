@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 mod canonical_analysis_scope_v1;
+mod commutative_cse_owner_v1;
 mod fixed_integer_continuation_claim_v1;
 mod fixed_integer_continuation_v1;
 mod fixed_policy_v3;
@@ -14,6 +15,11 @@ mod production;
 mod production_analysis;
 
 pub use canonical_analysis_scope_v1::*;
+pub use commutative_cse_owner_v1::{
+    CheckedCommutativeBitwiseOptimizationV1, CommutativeBitwiseExecutionV1,
+    CommutativeBitwiseOptimizationErrorV1, OwnedCommutativeBitwiseContinuationV1,
+    optimize_checked_commutative_bitwise_cse_v1, prepare_owned_commutative_bitwise_continuation_v1,
+};
 pub use fixed_integer_continuation_claim_v1::*;
 pub use fixed_integer_continuation_v1::{
     INTEGER_CONTINUATION_EXECUTION_RECORD_BYTES_V1, IntegerContinuationExecutionWitnessV1,
