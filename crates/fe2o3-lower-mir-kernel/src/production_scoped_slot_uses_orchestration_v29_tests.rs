@@ -70,6 +70,123 @@ fn real_source_scalar_array_diamond_and_loop_slot_uses_pass() {
     }
 }
 
+fn observe_source_alias(
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &mut [Option<LoweredFunctionResultV1>],
+    receipt: &OwnedScopedSourceSlotsV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let mut helpers = 0;
+    let mut pointers = BTreeSet::new();
+    for (index, output) in emitted.iter().enumerate() {
+        let id = instances.id_at(index).unwrap();
+        let instance = instances.instance(id).unwrap();
+        if instance.function() != SemanticFunctionIdV1::from_index(3) {
+            continue;
+        }
+        helpers += 1;
+        let source = instance.declaration();
+        let statements = source.blocks()[3].statements();
+        assert_eq!(statements.len(), 2);
+        let SemanticStatementKindV1::Assign(address) = statements[0].kind() else {
+            panic!("expected source address assignment");
+        };
+        assert_eq!(address.destination(), &place(5, source.locals()[5].ty()));
+        assert_eq!(
+            address.value().kind(),
+            &SemanticRvalueKindV1::AddressOf {
+                mutability: SemanticMutabilityV1::Mutable,
+                place: place(2, U32),
+            }
+        );
+        let SemanticStatementKindV1::Assign(read) = statements[1].kind() else {
+            panic!("expected source load assignment");
+        };
+        assert_eq!(read.destination(), &place(0, U32));
+        let SemanticRvalueKindV1::Load(load) = read.value().kind() else {
+            panic!("expected source memory load");
+        };
+        assert_eq!(
+            load.source(),
+            &SemanticPlaceV1::new(
+                SemanticLocalIdV1::from_index(5),
+                vec![
+                    SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, U32).unwrap()
+                ],
+                U32,
+            )
+            .unwrap()
+        );
+        let output = output.as_ref().unwrap();
+        let initialization = output.scoped_initialization.as_ref().unwrap();
+        let entry = initialization
+            .blocks
+            .iter()
+            .find(|row| row.block.index() == 3)
+            .unwrap();
+        assert!(initialization.initialized_locals[entry.initialized.clone()].contains(&2));
+        let block_id = output
+            .lifecycle_events
+            .as_ref()
+            .unwrap()
+            .placement
+            .block(3)?;
+        let block = output
+            .function
+            .body
+            .as_ref()
+            .unwrap()
+            .blocks
+            .iter()
+            .find(|block| block.id == block_id)
+            .unwrap();
+        let loads: Vec<_> = block
+            .operations
+            .iter()
+            .filter_map(|operation| match &operation.kind {
+                OperationKind::Load { pointer, access } => Some((*pointer, access)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(loads.len(), 1);
+        let slots: Vec<_> = receipt
+            .slots
+            .iter()
+            .filter(|slot| slot.instance == id)
+            .collect();
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0].origin.local, 2);
+        assert!(pointers.insert(slots[0].origin.pointer));
+        assert_eq!(loads[0].0, slots[0].origin.pointer);
+        assert_eq!(loads[0].1.address_space, AddressSpace::Private);
+        assert_eq!(loads[0].1.alignment, 4);
+        assert_eq!(
+            loads[0].1.volatile,
+            load.volatility() == SemanticVolatilityV1::Volatile
+        );
+    }
+    assert_eq!(helpers, 2);
+    stop_after_uses(instances, emitted, receipt, budget)
+}
+
+#[test]
+fn real_source_initialized_address_of_load_reuses_each_instance_slot() {
+    // This Semantic-MIR fixture checks alias lowering, not kill-sensitive initialization.
+    for looping in [false, true] {
+        for volatile in [false, true] {
+            let fixture = ScopedFixture::Initialization(InitializationFixtureV29 {
+                looping,
+                address_read: true,
+                volatile,
+                ..InitializationFixtureV29::default()
+            });
+            let (result, _, _) = run(false, fixture, observe_source_alias, 10_000_000, 10_000_000);
+            assert!(is_stopped(&result), "{fixture:?}: {result:?}");
+            assert_eq!(OBSERVED.get(), 1);
+        }
+    }
+}
+
 fn inject_observation(
     instances: &ExecutionInstancesV29<'_>,
     emitted: &mut [Option<LoweredFunctionResultV1>],

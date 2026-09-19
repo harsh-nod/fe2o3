@@ -310,6 +310,7 @@ struct InitializationFixtureV29 {
     kill: Option<InitializationKillV29>,
     reinitialize: bool,
     copy_read: bool,
+    address_read: bool,
     volatile: bool,
 }
 

@@ -36,11 +36,33 @@ pub(in super::super) fn initialization_owner(
 ) -> ProductionSemanticSsaOwnerV1 {
     let original = repeated_slot_owner();
     let semantic = original.source_semantic();
+    let mut types = semantic.types().to_vec();
     let mut functions = semantic.functions().to_vec();
     let helper = &functions[3];
     let mut locals = helper.locals().to_vec();
     locals.push(local(136, U32, SemanticLocalRoleV1::Temporary));
     locals.push(local(137, U32, SemanticLocalRoleV1::Temporary));
+    let mut exit = Vec::new();
+    let read_place = if config.address_read {
+        assert!(!config.copy_read);
+        let pointer = reference(&mut types, U32, SemanticMutabilityV1::Mutable, true);
+        locals.push(local(138, pointer, SemanticLocalRoleV1::Temporary));
+        exit.push(assign(
+            place(5, pointer),
+            SemanticRvalueKindV1::AddressOf {
+                mutability: SemanticMutabilityV1::Mutable,
+                place: place(2, U32),
+            },
+        ));
+        SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(5),
+            vec![SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, U32).unwrap()],
+            U32,
+        )
+        .unwrap()
+    } else {
+        place(2, U32)
+    };
     let edge =
         |role, target| SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target));
     let goto = |target| SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, target));
@@ -94,7 +116,7 @@ pub(in super::super) fn initialization_owner(
         SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(2, U32)))
     } else {
         SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
-            place(2, U32),
+            read_place,
             if config.volatile {
                 SemanticVolatilityV1::Volatile
             } else {
@@ -103,6 +125,7 @@ pub(in super::super) fn initialization_owner(
             None,
         ))
     };
+    exit.push(assign(place(0, U32), read));
     let mut entry = helper.blocks()[0].statements()[..2].to_vec();
     if config.looping {
         entry.push(assign(place(3, U32), SemanticRvalueKindV1::Use(literal(0))));
@@ -127,18 +150,10 @@ pub(in super::super) fn initialization_owner(
             },
         ),
         block(142, changed, goto(if config.looping { 1 } else { 3 })),
-        block(
-            143,
-            vec![assign(place(0, U32), read)],
-            SemanticTerminatorKindV1::Return,
-        ),
+        block(143, exit, SemanticTerminatorKindV1::Return),
     ];
     functions[3] = function(130, helper.role(), helper.abi().clone(), locals, blocks);
-    build(
-        semantic.types().to_vec(),
-        functions,
-        semantic.callables().to_vec(),
-    )
+    build(types, functions, semantic.callables().to_vec())
 }
 
 pub(in super::super) fn initialization_array_owner(whole: bool) -> ProductionSemanticSsaOwnerV1 {
