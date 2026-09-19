@@ -560,6 +560,7 @@ fn sidecar(
         )?)
 }
 
+// Caller binds both owners to the live ledger and the complete source roster.
 pub(super) fn matches_roots(
     a: &[ScopedModuleRootV29],
     b: &[ScopedModuleRootV29],

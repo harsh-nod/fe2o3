@@ -62,7 +62,14 @@ fn scoped_source_owner_retains_actual_inputs_graph_capture_and_replayed_assertio
                         .retained_storage()
                 },
             );
-            assert!(owner.retained_storage > input_storage + owner.pending.retained_storage);
+            assert_eq!(
+                owner.retained_storage,
+                input_storage
+                    + size_of::<SourceOwnedScopedModuleV29>()
+                    + owner.pending.retained_storage
+                    + owner.capture.transferred_storage()
+                    + owner.assertions.capacity() * size_of::<ReplayedInstanceAssertV1>()
+            );
             assert_eq!(
                 budget.storage(),
                 MODULE_FLOOR + old_capture + owner.retained_storage
@@ -232,20 +239,30 @@ fn scoped_source_owner_replay_rejects_metadata_changes_with_the_same_graph() {
             5 => {
                 assert!(roots[1].coordinates.anchors.rows.pop().is_some());
             }
-            6 => roots[0].source_slots.slots[0].origin.local += 1,
+            6 => {
+                roots
+                    .iter_mut()
+                    .flat_map(|root| &mut root.source_slots.slots)
+                    .next()
+                    .unwrap()
+                    .origin
+                    .local += 1
+            }
             7 => roots[0].source_slots.instances[0].slots.end += 1,
             8 => roots[1].insertions[0].after.first += 1,
             9 => roots[0].declarations[0].function_ordinal = 0,
             10 => roots[0].sidecars.rows[0].next_value += 1,
             11 => {
-                assert!(
-                    roots[0].sidecars.rows[0]
-                        .scoped_slot_origins
-                        .as_mut()
-                        .unwrap()
-                        .pop()
-                        .is_some()
-                );
+                let slots = roots
+                    .iter_mut()
+                    .flat_map(|root| &mut root.sidecars.rows)
+                    .find_map(|row| {
+                        row.scoped_slot_origins
+                            .as_mut()
+                            .filter(|rows| !rows.is_empty())
+                    })
+                    .unwrap();
+                assert!(slots.pop().is_some());
             }
             12 => {
                 roots[0].sidecars.rows[0]
@@ -257,12 +274,16 @@ fn scoped_source_owner_replay_rejects_metadata_changes_with_the_same_graph() {
                     .end += 1
             }
             13 => {
-                roots[0].sidecars.rows[0]
-                    .scoped_memory_anchors
-                    .as_mut()
-                    .unwrap()
-                    .rows[0]
-                    .position += 1
+                let anchors = roots
+                    .iter_mut()
+                    .flat_map(|root| &mut root.sidecars.rows)
+                    .find_map(|row| {
+                        row.scoped_memory_anchors
+                            .as_mut()
+                            .filter(|rows| !rows.rows.is_empty())
+                    })
+                    .unwrap();
+                anchors.rows[0].position += 1;
             }
             14 => {
                 roots[0].sidecars.rows[0]

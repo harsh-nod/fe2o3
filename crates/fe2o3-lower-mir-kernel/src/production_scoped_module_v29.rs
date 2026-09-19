@@ -71,15 +71,25 @@ impl From<ArgumentResourceV1> for ScopedModuleErrorV29 {
     }
 }
 
-fn scoped_module_attempt_v29<T>(
-    budget: &mut ArgumentBudgetV1<'_>,
+fn scoped_module_attempt_v29<'work, T>(
+    budget: &mut ArgumentBudgetV1<'work>,
     floor: usize,
-    build: impl FnOnce(&mut ArgumentBudgetV1<'_>) -> Result<T, ScopedModuleErrorV29>,
+    build: impl FnOnce(&mut ArgumentBudgetV1<'work>) -> Result<T, ScopedModuleErrorV29>,
 ) -> Result<T, ScopedModuleErrorV29> {
     if budget.storage() < floor {
         return Err(ArgumentResourceV1::Accounting.into());
     }
+    let ledger = budget.work_ledger_identity_v1();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build(budget)));
+    if budget.work_ledger_identity_v1() != ledger {
+        match result {
+            Err(payload) => std::panic::resume_unwind(payload),
+            other => {
+                drop(other);
+                return Err(ArgumentResourceV1::Accounting.into());
+            }
+        }
+    }
     match result {
         Ok(Ok(value)) => Ok(value),
         other => {
