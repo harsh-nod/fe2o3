@@ -12426,6 +12426,9 @@ include!("production_execution_instance_plan_v29.rs");
 include!("production_scoped_root_emission_v29.rs");
 include!("production_scoped_source_slots_v29.rs");
 include!("production_scoped_initialization_v29.rs");
+#[cfg(test)]
+#[path = "production_retained_load_fault_v1_tests.rs"]
+mod retained_load_fault_v1_tests;
 include!("production_execution_lifecycle_insertion_v29.rs");
 include!("production_kernel_metadata_v1.rs");
 include!("production_execution_scalar_operands_v29.rs");
@@ -14402,11 +14405,15 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         .retained_local_slots
                         .contains_key(&load.source().local().index())
                 {
-                    self.require_retained_local_initialized_v1(
+                    let initialized = self.require_retained_local_initialized_v1(
                         block,
                         statement,
                         load.source().local(),
-                    )?;
+                    );
+                    #[cfg(test)]
+                    let initialized =
+                        retained_load_fault_v1_tests::inject_failed_direct_load(initialized);
+                    initialized?;
                     self.retained_local_pointer_binding_v1(
                         load.source().local(),
                         AccessMode::ReadWrite,

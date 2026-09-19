@@ -478,16 +478,31 @@ fn with_pending_candidate(
     budget.reserve_storage(capture.retained_storage()).unwrap();
     let launch_roots = materialization_launch_roots_v1(&ssa, &launch).unwrap();
     let mut emission = AssertOriginEmissionV1::new(&mut budget);
+    let fault_site = match case {
+        UnitCase::Killed(kill) => Some((
+            1,
+            0,
+            Some(if matches!(kill, ScalarKill::Storage) {
+                3
+            } else {
+                2
+            }),
+            2,
+        )),
+        _ => None,
+    };
     let PendingHelperSourceLoweringV1 {
         mut module,
         correspondence,
         requires_source,
-    } = lower_pending_module_with_assert_origins_v1(
-        &ssa,
-        ProductionSemanticKirLimitsV1::default(),
-        &launch_roots,
-        &mut emission,
-    )
+    } = retained_load_fault_v1_tests::with_exact_sites(fault_site.as_slice(), || {
+        lower_pending_module_with_assert_origins_v1(
+            &ssa,
+            ProductionSemanticKirLimitsV1::default(),
+            &launch_roots,
+            &mut emission,
+        )
+    })
     .unwrap();
     assert!(requires_source);
     mutate(&mut module);
@@ -636,9 +651,9 @@ fn normal_source_constructor_keeps_two_roots_and_both_calls_per_root() {
 mod control_call_tests;
 #[path = "production_local_helper_memory_v1_tests.rs"]
 mod memory_tests;
-#[path = "production_local_helper_resource_v1_tests.rs"]
-mod resource_tests;
-#[path = "production_local_helper_ranked_v1_tests.rs"]
-mod ranked_tests;
 #[path = "production_local_helper_ranked_stage_v1_tests.rs"]
 mod ranked_stage_tests;
+#[path = "production_local_helper_ranked_v1_tests.rs"]
+mod ranked_tests;
+#[path = "production_local_helper_resource_v1_tests.rs"]
+mod resource_tests;

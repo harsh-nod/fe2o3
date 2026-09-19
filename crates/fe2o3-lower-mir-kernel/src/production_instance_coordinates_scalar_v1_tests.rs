@@ -276,7 +276,10 @@ fn with_scalar_expansion(
         let lowered = lower_scalar_instances(instances, budget);
         let call_storage: usize = lowered
             .iter()
-            .map(|row| row.call_returns.requested_bytes().unwrap())
+            .map(|row| {
+                row.call_returns.requested_bytes().unwrap()
+                    + row.scoped_initialization.as_ref().unwrap().retained_storage
+            })
             .sum();
         with_production_instance_correspondence_v1(instances, budget, |map, budget| {
             let mut functions: Vec<_> = lowered

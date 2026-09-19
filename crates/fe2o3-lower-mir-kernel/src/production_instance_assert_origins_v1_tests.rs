@@ -166,6 +166,7 @@ fn with_assert_pending(
                 .iter()
                 .map(|row| {
                     row.call_returns.requested_bytes().unwrap()
+                        + row.scoped_initialization.as_ref().unwrap().retained_storage
                         + row.instance_assert_origins.as_ref().unwrap().storage
                 })
                 .sum();
