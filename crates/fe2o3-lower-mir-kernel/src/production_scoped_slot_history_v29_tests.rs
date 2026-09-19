@@ -297,6 +297,30 @@ fn history_rosters_and_physical_event_order_are_checked() {
         .unwrap();
 }
 
+fn resource(result: UseResult<()>, work: bool) {
+    assert!(
+        matches!(
+            (&result, work),
+            (
+                Err(
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Work(_)
+                    )
+                ),
+                true
+            ) | (
+                Err(
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Storage(_)
+                    )
+                ),
+                false
+            )
+        ),
+        "{result:?}"
+    );
+}
+
 #[test]
 fn independently_counted_history_limits_preserve_the_caller_floor() {
     let program = program(&[(&[W, R], &[])]);
@@ -311,9 +335,9 @@ fn independently_counted_history_limits_preserve_the_caller_floor() {
     exact.0.unwrap();
     assert_eq!((exact.1, exact.2), (58, bytes));
     for work in 0..58 {
-        assert!(evaluate(&program, work, bytes).0.is_err(), "{work}");
+        resource(evaluate(&program, work, bytes).0, true);
     }
-    assert!(evaluate(&program, 58, bytes - 1).0.is_err());
+    resource(evaluate(&program, 58, bytes - 1).0, false);
 }
 
 fn raw_run(
@@ -461,6 +485,18 @@ fn actual_array_cells_are_sparse_and_distinct() {
     a.0.unwrap();
     b.0.unwrap();
     assert_eq!((a.1, a.2), (b.1, b.2));
+    let mut missing = low.clone();
+    missing.body.as_mut().unwrap().blocks[0]
+        .operations
+        .remove(7);
+    kir::verified(&missing);
+    assert!(matches!(
+        raw_run(&missing, &low_slots, LIMIT, LIMIT).0,
+        Err(ProductionSemanticKirErrorV1::Unsupported {
+            detail: "scoped slot read is not initialized in its fresh physical activation",
+            ..
+        })
+    ));
     let mut mixed = low.clone();
     mixed.body.as_mut().unwrap().blocks[0].operations.extend([
         kir::result(
@@ -527,14 +563,12 @@ fn physical_history_adapter_restores_scratch_at_exact_limits() {
     raw_run(&function, &slots, baseline.1, baseline.2)
         .0
         .unwrap();
-    assert!(
-        raw_run(&function, &slots, baseline.1 - 1, baseline.2)
-            .0
-            .is_err()
+    resource(
+        raw_run(&function, &slots, baseline.1 - 1, baseline.2).0,
+        true,
     );
-    assert!(
-        raw_run(&function, &slots, baseline.1, baseline.2 - 1)
-            .0
-            .is_err()
+    resource(
+        raw_run(&function, &slots, baseline.1, baseline.2 - 1).0,
+        false,
     );
 }

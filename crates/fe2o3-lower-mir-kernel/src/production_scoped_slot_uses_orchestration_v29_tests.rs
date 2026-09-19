@@ -275,7 +275,7 @@ fn replace_initial_store_with_read(
         ValueDef::new(ValueId(u32::MAX), Type::Scalar(ScalarType::U32)),
         OperationKind::Load {
             pointer: slot.origin.pointer,
-            access: access.clone(),
+            access: *access,
         },
     );
     Ok(())
