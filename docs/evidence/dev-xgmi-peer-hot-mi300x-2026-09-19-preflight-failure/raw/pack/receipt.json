@@ -1,0 +1,31 @@
+{
+  "command": [
+    "git",
+    "archive",
+    "--format=tar.gz",
+    "--output=/home/harsh/.codex-tmp/fe2o3-peer-hot-payload-wfmmtoz3/source.tar.gz",
+    "fe04fded75acd21efc87075bf668ecae5f0a6d28",
+    "--",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    ".cargo",
+    "crates",
+    "examples",
+    "benchmarks/runtime_gfx942",
+    "scripts/unsafe-source-baseline.json",
+    "docs/runtime-primary-queue-release-v1.md"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 128,
+  "finished_ns": 1789807430106798817,
+  "group_absent": true,
+  "pid": 526269,
+  "started_ns": 1789807430096167337,
+  "stderr_sha256": "0dc1f1dc4144049d805e2da5670b27c4c9fbcca81e4bbbaa04357b24383b297f",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 120
+}

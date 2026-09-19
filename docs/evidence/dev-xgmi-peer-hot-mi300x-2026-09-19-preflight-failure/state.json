@@ -1,0 +1,19 @@
+{
+  "absence_attempted": false,
+  "cleaned": false,
+  "cleanup_attempted": false,
+  "collected": false,
+  "create_attempted": false,
+  "created": false,
+  "failure": {
+    "error": "RuntimeError: pack failed",
+    "stage": "controller"
+  },
+  "local_payload_absent": true,
+  "native_attempted": false,
+  "native_succeeded": false,
+  "remote_absent": false,
+  "schema": "fe2o3.xgmi-peer-hot-controller-state.v1",
+  "secondary_failures": [],
+  "uploaded": false
+}

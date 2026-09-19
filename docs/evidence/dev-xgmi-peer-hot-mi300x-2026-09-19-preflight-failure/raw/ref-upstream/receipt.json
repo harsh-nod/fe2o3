@@ -1,0 +1,20 @@
+{
+  "command": [
+    "git",
+    "ls-remote",
+    "upstream",
+    "refs/heads/codex/r65-runtime-drain-versions"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789807430089700456,
+  "group_absent": true,
+  "pid": 526214,
+  "started_ns": 1789807429469703715,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "4be423fe3a6e8c64fa2e2f9cd50850342067f6d3acc06048a346aff1825d70f6",
+  "timeout_seconds": 60
+}

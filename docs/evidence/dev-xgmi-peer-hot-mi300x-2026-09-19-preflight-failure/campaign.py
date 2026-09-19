@@ -125,26 +125,6 @@ def control_spec(mode, marker):
     ]
 
 
-def source_paths(files):
-    need(type(files) is dict and files, "nonempty qualified source map")
-
-    def selects(selector, name):
-        return name == selector or name.startswith(selector + "/")
-
-    need(
-        all(
-            any(selects(selector, name) for selector in SOURCE_PATHS) for name in files
-        ),
-        "qualified source stays within declared selectors",
-    )
-    # git archive rejects absent selectors; git ls-files used by the CPU map does not.
-    return [
-        selector
-        for selector in SOURCE_PATHS
-        if any(selects(selector, name) for name in files)
-    ]
-
-
 def source_archive_files(path):
     with tarfile.open(path, "r:gz") as archive:
         files = {}
@@ -423,7 +403,7 @@ def run():
                 "--output=" + str(source_tar),
                 commit,
                 "--",
-                *source_paths(cpu_source),
+                *SOURCE_PATHS,
             ],
             120,
         )

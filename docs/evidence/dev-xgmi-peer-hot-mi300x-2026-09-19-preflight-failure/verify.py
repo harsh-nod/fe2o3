@@ -119,15 +119,7 @@ def verify():
         "transported helpers and source archive",
     )
     signed_tar = subprocess.check_output(
-        [
-            "git",
-            "archive",
-            "--format=tar",
-            commit,
-            "--",
-            *C.source_paths(cpu["source_files"]),
-        ],
-        cwd=ROOT,
+        ["git", "archive", "--format=tar", commit, "--", *C.SOURCE_PATHS], cwd=ROOT
     )
     with tarfile.open(fileobj=io.BytesIO(signed_tar), mode="r:") as archive:
         signed_files = {
@@ -234,7 +226,7 @@ def verify():
                 "--output=" + str(payload / "source.tar.gz"),
                 commit,
                 "--",
-                *C.source_paths(cpu["source_files"]),
+                *C.SOURCE_PATHS,
             ],
             120,
         ),

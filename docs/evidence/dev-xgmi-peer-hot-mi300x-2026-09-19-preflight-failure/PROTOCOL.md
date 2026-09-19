@@ -52,11 +52,6 @@ overwritten or relabeled as successful.
 
 ## Reproduction
 
-The first attempt stopped locally at source packaging, before remote creation.
-Its complete failed receipts and original tooling are preserved in
-`../dev-xgmi-peer-hot-mi300x-2026-09-19-preflight-failure`. The corrected packer
-omits absent optional selectors and still checks exact signed source-map equality.
-
 Run from a clean signed commit pushed to both configured remotes:
 
 ```sh

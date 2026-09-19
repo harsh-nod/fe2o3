@@ -1,0 +1,8 @@
+{
+  "error": "RuntimeError: pack failed",
+  "primary": {
+    "error": "RuntimeError: pack failed",
+    "stage": "controller"
+  },
+  "secondary_failures": []
+}

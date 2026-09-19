@@ -5,7 +5,6 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
-import subprocess
 import tempfile
 import unittest
 
@@ -21,39 +20,6 @@ SPEC.loader.exec_module(C)
 
 class InjectedFailure(RuntimeError):
     pass
-
-
-class SourcePackingTests(unittest.TestCase):
-    def test_absent_optional_selectors_are_omitted_without_losing_files(self):
-        files = {"Cargo.toml": "unused", "crates/demo/src/lib.rs": "unused"}
-        self.assertEqual(C.source_paths(files), ["Cargo.toml", "crates"])
-        files[".cargo/config.toml"] = "unused"
-        self.assertEqual(C.source_paths(files), ["Cargo.toml", ".cargo", "crates"])
-
-    def test_empty_or_out_of_scope_maps_are_rejected(self):
-        for files in ({}, {".cargo-other/config": "unused"}, {"unrelated": "unused"}):
-            with self.subTest(files=files), self.assertRaises(RuntimeError):
-                C.source_paths(files)
-
-    def test_signed_head_archive_matches_the_complete_qualified_source(self):
-        files = C.read(C.CPU / "raw/source-before/stdout")["files"]
-        with tempfile.TemporaryDirectory(prefix="fe2o3-hot-pack-test-") as folder:
-            archive = Path(folder) / "source.tar.gz"
-            subprocess.run(
-                [
-                    "git",
-                    "archive",
-                    "--format=tar.gz",
-                    "--output=" + str(archive),
-                    "HEAD",
-                    "--",
-                    *C.source_paths(files),
-                ],
-                cwd=C.ROOT,
-                check=True,
-                timeout=60,
-            )
-            self.assertEqual(C.source_archive_files(archive), files)
 
 
 class FakeSteps:
