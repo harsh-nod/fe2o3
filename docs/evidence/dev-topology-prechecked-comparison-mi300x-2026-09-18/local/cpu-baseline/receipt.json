@@ -1,0 +1,19 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-xgmi-pair-currentness-cpu-2026-09-18/verify.py"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789795112778376347,
+  "group_absent": true,
+  "pid": 3675606,
+  "started_ns": 1789795112610297633,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "255960c71168def6a542e3b4a1e91d76351c531d8d816dfa56557de0e80f654f",
+  "timeout_seconds": 60
+}

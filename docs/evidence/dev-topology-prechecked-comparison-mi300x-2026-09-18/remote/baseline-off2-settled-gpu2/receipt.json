@@ -1,0 +1,37 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-I",
+    "benchmarks/runtime_gfx942/copy-host-observe.py",
+    "--gpu-index",
+    "2",
+    "--pci-bdf",
+    "0000:46:00.0",
+    "--unique-id",
+    "0xd2e26fef80cf5c33"
+  ],
+  "cwd": "/home/harsh/fe2o3-topology-prechecked-comparison-20260918.c40887d06e49ab82/source-baseline",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/home/harsh/fe2o3-topology-prechecked-comparison-20260918.c40887d06e49ab82/target-baseline",
+    "CARGO_TERM_COLOR": "never",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/opt/rocm/bin:/usr/bin:/bin",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
+    "TMPDIR": "/home/harsh/fe2o3-topology-prechecked-comparison-20260918.c40887d06e49ab82/tmp",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789795785236288927,
+  "group_absent": true,
+  "pid": 2794835,
+  "started_ns": 1789795783057419163,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "2dfb9d084e018485abcf15dd8b75128fce41ce9e272a4b5fffe008effb6fe2bb",
+  "timeout_seconds": 100
+}

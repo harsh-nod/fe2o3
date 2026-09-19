@@ -1,0 +1,21 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-topology-prechecked-comparison-mi300x-2026-09-18/protocol.py",
+    "baseline",
+    "/home/harsh/.codex-tmp/fe2o3-topology-prechecked-comparison-20260918.9uh_wtho/source-baseline.tar.gz"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789795126221593005,
+  "group_absent": true,
+  "pid": 3675928,
+  "started_ns": 1789795115559101773,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "8a45d037bd6b007c26172ab047f58df1cb25aa4eebfe4b2d2ea8b4d2ffd5d8d9",
+  "timeout_seconds": 180
+}

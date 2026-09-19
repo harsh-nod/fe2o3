@@ -1,0 +1,14 @@
+{
+  "absence": true,
+  "cleaned": true,
+  "collected": true,
+  "create_attempted": true,
+  "created": true,
+  "failure": null,
+  "local_payload": "/home/harsh/.codex-tmp/fe2o3-topology-prechecked-comparison-20260918.9uh_wtho",
+  "local_payload_absent": true,
+  "native_attempted": true,
+  "native_failure": null,
+  "native_success": true,
+  "secondary_failures": []
+}

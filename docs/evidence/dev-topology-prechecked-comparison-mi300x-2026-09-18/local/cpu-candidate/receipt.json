@@ -1,0 +1,20 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-topology-prechecked-reads-cpu-2026-09-18/verify.py",
+    "--live"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789795113400280970,
+  "group_absent": true,
+  "pid": 3675612,
+  "started_ns": 1789795112779620943,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "b8b81e0b07a71da0470ba4086dd8051c471ca7cd485acc442383a074fca0ef4f",
+  "timeout_seconds": 60
+}

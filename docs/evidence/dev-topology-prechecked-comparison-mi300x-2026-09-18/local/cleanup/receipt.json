@@ -1,0 +1,28 @@
+{
+  "command": [
+    "ssh",
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+    "mi300x",
+    "/usr/bin/python3 -I - cleanup '{\"binding_sha256\":\"16d4f8e21a52d53d8536122a6d6e5211b4b9adf1f209b90a65b9a532eb7a7aba\",\"commit\":\"36420a33bcc8640ea89abe3ecdf5c815e73da541\",\"path\":\"/home/harsh/fe2o3-topology-prechecked-comparison-20260918.c40887d06e49ab82\"}'"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789795909355986332,
+  "group_absent": true,
+  "pid": 3738940,
+  "started_ns": 1789795907780737501,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": "c5a7b0560f089e6568debc4e52cf5efe0236a4fc3fb50b3e78469b85b4b96ecc",
+  "stdout_sha256": "09763d3e2eb3d63073f7444747d5b5034a486743bfb45a8590efd552d3bfbb65",
+  "timeout_seconds": 120
+}

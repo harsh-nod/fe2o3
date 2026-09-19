@@ -1,0 +1,38 @@
+{
+  "command": [
+    "cargo",
+    "build",
+    "--frozen",
+    "--release",
+    "-p",
+    "fe2o3-runtime",
+    "--features",
+    "hardware-diagnostic",
+    "--example",
+    "gfx942-runtime-xgmi-peer-benchmark"
+  ],
+  "cwd": "/home/harsh/fe2o3-topology-prechecked-comparison-20260918.c40887d06e49ab82/source-baseline",
+  "environment": {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/home/harsh/fe2o3-topology-prechecked-comparison-20260918.c40887d06e49ab82/target-baseline",
+    "CARGO_TERM_COLOR": "never",
+    "HOME": "/home/harsh",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/home/harsh/.cargo/bin:/opt/rocm/bin:/usr/bin:/bin",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
+    "TMPDIR": "/home/harsh/fe2o3-topology-prechecked-comparison-20260918.c40887d06e49ab82/tmp",
+    "USER": "harsh"
+  },
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789795246911420966,
+  "group_absent": true,
+  "pid": 2770994,
+  "started_ns": 1789795152703905631,
+  "stderr_sha256": "e3890c6c7d2f9a556e98a6738df80eda7f48259e759e8179b6f4d8d4d582db79",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 1200
+}
