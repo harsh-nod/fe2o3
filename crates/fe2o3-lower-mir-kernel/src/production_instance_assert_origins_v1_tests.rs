@@ -1,5 +1,46 @@
 use super::*;
 
+#[test]
+fn repeated_assertion_collection_keeps_instance_qualified_bindings() {
+    for expected in [false, true] {
+        for diamond in [false, true] {
+            with_assert_pending(expected, diamond, |pending, instances, budget| {
+                let floor = budget.storage();
+                let functions = std::slice::from_ref(&pending.function);
+                let graph = AssertGraphIndexV1::build_functions(functions, true, budget).unwrap();
+                let mut rows = Vec::new();
+                replay_instance_asserts_in_functions_v1(
+                    InstanceAssertReplaySubjectV1 {
+                        functions,
+                        function_ordinal: 0,
+                        sidecars: &pending.sidecars,
+                        coordinates: &pending.coordinates,
+                        slot_relocation: pending.slot_relocation.as_ref(),
+                        insertions: &[],
+                    },
+                    instances,
+                    &graph,
+                    budget,
+                    &mut |row, budget| {
+                        assert_origin_push_v1(&mut rows, row, budget)?;
+                        Ok(())
+                    },
+                )
+                .unwrap();
+                assert_eq!(rows.len(), 2);
+                assert_eq!(rows[0].site, rows[1].site);
+                assert_ne!(rows[0].instance, rows[1].instance);
+                assert_ne!(rows[0].binding.block(), rows[1].binding.block());
+                assert_ne!(rows[0].binding.outcome(), rows[1].binding.outcome());
+                assert!(rows.iter().all(|row| row.binding.expected() == expected));
+                graph.release(budget).unwrap();
+                assert_origin_drop_v1(rows, budget).unwrap();
+                assert_eq!(budget.storage(), floor);
+            });
+        }
+    }
+}
+
 fn assertion_calls_owner(expected: bool, diamond: bool) -> ProductionSemanticMirOwnerV1 {
     let original = scalar_calls_owner(true);
     let semantic = original.semantic();
