@@ -68,6 +68,29 @@ fn check_scoped_defined_call_phases_v29(
                     return Err(mismatch());
                 }
                 let values = CallFunctionIndexV1::new(&lowered.function, budget)?;
+                check_call_signature_v1(
+                    instances.owner().source_semantic(),
+                    source.declaration(),
+                    source.function(),
+                    if id == instances.root() {
+                        SemanticKirFunctionRoleV1::KernelEntry
+                    } else {
+                        SemanticKirFunctionRoleV1::InternalHelper
+                    },
+                    &lowered.function,
+                    budget,
+                )?;
+                let exits = instances.exits(id).ok_or_else(mismatch)?;
+                budget.charge_work(exits.len())?;
+                let returns = instances.returns(id).ok_or_else(mismatch)?.count();
+                if rows
+                    .iter()
+                    .filter(|row| matches!(row.kind, SemanticKirCallReturnKindV1::Return { .. }))
+                    .count()
+                    != returns
+                {
+                    return Err(mismatch());
+                }
                 for row in rows {
                     let SemanticKirCallReturnKindV1::Return {
                         components: returned,

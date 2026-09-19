@@ -216,34 +216,14 @@ fn check_call_correspondence_v1(
         .get(instance.semantic_function.index() as usize)
         .ok_or_else(mismatch)?;
     let body = target.body.as_ref().ok_or_else(mismatch)?;
-    budget.charge_work(source.locals().len())?;
-    match instance.role {
-        SemanticKirFunctionRoleV1::KernelEntry if target.signature.results.is_empty() => {}
-        SemanticKirFunctionRoleV1::KernelEntry => return Err(mismatch()),
-        SemanticKirFunctionRoleV1::InternalHelper => {
-            let shape_floor = budget.storage();
-            prepay_typed_shape_v1(
-                semantic.types(),
-                source.abi().source_output_type(),
-                0,
-                budget,
-            )?;
-            let shape =
-                helper_result_components_v1(semantic.types(), source, instance.semantic_function)?;
-            if shape.components.len() != target.signature.results.len() {
-                return Err(mismatch());
-            }
-            for ((_, _, expected, _, _), actual) in
-                shape.components.iter().zip(&target.signature.results)
-            {
-                if !call_types_equal_v1(expected, actual, budget)? {
-                    return Err(mismatch());
-                }
-            }
-            drop(shape);
-            budget.release_storage(budget.storage() - shape_floor)?;
-        }
-    }
+    check_call_signature_v1(
+        semantic,
+        source,
+        instance.semantic_function,
+        instance.role,
+        target,
+        budget,
+    )?;
     let values = CallFunctionIndexV1::new(target, budget)?;
     let mut used = 0_usize;
     for (span, block) in spans.iter().zip(&body.blocks) {
@@ -341,6 +321,52 @@ fn check_call_correspondence_v1(
         return Err(mismatch());
     }
     Ok(())
+}
+
+fn check_call_signature_v1(
+    semantic: &AdmittedInertSemanticMirV1,
+    source: &SemanticFunctionDeclV1,
+    function: SemanticFunctionIdV1,
+    role: SemanticKirFunctionRoleV1,
+    target: &Function,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let mismatch = || ProductionSemanticKirErrorV1::CorrespondenceMismatch;
+    budget.charge_work(source.locals().len())?;
+    match role {
+        SemanticKirFunctionRoleV1::KernelEntry
+            if target.role == fe2o3_kernel_ir::FunctionRole::KernelEntry
+                && target.signature.results.is_empty() =>
+        {
+            Ok(())
+        }
+        SemanticKirFunctionRoleV1::KernelEntry => Err(mismatch()),
+        SemanticKirFunctionRoleV1::InternalHelper => {
+            if target.role != fe2o3_kernel_ir::FunctionRole::InternalHelper {
+                return Err(mismatch());
+            }
+            with_canonical_call_scratch_v1(budget, |budget| {
+                prepay_typed_shape_v1(
+                    semantic.types(),
+                    source.abi().source_output_type(),
+                    0,
+                    budget,
+                )?;
+                let shape = helper_result_components_v1(semantic.types(), source, function)?;
+                if shape.components.len() != target.signature.results.len() {
+                    return Err(mismatch());
+                }
+                for ((_, _, expected, _, _), actual) in
+                    shape.components.iter().zip(&target.signature.results)
+                {
+                    if !call_types_equal_v1(expected, actual, budget)? {
+                        return Err(mismatch());
+                    }
+                }
+                Ok(())
+            })
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
