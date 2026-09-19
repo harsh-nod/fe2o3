@@ -13,7 +13,7 @@ use fe2o3_runtime::{
 const CANARY_BYTES: usize = 32;
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_DEPTH: usize = 32;
-const USAGE: &str = "usage: gfx942-runtime-xgmi-peer-benchmark <unique-id-0> <unique-id-1> <bytes> <depth> <warmups> <samples>";
+const USAGE: &str = "usage: gfx942-runtime-xgmi-peer-benchmark <unique-id-0> <unique-id-1> <bytes> <depth> <warmups> <samples> [--diagnose-xgmi]";
 
 type BenchmarkResult<T> = Result<T, Box<dyn Error>>;
 type XgmiContextV1 = RuntimeContextV1<KfdNativeXgmiRuntimeBackendV1>;
@@ -54,6 +54,39 @@ fn percentile(values: &[u128], numerator: usize, denominator: usize) -> Option<u
     values.get(rank.checked_sub(1)?).copied()
 }
 
+fn diagnostic_mode(args: &[String]) -> BenchmarkResult<bool> {
+    if args.len() == 6 {
+        return Ok(false);
+    }
+    if args.len() != 7 || args[6] != "--diagnose-xgmi" {
+        return Err(USAGE.into());
+    }
+    if !cfg!(feature = "hardware-diagnostic") {
+        return Err("--diagnose-xgmi requires the hardware-diagnostic feature".into());
+    }
+    Ok(true)
+}
+
+#[cfg(any(feature = "hardware-diagnostic", test))]
+fn diagnostic_submission_count(rounds: usize, depth: usize) -> BenchmarkResult<usize> {
+    if depth != 1 {
+        return Err("XGMI diagnostics require depth 1".into());
+    }
+    rounds
+        .checked_mul(4)
+        .and_then(|n| n.checked_add(2))
+        .filter(|n| *n <= 20_000)
+        .ok_or_else(|| "XGMI diagnostic submission count exceeds the bounded roster".into())
+}
+
+fn diagnostic_label(enabled: bool) -> &'static str {
+    if enabled {
+        " diagnostic=xgmi-host-stages-v1"
+    } else {
+        ""
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn report_measurement(
     unique_ids: [u64; 2],
@@ -64,6 +97,7 @@ fn report_measurement(
     measurement: &str,
     mapping_lifetime: &str,
     prime_batches: usize,
+    diagnostic: bool,
     mut forward_ns: Vec<u128>,
     mut reverse_ns: Vec<u128>,
 ) -> BenchmarkResult<()> {
@@ -80,7 +114,7 @@ fn report_measurement(
         .checked_mul(depth)
         .ok_or("XGMI bytes per round overflow")?;
     println!(
-        "backend=kfd schema=fe2o3.xgmi-peer-benchmark.v1 surface=runtime-facade unique_ids={:016x},{:016x} target=gfx942:xnack- bytes={} depth={} queue_depth={} batch_size={} direction=forward-then-reverse outstanding_depth={} engine_parallelism=ordered-single-sdma warmups={} samples={} measurement={} peer_access=topology-xgmi mapping_lifetime={} prime_batches={} doorbells_per_batch=1 progress=explicit-flush-then-wait background_progress=false forward_engine=topology-selected reverse_engine=topology-selected forward_p50_ns={} forward_p95_ns={} forward_p50_GBps={:.3} reverse_p50_ns={} reverse_p95_ns={} reverse_p50_GBps={:.3} canaries=pass teardown=explicit timing=facade-enqueue-flush-through-observed-completion",
+        "backend=kfd schema=fe2o3.xgmi-peer-benchmark.v1 surface=runtime-facade unique_ids={:016x},{:016x} target=gfx942:xnack- bytes={} depth={} queue_depth={} batch_size={} direction=forward-then-reverse outstanding_depth={} engine_parallelism=ordered-single-sdma warmups={} samples={} measurement={} peer_access=topology-xgmi mapping_lifetime={} prime_batches={} doorbells_per_batch=1 progress=explicit-flush-then-wait background_progress=false forward_engine=topology-selected reverse_engine=topology-selected forward_p50_ns={} forward_p95_ns={} forward_p50_GBps={:.3} reverse_p50_ns={} reverse_p95_ns={} reverse_p50_GBps={:.3} canaries=pass teardown=explicit timing=facade-enqueue-flush-through-observed-completion{}",
         unique_ids[0],
         unique_ids[1],
         copy_bytes,
@@ -99,6 +133,7 @@ fn report_measurement(
         reverse_p50,
         reverse_p95,
         bytes_per_round as f64 / reverse_p50 as f64,
+        diagnostic_label(diagnostic),
     );
     Ok(())
 }
@@ -303,9 +338,7 @@ fn release_direction(
 
 fn main() -> BenchmarkResult<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    if args.len() != 6 {
-        return Err(USAGE.into());
-    }
+    let diagnostic = diagnostic_mode(&args)?;
     let unique_ids = [parse_unique_id(&args[0])?, parse_unique_id(&args[1])?];
     let copy_bytes: usize = args[2].parse()?;
     let depth: usize = args[3].parse()?;
@@ -321,12 +354,28 @@ fn main() -> BenchmarkResult<()> {
         return Err("XGMI benchmark controls are out of range".into());
     }
     let rounds = warmups.checked_add(samples).ok_or("round count overflow")?;
+    #[cfg(feature = "hardware-diagnostic")]
+    let diagnostic_submissions = if diagnostic {
+        Some(diagnostic_submission_count(rounds, depth)?)
+    } else {
+        None
+    };
     let total_bytes = copy_bytes
         .checked_add(2 * CANARY_BYTES)
         .and_then(|value| u64::try_from(value).ok())
         .ok_or("XGMI allocation size overflow")?;
 
     let backend = KfdNativeXgmiRuntimeBackendV1::open_default(unique_ids[0], unique_ids[1])?;
+    #[cfg(feature = "hardware-diagnostic")]
+    let backend = {
+        let mut backend = backend;
+        if let Some(expected) = diagnostic_submissions {
+            backend
+                .enable_xgmi_copy_diagnostics_v1(expected, 40_000)
+                .map_err(facade_error)?;
+        }
+        backend
+    };
     let mut context = RuntimeContextV1::open(backend).map_err(facade_error)?;
     if context.devices().len() != 2
         || context
@@ -422,6 +471,40 @@ fn main() -> BenchmarkResult<()> {
     let mut backend = context.shutdown().map_err(facade_error)?;
     backend.shutdown_native_v1().map_err(facade_error)?;
 
+    #[cfg(feature = "hardware-diagnostic")]
+    if diagnostic {
+        let records = backend
+            .finish_xgmi_copy_diagnostics_v1()
+            .map_err(facade_error)?;
+        for (index, record) in records.into_iter().enumerate() {
+            let call = match record.call {
+                fe2o3_runtime::KfdRuntimeXgmiDiagnosticCallV1::Submit => "submit",
+                fe2o3_runtime::KfdRuntimeXgmiDiagnosticCallV1::Pending => "pending",
+                fe2o3_runtime::KfdRuntimeXgmiDiagnosticCallV1::Completed => "completed",
+            };
+            let ns = |value: Option<u64>| {
+                value.map_or_else(|| "unavailable".to_owned(), |n| n.to_string())
+            };
+            let preparation = record
+                .native
+                .preparation_ns
+                .map_or_else(|| "not-applicable".to_owned(), |n| n.to_string());
+            println!(
+                "schema=fe2o3.xgmi-host-attribution.v1 backend=kfd ordinal={} backend_submission={} source_uid={:016x} destination_uid={:016x} call={} opening_currentness_ns={} preparation_ns={} native_call_ns={} closing_currentness_ns={} total_ns={} authority=none teardown=explicit",
+                index,
+                record.backend_submission,
+                record.source_device,
+                record.destination_device,
+                call,
+                ns(record.native.opening_currentness_ns),
+                preparation,
+                ns(record.native.native_call_ns),
+                ns(record.native.closing_currentness_ns),
+                ns(record.native.total_ns),
+            );
+        }
+    }
+
     report_measurement(
         unique_ids,
         copy_bytes,
@@ -431,6 +514,7 @@ fn main() -> BenchmarkResult<()> {
         "remap-per-round",
         "host-access-between-rounds",
         0,
+        diagnostic,
         remap_forward_ns,
         remap_reverse_ns,
     )?;
@@ -443,6 +527,7 @@ fn main() -> BenchmarkResult<()> {
         "persistent-hot",
         "persistent-no-host-access-between-timed-rounds",
         1,
+        diagnostic,
         hot_forward_ns,
         hot_reverse_ns,
     )?;
@@ -482,5 +567,29 @@ mod tests {
         assert_ne!(pattern(0, 0, 0), pattern(1, 0, 0));
         assert_ne!(pattern(0, 0, 0), pattern(0, 1, 0));
         assert_ne!(pattern(0, 0, 0), pattern(0, 0, 1));
+    }
+
+    #[test]
+    fn diagnostic_controls_are_explicit_and_bounded_before_native_open() {
+        let mut args = vec![String::new(); 6];
+        assert!(!diagnostic_mode(&args).unwrap());
+        assert_eq!(diagnostic_label(false), "");
+        args.push("--diagnose-xgmi".into());
+        assert_eq!(
+            diagnostic_mode(&args).is_ok(),
+            cfg!(feature = "hardware-diagnostic")
+        );
+        assert_eq!(diagnostic_label(true), " diagnostic=xgmi-host-stages-v1");
+        args[6] = "--unknown".into();
+        assert!(diagnostic_mode(&args).is_err());
+        args.pop();
+        args.pop();
+        assert!(diagnostic_mode(&args).is_err());
+        assert_eq!(diagnostic_submission_count(40, 1).unwrap(), 162);
+        assert_eq!(diagnostic_submission_count(1, 1).unwrap(), 6);
+        assert_eq!(diagnostic_submission_count(4999, 1).unwrap(), 19998);
+        for (rounds, depth) in [(40, 0), (40, 2), (5000, 1), (usize::MAX, 1)] {
+            assert!(diagnostic_submission_count(rounds, depth).is_err());
+        }
     }
 }

@@ -1,0 +1,39 @@
+
+running 34 tests
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_attempt_panic_wins_retake_and_poison_with_doorbell_rooted ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_every_profile_retains_its_original_roster ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_first_panic_survives_retake_and_final_poison_panics ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_lower_failure_retains_attempted_owner_and_error_precedence ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_native_attempt_faults_retain_exact_mutated_arguments_and_resources ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_native_success_fills_and_extracts_every_profile ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_no_output_and_lower_panic_do_not_invent_custody ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_opaque_unwind_preserves_profile_without_inventing_queue ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_ownerless_failure_distinguishes_retryable_from_transport ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_real_reclaim_rejection_retains_exact_custody ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_retake_faults_retain_exact_single_and_combined_owners ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_retryable_failure_and_occupied_preflight_are_inert ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_roots_before_metadata_drop_and_preserves_retake_panic ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_success_preserves_owner_and_normal_teardown ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::constructed_sdma_creation_unwind_retains_every_profile_prefix_before_poison ... ok
+test queue::live::construction_primary::integration_tests::release_cases::sdma_creation_cases::sdma_creation_all_six_public_profiles_use_rooted_production_settlement ... ok
+test queue_linux::tests::terminal_creation_arm_poisons_on_drop_or_unwind_and_disarms_only_on_success ... ok
+test sdma::tests::creation_guards_cover_the_first_memory_operation_and_xgmi_route_scope ... ok
+test sdma::tests::sdma_copy_manifest_digest_is_frozen ... ok
+test sdma::tests::xgmi_creation_failure_marks_terminal_without_requiring_queue_roster ... ok
+test sdma::tests::xgmi_destroy_borrows_queue_until_native_destroy_succeeds ... ok
+test sdma::tests::xgmi_post_completion_currentness_failure_retains_both_mappings ... ok
+test sdma::tests::xgmi_timeout_failure_retains_the_exact_ticket ... ok
+test sdma::xgmi_creation::tests::diagnostic_formatting_and_drop_leave_confirmed_custody_in_the_root ... ok
+test sdma::xgmi_creation::tests::independent_terminalizers_preserve_original_panic_and_forget_secondary_payloads ... ok
+test sdma::xgmi_creation::tests::native_prefix_errors_and_panics_preserve_exact_attempt_and_doorbell ... ok
+test sdma::xgmi_creation::tests::occupied_root_drop_aborts_without_native_cleanup ... ok
+test sdma::xgmi_creation::tests::preflight_errors_and_panics_leave_vacant_reusable_roots ... ok
+test sdma::xgmi_creation::tests::route_key_opaque_and_confirmed_failures_retain_custody ... ok
+test sdma::xgmi_creation::tests::vacant_root_is_small_inline_and_diagnostic_only ... ok
+test sdma::xgmi_diagnostic::tests::disabled_timer_runs_each_operation_once_without_recording ... ok
+test sdma::xgmi_diagnostic::tests::duplicate_or_unavailable_measurement_cannot_become_valid_again ... ok
+test sdma::xgmi_diagnostic::tests::enabled_timer_preserves_results_and_phase_order ... ok
+test sdma::xgmi_diagnostic::tests::unwinding_operation_is_never_retried_or_replaced ... ok
+
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 1420 filtered out; finished in 526.71s
+

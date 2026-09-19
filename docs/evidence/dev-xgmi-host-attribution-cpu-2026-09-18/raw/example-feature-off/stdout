@@ -1,0 +1,9 @@
+
+running 4 tests
+test tests::canaries_bind_the_exact_inner_copy_region ... ok
+test tests::diagnostic_controls_are_explicit_and_bounded_before_native_open ... ok
+test tests::patterns_distinguish_round_slot_and_direction ... ok
+test tests::percentile_uses_nearest_rank ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,30 @@
+
+running 25 tests
+test kfd_backend::tests::native_xgmi_batch_selection_is_ready_directional_bounded_and_ordered ... ok
+test kfd_backend::tests::native_xgmi_cancellation_and_shutdown_preserve_phase_custody ... ok
+test kfd_backend::tests::native_xgmi_completed_ticket_bypasses_a_large_ready_backlog ... ok
+test kfd_backend::tests::native_xgmi_completion_slots_cover_every_outstanding_submission ... ok
+test kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_error_latches_before_formatting_and_preserves_roots ... ok
+test kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_panic_retains_selected_attempt_and_original_payload ... ok
+test kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_runtime_keeps_conservative_terminal_preflight_policy ... ok
+test kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_runtime_wires_persistent_roots_and_guards_teardown ... ok
+test kfd_backend::tests::native_xgmi_creation_tests::native_xgmi_success_installs_only_the_selected_direction ... ok
+test kfd_backend::tests::native_xgmi_dependency_and_pending_ownership_rules_are_bounded ... ok
+test kfd_backend::tests::native_xgmi_flush_admission_is_complete_bounded_and_nonmutating ... ok
+test kfd_backend::tests::native_xgmi_pair_and_capability_admission_fail_closed ... ok
+test kfd_backend::tests::native_xgmi_partial_reverse_restoration_keeps_each_restored_owner_indexed ... ok
+test kfd_backend::tests::native_xgmi_peer_admission_binds_direction_and_rejects_hostile_ranges ... ok
+test kfd_backend::tests::native_xgmi_ready_and_in_flight_indexes_remain_bounded_under_stress ... ok
+test kfd_backend::tests::native_xgmi_recoverable_batch_failure_settles_every_logical_owner ... ok
+test kfd_backend::tests::native_xgmi_recoverable_prefix_restoration_preserves_fifo_order ... ok
+test kfd_backend::xgmi_diagnostic::tests::admission_and_unsupported_shape_are_bounded ... ok
+test kfd_backend::xgmi_diagnostic::tests::errors_unwinds_and_wrong_identity_never_yield_a_complete_capture ... ok
+test kfd_backend::xgmi_diagnostic::tests::exact_two_direction_roster_preserves_identity_without_reallocation ... ok
+test kfd_backend::xgmi_diagnostic::tests::extraction_requires_shutdown_quiescence_and_is_single_use ... ok
+test kfd_backend::xgmi_diagnostic::tests::invalid_duration_is_not_zero_or_silently_accepted ... ok
+test kfd_backend::xgmi_diagnostic::tests::pending_exhaustion_and_foreign_poll_invalidate_without_growing_storage ... ok
+test kfd_backend::xgmi_diagnostic::tests::production_records_only_after_all_native_custody_branches_settle ... ok
+test kfd_backend::xgmi_diagnostic::tests::real_unwind_leaves_pending_and_cannot_be_rehabilitated ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 1113 filtered out; finished in 0.02s
+

@@ -95,8 +95,12 @@ mod directional_wait_diagnostic;
 mod drain_capture;
 #[cfg(feature = "hardware-diagnostic")]
 pub use directional_wait_diagnostic::KfdRuntimeDirectionalWaitObservationV1;
+#[cfg(feature = "hardware-diagnostic")]
+mod xgmi_diagnostic;
 #[cfg(test)]
 pub(crate) use drain_capture::tests::counted as counted_allocations_for_test_v1;
+#[cfg(feature = "hardware-diagnostic")]
+pub use xgmi_diagnostic::{KfdRuntimeXgmiCallObservationV1, KfdRuntimeXgmiDiagnosticCallV1};
 mod generated_adoption;
 mod generated_preparation;
 mod generated_shells;
@@ -7721,6 +7725,8 @@ pub struct KfdNativeXgmiRuntimeBackendV1 {
     routes: [Gfx942XgmiRouteV1; 2],
     queues: [Option<Gfx942NativeXgmiSdmaQueueV1>; 2],
     queue_creation_roots: [Gfx942NativeXgmiSdmaQueueCreationRootV1; 2],
+    #[cfg(feature = "hardware-diagnostic")]
+    xgmi_diagnostic: Option<xgmi_diagnostic::Recorder>,
     terminal: bool,
     shutdown: bool,
     next_handle: u64,
@@ -9236,6 +9242,8 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                 Gfx942NativeXgmiSdmaQueueCreationRootV1::new(),
                 Gfx942NativeXgmiSdmaQueueCreationRootV1::new(),
             ],
+            #[cfg(feature = "hardware-diagnostic")]
+            xgmi_diagnostic: None,
             terminal: false,
             shutdown: false,
             next_handle: 1,
@@ -9874,65 +9882,103 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             active_batch.push(active);
             requests.push(request);
         }
+        #[cfg(feature = "hardware-diagnostic")]
+        let diagnostic_id = xgmi_diagnostic::CallIdentity {
+            direction,
+            submission: active_batch[0].id,
+            submit: true,
+        };
+        #[cfg(feature = "hardware-diagnostic")]
+        let profile = self
+            .xgmi_diagnostic
+            .as_mut()
+            .is_some_and(|recorder| recorder.begin(diagnostic_id, batch_len));
+        #[cfg(feature = "hardware-diagnostic")]
+        let mut diagnostic = None;
         let result = {
             let (source_session, destination_session) =
                 Self::session_pair(&mut self.sessions, direction);
-            self.queues[direction]
+            let queue = self.queues[direction]
                 .as_mut()
-                .expect("directional XGMI queue was established")
-                .submit_batch(source_session, destination_session, requests)
+                .expect("directional XGMI queue was established");
+            #[cfg(feature = "hardware-diagnostic")]
+            let result = if profile {
+                queue
+                    .submit_batch_diagnostic_v1(source_session, destination_session, requests)
+                    .map(|(tickets, timing)| {
+                        diagnostic = Some(timing);
+                        tickets
+                    })
+            } else {
+                queue.submit_batch(source_session, destination_session, requests)
+            };
+            #[cfg(not(feature = "hardware-diagnostic"))]
+            let result = queue.submit_batch(source_session, destination_session, requests);
+            result
         };
-        match result {
-            Ok(tickets) => {
-                if tickets.len() != active_batch.len() {
-                    // Native publication retained mappings, but correspondence
-                    // to logical submissions is no longer recoverable.
-                    std::process::abort();
+        let outcome = (|| {
+            match result {
+                Ok(tickets) => {
+                    if tickets.len() != active_batch.len() {
+                        // Native publication retained mappings, but correspondence
+                        // to logical submissions is no longer recoverable.
+                        std::process::abort();
+                    }
+                    for (mut active, ticket) in active_batch.into_iter().zip(tickets) {
+                        active.ticket = Some(ticket);
+                        insert_ordered_xgmi_id_v1(
+                            &mut self.in_flight_by_direction[active.direction],
+                            active.id,
+                        );
+                        self.active.insert(active.id, active);
+                    }
+                    Ok(XgmiBatchPublicationOutcomeV1::Published)
                 }
-                for (mut active, ticket) in active_batch.into_iter().zip(tickets) {
-                    active.ticket = Some(ticket);
-                    insert_ordered_xgmi_id_v1(
-                        &mut self.in_flight_by_direction[active.direction],
-                        active.id,
-                    );
-                    self.active.insert(active.id, active);
+                Err(Gfx942XgmiBatchSubmissionFailureV1::Recoverable { error: _, requests }) => {
+                    if requests.len() != active_batch.len() {
+                        std::process::abort();
+                    }
+                    for (active, request) in active_batch.into_iter().zip(requests) {
+                        let (source, destination) = request.into_mappings();
+                        self.restore_mapped_copy_pair(
+                            active.source,
+                            active.destination,
+                            active.direction,
+                            source,
+                            destination,
+                        )?;
+                        self.finish_failed(active);
+                    }
+                    Ok(XgmiBatchPublicationOutcomeV1::RecoveredPrepublicationFailure)
                 }
-                Ok(XgmiBatchPublicationOutcomeV1::Published)
+                Err(Gfx942XgmiBatchSubmissionFailureV1::Retained { error, tickets }) => {
+                    if tickets.len() != active_batch.len() {
+                        std::process::abort();
+                    }
+                    for (mut active, ticket) in active_batch.into_iter().zip(tickets) {
+                        active.ticket = Some(ticket);
+                        insert_ordered_xgmi_id_v1(
+                            &mut self.in_flight_by_direction[active.direction],
+                            active.id,
+                        );
+                        self.active.insert(active.id, active);
+                    }
+                    Err(self.terminal_error(format!(
+                        "native XGMI batch publication retained tickets: {error}"
+                    )))
+                }
             }
-            Err(Gfx942XgmiBatchSubmissionFailureV1::Recoverable { error: _, requests }) => {
-                if requests.len() != active_batch.len() {
-                    std::process::abort();
-                }
-                for (active, request) in active_batch.into_iter().zip(requests) {
-                    let (source, destination) = request.into_mappings();
-                    self.restore_mapped_copy_pair(
-                        active.source,
-                        active.destination,
-                        active.direction,
-                        source,
-                        destination,
-                    )?;
-                    self.finish_failed(active);
-                }
-                Ok(XgmiBatchPublicationOutcomeV1::RecoveredPrepublicationFailure)
-            }
-            Err(Gfx942XgmiBatchSubmissionFailureV1::Retained { error, tickets }) => {
-                if tickets.len() != active_batch.len() {
-                    std::process::abort();
-                }
-                for (mut active, ticket) in active_batch.into_iter().zip(tickets) {
-                    active.ticket = Some(ticket);
-                    insert_ordered_xgmi_id_v1(
-                        &mut self.in_flight_by_direction[active.direction],
-                        active.id,
-                    );
-                    self.active.insert(active.id, active);
-                }
-                Err(self.terminal_error(format!(
-                    "native XGMI batch publication retained tickets: {error}"
-                )))
-            }
+        })();
+        #[cfg(feature = "hardware-diagnostic")]
+        if let Some(recorder) = self.xgmi_diagnostic.as_mut() {
+            let observed = if matches!(outcome, Ok(XgmiBatchPublicationOutcomeV1::Published)) {
+                diagnostic.map(|timing| (KfdRuntimeXgmiDiagnosticCallV1::Submit, timing))
+            } else {
+                None
+            };
+            recorder.finish(diagnostic_id, observed);
         }
+        outcome
     }
 
     fn progress_peer_copy(
@@ -9940,15 +9986,41 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         mut active: XgmiRuntimeSubmissionV1,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if let Some(ticket) = active.ticket.take() {
+            #[cfg(feature = "hardware-diagnostic")]
+            let diagnostic_id = xgmi_diagnostic::CallIdentity {
+                direction: active.direction,
+                submission: active.id,
+                submit: false,
+            };
+            #[cfg(feature = "hardware-diagnostic")]
+            let profile = self
+                .xgmi_diagnostic
+                .as_mut()
+                .is_some_and(|recorder| recorder.begin(diagnostic_id, 1));
+            #[cfg(feature = "hardware-diagnostic")]
+            let mut diagnostic = None;
             let result = {
                 let (source_session, destination_session) =
                     Self::session_pair(&mut self.sessions, active.direction);
-                self.queues[active.direction]
+                let queue = self.queues[active.direction]
                     .as_mut()
-                    .expect("published XGMI copy retains queue")
-                    .poll(source_session, destination_session, ticket)
+                    .expect("published XGMI copy retains queue");
+                #[cfg(feature = "hardware-diagnostic")]
+                let result = if profile {
+                    queue
+                        .poll_diagnostic_v1(source_session, destination_session, ticket)
+                        .map(|(poll, timing)| {
+                            diagnostic = Some(timing);
+                            poll
+                        })
+                } else {
+                    queue.poll(source_session, destination_session, ticket)
+                };
+                #[cfg(not(feature = "hardware-diagnostic"))]
+                let result = queue.poll(source_session, destination_session, ticket);
+                result
             };
-            return match result {
+            let outcome = (|| match result {
                 Ok(Gfx942XgmiCopyPollV1::Pending(ticket)) => {
                     active.ticket = Some(ticket);
                     self.active.insert(active.id, active);
@@ -9994,7 +10066,20 @@ impl KfdNativeXgmiRuntimeBackendV1 {
                         "native XGMI poll returned unexpected recovered mappings: {error}"
                     )))
                 }
-            };
+            })();
+            #[cfg(feature = "hardware-diagnostic")]
+            if let Some(recorder) = self.xgmi_diagnostic.as_mut() {
+                let observed =
+                    match outcome {
+                        Ok(BackendPollV1::Pending) => diagnostic
+                            .map(|timing| (KfdRuntimeXgmiDiagnosticCallV1::Pending, timing)),
+                        Ok(BackendPollV1::Succeeded) => diagnostic
+                            .map(|timing| (KfdRuntimeXgmiDiagnosticCallV1::Completed, timing)),
+                        _ => None,
+                    };
+                recorder.finish(diagnostic_id, observed);
+            }
+            return outcome;
         }
         while let Some(dependency) = active.dependencies.get(active.dependency_cursor).copied() {
             match self.poll_v1(dependency)? {
@@ -10059,12 +10144,8 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         Ok(())
     }
 
-    /// Destroys both directional queues after every logical handle is released.
-    pub fn shutdown_native_v1(
-        &mut self,
-    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        self.require_live()?;
-        let resources = XgmiLogicalResourceCountsV1 {
+    fn logical_resource_counts(&self) -> XgmiLogicalResourceCountsV1 {
+        XgmiLogicalResourceCountsV1 {
             streams: self.streams.len(),
             allocations: self.allocations.len(),
             submissions: self.submissions.len(),
@@ -10080,8 +10161,15 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             directional_active: self.active_by_direction.iter().sum(),
             stream_owners: self.active_stream_owners.len(),
             allocation_owners: self.active_allocation_owners.len(),
-        };
-        if !resources.permits_shutdown() {
+        }
+    }
+
+    /// Destroys both directional queues after every logical handle is released.
+    pub fn shutdown_native_v1(
+        &mut self,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_live()?;
+        if !self.logical_resource_counts().permits_shutdown() {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "native XGMI logical resources remain live",

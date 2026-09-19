@@ -219,6 +219,7 @@ pub use sdma::{
     GFX942_PERSISTENT_SDMA_WAIT_DIAGNOSTIC_MANIFEST_V1,
     Gfx942SdmaPersistentDiagnosticSleepCeilingV1, Gfx942SdmaPersistentWaitCountersV1,
     Gfx942SdmaPersistentWaitCpuV1, Gfx942SdmaPersistentWaitDiagnosticsV1,
+    Gfx942XgmiCopyCallDiagnosticsV1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

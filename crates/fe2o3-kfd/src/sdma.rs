@@ -51,6 +51,10 @@ pub(crate) mod creation;
 use creation::{SdmaCreationEscrowV1, SdmaCreationProfileV1};
 mod xgmi_creation;
 pub use xgmi_creation::Gfx942NativeXgmiSdmaQueueCreationRootV1;
+mod xgmi_diagnostic;
+#[cfg(feature = "hardware-diagnostic")]
+pub use xgmi_diagnostic::Gfx942XgmiCopyCallDiagnosticsV1;
+use xgmi_diagnostic::{CallTimer as XgmiCallTimer, Phase as XgmiCallPhase};
 
 mod multi_queue;
 #[cfg(feature = "hardware-diagnostic")]
@@ -4244,12 +4248,56 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
         currentness: XgmiRouteCurrentnessV1,
     ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, Gfx942XgmiBatchSubmissionFailureV1> {
-        if let Err(error) = Self::validate_route_currentness(
+        self.submit_batch_with_timer(
             source_session,
             destination_session,
-            self.route,
+            requests,
             currentness,
-        ) {
+            &mut XgmiCallTimer::<false>::new(),
+        )
+    }
+
+    /// Explicit host-only diagnostics; all ordinary full currentness checks and
+    /// ownership transitions are identical to `submit_batch`. No observation
+    /// escapes on error or unwind. Timing includes diagnostic overhead.
+    #[cfg(feature = "hardware-diagnostic")]
+    pub fn submit_batch_diagnostic_v1(
+        &mut self,
+        source_session: &mut SharedGttMemorySessionV1,
+        destination_session: &mut SharedGttMemorySessionV1,
+        requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
+    ) -> Result<
+        (Vec<Gfx942SdmaCopyTicketV1>, Gfx942XgmiCopyCallDiagnosticsV1),
+        Gfx942XgmiBatchSubmissionFailureV1,
+    > {
+        let start = Instant::now();
+        let mut timer = XgmiCallTimer::<true>::new();
+        let tickets = self.submit_batch_with_timer(
+            source_session,
+            destination_session,
+            requests,
+            XgmiRouteCurrentnessV1::Full,
+            &mut timer,
+        )?;
+        Ok((tickets, timer.finish(start)))
+    }
+
+    fn submit_batch_with_timer<const DIAGNOSTIC: bool>(
+        &mut self,
+        source_session: &mut SharedGttMemorySessionV1,
+        destination_session: &mut SharedGttMemorySessionV1,
+        requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
+        currentness: XgmiRouteCurrentnessV1,
+        timer: &mut XgmiCallTimer<DIAGNOSTIC>,
+    ) -> Result<Vec<Gfx942SdmaCopyTicketV1>, Gfx942XgmiBatchSubmissionFailureV1> {
+        if let Err(error) = timer.measure(XgmiCallPhase::Opening, || {
+            Self::validate_route_currentness(
+                source_session,
+                destination_session,
+                self.route,
+                currentness,
+            )
+        }) {
             return Err(Gfx942XgmiBatchSubmissionFailureV1::Recoverable { error, requests });
         }
         let owner = match self.owner.as_mut() {
@@ -4261,29 +4309,35 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
                 });
             }
         };
-        let prepared = match owner.prepare_xgmi_batch_recoverable(
-            source_session,
-            destination_session,
-            self.route,
-            requests,
-        ) {
+        let prepared = match timer.measure(XgmiCallPhase::Preparation, || {
+            owner.prepare_xgmi_batch_recoverable(
+                source_session,
+                destination_session,
+                self.route,
+                requests,
+            )
+        }) {
             Ok(prepared) => prepared,
             Err((error, requests)) => {
                 return Err(Gfx942XgmiBatchSubmissionFailureV1::Recoverable { error, requests });
             }
         };
-        let tickets = match owner.submit_prepared_xgmi_batch(source_session, prepared) {
+        let tickets = match timer.measure(XgmiCallPhase::Native, || {
+            owner.submit_prepared_xgmi_batch(source_session, prepared)
+        }) {
             Ok(tickets) => tickets,
             Err((error, tickets)) => {
                 return Err(Gfx942XgmiBatchSubmissionFailureV1::Retained { error, tickets });
             }
         };
-        if let Err(error) = Self::validate_route_currentness(
-            source_session,
-            destination_session,
-            self.route,
-            currentness,
-        ) {
+        if let Err(error) = timer.measure(XgmiCallPhase::Closing, || {
+            Self::validate_route_currentness(
+                source_session,
+                destination_session,
+                self.route,
+                currentness,
+            )
+        }) {
             owner.poisoned = true;
             return Err(Gfx942XgmiBatchSubmissionFailureV1::Retained { error, tickets });
         }
@@ -4297,25 +4351,61 @@ impl Gfx942NativeXgmiSdmaQueueV1 {
         destination_session: &mut SharedGttMemorySessionV1,
         ticket: Gfx942SdmaCopyTicketV1,
     ) -> Result<Gfx942XgmiCopyPollV1, Gfx942XgmiCopyFailureV1> {
-        if let Err(error) = Self::validate_route_currentness(
+        self.poll_with_timer(
             source_session,
             destination_session,
-            self.route,
-            XgmiRouteCurrentnessV1::Full,
-        ) {
+            ticket,
+            &mut XgmiCallTimer::<false>::new(),
+        )
+    }
+
+    /// Success-only host attribution for the same operation as `poll`.
+    /// Pending observations convey no completion or resource-release authority.
+    #[cfg(feature = "hardware-diagnostic")]
+    pub fn poll_diagnostic_v1(
+        &mut self,
+        source_session: &mut SharedGttMemorySessionV1,
+        destination_session: &mut SharedGttMemorySessionV1,
+        ticket: Gfx942SdmaCopyTicketV1,
+    ) -> Result<(Gfx942XgmiCopyPollV1, Gfx942XgmiCopyCallDiagnosticsV1), Gfx942XgmiCopyFailureV1>
+    {
+        let start = Instant::now();
+        let mut timer = XgmiCallTimer::<true>::new();
+        let result =
+            self.poll_with_timer(source_session, destination_session, ticket, &mut timer)?;
+        Ok((result, timer.finish(start)))
+    }
+
+    fn poll_with_timer<const DIAGNOSTIC: bool>(
+        &mut self,
+        source_session: &mut SharedGttMemorySessionV1,
+        destination_session: &mut SharedGttMemorySessionV1,
+        ticket: Gfx942SdmaCopyTicketV1,
+        timer: &mut XgmiCallTimer<DIAGNOSTIC>,
+    ) -> Result<Gfx942XgmiCopyPollV1, Gfx942XgmiCopyFailureV1> {
+        if let Err(error) = timer.measure(XgmiCallPhase::Opening, || {
+            Self::validate_route_currentness(
+                source_session,
+                destination_session,
+                self.route,
+                XgmiRouteCurrentnessV1::Full,
+            )
+        }) {
             self.poison_for_abandoned_batch();
             return Err(Gfx942XgmiCopyFailureV1::Retained { error, ticket });
         }
-        let result = match self.owner.as_mut() {
+        let result = timer.measure(XgmiCallPhase::Native, || match self.owner.as_mut() {
             Some(owner) => owner.poll_xgmi_in_current_scope(source_session, ticket),
             None => Err(Gfx942SdmaErrorV1::Contract("missing XGMI SDMA queue owner")),
-        };
-        let post = Self::validate_route_currentness(
-            source_session,
-            destination_session,
-            self.route,
-            XgmiRouteCurrentnessV1::Full,
-        );
+        });
+        let post = timer.measure(XgmiCallPhase::Closing, || {
+            Self::validate_route_currentness(
+                source_session,
+                destination_session,
+                self.route,
+                XgmiRouteCurrentnessV1::Full,
+            )
+        });
         if let Err(error) = post {
             self.poison_for_abandoned_batch();
             return Err(match result {
