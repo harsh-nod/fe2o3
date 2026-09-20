@@ -1,5 +1,6 @@
 // A pending expansion, not a verified graph or a source/lifecycle receipt.
 // Original sidecars stay instance-qualified; coordinates describe the expansion.
+include!("production_scoped_defined_calls_v29.rs");
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "Scoped source materialization remains gated")
@@ -285,6 +286,7 @@ fn assemble_pending_scoped_root_inner_v29(
 ) -> Result<PendingScopedRootEmissionV29, ProductionSemanticKirErrorV1> {
     let floor = budget.storage();
     let mut next_block = pending_scope_preflight_v29(instances, emitted, limits, budget)?;
+    check_scoped_defined_call_phases_v29(instances, emitted, budget)?;
     let result = with_production_instance_correspondence_v1(instances, budget, |map, budget| {
         // Validate every shared-emitter result before taking any caller slot.
         for (index, row) in emitted.iter().enumerate() {

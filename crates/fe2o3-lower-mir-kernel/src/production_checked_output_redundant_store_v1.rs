@@ -315,7 +315,11 @@ pub use owned::{
 mod commutative;
 pub use commutative::{
     ProductionCommutativeContinuationErrorV1, ProductionCommutativeContinuationStorageV1,
-    ProductionOwnedCommutativeContinuationV1, ProductionOwnedUnitLocalCommutativeContinuationV1,
+    ProductionOwnedCommutativeContinuationV1, ProductionOwnedPrivateCellPromotionContinuationV1,
+    ProductionOwnedUnitLocalCommutativeContinuationV1,
+    ProductionOwnedUnitLocalPrivateCellPromotionContinuationV1,
+    ProductionPrivateCellPromotionContinuationErrorV1,
+    ProductionPrivateCellPromotionContinuationStorageV1,
 };
 
 #[cfg(test)]

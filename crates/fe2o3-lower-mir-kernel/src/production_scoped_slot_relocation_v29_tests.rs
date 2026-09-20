@@ -205,17 +205,32 @@ fn reject_root_reentry(
     scoped_slot_uses_v29::check_scoped_source_slot_uses_v29(
         instances, emitted, slots, 1024, budget,
     )?;
-    let body = emitted[0].as_mut().unwrap().function.body.as_mut().unwrap();
+    let issuance = instances
+        .calls(instances.root())
+        .unwrap()
+        .iter()
+        .find(|call| call.occurrence().block.index() == 0)
+        .unwrap();
+    assert!(issuance.child().is_none());
+    let lowered = emitted[0].as_mut().unwrap();
+    let issuance_block = lowered
+        .blocks
+        .iter()
+        .find(|row| row.semantic_block == issuance.occurrence().block)
+        .unwrap()
+        .kernel_ir_block;
+    let body = lowered.function.body.as_mut().unwrap();
     let entry = body.blocks[0].id;
     let index = body
         .blocks
         .iter()
-        .position(|block| matches!(block.terminator, Some(Terminator::Return { .. })))
+        .position(|block| block.id == issuance_block)
         .unwrap();
-    let original = body.blocks[index].terminator.replace(Terminator::Branch {
-        target: entry,
-        arguments: Vec::new(),
-    });
+    // Preserve the source Return so the relocation guard remains the rejecting boundary.
+    let Some(Terminator::Branch { target, .. }) = body.blocks[index].terminator.as_mut() else {
+        panic!("context issuance has a normal edge")
+    };
+    let original = std::mem::replace(target, entry);
     scoped_slot_uses_v29::check_scoped_source_slot_uses_v29(
         instances, emitted, slots, 1024, budget,
     )?;
@@ -231,7 +246,7 @@ fn reject_root_reentry(
     drop(result);
     assert_eq!(budget.storage(), floor);
     assert!(emitted.iter().all(Option::is_some));
-    emitted[0]
+    let terminator = emitted[0]
         .as_mut()
         .unwrap()
         .function
@@ -239,7 +254,13 @@ fn reject_root_reentry(
         .as_mut()
         .unwrap()
         .blocks[index]
-        .terminator = original;
+        .terminator
+        .as_mut()
+        .unwrap();
+    let Terminator::Branch { target, .. } = terminator else {
+        unreachable!()
+    };
+    *target = original;
     scoped_slot_uses_v29::check_scoped_source_slot_uses_v29(
         instances, emitted, slots, 1024, budget,
     )?;

@@ -1,12 +1,20 @@
-use super::*;
-use fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1;
+use fe2o3_kernel_ir::{
+    CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
+    CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+    CanonicalKernelIrWorkLedgerIdentityV1,
+};
 use std::{
     any::Any,
+    marker::PhantomData,
+    mem::size_of,
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
 type Payload = Box<dyn Any + Send>;
-pub(super) struct Meter<'a, 'w> {
+pub(super) trait ScopeError: From<Resource> {
+    fn panicked() -> Self;
+}
+pub(super) struct Meter<'a, 'w, E> {
     budget: &'a mut Budget<'w>,
     slot: usize,
     ledger: CanonicalKirWorkIdentity,
@@ -15,10 +23,11 @@ pub(super) struct Meter<'a, 'w> {
     cleanup: bool,
     failed: bool,
     nested_panic: Option<Payload>,
+    error: PhantomData<fn() -> E>,
 }
 type CanonicalKirWorkIdentity = CanonicalKernelIrWorkLedgerIdentityV1;
-impl<'w> Meter<'_, 'w> {
-    fn check(&mut self) -> Result<()> {
+impl<'w, E: ScopeError> Meter<'_, 'w, E> {
+    fn check(&mut self) -> Result<(), E> {
         let expected = self.floor.checked_add(self.live);
         if self.slot != self.budget as *const Budget<'_> as usize
             || self.ledger != self.budget.work_ledger_identity_v1()
@@ -32,31 +41,31 @@ impl<'w> Meter<'_, 'w> {
         if self.failed {
             Err(Resource::Accounting.into())
         } else if self.nested_panic.is_some() {
-            Err(Error::Panicked)
+            Err(E::panicked())
         } else {
             Ok(())
         }
     }
-    pub(super) fn work(&mut self, count: usize) -> Result<()> {
+    pub(super) fn work(&mut self, count: usize) -> Result<(), E> {
         self.check()?;
         self.budget.charge_work(count)?;
         Ok(())
     }
-    pub(super) fn reserve(&mut self, bytes: usize) -> Result<()> {
+    pub(super) fn reserve(&mut self, bytes: usize) -> Result<(), E> {
         self.check()?;
         let next = self.live.checked_add(bytes).ok_or(Resource::Arithmetic)?;
         self.budget.reserve_storage(bytes)?;
         self.live = next;
         Ok(())
     }
-    pub(super) fn release(&mut self, bytes: usize) -> Result<()> {
+    pub(super) fn release(&mut self, bytes: usize) -> Result<(), E> {
         self.check()?;
         let next = self.live.checked_sub(bytes).ok_or(Resource::Accounting)?;
         self.budget.release_storage(bytes)?;
         self.live = next;
         Ok(())
     }
-    pub(super) fn table<T>(&mut self, count: usize) -> Result<(Vec<T>, usize)> {
+    pub(super) fn table<T>(&mut self, count: usize) -> Result<(Vec<T>, usize), E> {
         self.work(4)?;
         let requested = count
             .checked_mul(size_of::<T>())
@@ -69,7 +78,7 @@ impl<'w> Meter<'_, 'w> {
         let bytes = self.capacity::<T>(count, values.capacity())?;
         Ok((values, bytes))
     }
-    pub(super) fn capacity<T>(&mut self, requested: usize, actual: usize) -> Result<usize> {
+    pub(super) fn capacity<T>(&mut self, requested: usize, actual: usize) -> Result<usize, E> {
         let requested = requested
             .checked_mul(size_of::<T>())
             .ok_or(Resource::Arithmetic)?;
@@ -79,7 +88,7 @@ impl<'w> Meter<'_, 'w> {
         self.reserve(actual.checked_sub(requested).ok_or(Resource::Accounting)?)?;
         Ok(actual)
     }
-    pub(super) fn push<T>(&mut self, rows: &mut Vec<T>, row: T) -> Result<()> {
+    pub(super) fn push<T>(&mut self, rows: &mut Vec<T>, row: T) -> Result<(), E> {
         self.work(1)?;
         if rows.len() == rows.capacity() {
             return Err(Resource::Accounting.into());
@@ -93,8 +102,8 @@ impl<'w> Meter<'_, 'w> {
     /// scratch is adopted for cleanup, without resetting work or peak history.
     pub(super) fn derive<T>(
         &mut self,
-        run: impl FnOnce(&mut Budget<'w>) -> Result<T>,
-    ) -> Result<T> {
+        run: impl FnOnce(&mut Budget<'w>) -> Result<T, E>,
+    ) -> Result<T, E> {
         self.check()?;
         match catch_unwind(AssertUnwindSafe(|| run(self.budget))) {
             Ok(result) => {
@@ -120,7 +129,7 @@ impl<'w> Meter<'_, 'w> {
                     .storage()
                     .checked_sub(self.floor)
                     .ok_or(Resource::Accounting)?;
-                Err(Error::Panicked)
+                Err(E::panicked())
             }
         }
     }
@@ -130,10 +139,10 @@ impl<'w> Meter<'_, 'w> {
     }
 }
 
-pub(super) fn scoped<'w, T>(
+pub(super) fn scoped<'w, T, E: ScopeError>(
     budget: &mut Budget<'w>,
-    run: impl FnOnce(&mut Meter<'_, 'w>) -> Result<T>,
-) -> Result<T> {
+    run: impl FnOnce(&mut Meter<'_, 'w, E>) -> Result<T, E>,
+) -> Result<T, E> {
     let mut meter = Meter {
         slot: budget as *const Budget<'_> as usize,
         ledger: budget.work_ledger_identity_v1(),
@@ -142,17 +151,18 @@ pub(super) fn scoped<'w, T>(
         cleanup: true,
         failed: false,
         nested_panic: None,
+        error: PhantomData,
         budget,
     };
     let mut panics = [None, None];
     let mut result = match catch_unwind(AssertUnwindSafe(|| {
-        meter.reserve(size_of::<Meter<'_, '_>>())?;
+        meter.reserve(size_of::<Meter<'_, '_, E>>())?;
         run(&mut meter)
     })) {
         Ok(result) => result,
         Err(payload) => {
             panics[0] = Some(payload);
-            Err(Error::Panicked)
+            Err(E::panicked())
         }
     };
     if let Err(error) = meter.check() {
@@ -174,4 +184,119 @@ pub(super) fn scoped<'w, T>(
     drop(meter);
     drop(panics);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Budget, CanonicalKirWorkIdentity, Meter, Payload, Resource, ScopeError, scoped};
+    use crate::{
+        CanonicalKirLoopPreheadersErrorV1 as LoopError,
+        CanonicalKirPrivateCellPromotionErrorV1 as CellError,
+    };
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    use std::{
+        fmt::Debug,
+        mem::{align_of, size_of},
+        panic::panic_any,
+    };
+
+    // The former header's exact field types/order, with no resource algorithm.
+    struct PriorMeterLayout<'a, 'w> {
+        _budget: &'a mut Budget<'w>,
+        _slot: usize,
+        _ledger: CanonicalKirWorkIdentity,
+        _floor: usize,
+        _live: usize,
+        _cleanup: bool,
+        _failed: bool,
+        _nested_panic: Option<Payload>,
+    }
+
+    #[test]
+    fn typed_meter_preserves_prior_header_size_and_alignment() {
+        assert_eq!(
+            size_of::<Meter<'_, '_, CellError>>(),
+            size_of::<PriorMeterLayout<'_, '_>>()
+        );
+        assert_eq!(
+            size_of::<Meter<'_, '_, LoopError>>(),
+            size_of::<PriorMeterLayout<'_, '_>>()
+        );
+        assert_eq!(
+            align_of::<Meter<'_, '_, CellError>>(),
+            align_of::<PriorMeterLayout<'_, '_>>()
+        );
+        assert_eq!(
+            align_of::<Meter<'_, '_, LoopError>>(),
+            align_of::<PriorMeterLayout<'_, '_>>()
+        );
+    }
+
+    fn check_mapping<E: ScopeError + Debug>(classify: fn(E) -> Option<Resource>) {
+        let floor = 37;
+        let header = size_of::<PriorMeterLayout<'_, '_>>();
+        let limit = floor + header + 7;
+        for mode in 0..5 {
+            let mut work = Work::new(5);
+            {
+                let mut budget = Budget::new(&mut work, limit);
+                budget.reserve_storage(floor).unwrap();
+                let result: Result<(), E> = scoped(&mut budget, |meter| {
+                    meter.work(3)?;
+                    match mode {
+                        0 => meter.work(3),
+                        1 => meter.reserve(8),
+                        2 => panic_any("typed scope unwind"),
+                        3 => meter.derive(|budget| {
+                            budget.reserve_storage(7)?;
+                            panic_any("typed nested unwind");
+                        }),
+                        _ => {
+                            meter.budget_for_test().reserve_storage(1)?;
+                            Ok(())
+                        }
+                    }
+                });
+                match (mode, classify(result.unwrap_err())) {
+                    (0, Some(Resource::Work(error))) => {
+                        assert_eq!((error.actual(), error.limit()), (6, 5));
+                    }
+                    (1, Some(Resource::Storage(error))) => {
+                        assert_eq!((error.actual(), error.limit()), (limit + 1, limit));
+                    }
+                    (2 | 3, None) | (4, Some(Resource::Accounting)) => {}
+                    actual => panic!("wrong typed scope error: {actual:?}"),
+                }
+                assert_eq!(budget.storage(), floor + usize::from(mode == 4));
+                assert_eq!(budget.work(), 3);
+                assert_eq!(budget.failed_storage(), (mode == 1).then_some(limit + 1));
+                assert_eq!(
+                    budget.peak_storage(),
+                    floor
+                        + header
+                        + match mode {
+                            3 => 7,
+                            4 => 1,
+                            _ => 0,
+                        }
+                );
+            }
+            assert_eq!(work.work(), 3);
+            assert_eq!(work.failed_work(), (mode == 0).then_some(6));
+        }
+    }
+
+    #[test]
+    fn both_caller_errors_preserve_exact_scope_denials_and_history() {
+        check_mapping::<CellError>(|error| match error {
+            CellError::Resource(resource) => Some(resource),
+            CellError::Panicked => None,
+            other => panic!("unexpected private-cell error: {other:?}"),
+        });
+        check_mapping::<LoopError>(|error| match error {
+            LoopError::Resource(resource) => Some(resource),
+            LoopError::Panicked => None,
+            other => panic!("unexpected preheader error: {other:?}"),
+        });
+    }
 }

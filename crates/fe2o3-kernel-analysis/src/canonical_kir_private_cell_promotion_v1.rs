@@ -10,6 +10,7 @@ use crate::{
     CanonicalKirPrivateCellAccessKindV1 as AccessKind,
     CanonicalKirPrivateCellCensusErrorV1 as CensusError,
     CanonicalKirPrivateCellCensusLimitsV1 as Limits, CanonicalKirPrivateCellCensusV1 as Census,
+    canonical_kir_private_cell_pair_resources_v1 as resources,
 };
 use fe2o3_kernel_ir::{
     BinaryOp, CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -21,9 +22,6 @@ use std::{fmt, mem::size_of};
 
 #[path = "canonical_kir_private_cell_pair_check_v1.rs"]
 mod check;
-#[path = "canonical_kir_private_cell_pair_resources_v1.rs"]
-mod resources;
-use resources::{Meter, scoped};
 
 /// Inert classification of one complete output occurrence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,6 +68,18 @@ pub enum CanonicalKirPrivateCellPromotionErrorV1 {
 }
 type Error = CanonicalKirPrivateCellPromotionErrorV1;
 type Result<T> = std::result::Result<T, Error>;
+type Meter<'a, 'w> = resources::Meter<'a, 'w, Error>;
+impl resources::ScopeError for Error {
+    fn panicked() -> Self {
+        Self::Panicked
+    }
+}
+fn scoped<'w, T>(
+    budget: &mut Budget<'w>,
+    run: impl FnOnce(&mut Meter<'_, 'w>) -> Result<T>,
+) -> Result<T> {
+    resources::scoped(budget, run)
+}
 impl From<Resource> for Error {
     fn from(value: Resource) -> Self {
         Self::Resource(value)

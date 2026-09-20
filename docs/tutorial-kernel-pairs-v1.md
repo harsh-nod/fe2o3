@@ -114,8 +114,9 @@ The sibling `kernelInventory` in the existing manifest is an explicit
 the fixture inputs, source-driver contracts or curriculum source metadata.
 
 - `kernels` assigns stable IDs to exact positive fixture/symbol selections or
-  source-driver cases. Each ID has pending SIMT and tile records with a blocker
-  owner, issue and reason. Matching names, source paths or historical displayed
+  source-driver cases. Each ID has SIMT and tile variant records with a blocker
+  owner, issue and reason; the current checked-in records remain pending.
+  Matching names, source paths or historical displayed
   bytes alone cannot establish identity.
 - `negativeCases` retains the exact required-refusal source-driver cases outside
   the positive pair roster.
@@ -178,6 +179,50 @@ attributes. Direct fixture selection additionally evaluates only the restricted
 literal cfg and module forms described above against the retained Cargo feature
 contract. Rust compilation remains the authority for feature reachability and
 executable semantics.
+
+### Source-Bound Variants
+
+A variant may change from `status: "pending", source: null` to
+`status: "source-bound"` with this source object (digest values are placeholders):
+
+```json
+{
+  "implementationKernelId": "registered-implementation-id",
+  "selection": {
+    "kind": "fixture",
+    "fixtureId": "registered-fixture-id",
+    "kernelSymbol": "selected_kernel"
+  },
+  "selectionSha256": "<64 lowercase hexadecimal digits>",
+  "sourcePath": "examples/package/src/kernel.rs",
+  "sourceSha256": "<64 lowercase hexadecimal digits>",
+  "functionUtf8Offset": 123
+}
+```
+
+The variant retains `kind` and its blocker owner, issue and reason. `selection`
+may instead use an existing `source-driver-case` reference with its exact
+`lessonId`, `tabOrdinal` and `caseOrdinal`. It must belong to the declared
+implementation ID. That ID can differ from the obligation's `kernelId`, allowing
+different source/feature implementations without merging their identities.
+The report exposes each registered identity's `selectionSha256`, covering its
+package/lock/source-closure digests, Cargo target, features and kernel symbol.
+The physical file digest and function-name UTF-8 byte offset must also match the
+actual selected source. Both reference kinds use the restricted physical
+Cargo/cfg/module validation described above; unsupported syntax stays pending.
+
+This is a declared source association, not verification of SIMT/tile mode,
+semantic equivalence or execution. Even two associations to the same source
+provide none of those guarantees. `sourceBoundVariantCount` and
+`sourceBoundPairCount` count authenticated associations; `variantBindingStatus`
+is `pending`, `partial` or `source-bound`. These counts do not establish the final
+curriculum denominator or qualify pairs. Complete source binding removes only
+`per-kernel-variant-sources` from the report's missing bindings. Numerical
+contracts and independent oracles, verified artifacts, target-matched execution
+and other production evidence remain required; `per-variant-target-evidence`
+remains, stages are `not-evaluated`, and `qualified` stays false with zero
+qualified pairs. The separate runtime census and source/display join rules for
+`requiredPairCount` remain unchanged.
 
 ## Remaining Integration
 
