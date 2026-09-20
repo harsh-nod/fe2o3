@@ -355,7 +355,7 @@ readonly -a PROFILE_DEFINE=("${profile_define[@]}")
 run_clean /usr/bin/cc \
   -std=c11 -O2 -fPIE -static-pie -march=x86-64 -mtune=generic \
   -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
-  -Wstack-protector -fstack-protector-strong -D_FORTIFY_SOURCE=3 \
+  -Wstack-protector -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 \
   -fno-ident -ffile-prefix-map="${SCRIPT_DIR}"=. \
   -fdebug-prefix-map="${SCRIPT_DIR}"=. \
   -Wl,-z,relro,-z,now,-z,noexecstack,--fatal-warnings,--build-id=none \

@@ -287,7 +287,7 @@ trap 'exit 143' TERM
 run_clean /usr/bin/cc \
   -std=c11 -O2 -fPIE -static-pie \
   -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
-  -Wstack-protector -fstack-protector-strong -D_FORTIFY_SOURCE=3 \
+  -Wstack-protector -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 \
   -Wl,-z,relro,-z,now,-z,noexecstack \
   "${SOURCE}" -o "${TEMPORARY}"
 run_clean /usr/bin/strip --strip-all "${TEMPORARY}"
