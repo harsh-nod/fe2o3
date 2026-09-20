@@ -206,3 +206,227 @@ fn synthetic_request_mismatch_and_fixed_output_bound_fail_closed() {
     assert!(output.write_all(&[2]).is_err());
     assert_eq!(output.as_bytes(), &[1; OUTPUT_BYTES]);
 }
+
+#[test]
+fn optional_text_argv_preserves_two_path_json_and_exact_path_bounds() {
+    let parse =
+        |args: &[&str]| parse_arguments(args.iter().map(|argument| OsString::from(*argument)));
+    assert_eq!(parse(&["--help"]).unwrap(), InspectionCommand::Help);
+    for first in ["program.kir", "--text", "--help"] {
+        assert_eq!(
+            parse(&[first, "request.json"]).unwrap(),
+            InspectionCommand::Inspect {
+                format: OutputFormat::Json,
+                kir: first.into(),
+                request: "request.json".into(),
+            }
+        );
+    }
+    assert_eq!(
+        parse(&["--text", "program.kir", "request.json"]).unwrap(),
+        InspectionCommand::Inspect {
+            format: OutputFormat::Text,
+            kir: "program.kir".into(),
+            request: "request.json".into(),
+        }
+    );
+    for text in [false, true] {
+        for slot in 0..2 {
+            for length in [4096, 4097] {
+                let mut paths = ["program.kir".to_owned(), "request.json".to_owned()];
+                paths[slot] = "x".repeat(length);
+                let mut args = Vec::new();
+                if text {
+                    args.push(OsString::from("--text"));
+                }
+                args.extend(paths.map(OsString::from));
+                assert_eq!(parse_arguments(args.into_iter()).is_ok(), length == 4096);
+            }
+        }
+    }
+    for args in [
+        vec![],
+        vec!["--text"],
+        vec!["--json", "a", "b"],
+        vec!["--text", "--text", "a", "b"],
+        vec!["--text", "a", "b", "extra"],
+    ] {
+        assert!(parse(&args).is_err());
+    }
+    assert_eq!(
+        parse(&["a", "b", "extra"]).err(),
+        Some("exactly two paths of at most 4096 bytes are required")
+    );
+    use std::os::unix::ffi::OsStringExt;
+    let non_utf8 = OsString::from_vec(vec![0xff]);
+    for format in [OutputFormat::Json, OutputFormat::Text] {
+        let mut args = Vec::new();
+        if format == OutputFormat::Text {
+            args.push(OsString::from("--text"));
+        }
+        args.extend([non_utf8.clone(), OsString::from("request.json")]);
+        assert_eq!(
+            parse_arguments(args.into_iter()).unwrap(),
+            InspectionCommand::Inspect {
+                format,
+                kir: non_utf8.clone(),
+                request: "request.json".into(),
+            }
+        );
+    }
+}
+
+#[test]
+fn default_json_rendering_keeps_the_original_report_bytes() {
+    for case in fixture::cases() {
+        let input = admitted(&fixture::module_with_program(
+            true,
+            fixture::program(&case.descriptors),
+        ));
+        let view = inspect(&input).unwrap();
+        let observed = report(&input, &view);
+        let mut original = FixedOutput::new();
+        serde_json::to_writer(&mut original, &observed).unwrap();
+        original.write_all(b"\n").unwrap();
+        let current = render_output(&observed, OutputFormat::Json).unwrap();
+        assert_eq!(current.as_bytes(), original.as_bytes());
+    }
+}
+
+#[test]
+fn text_listing_keeps_literal_one_three_sixteen_instruction_order() {
+    let cases: &[(&[u16], &[&str])] = &[
+        (&[8], &["  00: v_mov_b32_e32 v33, v34"]),
+        (
+            &[133, 307, 413],
+            &[
+                "  00: v_xor_b32_e32 v32, v34, v35",
+                "  01: v_and_b32_e32 v32, v32, v36",
+                "  02: v_xor_b32_e32 v33, v35, v32",
+            ],
+        ),
+        (
+            &[
+                0, 141, 323, 188, 321, 58, 64, 181, 60, 331, 73, 194, 56, 333, 16, 72,
+            ],
+            &[
+                "  00: v_mov_b32_e32 v32, v34",
+                "  01: v_xor_b32_e32 v33, v34, v35",
+                "  02: v_and_b32_e32 v32, v33, v36",
+                "  03: v_or_b32_e32 v33, v32, v35",
+                "  04: v_add_u32_e32 v32, v33, v36",
+                "  05: v_sub_u32_e32 v33, v32, v34",
+                "  06: v_mov_b32_e32 v32, v33",
+                "  07: v_xor_b32_e32 v32, v32, v35",
+                "  08: v_or_b32_e32 v33, v32, v34",
+                "  09: v_and_b32_e32 v33, v33, v36",
+                "  10: v_add_u32_e32 v33, v33, v34",
+                "  11: v_sub_u32_e32 v32, v33, v35",
+                "  12: v_mov_b32_e32 v33, v32",
+                "  13: v_xor_b32_e32 v33, v33, v36",
+                "  14: v_mov_b32_e32 v32, v35",
+                "  15: v_mov_b32_e32 v33, v33",
+            ],
+        ),
+    ];
+    for &(descriptors, expected) in cases {
+        for used in [false, true] {
+            let input = admitted(&fixture::module_with_program(
+                used,
+                fixture::program(descriptors),
+            ));
+            let view = inspect(&input).unwrap();
+            let output = render_output(&report(&input, &view), OutputFormat::Text).unwrap();
+            let text = std::str::from_utf8(output.as_bytes()).unwrap();
+            assert_eq!(
+                text.lines()
+                    .filter(|line| line.starts_with("  "))
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert!(text.starts_with("Declared ordered-program syntax (not native disassembly)\n"));
+            assert!(text.contains("CPU preflight only, no execution"));
+            assert!(text.contains("NoMemory (not a whole-kernel effect)"));
+            assert!(text.contains("Unavailable: physical values, instruction microsteps"));
+        }
+    }
+}
+
+#[test]
+fn text_listing_uses_actual_coordinates_and_each_role_at_zero_and_sixty_three() {
+    for roles in [
+        [0, 1, 2, 3, 4],
+        [63, 1, 2, 3, 4],
+        [1, 0, 2, 3, 4],
+        [0, 63, 2, 3, 4],
+        [1, 2, 0, 3, 4],
+        [0, 1, 63, 3, 4],
+        [1, 2, 3, 0, 4],
+        [0, 1, 2, 63, 4],
+        [1, 2, 3, 4, 0],
+        [0, 1, 2, 3, 63],
+    ] {
+        let mut module = fixture::module_with_program(true, fixture::program(&[8]));
+        let operations = &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations;
+        let OperationKind::Gfx942OrderedProgram(program) = &mut operations[0].kind else {
+            panic!()
+        };
+        *program = Gfx942OrderedProgramV1::new(
+            program.source(),
+            Gfx942OrderedProgramRegistersV1::new(
+                roles[0],
+                roles[1],
+                [roles[2], roles[3], roles[4]],
+            )
+            .unwrap(),
+            *program.inputs(),
+            *program.program(),
+        )
+        .unwrap();
+        operations.swap(0, 1);
+        let input = admitted(&module);
+        let view = inspect(&input).unwrap();
+        let output = render_output(&report(&input, &view), OutputFormat::Text).unwrap();
+        let text = std::str::from_utf8(output.as_bytes()).unwrap();
+        assert!(text.contains("coordinate: function=0 block=0 operation=1 raw_block_id=7"));
+        assert!(text.contains("logical SSA: inputs=[0, 1, 2] result=4"));
+        assert!(text.contains(&format!(
+            "scratch=v{} out=v{} input0=v{} input1=v{} input2=v{}; high_water={}",
+            roles[0],
+            roles[1],
+            roles[2],
+            roles[3],
+            roles[4],
+            *roles.iter().max().unwrap() + 1
+        )));
+        assert!(text.contains(&format!("  00: v_mov_b32_e32 v{}, v{}", roles[1], roles[2])));
+    }
+}
+
+#[test]
+fn text_names_are_ascii_escaped_and_expansion_obeys_the_same_output_bound() {
+    let mut output = FixedOutput::new();
+    quoted_name(&mut output, "line\n\t\r\u{1b}\\\"é").unwrap();
+    assert_eq!(
+        std::str::from_utf8(output.as_bytes()).unwrap(),
+        "\"line\\n\\t\\r\\u{1b}\\\\\\\"\\u{e9}\""
+    );
+    assert!(output.as_bytes().is_ascii());
+    let mut exact = FixedOutput::new();
+    quoted_name(&mut exact, &"a".repeat(OUTPUT_BYTES - 2)).unwrap();
+    assert_eq!(exact.as_bytes().len(), OUTPUT_BYTES);
+    assert!(exact.write_all(b"\n").is_err());
+    let mut oversized = FixedOutput::new();
+    assert!(quoted_name(&mut oversized, &"a".repeat(OUTPUT_BYTES - 1)).is_err());
+    let input = admitted(&fixture::module(true));
+    let view = inspect(&input).unwrap();
+    let mut observed = report(&input, &view);
+    // Renderer-only boundary: these borrowed names are not a new admitted owner.
+    let expanded = "\u{1b}".repeat(MAX_ID_BYTES);
+    observed.kernel = &expanded;
+    observed.function = &expanded;
+    assert_eq!(
+        render_output(&observed, OutputFormat::Text).err(),
+        Some("bounded inspection text serialization failed")
+    );
+}

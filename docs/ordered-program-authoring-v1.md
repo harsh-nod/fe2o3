@@ -87,6 +87,39 @@ not be interpreted as published saturation. Fresh source terminal identifiers
 138–143 keep scalar authoring disjoint from saturation and Wave64. Incompatible
 feature families are rejected rather than promoted by choosing a larger number.
 
+## Inspect declared instruction syntax
+
+With the normal diagnostic exporter producing `program.kir` and a matching
+one-workgroup (64x1x1) simulation request, the installed read-only inspector
+offers either its unchanged JSON report or an optional text listing:
+
+```sh
+fe2o3-program-inspect program.kir request.json
+fe2o3-program-inspect --text program.kir request.json
+```
+
+The compatibility example `inspect_diagnostic_ordered_program_v17` accepts
+the same arguments. Both modes use the same canonical V17 admission and CPU
+preflight, do not execute the kernel, and finish rendering within the same
+8-KiB output buffer before writing stdout. Text rendering escapes every kernel
+and function name, and refuses overflow without publishing a partial listing.
+
+For the three-step declaration above, the instruction portion is:
+
+```text
+  00: v_xor_b32_e32 v32, v34, v35
+  01: v_and_b32_e32 v32, v32, v36
+  02: v_xor_b32_e32 v33, v35, v32
+```
+
+This is declared syntax, **not native disassembly**. Dead writes and self-moves
+remain in order. The listing includes the typed canonical identity, actual
+logical coordinate/SSA IDs and declared VGPR bindings; those bindings and their
+high-water count are not physical values, final allocation or occupancy.
+`NoMemory` describes the authored region, not surrounding Rust memory accesses.
+The listing is a human-readable view, not a new import/resume format or source
+authentication. Use JSON for existing machine consumers; its schema is unchanged.
+
 ## What the debugger shows
 
 CPU execution treats the program as one logical operation. Recorded views can

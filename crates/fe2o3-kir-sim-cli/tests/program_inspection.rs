@@ -53,6 +53,23 @@ fn command() -> Command {
 fn run(kir: &Path, request: &Path) -> Output {
     command().args([kir, request]).output().unwrap()
 }
+fn run_text(kir: &Path, request: &Path) -> Output {
+    command()
+        .arg("--text")
+        .args([kir, request])
+        .output()
+        .unwrap()
+}
+fn refused_both(kir: &Path, request: &Path) {
+    let original = run(kir, request);
+    let text = run_text(kir, request);
+    assert_eq!(
+        original.stderr, text.stderr,
+        "formats must share admission/preflight"
+    );
+    refused(original);
+    refused(text);
+}
 fn refused(output: Output) {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
@@ -137,6 +154,47 @@ fn installed_binary_reports_one_three_sixteen_used_and_unused_programs() {
             }
             assert_eq!(fs::read(&kir).unwrap(), owner.canonical_bytes());
             assert_eq!(fs::read(&request).unwrap(), request_bytes);
+            let listing = run_text(&kir, &request);
+            assert!(listing.status.success(), "{listing:?}");
+            assert!(listing.stderr.is_empty());
+            assert!(listing.stdout.len() <= 8192);
+            let text = std::str::from_utf8(&listing.stdout).unwrap();
+            assert!(text.starts_with("Declared ordered-program syntax (not native disassembly)\n"));
+            assert!(text.contains(&format!(
+                "canonical: V17 sha256={} bytes={}",
+                hex(owner.identity().digest()),
+                owner.canonical_bytes().len()
+            )));
+            assert!(text.contains("coordinate: function=0 block=0 operation=0 raw_block_id=7"));
+            assert!(text.contains("kernel: \"program\"\nfunction: \"program_entry\""));
+            let expected: Vec<_> = value["declared_instruction_steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .map(|(index, step)| {
+                    let mut line = format!(
+                        "  {index:02}: {} v{}",
+                        step["instruction"].as_str().unwrap(),
+                        step["output"]
+                    );
+                    for register in step["inputs"].as_array().unwrap() {
+                        line.push_str(&format!(", v{register}"));
+                    }
+                    line
+                })
+                .collect();
+            assert_eq!(
+                text.lines()
+                    .filter(|line| line.starts_with("  "))
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert!(text.contains("CPU preflight only, no execution"));
+            assert!(text.contains("proof/artifact/resume/hardware authority"));
+            assert_eq!(run(&kir, &request).stdout, output.stdout);
+            assert_eq!(fs::read(&kir).unwrap(), owner.canonical_bytes());
+            assert_eq!(fs::read(&request).unwrap(), request_bytes);
         }
     }
 }
@@ -150,24 +208,24 @@ fn malformed_wrong_version_request_and_redirected_inputs_refuse() {
     let request_bytes = fixture::request([19, 23, 42]);
     fs::write(&request, &request_bytes).unwrap();
     fs::write(&kir, b"not canonical").unwrap();
-    refused(run(&kir, &request));
+    refused_both(&kir, &request);
     let older = fixture_v16::owner(&fixture_v16::module(true));
     let old_path = directory.file("version16.kir");
     fs::write(&old_path, older.canonical_bytes()).unwrap();
-    refused(run(&old_path, &request));
+    refused_both(&old_path, &request);
     fs::write(&kir, owner.canonical_bytes()).unwrap();
     let redirected = directory.file("redirect.kir");
     symlink(&kir, &redirected).unwrap();
-    refused(run(&redirected, &request));
-    refused(run(&directory.0, &request));
+    refused_both(&redirected, &request);
+    refused_both(&directory.0, &request);
     let mut wrong: serde_json::Value = serde_json::from_slice(&request_bytes).unwrap();
     wrong["workgroup"] = serde_json::json!([32, 1, 1]);
     fs::write(&request, serde_json::to_vec(&wrong).unwrap()).unwrap();
-    refused(run(&kir, &request));
+    refused_both(&kir, &request);
     fs::write(&request, b"{\"schema\":\"x\",\"schema\":\"x\"}").unwrap();
-    refused(run(&kir, &request));
+    refused_both(&kir, &request);
     fs::write(&request, b"\xff").unwrap();
-    refused(run(&kir, &request));
+    refused_both(&kir, &request);
 }
 
 #[test]
@@ -185,4 +243,68 @@ fn help_and_exact_bounded_arguments() {
     refused(command().arg("missing").output().unwrap());
     refused(command().args(["a", "b", "c"]).output().unwrap());
     refused(command().args(["a", &"x".repeat(4097)]).output().unwrap());
+}
+
+#[test]
+fn text_arguments_are_closed_before_input_admission() {
+    for args in [
+        vec!["--text"],
+        vec!["--text", "--text", "a", "b"],
+        vec!["--text", "a", "b", "extra"],
+    ] {
+        let output = command().args(args).output().unwrap();
+        assert!(
+            std::str::from_utf8(&output.stderr)
+                .unwrap()
+                .contains("usage:")
+        );
+        refused(output);
+    }
+    for first in ["a", "--json"] {
+        let output = command().args([first, "b", "extra"]).output().unwrap();
+        assert_eq!(
+            output.stderr,
+            b"inspection refused: exactly two paths of at most 4096 bytes are required\n"
+        );
+        refused(output);
+    }
+    for args in [
+        vec!["--text".to_owned(), "a".to_owned(), "x".repeat(4097)],
+        vec!["--text".to_owned(), "x".repeat(4097), "b".to_owned()],
+    ] {
+        let output = command().args(args).output().unwrap();
+        assert!(
+            std::str::from_utf8(&output.stderr)
+                .unwrap()
+                .contains("paths of at most 4096 bytes")
+        );
+        refused(output);
+    }
+}
+
+#[test]
+fn escaped_name_growth_refuses_without_publishing_partial_text() {
+    let directory = Directory::new();
+    let kir = directory.file("program.kir");
+    let request = directory.file("request.json");
+    let mut module = fixture::module(true);
+    let escaped = "\u{1b}".repeat(1024);
+    module.functions[0].id = escaped.as_str().into();
+    module.kernels[0].entry = module.functions[0].id.clone();
+    module.kernels[0].id = escaped.as_str().into();
+    let owner = fixture::owner(&module);
+    fs::write(&kir, owner.canonical_bytes()).unwrap();
+    let mut data: serde_json::Value =
+        serde_json::from_slice(&fixture::request([19, 23, 42])).unwrap();
+    data["kernel"] = escaped.into();
+    let request_bytes = serde_json::to_vec(&data).unwrap();
+    fs::write(&request, &request_bytes).unwrap();
+    let output = run_text(&kir, &request);
+    assert_eq!(
+        output.stderr,
+        b"inspection refused: bounded inspection text serialization failed\n"
+    );
+    refused(output);
+    assert_eq!(fs::read(&kir).unwrap(), owner.canonical_bytes());
+    assert_eq!(fs::read(&request).unwrap(), request_bytes);
 }
