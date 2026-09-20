@@ -315,6 +315,22 @@ fn private_array_check_allocation_operation_v1<W: PrivateArrayChargeV1>(
     element_facts: PrivateRetainedSlotFactsV1,
     work: &mut W,
 ) -> Result<(), PrivateArrayRelationErrorV1<W::Error>> {
+    private_retained_check_allocation_operation_v1(
+        allocation,
+        expected_pointer,
+        Some(expected_count),
+        element_facts,
+        work,
+    )
+}
+
+fn private_retained_check_allocation_operation_v1<W: PrivateArrayChargeV1>(
+    allocation: &Operation,
+    expected_pointer: ValueId,
+    expected_count: Option<ValueId>,
+    element_facts: PrivateRetainedSlotFactsV1,
+    work: &mut W,
+) -> Result<(), PrivateArrayRelationErrorV1<W::Error>> {
     use PrivateArrayRelationErrorV1::Mismatch;
     work.charge_private_array_work(2)?;
     let [pointer] = allocation.results.as_slice() else {
@@ -331,7 +347,7 @@ fn private_array_check_allocation_operation_v1<W: PrivateArrayChargeV1>(
     };
     work.charge_private_array_work(4)?;
     if pointer.id != expected_pointer
-        || *count != Some(expected_count)
+        || *count != expected_count
         || *address_space != AddressSpace::Private
         || *alignment != element_facts.alignment
     {

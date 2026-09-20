@@ -22,6 +22,9 @@ const ISSUER: SemanticCallableIdV1 = SemanticCallableIdV1::from_index(2);
 const WORK: usize = 10_000;
 const FLOOR: usize = 19;
 
+#[path = "execution_source_census_v29.rs"]
+mod execution_source_census_v29;
+
 #[derive(Clone, Copy, Debug)]
 enum Transport {
     Copy,

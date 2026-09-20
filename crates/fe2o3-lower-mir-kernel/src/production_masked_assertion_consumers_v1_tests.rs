@@ -484,3 +484,115 @@ fn masked_assertion_absent_pattern_keeps_legacy_bounds_without_query_tables() {
     .unwrap();
     assert_eq!(budget.storage(), FLOOR);
 }
+
+#[test]
+fn borrowed_legacy_assert_decisions_preserve_membership_and_backing() {
+    let decisions = InfallibleAssertDecisionsV1::Legacy(BTreeSet::from([0, 2, 7]));
+    let borrowed = decisions.borrowed();
+    let repeated = borrowed.borrowed();
+    let InfallibleAssertDecisionsV1::Legacy(original) = &decisions else {
+        panic!("original legacy owner changed");
+    };
+    for view in [&borrowed, &repeated] {
+        let InfallibleAssertDecisionsV1::LegacyBorrowed(actual) = view else {
+            panic!("legacy view must borrow the original set");
+        };
+        assert!(std::ptr::eq(original, *actual));
+        for block in 0..10 {
+            assert_eq!(view.contains(&block), decisions.contains(&block));
+        }
+    }
+}
+
+#[test]
+fn borrowed_source_assert_decisions_retain_exact_plan_and_part_custody() {
+    let (owner, _) = masked_fixture(SemanticBinaryOpV1::ShiftLeft, Some(31), false);
+    let (foreign, _) = masked_fixture(SemanticBinaryOpV1::ShiftLeft, Some(31), false);
+    let plans = [private_plan()];
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+    let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, STORAGE);
+    budget.reserve_storage(FLOOR).unwrap();
+    with_masked_assertion_plans_v1(&owner, &plans, BTreeSet::new(), &mut budget, |tables, _| {
+        let source = owner.source_semantic();
+        let decisions = masked_decisions_for_plan_v1(source, &plans[0], &tables[0])?;
+        let borrowed = decisions.borrowed();
+        let repeated = borrowed.borrowed();
+        let foreign_plan = plans[0].clone();
+        for view in [&borrowed, &repeated] {
+            let InfallibleAssertDecisionsV1::Source(actual) = view else {
+                panic!("source evidence must not become a legacy set");
+            };
+            assert!(std::ptr::eq(*actual, tables[0].as_ref().unwrap()));
+            assert!(view.contains(&0));
+            assert!(!view.contains(&1));
+            view.require_source(source, &plans[0])?;
+            view.require_parts(source.types(), source.callables(), &source.functions()[0], ROOT, ROOT)?;
+            assert!(matches!(view.require_source(foreign.source_semantic(), &plans[0]),
+                Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)));
+            assert!(matches!(view.require_source(source, &foreign_plan),
+                Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)));
+            assert!(matches!(view.require_parts(foreign.source_semantic().types(),
+                source.callables(), &source.functions()[0], ROOT, ROOT),
+                Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)));
+            assert!(matches!(view.require_parts(source.types(), source.callables(),
+                &source.functions()[0], SemanticFunctionIdV1::from_index(1), ROOT),
+                Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)));
+        }
+        Ok(())
+    }).unwrap();
+    assert_eq!(budget.storage(), FLOOR);
+}
+
+#[test]
+fn actual_lowering_releases_budget_borrow_before_original_decisions_are_reused() {
+    let (owner, _) = masked_fixture(SemanticBinaryOpV1::ShiftRight, Some(31), false);
+    let plans = [private_plan()];
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+    let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, STORAGE);
+    budget.reserve_storage(FLOOR).unwrap();
+    let ledger = budget.work_ledger_identity_v1();
+    with_masked_assertion_plans_v1(&owner, &plans, BTreeSet::new(), &mut budget, |tables, budget| {
+        let source = owner.source_semantic();
+        let decisions = masked_decisions_for_plan_v1(source, &plans[0], &tables[0])?;
+        let limit = ProductionSemanticKirLimitsV1::default().max_operations;
+        let mut private_work = PrivateArrayLazyBudgetV1::new(1, limit);
+        let floor = budget.storage();
+        let lowered = lower_one_semantic_function_with_calls_v29(
+            source,
+            &plans[0],
+            owner.plan_for_function(ROOT).unwrap(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            Some([64, 1, 1]),
+            decisions.borrowed(),
+            1,
+            true,
+            limit,
+            None,
+            &mut private_work,
+            None,
+            budget,
+            SemanticEmissionPlacementV1::default(),
+            None,
+            None,
+            None,
+        )?;
+        // Mutate the same live budget, then use the original source-bound fact.
+        let accepted_work = budget.work();
+        budget.charge_work(1)?;
+        assert_eq!(budget.work(), accepted_work + 1);
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert!(decisions.contains(&0));
+        decisions.require_source(source, &plans[0])?;
+        let blocks = &lowered.function.body.as_ref().unwrap().blocks;
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(blocks[0].terminator, Some(Terminator::Branch { .. })));
+        assert!(lowered.emitted_operations > 0);
+        let retained = budget.storage().checked_sub(floor).unwrap();
+        drop(lowered);
+        budget.release_storage(retained)?;
+        assert_eq!(budget.storage(), floor);
+        Ok(())
+    }).unwrap();
+    assert_eq!(budget.storage(), FLOOR);
+}

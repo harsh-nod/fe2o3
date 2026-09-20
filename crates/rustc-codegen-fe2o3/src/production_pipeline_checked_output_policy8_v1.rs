@@ -26,8 +26,12 @@ use std::mem::size_of;
 
 #[path = "production_policy8_extraction_v1.rs"]
 mod extraction;
+#[path = "production_policy8_history_v1.rs"]
+mod history;
 #[path = "production_policy8_native_v1.rs"]
 pub(crate) mod native;
+#[path = "production_policy8_semantic_v1.rs"]
+pub(crate) mod semantic;
 #[cfg(test)]
 #[path = "production_policy8_source_observation_v1_tests.rs"]
 pub(crate) mod source_observation;
@@ -36,6 +40,8 @@ pub(crate) mod source_observation;
 pub(crate) enum CheckedOutputPolicy8StageErrorV1 {
     Resource(Resource),
     Admission(Box<fe2o3_lower_mir_kernel::ProductionCommutativeContinuationErrorV1>),
+    Portable(Box<fe2o3_kernel_opt::CanonicalPolicy8SemanticErrorV1>),
+    History(Box<history::Policy8HistoryExportErrorV1>),
     Native(Box<super::native_checked_output_handoff_v1::NativeOutputHandoffErrorV1>),
     NativeSource(Box<crate::production_native_source_lineage_v1::NativeSourceLineageErrorV1>),
     InputAssociation(Box<super::native_checked_output_handoff_v1::policy6::final_receipts::input_association::NativeInputAssociationErrorPolicy6V1>),
@@ -51,6 +57,8 @@ impl std::error::Error for CheckedOutputPolicy8StageErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Admission(error) => Some(error.as_ref()),
+            Self::Portable(error) => Some(error.as_ref()),
+            Self::History(error) => Some(error.as_ref()),
             Self::Native(error) => Some(error.as_ref()),
             Self::NativeSource(error) => Some(error.as_ref()),
             Self::InputAssociation(error) => Some(error.as_ref()),
@@ -158,7 +166,7 @@ impl Policy8ArtifactsStorageV1 {
     }
 }
 
-/// Owns actual K artifacts and one immutable P7 history. No combined wire exists.
+/// Owns actual K artifacts and one immutable P7 history. Export remains inert.
 pub(crate) struct PreparedPolicy8ArtifactsV1 {
     admitted: Admitted8,
     prefix_execution: Policy7ExecutionWitnessV1,

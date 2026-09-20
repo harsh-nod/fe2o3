@@ -50,6 +50,9 @@ pub(crate) struct View<'a> {
     pub(crate) prepared_floor: usize,
 }
 impl View<'_> {
+    pub(crate) fn history_round_trip(&self, budget: &mut Budget<'_>) -> Result<(), String> {
+        super::history::tests::observe_stage(self.stage, budget).map_err(|e| format!("{e:?}"))
+    }
     pub(crate) fn replay(&self, budget: &mut Budget<'_>) -> Result<(), String> {
         self.stage
             .verify_equivalence(budget)

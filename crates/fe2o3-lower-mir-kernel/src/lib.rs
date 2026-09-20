@@ -5,6 +5,8 @@
 mod production_context_roots_v1;
 mod production_correspondence_evidence_v4;
 mod production_correspondence_evidence_v5;
+mod production_execution_discharge_v29;
+mod production_execution_source_input_v29;
 mod production_formal_memory_evidence_v4;
 mod production_formal_memory_v1;
 mod production_lineage_evidence_v3;
@@ -17,6 +19,8 @@ pub use production_source_launch_v1::*;
 pub use production_context_roots_v1::*;
 pub use production_correspondence_evidence_v4::*;
 pub use production_correspondence_evidence_v5::*;
+pub use production_execution_discharge_v29::*;
+pub use production_execution_source_input_v29::*;
 pub use production_formal_memory_evidence_v4::*;
 pub use production_formal_memory_v1::*;
 pub use production_lineage_evidence_v3::*;

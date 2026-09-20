@@ -1,5 +1,7 @@
 // Physical signatures for expanded instances. Nominal bindings arrive only via
 // the scoped call seed; this plan is not producer or borrow authority.
+include!("production_execution_owner_parameter_v29.rs");
+
 fn execution_reference_abi_scalar_v29(
     types: &[SemanticTypeDeclV1],
     ty: SemanticTypeIdV1,
@@ -141,6 +143,29 @@ fn check_execution_instance_abi_v29(
                 continue;
             }
             let shape_floor = budget.storage();
+            if let Some(direct) = execution_direct_parameter_v29(
+                semantic,
+                function_id,
+                mapped.source_argument(),
+                mapped.tuple_field(),
+                mapped.abi().ty(),
+                budget,
+            )? {
+                if mapped.ordinal() != mapped.source_argument()
+                    || mapped.local_field().is_some()
+                    || function.locals()[mapped.local().index() as usize].role()
+                        != SemanticLocalRoleV1::Argument(mapped.source_argument())
+                    || !std::ptr::eq(
+                        mapped.abi(),
+                        &abi.adjusted_arguments()[mapped.ordinal() as usize],
+                    )
+                {
+                    return Err(execution_call_error_v29());
+                }
+                drop(direct);
+                budget.release_storage(budget.storage() - shape_floor)?;
+                continue;
+            }
             prepay_argument_shape_v1(semantic, mapped.abi().ty(), budget)?;
             let (_, shape) = helper_parameter_shape_with_policy_v1(
                 semantic.types(),
@@ -175,10 +200,6 @@ fn check_execution_instance_abi_v29(
     result
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Scope materializer integration remains gated")
-)]
 fn execution_instance_plan_v29(
     instances: &ExecutionInstancesV29<'_>,
     instance: ProductionCallInstanceIdV1,
@@ -207,6 +228,102 @@ fn build_execution_instance_plan_v29(
     placement: SemanticEmissionPlacementV1,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<LoweredFunctionPlanV1, ProductionSemanticKirErrorV1> {
+    let layout = execution_function_layout_v29(instances, instance, budget)?;
+    let row = instances
+        .instance(instance)
+        .ok_or_else(execution_call_error_v29)?;
+    budget.charge_work(layout.parameter_types.len())?;
+    let mut parameter_values = emission_vec_v1(layout.parameter_types.len(), budget)?;
+    let mut next_value = placement.first_value;
+    for _ in &layout.parameter_types {
+        let id = ValueId(next_value);
+        next_value = next_value
+            .checked_add(1)
+            .ok_or(ArgumentResourceV1::Arithmetic)?;
+        parameter_values.push(id);
+    }
+    Ok(LoweredFunctionPlanV1 {
+        correspondence_owner: instances
+            .instance(instances.root())
+            .ok_or_else(execution_call_error_v29)?
+            .function(),
+        semantic_function: row.function(),
+        kernel_ir_function,
+        role: SemanticKirFunctionRoleV1::InternalHelper,
+        parameter_declarations: layout.parameter_declarations,
+        parameter_types: layout.parameter_types,
+        parameter_values,
+        call_arguments: layout.call_arguments,
+        parameter_local_bindings: Vec::new(),
+        parameter_component_bindings: Vec::new(),
+        ignored_parameter_bindings: Vec::new(),
+        result_types: layout.result_types,
+    })
+}
+
+struct ExecutionFunctionLayoutV29 {
+    parameter_declarations: Vec<(u32, usize, SemanticTypeIdV1)>,
+    parameter_types: Vec<Type>,
+    call_arguments: Vec<HelperCallArgumentV1>,
+    result_types: Vec<Type>,
+}
+
+fn execution_function_layout_v29(
+    instances: &ExecutionInstancesV29<'_>,
+    instance: ProductionCallInstanceIdV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<ExecutionFunctionLayoutV29, ProductionSemanticKirErrorV1> {
+    let floor = budget.storage();
+    let result = build_execution_function_layout_v29(instances, instance, budget);
+    if result.is_err() {
+        budget.release_storage(budget.storage() - floor)?;
+    }
+    result
+}
+
+fn execution_function_signature_v29(
+    instances: &ExecutionInstancesV29<'_>,
+    instance: ProductionCallInstanceIdV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<LoweredFunctionSignatureV1, ProductionSemanticKirErrorV1> {
+    let floor = budget.storage();
+    let result = (|| {
+        let layout = execution_function_layout_v29(instances, instance, budget)?;
+        let function = instances
+            .instance(instance)
+            .ok_or_else(execution_call_error_v29)?
+            .declaration();
+        let inputs = function.abi().source_input_types();
+        budget.charge_work(inputs.len())?;
+        let mut parameter_semantic_types = emission_vec_v1(inputs.len(), budget)?;
+        // Physical erasure never changes the source operand roster. In particular,
+        // RustCall retains its whole source tuple and ignored closure arguments.
+        parameter_semantic_types.extend_from_slice(inputs);
+        let declaration_bytes = argument_product_v1(
+            layout.parameter_declarations.capacity(),
+            std::mem::size_of::<(u32, usize, SemanticTypeIdV1)>(),
+        )?;
+        drop(layout.parameter_declarations);
+        budget.release_storage(declaration_bytes)?;
+        Ok(LoweredFunctionSignatureV1 {
+            parameter_semantic_types,
+            call_arguments: layout.call_arguments,
+            parameter_types: layout.parameter_types,
+            result_types: layout.result_types,
+            result_semantic_type: function.abi().source_output_type(),
+        })
+    })();
+    if result.is_err() {
+        budget.release_storage(budget.storage() - floor)?;
+    }
+    result
+}
+
+fn build_execution_function_layout_v29(
+    instances: &ExecutionInstancesV29<'_>,
+    instance: ProductionCallInstanceIdV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<ExecutionFunctionLayoutV29, ProductionSemanticKirErrorV1> {
     budget.charge_work(8)?;
     let row = instances
         .instance(instance)
@@ -222,9 +339,7 @@ fn build_execution_instance_plan_v29(
     check_execution_instance_abi_v29(semantic, row.function(), budget)?;
     let mut parameter_declarations = Vec::new();
     let mut parameter_types = Vec::new();
-    let mut parameter_values = Vec::new();
     let mut call_arguments = Vec::new();
-    let mut next_value = placement.first_value;
     // Entry-local order is also the scoped constructor's reconstruction order.
     // A packed RustCall tuple stays whole; expanded fields retain their selector.
     for (local, declaration) in function.locals().iter().enumerate() {
@@ -251,15 +366,30 @@ fn build_execution_instance_plan_v29(
             (selector.source_argument, local, selector.ty),
             budget,
         )?;
+        if let Some(direct) = execution_direct_parameter_v29(
+            semantic,
+            row.function(),
+            selector.source_argument,
+            selector.tuple_field,
+            selector.ty,
+            budget,
+        )? {
+            emission_push_v1(&mut parameter_types, direct, budget)?;
+            emission_push_v1(
+                &mut call_arguments,
+                HelperCallArgumentV1 {
+                    source_argument: selector.source_argument,
+                    tuple_field: None,
+                    component: None,
+                },
+                budget,
+            )?;
+            continue;
+        }
         let physical = execution_cfg_types_v29(semantic.types(), selector.ty, budget)?;
         let backing = argument_product_v1(physical.capacity(), std::mem::size_of::<Type>())?;
         for (component, ty) in physical.into_iter().enumerate() {
-            let id = ValueId(next_value);
-            next_value = next_value
-                .checked_add(1)
-                .ok_or(ArgumentResourceV1::Arithmetic)?;
             emission_push_v1(&mut parameter_types, ty, budget)?;
-            emission_push_v1(&mut parameter_values, id, budget)?;
             emission_push_v1(
                 &mut call_arguments,
                 HelperCallArgumentV1 {
@@ -298,21 +428,10 @@ fn build_execution_instance_plan_v29(
         Ok::<_, ProductionSemanticKirErrorV1>(result)
     })();
     budget.release_storage(scratch)?;
-    Ok(LoweredFunctionPlanV1 {
-        correspondence_owner: instances
-            .instance(instances.root())
-            .ok_or_else(execution_call_error_v29)?
-            .function(),
-        semantic_function: row.function(),
-        kernel_ir_function,
-        role: SemanticKirFunctionRoleV1::InternalHelper,
+    Ok(ExecutionFunctionLayoutV29 {
         parameter_declarations,
         parameter_types,
-        parameter_values,
         call_arguments,
-        parameter_local_bindings: Vec::new(),
-        parameter_component_bindings: Vec::new(),
-        ignored_parameter_bindings: Vec::new(),
         result_types: result_types?,
     })
 }

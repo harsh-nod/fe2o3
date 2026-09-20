@@ -399,7 +399,15 @@ fn physical_initialization_cannot_resurrect_a_source_cell_after_any_source_only_
             &mut budget,
         )
         .unwrap_err();
-        assert!(killed_source_error(&error), "{error:?}");
+        assert!(
+            matches!(
+                error,
+                ProductionPreRankedKirErrorV1::Lowering(ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                    function: 1, block: 0, statement: Some(statement), local: 2,
+                }) if statement == if matches!(kill, ScalarKill::Storage) { 3 } else { 2 }
+            ),
+            "{error:?}"
+        );
         assert_eq!(budget.storage(), FLOOR);
     }
 }

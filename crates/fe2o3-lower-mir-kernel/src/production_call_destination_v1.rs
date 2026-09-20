@@ -14,6 +14,17 @@ impl SemanticFunctionLoweringV1<'_> {
         destination: &SemanticPlaceV1,
         operations: &mut Vec<Operation>,
     ) -> Result<PreparedSemanticCallDestinationV1, ProductionSemanticKirErrorV1> {
+        self.with_scoped_call_memory_frame_v29(block, destination, false, |this| {
+            this.prepare_call_destination_inner_v29(block, destination, operations)
+        })
+    }
+
+    fn prepare_call_destination_inner_v29(
+        &mut self,
+        block: SemanticBlockIdV1,
+        destination: &SemanticPlaceV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<PreparedSemanticCallDestinationV1, ProductionSemanticKirErrorV1> {
         if destination.projections().is_empty() {
             return Ok(PreparedSemanticCallDestinationV1::Unprojected);
         }
@@ -68,6 +79,27 @@ impl SemanticFunctionLoweringV1<'_> {
         predicate: Option<ValueId>,
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        self.with_scoped_call_memory_frame_v29(block, destination, true, |this| {
+            this.finish_call_destination_inner_v29(
+                block,
+                destination,
+                prepared,
+                binding,
+                predicate,
+                operations,
+            )
+        })
+    }
+
+    fn finish_call_destination_inner_v29(
+        &mut self,
+        block: SemanticBlockIdV1,
+        destination: &SemanticPlaceV1,
+        prepared: PreparedSemanticCallDestinationV1,
+        binding: SemanticValueBindingV1,
+        predicate: Option<ValueId>,
+        operations: &mut Vec<Operation>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
         match prepared {
             PreparedSemanticCallDestinationV1::Unprojected => {
                 if predicate.is_some()
@@ -94,7 +126,7 @@ impl SemanticFunctionLoweringV1<'_> {
                     // The only false-guard continuation is the existing trap block.
                     return self.bind_destination(block, None, destination, binding);
                 }
-                self.assign_place(
+                self.assign_place_inner_v29(
                     block,
                     None,
                     destination,

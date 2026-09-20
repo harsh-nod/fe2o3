@@ -127,6 +127,7 @@ impl SemanticControlFlowSsaPlanV1 {
             max_analysis_storage,
             None,
             None,
+            None,
         )
     }
 
@@ -140,6 +141,7 @@ impl SemanticControlFlowSsaPlanV1 {
         max_analysis_storage: usize,
         mut emission_work: Option<&mut (dyn SemanticEmissionBudgetV1 + 'work)>,
         execution: Option<&ExecutionAvailabilityV29<'_>>,
+        lifecycle: Option<&dyn ExecutionLifecycleConsumerV29>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let SemanticSsaTransportInputV1 {
             types,
@@ -152,8 +154,14 @@ impl SemanticControlFlowSsaPlanV1 {
         {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
-        let compiler_issued_bindings =
-            compiler_issued_ssa_bindings_v1(types, callables, function, semantic_function)?;
+        let compiler_issued_bindings = compiler_issued_ssa_bindings_v1(
+            types,
+            callables,
+            function,
+            semantic_function,
+            lifecycle,
+            emission_work.as_deref_mut(),
+        )?;
         let shared = semantic_ssa.plan();
         let retained_cross_edge = semantic_ssa
             .retained_cross_edge_variables()

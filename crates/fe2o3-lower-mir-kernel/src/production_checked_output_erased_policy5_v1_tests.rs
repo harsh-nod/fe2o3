@@ -191,16 +191,17 @@ fn source_initialized_read_is_required_even_when_optimizer_reports_no_load_rows(
         SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(3)),
         SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(3)),
     ] {
+        let original = erased_effect_fixture_with_lifetime(true, 1, Some(killed));
+        let site = [(0, 1, Some(2), 3)];
         let FinalFixture {
             source,
             bound,
             checked,
             bound_storage,
             ..
-        } = final_fixture_from(
-            erased_effect_fixture_with_lifetime(true, 1, Some(killed)),
-            None,
-        );
+        } = retained_load_fault_v1_tests::with_exact_sites(&site, || {
+            final_fixture_from(original, None)
+        });
         drop(checked);
         let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
         let mut budget = ArgumentBudgetV1::new(&mut work, STORAGE);
@@ -213,7 +214,18 @@ fn source_initialized_read_is_required_even_when_optimizer_reports_no_load_rows(
         assert!(checked.load_forwarding_rows().is_empty());
         budget.reserve_storage(checked.retained_storage()).unwrap();
         let floor = budget.storage();
-        assert!(Final5::try_admit_v1(source, bound, checked, &mut budget).is_err());
+        let result = retained_load_fault_v1_tests::with_exact_replays(&site, 2, || {
+            Final5::try_admit_v1(source, bound, checked, &mut budget)
+        });
+        assert!(matches!(
+            result,
+            Err(Error5::Prefix(FinalError::Admission(
+                AdmissionError::Unsupported {
+                    phase: "private source",
+                    detail: "no source lifetime or Move invalidation between Store and Load",
+                }
+            )))
+        ));
         assert_eq!(budget.storage(), floor);
     }
 }

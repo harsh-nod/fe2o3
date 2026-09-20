@@ -4,6 +4,9 @@ use production_call_instances_v1::{
     ProductionCallInstanceErrorV1, with_production_call_instances_v1,
 };
 
+#[path = "production_instance_coordinates_owner_v1_tests.rs"]
+mod coordinates_owner_tests;
+
 fn with_plan(test: impl FnOnce(&ProductionCallInstancePlanV1<'_>, &mut ArgumentBudgetV1<'_>)) {
     with_plan_owner(resource_tests::helper_closure_semantic_owner(), test);
 }
@@ -234,6 +237,18 @@ fn cursor_selected_instance_cannot_be_relabelled_on_append() {
         )
         .unwrap();
         caller.source_call_instance = plan.calls(plan.root()).unwrap()[0].child();
+        let storage = storage
+            + caller
+                .scoped_initialization
+                .as_ref()
+                .unwrap()
+                .retained_storage
+            + caller
+                .scoped_memory_anchors
+                .as_ref()
+                .unwrap()
+                .retained_storage()
+                .unwrap();
         let rejected = with_production_instance_correspondence_v1(plan, budget, |map, budget| {
             map.append_lowered(plan.root(), &caller, budget)
         });

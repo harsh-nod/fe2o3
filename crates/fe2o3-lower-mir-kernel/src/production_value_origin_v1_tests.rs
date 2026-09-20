@@ -142,7 +142,11 @@ fn prepared_origins_query_sparse_values_without_rebuilding_the_worklist() {
     }
     with_inventory(blocks, |inventory, owner, budget| {
         let floor = budget.storage();
+        let start = budget.work();
         with_whole_value_origins_v1(inventory, owner, SUBJECT, budget, |origins, budget| {
+            let expected_preparation = 8 + 7 * 131 + 128 + 131 + 131 + 128;
+            assert_eq!(expected_preparation, 1443);
+            assert_eq!(budget.work() - start, expected_preparation);
             let retained = budget.storage();
             assert_eq!(retained - floor, 131 * std::mem::size_of::<Origin>());
             let peak = budget.peak_storage();
@@ -202,6 +206,7 @@ fn prepared_origins_restore_storage_on_exact_resource_and_query_failures() {
                     SUBJECT,
                     &mut budget,
                     |origins, budget| {
+                        assert_eq!(budget.work(), 46);
                         let live = budget.storage();
                         let result =
                             origins.resolve(ValueId(if missing { 401 } else { 400 }), budget);
@@ -237,6 +242,39 @@ fn prepared_origins_restore_storage_on_exact_resource_and_query_failures() {
             assert_eq!(outer.storage(), floor);
         },
     );
+}
+
+#[test]
+fn origin_consumer_temporaries_preserve_nested_results_and_the_caller_floor() {
+    let mut entry = block(77, None);
+    entry.terminator = branch(18, 98);
+    with_inventory(vec![entry, block(18, Some(400))], |inventory, owner, _| {
+        for fail in [false, true] {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+            let mut budget = Budget::new(&mut work, LIMIT);
+            budget.reserve_storage(23).unwrap();
+            let preparation_bytes = 4
+                * (std::mem::size_of::<Origin>() + 2 * std::mem::size_of::<usize>() + 1)
+                + 2 * std::mem::size_of::<usize>();
+            let result = with_whole_value_origins_v1(
+                inventory,
+                owner,
+                SUBJECT,
+                &mut budget,
+                |origins, budget| {
+                    assert_eq!(budget.work(), 46);
+                    assert_eq!(budget.peak_storage(), 23 + preparation_bytes);
+                    assert_eq!(budget.storage(), 23 + 4 * std::mem::size_of::<Origin>());
+                    assert_eq!(origins.origins.len(), 4);
+                    budget.reserve_storage(1000).unwrap();
+                    if fail { Err("consumer refused") } else { Ok(7) }
+                },
+            )
+            .unwrap();
+            assert_eq!(result, if fail { Err("consumer refused") } else { Ok(7) });
+            assert_eq!(budget.storage(), 23);
+        }
+    });
 }
 
 #[test]

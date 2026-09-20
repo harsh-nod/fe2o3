@@ -10,6 +10,9 @@ mod partial_move_dynamic_destination_tests;
 #[path = "transparent_borrow_occurrence_tests.rs"]
 mod transparent_borrow_occurrence_tests;
 
+#[path = "execution_borrow_v29_tests.rs"]
+mod execution_borrow_v29_tests;
+
 #[path = "streaming_replay_tests.rs"]
 mod streaming_replay_tests;
 

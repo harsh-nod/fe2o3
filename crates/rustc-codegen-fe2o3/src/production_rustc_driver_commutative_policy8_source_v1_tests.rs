@@ -151,6 +151,9 @@ fn observe_bound_view(
     if budget.storage() != floor || budget.work_ledger_identity_v1() != ledger || replay_work == 0 {
         return Err("same live stage/tail replay lost ledger/floor/work".into());
     }
+    // Both Direct and UnitLocal paths require the actual full-stage exporter
+    // and independent decoded history; old output/SIM assertions stay intact.
+    view.history_round_trip(budget)?;
     // P7 may have changed N already. The expected two reversed dynamic bitwise
     // expressions and one retained dynamic U32 Divide are checked in actual J,
     // not inferred by copying original-N coordinates or an old component report.

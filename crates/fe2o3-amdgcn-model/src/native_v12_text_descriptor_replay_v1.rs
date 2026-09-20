@@ -185,27 +185,35 @@ impl<'o, 'c, 'd, 'l> ReplayedNativeV12TextDescriptorRelationV1<'o, 'c, 'd, 'l> {
     }
 }
 
-fn scoped<T>(
-    budget: &mut Budget<'_>,
-    run: impl FnOnce(&mut Budget<'_>) -> Result<T, E>,
+fn scoped<'work, T>(
+    budget: &mut Budget<'work>,
+    run: impl FnOnce(&mut Budget<'work>) -> Result<T, E>,
 ) -> Result<T, E> {
     let floor = budget.storage();
-    let result = match catch_unwind(AssertUnwindSafe(|| run(budget))) {
+    let ledger = budget.work_ledger_identity_v1();
+    let mut payloads = [None, None];
+    let mut result = match catch_unwind(AssertUnwindSafe(|| run(budget))) {
         Ok(result) => result,
         Err(payload) => {
-            drop(payload);
+            payloads[0] = Some(payload);
             Err(E::Panicked)
         }
     };
-    let restored = budget
-        .storage()
-        .checked_sub(floor)
-        .ok_or(Resource::Accounting)
-        .and_then(|bytes| budget.release_storage(bytes));
+    let restored = if ledger != budget.work_ledger_identity_v1() {
+        Err(Resource::Accounting)
+    } else {
+        budget
+            .storage()
+            .checked_sub(floor)
+            .ok_or(Resource::Accounting)
+            .and_then(|bytes| budget.release_storage(bytes))
+    };
     if let Err(error) = restored {
-        drop(result);
-        return Err(error.into());
+        let rejected = std::mem::replace(&mut result, Err(error.into()));
+        payloads[1] = catch_unwind(AssertUnwindSafe(|| drop(rejected))).err();
     }
+    // Payload destructors may panic; restore only the original ledger first.
+    drop(payloads);
     result
 }
 
@@ -596,6 +604,10 @@ pub fn check_native_v12_text_descriptor_relation_v1<'o, 'c, 'd, 'l>(
         })
     })
 }
+
+#[cfg(test)]
+#[path = "native_v12_text_descriptor_scope_v1_tests.rs"]
+mod scope_tests;
 
 #[cfg(test)]
 mod tests {

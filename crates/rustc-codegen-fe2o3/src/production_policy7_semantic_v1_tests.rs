@@ -4,6 +4,9 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_kernel_opt::encode_checked_canonical_policy4_execution_receipt_v1;
 
+#[path = "production_policy7_semantic_parity_v1_tests.rs"]
+mod parity;
+
 fn validate<'a>(
     stage: &'a PreparedPolicy7ArtifactsV1,
     policy4_wire: &'a [u8],
@@ -83,6 +86,7 @@ pub(crate) fn exercise(stage: &PreparedPolicy7ArtifactsV1, budget: &mut Budget<'
         integer_record: checked.continuation().execution().canonical_bytes(),
         transition_wire: transition.canonical_bytes(),
     };
+    parity::exercise(stage, p4.canonical_bytes(), claims, budget);
     let floor = budget.storage();
     // Decode genuine producer bytes, then borrow the owned rows into the real
     // independent I/J checker. This is not a raw-to-sealed witness constructor.

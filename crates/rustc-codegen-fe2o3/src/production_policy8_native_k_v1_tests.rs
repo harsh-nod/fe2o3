@@ -45,6 +45,9 @@ fn check_artifacts(
     artifacts
         .verify_equivalence(profile, typed, budget)
         .unwrap();
+    crate::production_pipeline::checked_output_policy8_v1::semantic::tests::exercise(
+        artifacts, budget,
+    );
     crate::production_pipeline::checked_output_policy8_v1::native::tests::exercise_producer_limits_v1(
         artifacts.native_worker_output_v1().prepared, profile,
     );

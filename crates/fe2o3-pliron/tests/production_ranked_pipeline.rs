@@ -44,6 +44,9 @@ use fe2o3_pliron::{
 };
 use fe2o3_proof_contracts::DigestV1;
 
+#[path = "production_ranked_pipeline/refinement_staging_v2.rs"]
+mod refinement_staging_v2;
+
 const VIEW: ProductionRankedValueIdV1 = ProductionRankedValueIdV1::new(0);
 const INDEX: ProductionRankedValueIdV1 = ProductionRankedValueIdV1::new(1);
 

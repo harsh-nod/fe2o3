@@ -1,4 +1,6 @@
 //! Child of the existing P7 tests: reuse its genuine consumed prefix fixture.
+#[path = "checked_optimization_policy8_transport_v1_tests.rs"]
+mod transport;
 use super::{Prepared, STORAGE, WORK, encode, fixture, prepared_module_with_work};
 use crate::*;
 use fe2o3_kernel_ir::{

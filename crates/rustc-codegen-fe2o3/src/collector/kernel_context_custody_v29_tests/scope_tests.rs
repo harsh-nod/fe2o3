@@ -35,9 +35,16 @@ fn pending(semantic: &AdmittedInertSemanticMirV1) -> PendingWorkgroupScopesV29 {
 
 fn capture(
     semantic: &AdmittedInertSemanticMirV1,
+    change: impl FnMut(usize, &mut Vec<ScopeEventV29>),
+) -> PendingWorkgroupScopesV29 {
+    capture_with_pending(semantic, pending(semantic), change)
+}
+
+fn capture_with_pending(
+    semantic: &AdmittedInertSemanticMirV1,
+    mut pending: PendingWorkgroupScopesV29,
     mut change: impl FnMut(usize, &mut Vec<ScopeEventV29>),
 ) -> PendingWorkgroupScopesV29 {
-    let mut pending = pending(semantic);
     for (index, function) in semantic.functions().iter().enumerate() {
         let function_id = SemanticFunctionIdV1::from_index(index as u32);
         let mut events = Vec::new();
@@ -92,6 +99,19 @@ fn seal(
 
 pub(super) fn complete(semantic: &AdmittedInertSemanticMirV1) -> RetainedContextEntriesV29 {
     seal(capture(semantic, |_, _| {}), semantic).unwrap()
+}
+
+pub(super) fn complete_ordinary(
+    semantic: &AdmittedInertSemanticMirV1,
+) -> RetainedContextEntriesV29 {
+    let pending = PendingWorkgroupScopesV29::new(
+        vec![ScopeCallableV29::Ordinary; semantic.callables().len()],
+        declarations(semantic),
+        semantic.target(),
+        semantic.functions().len(),
+    )
+    .unwrap();
+    seal(capture_with_pending(semantic, pending, |_, _| {}), semantic).unwrap()
 }
 
 fn ordinary_root(root: &SemanticFunctionDeclV1) -> SemanticFunctionDeclV1 {
@@ -188,7 +208,7 @@ fn materialization_source_keeps_context_subset_of_the_physical_root_roster() {
     let launch = launch_roster(&semantic);
     let owner = ssa_owner(semantic);
     let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(10_000);
-    let mut budget = VisitBudget::new(&mut work, 7);
+    let mut budget = VisitBudget::new(&mut work, projection_storage(&receipt) + 7);
     budget.reserve_storage(7).unwrap();
     let view = receipt
         .materialization_source_v29(owner.source_semantic(), &mut budget)

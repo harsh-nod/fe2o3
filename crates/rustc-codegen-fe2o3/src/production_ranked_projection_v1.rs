@@ -19,6 +19,8 @@ mod helper_source_fixture_v1 {
 mod analysis_multi_split_v1;
 mod canonical_assertion_facts_v1;
 #[cfg(test)]
+pub(crate) mod conditional_bound_observation_v1_tests;
+#[cfg(test)]
 pub(crate) mod conditional_output_observation_v1_tests;
 mod gfx942_inline_value_projection_v30;
 mod materialized_callable_effect_v1;
@@ -3760,6 +3762,8 @@ fn project_and_verify_ranked_root_with_singletons_v1(
     let (lowering, effect_receipts) = if reference_bindings.as_slice().is_empty() {
         #[cfg(test)]
         conditional_output_observation_v1_tests::reject_unannotated()?;
+        #[cfg(test)]
+        conditional_bound_observation_v1_tests::reject_unannotated()?;
         let ranked_ir = format_ranked_cfg(function_name(root_function)?, kernel.blocks())?;
         let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, kernel)
             .map_err(ProductionRankedProjectionErrorV1::Construction)?;
@@ -3803,6 +3807,22 @@ fn project_and_verify_ranked_root_with_singletons_v1(
                     &ranked_ir,
                 ),
             )?;
+        }
+        #[cfg(test)]
+        if conditional_bound_observation_v1_tests::is_active() {
+            let bound = request
+                .prove_and_bind()
+                .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?;
+            assertion_facts.observe_conditional_bound_for_test_v1(
+                bound,
+                selection.root().index(),
+                source_root.source_rank(),
+                &access_sources,
+                &executable_effect_sources,
+            )?;
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                conditional_bound_observation_v1_tests::STOP,
+            ));
         }
         request
             .prove_and_compile()

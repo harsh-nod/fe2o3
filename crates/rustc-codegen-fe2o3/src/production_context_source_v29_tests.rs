@@ -6,12 +6,22 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_lower_mir_kernel::{ProductionCheckedContextRootV29, ProductionContextRootErrorV29};
 use fe2o3_mir_model::semantic_mir_v1::*;
+use fe2o3_mir_model::{SsaBlockIdV1, SsaResolvedEventV1, SsaVariableIdV1};
+use fe2o3_pliron::{
+    ProductionSemanticSsaEntryOriginV1 as EntryOrigin,
+    ProductionSemanticSsaEventOccurrenceV1 as Event, ProductionSemanticSsaEventRoleV1 as EventRole,
+    ProductionSemanticSsaOccurrenceSiteV1 as Site,
+    ProductionSemanticSsaOperandRoleV1 as OperandRole,
+};
 use std::fmt::Write as _;
 
 const ARGS: &str = "FE2O3_TEST_CONTEXT_SOURCE_ARGS_V29";
 const RESULT: &str = "FE2O3_TEST_CONTEXT_SOURCE_RESULT_V29";
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::context_source_child";
 const REPORT_BYTES: usize = 2 * 1024 * 1024;
+
+#[path = "production_pending_context_source_v29_tests.rs"]
+mod pending_source_tests;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct SourceObservation {
@@ -21,10 +31,12 @@ struct SourceObservation {
     derives: usize,
     rust_call_functions: usize,
     borrows: usize,
+    promoted_context_borrows: usize,
     helper_stores: usize,
     helper_stored_u32: Option<u32>,
     provider: Option<u32>,
     provider_calls: usize,
+    checked_provider_receivers: usize,
     provider_returns: usize,
     provider_returned_u32: Option<u32>,
     structure: String,
@@ -149,6 +161,51 @@ fn literal_return_through_defined_calls(
     Ok(None)
 }
 
+fn context_reference(
+    source: &AdmittedInertSemanticMirV1,
+    ty: SemanticTypeIdV1,
+    context: SemanticTypeIdV1,
+) -> bool {
+    matches!(
+        source.types()[ty.index() as usize].shape(),
+        SemanticTypeShapeV1::Pointer(pointer)
+            if pointer.kind() == SemanticPointerKindV1::Reference
+                && pointer.pointee() == context
+    )
+}
+
+fn exact_event<'a>(
+    events: &'a [Event],
+    site: Site,
+    operand: OperandRole,
+    role: EventRole,
+    local: SemanticLocalIdV1,
+    budget: &mut Budget<'_>,
+) -> Result<&'a Event, ResourceError> {
+    budget.charge_work(events.len())?;
+    let mut matching = events
+        .iter()
+        .filter(|event| event.site() == site && event.operand() == operand && event.role() == role);
+    let event = matching.next().unwrap_or_else(|| {
+        panic!("missing source event: {site:?} {operand:?} {role:?} local={local:?}")
+    });
+    assert!(
+        matching.next().is_none(),
+        "duplicate source event: {site:?} {operand:?} {role:?}"
+    );
+    assert_eq!(
+        event.event().variable(),
+        SsaVariableIdV1::new(local.index())
+    );
+    if event.is_reachable() {
+        assert!(event.is_promoted(), "{event:?}");
+        assert!(event.resolved().is_some(), "{event:?}");
+    } else {
+        assert!(event.resolved().is_none(), "{event:?}");
+    }
+    Ok(event)
+}
+
 fn observe(
     root: ProductionCheckedContextRootV29<'_>,
     budget: &mut Budget<'_>,
@@ -156,6 +213,7 @@ fn observe(
 ) -> Result<SourceObservation, ProductionContextRootErrorV29> {
     let ssa = root.semantic_ssa();
     let source = ssa.source_semantic();
+    let occurrences = ssa.occurrences_v1().expect("same-owner occurrence capture");
     assert_eq!(source.wire_version(), SemanticMirWireVersionV1::V29);
     assert!(std::ptr::eq(
         root.root(),
@@ -172,19 +230,31 @@ fn observe(
         derives: 0,
         rust_call_functions: 0,
         borrows: 0,
+        promoted_context_borrows: 0,
         helper_stores: 0,
         helper_stored_u32: None,
         provider: None,
         provider_calls: 0,
+        checked_provider_receivers: 0,
         provider_returns: 0,
         provider_returned_u32: None,
         structure: String::new(),
     };
     for (index, function) in source.functions().iter().enumerate() {
         budget.charge_work(1)?;
+        let captured = occurrences
+            .function(SemanticFunctionIdV1::from_index(index as u32))
+            .unwrap();
+        budget.charge_work(captured.entry_definitions().len())?;
+        for entry in captured.entry_definitions() {
+            let ty = function.locals()[entry.variable().get() as usize].ty();
+            if ty == root.context_type() || context_reference(source, ty, root.context_type()) {
+                assert_ne!(entry.origin(), EntryOrigin::ImplicitCapability);
+            }
+        }
         observation.rust_call_functions +=
             usize::from(function.abi().extern_abi() == SemanticExternAbiV1::RustCall);
-        for block in function.blocks() {
+        for (block_index, block) in function.blocks().iter().enumerate() {
             budget.charge_work(2)?;
             if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
                 && matches!(
@@ -200,13 +270,54 @@ fn observe(
                 observation.derives += 1;
                 assert!(observation.provider.replace(index as u32).is_none());
             }
-            for statement in block.statements() {
+            for (statement_index, statement) in block.statements().iter().enumerate() {
                 budget.charge_work(2)?;
                 if let SemanticStatementKindV1::Assign(assignment) = statement.kind() {
                     observation.borrows += usize::from(matches!(
                         assignment.value().kind(),
                         SemanticRvalueKindV1::Borrow { .. }
                     ));
+                    if let SemanticRvalueKindV1::Borrow {
+                        place,
+                        kind: SemanticBorrowKindV1::Mutable,
+                    } = assignment.value().kind()
+                        && place.ty() == root.context_type()
+                    {
+                        let site = Site::Statement {
+                            block: SsaBlockIdV1::new(block_index as u32),
+                            statement: statement_index as u32,
+                        };
+                        budget.charge_work(captured.elisions().len())?;
+                        assert!(!captured.elisions().contains(&site));
+                        let base = exact_event(
+                            captured.events(),
+                            site,
+                            OperandRole::RvaluePlace,
+                            EventRole::BaseUse,
+                            place.local(),
+                            budget,
+                        )?;
+                        let definition = exact_event(
+                            captured.events(),
+                            site,
+                            OperandRole::Destination,
+                            EventRole::DestinationDefine,
+                            assignment.destination().local(),
+                            budget,
+                        )?;
+                        assert_eq!(base.is_reachable(), definition.is_reachable());
+                        if base.is_reachable() {
+                            assert!(matches!(
+                                base.resolved(),
+                                Some(SsaResolvedEventV1::Use { .. })
+                            ));
+                            assert!(matches!(
+                                definition.resolved(),
+                                Some(SsaResolvedEventV1::Define { .. })
+                            ));
+                            observation.promoted_context_borrows += 1;
+                        }
+                    }
                     budget.charge_work(assignment.destination().projections().len())?;
                     if index == observation.helper as usize
                         && assignment
@@ -240,9 +351,32 @@ fn observe(
     if let Some(provider) = observation.provider {
         assert_ne!(provider, observation.root);
         assert_ne!(provider, observation.helper);
-        for function in source.functions() {
+        let body = &source.functions()[provider as usize];
+        assert_eq!(body.item_definition_identity(), provider_definition);
+        budget.charge_work(body.abi().source_input_types().len())?;
+        let mut receivers =
+            body.abi()
+                .source_input_types()
+                .iter()
+                .enumerate()
+                .filter(|(ordinal, ty)| {
+                    context_reference(source, **ty, root.context_type())
+                        && matches!(
+                            source.types()[ty.index() as usize].shape(),
+                            SemanticTypeShapeV1::Pointer(pointer)
+                                if pointer.mutability() == SemanticMutabilityV1::Mutable
+                        )
+                        && body.abi().source_argument_ownership()[*ordinal]
+                            == SemanticSourceArgumentOwnershipV1::UniqueBorrow
+                });
+        let (receiver, _) = receivers.next().expect("provider Context receiver");
+        assert!(receivers.next().is_none());
+        for (function_index, function) in source.functions().iter().enumerate() {
             budget.charge_work(1)?;
-            for block in function.blocks() {
+            let captured = occurrences
+                .function(SemanticFunctionIdV1::from_index(function_index as u32))
+                .unwrap();
+            for (block_index, block) in function.blocks().iter().enumerate() {
                 budget.charge_work(1)?;
                 if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
                     && matches!(source.callables().get(call.callee().index() as usize),
@@ -250,11 +384,57 @@ fn observe(
                             if function.index() == provider)
                 {
                     observation.provider_calls += 1;
+                    let argument = &call.arguments()[receiver];
+                    let (SemanticOperandV1::Move(place) | SemanticOperandV1::Copy(place)) =
+                        argument
+                    else {
+                        panic!("provider receiver must retain its source place");
+                    };
+                    let site = Site::Terminator {
+                        block: SsaBlockIdV1::new(block_index as u32),
+                    };
+                    let operand = OperandRole::CallArgument(receiver as u32);
+                    let used = exact_event(
+                        captured.events(),
+                        site,
+                        operand,
+                        EventRole::BaseUse,
+                        place.local(),
+                        budget,
+                    )?;
+                    if matches!(argument, SemanticOperandV1::Move(_))
+                        && place.projections().is_empty()
+                    {
+                        let killed = exact_event(
+                            captured.events(),
+                            site,
+                            operand,
+                            EventRole::MoveKill,
+                            place.local(),
+                            budget,
+                        )?;
+                        assert_eq!(used.is_reachable(), killed.is_reachable());
+                        if let Some(SsaResolvedEventV1::Use { value, .. }) = used.resolved() {
+                            assert!(matches!(killed.resolved(),
+                                Some(SsaResolvedEventV1::Kill { previous: Some(previous), .. })
+                                    if previous == value));
+                        }
+                    } else {
+                        budget.charge_work(captured.events().len())?;
+                        assert!(!captured.events().iter().any(|event| event.site() == site
+                            && event.operand() == operand
+                            && event.role() == EventRole::MoveKill));
+                    }
+                    if used.is_reachable() {
+                        assert!(matches!(
+                            used.resolved(),
+                            Some(SsaResolvedEventV1::Use { .. })
+                        ));
+                        observation.checked_provider_receivers += 1;
+                    }
                 }
             }
         }
-        let body = &source.functions()[provider as usize];
-        assert_eq!(body.item_definition_identity(), provider_definition);
         observation.provider_returned_u32 =
             literal_return_through_defined_calls(source, provider as usize, budget)?;
         for block in body.blocks() {
@@ -421,6 +601,64 @@ fn actual_context_store_reaches_the_checked_root_consumer() {
 }
 
 fn check_actual_sources(cases: &[(&str, &str)], expected_derives: usize, profiles: &[(u8, u8)]) {
+    run_actual_sources::<SourceObservation>(
+        cases,
+        profiles,
+        CHILD,
+        "CONTEXT_SOURCE_OBSERVATION",
+        source,
+        |opt, mir, label, observation, observations| {
+            assert_eq!(observation.derives, expected_derives);
+            assert_eq!(observation.helper_stores, 1);
+            if opt == 3 && mir == 2 {
+                let expected = match label {
+                    "constant7" | "discarded" => Some(7),
+                    "constant11" => Some(11),
+                    _ => None,
+                };
+                assert_eq!(observation.provider_returned_u32, expected, "{label}");
+            }
+            if expected_derives != 0 {
+                assert!(observation.borrows > 0);
+                assert!(observation.promoted_context_borrows > 0);
+                assert!(observation.provider.is_some());
+                assert_eq!(observation.provider_calls, 1);
+                assert_eq!(
+                    observation.checked_provider_receivers,
+                    observation.provider_calls
+                );
+                assert_eq!(observation.provider_returns, 1);
+                assert_eq!(observation.helper_stored_u32, None);
+            } else {
+                assert_eq!(observation.promoted_context_borrows, 0);
+                assert_eq!(observation.checked_provider_receivers, 0);
+                assert_eq!(observation.provider, None);
+                assert_eq!(observation.provider_calls, 0);
+                assert_eq!(observation.provider_returns, 0);
+            }
+            if let Some(previous) = observations.get(label) {
+                assert_eq!(&observation, previous, "fresh-process source observation");
+            } else {
+                for previous in observations.values() {
+                    assert_ne!(
+                        observation.source, previous.source,
+                        "changed source cannot reuse the observation"
+                    );
+                }
+                observations.insert(label.to_owned(), observation);
+            }
+        },
+    );
+}
+
+fn run_actual_sources<T: Serialize + serde::de::DeserializeOwned + std::fmt::Debug>(
+    cases: &[(&str, &str)],
+    profiles: &[(u8, u8)],
+    child: &str,
+    tag: &str,
+    program: impl Fn(&str) -> String,
+    mut validate: impl FnMut(u8, u8, &str, T, &mut std::collections::BTreeMap<String, T>),
+) {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -496,10 +734,10 @@ fn check_actual_sources(cases: &[(&str, &str)], expected_derives: usize, profile
         let core = artifact(&messages, "core");
         let builtins = artifact(&messages, "compiler_builtins");
         for &(opt, mir) in profiles {
-            let mut observations = std::collections::BTreeMap::<&str, SourceObservation>::new();
+            let mut observations = std::collections::BTreeMap::<String, T>::new();
             for (ordinal, (label, body)) in cases.iter().enumerate() {
                 let source_path = scratch.path().join(format!("{label}.rs"));
-                std::fs::write(&source_path, source(body)).unwrap();
+                std::fs::write(&source_path, program(body)).unwrap();
                 let compiler_output = scratch
                     .path()
                     .join(format!("output-{target}-{opt}-{mir}-{ordinal}"));
@@ -566,7 +804,7 @@ fn check_actual_sources(cases: &[(&str, &str)], expected_derives: usize, profile
                 std::fs::write(&request, serde_json::to_vec(&args).unwrap()).unwrap();
                 let child = clean_command(env::current_exe().unwrap())
                     .current_dir(&workspace)
-                    .args(["--exact", CHILD, "--ignored", "--nocapture"])
+                    .args(["--exact", child, "--ignored", "--nocapture"])
                     .env(ARGS, &request)
                     .env(RESULT, &response)
                     .env("FE2O3_CONTEXT_PROTOCOL_SOURCE", &source_path)
@@ -591,46 +829,15 @@ fn check_actual_sources(cases: &[(&str, &str)], expected_derives: usize, profile
                     ));
                     continue;
                 }
-                let result: Result<SourceObservation, String> =
+                let result: Result<T, String> =
                     serde_json::from_slice(&std::fs::read(&response).unwrap()).unwrap();
                 let observation = result.unwrap();
                 eprintln!(
-                    "CONTEXT_SOURCE_OBSERVATION {target}/opt{opt}/mir{mir}/{label}: {}\n{}",
+                    "{tag} {target}/opt{opt}/mir{mir}/{label}: {}\n{}",
                     serde_json::to_string(&observation).unwrap(),
                     String::from_utf8_lossy(&child.stdout)
                 );
-                assert_eq!(observation.derives, expected_derives);
-                assert_eq!(observation.helper_stores, 1);
-                if opt == 3 && mir == 2 {
-                    let expected = match *label {
-                        "constant7" | "discarded" => Some(7),
-                        "constant11" => Some(11),
-                        _ => None,
-                    };
-                    assert_eq!(observation.provider_returned_u32, expected, "{label}");
-                }
-                if expected_derives != 0 {
-                    assert!(observation.borrows > 0);
-                    assert!(observation.provider.is_some());
-                    assert_eq!(observation.provider_calls, 1);
-                    assert_eq!(observation.provider_returns, 1);
-                    assert_eq!(observation.helper_stored_u32, None);
-                } else {
-                    assert_eq!(observation.provider, None);
-                    assert_eq!(observation.provider_calls, 0);
-                    assert_eq!(observation.provider_returns, 0);
-                }
-                if let Some(previous) = observations.get(label) {
-                    assert_eq!(&observation, previous, "fresh-process source observation");
-                } else {
-                    for previous in observations.values() {
-                        assert_ne!(
-                            observation.source, previous.source,
-                            "changed source cannot reuse the observation"
-                        );
-                    }
-                    observations.insert(label, observation);
-                }
+                validate(opt, mir, label, observation, &mut observations);
             }
         }
         std::fs::remove_dir_all(&dependency_target).unwrap();
