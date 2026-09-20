@@ -1,0 +1,15 @@
+{
+  "label": "create",
+  "command": [
+    "ssh",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "mi300x",
+    "/usr/bin/mktemp -d /home/harsh/fe2o3-ordered-peer-smoke-20260920.XXXXXXXX"
+  ],
+  "exit": 0,
+  "started_unix_ns": 1789943791024272825,
+  "finished_unix_ns": 1789943791762854633
+}

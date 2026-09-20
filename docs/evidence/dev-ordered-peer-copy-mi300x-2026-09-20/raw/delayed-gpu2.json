@@ -1,0 +1,15 @@
+{
+  "label": "delayed-gpu2",
+  "command": [
+    "ssh",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "mi300x",
+    "/usr/bin/python3 -I -B /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/copy-host-observe.py --gpu-index 2 --pci-bdf 0000:46:00.0 --unique-id 0xd2e26fef80cf5c33"
+  ],
+  "exit": 0,
+  "started_unix_ns": 1789943843118612536,
+  "finished_unix_ns": 1789943846056329497
+}

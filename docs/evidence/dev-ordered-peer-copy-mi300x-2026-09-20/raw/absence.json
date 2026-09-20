@@ -1,0 +1,15 @@
+{
+  "label": "absence",
+  "command": [
+    "ssh",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "mi300x",
+    "/usr/bin/python3 -I -B -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); assert not p.exists() and not p.is_symlink(); print('\"'\"'owned_absence=passed'\"'\"')' /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2"
+  ],
+  "exit": 0,
+  "started_unix_ns": 1789943847996118728,
+  "finished_unix_ns": 1789943848787244331
+}

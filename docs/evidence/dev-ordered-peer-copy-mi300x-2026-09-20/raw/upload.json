@@ -1,0 +1,16 @@
+{
+  "label": "upload",
+  "command": [
+    "scp",
+    "-q",
+    "-o",
+    "BatchMode=yes",
+    "--",
+    "/dev/shm/fe2o3-link-parser-build-20260920.2LJm2Q0Q/target/x86_64-unknown-linux-musl/debug/examples/gfx942-runtime-xgmi-segments-smoke",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/benchmarks/runtime_gfx942/copy-host-observe.py",
+    "mi300x:/home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/"
+  ],
+  "exit": 0,
+  "started_unix_ns": 1789943791763480838,
+  "finished_unix_ns": 1789943794570366550
+}

@@ -1,0 +1,15 @@
+{
+  "label": "settled-gpu1",
+  "command": [
+    "ssh",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "mi300x",
+    "/usr/bin/python3 -I -B /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/copy-host-observe.py --gpu-index 1 --pci-bdf 0000:26:00.0 --unique-id 0xab83d2ffef0d3cdf"
+  ],
+  "exit": 0,
+  "started_unix_ns": 1789943814719133822,
+  "finished_unix_ns": 1789943817684411916
+}

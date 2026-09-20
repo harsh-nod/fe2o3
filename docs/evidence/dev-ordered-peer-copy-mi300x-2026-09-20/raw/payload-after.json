@@ -1,0 +1,15 @@
+{
+  "label": "payload-after",
+  "command": [
+    "ssh",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "mi300x",
+    "/usr/bin/sha256sum -- /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/gfx942-runtime-xgmi-segments-smoke /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/copy-host-observe.py"
+  ],
+  "exit": 0,
+  "started_unix_ns": 1789943846063020326,
+  "finished_unix_ns": 1789943846874786372
+}

@@ -1,0 +1,199 @@
+{
+  "schema": "fe2o3.ordered-peer-cpu-replay.v1",
+  "source_commit": "a1301779d5536723cbbb5693823ce7f652d91129",
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": {
+    "HOME": "/home/harsh",
+    "PATH": "/home/harsh/.cargo/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "RUSTUP_TOOLCHAIN": "nightly-2026-04-03",
+    "CARGO_TARGET_DIR": "/dev/shm/fe2o3-link-parser-build-20260920.2LJm2Q0Q/target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_TERM_COLOR": "never",
+    "RUST_TEST_THREADS": "2",
+    "CARGO_PROFILE_DEV_OPT_LEVEL": "1",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_DEV_DEBUG_ASSERTIONS": "true",
+    "CARGO_PROFILE_DEV_OVERFLOW_CHECKS": "true",
+    "CARGO_PROFILE_TEST_OPT_LEVEL": "1",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG_ASSERTIONS": "true",
+    "CARGO_PROFILE_TEST_OVERFLOW_CHECKS": "true"
+  },
+  "records": [
+    {
+      "label": "source-before",
+      "command": [
+        "git",
+        "diff",
+        "--exit-code",
+        "a1301779d5536723cbbb5693823ce7f652d91129",
+        "--",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo",
+        "crates"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943918202351500,
+      "finished_unix_ns": 1789943918225048473
+    },
+    {
+      "label": "rustc",
+      "command": [
+        "rustc",
+        "-vV"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943918225053031,
+      "finished_unix_ns": 1789943918250618923
+    },
+    {
+      "label": "cargo",
+      "command": [
+        "cargo",
+        "-V"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943918250625309,
+      "finished_unix_ns": 1789943918269409115
+    },
+    {
+      "label": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-q",
+        "-p",
+        "fe2o3-runtime",
+        "--all-features",
+        "--target",
+        "x86_64-unknown-linux-musl",
+        "--example",
+        "gfx942-runtime-xgmi-segments-smoke"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943918269415154,
+      "finished_unix_ns": 1789943918544448511
+    },
+    {
+      "label": "gnu-runtime",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-q",
+        "-p",
+        "fe2o3-runtime",
+        "--all-features",
+        "--lib"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943918550140253,
+      "finished_unix_ns": 1789943924851321953
+    },
+    {
+      "label": "musl-runtime",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-q",
+        "-p",
+        "fe2o3-runtime",
+        "--all-features",
+        "--target",
+        "x86_64-unknown-linux-musl",
+        "--lib",
+        "--example",
+        "gfx942-runtime-xgmi-segments-smoke"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943924851331568,
+      "finished_unix_ns": 1789943934159583798
+    },
+    {
+      "label": "r74-model",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-q",
+        "-p",
+        "fe2o3-runtime-model",
+        "--lib",
+        "r74_ordered_peer_copy"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943934159591267,
+      "finished_unix_ns": 1789943934536982303
+    },
+    {
+      "label": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-q",
+        "-p",
+        "fe2o3-runtime",
+        "--all-features",
+        "--lib",
+        "--tests",
+        "--example",
+        "gfx942-runtime-xgmi-segments-smoke",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943934536989538,
+      "finished_unix_ns": 1789943968569813774
+    },
+    {
+      "label": "source-after",
+      "command": [
+        "git",
+        "diff",
+        "--exit-code",
+        "a1301779d5536723cbbb5693823ce7f652d91129",
+        "--",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo",
+        "crates"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943968569820579,
+      "finished_unix_ns": 1789943968594724709
+    }
+  ],
+  "binary_sha256": "7897faf9f4657e4204a988a48438ea6bb974d34a472399cdf46253c86803ddb1",
+  "byte_identical_post_trial_build": true,
+  "clean_target_rebuild": false,
+  "files": {
+    "build.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "build.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cargo.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cargo.stdout": "ec757dbb82aca77f9d653bc3a3f1e69665ac3ea072fcfba984595bf479b17fcc",
+    "clippy.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "clippy.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "gnu-runtime.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "gnu-runtime.stdout": "be66b57b6d9eff9d8e5b4858d4622d6b590a0f393faee2c95939a137dcf4e5b6",
+    "musl-runtime.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "musl-runtime.stdout": "3718af9fdea8a941bdf2f68b948c83240fa34b94d1ca3ec2271d93400a1d7023",
+    "r74-model.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "r74-model.stdout": "5560e688dacea36af99cb10dd1a1fd684e95e4e6951bc30c867ab61a72427852",
+    "rustc.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rustc.stdout": "580dbecb7627e4e8ad67fd0b1d539727ba8d2651d04035c907b406d83200b4e2",
+    "source-after.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source-after.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source-before.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source-before.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

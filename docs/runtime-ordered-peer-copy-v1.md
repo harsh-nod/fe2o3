@@ -98,15 +98,58 @@ example's two CPU tests also passed. The no-default-features context/XGMI subset
 passed 195 tests. Warnings-denied all-features Clippy passed for the runtime
 library, tests, and smoke example.
 
-The three focused R74 Rust model tests passed. The independent R74 Verus artifact
+The full Rust model library suite passed 799 tests with two ignored, including
+the three focused R74 tests. The independent R74 Verus artifact
 verified ten obligations, and each of its five expected-negative controls failed
 its named obligation. The registered 691-file negative-quality audit passed.
-The full authenticated proof runner and native hardware qualification are still
-pending at this source checkpoint; targeted results do not substitute for them.
+The complete authenticated `crates/fe2o3-runtime-model/verus/verify-verus.sh`
+run subsequently passed with pinned Verus `0.2026.08.09.92f466f`, all 691
+expected-negative controls, the executable journal/reader mutation checks,
+and final source/toolchain integrity checks. Its terminal transcript matched
+SHA-256 `cc1a7bea894a1905cd90a318744d1a6c0fc39f8fb14521720993804020ab3afb`.
+This establishes the registered model obligations within the scope above,
+not executable Rust/native refinement.
+
+## Native Qualification
+
+Signed implementation `a1301779d5536723cbbb5693823ce7f652d91129` passed all
+eight smoke cases on freshly admitted MI300X GPUs 1 and 2. Both directions
+passed counts 1/65/4096 with whole-operation wait and a four-segment poll/flush
+continuation. Explicit shutdown, settled/delayed endpoint checks, and owned
+remote cleanup passed. The [source-bound correctness packet](evidence/dev-ordered-peer-copy-mi300x-2026-09-20/README.md)
+contains raw receipts, a byte-identical post-trial build and CPU replay, and an
+offline verifier. It is not native fault injection or performance evidence.
+
+## Performance Qualification Plan
+
+The next comparison must use one retained source/destination allocation pair
+and one stream for each backend. Descriptor count is independent of existing
+benchmark queue depth; keep depth one. Start with useful list payloads of
+64 KiB and 2 MiB, each split into 1/65/256/4096 descriptors. Precompute ragged
+lengths, permuted disjoint destination ranges, gaps and outer canaries. Give
+every prime, warmup and sample its own poisoned destination band within the
+same retained allocation. Final whole-allocation validation can then detect
+omitted timed lists, unlike repeated overwrites of a primed range.
+
+Primary baselines should enqueue the full list on one HIP stream, or use an
+HSA predecessor-signal chain, then observe final completion. fe2o3 submits one
+logical sequence and waits for the whole operation, including descriptor
+validation, journal work, and full closing currentness. A host-wait-per-segment
+HIP/HSA mode may be reported separately, but must not be the sole comparison.
+
+Use one absolute deadline per list, identical plans and device identities,
+matched warmup/sample counts, raw samples, and fresh shared-host admission.
+Report whole-list p50/p95 latency and useful bytes per second. List time divided
+by descriptor count is amortized time per segment, not measured individual
+segment latency. HIP/HSA do not provide fe2o3's full-currentness contract; the
+comparison must disclose that difference. No host access occurs between timed
+lists; initialization, readback, and completion-record cleanup are outside the
+declared timed interval. A separate untimed overlap case checks last-writer
+ordering. The existing generic benchmark runner is not evidence that these
+workloads are matched and needs an explicit new mode.
 
 ## Remaining Work
 
-- Native hardware qualification and a source-bound evidence packet.
 - Matched useful-segment workloads against HIP/HSA, including admission and
   completion costs. No new speedup or parity claim follows from this API.
 - Owner-engine convenience wrappers with descriptor budget accounting, graph

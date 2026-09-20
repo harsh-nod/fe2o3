@@ -43,6 +43,8 @@ documentation.
 - [Worker V3 load envelope](worker-v3-receipt-bearing-load-envelope-v2.md)
 - [Pure-Rust runtime](formally-verified-pure-rust-runtime-v1.md)
 - [Runtime identity oracle](runtime-identity-oracle-v1.md)
+- [Ordered peer copy V1](runtime-ordered-peer-copy-v1.md): local SPI contract,
+  bounded XGMI execution, verification scope, and qualification plan.
 - [Device operations](device-operations.md)
 - [Device memory safety](device-memory-safety.md)
 
@@ -108,6 +110,8 @@ replacement for the support matrix.
   screen](evidence/mi300x-r56-two-native-logical-mux-screen-2026-09-07.md)
 - [MI300X R57 N3 persistent-compute qualification
   evidence](evidence/mi300x-r57-n3-qualification-2026-09-08.md)
+- [MI300X ordered peer-copy correctness
+  evidence](evidence/dev-ordered-peer-copy-mi300x-2026-09-20/README.md)
 
 Evidence documents describe exact qualified observations. They do not silently
 upgrade an experimental target or path into a supported public interface.

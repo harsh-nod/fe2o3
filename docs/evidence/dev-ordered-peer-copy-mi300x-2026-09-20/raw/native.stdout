@@ -1,0 +1,9 @@
+direction=0 segments=1 poll_flush=false correctness=passed
+direction=0 segments=65 poll_flush=false correctness=passed
+direction=0 segments=4096 poll_flush=false correctness=passed
+direction=0 segments=4 poll_flush=true correctness=passed
+direction=1 segments=1 poll_flush=false correctness=passed
+direction=1 segments=65 poll_flush=false correctness=passed
+direction=1 segments=4096 poll_flush=false correctness=passed
+direction=1 segments=4 poll_flush=true correctness=passed
+native_shutdown=passed

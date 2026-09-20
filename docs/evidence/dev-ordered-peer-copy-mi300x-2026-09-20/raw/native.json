@@ -1,0 +1,15 @@
+{
+  "label": "native",
+  "command": [
+    "ssh",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=10",
+    "mi300x",
+    "/usr/bin/python3 -I -B -c 'import os,resource,sys; resource.setrlimit(resource.RLIMIT_CORE,(0,0)); os.chdir(sys.argv[1]); os.execvpe(sys.argv[2],sys.argv[2:],os.environ)' /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2 /usr/bin/env -u HIP_VISIBLE_DEVICES -u ROCR_VISIBLE_DEVICES -u CUDA_VISIBLE_DEVICES -u GPU_DEVICE_ORDINAL TMPDIR=/home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2 /usr/bin/timeout --signal=TERM --kill-after=5s 180s /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/gfx942-runtime-xgmi-segments-smoke 0xab83d2ffef0d3cdf 0xd2e26fef80cf5c33"
+  ],
+  "exit": 0,
+  "started_unix_ns": 1789943801649449354,
+  "finished_unix_ns": 1789943812718582332
+}

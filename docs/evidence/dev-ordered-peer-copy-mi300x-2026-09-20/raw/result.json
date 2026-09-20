@@ -1,0 +1,282 @@
+{
+  "schema": "fe2o3.ordered-peer-smoke.v1",
+  "source_commit": "a1301779d5536723cbbb5693823ce7f652d91129",
+  "controller_sha256": "b699a9ee5dc82fce2a9d75b3998aa747718f2a4fb8e8e1e682df0f5c1f532d2b",
+  "target": "x86_64-unknown-linux-musl",
+  "profile": "dev opt-level=1 debug=0 debug-assertions=true overflow-checks=true incremental=0",
+  "features": "all-features",
+  "binary_sha256": "7897faf9f4657e4204a988a48438ea6bb974d34a472399cdf46253c86803ddb1",
+  "observer_sha256": "5d37b09bf0823854c6a45b914d866c042c1e65486cd96c6301285a0147ae6c51",
+  "devices": [
+    [
+      1,
+      "0000:26:00.0",
+      "0xab83d2ffef0d3cdf"
+    ],
+    [
+      2,
+      "0000:46:00.0",
+      "0xd2e26fef80cf5c33"
+    ]
+  ],
+  "remote_owned": "/home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2",
+  "owned_cleanup": true,
+  "performance_accepted": false,
+  "exclusive_reservation": false,
+  "failure": null,
+  "records": [
+    {
+      "label": "source-signature",
+      "command": [
+        "git",
+        "-c",
+        "gpg.ssh.allowedSignersFile=/home/harsh/.codex-tmp/fe2o3-logical-mux-sdma-protocol-v2-20260918/allowed-signers",
+        "verify-commit",
+        "a1301779d5536723cbbb5693823ce7f652d91129"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943791001392947,
+      "finished_unix_ns": 1789943791023587383
+    },
+    {
+      "label": "create",
+      "command": [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "mi300x",
+        "/usr/bin/mktemp -d /home/harsh/fe2o3-ordered-peer-smoke-20260920.XXXXXXXX"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943791024272825,
+      "finished_unix_ns": 1789943791762854633
+    },
+    {
+      "label": "upload",
+      "command": [
+        "scp",
+        "-q",
+        "-o",
+        "BatchMode=yes",
+        "--",
+        "/dev/shm/fe2o3-link-parser-build-20260920.2LJm2Q0Q/target/x86_64-unknown-linux-musl/debug/examples/gfx942-runtime-xgmi-segments-smoke",
+        "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/benchmarks/runtime_gfx942/copy-host-observe.py",
+        "mi300x:/home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943791763480838,
+      "finished_unix_ns": 1789943794570366550
+    },
+    {
+      "label": "payload-before",
+      "command": [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "mi300x",
+        "/usr/bin/sha256sum -- /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/gfx942-runtime-xgmi-segments-smoke /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/copy-host-observe.py"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943794571213187,
+      "finished_unix_ns": 1789943795358809707
+    },
+    {
+      "label": "preflight-gpu1",
+      "command": [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "mi300x",
+        "/usr/bin/python3 -I -B /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/copy-host-observe.py --gpu-index 1 --pci-bdf 0000:26:00.0 --unique-id 0xab83d2ffef0d3cdf"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943795359298505,
+      "finished_unix_ns": 1789943798670131182
+    },
+    {
+      "label": "preflight-gpu2",
+      "command": [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "mi300x",
+        "/usr/bin/python3 -I -B /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/copy-host-observe.py --gpu-index 2 --pci-bdf 0000:46:00.0 --unique-id 0xd2e26fef80cf5c33"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943798679073308,
+      "finished_unix_ns": 1789943801643766728
+    },
+    {
+      "label": "native",
+      "command": [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "mi300x",
+        "/usr/bin/python3 -I -B -c 'import os,resource,sys; resource.setrlimit(resource.RLIMIT_CORE,(0,0)); os.chdir(sys.argv[1]); os.execvpe(sys.argv[2],sys.argv[2:],os.environ)' /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2 /usr/bin/env -u HIP_VISIBLE_DEVICES -u ROCR_VISIBLE_DEVICES -u CUDA_VISIBLE_DEVICES -u GPU_DEVICE_ORDINAL TMPDIR=/home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2 /usr/bin/timeout --signal=TERM --kill-after=5s 180s /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/gfx942-runtime-xgmi-segments-smoke 0xab83d2ffef0d3cdf 0xd2e26fef80cf5c33"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943801649449354,
+      "finished_unix_ns": 1789943812718582332
+    },
+    {
+      "label": "settled-gpu1",
+      "command": [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "mi300x",
+        "/usr/bin/python3 -I -B /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/copy-host-observe.py --gpu-index 1 --pci-bdf 0000:26:00.0 --unique-id 0xab83d2ffef0d3cdf"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943814719133822,
+      "finished_unix_ns": 1789943817684411916
+    },
+    {
+      "label": "settled-gpu2",
+      "command": [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "mi300x",
+        "/usr/bin/python3 -I -B /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/copy-host-observe.py --gpu-index 2 --pci-bdf 0000:46:00.0 --unique-id 0xd2e26fef80cf5c33"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943817689768762,
+      "finished_unix_ns": 1789943820765409474
+    },
+    {
+      "label": "delayed-gpu1",
+      "command": [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "mi300x",
+        "/usr/bin/python3 -I -B /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/copy-host-observe.py --gpu-index 1 --pci-bdf 0000:26:00.0 --unique-id 0xab83d2ffef0d3cdf"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943840771198090,
+      "finished_unix_ns": 1789943843112994584
+    },
+    {
+      "label": "delayed-gpu2",
+      "command": [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "mi300x",
+        "/usr/bin/python3 -I -B /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/copy-host-observe.py --gpu-index 2 --pci-bdf 0000:46:00.0 --unique-id 0xd2e26fef80cf5c33"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943843118612536,
+      "finished_unix_ns": 1789943846056329497
+    },
+    {
+      "label": "payload-after",
+      "command": [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "mi300x",
+        "/usr/bin/sha256sum -- /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/gfx942-runtime-xgmi-segments-smoke /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2/copy-host-observe.py"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943846063020326,
+      "finished_unix_ns": 1789943846874786372
+    },
+    {
+      "label": "cleanup",
+      "command": [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "mi300x",
+        "/usr/bin/python3 -I -B -c 'import os,pathlib,re,stat,subprocess,sys\np=pathlib.Path(sys.argv[1]); names=sys.argv[2:]\ns=p.lstat()\nassert stat.S_ISDIR(s.st_mode) and s.st_uid==os.geteuid() and stat.S_IMODE(s.st_mode)==0o700\nassert {f.name for f in p.iterdir()} <= set(names)\nprocesses=subprocess.check_output(['\"'\"'/bin/ps'\"'\"','\"'\"'-eo'\"'\"','\"'\"'args='\"'\"'],text=True).splitlines()\nassert not any(re.match('\"'\"'^'\"'\"'+re.escape(str(p/names[0]))+r'\"'\"'(?: |$)'\"'\"',line) for line in processes)\nfor f in p.iterdir():\n s=f.lstat(); assert stat.S_ISREG(s.st_mode) and s.st_uid==os.geteuid()\nfor f in p.iterdir(): f.unlink()\np.rmdir()\nassert not p.exists() and not p.is_symlink()\nprint('\"'\"'owned_cleanup=passed'\"'\"')\n' /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2 gfx942-runtime-xgmi-segments-smoke copy-host-observe.py"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943847006452024,
+      "finished_unix_ns": 1789943847995818506
+    },
+    {
+      "label": "absence",
+      "command": [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "mi300x",
+        "/usr/bin/python3 -I -B -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); assert not p.exists() and not p.is_symlink(); print('\"'\"'owned_absence=passed'\"'\"')' /home/harsh/fe2o3-ordered-peer-smoke-20260920.zET9ZKt2"
+      ],
+      "exit": 0,
+      "started_unix_ns": 1789943847996118728,
+      "finished_unix_ns": 1789943848787244331
+    }
+  ],
+  "files": {
+    "absence.json": "0457112dcb1df4dcb4dac473a0fedea69e55dacd01bb148220506b1c6ae187f7",
+    "absence.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "absence.stdout": "599e12ffd7b164b0f97fce9b69d461bd90cc736d5abb125dadfbeb6613489573",
+    "cleanup.json": "90518a4718c444f69ef33360ef849cc859366787ec3179aacd803df6a5ae0a33",
+    "cleanup.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cleanup.stdout": "46d0002904ad293b1276c3cf4c7b02df7e74d51460006d946bc843468c25ad88",
+    "create.json": "b2967d2b2961f59634bde9c73b9957b4ab850b6f0a93810291ae391b0753a92e",
+    "create.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "create.stdout": "31cc39cd4acf3ab46ac470728a34336c3cdf2670d864e9c068f69e5ac8792ad3",
+    "delayed-gpu1.json": "0d02f2de8b36cb240aa75ed3c25a24989682b1a5ecb529bce3be7e5fb83c22f3",
+    "delayed-gpu1.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "delayed-gpu1.stdout": "3299e64f9b8f6e626b942bafddeb56dac1cf346024a8bdf9a07a29e70ebe03a1",
+    "delayed-gpu2.json": "9c89d2f7088f51cfb8267f34f41b2aae48cc897fbefedf22aa67f0c01916e56e",
+    "delayed-gpu2.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "delayed-gpu2.stdout": "afc234e919d8a27572d4b4577e152faf775b370c4e6d4c4c7f4700431ab5492b",
+    "native.json": "037bb9f1c736dfe232c6aab24a097747f600a294e63df01d029213e5b19d0d25",
+    "native.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "native.stdout": "a9a245cc4cd4e0e4ba33496329db3a3cdfa1b0de2a11e968f63e8b30e4464086",
+    "payload-after.json": "cc2d13656b3fc4eef3b8264a2422365e3b52eba36a8139e801ef0ae3b32e82a7",
+    "payload-after.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "payload-after.stdout": "ee1400ccecf92179c67292c02300242b18dfb9a83f0b76c1ab08e304085f0cfc",
+    "payload-before.json": "8bbfb161505e38a30d95539937dfba33d3484ef6acd430762449b4892d6aeee5",
+    "payload-before.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "payload-before.stdout": "ee1400ccecf92179c67292c02300242b18dfb9a83f0b76c1ab08e304085f0cfc",
+    "preflight-gpu1.json": "b0b82c2757bbdc91f6c4d43fb6d1e4e8d34cae676cf3a86ccf8aef19e09542e7",
+    "preflight-gpu1.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "preflight-gpu1.stdout": "a9f79e9bb01a6d6e06ad3c53811a2ecb2c58848678024775e55f7175ae432131",
+    "preflight-gpu2.json": "63ebd3c3990fdec5f58bfbe59372876368fdc1716442d1d5bf6ef6155021071a",
+    "preflight-gpu2.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "preflight-gpu2.stdout": "4d67a4039078d202974af8d25265441748b10c37da6fe23eac9ad5605dcecec2",
+    "settled-gpu1.json": "109855d2ac42eb67e359c24529a11a2b82ba06527f0a7aa189293881403ec905",
+    "settled-gpu1.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "settled-gpu1.stdout": "35554cc3f892ec42152da4dbfeb2e57f7bfa9fd3cfb4f7ced37824eb49b2cd6e",
+    "settled-gpu2.json": "2b4215816e7f77c3973790229d9c9f643ce92fc4db301b315c0d7f90926bc065",
+    "settled-gpu2.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "settled-gpu2.stdout": "44d119534917953715ea014d5a66a6c8e8461930b5db02b3d3e5443f800b4aee",
+    "source-signature.json": "0e35911f880046c49451d4b906072ee138148993e87d990a98dffff31bc96bab",
+    "source-signature.stderr": "5dcbbd12ade52fe6e55a262621388a888ed2b42224570077f392d25f46bdfd22",
+    "source-signature.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "upload.json": "cc15b5cd76277c76e30b4289ce6be5e4f31685f93cdc607998c71a6287a39547",
+    "upload.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "upload.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}
