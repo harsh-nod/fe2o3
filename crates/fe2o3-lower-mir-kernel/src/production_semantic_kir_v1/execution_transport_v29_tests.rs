@@ -514,24 +514,44 @@ fn execution_borrow_requires_the_retained_assignment_not_an_equal_clone() {
 
 #[test]
 fn ordinary_operands_without_a_cursor_still_require_the_exact_shared_work_budget() {
+    #[derive(Debug)]
+    enum Expected {
+        Success,
+        Work,
+        Storage,
+    }
+    const FLOOR: usize = 37;
     let types = types();
     let scalar = |id| SemanticValueBindingV1::Value {
         id: ValueId(id),
         ty: Type::Scalar(ScalarType::U32),
     };
-    for (input, binding, exact) in [
-        (SemanticTypeIdV1::from_index(2), scalar(77), 4),
+    for (input, binding, exact, storage) in [
+        (SemanticTypeIdV1::from_index(2), scalar(77), 6, 0),
         (
             SemanticTypeIdV1::from_index(8),
             SemanticValueBindingV1::Aggregate(vec![scalar(77), scalar(78)]),
-            12,
+            20,
+            2 * std::mem::size_of::<SemanticValueBindingV1>(),
         ),
     ] {
         let function = function(input, vec![]);
         let expected = binding.values().unwrap();
-        for limit in [0, exact - 1, exact] {
+        let mut cases = vec![
+            (0, storage, Expected::Work),
+            (exact - 1, storage, Expected::Work),
+            (exact, storage, Expected::Success),
+        ];
+        if storage != 0 {
+            cases.extend([
+                (exact, 0, Expected::Storage),
+                (exact, storage - 1, Expected::Storage),
+            ]);
+        }
+        for (limit, storage_limit, outcome) in cases {
             let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(limit);
-            let mut budget = ArgumentBudgetV1::new(&mut work, 0);
+            let mut budget = ArgumentBudgetV1::new(&mut work, FLOOR + storage_limit);
+            budget.reserve_storage(FLOOR).unwrap();
             let ledger = budget.work_ledger_identity_v1();
             let mut lowering = lowering(&types, &function);
             lowering.locals[1] = Some(binding.clone());
@@ -546,10 +566,6 @@ fn ordinary_operands_without_a_cursor_still_require_the_exact_shared_work_budget
                 &SemanticOperandV1::Copy(place(1, input)),
                 &mut operations,
             );
-            assert_eq!(result.is_ok(), limit == exact);
-            if limit == exact {
-                assert_eq!(result.unwrap().values().unwrap(), expected);
-            }
             assert_eq!(
                 lowering.locals[1].as_ref().unwrap().values().unwrap(),
                 expected
@@ -565,11 +581,50 @@ fn ordinary_operands_without_a_cursor_still_require_the_exact_shared_work_budget
                     == ledger
             );
             drop(lowering);
-            assert_eq!(budget.storage(), 0);
-            assert!(budget.work() <= limit);
-            if limit == exact {
-                assert_eq!(budget.work(), exact);
+            let mut failed_work = None;
+            match (outcome, result) {
+                (Expected::Success, Ok(copied)) => {
+                    assert_eq!(copied.values().unwrap(), expected);
+                    let live = match &copied {
+                        SemanticValueBindingV1::Aggregate(fields) => {
+                            fields.capacity() * std::mem::size_of::<SemanticValueBindingV1>()
+                        }
+                        _ => 0,
+                    };
+                    assert_eq!(live, storage);
+                    assert_eq!(budget.storage(), FLOOR + live);
+                    assert_eq!(budget.work(), exact);
+                    drop(copied);
+                    budget.release_storage(live).unwrap();
+                }
+                (
+                    Expected::Work,
+                    Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Work(error),
+                    )),
+                ) => {
+                    assert_eq!(error.actual(), limit + 1);
+                    assert_eq!(error.limit(), limit);
+                    failed_work = Some(error.actual());
+                    if limit == exact - 1 {
+                        assert_eq!(budget.peak_storage(), FLOOR + storage);
+                    }
+                }
+                (
+                    Expected::Storage,
+                    Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Storage(_),
+                    )),
+                ) => {
+                    assert_eq!(budget.work(), 16);
+                    assert_eq!(budget.failed_storage(), Some(FLOOR + storage));
+                }
+                (outcome, result) => panic!("expected {outcome:?}, got {result:?}"),
             }
+            assert_eq!(budget.storage(), FLOOR);
+            assert!(budget.work() <= limit);
+            drop(budget);
+            assert_eq!(work.failed_work(), failed_work);
         }
     }
 }
