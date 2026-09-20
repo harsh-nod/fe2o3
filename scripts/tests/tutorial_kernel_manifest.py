@@ -540,7 +540,9 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
 
     def test_real_source_bound_variant_report_does_not_qualify_or_complete_census(self):
         # A physical source association, not a new tile implementation or receipt.
-        binding = self.bind_source_variant(self.manifest, ROOT, "gfx950-gpt-oss-serial-router")
+        kernel_id = "fixture:gfx950-gpt-oss-serial-router:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        foreign_id = "fixture:gfx950-gpt-oss-held-fragments:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        binding = self.bind_source_variant(self.manifest, ROOT, kernel_id)
         report = self.kernel_pair_report()
         self.assertEqual(report["sourceBoundVariantCount"], 1)
         self.assertEqual(report["sourceBoundPairCount"], 0)
@@ -559,7 +561,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         for mutate, message in (
             (lambda value: value.update(sourceSha256="0" * 64), "exact current source occurrence"),
             (lambda value: value.update(selectionSha256="0" * 64), "selection digest is stale"),
-            (lambda value: value.update(implementationKernelId="gfx950-gpt-oss-held-fragments"), "does not belong"),
+            (lambda value: value.update(implementationKernelId=foreign_id), "does not belong"),
         ):
             changed = copy.deepcopy(self.manifest)
             row = next(row for row in changed["kernelInventory"]["kernels"]
@@ -567,6 +569,43 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             mutate(row["variants"][0]["source"])
             with self.subTest(message=message), self.assertRaisesRegex(SystemExit, message):
                 self.validator.validate_kernel_inventory(changed, None)
+
+    def test_fully_source_bound_report_still_requires_execution_and_artifact_evidence(self):
+        document, runtime = self.gpt_fixture_document()
+        fixtures = {row["fixtureId"]: row for row in document["compilerFixtures"]}
+        entry = next(row for row in document["entries"] if row["lessonId"] == "gfx950-gpt-oss-120b-megakernel")
+        entry["compilerFixtureIds"] = sorted(fixtures)
+        document["entries"] = [entry]
+        for kernel in document["kernelInventory"]["kernels"]:
+            binding = self.bind_source_variant(document, ROOT, kernel["kernelId"])
+            # Deliberate report-only declarations, not a claim that these real
+            # sources implement both modes or have equivalent numerical behavior.
+            kernel["variants"][1].update(status="source-bound", source=copy.deepcopy(binding))
+        self.validator.validate_site_inventory(document["curriculum"], runtime)
+        for census in (None, runtime):
+            with self.subTest(runtime_census=census is not None):
+                report = self.validator._kernel_pair_report(document, fixtures, {}, census, repo_root=ROOT)
+                self.assertEqual(report["variantBindingStatus"], "source-bound")
+                self.assertEqual(report["sourceBoundVariantCount"], 12)
+                self.assertEqual(report["sourceBoundPairCount"], 6)
+                self.assertNotIn("per-kernel-variant-sources", report["missingBindings"])
+                self.assertIn("per-variant-target-evidence", report["missingBindings"])
+                self.assertIs(report["qualified"], False)
+                self.assertEqual(report["qualifiedPairCount"], 0)
+                self.assertEqual(report["stageStatus"], "not-evaluated")
+                self.assertIs(report["productionContract"]["requiresFinalOptimizedGraphVerification"], True)
+                self.assertEqual(report["productionContract"]["requiredPolicyVersion"], 4)
+                self.assertIs(report["productionContract"]["allowsPipelineSelection"], False)
+                self.assertIs(report["productionContract"]["allowsFallback"], False)
+                if census is None:
+                    self.assertIsNone(report["requiredPairCount"])
+                    self.assertIs(report["inventoryComplete"], False)
+                    self.assertIn("exhaustive-kernel-identity", report["missingBindings"])
+                else:
+                    # Six identities in this component fixture, not the website's denominator.
+                    self.assertEqual(report["requiredPairCount"], 6)
+                    self.assertIs(report["inventoryComplete"], True)
+                    self.assertEqual(report["missingBindings"], ["per-variant-target-evidence"])
 
     def test_real_fixture_same_symbol_file_and_feature_substitutions_reject(self):
         original, _ = self.gpt_fixture_document()
