@@ -1,0 +1,21 @@
+{
+  "command": [
+    "python3",
+    "-I",
+    "-B",
+    "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917/docs/evidence/dev-topology-link-parser-cpu-2026-09-20/test_cpu.py",
+    "-v"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789932816798378881,
+  "group_absent": true,
+  "pid": 249969,
+  "started_ns": 1789932816576937231,
+  "stderr_sha256": "6ffabbd7f99abb731bd79e42f92e9245ccfa1faf002d8338d8b66f8c86d4d6be",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 120
+}

@@ -12,6 +12,8 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+mod link_properties;
+
 /// Kernel-owned topology tree used by the first Linux KFD profile.
 pub const DEFAULT_TOPOLOGY_ROOT: &str = "/sys/class/kfd/kfd/topology";
 pub const DEFAULT_BOOT_ID_PATH: &str = "/proc/sys/kernel/random/boot_id";
@@ -2045,30 +2047,13 @@ fn parse_topology_links(
             return Err(TopologyError::UnexpectedLinkEntry(path));
         }
         let properties_observation = inspect_regular(&contents[0].1)?;
-        let properties = parse_named_properties_prechecked(
-            properties_observation,
-            &[
-                ("type", 0, u32::MAX as u64),
-                ("version_major", 0, u32::MAX as u64),
-                ("version_minor", 0, u32::MAX as u64),
-                ("node_from", 0, u16::MAX as u64),
-                ("node_to", 0, u16::MAX as u64),
-                ("weight", 0, u32::MAX as u64),
-                ("min_latency", 0, u64::MAX),
-                ("max_latency", 0, u64::MAX),
-                ("min_bandwidth", 0, u64::MAX),
-                ("max_bandwidth", 0, u64::MAX),
-                ("recommended_transfer_size", 0, u64::MAX),
-                ("recommended_sdma_engine_id_mask", 0, u64::MAX),
-                ("flags", 0, u32::MAX as u64),
-            ],
-        )?;
-        let node_from = properties["node_from"] as u32;
-        let node_to = properties["node_to"] as u32;
-        let min_latency = properties["min_latency"];
-        let max_latency = properties["max_latency"];
-        let min_bandwidth = properties["min_bandwidth"];
-        let max_bandwidth = properties["max_bandwidth"];
+        let properties = link_properties::read(properties_observation)?;
+        let node_from = properties.node_from;
+        let node_to = properties.node_to;
+        let min_latency = properties.min_latency;
+        let max_latency = properties.max_latency;
+        let min_bandwidth = properties.min_bandwidth;
+        let max_bandwidth = properties.max_bandwidth;
         if node_from != node_id || node_to == node_id {
             return Err(TopologyError::InvalidLinkEndpoint {
                 path: contents[0].1.clone(),
@@ -2085,19 +2070,19 @@ fn parse_topology_links(
         links.push(KfdTopologyLinkV1 {
             set,
             index,
-            link_type: properties["type"] as u32,
-            version_major: properties["version_major"] as u32,
-            version_minor: properties["version_minor"] as u32,
+            link_type: properties.link_type,
+            version_major: properties.version_major,
+            version_minor: properties.version_minor,
             node_from,
             node_to,
-            weight: properties["weight"] as u32,
+            weight: properties.weight,
             min_latency,
             max_latency,
             min_bandwidth,
             max_bandwidth,
-            recommended_transfer_size: properties["recommended_transfer_size"],
-            recommended_sdma_engine_id_mask: properties["recommended_sdma_engine_id_mask"],
-            flags: properties["flags"] as u32,
+            recommended_transfer_size: properties.recommended_transfer_size,
+            recommended_sdma_engine_id_mask: properties.recommended_sdma_engine_id_mask,
+            flags: properties.flags,
         });
     }
     Ok(links)
@@ -2555,6 +2540,7 @@ fn discover_topology_at(root: &Path) -> Result<TopologySnapshot, TopologyError> 
 
 #[cfg(test)]
 pub(crate) mod tests {
+    mod link_properties;
     pub(super) mod prechecked_reads;
 
     use super::*;

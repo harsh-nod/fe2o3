@@ -1,0 +1,9 @@
+{
+  "docs/evidence/dev-sdma-direct-readback-cpu-2026-09-18/source.py": "a7a8b8e73aa1a0817e13f9e575369403ece42f4eb702fd1ec04d9bc57fcff953",
+  "docs/evidence/dev-topology-link-parser-cpu-2026-09-20/PROTOCOL.md": "6d593d75e352afaa998eaa297cce4ac45a5d1cbeeed22133e83389328776eb75",
+  "docs/evidence/dev-topology-link-parser-cpu-2026-09-20/cpu.py": "44a795ab81cd6520249ca17b4eac5f48e07955cde7d95e7c48f66f6230d3a913",
+  "docs/evidence/dev-topology-link-parser-cpu-2026-09-20/test_cpu.py": "8bde8cfb5f1b60d527aa851441c065a4d676a9d2ae0dae6004180579daefa05f",
+  "docs/evidence/dev-xgmi-aggregate-attribution-cpu-2026-09-19/cpu.py": "a0b39f6821352fa3f62c9fc72484519cd7a27b4c65d54e1f77f13c44a6b23686",
+  "docs/evidence/dev-xgmi-settled-mi300x-2026-09-18/native.py": "df740a80c83c94af02f7e7dfb1203dcf7c1eafbde0010e41219e4aac40b34bb7",
+  "docs/runtime-topology-link-parser-v1.md": "2c3bd5afc13e17681fab24e16877950942a6756bce4fa0dddfb86333dd6e2272"
+}

@@ -1,0 +1,25 @@
+{
+  "command": [
+    "rustfmt",
+    "--edition",
+    "2024",
+    "--check",
+    "--config",
+    "skip_children=true",
+    "crates/fe2o3-kfd/src/topology.rs",
+    "crates/fe2o3-kfd/src/topology/link_properties.rs",
+    "crates/fe2o3-kfd/src/topology/tests/link_properties.rs"
+  ],
+  "cwd": "/home/harsh/.codex-tmp/fe2o3-c4-completion-20260917",
+  "environment": null,
+  "error": null,
+  "exit": 0,
+  "finished_ns": 1789932816919124306,
+  "group_absent": true,
+  "pid": 249986,
+  "started_ns": 1789932816800192559,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdin_sha256": null,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "timeout_seconds": 180
+}
