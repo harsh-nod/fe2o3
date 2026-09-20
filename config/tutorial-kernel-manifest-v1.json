@@ -8787,11 +8787,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/tiled_gemm_general_v1/Cargo.toml",
-        "packageManifestSha256": "8fcded65fb00a9e8c19214683bafecedd7c82832903db298145027ad8ace1021",
+        "packageManifestSha256": "ae65a8dcc68bb0ee29e81ad0b5ff5fa3e9e7f5177c646859ad0d6e3d71a932ed",
         "sourcePaths": [
           "examples/tiled_gemm_general_v1/src/kernel.rs"
         ],
-        "sourceClosureSha256": "b20a03bfde4cfa37792f0289cc36401b12d2ddd72ae554e451b6198aea9a9088",
+        "sourceClosureSha256": "32468a71db16d1fadde40e5f02d7da7dacccadd875fd54687c161bc1e58340dc",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_tiled_gemm_general_v1",
@@ -8804,7 +8804,7 @@
         ],
         "cargoLockPath": "examples/tiled_gemm_general_v1/Cargo.lock",
         "cargoLockSha256": "f1634e2db5b226485a090f8a2893210c9320d4f5d4d846b505d4f3315784c80f",
-        "contractSha256": "e8d8d33f46c446a0342f71239c117eb1976693b63fbbb9ac8170424b032aa835"
+        "contractSha256": "77f715704eb02ae3ee017cea16efeadbbb080c56d4173982ae2c098034c11d71"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-tiled-gemm.request.json",
