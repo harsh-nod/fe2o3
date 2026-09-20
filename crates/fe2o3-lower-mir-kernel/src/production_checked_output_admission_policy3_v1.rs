@@ -4,9 +4,13 @@ use super::*;
 mod general;
 pub use general::redundant_store::{
     ProductionCommutativeContinuationErrorV1, ProductionCommutativeContinuationStorageV1,
-    ProductionOwnedCommutativeContinuationV1, ProductionOwnedRedundantStoreContinuationV1,
-    ProductionOwnedRedundantStoreStorageV1, ProductionOwnedUnitLocalCommutativeContinuationV1,
-    ProductionOwnedUnitLocalRedundantStoreContinuationV1, ProductionRedundantStoreAdmissionErrorV1,
+    ProductionOwnedCommutativeContinuationV1, ProductionOwnedPrivateCellPromotionContinuationV1,
+    ProductionOwnedRedundantStoreContinuationV1, ProductionOwnedRedundantStoreStorageV1,
+    ProductionOwnedUnitLocalCommutativeContinuationV1,
+    ProductionOwnedUnitLocalPrivateCellPromotionContinuationV1,
+    ProductionOwnedUnitLocalRedundantStoreContinuationV1,
+    ProductionPrivateCellPromotionContinuationErrorV1,
+    ProductionPrivateCellPromotionContinuationStorageV1, ProductionRedundantStoreAdmissionErrorV1,
     ProductionRedundantStoreAdmissionStorageV1, ProductionRedundantStoreAdmissionV1,
 };
 

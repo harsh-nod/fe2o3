@@ -366,3 +366,12 @@ consuming_owner!(
 #[cfg(test)]
 #[path = "production_checked_output_commutative_internal_v1_tests.rs"]
 mod tests;
+
+#[path = "production_checked_output_private_cell_v1.rs"]
+mod private_cell;
+pub use private_cell::{
+    ProductionOwnedPrivateCellPromotionContinuationV1,
+    ProductionOwnedUnitLocalPrivateCellPromotionContinuationV1,
+    ProductionPrivateCellPromotionContinuationErrorV1,
+    ProductionPrivateCellPromotionContinuationStorageV1,
+};

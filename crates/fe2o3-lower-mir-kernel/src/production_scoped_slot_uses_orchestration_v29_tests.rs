@@ -198,7 +198,8 @@ fn inject_observation(
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     check_receipt(instances, emitted, receipt, budget);
     let slot = receipt.slots[0];
-    let function = &mut emitted[slot.instance.index()].as_mut().unwrap().function;
+    let lowered = emitted[slot.instance.index()].as_mut().unwrap();
+    let function = &mut lowered.function;
     assert!(
         !function
             .body
@@ -210,16 +211,38 @@ fn inject_observation(
             .flat_map(|op| &op.results)
             .any(|result| result.id == ValueId(u32::MAX))
     );
-    function.body.as_mut().unwrap().blocks[0]
-        .operations
-        .push(Operation::effect_free(
-            ValueDef::new(ValueId(u32::MAX), Type::BOOL),
-            OperationKind::Compare {
-                predicate: ComparePredicate::Equal,
-                lhs: slot.origin.pointer,
-                rhs: slot.origin.pointer,
-            },
-        ));
+    let block = &mut function.body.as_mut().unwrap().blocks[0];
+    let block_id = block.id;
+    let first = u32::try_from(block.operations.len()).unwrap();
+    block.operations.push(Operation::effect_free(
+        ValueDef::new(ValueId(u32::MAX), Type::BOOL),
+        OperationKind::Compare {
+            predicate: ComparePredicate::Equal,
+            lhs: slot.origin.pointer,
+            rhs: slot.origin.pointer,
+        },
+    ));
+    // Keep source-span coverage coherent so this reaches the pointer-use checker.
+    let terminator = lowered
+        .terminator_operation_spans
+        .iter_mut()
+        .find(|span| span.kernel_ir_block == block_id)
+        .unwrap();
+    assert_eq!(terminator.first_operation_ordinal, first);
+    assert_eq!(terminator.operation_count, 0);
+    let statement = lowered
+        .statement_operation_spans
+        .iter_mut()
+        .rev()
+        .find(|span| span.kernel_ir_block == block_id)
+        .unwrap();
+    assert_eq!(
+        statement.first_operation_ordinal + statement.operation_count,
+        first
+    );
+    statement.operation_count += 1;
+    terminator.first_operation_ordinal += 1;
+    check_scoped_defined_call_phases_v29(instances, emitted, budget)?;
     Ok(())
 }
 

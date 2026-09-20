@@ -1,4 +1,5 @@
 //! Closed owning private-cell transaction. No fixed policy or source/native gate.
+use crate::private_cell_promotion_resources_v1 as resources;
 use fe2o3_kernel_analysis::{
     CanonicalKirInventoryErrorV1 as InventoryError, CanonicalKirInventoryV1 as Inventory,
     CanonicalKirPrivateCellAccessKindV1 as AccessKind,
@@ -23,9 +24,6 @@ use std::{fmt, mem::size_of};
 
 #[path = "private_cell_promotion_build_v1.rs"]
 mod build;
-#[path = "private_cell_promotion_resources_v1.rs"]
-mod resources;
-use resources::{Meter, scoped};
 
 /// Failure of the closed transaction; no partial candidate or owner escapes.
 #[derive(Debug)]
@@ -49,6 +47,18 @@ pub enum OwnedPrivateCellPromotionErrorV1 {
 }
 type Error = OwnedPrivateCellPromotionErrorV1;
 type Result<T> = std::result::Result<T, Error>;
+type Meter<'a, 'w> = resources::Meter<'a, 'w, Error>;
+impl resources::ScopeError for Error {
+    fn panicked() -> Self {
+        Self::Panicked
+    }
+}
+fn scoped<'w, T>(
+    budget: &mut Budget<'w>,
+    run: impl FnOnce(&mut Meter<'_, 'w>) -> Result<T>,
+) -> Result<T> {
+    resources::scoped(budget, run)
+}
 impl From<Resource> for Error {
     fn from(value: Resource) -> Self {
         Self::Resource(value)

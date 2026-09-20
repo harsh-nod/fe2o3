@@ -1,6 +1,10 @@
 //! Explicit post-proof diagnostic stop. No pending owner can resume compilation.
 use super::ProductionRankedProjectionErrorV1;
+use crate::production_conditional_reference_output_v1::{
+    Error as JoinError, with_conditional_reference_output_v1,
+};
 use crate::production_reference_effect_join_v2::CompilerOwnedBoundReferenceEffectV2;
+use crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1;
 use dialect_kernel::{OwnershipCoverageAttr, OwnershipPartitionAttr};
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -29,11 +33,22 @@ use std::{
 pub(crate) const STOP: &str = "test-only post-bind source observation stopped with pending checks";
 pub(crate) const UNANNOTATED: &str = "test-only post-bind observation refused an unannotated root";
 const SITES: usize = MAX_HIERARCHICAL_OWNERSHIP_CONTRACTS_V1;
+#[path = "conditional_reference_negative_v1_tests.rs"]
+mod negative_reference;
 const EMPTY_SITE: Site = Site {
     block: 0,
     operation: 0,
     view: ProductionRankedValueV1::Argument(0),
 };
+
+pub(crate) struct BoundSourceV1<'a> {
+    pub(crate) root: u32,
+    pub(crate) rank: u8,
+    pub(crate) access: &'a [ProductionRankedAccessSourceV1],
+    pub(crate) effects: &'a [ProductionRankedExecutableEffectSourceV1],
+    pub(crate) references: &'a AuthenticatedReferenceEffectBindingsV1,
+    pub(crate) logical_name: &'a str,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct Observation {
@@ -45,6 +60,17 @@ pub(crate) struct Observation {
     pub(crate) value_expressions: usize,
     pub(crate) pending_checks: usize,
     pub(crate) work: usize,
+    pub(crate) output: OutputObservation,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct OutputObservation {
+    pub(crate) source_argument: u32,
+    pub(crate) adjusted_argument: u32,
+    pub(crate) physical_argument: u32,
+    pub(crate) raw_reference_argument: u32,
+    pub(crate) element_bytes: u64,
+    pub(crate) address_domain: String,
 }
 
 #[derive(Default)]
@@ -87,10 +113,7 @@ pub(crate) fn observe<R>(run: impl FnOnce() -> R) -> (R, Result<Observation, Str
 pub(super) fn observe_bound(
     owner: &ProductionPreRankedKirOwnerV1,
     bound: CompilerOwnedBoundReferenceEffectV2,
-    root: u32,
-    rank: u8,
-    access: &[ProductionRankedAccessSourceV1],
-    effects: &[ProductionRankedExecutableEffectSourceV1],
+    source: BoundSourceV1<'_>,
     budget: &mut Budget<'_>,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     let floor = budget.storage();
@@ -117,14 +140,14 @@ pub(super) fn observe_bound(
                     assert_eq!(actual.verifying_key(), key);
                 }
                 let candidate = NativeRankedSourceCandidateV1::from_untrusted_parts(
-                    root,
-                    rank,
+                    source.root,
+                    source.rank,
                     pending.kernel().map_err(|e| format!("{e:?}"))?,
-                    access,
-                    effects,
+                    source.access,
+                    source.effects,
                     "post-bind diagnostic only",
                 );
-                let mut observation = inspect(owner, pending, candidate, budget)?;
+                let mut observation = inspect(owner, pending, candidate, &source, budget)?;
                 observation.signed_receipts = signed.len();
                 Ok(observation)
             })
@@ -365,6 +388,7 @@ fn inspect(
     owner: &ProductionPreRankedKirOwnerV1,
     pending: &ProductionConditionalRankedAnalysisV1,
     candidate: NativeRankedSourceCandidateV1<'_>,
+    source: &BoundSourceV1<'_>,
     budget: &mut Budget<'_>,
 ) -> Result<Observation, String> {
     let [kernel] = owner.executable().module().kernels.as_slice() else {
@@ -374,12 +398,49 @@ fn inspect(
     let rows = format!("{:?}", pending.rows());
     let bounds = pending.mandatory_bounds_failure().map(str::to_owned);
     let checks = pending.pending_pipeline_checks();
-    let report = owner
-        .check_conditional_source_translation_v1(pending, candidate, budget)
-        .map_err(|e| e.to_string())?;
-    assert!(std::ptr::eq(report.source(), owner));
-    assert!(std::ptr::eq(report.pending(), pending));
-    assert!(report.memory_effects() > 0 && report.value_expressions() > 0);
+    let (memory_effects, value_expressions, output) = with_conditional_reference_output_v1(
+        owner,
+        pending,
+        candidate,
+        source.references,
+        source.logical_name,
+        budget,
+        |joined| {
+            let report = joined.translation();
+            let output = joined.coverage().output();
+            let binding = output.binding();
+            assert!(std::ptr::eq(report.source(), owner));
+            assert!(std::ptr::eq(report.pending(), pending));
+            assert!(std::ptr::eq(
+                output.candidate().kernel(),
+                candidate.kernel()
+            ));
+            assert!(std::ptr::eq(joined.ownership(), &pending.selections()[0]));
+            assert!(
+                source
+                    .references
+                    .as_slice()
+                    .iter()
+                    .any(|reference| { std::ptr::eq(reference, joined.reference_binding()) })
+            );
+            assert_eq!(joined.reference_write().argument, binding.source_argument());
+            assert_eq!(report.memory_effects(), 1);
+            assert_eq!(report.value_expressions(), 1);
+            Ok((
+                report.memory_effects(),
+                report.value_expressions(),
+                OutputObservation {
+                    source_argument: binding.source_argument(),
+                    adjusted_argument: binding.adjusted_argument(),
+                    physical_argument: binding.coverage().output_parameter_index(),
+                    raw_reference_argument: joined.raw_reference_argument(),
+                    element_bytes: binding.coverage().element_bytes(),
+                    address_domain: format!("{:?}", output.address_domain()),
+                },
+            ))
+        },
+    )
+    .map_err(|error| error.to_string())?;
     assert!(!legacy.is_clean());
     assert!(legacy.findings().iter().any(|finding| matches!(
         finding,
@@ -414,6 +475,8 @@ fn inspect(
         ));
     }
     check_budget(owner, pending, candidate);
+    check_join_budget(owner, pending, candidate, source);
+    negative_reference::check(owner, pending, candidate, source);
     assert_eq!(*pending.legacy_report(), legacy);
     assert_eq!(format!("{:?}", pending.rows()), rows);
     assert_eq!(pending.mandatory_bounds_failure(), bounds.as_deref());
@@ -423,11 +486,58 @@ fn inspect(
         canonical_digest: *owner.executable().canonical().identity().digest(),
         selected: pending.selections().len(),
         signed_receipts: 0,
-        memory_effects: report.memory_effects(),
-        value_expressions: report.value_expressions(),
+        memory_effects,
+        value_expressions,
         pending_checks: checks.len(),
         work: 0,
+        output,
     })
+}
+
+fn check_join_budget(
+    owner: &ProductionPreRankedKirOwnerV1,
+    pending: &ProductionConditionalRankedAnalysisV1,
+    candidate: NativeRankedSourceCandidateV1<'_>,
+    source: &BoundSourceV1<'_>,
+) {
+    let floor = owner.retained_analysis_storage_v1();
+    let run = |limit, missing_floor| {
+        let mut work = Work::new(limit);
+        let mut budget = Budget::new(&mut work, floor + 1024 * 1024);
+        let retained = floor - usize::from(missing_floor);
+        budget.reserve_storage(retained).unwrap();
+        budget.charge_work(17).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let mut callbacks = 0;
+        let result = with_conditional_reference_output_v1(
+            owner,
+            pending,
+            candidate,
+            source.references,
+            source.logical_name,
+            &mut budget,
+            |_| {
+                callbacks += 1;
+                Ok(())
+            },
+        );
+        assert_eq!(callbacks, usize::from(result.is_ok()));
+        assert_eq!(budget.storage(), retained);
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        let used = budget.work();
+        (result, used, work.failed_work())
+    };
+    let (baseline, exact, failed) = run(10_000_000, false);
+    baseline.unwrap();
+    assert_eq!(failed, None);
+    run(exact, false).0.unwrap();
+    let (short, _, failed) = run(exact - 1, false);
+    assert!(
+        matches!(short, Err(JoinError::Resource(Resource::Work(_)))),
+        "{short:?}"
+    );
+    assert_eq!(failed, Some(exact));
+    assert!(matches!(run(exact, true).0, Err(JoinError::Source(_))));
 }
 
 fn check_budget(

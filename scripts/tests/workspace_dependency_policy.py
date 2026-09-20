@@ -131,6 +131,10 @@ class WorkspaceDependencyPolicyTests(unittest.TestCase):
     def test_production_simulator_oracle_exception_is_exact_and_dev_only(self) -> None:
         reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
         for source, target, kind, allowed in [
+            ("fe2o3-kernel-opt", "fe2o3-kir-sim", "dev", True),
+            ("fe2o3-kernel-opt", "fe2o3-kir-sim", None, False),
+            ("fe2o3-kernel-opt", "fe2o3-kir-sim", "build", False),
+            ("fe2o3-kernel-opt", "fe2o3-runtime", "dev", False),
             ("fe2o3-lower-mir-kernel", "fe2o3-kir-sim", "dev", True),
             ("fe2o3-lower-mir-kernel", "fe2o3-kir-sim", None, False),
             ("fe2o3-lower-mir-kernel", "fe2o3-kir-sim", "build", False),

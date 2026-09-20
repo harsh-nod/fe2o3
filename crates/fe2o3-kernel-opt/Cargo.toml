@@ -14,6 +14,9 @@ fe2o3-kernel-analysis = { workspace = true, default-features = false }
 fe2o3-kernel-ir.workspace = true
 fe2o3-pliron.workspace = true
 
+[dev-dependencies]
+fe2o3-kir-sim.workspace = true
+
 [lib]
 name = "fe2o3_kernel_opt"
 
