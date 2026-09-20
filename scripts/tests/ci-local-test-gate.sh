@@ -814,6 +814,8 @@ for core_step in \
   fe2o3-runtime-release-tests \
   cpu-tests \
   wrapper-managed-cpu-tests \
+  cpu-reference-tiled-gemm-paired-default \
+  cpu-reference-tiled-gemm-paired-simt \
   cpu-test-partition-revalidation \
   cpu-test-binding-projection-revalidation \
   rustc-codegen-lib-tests \
@@ -832,6 +834,14 @@ assert_equals \
   'python3 -B scripts/tests/tutorial_cpu_reference.py' \
   "$(step_command tutorial-cpu-reference-tests)" \
   'generic core did not gate the tutorial CPU runner protocols'
+assert_equals \
+  "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 test --locked --offline --manifest-path examples/tiled_gemm_general_v1/Cargo.toml --test paired_contract" \
+  "$(step_command cpu-reference-tiled-gemm-paired-default)" \
+  'generic core did not gate the default GEMM paired contract'
+assert_equals \
+  "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 test --locked --offline --manifest-path examples/tiled_gemm_general_v1/Cargo.toml --no-default-features --features kernel-simt-gemm-general --test paired_contract" \
+  "$(step_command cpu-reference-tiled-gemm-paired-simt)" \
+  'generic core did not gate the SIMT GEMM paired contract'
 assert_equals \
   "env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p cargo-fe2o3" \
   "$(step_command cargo-fe2o3-tests)" \
@@ -967,6 +977,10 @@ assert_step_count rustc-codegen-lib-tests 1 \
   'serial generic gate did not run backend library tests exactly once'
 assert_step_count tutorial-cpu-reference-tests 1 \
   'serial generic gate did not run tutorial CPU runner protocols exactly once'
+assert_step_count cpu-reference-tiled-gemm-paired-default 1 \
+  'serial generic gate did not run the default GEMM paired contract exactly once'
+assert_step_count cpu-reference-tiled-gemm-paired-simt 1 \
+  'serial generic gate did not run the SIMT GEMM paired contract exactly once'
 
 STEP_NAMES=()
 STEP_COMMANDS=()

@@ -58,6 +58,8 @@ def recovered_scope(manifest):
             "cpu-reference-scalar-gemm", "semantic-simulation-scalar-gemm",
             "semantic-simulation-gfx950-gpt-oss-pipelined-attention",
             "semantic-simulation-gfx950-gpt-oss-scalar-attention",
+            "cpu-reference-tiled-gemm-paired-default",
+            "cpu-reference-tiled-gemm-paired-simt",
         }:
             continue
         suite = {key: copy.deepcopy(original[key]) for key in ("suiteId", "gate", "command", "coverage")}
@@ -116,7 +118,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(sum(f["target"] == "gfx942" for f in fixtures.values()), 11)
         self.assertEqual(sum(f["target"] == "gfx950" for f in fixtures.values()), 39)
         self.assertEqual(len(self.manifest["entries"]), 25)
-        self.assertEqual(len(self.manifest["qualification"]["suites"]), 62)
+        self.assertEqual(len(self.manifest["qualification"]["suites"]), 64)
         self.assertTrue(all(e["classification"] == "compiler-produced" for e in self.manifest["entries"]))
         self.assertTrue(all(s["availability"] == "pending" for s in self.manifest["qualification"]["suites"]))
 
@@ -125,6 +127,27 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             recovered_scope(self.manifest), sort_keys=True, separators=(",", ":"), ensure_ascii=True
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(), "db1d9a0d5c5aca3b9c76a4713ddd3b22417e41ee24667efae11773dfccdc4215")
+
+    def test_gemm_paired_cpu_reference_suites_keep_explicit_feature_selections(self):
+        suites = {suite["suiteId"]: suite for suite in self.manifest["qualification"]["suites"]}
+        original = suites["cpu-reference-tiled-gemm"]
+        manifest = "examples/tiled_gemm_general_v1/Cargo.toml"
+        self.assertEqual(original["command"]["arguments"], [manifest, "lib"])
+        selections = {
+            "cpu-reference-tiled-gemm-paired-default": [],
+            "cpu-reference-tiled-gemm-paired-simt": [
+                "--no-default-features", "--features", "kernel-simt-gemm-general",
+            ],
+        }
+        for suite_id, features in selections.items():
+            with self.subTest(suite=suite_id):
+                suite = suites[suite_id]
+                expected_command = copy.deepcopy(original["command"])
+                expected_command["arguments"] = [manifest, "test", "paired_contract", *features]
+                self.assertEqual(suite["command"], expected_command)
+                self.assertEqual(suite["gate"], "cpu-reference")
+                self.assertEqual(suite["availability"], "pending")
+                self.assertEqual(suite["coverage"], original["coverage"])
 
     def test_full_runtime_curriculum_snapshot_preserves_pending_obligations(self):
         curriculum = self.manifest["curriculum"]

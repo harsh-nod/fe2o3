@@ -7147,6 +7147,71 @@
         ]
       },
       {
+        "suiteId": "cpu-reference-tiled-gemm-paired-default",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/tiled_gemm_general_v1/Cargo.toml",
+            "test",
+            "paired_contract"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Fresh qualification remains pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gemm-proof-plan",
+            "fixtureIds": [
+              "gfx942-tiled-gemm"
+            ]
+          },
+          {
+            "lessonId": "gemm-tiling",
+            "fixtureIds": [
+              "gfx942-tiled-gemm"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-tiled-gemm-paired-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/tiled_gemm_general_v1/Cargo.toml",
+            "test",
+            "paired_contract",
+            "--no-default-features",
+            "--features",
+            "kernel-simt-gemm-general"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Fresh qualification remains pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gemm-proof-plan",
+            "fixtureIds": [
+              "gfx942-tiled-gemm"
+            ]
+          },
+          {
+            "lessonId": "gemm-tiling",
+            "fixtureIds": [
+              "gfx942-tiled-gemm"
+            ]
+          }
+        ]
+      },
+      {
         "suiteId": "cpu-reference-tiled-gemm",
         "gate": "cpu-reference",
         "availability": "pending",

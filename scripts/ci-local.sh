@@ -733,6 +733,16 @@ run_cpu_tests() {
       env "${loader_environment_removals[@]}" FE2O3_HIP_SYS_DISABLE=1 \
       "${CARGO_FE2O3_BINARY}" "${wrapper_cargo_args[@]}"
   fi
+  validate_cargo_fe2o3_driver
+  run_step cpu-reference-tiled-gemm-paired-default \
+    env "${loader_environment_removals[@]}" FE2O3_HIP_SYS_DISABLE=1 \
+    "${CARGO_FE2O3_BINARY}" test --locked --offline \
+      --manifest-path examples/tiled_gemm_general_v1/Cargo.toml --test paired_contract
+  run_step cpu-reference-tiled-gemm-paired-simt \
+    env "${loader_environment_removals[@]}" FE2O3_HIP_SYS_DISABLE=1 \
+    "${CARGO_FE2O3_BINARY}" test --locked --offline \
+      --manifest-path examples/tiled_gemm_general_v1/Cargo.toml \
+      --no-default-features --features kernel-simt-gemm-general --test paired_contract
   # The queries above and the test command are authority-free policy scans. Recheck
   # both selected lists and the complete structural set so source drift cannot
   # silently reroute or omit a package.
