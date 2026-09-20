@@ -1,6 +1,9 @@
 use super::*;
 use crate::production_semantic_kir_v1::scoped_slot_uses_v29;
 
+#[path = "production_scoped_defined_calls_v29_tests.rs"]
+mod defined_call_phases;
+
 const LIMIT: usize = 10_000_000;
 
 fn check_anchors(
