@@ -125,7 +125,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "fb63871fab6dad7d72218cec93860110064e529a30567be6b07897cf0bb49c8e")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "67bacc7a6137303e930b18477ea0d61c912a4f10e48b0b3e25eee6a9a1758da6")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)
@@ -511,6 +511,101 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertFalse(without_runtime["inventoryComplete"])
         self.assertIsNone(without_runtime["requiredPairCount"])
         self.assertEqual(sum("selection" in row for row in without_runtime["unresolvedBindings"]), 6)
+
+    def bind_source_variant(self, document, root, kernel_id):
+        inventory = self.validator.validate_kernel_inventory(document, None, repo_root=root)
+        retained = next(row for row in inventory["kernelIdentities"] if row["kernelId"] == kernel_id)
+        kernel = next(row for row in document["kernelInventory"]["kernels"] if row["kernelId"] == kernel_id)
+        reference = kernel["selections"][0]
+        if reference["kind"] == "fixture":
+            fixture = next(row for row in document["compilerFixtures"] if row["fixtureId"] == reference["fixtureId"])
+            path = fixture["compilerInput"]["sourcePaths"][0]
+            symbol = reference["kernelSymbol"]
+        else:
+            lesson = next(row for row in document["curriculum"]["lessons"] if row["lessonId"] == reference["lessonId"])
+            tab = lesson["codeTabs"][reference["tabOrdinal"]]
+            path = tab["sourcePath"]
+            symbol = tab["sourceItem"]["cases"][reference["caseOrdinal"]]["kernelSymbol"]
+        source = (root / path).read_bytes()
+        function = next(row for row in self.validator.ordinary_rust_function_items(source.decode("utf-8"))
+                        if row["kernelSymbol"] == symbol and row["attributedKernel"])
+        binding = {
+            "implementationKernelId": kernel_id, "selection": copy.deepcopy(reference),
+            "selectionSha256": retained["selectionSha256"], "sourcePath": path,
+            "sourceSha256": hashlib.sha256(source).hexdigest(),
+            "functionUtf8Offset": function["functionUtf8Offset"],
+        }
+        kernel["variants"][0].update(status="source-bound", source=binding)
+        return binding
+
+    def test_real_source_bound_variant_report_does_not_qualify_or_complete_census(self):
+        # A physical source association, not a new tile implementation or receipt.
+        kernel_id = "fixture:gfx950-gpt-oss-serial-router:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        foreign_id = "fixture:gfx950-gpt-oss-held-fragments:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        binding = self.bind_source_variant(self.manifest, ROOT, kernel_id)
+        report = self.kernel_pair_report()
+        self.assertEqual(report["sourceBoundVariantCount"], 1)
+        self.assertEqual(report["sourceBoundPairCount"], 0)
+        self.assertEqual(report["variantBindingStatus"], "partial")
+        self.assertIs(report["qualified"], False)
+        self.assertEqual(report["qualifiedPairCount"], 0)
+        self.assertEqual(report["stageStatus"], "not-evaluated")
+        self.assertIs(report["inventoryComplete"], False)
+        self.assertIsNone(report["requiredPairCount"])
+        self.assertIn("per-kernel-variant-sources", report["missingBindings"])
+        self.assertIn("per-variant-target-evidence", report["missingBindings"])
+        kernel = next(row for row in report["kernelInventory"]["kernelIdentities"]
+                      if row["kernelId"] == binding["implementationKernelId"])
+        self.assertEqual(kernel["variants"][0]["source"], binding)
+        self.assertEqual(kernel["variants"][1]["status"], "pending")
+        for mutate, message in (
+            (lambda value: value.update(sourceSha256="0" * 64), "exact current source occurrence"),
+            (lambda value: value.update(selectionSha256="0" * 64), "selection digest is stale"),
+            (lambda value: value.update(implementationKernelId=foreign_id), "does not belong"),
+        ):
+            changed = copy.deepcopy(self.manifest)
+            row = next(row for row in changed["kernelInventory"]["kernels"]
+                       if row["kernelId"] == binding["implementationKernelId"])
+            mutate(row["variants"][0]["source"])
+            with self.subTest(message=message), self.assertRaisesRegex(SystemExit, message):
+                self.validator.validate_kernel_inventory(changed, None)
+
+    def test_fully_source_bound_report_still_requires_execution_and_artifact_evidence(self):
+        document, runtime = self.gpt_fixture_document()
+        fixtures = {row["fixtureId"]: row for row in document["compilerFixtures"]}
+        entry = next(row for row in document["entries"] if row["lessonId"] == "gfx950-gpt-oss-120b-megakernel")
+        entry["compilerFixtureIds"] = sorted(fixtures)
+        document["entries"] = [entry]
+        for kernel in document["kernelInventory"]["kernels"]:
+            binding = self.bind_source_variant(document, ROOT, kernel["kernelId"])
+            # Deliberate report-only declarations, not a claim that these real
+            # sources implement both modes or have equivalent numerical behavior.
+            kernel["variants"][1].update(status="source-bound", source=copy.deepcopy(binding))
+        self.validator.validate_site_inventory(document["curriculum"], runtime)
+        for census in (None, runtime):
+            with self.subTest(runtime_census=census is not None):
+                report = self.validator._kernel_pair_report(document, fixtures, {}, census, repo_root=ROOT)
+                self.assertEqual(report["variantBindingStatus"], "source-bound")
+                self.assertEqual(report["sourceBoundVariantCount"], 12)
+                self.assertEqual(report["sourceBoundPairCount"], 6)
+                self.assertNotIn("per-kernel-variant-sources", report["missingBindings"])
+                self.assertIn("per-variant-target-evidence", report["missingBindings"])
+                self.assertIs(report["qualified"], False)
+                self.assertEqual(report["qualifiedPairCount"], 0)
+                self.assertEqual(report["stageStatus"], "not-evaluated")
+                self.assertIs(report["productionContract"]["requiresFinalOptimizedGraphVerification"], True)
+                self.assertEqual(report["productionContract"]["requiredPolicyVersion"], 4)
+                self.assertIs(report["productionContract"]["allowsPipelineSelection"], False)
+                self.assertIs(report["productionContract"]["allowsFallback"], False)
+                if census is None:
+                    self.assertIsNone(report["requiredPairCount"])
+                    self.assertIs(report["inventoryComplete"], False)
+                    self.assertIn("exhaustive-kernel-identity", report["missingBindings"])
+                else:
+                    # Six identities in this component fixture, not the website's denominator.
+                    self.assertEqual(report["requiredPairCount"], 6)
+                    self.assertIs(report["inventoryComplete"], True)
+                    self.assertEqual(report["missingBindings"], ["per-variant-target-evidence"])
 
     def test_real_fixture_same_symbol_file_and_feature_substitutions_reject(self):
         original, _ = self.gpt_fixture_document()
@@ -1269,6 +1364,52 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "pending source-item"):
                 self.validator.validate_curriculum_tab(tab, 0, "whole-file", "executable")
             self.assertEqual(tab["sourceItemStatus"], "contract-bound")
+
+    def test_source_driver_variant_binding_revalidates_physical_closure_and_cargo_lock(self):
+        with tempfile.TemporaryDirectory(prefix="fe2o3-variant-source-") as temporary:
+            root = Path(temporary)
+            tab, source = self.whole_file_source_fixture(root)
+            self.validator.validate_source_item(root, "whole-file", tab, {})
+            reference = {"kind": "source-driver-case", "lessonId": "whole-file", "tabOrdinal": 0, "caseOrdinal": 0}
+            offset = source.index(b"selected")
+            document = {
+                "compilerFixtures": [],
+                "curriculum": {"schema": self.validator.CURRICULUM_SCHEMA_V2,
+                               "lessons": [{"lessonId": "whole-file", "role": "executable", "codeTabs": [tab]}]},
+                "kernelInventory": {
+                    "schema": "fe2o3-tutorial-kernel-identities-v1",
+                    "kernels": [{"kernelId": "selected", "selections": [reference],
+                                 "variants": copy.deepcopy(self.original["kernelInventory"]["kernels"][0]["variants"])}],
+                    "negativeCases": [], "displayItems": [{
+                        "lessonId": "whole-file", "tabOrdinal": 0, "functionUtf8Offset": offset,
+                        "kernelSymbol": "selected", "classification": "kernel", "kernelIds": ["selected"],
+                        "negativeCases": [], "bindingStatus": "source-driver-contract",
+                        "reason": "Constructed physical source contract, not a compilation receipt.",
+                    }],
+                },
+            }
+            binding = self.bind_source_variant(document, root, "selected")
+            result = self.validator.validate_kernel_inventory(document, None, repo_root=root)
+            self.assertEqual(result["sourceBoundVariantCount"], 1)
+            self.assertEqual(result["sourceBoundPairCount"], 0)
+            self.assertIsNone(result["requiredPairCount"])
+            self.assertEqual(binding["functionUtf8Offset"], offset)
+            self.assertGreater(offset, source.decode("utf-8").index("selected"))
+            mutations = (
+                (root / tab["sourcePath"], b"\n// changed source\n", "sourceClosureSha256 is stale"),
+                (root / "fixture/Cargo.lock", b"\n# changed lock\n", "cargoLockSha256 is stale"),
+                (root / "fixture/Cargo.toml", b"\n# changed manifest\n", "packageManifestSha256 is stale"),
+            )
+            for path, suffix, message in mutations:
+                before = path.read_bytes()
+                try:
+                    path.write_bytes(before + suffix)
+                    with self.subTest(path=path), self.assertRaisesRegex(SystemExit, message):
+                        self.validator.validate_kernel_inventory(document, None, repo_root=root)
+                finally:
+                    path.write_bytes(before)
+            self.assertEqual(self.validator.validate_kernel_inventory(
+                document, None, repo_root=root)["sourceBoundVariantCount"], 1)
 
     def test_rehashed_whole_file_sources_reject_partial_or_mixed_byte_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:

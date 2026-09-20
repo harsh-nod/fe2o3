@@ -32,6 +32,8 @@ mod helper_reference_source;
 mod integer_identity_source;
 #[path = "production_rustc_driver_loop_capture_source_v1_tests.rs"]
 mod loop_capture_source;
+#[path = "production_rustc_driver_private_cell_native_source_v1_tests.rs"]
+mod private_cell_native_source;
 #[path = "production_rustc_driver_redundant_store_source_v1_tests.rs"]
 mod redundant_store_source;
 #[path = "production_rustc_driver_wave64_capture_source_v1_tests.rs"]

@@ -4,6 +4,7 @@
 import copy
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import re
 import unittest
@@ -35,6 +36,16 @@ def variants():
                          "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
                          "reason": "Variant implementation is pending."}}
             for kind in ("simt", "tile")]
+
+
+def selection_digest(inputs, symbol):
+    payload = {key: inputs[key] for key in (
+        "packageManifest", "packageManifestSha256", "cargoLockPath", "cargoLockSha256",
+        "sourcePaths", "sourceClosureSha256", "cargoTarget", "defaultFeatures", "features",
+    )}
+    payload["kernelSymbol"] = symbol
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    return hashlib.sha256(b"fe2o3-tutorial-kernel-selection-v1\0" + encoded).hexdigest()
 
 
 class KernelIdentitiesTests(unittest.TestCase):
@@ -117,6 +128,8 @@ class KernelIdentitiesTests(unittest.TestCase):
         self.assertTrue(result["inventoryComplete"])
         self.assertEqual(result["requiredPairCount"], 1)
         self.assertEqual(result["knownKernelIdentityCount"], 1)
+        self.assertEqual(result["kernelIdentities"][0]["selectionSha256"],
+                         selection_digest(self.manifest["compilerFixtures"][0]["compilerInput"], "good"))
         self.assertEqual(result["negativeCaseCount"], 1)
         self.assertEqual(result["unresolvedBindings"], [])
         self.assertEqual(result["kernelIdentities"][0]["variants"], variants())
@@ -277,7 +290,7 @@ class KernelIdentitiesTests(unittest.TestCase):
             (lambda: self.inventory()["displayItems"][0].update(classification={}), "must be strings"),
             (lambda: self.inventory()["displayItems"][0].update(bindingStatus=[]), "must be strings"),
             (lambda: self.inventory()["displayItems"][0].update(functionUtf8Offset=True), "nonnegative integer"),
-            (lambda: self.inventory()["kernels"][0]["variants"][0].update(status="passed"), "remain pending"),
+            (lambda: self.inventory()["kernels"][0]["variants"][0].update(status="passed"), "not qualification"),
             (lambda: self.manifest.pop("curriculum"), "existing V2 curriculum"),
             (lambda: self.manifest["curriculum"].update(schema="other"), "existing V2 curriculum"),
         ]
@@ -516,6 +529,183 @@ class FixtureDisplayTests(unittest.TestCase):
         loader = mock.Mock(return_value=(self.library, self.sources, ["left"]))
         self.assertEqual(self.validate(load_fixture_sources=loader)["unresolvedBindings"], [])
         loader.assert_called_once_with(self.fixture)
+
+    def binding(self, implementation="left", reference=None):
+        fixture = next(row for row in self.manifest["compilerFixtures"] if row["fixtureId"] == implementation)
+        inputs = fixture["compilerInput"]
+        path = inputs["sourcePaths"][0]
+        source = self.sources[path]
+        return {
+            "implementationKernelId": implementation,
+            "selection": reference or {"kind": "fixture", "fixtureId": implementation, "kernelSymbol": "same"},
+            "selectionSha256": selection_digest(inputs, "same"), "sourcePath": path,
+            "sourceSha256": hashlib.sha256(source.encode()).hexdigest(),
+            "functionUtf8Offset": self.scanner.ordinary_rust_function_items(source)[0]["functionUtf8Offset"],
+        }
+
+    def bind(self, kind="simt", implementation="left"):
+        variant = next(row for row in self.manifest["kernelInventory"]["kernels"][0]["variants"]
+                       if row["kind"] == kind)
+        variant.update(status="source-bound", source=self.binding(implementation))
+        return variant["source"]
+
+    def add_right(self):
+        fixture = copy.deepcopy(self.fixture)
+        fixture["fixtureId"] = "right"
+        fixture["compilerInput"].update(features=["right"], sourcePaths=["example/src/right.rs"])
+        self.manifest["compilerFixtures"].append(fixture)
+        self.manifest["kernelInventory"]["kernels"].append({
+            "kernelId": "right", "variants": variants(),
+            "selections": [{"kind": "fixture", "fixtureId": "right", "kernelSymbol": "same"}],
+        })
+
+    def test_source_bound_variant_is_detached_unqualified_and_not_a_display_join(self):
+        binding = self.bind()
+        self.row.update(bindingStatus="pending", kernelIds=[])
+        before = copy.deepcopy((self.manifest, self.runtime, self.sources))
+        result = self.validate()
+        self.assertEqual(result["sourceBoundVariantCount"], 1)
+        self.assertEqual(result["sourceBoundPairCount"], 0)
+        self.assertEqual(result["variantBindingStatus"], "partial")
+        self.assertFalse(result["inventoryComplete"])
+        self.assertIsNone(result["requiredPairCount"])
+        self.assertEqual(result["pendingDisplayItemCount"], 1)
+        retained = result["kernelIdentities"][0]["variants"][0]
+        self.assertEqual(retained["source"], binding)
+        self.assertEqual(retained["status"], "source-bound")
+        self.assertTrue(retained["blocker"]["reason"])
+        retained["source"]["selection"]["fixtureId"] = "changed"
+        self.assertEqual((self.manifest, self.runtime, self.sources), before)
+
+    def test_distinct_file_feature_implementations_associate_without_merging_obligations(self):
+        self.add_right()
+        simt = self.bind()
+        tile = self.bind("tile", "right")
+        self.assertNotEqual(simt["sourcePath"], tile["sourcePath"])
+        self.assertNotEqual(simt["selectionSha256"], tile["selectionSha256"])
+        loader = mock.Mock(side_effect=lambda fixture: (
+            self.library, self.sources, fixture["compilerInput"]["features"]))
+        result = self.validate(load_fixture_sources=loader)
+        self.assertEqual(loader.call_count, 2)
+        self.assertEqual(result["sourceBoundVariantCount"], 2)
+        self.assertEqual(result["sourceBoundPairCount"], 1)
+        self.assertEqual(result["knownKernelIdentityCount"], 2)
+        self.assertEqual(result["variantBindingStatus"], "partial")
+        self.assertIsNone(result["requiredPairCount"])
+        self.assertFalse(result["inventoryComplete"])
+        self.assertEqual(result["kernelIdentities"][1]["variants"], variants())
+        self.assertEqual([row["kernelId"] for row in result["kernelIdentities"]], ["left", "right"])
+
+    def test_source_binding_rejects_stale_fields_and_foreign_identity(self):
+        mutations = (
+            ("implementationKernelId", "missing", "does not belong"),
+            ("selection", {"kind": "fixture", "fixtureId": "missing", "kernelSymbol": "same"}, "does not belong"),
+            ("selection", case_ref(0), "does not belong"),
+            ("selectionSha256", "0" * 64, "selection digest is stale"),
+            ("selectionSha256", "F" * 64, "lowercase SHA-256"),
+            ("sourcePath", "example/src/right.rs", "not an exact selected source"),
+            ("sourceSha256", "0" * 64, "exact current source occurrence"),
+            ("sourceSha256", "bad", "lowercase SHA-256"),
+            ("functionUtf8Offset", 0, "exact current source occurrence"),
+            ("functionUtf8Offset", True, "nonnegative integer"),
+        )
+        for field, value, message in mutations:
+            self.setUp()
+            self.bind()[field] = value
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(IDENTITIES.KernelInventoryError, message):
+                self.validate(False)
+        self.setUp()
+        self.add_right()
+        binding = self.bind("simt", "right")
+        binding["implementationKernelId"] = "left"
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "does not belong"):
+            self.validate(False)
+
+    def test_source_binding_rejects_feature_revision_and_physical_source_substitution(self):
+        for field, value in (("features", ["right"]), ("defaultFeatures", True),
+                             ("sourceClosureSha256", "4" * 64), ("cargoLockSha256", "5" * 64),
+                             ("packageManifestSha256", "6" * 64),
+                             ("cargoTarget", {"kind": "lib", "name": "other", "sourcePath": "src/lib.rs"})):
+            self.setUp()
+            self.bind()
+            self.fixture["compilerInput"][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "selection digest is stale"):
+                self.validate(False)
+        self.setUp()
+        binding = self.bind()
+        self.fixture["compilerInput"]["features"] = ["right"]
+        binding["selectionSha256"] = selection_digest(self.fixture["compilerInput"], "same")
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "exact current source occurrence"):
+            self.validate(False)
+        self.setUp()
+        self.bind()
+        self.sources[self.path] += "// changed\n"
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "exact current source occurrence"):
+            self.validate(False)
+
+    def test_source_bound_state_requires_source_validation_and_cannot_claim_qualification(self):
+        self.bind()
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "physical source validation"):
+            self.validate(False, load_fixture_sources=None)
+        original = copy.deepcopy(self.manifest)
+        for changes, message in (({"status": "qualified"}, "not qualification"),
+                                 ({"status": "pending"}, "pending variant cannot"),
+                                 ({"source": None}, "variant source has unexpected"),
+                                 ({"blocker": None}, "blocker has unexpected")):
+            self.manifest = copy.deepcopy(original)
+            self.manifest["kernelInventory"]["kernels"][0]["variants"][0].update(changes)
+            with self.subTest(changes=changes), self.assertRaisesRegex(IDENTITIES.KernelInventoryError, message):
+                self.validate(False)
+
+    def test_source_driver_implementation_uses_its_own_physical_selection_loader(self):
+        binding = self.bind()
+        inputs = self.fixture["compilerInput"]
+        reference = case_ref(0)
+        self.tab["sourceItem"] = {
+            "compilerInput": {key: value for key, value in inputs.items() if key not in {"features", "kernelSymbols"}},
+            "cases": [{"kernelSymbol": "same", "features": ["left"], "target": "gfx950",
+                       "displayedFragmentOrdinal": 0, "expectation": {"kind": "verified-bundle-export"}}],
+        }
+        self.manifest["compilerFixtures"] = []
+        self.manifest["kernelInventory"]["kernels"][0]["selections"] = [reference]
+        binding["selection"] = copy.deepcopy(reference)
+        self.row.update(bindingStatus="pending", kernelIds=[])
+        loader = mock.Mock(return_value=(self.library, self.sources, ["left"]))
+        result = self.validate(False, load_source_case_sources=loader)
+        self.assertEqual(result["sourceBoundVariantCount"], 1)
+        self.assertIsNone(result["requiredPairCount"])
+        loader.assert_called_once_with("lesson", self.tab, self.tab["sourceItem"]["cases"][0])
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "source case binding requires"):
+            self.validate(False)
+        self.tab["sourceItem"]["cases"][0]["expectation"]["kind"] = "rejected"
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "negative"):
+            self.validate(False, load_source_case_sources=loader)
+
+    def test_source_binding_record_and_source_byte_limits_are_shared_with_displays(self):
+        self.bind()
+        self.bind("tile")
+        # Binding the same source to two declared modes is not mode verification;
+        # this fixture checks only shared traversal and exact accounting.
+        self.assertEqual(self.validate(False)["variantBindingStatus"], "source-bound")
+        first_success = None
+        for limit in range(1, 150):
+            try:
+                result = self.validate(False, max_records=limit)
+                first_success = limit
+                break
+            except IDENTITIES.KernelInventoryError:
+                pass
+        self.assertIsNotNone(first_success)
+        self.assertEqual(result["sourceBoundVariantCount"], 2)
+        self.assertEqual(result["sourceBoundPairCount"], 1)
+        with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "record bound"):
+            self.validate(False, max_records=first_success - 1)
+        byte_count = sum(len(self.sources[path].encode()) for path in (self.library, self.path))
+        with mock.patch.object(IDENTITIES, "MAX_RUNTIME_BYTES", byte_count):
+            self.assertEqual(self.validate(False)["sourceBoundPairCount"], 1)
+        with mock.patch.object(IDENTITIES, "MAX_RUNTIME_BYTES", byte_count - 1):
+            with self.assertRaisesRegex(IDENTITIES.KernelInventoryError, "aggregate byte bound"):
+                self.validate(False)
 
 
 if __name__ == "__main__":

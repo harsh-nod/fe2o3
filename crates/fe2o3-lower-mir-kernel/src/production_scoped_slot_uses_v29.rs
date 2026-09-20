@@ -528,6 +528,7 @@ pub(super) fn check_scoped_source_slot_uses_v29(
         {
             return Err(scoped_slot_error_v29());
         }
+        check_scoped_defined_call_phases_v29(instances, emitted, budget)?;
         for row in &slots.instances {
             budget.charge_work(1)?;
             let candidates = slots

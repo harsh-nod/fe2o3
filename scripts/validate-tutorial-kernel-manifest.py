@@ -198,9 +198,7 @@ def validate_kernel_inventory(
     root = Path(__file__).resolve().parents[1] if repo_root is None else repo_root
     cache = {} if package_cache is None else package_cache
 
-    def fixture_sources(fixture: dict[str, Any]) -> tuple[str, dict[str, str], list[str]]:
-        checked = validate_compiler_input(root, fixture, "direct fixture binding", cache)
-        inputs = fixture["compilerInput"]
+    def physical_sources(inputs: dict[str, Any], checked: dict[str, Any]) -> tuple[str, dict[str, str], list[str]]:
         package = cache[inputs["packageManifest"]]
         cargo = package["cargo"]
         if (cargo["package"].get("build") not in (None, False)
@@ -216,6 +214,17 @@ def validate_kernel_inventory(
         library = (PurePosixPath(inputs["packageManifest"]).parent / inputs["cargoTarget"]["sourcePath"]).as_posix()
         return library, sources, checked["enabledFeatures"]
 
+    def fixture_sources(fixture: dict[str, Any]) -> tuple[str, dict[str, str], list[str]]:
+        checked = validate_compiler_input(root, fixture, "direct fixture binding", cache)
+        return physical_sources(fixture["compilerInput"], checked)
+
+    def source_case_sources(lesson: str, tab: dict[str, Any], case: dict[str, Any]) -> tuple[str, dict[str, str], list[str]]:
+        inputs = {**tab["sourceItem"]["compilerInput"], "features": case["features"],
+                  "kernelSymbols": [case["kernelSymbol"]]}
+        checked = validate_compiler_input_data(
+            root, inputs, f"{lesson} variant source case binding", cache, feature_scoped_includes=True)
+        return physical_sources(inputs, checked)
+
     def rust_syntax(source: str) -> tuple[str, dict[int, int]]:
         code = _rust_code_without_comments_and_literals(source)
         return code, _rust_delimiters(code)
@@ -224,6 +233,7 @@ def validate_kernel_inventory(
         return module.validate_kernel_inventory(
             manifest, inventory, ordinary_rust_function_items, max_records=max_records,
             load_fixture_sources=fixture_sources, rust_syntax=rust_syntax,
+            load_source_case_sources=source_case_sources,
         )
     except module.KernelInventoryError as error:
         fail(str(error))
@@ -2025,8 +2035,13 @@ def _kernel_pair_report(
             schema="fe2o3-tutorial-kernel-pair-obligations-v2",
             inventoryComplete=identities["inventoryComplete"],
             requiredPairCount=identities["requiredPairCount"],
+            variantBindingStatus=identities["variantBindingStatus"],
+            sourceBoundVariantCount=identities["sourceBoundVariantCount"],
+            sourceBoundPairCount=identities["sourceBoundPairCount"],
             kernelInventory=identities,
         )
+        if identities["variantBindingStatus"] == "source-bound":
+            report["missingBindings"].remove("per-kernel-variant-sources")
         if identities["inventoryComplete"]:
             report["missingBindings"].remove("exhaustive-kernel-identity")
     return report

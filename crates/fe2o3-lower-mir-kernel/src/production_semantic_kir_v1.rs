@@ -10881,6 +10881,8 @@ fn lower_one_semantic_function_with_calls_v29<'facts>(
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     let infallible_asserts = infallible_asserts.into();
     infallible_asserts.require_source(semantic, plan)?;
+    // Diagnostic cursors lack the scoped output owner that retains this charge.
+    let retained_header = execution.is_some() && execution_calls.is_some() && lifecycle.is_some();
     let source_call_instance = execution.as_ref().map(|cursor| cursor.instance);
     let initialization_subject = execution
         .as_ref()
@@ -11272,19 +11274,28 @@ fn lower_one_semantic_function_with_calls_v29<'facts>(
             (declaration.id.clone(), declaration)
         })
         .collect::<BTreeMap<_, _>>();
+    let (id, signature, parameters) = if retained_header {
+        copy_emitted_function_header_v29(
+            &plan.kernel_ir_function,
+            &plan.parameter_types,
+            &plan.result_types,
+            &plan.parameter_values,
+            call_budget,
+        )?
+    } else {
+        (
+            plan.kernel_ir_function.clone(),
+            Signature::new(plan.parameter_types.clone(), plan.result_types.clone()),
+            plan.parameter_values.clone(),
+        )
+    };
     let mut lowered = match plan.role {
-        SemanticKirFunctionRoleV1::KernelEntry => Function::kernel_entry(
-            plan.kernel_ir_function.clone(),
-            Signature::new(plan.parameter_types.clone(), plan.result_types.clone()),
-            plan.parameter_values.clone(),
-            target_blocks,
-        ),
-        SemanticKirFunctionRoleV1::InternalHelper => Function::internal_helper(
-            plan.kernel_ir_function.clone(),
-            Signature::new(plan.parameter_types.clone(), plan.result_types.clone()),
-            plan.parameter_values.clone(),
-            target_blocks,
-        ),
+        SemanticKirFunctionRoleV1::KernelEntry => {
+            Function::kernel_entry(id, signature, parameters, target_blocks)
+        }
+        SemanticKirFunctionRoleV1::InternalHelper => {
+            Function::internal_helper(id, signature, parameters, target_blocks)
+        }
     };
     if has_runtime_assert {
         lowered
@@ -12645,6 +12656,7 @@ include!("production_semantic_kir_v1/semantic_ssa_plan_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_enum_values_01.rs");
 include!("production_execution_bindings_v1.rs");
 include!("production_emission_budget_v1.rs");
+include!("production_emitted_function_header_v29.rs");
 include!("production_execution_availability_v29.rs");
 include!("production_execution_call_parameters_v29.rs");
 include!("production_execution_call_sink_v29.rs");

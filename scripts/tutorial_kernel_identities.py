@@ -4,7 +4,9 @@ This module owns no source inventory, execution evidence, or file I/O. The calle
 validates the existing manifest/runtime projection first and supplies its bounded
 Rust scanner and lexer. Restricted fixture selection uses those same coordinates.
 References retain those input contracts; a lexical occurrence is never compiler
-or qualification evidence.
+or qualification evidence. A source-bound variant declares an association with
+an independently registered implementation identity, not semantic equivalence
+or verification of its programming mode.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ MAX_IDENTITY_BYTES = 16 * 1024 * 1024
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 KERNEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}")
 ISSUE_URL = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*")
+SHA256 = re.compile(r"[0-9a-f]{64}")
 INPUT_FIELDS = {
     "packageManifest", "packageManifestSha256", "cargoLockPath", "cargoLockSha256",
     "sourcePaths", "sourceClosureSha256", "cargoTarget", "defaultFeatures", "features",
@@ -61,6 +64,12 @@ def _integer(value: Any, label: str) -> int:
 def _symbol(value: Any) -> str:
     if not isinstance(value, str) or len(value) > 256 or IDENTIFIER.fullmatch(value) is None:
         _fail("kernelSymbol must be an ordinary Rust identifier")
+    return value
+
+
+def _digest(value: Any, label: str) -> str:
+    if not isinstance(value, str) or SHA256.fullmatch(value) is None:
+        _fail(f"{label} must be an exact lowercase SHA-256 digest")
     return value
 
 
@@ -350,6 +359,7 @@ def validate_kernel_inventory(
     manifest: dict[str, Any], runtime_inventory: dict[str, Any] | None,
     scan_functions: Callable[[str], list[dict[str, Any]]], *, max_records: int = 4096,
     load_fixture_sources: Callable | None = None, rust_syntax: Callable | None = None,
+    load_source_case_sources: Callable | None = None,
 ) -> dict[str, Any]:
     """Validate the optional sibling and return only bounded validated fields.
 
@@ -392,7 +402,7 @@ def validate_kernel_inventory(
                 key = ("source-driver-case", lesson_id, ordinal, index)
                 inputs = {**item["compilerInput"], "features": case["features"]}
                 add_selection(key, {"identity": _selection_identity(inputs, case["kernelSymbol"], budget),
-                                    "symbol": case["kernelSymbol"], "case": case})
+                                    "symbol": case["kernelSymbol"], "case": case, "tab": tab})
                 if case["expectation"]["kind"] == "rejected":
                     expected_negative.add(key)
     expected_positive = selections.keys() - expected_negative
@@ -427,20 +437,43 @@ def validate_kernel_inventory(
         variants = []
         for variant in budget.rows(kernel["variants"], "variants"):
             _object(variant, {"kind", "status", "source", "blocker"}, "variant")
-            if variant["status"] != "pending" or variant["source"] is not None:
-                _fail("variants remain pending, not source implementations or qualification")
+            status = variant["status"]
+            if status not in ("pending", "source-bound"):
+                _fail("variant status must be pending or source-bound, not qualification")
+            source = None
+            if status == "pending":
+                if variant["source"] is not None:
+                    _fail("pending variant cannot carry a source binding")
+            else:
+                binding = _object(variant["source"], {
+                    "implementationKernelId", "selection", "selectionSha256", "sourcePath",
+                    "sourceSha256", "functionUtf8Offset",
+                }, "variant source")
+                budget.rows([binding], "variant sources")
+                implementation = _text(binding["implementationKernelId"], "implementationKernelId")
+                if KERNEL_ID.fullmatch(implementation) is None:
+                    _fail("invalid implementationKernelId")
+                _, reference = _reference(binding["selection"])
+                source = {
+                    "implementationKernelId": implementation, "selection": reference,
+                    "selectionSha256": _digest(binding["selectionSha256"], "selectionSha256"),
+                    "sourcePath": _text(binding["sourcePath"], "sourcePath", 4096),
+                    "sourceSha256": _digest(binding["sourceSha256"], "sourceSha256"),
+                    "functionUtf8Offset": _integer(binding["functionUtf8Offset"], "functionUtf8Offset"),
+                }
             blocker = _object(variant["blocker"], {"owner", "issue", "reason"}, "blocker")
             owner = _text(blocker["owner"], "blocker owner")
             issue = _text(blocker["issue"], "blocker issue", 1024)
             reason = _text(blocker["reason"], "blocker reason", 2048)
             if ISSUE_URL.fullmatch(issue) is None:
                 _fail("blocker issue must be an exact GitHub issue URL")
-            variants.append({"kind": variant["kind"], "status": "pending", "source": None,
+            variants.append({"kind": variant["kind"], "status": status, "source": source,
                              "blocker": {"owner": owner, "issue": issue, "reason": reason}})
         if [row["kind"] for row in variants] not in (["simt", "tile"], ["simt", "tile", "mixed"]):
             _fail("kernel must retain ordered SIMT/tile and optional mixed variants")
         by_id[kernel_id] = keys
-        kernels.append({"kernelId": kernel_id, "selections": refs, "variants": variants})
+        kernels.append({"kernelId": kernel_id, "selectionSha256": identity,
+                        "selections": refs, "variants": variants})
     if consumed != expected_positive:
         _fail("missing positive source selection")
 
@@ -454,6 +487,60 @@ def validate_kernel_inventory(
         negative_refs.append(ref)
     if negative_keys != expected_negative:
         _fail("missing required-negative case")
+
+    selected_sources = {}
+    source_digests = {}
+
+    def selected_source(key: tuple[Any, ...]) -> tuple[str, int, str, str]:
+        selection = selections[key]
+        cache_key = key[:2] if key[0] == "fixture" else key
+        if cache_key not in selected_sources:
+            if rust_syntax is None:
+                _fail("source binding requires current physical source validation")
+            if key[0] == "fixture":
+                if load_fixture_sources is None:
+                    _fail("fixture source binding requires current physical source validation")
+                fixture, loader = selection["fixture"], load_fixture_sources
+            else:
+                if load_source_case_sources is None:
+                    _fail("source case binding requires current physical source validation")
+                tab, case = selection["tab"], selection["case"]
+                fixture = {"compilerInput": {**tab["sourceItem"]["compilerInput"],
+                           "features": case["features"], "kernelSymbols": [case["kernelSymbol"]]}}
+                loader = lambda _: load_source_case_sources(key[1], tab, case)
+            selected_sources[cache_key] = _fixture_selection(
+                fixture, loader, scan_functions, rust_syntax, budget)
+        path, offset, source = selected_sources[cache_key][selection["symbol"]]
+        digest_key = (cache_key, path)
+        if digest_key not in source_digests:
+            source_digests[digest_key] = hashlib.sha256(_utf8(source, "selected source")).hexdigest()
+        return path, offset, source, source_digests[digest_key]
+
+    # Resolve after collecting all identities: implementations may be declared
+    # later and may differ from the obligation's original source selection.
+    source_bound_variants = source_bound_pairs = variant_count = 0
+    for kernel in kernels:
+        for variant in kernel["variants"]:
+            variant_count += 1
+            binding = variant["source"]
+            if binding is None:
+                continue
+            key, _ = _reference(binding["selection"])
+            if key not in by_id.get(binding["implementationKernelId"], set()):
+                _fail("variant selection does not belong to its implementation kernel")
+            selection = selections[key]
+            if binding["selectionSha256"] != selection["identity"]:
+                _fail("variant selection digest is stale or differs from its implementation")
+            inputs = (selection["fixture"]["compilerInput"] if key[0] == "fixture"
+                      else selection["tab"]["sourceItem"]["compilerInput"])
+            if binding["sourcePath"] not in inputs["sourcePaths"]:
+                _fail("variant source path is not an exact selected source")
+            path, offset, _, digest = selected_source(key)
+            if (binding["sourcePath"] != path or binding["functionUtf8Offset"] != offset
+                    or binding["sourceSha256"] != digest):
+                _fail("variant source differs from the exact current source occurrence")
+            source_bound_variants += 1
+        source_bound_pairs += all(row["status"] == "source-bound" for row in kernel["variants"][:2])
 
     runtime_tabs = {}
     candidates = {}
@@ -499,7 +586,6 @@ def validate_kernel_inventory(
     negative_display_keys = set()
     bound_positive = set()
     unresolved = []
-    fixture_sources = {}
     for row in budget.rows(inventory["displayItems"], "display items"):
         _object(row, DISPLAY_FIELDS, "display item")
         lesson = _text(row["lessonId"], "lessonId")
@@ -576,12 +662,8 @@ def validate_kernel_inventory(
                         fixture = selections[key]["fixture"]
                         if tab["sourcePath"] not in fixture["compilerInput"]["sourcePaths"]:
                             _fail("fixture display path is not an exact selected source")
-                        if key[1] not in fixture_sources:
-                            fixture_sources[key[1]] = _fixture_selection(
-                                fixture, load_fixture_sources, scan_functions, rust_syntax, budget)
-                        path, source_offset, source = fixture_sources[key[1]][symbol]
+                        path, source_offset, source, digest = selected_source(key)
                         encoded = _utf8(source, "fixture source")
-                        digest = hashlib.sha256(encoded).hexdigest()
                         if (path != tab["sourcePath"] or source_offset != offset
                                 or len(encoded) != tab["displayedUtf8Bytes"]
                                 or digest != tab["sourceSha256"] or digest != tab["displayedSha256"]):
@@ -644,6 +726,9 @@ def validate_kernel_inventory(
     return {
         "inventoryComplete": complete, "requiredPairCount": len(kernels) if complete else None,
         "knownKernelIdentityCount": len(kernels), "displayItemCount": len(displays),
+        "sourceBoundVariantCount": source_bound_variants, "sourceBoundPairCount": source_bound_pairs,
+        "variantBindingStatus": ("pending" if not source_bound_variants else
+                                 "source-bound" if source_bound_variants == variant_count else "partial"),
         "pendingDisplayItemCount": pending_displays, "negativeCaseCount": len(negative_refs),
         "runtimeCensusValidated": runtime_inventory is not None,
         "unresolvedBindings": unresolved, "kernelIdentities": kernels,

@@ -25,6 +25,7 @@ mod monomorphization_dead;
 #[cfg(test)]
 mod process_execution;
 mod production_canonical_phase_policy_v1;
+mod production_conditional_reference_output_v1;
 mod production_geometry_v1;
 mod production_inline_assembly_v30;
 mod production_inline_source_occurrences_v30;

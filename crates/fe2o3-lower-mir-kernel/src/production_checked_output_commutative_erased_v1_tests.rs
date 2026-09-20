@@ -1,5 +1,7 @@
 // Genuine constructed UnitLocal source/N/E, not ordinary Rust/native admission.
 use super::*;
+#[path = "production_checked_output_private_cell_erased_v1_tests.rs"]
+mod private_cell_tests;
 
 fn bitwise_fixture(roots: usize) -> Fixture6 {
     let fixture = erased_effect_fixture_mode_with_functions(

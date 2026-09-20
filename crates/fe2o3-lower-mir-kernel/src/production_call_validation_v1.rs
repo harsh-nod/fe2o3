@@ -30,11 +30,7 @@ impl<'a> CallFunctionIndexV1<'a> {
             argument_sum_v1(&[count, body.blocks.len()])?,
             100,
         )?)?;
-        budget.reserve_storage(argument_sum_v1(&[
-            argument_product_v1(count, std::mem::size_of::<(ValueId, &Type)>())?,
-            argument_product_v1(body.blocks.len(), std::mem::size_of::<&BasicBlock>())?,
-        ])?)?;
-        let mut rows = argument_vec_v1(count)?;
+        let mut rows = emission_vec_v1(count, budget)?;
         rows.extend(
             body.parameters
                 .iter()
@@ -53,7 +49,7 @@ impl<'a> CallFunctionIndexV1<'a> {
         if rows.windows(2).any(|pair| pair[0].0 == pair[1].0) {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
-        let mut blocks = argument_vec_v1(body.blocks.len())?;
+        let mut blocks = emission_vec_v1(body.blocks.len(), budget)?;
         blocks.extend(&body.blocks);
         sort_correspondence_keys_v1(&mut blocks, 31, &|block| u64::from(block.id.0));
         if blocks.windows(2).any(|pair| pair[0].id == pair[1].id) {
@@ -220,34 +216,14 @@ fn check_call_correspondence_v1(
         .get(instance.semantic_function.index() as usize)
         .ok_or_else(mismatch)?;
     let body = target.body.as_ref().ok_or_else(mismatch)?;
-    budget.charge_work(source.locals().len())?;
-    match instance.role {
-        SemanticKirFunctionRoleV1::KernelEntry if target.signature.results.is_empty() => {}
-        SemanticKirFunctionRoleV1::KernelEntry => return Err(mismatch()),
-        SemanticKirFunctionRoleV1::InternalHelper => {
-            let shape_floor = budget.storage();
-            prepay_typed_shape_v1(
-                semantic.types(),
-                source.abi().source_output_type(),
-                0,
-                budget,
-            )?;
-            let shape =
-                helper_result_components_v1(semantic.types(), source, instance.semantic_function)?;
-            if shape.components.len() != target.signature.results.len() {
-                return Err(mismatch());
-            }
-            for ((_, _, expected, _, _), actual) in
-                shape.components.iter().zip(&target.signature.results)
-            {
-                if !call_types_equal_v1(expected, actual, budget)? {
-                    return Err(mismatch());
-                }
-            }
-            drop(shape);
-            budget.release_storage(budget.storage() - shape_floor)?;
-        }
-    }
+    check_call_signature_v1(
+        semantic,
+        source,
+        instance.semantic_function,
+        instance.role,
+        target,
+        budget,
+    )?;
     let values = CallFunctionIndexV1::new(target, budget)?;
     let mut used = 0_usize;
     for (span, block) in spans.iter().zip(&body.blocks) {
@@ -347,6 +323,52 @@ fn check_call_correspondence_v1(
     Ok(())
 }
 
+fn check_call_signature_v1(
+    semantic: &AdmittedInertSemanticMirV1,
+    source: &SemanticFunctionDeclV1,
+    function: SemanticFunctionIdV1,
+    role: SemanticKirFunctionRoleV1,
+    target: &Function,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let mismatch = || ProductionSemanticKirErrorV1::CorrespondenceMismatch;
+    budget.charge_work(source.locals().len())?;
+    match role {
+        SemanticKirFunctionRoleV1::KernelEntry
+            if target.role == fe2o3_kernel_ir::FunctionRole::KernelEntry
+                && target.signature.results.is_empty() =>
+        {
+            Ok(())
+        }
+        SemanticKirFunctionRoleV1::KernelEntry => Err(mismatch()),
+        SemanticKirFunctionRoleV1::InternalHelper => {
+            if target.role != fe2o3_kernel_ir::FunctionRole::InternalHelper {
+                return Err(mismatch());
+            }
+            with_canonical_call_scratch_v1(budget, |budget| {
+                prepay_typed_shape_v1(
+                    semantic.types(),
+                    source.abi().source_output_type(),
+                    0,
+                    budget,
+                )?;
+                let shape = helper_result_components_v1(semantic.types(), source, function)?;
+                if shape.components.len() != target.signature.results.len() {
+                    return Err(mismatch());
+                }
+                for ((_, _, expected, _, _), actual) in
+                    shape.components.iter().zip(&target.signature.results)
+                {
+                    if !call_types_equal_v1(expected, actual, budget)? {
+                        return Err(mismatch());
+                    }
+                }
+                Ok(())
+            })
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn check_call_transport_v1(
     owner: &ProductionSemanticSsaOwnerV1,
@@ -361,8 +383,43 @@ fn check_call_transport_v1(
     values: &CallFunctionIndexV1<'_>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
+    let plan = owner
+        .plan_for_function(instance.semantic_function)
+        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+    check_resolved_call_transport_v1(
+        plan,
+        SemanticBlockIdV1::from_index(block.id.0),
+        block,
+        call,
+        operation,
+        first,
+        end,
+        destination_kind,
+        transport,
+        values,
+        budget,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_resolved_call_transport_v1(
+    plan: &ProductionSemanticSsaFunctionPlanV1,
+    semantic_block: SemanticBlockIdV1,
+    block: &BasicBlock,
+    call: &SemanticDirectCallV1,
+    operation: usize,
+    first: usize,
+    end: usize,
+    destination_kind: SemanticKirCallDestinationV1,
+    transport: &[CallResultComponentV1],
+    values: &CallFunctionIndexV1<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
     use fe2o3_mir_model::{SsaBlockIdV1, SsaEdgeIdV1};
     let mismatch = || ProductionSemanticKirErrorV1::CorrespondenceMismatch;
+    if !(operation < first && first <= end && end <= block.operations.len()) {
+        return Err(mismatch());
+    }
     budget.charge_work(end - first)?;
     for cast in &block.operations[first..end] {
         let OperationKind::Cast {
@@ -386,11 +443,8 @@ fn check_call_transport_v1(
             return Err(mismatch());
         }
     }
-    let plan = owner
-        .plan_for_function(instance.semantic_function)
-        .ok_or_else(mismatch)?
-        .plan();
-    let edge = SsaEdgeIdV1::new(SsaBlockIdV1::new(block.id.0), 0);
+    let plan = plan.plan();
+    let edge = SsaEdgeIdV1::new(SsaBlockIdV1::new(semantic_block.index()), 0);
     let definitions = plan.edge_definitions(edge).ok_or_else(mismatch)?;
     let arguments = plan.edge_arguments(edge).ok_or_else(mismatch)?;
     budget.charge_work(argument_sum_v1(&[definitions.len(), arguments.len()])?)?;
@@ -557,14 +611,6 @@ fn check_defined_call_v1(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     let mismatch = || ProductionSemanticKirErrorV1::CorrespondenceMismatch;
-    if !(first <= arguments_first
-        && arguments_first <= call_operation
-        && call_operation < destination_end
-        && destination_end <= end
-        && matches!(call.unwind(), SemanticUnwindActionV1::Unreachable))
-    {
-        return Err(mismatch());
-    }
     let (callee_instance, target) =
         targets.source(instance.correspondence_owner, callee, budget)?;
     if callee_instance.role != SemanticKirFunctionRoleV1::InternalHelper {
@@ -574,6 +620,61 @@ fn check_defined_call_v1(
         .functions()
         .get(callee.index() as usize)
         .ok_or_else(mismatch)?;
+    let successor = BlockId(
+        call.destination()
+            .ok_or_else(mismatch)?
+            .edge()
+            .target()
+            .index(),
+    );
+    check_resolved_defined_call_v1(
+        semantic,
+        source,
+        &callee_instance.kernel_ir_function,
+        target,
+        successor,
+        block,
+        call,
+        first,
+        end,
+        arguments_first,
+        call_operation,
+        destination_end,
+        destination,
+        values,
+        budget,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_resolved_defined_call_v1(
+    semantic: &AdmittedInertSemanticMirV1,
+    source: &SemanticFunctionDeclV1,
+    expected_callee: &FunctionId,
+    target: &Function,
+    successor: BlockId,
+    block: &BasicBlock,
+    call: &SemanticDirectCallV1,
+    first: usize,
+    end: usize,
+    arguments_first: usize,
+    call_operation: usize,
+    destination_end: usize,
+    destination: SemanticKirCallDestinationV1,
+    values: &CallFunctionIndexV1<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let mismatch = || ProductionSemanticKirErrorV1::CorrespondenceMismatch;
+    if !(first <= arguments_first
+        && arguments_first <= call_operation
+        && call_operation < destination_end
+        && destination_end <= end
+        && end <= block.operations.len()
+        && matches!(call.unwind(), SemanticUnwindActionV1::Unreachable))
+        || target.role != fe2o3_kernel_ir::FunctionRole::InternalHelper
+    {
+        return Err(mismatch());
+    }
     let operation = &block.operations[call_operation];
     let OperationKind::Call {
         callee: actual_callee,
@@ -584,11 +685,12 @@ fn check_defined_call_v1(
     };
     budget.charge_work(argument_sum_v1(&[
         actual_callee.as_str().len(),
-        callee_instance.kernel_ir_function.as_str().len(),
+        expected_callee.as_str().len(),
         arguments.len(),
         call.arguments().len(),
     ])?)?;
-    if actual_callee != &callee_instance.kernel_ir_function
+    if actual_callee != expected_callee
+        || actual_callee != &target.id
         || arguments.len() != target.signature.parameters.len()
         || operation.results.len() != target.signature.results.len()
         || call.arguments().len() != source.abi().source_input_types().len()
@@ -684,7 +786,7 @@ fn check_defined_call_v1(
     let Some(Terminator::Branch { target, arguments }) = &block.terminator else {
         return Err(mismatch());
     };
-    if target.0 != source_destination.edge().target().index() {
+    if *target != successor {
         return Err(mismatch());
     }
     let successor = values.block(*target, budget)?;

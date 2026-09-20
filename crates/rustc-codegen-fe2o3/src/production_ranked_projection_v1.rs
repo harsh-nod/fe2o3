@@ -3815,10 +3815,14 @@ fn project_and_verify_ranked_root_with_singletons_v1(
                 .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?;
             assertion_facts.observe_conditional_bound_for_test_v1(
                 bound,
-                selection.root().index(),
-                source_root.source_rank(),
-                &access_sources,
-                &executable_effect_sources,
+                conditional_bound_observation_v1_tests::BoundSourceV1 {
+                    root: selection.root().index(),
+                    rank: source_root.source_rank(),
+                    access: &access_sources,
+                    effects: &executable_effect_sources,
+                    references: reference_bindings,
+                    logical_name,
+                },
             )?;
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 conditional_bound_observation_v1_tests::STOP,
