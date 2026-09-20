@@ -617,7 +617,7 @@ target lowering, and host execution into explicit ownership boundaries:
 - Pliron framework: `fe2o3-pliron` is a bounded D0 context, registration,
   context-identity, pass-planning, and owner-held textual bridge over Pliron
   v0.17.0 at reviewed fork commit
-  `7ebf6e6638c2a3bcec179423993b01211a9689b4`, a strict descendant of the
+  `e054e5b2e53c7330470f9202c35c8c0e4e102092`, a strict descendant of the
   upstream v0.17.0 commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`.
   The analysis-owner migration does not complete the canonical production
   emitter, generic resource-accounting closure, tutorial qualification, or

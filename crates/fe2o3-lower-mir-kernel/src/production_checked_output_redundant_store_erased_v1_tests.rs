@@ -1,5 +1,7 @@
 // Genuine constructed source/N/E with global effects and a surviving Load.
 use super::*;
+#[path = "production_checked_output_commutative_erased_v1_tests.rs"]
+mod commutative_tests;
 #[path = "production_checked_output_owned_redundant_store_erased_v1_tests.rs"]
 mod owned_tests;
 

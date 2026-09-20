@@ -3,7 +3,7 @@ use fe2o3_kernel_ir::CanonicalKirOperationTransitionV1;
 
 type Site = Option<(SemanticFunctionIdV1, SemanticBlockIdV1, u32)>;
 
-fn retained_sites(
+pub(super) fn retained_sites(
     input: &CanonicalKirInventoryV1<'_>,
     output: &CanonicalKirInventoryV1<'_>,
     source: &[Site],
@@ -36,7 +36,7 @@ fn retained_sites(
     Ok(result)
 }
 
-fn coordinate_sites(
+pub(super) fn coordinate_sites(
     input: &CanonicalKirInventoryV1<'_>,
     output: &CanonicalKirInventoryV1<'_>,
     sites: &[Site],

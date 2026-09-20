@@ -265,12 +265,17 @@ fn final_erased_policy4_retains_source_lifetime_kill_refusals_after_erasure() {
             SemanticPlaceV1::new(SemanticLocalIdV1::from_index(3), vec![], ARRAY_SCALAR).unwrap(),
         ),
     ] {
-        let input = final_fixture_from(
-            erased_effect_fixture_with_lifetime(true, 1, Some(killed)),
-            None,
-        );
+        let original = erased_effect_fixture_with_lifetime(true, 1, Some(killed));
+        let site = [(0, 1, Some(2), 3)];
+        let input = retained_load_fault_v1_tests::with_exact_sites(&site, || {
+            final_fixture_from(original, None)
+        });
+        // Corrupt only the independent re-emission, not the later history check.
+        let result = retained_load_fault_v1_tests::with_exact_replays(&site, 2, || {
+            final_admit(input, WORK, STORAGE).0
+        });
         assert!(matches!(
-            final_admit(input, WORK, STORAGE).0,
+            result,
             Err(FinalError::Admission(AdmissionError::Unsupported {
                 phase: "private source",
                 detail: "no source lifetime or Move invalidation between Store and Load",

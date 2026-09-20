@@ -143,12 +143,30 @@ fn record(
     output: &Owner,
     load_count: usize,
 ) -> Result<[u8; POLICY5_EXECUTION_RECORD_BYTES_V1], Resource> {
+    policy5_record_v1(
+        input,
+        prefix.intermediate_policy3().owner(),
+        prefix.owner(),
+        output,
+        prefix.forwarding_rows().len(),
+        load_count,
+    )
+}
+
+pub(crate) fn policy5_record_v1(
+    input: &Owner,
+    intermediate: &Owner,
+    stored: &Owner,
+    output: &Owner,
+    store_count: usize,
+    load_count: usize,
+) -> Result<[u8; POLICY5_EXECUTION_RECORD_BYTES_V1], Resource> {
     let mut bytes = [0; POLICY5_EXECUTION_RECORD_BYTES_V1];
     bytes[..8].copy_from_slice(b"F2P5EX1\0");
     bytes[8..16].copy_from_slice(&[1, 0, 5, 0, 4, 0, 1, 0]);
     bytes[16..24].copy_from_slice(&1u64.to_le_bytes());
     bytes[24..32].copy_from_slice(
-        &u64::try_from(prefix.forwarding_rows().len())
+        &u64::try_from(store_count)
             .map_err(|_| Resource::Arithmetic)?
             .to_le_bytes(),
     );
@@ -159,8 +177,8 @@ fn record(
     );
     for (offset, owner) in [
         (40, input),
-        (80, prefix.intermediate_policy3().owner()),
-        (120, prefix.owner()),
+        (80, intermediate),
+        (120, stored),
         (160, output),
     ] {
         let identity = owner.canonical().identity();

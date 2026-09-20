@@ -76,9 +76,21 @@ pub(in crate::production_pipeline) fn check_policy7(
     check_fixed(inputs, ranked, receipts, typed, FixedOutput::J, budget)
 }
 
+/// Fixed Policy8 entry accepts only actual K owner/report custody.
+pub(in crate::production_pipeline) fn check_policy8(
+    inputs: OutputInputsV1<'_>,
+    ranked: &Ranked,
+    receipts: &NativeFinalOutputReceiptsPolicy6V1,
+    typed: &[TypedDescriptorRootV1],
+    budget: &mut Budget<'_>,
+) -> R<()> {
+    check_fixed(inputs, ranked, receipts, typed, FixedOutput::K, budget)
+}
+
 enum FixedOutput {
     I,
     J,
+    K,
 }
 
 fn check_fixed(
@@ -97,6 +109,15 @@ fn check_fixed(
         let output = inputs.owner.output();
         let source = inputs.owner.source(inputs.catalog)?;
         let (reports, receipt_error, payload_error) = match fixed {
+            FixedOutput::K => (
+                match inputs.owner {
+                    OutputOwnerV1::Direct8(owner) => owner.kernels(),
+                    OutputOwnerV1::Erased8(owner) => owner.kernels(),
+                    _ => return Err(E::Mismatch("fixed Policy8 receipt owner")),
+                },
+                "fresh final-K formal receipt",
+                "fresh final-K formal payload",
+            ),
             FixedOutput::I => (
                 reports(inputs.owner)?,
                 "fresh final-I formal receipt",

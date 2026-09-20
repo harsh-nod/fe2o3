@@ -478,16 +478,31 @@ fn with_pending_candidate(
     budget.reserve_storage(capture.retained_storage()).unwrap();
     let launch_roots = materialization_launch_roots_v1(&ssa, &launch).unwrap();
     let mut emission = AssertOriginEmissionV1::new(&mut budget);
+    let fault_site = match case {
+        UnitCase::Killed(kill) => Some((
+            1,
+            0,
+            Some(if matches!(kill, ScalarKill::Storage) {
+                3
+            } else {
+                2
+            }),
+            2,
+        )),
+        _ => None,
+    };
     let PendingHelperSourceLoweringV1 {
         mut module,
         correspondence,
         requires_source,
-    } = lower_pending_module_with_assert_origins_v1(
-        &ssa,
-        ProductionSemanticKirLimitsV1::default(),
-        &launch_roots,
-        &mut emission,
-    )
+    } = retained_load_fault_v1_tests::with_exact_sites(fault_site.as_slice(), || {
+        lower_pending_module_with_assert_origins_v1(
+            &ssa,
+            ProductionSemanticKirLimitsV1::default(),
+            &launch_roots,
+            &mut emission,
+        )
+    })
     .unwrap();
     assert!(requires_source);
     mutate(&mut module);
@@ -636,9 +651,112 @@ fn normal_source_constructor_keeps_two_roots_and_both_calls_per_root() {
 mod control_call_tests;
 #[path = "production_local_helper_memory_v1_tests.rs"]
 mod memory_tests;
-#[path = "production_local_helper_resource_v1_tests.rs"]
-mod resource_tests;
-#[path = "production_local_helper_ranked_v1_tests.rs"]
-mod ranked_tests;
 #[path = "production_local_helper_ranked_stage_v1_tests.rs"]
 mod ranked_stage_tests;
+#[path = "production_local_helper_ranked_v1_tests.rs"]
+mod ranked_tests;
+#[path = "production_local_helper_resource_v1_tests.rs"]
+mod resource_tests;
+
+#[test]
+fn conditional_translation_refuses_genuine_unit_local_owners() {
+    use fe2o3_pliron::{
+        ProductionConditionalOwnershipSiteV1, ProductionConstructionV1, ProductionPlironSessionV1,
+        ProductionRankedBlockV1, ProductionRankedKernelV1, ProductionRankedTerminatorV1,
+        ProductionRankedValueIdV1, ProductionSessionLimitsV1,
+    };
+    for calls in [&[1][..], &[0, 1][..]] {
+        let source = unit_owner(UnitCase::Initializer, calls);
+        let layout = source.source_launch().roots()[0].layout();
+        let local = |id| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(id));
+        let recipe = ProductionRankedKernelV1::new(
+            "policy_gate_only",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::ExecutionLayout {
+                        grid_identity: layout.grid_identity(),
+                        global_extents: layout.global_extents(),
+                        workgroup_extents: layout.workgroup_extents(),
+                        subgroup_size: layout.subgroup_size(),
+                        full_physical_workgroups: layout.full_physical_workgroups(),
+                    },
+                    ProductionRankedOperationV1::View {
+                        result: ProductionRankedValueIdV1::new(0),
+                        element_width: 32,
+                        writable: true,
+                        shape: vec![1],
+                        dynamic_extents: vec![],
+                        allocation_origin: 1,
+                        noalias_class: 1,
+                    },
+                    ProductionRankedOperationV1::IndexConstant {
+                        result: ProductionRankedValueIdV1::new(1),
+                        value: 0,
+                    },
+                    ProductionRankedOperationV1::OwnershipContract {
+                        view: local(0),
+                        coverage: dialect_kernel::OwnershipCoverageAttr::TotalView,
+                        partition: dialect_kernel::OwnershipPartitionAttr::ExactSets,
+                    },
+                    ProductionRankedOperationV1::Access {
+                        kind: dialect_kernel::AccessKindAttr::Write,
+                        view: local(0),
+                        indices: vec![local(1)],
+                    },
+                ],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap();
+        let mut session = ProductionPlironSessionV1::new(
+            ProductionSessionLimitsV1::default(),
+            [
+                dialect_gpu::dialect_registration().unwrap(),
+                dialect_kernel::dialect_registration().unwrap(),
+            ],
+        )
+        .unwrap();
+        let registered = session
+            .register_construction(
+                ProductionConstructionV1::ranked_kernel("policy_gate", recipe).unwrap(),
+            )
+            .unwrap();
+        let (stage, root) = session.construct_registered(registered).unwrap();
+        let pending = session
+            .prepare_conditional_ranked_analysis_v1(
+                stage,
+                root,
+                &[ProductionConditionalOwnershipSiteV1 {
+                    block: 0,
+                    operation: 3,
+                    view: local(0),
+                }],
+            )
+            .unwrap();
+        // This is only a policy-gate test, not a proposed matching translation.
+        let candidate = crate::NativeRankedSourceCandidateV1::from_untrusted_parts(
+            0,
+            1,
+            pending.kernel().unwrap(),
+            &[],
+            &[],
+            "",
+        );
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
+        let mut budget = ArgumentBudgetV1::new(&mut work, STORAGE);
+        let floor = source.retained_analysis_storage_v1() + FLOOR;
+        budget.reserve_storage(floor).unwrap();
+        assert!(matches!(
+            source.check_conditional_source_translation_v1(&pending, candidate, &mut budget),
+            Err(
+                ProductionConditionalSourceTranslationErrorV1::Correspondence(
+                    ProductionSemanticKirErrorV1::LocalHelperSourceConsumerUnavailable {
+                        consumer: "conditional source translation"
+                    }
+                )
+            )
+        ));
+        assert_eq!(budget.storage(), floor);
+    }
+}

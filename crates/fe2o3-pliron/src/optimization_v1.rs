@@ -1003,3 +1003,4 @@ fn run_observed_dominance_cse_v1(
 mod graph_custody_tests_v1;
 
 include!("optimization_integer_continuation_v1.rs");
+include!("optimization_commutative_owner_v1.rs");

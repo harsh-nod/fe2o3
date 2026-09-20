@@ -7,6 +7,8 @@ use fe2o3_kernel_ir::{
 };
 use simulation::integer_identity::{Batch, Integer, ROOTS};
 
+#[path = "production_rustc_driver_dominance_cse_source_v1_tests.rs"]
+mod dominance;
 #[path = "production_rustc_driver_integer_identity_graph_v1_tests.rs"]
 mod graph;
 #[path = "production_rustc_driver_masked_shift_fixed6_source_v1_tests.rs"]
@@ -55,6 +57,8 @@ impl Case {
 enum FixtureCase {
     IntegerIdentity(Case),
     MaskedShift(masked::Case),
+    DominanceCse(dominance::Case),
+    CommutativeCse(dominance::Case),
 }
 
 impl From<Case> for FixtureCase {
@@ -68,24 +72,32 @@ impl FixtureCase {
         match self {
             Self::IntegerIdentity(case) => case.name(),
             Self::MaskedShift(case) => case.name(),
+            Self::DominanceCse(case) => case.name(),
+            Self::CommutativeCse(case) => dominance::commutative::name(case),
         }
     }
     fn target(self) -> Target {
         match self {
             Self::IntegerIdentity(case) => case.target,
             Self::MaskedShift(case) => case.target,
+            Self::DominanceCse(case) => case.target,
+            Self::CommutativeCse(case) => case.target,
         }
     }
     fn source_leaf(self) -> &'static str {
         match self {
             Self::IntegerIdentity(_) => "integer_identity.rs",
             Self::MaskedShift(_) => "masked_shift.rs",
+            Self::DominanceCse(_) => "dominance_cse.rs",
+            Self::CommutativeCse(_) => "commutative_cse.rs",
         }
     }
     fn roots(self) -> &'static [&'static str] {
         match self {
             Self::IntegerIdentity(_) => &ROOTS,
             Self::MaskedShift(_) => &simulation::masked_shift::ROOTS,
+            Self::DominanceCse(_) => &dominance::ROOTS,
+            Self::CommutativeCse(_) => &dominance::ROOTS,
         }
     }
 }
@@ -125,6 +137,8 @@ struct Report {
 enum Outcome {
     Observed(Box<Observation6>),
     ObservedMasked(Box<masked::Observation6>),
+    ObservedDominance(Box<dominance::Observation6>),
+    ObservedCommutative(Box<dominance::commutative::Observation>),
     Extracted {
         llvm_sha256: [u8; 32],
         llvm_bytes: usize,
@@ -403,6 +417,10 @@ fn observe(tcx: TyCtxt<'_>, request: &Request, artifact: &Path) -> Result<Outcom
     let case = match request.case {
         FixtureCase::IntegerIdentity(case) => case,
         FixtureCase::MaskedShift(case) => return masked::observe(stage, case, artifact),
+        FixtureCase::DominanceCse(case) => return dominance::observe(stage, case, artifact),
+        FixtureCase::CommutativeCse(case) => {
+            return dominance::commutative::observe(stage, case, artifact);
+        }
     };
     let roots = graph::observe(&stage, case)?;
     let replay_work = replay_actual_continuation(&stage)?;
@@ -653,6 +671,14 @@ fn decode_report(
             Outcome::ObservedMasked(_),
             Mode::Observe,
             FixtureCase::MaskedShift(_)
+        ) | (
+            Outcome::ObservedDominance(_),
+            Mode::Observe,
+            FixtureCase::DominanceCse(_)
+        ) | (
+            Outcome::ObservedCommutative(_),
+            Mode::Observe,
+            FixtureCase::CommutativeCse(_)
         ) | (Outcome::Extracted { .. }, Mode::Extract, _)
             | (Outcome::Extracted { .. }, Mode::ExtractCensus, _)
             | (Outcome::MissingProof { .. }, Mode::MissingProof, _)
@@ -806,6 +832,22 @@ fn observed_subjects(
             Ok((
                 report.llvm_sha256,
                 report.llvm_bytes,
+                report.source_roots.clone(),
+            ))
+        }
+        (FixtureCase::DominanceCse(case), Outcome::ObservedDominance(report)) => {
+            dominance::validate_observation(case, report)?;
+            Ok((
+                report.llvm_sha256,
+                report.llvm_bytes,
+                report.source_roots.clone(),
+            ))
+        }
+        (FixtureCase::CommutativeCse(case), Outcome::ObservedCommutative(report)) => {
+            dominance::commutative::validate(case, report)?;
+            Ok((
+                report.baseline_llvm_sha256,
+                report.baseline_llvm_bytes,
                 report.source_roots.clone(),
             ))
         }

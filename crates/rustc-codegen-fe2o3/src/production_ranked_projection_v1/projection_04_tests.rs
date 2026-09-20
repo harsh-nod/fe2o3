@@ -143,6 +143,7 @@
             memory_space: MemorySpaceAttr::Global,
             source: SemanticSourceProvenanceV1::unavailable(),
             semantic_site: None,
+            output_extent: None,
         };
         let (blocks, sources, ranked_ir) = single_guarded_cfg(entry, guarded);
         assert_eq!(blocks.len(), 5);
@@ -162,6 +163,41 @@
         assert!(lowering.race_report().is_clean());
         assert!(ranked_ir.contains("kernel.cond_br") && ranked_ir.contains("kernel.access"));
         assert!(ranked_ir.contains("kernel.br ^bb4"));
+    }
+
+    #[test]
+    fn checked_extent_provenance_survives_cfg_relocation_and_access_retention() {
+        // Inert component custody only: no canonical/source authentication.
+        let view = ProductionRankedValueIdV1::new(1);
+        let index = ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(0));
+        let extent = ProductionRankedValueV1::Argument(0);
+        let proposal = ProductionRankedOutputExtentSourceV1::new(
+            7, ProductionRankedValueV1::Local(view), extent, index,
+        );
+        let guarded = GuardedRankedAccessV1 {
+            view,
+            indices: vec![index],
+            checked_success: None,
+            comparisons: vec![(index, extent)],
+            access: AccessKindAttr::Write,
+            memory_space: MemorySpaceAttr::Global,
+            source: SemanticSourceProvenanceV1::unavailable(),
+            semantic_site: Some(ProjectedSemanticAccessSiteV1 { block: 0, statement: None }),
+            output_extent: Some(proposal),
+        };
+        let (blocks, sources, _) = single_guarded_cfg(vec![], guarded);
+        assert_eq!(sources[0].block, 2);
+        assert_eq!(sources[0].output_extent, Some(proposal));
+        let function = projection_function(vec![block(29, vec![], SemanticTerminatorKindV1::Return)]);
+        let retained = production_access_sources(
+            &projection_types(), &function, &blocks, &sources,
+            &mut ComponentDynamicAssertionFactsV1,
+        ).unwrap();
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].ranked_block(), 2);
+        assert_eq!(retained[0].semantic_access_ordinal(), 0);
+        assert_eq!(retained[0].output_extent(), Some(proposal));
+        assert_eq!(proposal.source_argument(), 7);
     }
 
     #[test]
@@ -530,6 +566,7 @@
                 access: AccessKindAttr::Write,
                 memory_space: MemorySpaceAttr::Global,
                 source: SemanticSourceProvenanceV1::unavailable(),
+                output_extent: None,
                 semantic_site: None,
             })
         };
@@ -656,6 +693,7 @@
             memory_space: MemorySpaceAttr::Global,
             source: SemanticSourceProvenanceV1::unavailable(),
             semantic_site: None,
+            output_extent: None,
         };
         let (blocks, sources, ranked_ir) = single_guarded_cfg(entry, guarded);
         assert_eq!(blocks.len(), 6);

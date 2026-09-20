@@ -222,42 +222,8 @@ fn evaluate_index_equivalence_v1(
                 active.try_reserve(1).map_err(|_| EquivalenceVisitLimitV1)?;
                 active.insert(pair);
 
-                let transparent_source = |value: Value| {
-                    let definition = value.defining_op()?;
-                    let operation = Operation::get_op_dyn(definition, context);
-                    let join = operation.downcast_ref::<DeterministicJoinOp>()?;
-                    let dependencies = join.dependencies(context);
-                    (dependencies.len() == 1).then(|| dependencies[0])
-                };
-                if let Some(source) = transparent_source(pair.0) {
-                    let dependency = (source, pair.1);
-                    push_equivalence_cursor_v1(
-                        &mut pending,
-                        EquivalenceCursorV1::FinishSingle { pair, dependency },
-                        cursor_limit,
-                    )?;
-                    push_equivalence_cursor_v1(
-                        &mut pending,
-                        EquivalenceCursorV1::Enter(dependency),
-                        cursor_limit,
-                    )?;
-                    continue;
-                }
-                if let Some(source) = transparent_source(pair.1) {
-                    let dependency = (pair.0, source);
-                    push_equivalence_cursor_v1(
-                        &mut pending,
-                        EquivalenceCursorV1::FinishSingle { pair, dependency },
-                        cursor_limit,
-                    )?;
-                    push_equivalence_cursor_v1(
-                        &mut pending,
-                        EquivalenceCursorV1::Enter(dependency),
-                        cursor_limit,
-                    )?;
-                    continue;
-                }
-
+                // Dependency-only joins are opaque here, even with one input.
+                // Uniformity dependence does not establish numeric equality.
                 let (Some(left_definition), Some(right_definition)) =
                     (pair.0.defining_op(), pair.1.defining_op())
                 else {

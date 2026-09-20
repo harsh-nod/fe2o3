@@ -167,6 +167,18 @@ fn captured_source_instances_drive_existing_lowering_and_call_expansion() {
             drop(caller.call_returns);
             drop(callee.call_returns);
             budget.release_storage(call_storage)?;
+            let caller_initialization = caller.scoped_initialization.unwrap();
+            let callee_initialization = callee.scoped_initialization.unwrap();
+            let initialization_storage =
+                caller_initialization.retained_storage + callee_initialization.retained_storage;
+            drop((caller_initialization, callee_initialization));
+            budget.release_storage(initialization_storage)?;
+            let caller_memory = caller.scoped_memory_anchors.unwrap();
+            let callee_memory = callee.scoped_memory_anchors.unwrap();
+            let memory_storage = caller_memory.retained_storage().unwrap()
+                + callee_memory.retained_storage().unwrap();
+            drop((caller_memory, callee_memory));
+            budget.release_storage(memory_storage)?;
             let expanded = mapping
                 .splice(
                     call,

@@ -121,6 +121,7 @@ fn collector<'tcx>(tcx: TyCtxt<'tcx>, root: Instance<'tcx>) -> DeviceCollector<'
             frontend_contract: None,
             kernel_context_contract: None,
             reference_effect_binding: None,
+            reference_target: None,
         })
         .unwrap();
     collector
@@ -1006,6 +1007,7 @@ fn a_projected_external_input_cannot_inherit_another_callers_local_origin() {
                 frontend_contract: None,
                 kernel_context_contract: None,
                 reference_effect_binding: None,
+                reference_target: None,
             })
             .unwrap();
         let error = match collector.collect() {

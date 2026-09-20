@@ -308,6 +308,10 @@ include!("control_flow_resources_v1.rs");
 include!("control_flow_build_v1.rs");
 include!("control_flow_analysis_v1.rs");
 
+#[path = "canonical_control_flow_scope_v1.rs"]
+mod canonical_scope_v1;
+pub use canonical_scope_v1::*;
+
 fn for_each_terminator_edge<E>(
     terminator: &Terminator,
     mut visit: impl FnMut(BlockId, &[ValueId]) -> Result<(), E>,

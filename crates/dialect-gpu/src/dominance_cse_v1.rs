@@ -279,12 +279,48 @@ enum Visit {
     Exit(usize),
 }
 
+// Only separately named closed raw entrypoints select this private strategy.
+// The historical exact branch retains its original charges and key behavior.
+#[derive(Clone, Copy)]
+enum MatchRule {
+    Exact,
+    CommutativeBitwise,
+}
+
 fn dominance_pure_cse_impl<B: DominanceCseBudgetV1>(
     root: Ptr<Operation>,
     context: &mut Context,
     dominance: &mut DomInfo,
     budget: &mut B,
     observer: Option<Box<dyn RewriteObserver>>,
+) -> Result<IRStatus, DominanceCseErrorV1<B::Error>> {
+    dominance_cse_with_rule(root, context, dominance, budget, observer, MatchRule::Exact)
+}
+
+pub(super) fn commutative_bitwise_impl<B: DominanceCseBudgetV1>(
+    root: Ptr<Operation>,
+    context: &mut Context,
+    dominance: &mut DomInfo,
+    budget: &mut B,
+    observer: Option<Box<dyn RewriteObserver>>,
+) -> Result<IRStatus, DominanceCseErrorV1<B::Error>> {
+    dominance_cse_with_rule(
+        root,
+        context,
+        dominance,
+        budget,
+        observer,
+        MatchRule::CommutativeBitwise,
+    )
+}
+
+fn dominance_cse_with_rule<B: DominanceCseBudgetV1>(
+    root: Ptr<Operation>,
+    context: &mut Context,
+    dominance: &mut DomInfo,
+    budget: &mut B,
+    observer: Option<Box<dyn RewriteObserver>>,
+    rule: MatchRule,
 ) -> Result<IRStatus, DominanceCseErrorV1<B::Error>> {
     let mut scope = StorageScope::new(budget);
     scope.work(1)?;
@@ -315,7 +351,7 @@ fn dominance_pure_cse_impl<B: DominanceCseBudgetV1>(
             if region.deref(context).has_ssa_dominance(context) {
                 scope.work(1)?;
                 let tree = dominance.get_dom_tree(context, region);
-                eliminate_region(tree, context, &mut rewriter, scope.budget)?;
+                eliminate_region(tree, context, &mut rewriter, scope.budget, rule)?;
             }
         }
         scope.work(pending.len() - nested_start)?;
@@ -329,6 +365,7 @@ fn eliminate_region<B: DominanceCseBudgetV1>(
     context: &mut Context,
     rewriter: &mut IRRewriter<DummyListener>,
     budget: &mut B,
+    rule: MatchRule,
 ) -> Result<(), DominanceCseErrorV1<B::Error>> {
     let mut scope = StorageScope::new(budget);
     scope.work(1)?;
@@ -371,11 +408,26 @@ fn eliminate_region<B: DominanceCseBudgetV1>(
                     let width = BorrowedPureCseKeyV1::structured_width(operation, context)
                         .ok_or(DominanceCseErrorV1::Overflow)?;
                     scope.work(width)?;
-                    let Some(key) = BorrowedPureCseKeyV1::from_operation(operation, context) else {
+                    let key = match rule {
+                        MatchRule::Exact => {
+                            BorrowedPureCseKeyV1::from_operation(operation, context)
+                        }
+                        MatchRule::CommutativeBitwise => {
+                            scope.work(4)?;
+                            crate::commutative_bitwise_cse_v1::key(operation, context)
+                        }
+                    };
+                    let Some(key) = key else {
                         continue;
                     };
                     scope.work(width.checked_add(1).ok_or(DominanceCseErrorV1::Overflow)?)?;
-                    let fingerprint = fingerprint(key, context);
+                    let fingerprint = match rule {
+                        MatchRule::Exact => fingerprint(key, context),
+                        MatchRule::CommutativeBitwise => {
+                            scope.work(2)?;
+                            crate::commutative_bitwise_cse_v1::fingerprint(key, context)
+                        }
+                    };
                     let previous = table.get(&fingerprint).copied();
                     let mut candidate = previous;
                     let mut earlier = None;
@@ -390,7 +442,14 @@ fn eliminate_region<B: DominanceCseBudgetV1>(
                                 .and_then(|n| n.checked_add(1))
                                 .ok_or(DominanceCseErrorV1::Overflow)?,
                         )?;
-                        if key.exactly_equal(row.key, context) {
+                        let equal = match rule {
+                            MatchRule::Exact => key.exactly_equal(row.key, context),
+                            MatchRule::CommutativeBitwise => {
+                                scope.work(2)?;
+                                crate::commutative_bitwise_cse_v1::equal(key, row.key, context)
+                            }
+                        };
+                        if equal {
                             earlier = Some(row.key.operation());
                             break;
                         }

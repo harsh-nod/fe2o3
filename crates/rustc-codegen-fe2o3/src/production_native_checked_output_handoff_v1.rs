@@ -34,6 +34,7 @@ pub(crate) enum NativeOutputHandoffErrorV1 {
     Admission5(Box<fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy5V1>),
     Admission6(Box<fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy6V1>),
     Admission7(Box<fe2o3_lower_mir_kernel::ProductionRedundantStoreAdmissionErrorV1>),
+    Admission8(Box<fe2o3_lower_mir_kernel::ProductionCommutativeContinuationErrorV1>),
     Source(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     Descriptor(Box<crate::compiler_descriptor::CompilerDescriptorError>),
     Native(dialect_amdgcn::NativeV12TextDescriptorReplayErrorV1),
@@ -55,6 +56,7 @@ impl fmt::Display for NativeOutputHandoffErrorV1 {
             Self::Admission5(error) => write!(f, "Policy5 admission: {error}"),
             Self::Admission6(error) => write!(f, "Policy6 admission: {error}"),
             Self::Admission7(error) => write!(f, "Policy7 admission: {error}"),
+            Self::Admission8(error) => write!(f, "Policy8 admission: {error}"),
             Self::Source(error) => write!(f, "source: {error}"),
             Self::Descriptor(error) => write!(f, "descriptor: {error}"),
             Self::Native(error) => write!(f, "native: {error}"),
@@ -84,6 +86,8 @@ pub(crate) enum OutputOwnerV1<'a> {
     Erased6(&'a fe2o3_lower_mir_kernel::ProductionUnitLocalErasedCheckedOutputOwnerPolicy6V1),
     Direct7(&'a fe2o3_lower_mir_kernel::ProductionOwnedRedundantStoreContinuationV1),
     Erased7(&'a fe2o3_lower_mir_kernel::ProductionOwnedUnitLocalRedundantStoreContinuationV1),
+    Direct8(&'a fe2o3_lower_mir_kernel::ProductionOwnedCommutativeContinuationV1),
+    Erased8(&'a fe2o3_lower_mir_kernel::ProductionOwnedUnitLocalCommutativeContinuationV1),
 }
 impl<'a> OutputOwnerV1<'a> {
     pub(crate) fn output(self) -> &'a Graph {
@@ -96,6 +100,8 @@ impl<'a> OutputOwnerV1<'a> {
             Self::Erased6(v) => v.output(),
             Self::Direct7(v) => v.output(),
             Self::Erased7(v) => v.output(),
+            Self::Direct8(v) => v.output(),
+            Self::Erased8(v) => v.output(),
         }
     }
     pub(crate) fn source(self, catalog: &'a Catalog) -> R<SourceInputsV1<'a>> {
@@ -108,10 +114,27 @@ impl<'a> OutputOwnerV1<'a> {
             Self::Erased6(v) => Ok(SourceInputsV1::erased(v.erased_source(), catalog)),
             Self::Direct7(v) => SourceInputsV1::direct(v.prefix().source_semantic_kir(), catalog),
             Self::Erased7(v) => Ok(SourceInputsV1::erased(v.prefix().erased_source(), catalog)),
+            Self::Direct8(v) => {
+                SourceInputsV1::direct(v.prefix().prefix().source_semantic_kir(), catalog)
+            }
+            Self::Erased8(v) => Ok(SourceInputsV1::erased(
+                v.prefix().prefix().erased_source(),
+                catalog,
+            )),
         }
     }
     fn verify(self, budget: &mut Budget<'_>) -> R<()> {
         match self {
+            Self::Direct8(v) => {
+                return v
+                    .verify_equivalence(budget)
+                    .map_err(|e| E::Admission8(Box::new(e)));
+            }
+            Self::Erased8(v) => {
+                return v
+                    .verify_equivalence(budget)
+                    .map_err(|e| E::Admission8(Box::new(e)));
+            }
             Self::Direct7(v) => {
                 return v
                     .verify_equivalence(budget)

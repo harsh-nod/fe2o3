@@ -1628,115 +1628,14 @@ impl Capture {
                 ctx,
                 u8::try_from(policy.passes().len() + 2).map_err(|_| E::Arithmetic)?,
             )?;
-            state.step(roster.len())?;
-            let mut rows = KirNeutralOccurrenceRowsV1 {
-                functions: vector(state.functions.len())?,
-                blocks: vector(state.blocks.rows.len())?,
-                segments: vector(state.chains.len())?,
-                operations: vector(state.operations.rows.len())?,
-                definitions: vector(state.inputs.len())?,
-                definition_outputs: Vec::new(),
-                uses: vector(state.uses.rows.len())?,
-                edges: vector(state.edges.rows.len())?,
-                edge_arguments: vector(state.uses.rows.len())?,
-            };
-            for (i, function) in state.functions.iter().enumerate() {
-                if output.functions[i].body.is_some() != function.live.is_some()
-                    || output.functions[i].signature.parameters.len() != function.parameters
-                {
-                    return Err(E::Identity);
-                }
-                rows.functions.push(FunctionRow {
-                    input: function.coordinate,
-                    output: Function(index(i)?),
-                });
-            }
-            let mut previous_block = None;
-            for &(key, endpoint) in roster {
-                let (LiveKeyV12::Operation(raw), Endpoint::Operation(coordinate)) = (key, endpoint)
-                else {
-                    continue;
-                };
-                let id = state.op(raw)?;
-                let block = block_coordinate(coordinate)?;
-                if previous_block != Some(block) {
-                    let start = rows.segments.len();
-                    let mut next = Some(state.blocks.rows[state.operations.rows[id].parent].head);
-                    while let Some(link) = next {
-                        state.step(1)?;
-                        if rows.segments.len() >= state.chains.len() {
-                            return Err(E::Lifecycle);
-                        }
-                        let link = &state.chains[link];
-                        rows.segments.push(link.segment);
-                        next = link.next;
-                    }
-                    rows.blocks.push(BlockRow {
-                        output: block,
-                        segments: Range {
-                            start: index(start)?,
-                            len: index(rows.segments.len() - start)?,
-                        },
-                    });
-                    previous_block = Some(block);
-                }
-                if matches!(coordinate, Coordinate::Operation { .. }) {
-                    let record = &state.operations.rows[id];
-                    let origin = match (record.input, record.constant_from) {
-                        (Some(input @ Coordinate::Operation { .. }), None) => {
-                            Origin::Retained(operation_coordinate(input)?)
-                        }
-                        (None, Some(definition)) if is_constant(ctx, raw) => {
-                            Origin::ConstantFrom(definition)
-                        }
-                        _ => return Err(E::Coverage),
-                    };
-                    rows.operations.push(OperationRow {
-                        output: operation_coordinate(coordinate)?,
-                        origin,
-                    });
-                }
-                let occurrence_count = state.operations.rows[id]
-                    .operands
-                    .len()
-                    .checked_add(state.operations.rows[id].edges.len())
-                    .ok_or(E::Arithmetic)?;
-                state.step(occurrence_count)?;
-                for (operand, &use_id) in state.operations.rows[id].operands.iter().enumerate() {
-                    rows.uses.push(UseRow {
-                        output: use_coordinate(coordinate, operand)?,
-                        input: state.uses.rows[use_id].input.ok_or(E::Coverage)?,
-                    });
-                }
-                for (successor, &edge_id) in state.operations.rows[id].edges.iter().enumerate() {
-                    if !matches!(coordinate, Coordinate::Terminator { .. }) {
-                        return Err(E::Coverage);
-                    }
-                    let edge = &state.edges.rows[edge_id];
-                    let output = Edge {
-                        source: block,
-                        successor: index(successor)?,
-                    };
-                    rows.edges.push(EdgeRow {
-                        output,
-                        input: edge.input.ok_or(E::Coverage)?,
-                    });
-                    for (argument, &use_id) in edge.arguments.iter().enumerate() {
-                        rows.edge_arguments.push(EdgeArgumentRow {
-                            output: EdgeArgument {
-                                edge: output,
-                                argument: index(argument)?,
-                            },
-                            input: state.uses.rows[use_id].edge_argument.ok_or(E::Coverage)?,
-                        });
-                    }
-                }
-            }
-            derive_definition_rows(&mut state, map, &mut rows)?;
-            if rows.retained_storage()? > state.limits.storage()? {
-                return Err(E::Limit);
-            }
-            Ok(rows)
+            assemble_occurrence_rows(
+                &mut state,
+                ctx,
+                roster,
+                output,
+                &mut RowAllocation::legacy(),
+                |state, rows, _| derive_definition_rows(state, map, rows),
+            )
         })();
         if let Err(error) = &result {
             state.failure = Some(error.clone());
@@ -1745,6 +1644,129 @@ impl Capture {
     }
 }
 
+fn assemble_occurrence_rows(
+    state: &mut State,
+    ctx: &Context,
+    roster: &LiveRosterV12,
+    output: &Module,
+    allocation: &mut RowAllocation<'_, '_>,
+    derive: impl FnOnce(
+        &mut State,
+        &mut KirNeutralOccurrenceRowsV1,
+        &mut RowAllocation<'_, '_>,
+    ) -> Result<()>,
+) -> Result<KirNeutralOccurrenceRowsV1> {
+    state.step(roster.len())?;
+    let mut rows = KirNeutralOccurrenceRowsV1 {
+        functions: allocation.vector(state.functions.len())?,
+        blocks: allocation.vector(state.blocks.rows.len())?,
+        segments: allocation.vector(state.chains.len())?,
+        operations: allocation.vector(state.operations.rows.len())?,
+        definitions: allocation.vector(state.inputs.len())?,
+        definition_outputs: allocation.descendants(state.inputs.len())?,
+        uses: allocation.vector(state.uses.rows.len())?,
+        edges: allocation.vector(state.edges.rows.len())?,
+        edge_arguments: allocation.vector(state.uses.rows.len())?,
+    };
+    for (i, function) in state.functions.iter().enumerate() {
+        if output.functions[i].body.is_some() != function.live.is_some()
+            || output.functions[i].signature.parameters.len() != function.parameters
+        {
+            return Err(E::Identity);
+        }
+        rows.functions.push(FunctionRow {
+            input: function.coordinate,
+            output: Function(index(i)?),
+        });
+    }
+    let mut previous_block = None;
+    for &(key, endpoint) in roster {
+        let (LiveKeyV12::Operation(raw), Endpoint::Operation(coordinate)) = (key, endpoint) else {
+            continue;
+        };
+        let id = state.op(raw)?;
+        let block = block_coordinate(coordinate)?;
+        if previous_block != Some(block) {
+            let start = rows.segments.len();
+            let mut next = Some(state.blocks.rows[state.operations.rows[id].parent].head);
+            while let Some(link) = next {
+                state.step(1)?;
+                if rows.segments.len() >= state.chains.len() {
+                    return Err(E::Lifecycle);
+                }
+                let link = &state.chains[link];
+                rows.segments.push(link.segment);
+                next = link.next;
+            }
+            rows.blocks.push(BlockRow {
+                output: block,
+                segments: Range {
+                    start: index(start)?,
+                    len: index(rows.segments.len() - start)?,
+                },
+            });
+            previous_block = Some(block);
+        }
+        if matches!(coordinate, Coordinate::Operation { .. }) {
+            let record = &state.operations.rows[id];
+            let origin = match (record.input, record.constant_from) {
+                (Some(input @ Coordinate::Operation { .. }), None) => {
+                    Origin::Retained(operation_coordinate(input)?)
+                }
+                (None, Some(definition)) if is_constant(ctx, raw) => {
+                    Origin::ConstantFrom(definition)
+                }
+                _ => return Err(E::Coverage),
+            };
+            rows.operations.push(OperationRow {
+                output: operation_coordinate(coordinate)?,
+                origin,
+            });
+        }
+        let occurrence_count = state.operations.rows[id]
+            .operands
+            .len()
+            .checked_add(state.operations.rows[id].edges.len())
+            .ok_or(E::Arithmetic)?;
+        state.step(occurrence_count)?;
+        for (operand, &use_id) in state.operations.rows[id].operands.iter().enumerate() {
+            rows.uses.push(UseRow {
+                output: use_coordinate(coordinate, operand)?,
+                input: state.uses.rows[use_id].input.ok_or(E::Coverage)?,
+            });
+        }
+        for (successor, &edge_id) in state.operations.rows[id].edges.iter().enumerate() {
+            if !matches!(coordinate, Coordinate::Terminator { .. }) {
+                return Err(E::Coverage);
+            }
+            let edge = &state.edges.rows[edge_id];
+            let output = Edge {
+                source: block,
+                successor: index(successor)?,
+            };
+            rows.edges.push(EdgeRow {
+                output,
+                input: edge.input.ok_or(E::Coverage)?,
+            });
+            for (argument, &use_id) in edge.arguments.iter().enumerate() {
+                rows.edge_arguments.push(EdgeArgumentRow {
+                    output: EdgeArgument {
+                        edge: output,
+                        argument: index(argument)?,
+                    },
+                    input: state.uses.rows[use_id].edge_argument.ok_or(E::Coverage)?,
+                });
+            }
+        }
+    }
+    derive(state, &mut rows, allocation)?;
+    if rows.retained_storage()? > state.limits.storage()? {
+        return Err(E::Limit);
+    }
+    Ok(rows)
+}
+
+include!("kir_commutative_capture_v1.rs");
 /// Values use the already retained, independently lifecycle-checked old-map
 /// witness. This does not infer operands from that map or alter its wire bytes.
 fn derive_definition_rows(

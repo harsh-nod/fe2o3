@@ -1,10 +1,43 @@
 #![no_std]
 
+#[cfg(feature = "conditional-descriptor-pair")]
+mod conditional_descriptor_pair;
+
+#[cfg(any(
+    feature = "loop-capture-exact",
+    feature = "loop-capture-renamed",
+    feature = "loop-capture-generic",
+    feature = "loop-capture-multi",
+    feature = "loop-capture-u64"
+))]
+mod loop_capture;
+
 #[cfg(feature = "redundant-store-policy7")]
 mod redundant_store_policy7;
 
+#[cfg(any(
+    feature = "redundant-store-policy7-i8",
+    feature = "redundant-store-policy7-u8",
+    feature = "redundant-store-policy7-i16",
+    feature = "redundant-store-policy7-u16",
+    feature = "redundant-store-policy7-i32",
+    feature = "redundant-store-policy7-u32",
+    feature = "redundant-store-policy7-i64",
+    feature = "redundant-store-policy7-u64",
+))]
+mod redundant_store_policy7_matrix;
+
 #[cfg(feature = "integer-identity")]
 mod integer_identity;
+
+#[cfg(feature = "dominance-cse")]
+mod dominance_cse;
+
+#[cfg(feature = "commutative-cse")]
+mod commutative_cse;
+
+#[cfg(feature = "commutative-unitlocal-policy8")]
+mod commutative_unitlocal_policy8;
 
 #[cfg(feature = "wave64-capture")]
 mod wave64_capture;
@@ -86,7 +119,23 @@ mod ordered_region_v31;
 mod ordered_program_v32;
 
 #[cfg(not(any(
+    feature = "loop-capture-exact",
+    feature = "loop-capture-renamed",
+    feature = "loop-capture-generic",
+    feature = "loop-capture-multi",
+    feature = "loop-capture-u64",
+    feature = "dominance-cse",
+    feature = "commutative-cse",
+    feature = "commutative-unitlocal-policy8",
     feature = "redundant-store-policy7",
+    feature = "redundant-store-policy7-i8",
+    feature = "redundant-store-policy7-u8",
+    feature = "redundant-store-policy7-i16",
+    feature = "redundant-store-policy7-u16",
+    feature = "redundant-store-policy7-i32",
+    feature = "redundant-store-policy7-u32",
+    feature = "redundant-store-policy7-i64",
+    feature = "redundant-store-policy7-u64",
     feature = "integer-identity",
     feature = "wave64-capture",
     feature = "constant-shift",
@@ -101,6 +150,7 @@ mod ordered_program_v32;
     feature = "multi-root-ownership",
     feature = "multi-root-target-lineage",
     feature = "wrapped-fill",
+    feature = "conditional-descriptor-pair",
     feature = "private-unit-helper",
     feature = "f32-negate",
     feature = "f32-divide",

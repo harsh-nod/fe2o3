@@ -53,6 +53,29 @@ fn erased_effect_fixture_mode(
     ProductionPreRankedKirOwnerV1,
     Vec<ProductionRankedSemanticProjectionRootV1>,
 ) {
+    erased_effect_fixture_mode_with_functions(
+        expected,
+        root_count,
+        lifetime,
+        load_forwarding,
+        integer_identity,
+        redundant_store,
+        |_| {},
+    )
+}
+
+fn erased_effect_fixture_mode_with_functions(
+    expected: bool,
+    root_count: usize,
+    lifetime: Option<SemanticStatementKindV1>,
+    load_forwarding: bool,
+    integer_identity: bool,
+    redundant_store: bool,
+    transform: impl FnOnce(&mut Vec<SemanticFunctionDeclV1>),
+) -> (
+    ProductionPreRankedKirOwnerV1,
+    Vec<ProductionRankedSemanticProjectionRootV1>,
+) {
     use fe2o3_pliron::{
         ProductionConstructionV1, ProductionNumericalContractV2, ProductionRankedBlockV1,
         ProductionRankedKernelV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
@@ -267,11 +290,21 @@ fn erased_effect_fixture_mode(
         );
         let (mut private_statements, final_statements) = if load_forwarding {
             (
-                vec![private_store, global_store, private_load.clone(), private_load, index, predicate],
+                vec![
+                    private_store,
+                    global_store,
+                    private_load.clone(),
+                    private_load,
+                    index,
+                    predicate,
+                ],
                 vec![],
             )
         } else {
-            (vec![private_store, private_load, index, predicate], vec![global_store])
+            (
+                vec![private_store, private_load, index, predicate],
+                vec![global_store],
+            )
         };
         if let Some(statement) = &lifetime {
             private_statements.insert(1, SemanticStatementV1::new(provenance, statement.clone()));
@@ -320,11 +353,7 @@ fn erased_effect_fixture_mode(
             SemanticBlockIdV1::from_index(0),
             vec![
                 block(170 + ordinal as u8 * 3, vec![pointer_assignment], call),
-                block(
-                    171 + ordinal as u8 * 3,
-                    private_statements,
-                    assert,
-                ),
+                block(171 + ordinal as u8 * 3, private_statements, assert),
                 block(
                     172 + ordinal as u8 * 3,
                     final_statements,
@@ -335,6 +364,7 @@ fn erased_effect_fixture_mode(
         .unwrap()
         .with_kernel_entry(entry);
     }
+    transform(&mut functions);
     let admitted = InertSemanticMirRequestV1::new(
         source.target(),
         types,
@@ -381,12 +411,23 @@ fn erased_effect_fixture_mode(
             .unwrap();
     let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
     let mut budget = ArgumentBudgetV1::new(&mut work, STORAGE);
-    let owner = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
-        ssa,
-        launch,
-        ProductionSemanticKirLimitsV1::default(),
-        &mut budget,
-    )
+    let fault_sites: Vec<_> = if lifetime.is_some() && !load_forwarding {
+        ssa.source_semantic()
+            .roots()
+            .iter()
+            .map(|root| (root.index(), 1, Some(2), 3))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let owner = retained_load_fault_v1_tests::with_exact_sites(&fault_sites, || {
+        ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+            ssa,
+            launch,
+            ProductionSemanticKirLimitsV1::default(),
+            &mut budget,
+        )
+    })
     .unwrap();
     let roots = owner
         .source_launch()

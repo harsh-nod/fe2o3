@@ -27,6 +27,7 @@ use pliron::{
 
 mod registration;
 
+pub mod commutative_bitwise_cse_v1;
 pub mod cse_v1;
 pub mod dominance_cse_v1;
 pub mod integer_identity_v1;

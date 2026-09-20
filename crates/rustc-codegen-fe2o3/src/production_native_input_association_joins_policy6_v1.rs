@@ -51,6 +51,22 @@ pub(in crate::production_pipeline) fn check_policy7(
     )
 }
 
+/// K supplies only its retained Prefix6 for original-N association evidence.
+pub(in crate::production_pipeline) fn check_policy8(
+    native: &crate::production_pipeline::checked_output_policy8_v1::native::PreparedNativeCheckedOutputWorkerHandoffPolicy8V1,
+    receipts: &NativeOriginalInputAssociationReceiptsPolicy6V1,
+    budget: &mut Budget<'_>,
+) -> R<()> {
+    check_parts(
+        native.inputs(),
+        native.original_source_view(),
+        native.ranked(),
+        native.original_kernel_ir_preimage(),
+        receipts,
+        budget,
+    )
+}
+
 fn check_parts(
     inputs: crate::production_pipeline::native_checked_output_handoff_v1::StageInputsV1<'_>,
     original_owner: crate::production_pipeline::native_checked_output_handoff_v1::OutputOwnerV1<'_>,

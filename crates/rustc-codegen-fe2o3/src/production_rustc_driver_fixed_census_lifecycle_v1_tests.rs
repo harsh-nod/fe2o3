@@ -11,6 +11,8 @@ const STALE: &[u8] = b"{\"runId\":\"stale-sentinel\",\"extractionSucceeded\":tru
 
 #[path = "production_rustc_driver_fixed7_census_lifecycle_v1_tests.rs"]
 mod policy7;
+#[path = "production_rustc_driver_fixed8_census_lifecycle_v1_tests.rs"]
+mod policy8;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 enum Policy {

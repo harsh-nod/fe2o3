@@ -7,9 +7,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         semantic_ssa: &ProductionSemanticSsaFunctionPlanV1,
         correspondence_owner: SemanticFunctionIdV1,
         semantic_function: SemanticFunctionIdV1,
-        defined_function_ids: BTreeMap<SemanticFunctionIdV1, FunctionId>,
-        defined_function_signatures: BTreeMap<SemanticFunctionIdV1, LoweredFunctionSignatureV1>,
-        result_types: Vec<Type>,
+        defined_function_ids:
+            impl Into<EmissionReadOnlyV1<'a, BTreeMap<SemanticFunctionIdV1, FunctionId>>>,
+        defined_function_signatures: impl Into<
+            EmissionReadOnlyV1<'a, BTreeMap<SemanticFunctionIdV1, LoweredFunctionSignatureV1>>,
+        >,
+        result_types: impl Into<EmissionReadOnlyV1<'a, Vec<Type>>>,
         parameters: SemanticParameterBindingsV1<'_>,
         assert_failure_block: Option<BlockId>,
         required_workgroup: Option<[u32; 3]>,
@@ -18,11 +21,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         authenticated_ranked_control: bool,
         max_operations: usize,
         mut private_array_work: PrivateArrayRecorderWorkV1<'a>,
-        private_array_sources: Option<(&PrivateArrayMergeV1, Option<&PrivateArrayMergeV1>)>,
+        private_array_sources: Option<PrivateArraySourcesV1<'_>>,
         call_returns: CallReturnBufferV1,
         mut emission_work: Option<&'a mut dyn SemanticEmissionBudgetV1>,
         emission_placement: SemanticEmissionPlacementV1,
         mut execution: Option<ExecutionAvailabilityV29<'a>>,
+        lifecycle: Option<&'a mut (dyn ExecutionLifecycleConsumerV29 + 'a)>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         infallible_asserts.require_parts(
             types,
@@ -36,6 +40,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             if !std::ptr::eq(execution.cfg.types, types) {
                 return Err(execution_cfg_error_v29());
             }
+        }
+        if let Some(consumer) = lifecycle.as_deref() {
+            let cursor = execution
+                .as_ref()
+                .ok_or_else(execution_availability_error_v29)?;
+            let budget = emission_work
+                .as_deref_mut()
+                .ok_or(ArgumentResourceV1::Accounting)?;
+            cursor.check_ledger(budget)?;
+            let result = consumer.check_instance(cursor, budget);
+            cursor.check_ledger(budget)?;
+            result?;
         }
         let mut locals = vec![None; function.locals().len()];
         let option_producers = semantic_option_producers_v1(function, callables)
@@ -134,6 +150,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             max_operations,
             emission_work.as_deref_mut(),
             execution.as_ref(),
+            lifecycle.as_deref(),
         )?;
         let workgroup_pipeline_contracts = workgroup_pipeline_type_contracts_v1(
             types,
@@ -236,14 +253,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         let mut private_array_outer = PrivateArrayPayloadV1::default();
         if private_array_enabled {
             private_array_work.activate()?;
-            if let Some((root, outer)) = private_array_sources {
-                private_array_outer = root.payload(0, 0, 0, &mut private_array_work)?;
-                if let Some(outer) = outer {
-                    private_array_outer = private_array_outer.add(
-                        outer.payload(0, 0, 0, &mut private_array_work)?,
-                        &mut private_array_work,
-                    )?;
-                }
+            if let Some(sources) = private_array_sources {
+                private_array_outer = sources.payload(&mut private_array_work)?;
             }
         }
         Ok(Self {
@@ -253,15 +264,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 private_array_enabled,
                 max_operations,
                 private_array_outer,
+                emission_placement,
             ),
             types,
             callables,
             function,
             correspondence_owner,
             semantic_function,
-            defined_function_ids,
-            defined_function_signatures,
-            result_types,
+            defined_function_ids: defined_function_ids.into(),
+            defined_function_signatures: defined_function_signatures.into(),
+            result_types: result_types.into(),
             locals,
             retained_local_slots,
             retained_local_allocas_emitted: false,
@@ -282,8 +294,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             next_value,
             emission_placement,
             emission_work,
+            scoped_memory: execution
+                .as_ref()
+                .map(|cursor| ScopedMemoryRecorderV29::new(cursor, emission_placement)),
             execution,
             execution_calls: None,
+            lifecycle,
             assert_failure_block,
             required_workgroup,
             infallible_asserts,

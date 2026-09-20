@@ -130,8 +130,8 @@ mod resource_upper_bound_tests {
     }
 
     #[test]
-    fn deep_cast_join_binary_pair_has_exact_and_one_under_equivalence_admission() {
-        const DEPTH: usize = 51;
+    fn deep_cast_binary_pair_has_exact_and_one_under_equivalence_admission() {
+        const DEPTH: usize = 85;
         let mut context = Context::new();
         register_dialect(&mut context, &DialectName::try_new(DIALECT_NAME).unwrap()).unwrap();
         let left_root = IndexConstantOp::new(&mut context, 1);
@@ -155,17 +155,13 @@ mod resource_upper_bound_tests {
             let right_binary = right_binary.result(&context);
             let left_cast = IndexUnsignedCastOp::new(&mut context, left_binary, 32);
             let right_cast = IndexUnsignedCastOp::new(&mut context, right_binary, 32);
-            let left_cast = left_cast.result(&context);
-            let right_cast = right_cast.result(&context);
-            let left_join = DeterministicJoinOp::new(&mut context, vec![left_cast]);
-            let right_join = DeterministicJoinOp::new(&mut context, vec![right_cast]);
-            left = left_join.result(&context);
-            right = right_join.result(&context);
+            left = left_cast.result(&context);
+            right = right_cast.result(&context);
         }
 
-        // Each layer visits join/join, source/join, cast, binary, and its RHS
-        // constant pair; the two roots contribute the final visit.
-        assert_eq!(DEPTH * 5 + 1, MAX_EQUIVALENCE_WORK_V1);
+        // Each layer visits cast, binary, and its RHS constant pair; the two
+        // roots contribute the final visit. Opaque joins cannot prove equality.
+        assert_eq!(DEPTH * 3 + 1, MAX_EQUIVALENCE_WORK_V1);
         let mut exact_resources =
             EquivalenceResourceMeterV1::new(2, MAX_EQUIVALENCE_WORK_V1).unwrap();
         assert_eq!(

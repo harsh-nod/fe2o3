@@ -2,6 +2,8 @@
 #![doc = include_str!("../README.md")]
 
 mod canonical_analysis_scope_v1;
+mod commutative_cse_owner_v1;
+mod fixed_integer_continuation_claim_v1;
 mod fixed_integer_continuation_v1;
 mod fixed_policy_v3;
 mod graph_analysis_v1;
@@ -13,6 +15,12 @@ mod production;
 mod production_analysis;
 
 pub use canonical_analysis_scope_v1::*;
+pub use commutative_cse_owner_v1::{
+    CheckedCommutativeBitwiseOptimizationV1, CommutativeBitwiseExecutionV1,
+    CommutativeBitwiseOptimizationErrorV1, OwnedCommutativeBitwiseContinuationV1,
+    optimize_checked_commutative_bitwise_cse_v1, prepare_owned_commutative_bitwise_continuation_v1,
+};
+pub use fixed_integer_continuation_claim_v1::*;
 pub use fixed_integer_continuation_v1::{
     INTEGER_CONTINUATION_EXECUTION_RECORD_BYTES_V1, IntegerContinuationExecutionWitnessV1,
 };
@@ -54,7 +62,10 @@ pub use production::{
     PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V5, PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4,
     PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V5, PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2,
     ProductionCheckedNonCanonicalLoopProofImportV1, ProductionCollectiveSemanticContractV1,
-    ProductionCollectiveSemanticKindV1, ProductionConstructionV1,
+    ProductionCollectiveSemanticKindV1, ProductionConditionalOwnershipBlockerV1,
+    ProductionConditionalOwnershipCheckV1, ProductionConditionalOwnershipErrorV1,
+    ProductionConditionalOwnershipRowV1, ProductionConditionalOwnershipSiteV1,
+    ProductionConditionalRankedAnalysisV1, ProductionConstructionV1,
     ProductionCooperativeTensorBindingV1, ProductionEffectRefinementContractV2,
     ProductionExactGraphIdentityV1, ProductionFunctionalRefinementAdmissionErrorV2,
     ProductionGpuWriteSiteV2, ProductionIeeeExceptionalValuePolicyV2, ProductionIeeeRoundingModeV2,
@@ -120,7 +131,7 @@ pub use production::{
 pub use production::{
     ProductionRefinementStagingPolicyV2,
     compile_ranked_kernel_with_policy_checked_refinement_staging_v2,
-    import_noncanonical_loop_proof_v1,
+    import_noncanonical_loop_proof_v1, stage_ranked_kernel_with_policy_checked_refinement_v2,
 };
 
 use std::{

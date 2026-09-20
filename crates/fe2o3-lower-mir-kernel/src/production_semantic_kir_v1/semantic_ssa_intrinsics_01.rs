@@ -1,14 +1,36 @@
-fn compiler_issued_ssa_bindings_v1(
+fn compiler_issued_ssa_bindings_v1<'work>(
     types: &[SemanticTypeDeclV1],
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
     semantic_function: SemanticFunctionIdV1,
+    lifecycle: Option<&dyn ExecutionLifecycleConsumerV29>,
+    mut emission_work: Option<&mut (dyn SemanticEmissionBudgetV1 + 'work)>,
 ) -> Result<BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1> {
     let mut bindings = BTreeMap::new();
-    for callable in callables {
+    for (index, callable) in callables.iter().enumerate() {
         let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable else {
             continue;
         };
+        if matches!(
+            operation,
+            SemanticCompilerIntrinsicOperationV1::Execution(_)
+        ) && let Some(consumer) = lifecycle
+        {
+            let budget = emission_work
+                .as_deref_mut()
+                .ok_or(ArgumentResourceV1::Accounting)?;
+            let ledger = budget.work_ledger_identity_v1();
+            let callable_id =
+                fe2o3_mir_model::semantic_mir_v1::SemanticCallableIdV1::from_index(
+                    u32::try_from(index).map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                );
+            let result = consumer.require_catalog_entry(callable_id, callable, budget);
+            if ledger != budget.work_ledger_identity_v1() {
+                return Err(ArgumentResourceV1::Accounting.into());
+            }
+            result?;
+            continue;
+        }
         require_current_production_intrinsic_v1(operation)?;
         match operation {
             SemanticCompilerIntrinsicOperationV1::WorkgroupLdsScopeCurrent { scope } => {

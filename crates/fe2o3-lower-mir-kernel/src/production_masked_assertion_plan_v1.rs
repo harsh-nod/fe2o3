@@ -14,6 +14,7 @@ struct MaskedAssertionPlanV1<'source> {
 
 enum InfallibleAssertDecisionsV1<'source> {
     Legacy(BTreeSet<u32>),
+    LegacyBorrowed(&'source BTreeSet<u32>),
     Source(&'source MaskedAssertionPlanV1<'source>),
 }
 
@@ -24,9 +25,19 @@ impl From<BTreeSet<u32>> for InfallibleAssertDecisionsV1<'_> {
 }
 
 impl InfallibleAssertDecisionsV1<'_> {
+    // Keep the original decision owner independent of the emitter's budget borrow.
+    fn borrowed(&self) -> InfallibleAssertDecisionsV1<'_> {
+        match self {
+            Self::Legacy(bounds) => InfallibleAssertDecisionsV1::LegacyBorrowed(bounds),
+            Self::LegacyBorrowed(bounds) => InfallibleAssertDecisionsV1::LegacyBorrowed(bounds),
+            Self::Source(plan) => InfallibleAssertDecisionsV1::Source(plan),
+        }
+    }
+
     fn contains(&self, block: &u32) -> bool {
         match self {
             Self::Legacy(bounds) => bounds.contains(block),
+            Self::LegacyBorrowed(bounds) => bounds.contains(block),
             Self::Source(plan) => {
                 plan.bounds.contains(block)
                     || plan.rows.get(*block as usize).is_some_and(Option::is_some)

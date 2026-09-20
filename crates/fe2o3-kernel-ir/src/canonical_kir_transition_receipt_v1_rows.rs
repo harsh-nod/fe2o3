@@ -238,19 +238,19 @@ impl Reader<'_> {
             )),
         }
     }
-    fn function_row(&mut self) -> Result<FunctionRow> {
+    pub(super) fn function_row(&mut self) -> Result<FunctionRow> {
         Ok(FunctionRow {
             input: Function(self.u32()?),
             output: Function(self.u32()?),
         })
     }
-    fn block_row(&mut self) -> Result<BlockRow> {
+    pub(super) fn block_row(&mut self) -> Result<BlockRow> {
         Ok(BlockRow {
             output: self.block()?,
             segments: self.range()?,
         })
     }
-    fn segment(&mut self) -> Result<Segment> {
+    pub(super) fn segment(&mut self) -> Result<Segment> {
         let input = self.block()?;
         let tag = self.u32()?;
         let edge = self.edge()?;
@@ -275,7 +275,7 @@ impl Reader<'_> {
         };
         Ok(Segment { input, connector })
     }
-    fn operation_row(&mut self) -> Result<OperationRow> {
+    pub(super) fn operation_row(&mut self) -> Result<OperationRow> {
         let output = self.operation()?;
         let origin = match self.u32()? {
             0 => {
@@ -296,13 +296,13 @@ impl Reader<'_> {
         };
         Ok(OperationRow { output, origin })
     }
-    fn definition_row(&mut self) -> Result<DefinitionRow> {
+    pub(super) fn definition_row(&mut self) -> Result<DefinitionRow> {
         Ok(DefinitionRow {
             input: self.definition()?,
             outputs: self.range()?,
         })
     }
-    fn descendant(&mut self) -> Result<Descendant> {
+    pub(super) fn descendant(&mut self) -> Result<Descendant> {
         let output = self.definition()?;
         let kind = match self.u32()? {
             0 => DescendantKind::Retained,
@@ -315,19 +315,19 @@ impl Reader<'_> {
         };
         Ok(Descendant { output, kind })
     }
-    fn use_row(&mut self) -> Result<UseRow> {
+    pub(super) fn use_row(&mut self) -> Result<UseRow> {
         Ok(UseRow {
             output: self.use_coordinate()?,
             input: self.use_coordinate()?,
         })
     }
-    fn edge_row(&mut self) -> Result<EdgeRow> {
+    pub(super) fn edge_row(&mut self) -> Result<EdgeRow> {
         Ok(EdgeRow {
             output: self.edge()?,
             input: self.edge()?,
         })
     }
-    fn edge_argument_row(&mut self) -> Result<EdgeArgumentRow> {
+    pub(super) fn edge_argument_row(&mut self) -> Result<EdgeArgumentRow> {
         Ok(EdgeArgumentRow {
             output: self.edge_argument()?,
             input: self.edge_argument()?,

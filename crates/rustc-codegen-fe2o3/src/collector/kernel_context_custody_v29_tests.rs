@@ -4,6 +4,25 @@ use super::*;
 #[path = "kernel_context_custody_v29_tests/scope_tests.rs"]
 mod scope_tests;
 
+#[path = "kernel_context_custody_v29_tests/projection_tests.rs"]
+mod projection_tests;
+
+fn projection_storage(entries: &RetainedContextEntriesV29) -> usize {
+    let source = RetainedExecutionSourceV29 {
+        semantic_sha256: &entries.semantic_sha256,
+        roots: &entries.entries,
+        scopes: entries.scopes.as_ref().unwrap(),
+    };
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(100_000);
+    let mut budget = VisitBudget::new(&mut work, 1 << 20);
+    crate::production_pipeline::with_projected_execution_source_v29(
+        &source,
+        &mut budget,
+        |_, budget| Ok(budget.storage()),
+    )
+    .unwrap()
+}
+
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const U32: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
 const MARKER: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);
@@ -647,11 +666,12 @@ fn production_context_handoff_joins_ssa_and_launch_under_the_shared_budget() {
     for count in [1, 4] {
         let semantic = fixture_roots(Mutation::None, count);
         let entries = scope_tests::complete(&semantic);
+        let storage = projection_storage(&entries);
         let launch = launch_roster(&semantic);
         let owner = ssa_owner(semantic);
         let exact = {
             let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(10_000);
-            let mut budget = VisitBudget::new(&mut work, 0);
+            let mut budget = VisitBudget::new(&mut work, storage);
             check_context_handoff_v29(&entries, &owner, &launch, &mut budget, |root, _| {
                 assert!(std::ptr::eq(root.semantic_ssa(), &owner));
                 Ok(())
@@ -662,7 +682,7 @@ fn production_context_handoff_joins_ssa_and_launch_under_the_shared_budget() {
         for prior in [0, 11] {
             for limit in [exact - 1, exact] {
                 let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(prior + limit);
-                let mut budget = VisitBudget::new(&mut work, 7);
+                let mut budget = VisitBudget::new(&mut work, storage + 7);
                 budget.charge_work(prior).unwrap();
                 budget.reserve_storage(7).unwrap();
                 let result = check_context_handoff_v29(
@@ -699,7 +719,7 @@ fn production_context_handoff_joins_ssa_and_launch_under_the_shared_budget() {
             (&different_owner, &different_launch, true),
         ] {
             let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(exact);
-            let mut budget = VisitBudget::new(&mut work, 0);
+            let mut budget = VisitBudget::new(&mut work, storage);
             let error = check_context_handoff_v29(&entries, ssa, launch, &mut budget, |_, _| {
                 panic!("substitution must reject before the observer")
             })
@@ -719,7 +739,7 @@ fn production_context_handoff_joins_ssa_and_launch_under_the_shared_budget() {
             }
         }
         let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(exact);
-        let mut budget = VisitBudget::new(&mut work, 0);
+        let mut budget = VisitBudget::new(&mut work, storage);
         let mut visits = 0;
         let error = check_context_handoff_v29(&entries, &owner, &launch, &mut budget, |_, _| {
             visits += 1;
@@ -732,7 +752,7 @@ fn production_context_handoff_joins_ssa_and_launch_under_the_shared_budget() {
             ProductionPipelineError::ContextHandoff(ProductionContextRootErrorV29::Arguments)
         ));
         let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(exact);
-        let mut budget = VisitBudget::new(&mut work, 7);
+        let mut budget = VisitBudget::new(&mut work, storage + 7);
         budget.reserve_storage(7).unwrap();
         let mut visits = 0;
         let error =

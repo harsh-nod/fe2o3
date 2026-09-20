@@ -29,6 +29,10 @@ use std::{
 #[path = "canonical_kir_transition_receipt_v1_rows.rs"]
 mod rows;
 
+#[path = "canonical_kir_occurrence_row_bytes_v1.rs"]
+mod row_bytes;
+pub use row_bytes::*;
+
 /// Fixed named scalar/CFG transition checker policy, independent of wire schema.
 pub const CANONICAL_KIR_TRANSITION_CHECKER_POLICY_V1: u16 = 1;
 /// Canonical occurrence receipt framing, separate from graph and legacy map frames.

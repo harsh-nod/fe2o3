@@ -30,6 +30,8 @@ fn check_native_worker_descriptor_source_inner_v1(
         OutputOwnerV1::Erased6(owner) => policy6::erased_view(owner),
         OutputOwnerV1::Direct7(owner) => policy7::direct_view(owner).map_err(descriptor)?,
         OutputOwnerV1::Erased7(owner) => policy7::erased_view(owner),
+        OutputOwnerV1::Direct8(owner) => policy8::direct_view(owner).map_err(descriptor)?,
+        OutputOwnerV1::Erased8(owner) => policy8::erased_view(owner),
         OutputOwnerV1::Direct(owner) => CheckedDescriptorViewV1 {
             semantic: owner.source_semantic_kir().semantic().semantic(),
             source_launch: owner

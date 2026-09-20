@@ -18,6 +18,7 @@ use fe2o3_kernel_ir::{
 };
 
 mod catalog_transport;
+mod commutative_bitwise_cse;
 mod control;
 mod control_index;
 mod dominance_cse;

@@ -1,4 +1,4 @@
-//! One strict opt0 u32/gfx942 source mutation, separate from the 26-child census.
+//! Shared strict source protocol for the original smoke and separate fixed-width matrix.
 use super::fixed_census_observation as census;
 use super::*;
 use crate::production_pipeline::checked_output_policy7_v1::source_observation;
@@ -11,8 +11,11 @@ use std::sync::{Arc, Mutex};
 mod active_source;
 #[path = "production_rustc_driver_redundant_store_graph_v1_tests.rs"]
 mod graph;
+#[path = "production_rustc_driver_redundant_store_matrix_v1_tests.rs"]
+mod matrix;
 #[path = "production_rustc_driver_redundant_store_simulation_v1_tests.rs"]
 mod sim;
+use matrix::{Case, Integer, Target};
 
 const ROOT: &str = "private_store_policy7";
 const BASE: &str = "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device";
@@ -34,6 +37,7 @@ struct Stamp {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
+    case: Case,
     mode: Mode,
     args_sha256: [u8; 32],
     source: Vec<Stamp>,
@@ -69,12 +73,12 @@ fn workspace() -> PathBuf {
         .canonicalize()
         .unwrap()
 }
-fn stamps() -> Vec<Stamp> {
+fn stamps(case: Case) -> Vec<Stamp> {
     [
         "Cargo.lock".into(),
         format!("{BASE}/Cargo.toml"),
         format!("{BASE}/src/lib.rs"),
-        format!("{BASE}/src/redundant_store_policy7.rs"),
+        format!("{BASE}/src/{}", case.fixture()),
     ]
     .into_iter()
     .map(|p: String| {
@@ -87,7 +91,7 @@ fn stamps() -> Vec<Stamp> {
     .collect()
 }
 fn check_request(request: &Request, args: &[String]) -> Result<(), String> {
-    if request.source != stamps()
+    if request.source != stamps(request.case)
         || request.args_sha256 != digest(&serde_json::to_vec(args).map_err(|e| e.to_string())?)
         || args
             .iter()
@@ -108,9 +112,10 @@ fn check_request(request: &Request, args: &[String]) -> Result<(), String> {
 }
 fn source(
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    case: Case,
 ) -> Result<Source, String> {
     let roots = census::roots(semantic)?;
-    if roots.len() != 1 || roots[0].name != ROOT {
+    if roots.len() != 1 || roots[0].name != case.root() {
         return Err("Policy7 smoke requires exactly its actual source root".into());
     }
     let identity = *semantic.semantic_sha256().as_bytes();
@@ -133,6 +138,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 fn observe(tcx: TyCtxt<'_>, request: &Request, artifact: &Path) -> Result<Outcome, String> {
+    let case = request.case;
     let active_source = active_source::resolve(
         tcx,
         request.source.last().ok_or("missing active source stamp")?,
@@ -163,7 +169,7 @@ fn observe(tcx: TyCtxt<'_>, request: &Request, artifact: &Path) -> Result<Outcom
             if state.0 != 1 {
                 return Err("second actual Stage7 observation".into());
             }
-            state.1 = Some(graph::observe(view, active_source, budget)?);
+            state.1 = Some(graph::observe(view, active_source, case, budget)?);
             Ok(())
         }),
         || {
@@ -173,8 +179,7 @@ fn observe(tcx: TyCtxt<'_>, request: &Request, artifact: &Path) -> Result<Outcom
                     if identity.policy != 7
                         || identity.erased.is_some()
                         || identity.input == identity.output
-                        || handoff.target()
-                            != fe2o3_compiler_ffi::DeviceTargetV1::parse("gfx942:xnack-").unwrap()
+                        || handoff.target() != case.target().device()
                         || handoff.code_object_version()
                             != fe2o3_compiler_ffi::CodeObjectVersion::V6
                         || descriptor.grants_link_authority()
@@ -219,7 +224,7 @@ fn observe(tcx: TyCtxt<'_>, request: &Request, artifact: &Path) -> Result<Outcom
     {
         return Err("observed actual owner differs from consumed J extraction".into());
     }
-    graph::validate(&report)?;
+    graph::validate(&report, case)?;
     Ok(Outcome::Observed(Box::new(report)))
 }
 struct SmokeCallbacks {
@@ -233,14 +238,14 @@ impl Callbacks for SmokeCallbacks {
         Compilation::Stop
     }
 }
-fn extract(args: &[String], artifact: &Path) -> Result<Outcome, String> {
+fn extract(args: &[String], artifact: &Path, case: Case) -> Result<Outcome, String> {
     let observed = Arc::new(Mutex::new((0_usize, None)));
     let state = Arc::clone(&observed);
     super::super::fixed_census_invocation_observer_v1_tests::with_observer(
         Box::new(move |_, semantic| {
             let mut state = state.lock().unwrap();
             state.0 += 1;
-            state.1 = Some(source(semantic));
+            state.1 = Some(source(semantic, case));
         }),
         || run_production_fixed_checked_output_policy7_extraction_driver_v1(args, artifact),
     )?;
@@ -278,7 +283,7 @@ fn policy7_redundant_store_source_child() {
             return Err("Policy7 artifact is not fresh".into());
         }
         let outcome = match request.mode {
-            Mode::Extract => extract(&args, &artifact)?,
+            Mode::Extract => extract(&args, &artifact, request.case)?,
             Mode::Observe => {
                 let mut callbacks = SmokeCallbacks {
                     request: request.clone(),
@@ -323,6 +328,9 @@ fn decode(status: Option<i32>, bytes: Option<&[u8]>, request: &Request) -> Resul
     ) {
         return Err("Policy7 outcome mode changed".into());
     }
+    if let Outcome::Observed(observed) = &result {
+        graph::validate(observed, request.case)?;
+    }
     Ok(result)
 }
 fn child(
@@ -364,15 +372,12 @@ fn child(
     (outcome, std::fs::read(artifact).unwrap())
 }
 
-#[test]
-#[ignore = "strict ordinary Rust gfx942 opt0 private-Store mutation; exactly two compiler children"]
-fn ordinary_rust_redundant_private_store_reaches_actual_j_native_and_sim() {
-    let scratch = crate::test_temp_dir::TestTempDir::create("fe2o3-policy7-store-smoke");
+fn capture(case: Case, directory: &Path, target: &Path) -> corpus_cargo::Captured {
     let hash = |p: &str| crate::encode_hex(&digest(&std::fs::read(workspace().join(p)).unwrap()));
     let manifest = format!("{BASE}/Cargo.toml");
     let fixture = corpus::Fixture {
-        fixture_id: "redundant-store-policy7-u32-gfx942-opt0".into(),
-        target: "gfx942".into(),
+        fixture_id: case.label(),
+        target: case.target().name().into(),
         compiler_input: corpus::CompilerInput {
             package_manifest_sha256: hash(&manifest),
             package_manifest: manifest,
@@ -380,7 +385,7 @@ fn ordinary_rust_redundant_private_store_reaches_actual_j_native_and_sim() {
             cargo_lock_sha256: hash("Cargo.lock"),
             source_paths: vec![
                 format!("{BASE}/src/lib.rs"),
-                format!("{BASE}/src/redundant_store_policy7.rs"),
+                format!("{BASE}/src/{}", case.fixture()),
             ],
             source_closure_sha256: String::new(),
             cargo_target: corpus::CargoTarget {
@@ -389,34 +394,33 @@ fn ordinary_rust_redundant_private_store_reaches_actual_j_native_and_sim() {
                 source_path: "src/lib.rs".into(),
             },
             default_features: false,
-            features: vec!["redundant-store-policy7".into()],
-            kernel_symbols: vec![ROOT.into()],
+            features: vec![case.feature().into()],
+            kernel_symbols: vec![case.root().into()],
         },
     };
-    let mut captured = corpus_cargo::capture(
-        &workspace(),
-        &fixture,
-        scratch.path(),
-        &scratch.path().join("target"),
-    )
-    .unwrap();
+    let mut captured = corpus_cargo::capture(&workspace(), &fixture, directory, target).unwrap();
     require_canonical_overflow_checks_v1(&captured.args).unwrap();
     captured
         .args
         .extend(["-Zinline-mir=no".into(), "-Zmir-opt-level=0".into()]);
+    captured
+}
+
+fn qualify(captured: &corpus_cargo::Captured, directory: &Path, case: Case) -> graph::Observed {
     let request = Request {
+        case,
         mode: Mode::Observe,
         args_sha256: digest(&serde_json::to_vec(&captured.args).unwrap()),
-        source: stamps(),
+        source: stamps(case),
     };
-    let (observed, actual) = child(&captured, scratch.path(), request.clone());
+    let (observed, actual) = child(captured, directory, request.clone());
     let Outcome::Observed(observed) = observed else {
         unreachable!()
     };
-    graph::validate(&observed).unwrap();
+    graph::validate(&observed, case).unwrap();
     let (extracted, independent) = child(
-        &captured,
-        scratch.path(),
+        captured,
+        directory,
         Request {
             mode: Mode::Extract,
             ..request.clone()
@@ -440,11 +444,24 @@ fn ordinary_rust_redundant_private_store_reaches_actual_j_native_and_sim() {
         (observed.llvm_sha256, observed.llvm_bytes)
     );
     assert_eq!(digest(&actual), observed.llvm_sha256);
-    assert_eq!(stamps(), request.source);
+    assert_eq!(stamps(case), request.source);
+    *observed
+}
+
+#[test]
+#[ignore = "strict ordinary Rust gfx942 opt0 private-Store mutation; exactly two compiler children"]
+fn ordinary_rust_redundant_private_store_reaches_actual_j_native_and_sim() {
+    let scratch = crate::test_temp_dir::TestTempDir::create("fe2o3-policy7-store-smoke");
+    let captured = capture(
+        Case::Smoke {},
+        scratch.path(),
+        &scratch.path().join("target"),
+    );
+    let observed = qualify(&captured, scratch.path(), Case::Smoke {});
     eprintln!(
         "POLICY7 SOURCE: 1 direct u32 gfx942 opt0 root; {} actual I-to-J deletions; {} LLVM bytes; {} SIM scenarios; 2 independent compiler children",
         observed.deletions,
-        llvm_bytes,
+        observed.llvm_bytes,
         observed.sim.scenarios.len()
     );
 }
@@ -452,6 +469,7 @@ fn ordinary_rust_redundant_private_store_reaches_actual_j_native_and_sim() {
 #[test]
 fn policy7_smoke_protocol_rejects_failure_missing_foreign_and_wrong_mode() {
     let request = Request {
+        case: Case::Smoke {},
         mode: Mode::Extract,
         args_sha256: [1; 32],
         source: Vec::new(),

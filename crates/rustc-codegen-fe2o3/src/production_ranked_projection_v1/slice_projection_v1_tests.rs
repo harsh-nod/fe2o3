@@ -79,6 +79,7 @@ fn source(operation: usize, memory_space: MemorySpaceAttr) -> ProjectedAccessSou
         memory_space,
         access: AccessKindAttr::Read,
         source: SemanticSourceProvenanceV1::unavailable(),
+        output_extent: None,
         semantic_site: Some(site(Some(7))),
     }
 }
@@ -102,6 +103,7 @@ fn guarded(memory_space: MemorySpaceAttr) -> GuardedAccessSiteV1 {
             access: AccessKindAttr::Read,
             memory_space,
             source: SemanticSourceProvenanceV1::unavailable(),
+            output_extent: None,
             semantic_site: Some(site(Some(7))),
         },
     }

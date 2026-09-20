@@ -3,6 +3,13 @@
 #[path = "compiler_descriptor_checked_output_policy3_v1.rs"]
 pub(crate) mod checked_output_policy3_v1;
 
+#[path = "compiler_descriptor_conditional_output_binding_v1.rs"]
+pub(crate) mod conditional_output_binding_v1;
+#[cfg(test)]
+pub(crate) use conditional_output_binding_v1::{
+    CompilerConditionalOutputDescriptorErrorV1, bind_conditional_output_descriptor_v1,
+};
+
 use crate::collector::{CollectedFunction, TypedArgumentListV1};
 use crate::kernel_ir_codegen::InertCompilerModuleTextV1;
 use crate::rust_type_layout_v3::{
@@ -1582,6 +1589,7 @@ pub(crate) enum CompilerDescriptorError {
         Box<fe2o3_lower_mir_kernel::ProductionCheckedOutputAdmissionErrorPolicy6V1>,
     ),
     CheckedOutputPolicy7(Box<fe2o3_lower_mir_kernel::ProductionRedundantStoreAdmissionErrorV1>),
+    CheckedOutputPolicy8(Box<fe2o3_lower_mir_kernel::ProductionCommutativeContinuationErrorV1>),
     CheckedOutputTarget(dialect_amdgcn::ProductionTargetCoordinateErrorV1),
     ProductionGeometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
     ProductionDescriptorMismatch(&'static str),
@@ -1695,6 +1703,12 @@ impl fmt::Display for CompilerDescriptorError {
                 write!(
                     formatter,
                     "checked Policy6 output admission failed: {error}"
+                )
+            }
+            Self::CheckedOutputPolicy8(error) => {
+                write!(
+                    formatter,
+                    "checked Policy8 descriptor admission failed: {error}"
                 )
             }
             Self::CheckedOutputPolicy7(error) => {

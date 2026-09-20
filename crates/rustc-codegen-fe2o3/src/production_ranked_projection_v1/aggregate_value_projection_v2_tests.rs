@@ -263,6 +263,7 @@ fn aggregate_projected_writes_v2(
             access: AccessKindAttr::Write,
             memory_space: MemorySpaceAttr::Global,
             source: SemanticSourceProvenanceV1::unavailable(),
+            output_extent: None,
             semantic_site: Some(ProjectedSemanticAccessSiteV1 {
                 block: 0,
                 statement: Some(statement),
@@ -1000,6 +1001,7 @@ fn gpu_aggregate_load_retains_ranked_read_identity_v2() {
             access,
             memory_space: MemorySpaceAttr::Global,
             source: SemanticSourceProvenanceV1::unavailable(),
+            output_extent: None,
             semantic_site: Some(ProjectedSemanticAccessSiteV1 {
                 block: 0,
                 statement: Some(ordinal),

@@ -31,6 +31,8 @@ pub(crate) mod checked_output_policy5_v1;
 pub(crate) mod checked_output_policy6_v1;
 #[path = "production_pipeline_checked_output_policy7_v1.rs"]
 pub(crate) mod checked_output_policy7_v1;
+#[path = "production_pipeline_checked_output_policy8_v1.rs"]
+pub(crate) mod checked_output_policy8_v1;
 #[cfg(test)]
 #[path = "production_pipeline_checked_output_progress_v1_tests.rs"]
 pub(crate) mod checked_output_progress_v1;
@@ -46,6 +48,9 @@ pub(crate) mod fixed_checked_output_policy6_v1;
 pub(crate) mod fixed_checked_output_v1;
 #[path = "production_native_checked_output_handoff_v1.rs"]
 pub(crate) mod native_checked_output_handoff_v1;
+#[cfg(test)]
+#[path = "production_pipeline_pre_ranked_observation_v1_tests.rs"]
+mod pre_ranked_observation_v1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProductionDisposition {
@@ -69,6 +74,10 @@ pub(crate) enum ProductionPipelineError {
     SemanticMiddleEnd(fe2o3_pliron::ProductionSemanticMirErrorV1),
     SemanticSsa(fe2o3_pliron::ProductionSemanticSsaErrorV1),
     ContextHandoff(fe2o3_lower_mir_kernel::ProductionContextRootErrorV29),
+    #[cfg(test)]
+    PendingScopedSource(fe2o3_lower_mir_kernel::ProductionPendingScopedSourceErrorV29),
+    #[cfg(test)]
+    PendingScopedObservationIncomplete,
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
@@ -99,6 +108,8 @@ pub(crate) enum ProductionPipelineError {
     CheckedOutputPolicy5Stage(checked_output_policy5_v1::CheckedOutputPolicy5StageErrorV1),
     CheckedOutputPolicy6Stage(checked_output_policy6_v1::CheckedOutputPolicy6StageErrorV1),
     CheckedOutputPolicy7Stage(checked_output_policy7_v1::CheckedOutputPolicy7StageErrorV1),
+    CheckedOutputPolicy8Stage(checked_output_policy8_v1::CheckedOutputPolicy8StageErrorV1),
+    ScalarEmissionCapture(Box<fe2o3_lower_mir_kernel::ProductionScalarSsaEmissionErrorV1>),
     TargetKernelIrV8(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV8),
     TargetKernelIrV9(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV9),
     TargetKernelIrV11(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV11),
@@ -129,10 +140,12 @@ impl From<Box<ProductionPipelineError>> for ProductionPipelineError {
 impl fmt::Display for ProductionPipelineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ScalarEmissionCapture(error) => write!(formatter, "production scalar emission capture failed: {error}"),
             Self::CheckedOutputStage(error) => write!(formatter, "checked-output production stage failed: {error}"),
             Self::CheckedOutputPolicy5Stage(error) => write!(formatter, "checked Policy5 production stage failed: {error}"),
             Self::CheckedOutputPolicy6Stage(error) => write!(formatter, "checked Policy6 production stage failed: {error}"),
             Self::CheckedOutputPolicy7Stage(error) => write!(formatter, "checked Policy7 production stage failed: {error}"),
+            Self::CheckedOutputPolicy8Stage(error) => write!(formatter, "checked Policy8 production stage failed: {error}"),
             Self::CustomLlvmConfiguration => formatter.write_str(
                 "production compilation rejects caller-selected LLVM arguments or passes before transaction construction",
             ),
@@ -147,6 +160,10 @@ impl fmt::Display for ProductionPipelineError {
                 write!(formatter, "production compilation semantic SSA planning failed: {error}")
             }
             Self::ContextHandoff(error) => write!(formatter, "production compilation context root handoff failed: {error}"),
+            #[cfg(test)]
+            Self::PendingScopedSource(error) => write!(formatter, "production pending scoped observation failed: {error}"),
+            #[cfg(test)]
+            Self::PendingScopedObservationIncomplete => formatter.write_str("pending scoped observation is incomplete and grants no execution authority"),
             Self::RankedProjection(error) => {
                 write!(formatter, "production compilation general kernel verification failed: {error}")
             }
@@ -303,10 +320,15 @@ impl fmt::Display for ProductionPipelineError {
 impl std::error::Error for ProductionPipelineError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::ScalarEmissionCapture(error) => Some(error.as_ref()),
             Self::SemanticImport(error) => Some(error),
             Self::SemanticMiddleEnd(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
             Self::ContextHandoff(error) => Some(error),
+            #[cfg(test)]
+            Self::PendingScopedSource(error) => Some(error),
+            #[cfg(test)]
+            Self::PendingScopedObservationIncomplete => None,
             Self::RankedProjection(error) => Some(error),
             Self::RankedVerification(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
@@ -332,6 +354,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::CheckedOutputPolicy5Stage(error) => Some(error),
             Self::CheckedOutputPolicy6Stage(error) => Some(error),
             Self::CheckedOutputPolicy7Stage(error) => Some(error),
+            Self::CheckedOutputPolicy8Stage(error) => Some(error),
             Self::TargetKernelIrV8(error) => Some(error),
             Self::TargetKernelIrV9(error) => Some(error),
             Self::TargetKernelIrV11(error) => Some(error),
@@ -489,6 +512,19 @@ pub(crate) struct ProductionCompilation<'tcx, Stage> {
 struct MaterializedNeutralProductionCompilation {
     materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
     ranked_roots: Vec<crate::production_ranked_projection_v1::ProductionRankedRootInputV1>,
+    bindings: AuthenticatedProductionBindings,
+}
+
+struct PreparedMaterializationV29<M> {
+    materialized: M,
+    ranked_roots: Vec<crate::production_ranked_projection_v1::ProductionRankedRootInputV1>,
+    bindings: AuthenticatedProductionBindings,
+}
+
+struct PreparedSsaMaterializationV29 {
+    semantic_ssa: fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+    ranked_roots: Vec<crate::production_ranked_projection_v1::ProductionRankedRootInputV1>,
+    launch: fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1,
     bindings: AuthenticatedProductionBindings,
 }
 
@@ -3477,7 +3513,9 @@ impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
 #[path = "production_context_handoff_v29.rs"]
 mod context_handoff_v29;
 #[cfg(test)]
-pub(crate) use context_handoff_v29::check_context_handoff_v29;
+pub(crate) use context_handoff_v29::{
+    check_context_handoff_v29, with_projected_execution_source_v29,
+};
 
 impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
     fn require_target_neutral_lowering(self) -> ProductionPipelineError {
@@ -3513,47 +3551,76 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
             fe2o3_lower_mir_kernel::ProductionContextRootErrorV29,
         >,
     ) -> Result<MaterializedNeutralProductionCompilation, Box<ProductionPipelineError>> {
-        let SsaSemanticMirStage {
-            semantic_ssa,
+        let PreparedMaterializationV29 {
+            materialized,
+            ranked_roots,
             bindings,
-        } = self.stage;
-        crate::compiler_descriptor::validate_production_v1_semantic_ownership_evidence(
-            &bindings.typed_descriptor_roots,
-            semantic_ssa.source_semantic(),
-        )
-        .map_err(ProductionPipelineError::DescriptorEvidence)?;
-        let ranked_roots = bindings
-            .typed_descriptor_roots
-            .iter()
-            .map(|typed_root| {
-                let source_launch = typed_root.source_launch().ok_or(
-                    ProductionPipelineError::Geometry(
-                        crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
-                    ),
-                )?;
-                Ok(
-                    crate::production_ranked_projection_v1::ProductionRankedRootInputV1::new(
+        } = self.materialize_prepared_v29(use_root, |semantic_ssa, launch, budget| {
+            let owner =
+                fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+                    semantic_ssa,
+                    launch,
+                    fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+                    budget,
+                )
+                .map_err(ProductionPipelineError::PreRankedMaterialization)?;
+            let retained = owner.retained_analysis_storage_v1();
+            Ok((owner, retained))
+        })?;
+        Ok(MaterializedNeutralProductionCompilation {
+            materialized,
+            ranked_roots,
+            bindings,
+        })
+    }
+
+    // Both owning constructors cross the same descriptor/context/launch gates.
+    // This private callback is not a caller-selected compiler policy.
+    fn materialize_prepared_v29<M>(
+        self,
+        use_root: impl for<'a> FnMut(
+            fe2o3_lower_mir_kernel::ProductionCheckedContextRootV29<'a>,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<
+            (),
+            fe2o3_lower_mir_kernel::ProductionContextRootErrorV29,
+        >,
+        materialize: impl FnOnce(
+            fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+            fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<(M, usize), ProductionPipelineError>,
+    ) -> Result<PreparedMaterializationV29<M>, Box<ProductionPipelineError>> {
+        self.with_prepared_materialization_budget_v29(|prepared, budget| {
+            materialize_prepared_with_budget_v29(prepared, budget, use_root, materialize)
+        })
+    }
+
+    fn with_prepared_materialization_budget_v29<R>(
+        self,
+        run: impl FnOnce(
+            PreparedSsaMaterializationV29,
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<R, Box<ProductionPipelineError>>,
+    ) -> Result<R, Box<ProductionPipelineError>> {
+        let prepared = self.prepare_materialization_inputs_v29(|typed_roots| {
+            typed_roots
+                .iter()
+                .map(|typed_root| {
+                    let source_launch = typed_root.source_launch().ok_or(
+                        ProductionPipelineError::Geometry(
+                            crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
+                        ),
+                    )?;
+                    Ok(crate::production_ranked_projection_v1::ProductionRankedRootInputV1::new(
                         typed_root.logical_name(),
                         typed_root.kernel_binding_bytes(),
                         source_launch,
-                    ),
-                )
-            })
-            .collect::<Result<Vec<_>, ProductionPipelineError>>()?;
-        let launch =
-            crate::production_ranked_projection_v1::source_launch_roster_for_ranked_inputs_v1(
-                &semantic_ssa,
-                &ranked_roots,
-            )
-            .map_err(crate::production_ranked_projection_v1::source_launch_projection_error_v1)
-            .map_err(ProductionPipelineError::RankedProjection)?;
-        let resource_error = |error| {
-            ProductionPipelineError::PreRankedMaterialization(
-                fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1::Canonical(
-                    fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV12::Resource(error),
-                ),
-            )
-        };
+                    ))
+                })
+                .collect::<Result<Vec<_>, ProductionPipelineError>>()
+        })?;
+        let resource_error = materialization_resource_error_v29;
         let work_limit = usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT)
             .map_err(|_| {
             resource_error(
@@ -3565,33 +3632,157 @@ impl<'tcx> ProductionCompilation<'tcx, SsaSemanticMirStage> {
             &mut work,
             crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
         );
-        context_handoff_v29::check_context_handoff_v29(
-            &bindings.context_entries,
-            &semantic_ssa,
-            &launch,
-            &mut budget,
-            use_root,
-        )?;
-        let materialized =
-            fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
-                semantic_ssa,
-                launch,
-                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
-                &mut budget,
+        run(prepared, &mut budget)
+    }
+
+    fn prepare_materialization_inputs_v29(
+        self,
+        roots: impl FnOnce(
+            &[crate::compiler_descriptor::TypedDescriptorRootV1],
+        ) -> Result<
+            Vec<crate::production_ranked_projection_v1::ProductionRankedRootInputV1>,
+            ProductionPipelineError,
+        >,
+    ) -> Result<PreparedSsaMaterializationV29, ProductionPipelineError> {
+        let SsaSemanticMirStage {
+            semantic_ssa,
+            bindings,
+        } = self.stage;
+        crate::compiler_descriptor::validate_production_v1_semantic_ownership_evidence(
+            &bindings.typed_descriptor_roots,
+            semantic_ssa.source_semantic(),
+        )
+        .map_err(ProductionPipelineError::DescriptorEvidence)?;
+        let ranked_roots = roots(&bindings.typed_descriptor_roots)?;
+        let launch =
+            crate::production_ranked_projection_v1::source_launch_roster_for_ranked_inputs_v1(
+                &semantic_ssa,
+                &ranked_roots,
             )
-            .map_err(ProductionPipelineError::PreRankedMaterialization)?;
-        // Accept the graph, sealed origin and helper transfers before any next phase.
-        // This local ledger does not claim coverage of source-ranked analyses.
-        let retained_storage = materialized.retained_analysis_storage_v1();
-        budget
-            .reserve_storage(retained_storage)
-            .map_err(resource_error)?;
-        Ok(MaterializedNeutralProductionCompilation {
-            materialized,
+            .map_err(crate::production_ranked_projection_v1::source_launch_projection_error_v1)
+            .map_err(ProductionPipelineError::RankedProjection)?;
+        Ok(PreparedSsaMaterializationV29 {
+            semantic_ssa,
             ranked_roots,
+            launch,
             bindings,
         })
     }
+}
+
+fn materialization_resource_error_v29(
+    error: fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1,
+) -> ProductionPipelineError {
+    ProductionPipelineError::PreRankedMaterialization(
+        fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1::Canonical(
+            fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV12::Resource(error),
+        ),
+    )
+}
+
+// Same genuine context and materialization path; the caller selects no policy.
+// Preserve the unreserved-delta contract consumed by ordinary and guarded owners.
+fn materialize_prepared_with_budget_v29<M>(
+    prepared: PreparedSsaMaterializationV29,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    use_root: impl for<'a> FnMut(
+        fe2o3_lower_mir_kernel::ProductionCheckedContextRootV29<'a>,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    )
+        -> Result<(), fe2o3_lower_mir_kernel::ProductionContextRootErrorV29>,
+    materialize: impl FnOnce(
+        fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<(M, usize), ProductionPipelineError>,
+) -> Result<PreparedMaterializationV29<M>, Box<ProductionPipelineError>> {
+    let PreparedSsaMaterializationV29 {
+        semantic_ssa,
+        ranked_roots,
+        launch,
+        bindings,
+    } = prepared;
+    #[cfg(test)]
+    let semantic_ssa = {
+        let mut ssa = semantic_ssa;
+        if ssa.source_semantic().wire_version()
+            == fe2o3_mir_model::semantic_mir_v1::SemanticMirWireVersionV1::V29
+        {
+            let receipt = ssa
+                .try_capture_occurrences_with_budget_v1(budget)
+                .map_err(|error| {
+                    ProductionPipelineError::PreRankedMaterialization(
+                        fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1::Occurrences(error),
+                    )
+                })?;
+            budget
+                .reserve_storage(receipt.retained_storage())
+                .map_err(materialization_resource_error_v29)?;
+        }
+        ssa
+    };
+    let PreparedMaterializationV29 {
+        materialized: (materialized, retained_storage),
+        ranked_roots,
+        bindings,
+    } = consume_prepared_with_budget_v29(
+        PreparedSsaMaterializationV29 {
+            semantic_ssa,
+            ranked_roots,
+            launch,
+            bindings,
+        },
+        budget,
+        use_root,
+        |semantic_ssa, launch, _, budget| materialize(semantic_ssa, launch, budget),
+    )?;
+    // Accept graph, sealed origins and helper transfers before the next phase.
+    // Inherited descriptor/launch/source-ranked allocations remain separate.
+    budget
+        .reserve_storage(retained_storage)
+        .map_err(materialization_resource_error_v29)?;
+    Ok(PreparedMaterializationV29 {
+        materialized,
+        ranked_roots,
+        bindings,
+    })
+}
+
+// This core authenticates custody, but deliberately owns no result-storage convention.
+fn consume_prepared_with_budget_v29<M>(
+    prepared: PreparedSsaMaterializationV29,
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    use_root: impl for<'a> FnMut(
+        fe2o3_lower_mir_kernel::ProductionCheckedContextRootV29<'a>,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    )
+        -> Result<(), fe2o3_lower_mir_kernel::ProductionContextRootErrorV29>,
+    consume: impl FnOnce(
+        fe2o3_pliron::ProductionSemanticSsaOwnerV1,
+        fe2o3_lower_mir_kernel::ProductionSourceLaunchRosterV1,
+        &crate::collector::RetainedContextEntriesV29,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<M, ProductionPipelineError>,
+) -> Result<PreparedMaterializationV29<M>, Box<ProductionPipelineError>> {
+    let PreparedSsaMaterializationV29 {
+        semantic_ssa,
+        ranked_roots,
+        launch,
+        bindings,
+    } = prepared;
+    context_handoff_v29::check_context_handoff_v29(
+        &bindings.context_entries,
+        &semantic_ssa,
+        &launch,
+        budget,
+        use_root,
+    )?;
+    let materialized = consume(semantic_ssa, launch, &bindings.context_entries, budget)?;
+    Ok(PreparedMaterializationV29 {
+        materialized,
+        ranked_roots,
+        bindings,
+    })
 }
 
 impl MaterializedNeutralProductionCompilation {
@@ -3656,6 +3847,10 @@ impl RankedVerifiedProductionCompilation {
     }
 }
 
+#[path = "production_pipeline_guarded_loop_source_v1.rs"]
+pub(crate) mod guarded_loop_source_v1;
+#[path = "production_pipeline_loop_capture_v1.rs"]
+pub(crate) mod loop_capture_v1;
 pub(crate) mod ordered_program_diagnostic_v32;
 pub(crate) mod ordered_region_diagnostic_v31;
 #[cfg(test)]

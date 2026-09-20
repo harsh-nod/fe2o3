@@ -17,6 +17,10 @@ use crate::semantic_mir_v1::{
     SemanticUnwindActionV1,
 };
 
+#[path = "semantic_u32_induction_bound_snapshot_v1.rs"]
+mod bound_snapshot;
+pub use bound_snapshot::*;
+
 /// Maximum independently charged CFG, inventory, candidate, and reachability work.
 pub const MAX_SEMANTIC_U32_INDUCTION_WORK_V1: usize = 4_000_000;
 
@@ -629,10 +633,10 @@ impl SemanticInventoryV1 {
         budget: &mut WorkBudgetV1,
     ) -> Result<Self, SemanticU32InductionAnalysisErrorV1> {
         let local_count = function.locals().len();
-        let mut definitions = fallible_filled_vec(local_count, DefinitionSummaryV1::default())?;
-        let mut address_or_projection_hazard = fallible_filled_vec(local_count, false)?;
-        let mut direct_copy_alias = fallible_filled_vec(local_count, false)?;
-        let mut use_counts = fallible_filled_vec(local_count, 0_usize)?;
+        let mut definitions = budget.filled(local_count, DefinitionSummaryV1::default())?;
+        let mut address_or_projection_hazard = budget.filled(local_count, false)?;
+        let mut direct_copy_alias = budget.filled(local_count, false)?;
+        let mut use_counts = budget.filled(local_count, 0_usize)?;
         let mut checked_additions = Vec::new();
         budget.charge(local_count)?;
 
@@ -660,9 +664,7 @@ impl SemanticInventoryV1 {
                             assignment.value().kind()
                             && checked.operation() == SemanticCheckedBinaryOpV1::Add
                         {
-                            checked_additions
-                                .try_reserve(1)
-                                .map_err(|_| SemanticU32InductionAnalysisErrorV1::Storage)?;
+                            budget.reserve_vec(&mut checked_additions, 1, false)?;
                             checked_additions.push(CandidateSiteV1 {
                                 block: block_index,
                                 statement: statement_index,
@@ -797,6 +799,29 @@ fn prove_candidate_v1(
     budget: &mut WorkBudgetV1,
 ) -> Result<Option<SemanticU32InductionNoOverflowCertificateV1>, SemanticU32InductionAnalysisErrorV1>
 {
+    Ok(
+        prove_candidate_with_bound_v1(context, candidate, BoundResolverV1::Legacy, budget)?
+            .map(|proved| proved.certificate),
+    )
+}
+
+#[derive(Clone, Copy)]
+enum BoundResolverV1<'a> {
+    Legacy,
+    Snapshot(&'a bound_snapshot::LifetimeIndex),
+}
+struct ProvedCandidateV1 {
+    certificate: SemanticU32InductionNoOverflowCertificateV1,
+    guard_bound: SemanticU32InductionPlaceBindingV1,
+    bound_snapshot: Option<SemanticU32InductionStatementSiteV1>,
+}
+
+fn prove_candidate_with_bound_v1(
+    context: &CandidateProofContextV1<'_>,
+    candidate: CandidateSiteV1,
+    resolver: BoundResolverV1<'_>,
+    budget: &mut WorkBudgetV1<'_>,
+) -> Result<Option<ProvedCandidateV1>, SemanticU32InductionAnalysisErrorV1> {
     let CandidateProofContextV1 {
         types,
         function,
@@ -1025,7 +1050,24 @@ fn prove_candidate_v1(
     let Some(bound_place) = exact_operand_place(bound_operand) else {
         return Ok(None);
     };
-    let bound = bound_place.local();
+    let guard_bound = bound_place.local();
+    let (bound, bound_snapshot) = match resolver {
+        BoundResolverV1::Legacy => (guard_bound, None),
+        BoundResolverV1::Snapshot(lifetimes) => {
+            let Some(binding) = bound_snapshot::resolve(
+                context,
+                header_index,
+                guard_statement,
+                bound_place,
+                lifetimes,
+                budget,
+            )?
+            else {
+                return Ok(None);
+            };
+            binding
+        }
+    };
     let bound_ty = bound_place.ty();
     let predicate = guard_assignment.destination().local();
     let predicate_ty = guard_assignment.destination().ty();
@@ -1050,7 +1092,7 @@ fn prove_candidate_v1(
         || !bound_decl.role().is_entry_argument()
         || definition(inventory, bound)?.count != 0
         || local(inventory.address_or_projection_hazard.as_slice(), bound)?
-        || local(inventory.direct_copy_alias.as_slice(), bound)?
+        || (bound_snapshot.is_none() && local(inventory.direct_copy_alias.as_slice(), bound)?)
         || !guard_assignment.destination().projections().is_empty()
         || guard_assignment.value().result_type() != predicate_ty
         || !is_exact_bool(types, predicate_ty)
@@ -1170,7 +1212,28 @@ fn prove_candidate_v1(
             "an induction body entry is outside the block table",
         ));
     };
-    Ok(Some(SemanticU32InductionNoOverflowCertificateV1 {
+    if let BoundResolverV1::Snapshot(lifetimes) = resolver {
+        for snapshot in [
+            guard_induction_snapshot.map(|site| (guard_induction, site)),
+            bound_snapshot.map(|site| (guard_bound, site)),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !bound_snapshot::lifetime_matches(
+                lifetimes,
+                snapshot.0,
+                snapshot.1,
+                header_index,
+                body_entry_index,
+                exit_index,
+                budget,
+            )? {
+                return Ok(None);
+            }
+        }
+    }
+    let certificate = SemanticU32InductionNoOverflowCertificateV1 {
         semantic_mir_sha256,
         function: function_id,
         function_identity: function.identity(),
@@ -1190,6 +1253,22 @@ fn prove_candidate_v1(
         guard: statement_site(header_index, header, guard_definition)?,
         checked_addition: statement_site(candidate.block, candidate_block, candidate_definition)?,
         update: statement_site(update_block_index, update_block, update_site)?,
+    };
+    // Legacy reports retain exactly their old fields and metered work. Only the
+    // separately typed new family can retain this additional bound relation.
+    let (guard_bound, bound_snapshot) = match resolver {
+        BoundResolverV1::Legacy => (certificate.bound, None),
+        BoundResolverV1::Snapshot(_) => (
+            place_binding(types, function, guard_bound)?,
+            bound_snapshot
+                .map(|site| statement_site(header_index, header, site))
+                .transpose()?,
+        ),
+    };
+    Ok(Some(ProvedCandidateV1 {
+        certificate,
+        guard_bound,
+        bound_snapshot,
     }))
 }
 
@@ -1301,8 +1380,8 @@ impl SemanticCfgV1 {
                 "the semantic function has no valid entry block",
             ));
         }
-        let mut successors = fallible_nested_vec(block_count)?;
-        let mut predecessors = fallible_nested_vec(block_count)?;
+        let mut successors = budget.nested(block_count)?;
+        let mut predecessors = budget.nested(block_count)?;
         budget.charge(block_count)?;
         for (source, block) in function.blocks().iter().enumerate() {
             block.terminator().kind().try_for_each_edge(|edge| {
@@ -1313,12 +1392,8 @@ impl SemanticCfgV1 {
                         "a semantic CFG edge is outside the block table",
                     ));
                 }
-                successors[source]
-                    .try_reserve(1)
-                    .map_err(|_| SemanticU32InductionAnalysisErrorV1::Storage)?;
-                predecessors[target]
-                    .try_reserve(1)
-                    .map_err(|_| SemanticU32InductionAnalysisErrorV1::Storage)?;
+                budget.reserve_vec(&mut successors[source], 1, false)?;
+                budget.reserve_vec(&mut predecessors[target], 1, false)?;
                 successors[source].push(target);
                 predecessors[target].push(source);
                 Ok(())
@@ -1419,14 +1494,12 @@ impl SemanticCfgV1 {
         avoided: Option<usize>,
         budget: &mut WorkBudgetV1,
     ) -> Result<Vec<bool>, SemanticU32InductionAnalysisErrorV1> {
-        let mut visited = fallible_filled_vec(self.successors.len(), false)?;
+        let mut visited = budget.filled(self.successors.len(), false)?;
         if avoided == Some(self.entry) {
             return Ok(visited);
         }
         let mut pending = Vec::new();
-        pending
-            .try_reserve(self.successors.len())
-            .map_err(|_| SemanticU32InductionAnalysisErrorV1::Storage)?;
+        budget.reserve_vec(&mut pending, self.successors.len(), false)?;
         visited[self.entry] = true;
         pending.push(self.entry);
         while let Some(block) = pending.pop() {
@@ -1444,14 +1517,19 @@ impl SemanticCfgV1 {
 }
 
 #[derive(Default)]
-struct WorkBudgetV1 {
+struct WorkBudgetV1<'meter> {
     used: usize,
     limit: usize,
+    meter: Option<&'meter mut dyn bound_snapshot::InternalMeter>,
 }
 
-impl WorkBudgetV1 {
+impl WorkBudgetV1<'_> {
     const fn new(limit: usize) -> Self {
-        Self { used: 0, limit }
+        Self {
+            used: 0,
+            limit,
+            meter: None,
+        }
     }
 
     fn charge(&mut self, amount: usize) -> Result<(), SemanticU32InductionAnalysisErrorV1> {
@@ -1467,7 +1545,77 @@ impl WorkBudgetV1 {
                 limit: self.limit,
             });
         }
+        if let Some(meter) = &mut self.meter {
+            meter.charge_work(amount)?;
+        }
         Ok(())
+    }
+
+    fn reserve_vec<T>(
+        &mut self,
+        values: &mut Vec<T>,
+        additional: usize,
+        exact: bool,
+    ) -> Result<(), SemanticU32InductionAnalysisErrorV1> {
+        use SemanticU32InductionAnalysisErrorV1::Storage;
+        let requested = values.len().checked_add(additional).ok_or(Storage)?;
+        let grows = requested > values.capacity();
+        if grows && self.meter.is_some() {
+            let bytes = requested
+                .checked_mul(std::mem::size_of::<T>())
+                .ok_or(Storage)?;
+            self.charge(
+                values
+                    .capacity()
+                    .checked_mul(std::mem::size_of::<T>())
+                    .ok_or(Storage)?,
+            )?;
+            self.meter.as_mut().unwrap().reserve_storage(bytes)?;
+        }
+        if exact {
+            values.try_reserve_exact(additional)
+        } else {
+            values.try_reserve(additional)
+        }
+        .map_err(|_| Storage)?;
+        if grows && let Some(meter) = &mut self.meter {
+            let excess = values
+                .capacity()
+                .checked_sub(requested)
+                .and_then(|n| n.checked_mul(std::mem::size_of::<T>()))
+                .ok_or(Storage)?;
+            meter.reserve_storage(excess)?;
+        }
+        Ok(())
+    }
+
+    fn filled<T: Clone>(
+        &mut self,
+        length: usize,
+        value: T,
+    ) -> Result<Vec<T>, SemanticU32InductionAnalysisErrorV1> {
+        if self.meter.is_none() {
+            return fallible_filled_vec(length, value);
+        }
+        self.charge(length)?;
+        let mut result = Vec::new();
+        self.reserve_vec(&mut result, length, true)?;
+        result.resize(length, value);
+        Ok(result)
+    }
+
+    fn nested<T>(
+        &mut self,
+        length: usize,
+    ) -> Result<Vec<Vec<T>>, SemanticU32InductionAnalysisErrorV1> {
+        if self.meter.is_none() {
+            return fallible_nested_vec(length);
+        }
+        self.charge(length)?;
+        let mut result = Vec::new();
+        self.reserve_vec(&mut result, length, true)?;
+        result.resize_with(length, Vec::new);
+        Ok(result)
     }
 }
 

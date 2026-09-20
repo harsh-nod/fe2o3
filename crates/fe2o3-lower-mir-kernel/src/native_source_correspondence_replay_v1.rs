@@ -125,6 +125,11 @@ pub struct NativeRankedSourceCandidateV1<'a> {
 
 impl<'a> NativeRankedSourceCandidateV1<'a> {
     /// Packages untrusted parts without validating their relation or provenance.
+    /// Optional extent proposals stay inline in the borrowed access rows; absent
+    /// proposals are never synthesized from ranked argument ordinals.
+    /// Base-field serialized candidates therefore remain absent after decoding;
+    /// this in-process API neither extends a wire version nor authenticates the
+    /// optional proposal through the existing unconditional source checks.
     pub const fn from_untrusted_parts(
         semantic_root: u32,
         launch_rank: u8,
@@ -154,7 +159,9 @@ impl<'a> NativeRankedSourceCandidateV1<'a> {
     pub const fn kernel(&self) -> &'a ProductionRankedKernelV1 {
         self.kernel
     }
-    /// Complete ordered source/access correspondence recipe.
+    /// Complete ordered source/access correspondence recipe, including inert
+    /// checked-view extent proposals. Replay copies each entire row using its
+    /// actual size on the existing caller ledger, without a second provenance map.
     pub const fn access_sources(&self) -> &'a [super::ProductionRankedAccessSourceV1] {
         self.access_sources
     }
@@ -446,6 +453,10 @@ fn native_source_vector_v1<T>(length: usize, budget: &mut Budget<'_>) -> Result<
     )?;
     Ok(values)
 }
+
+#[cfg(test)]
+#[path = "native_source_extent_retention_v1_tests.rs"]
+mod extent_retention_tests;
 
 fn native_source_transfer_v1<T>(
     budget: &mut Budget<'_>,

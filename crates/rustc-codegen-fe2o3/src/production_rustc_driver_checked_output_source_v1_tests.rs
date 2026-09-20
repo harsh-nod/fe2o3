@@ -16,6 +16,12 @@ use std::process::Command;
 #[path = "production_context_source_v29_tests.rs"]
 mod context_source_v29_tests;
 
+#[path = "production_rustc_driver_conditional_bound_source_v1_tests.rs"]
+mod conditional_bound_source;
+#[path = "production_rustc_driver_conditional_coverage_v1_tests.rs"]
+mod conditional_coverage;
+#[path = "production_rustc_driver_conditional_ranked_output_v1_tests.rs"]
+mod conditional_ranked_output;
 #[path = "production_rustc_driver_fixed_census_lifecycle_v1_tests.rs"]
 mod fixed_census_lifecycle;
 #[path = "production_rustc_driver_fixed_census_observation_v1_tests.rs"]
@@ -24,6 +30,8 @@ mod fixed_census_observation;
 mod helper_reference_source;
 #[path = "production_rustc_driver_integer_identity_source_v1_tests.rs"]
 mod integer_identity_source;
+#[path = "production_rustc_driver_loop_capture_source_v1_tests.rs"]
+mod loop_capture_source;
 #[path = "production_rustc_driver_redundant_store_source_v1_tests.rs"]
 mod redundant_store_source;
 #[path = "production_rustc_driver_wave64_capture_source_v1_tests.rs"]
@@ -317,6 +325,10 @@ fn checked_output_source_child() {
         return;
     };
     let args: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    if loop_capture_source::requested() {
+        loop_capture_source::run_child(&args);
+        return;
+    }
     let mut callbacks = CheckedOutputCallbacks {
         probe_missing_proof: env::var_os(CHILD_PROOF_PROBE).is_some(),
         progress: progress::CallbackProgress::from_environment(),
@@ -356,77 +368,7 @@ fn checked_output_source_child() {
     assert!(result.is_ok(), "checked native source route: {result:?}");
 }
 
-fn clean_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
-    let mut command = Command::new(program);
-    command.env_clear();
-    for key in [
-        "HOME",
-        "PATH",
-        "CARGO_HOME",
-        "RUSTUP_HOME",
-        "RUSTUP_TOOLCHAIN",
-        "LD_LIBRARY_PATH",
-        "TMPDIR",
-    ] {
-        if let Some(value) = env::var_os(key) {
-            command.env(key, value);
-        }
-    }
-    command
-        .env("CARGO_BUILD_JOBS", "1")
-        .env("CARGO_INCREMENTAL", "0")
-        .env("CARGO_NET_OFFLINE", "true")
-        .env("CARGO_PROFILE_RELEASE_DEBUG", "0")
-        .env("FE2O3_HIP_SYS_DISABLE", "1")
-        .env("FE2O3_HSA_RUNTIME_DISABLE", "1");
-    command
-}
-
-fn output(command: &mut Command) -> std::process::Output {
-    let result = command
-        .output()
-        .expect("execute source qualification command");
-    assert!(
-        result.status.success(),
-        "{command:?}\n{}\n{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-    result
-}
-
-fn artifact(messages: &[serde_json::Value], name: &str) -> PathBuf {
-    let artifacts: Vec<_> = messages
-        .iter()
-        .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == name)
-        .collect();
-    assert_eq!(
-        artifacts.len(),
-        1,
-        "one actual Cargo artifact for {name}: {artifacts:?}"
-    );
-    let filenames = artifacts[0]["filenames"]
-        .as_array()
-        .expect("Cargo artifact filenames");
-    // build-std can emit both for one artifact. This callback needs metadata;
-    // use the standalone metadata when present, otherwise its library container.
-    for extension in ["rmeta", "rlib"] {
-        let matches: Vec<_> = filenames
-            .iter()
-            .filter_map(|p| p.as_str())
-            .map(PathBuf::from)
-            .filter(|p| p.extension().is_some_and(|ext| ext == extension))
-            .collect();
-        assert!(
-            matches.len() <= 1,
-            "ambiguous {extension} for {name}: {matches:?}"
-        );
-        if let Some(path) = matches.into_iter().next() {
-            return path;
-        }
-    }
-    panic!("missing metadata for actual Cargo artifact {name}");
-}
+include!("production_rustc_driver_checked_output_source_helpers_v1_tests.rs");
 
 #[test]
 #[ignore = "requires pinned nightly rust-src, AMD dependencies, and ordinary-source compilation"]
@@ -459,6 +401,8 @@ fn ordinary_rust_private_unit_helper_reaches_checked_native_output() {
 }
 
 enum OrdinarySourceCase {
+    ConditionalDescriptorPair,
+    ReferenceFill,
     MaskedShift(masked_shift_source::Config),
     ConstantShift(shift_source::Config),
     ScalarBorrowPolicy5,
@@ -500,6 +444,21 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
     profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
     fixed_facade: bool,
 ) {
+    ordinary_rust_source_cases(cases, profile, fixed_facade, None);
+}
+
+struct SourceObserver {
+    child_test: &'static str,
+    check: fn(&Path, &[&str]),
+}
+
+fn ordinary_rust_source_cases(
+    cases: &[OrdinarySourceCase],
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    fixed_facade: bool,
+    observer: Option<SourceObserver>,
+) {
+    assert!(!fixed_facade || observer.is_none());
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -635,6 +594,24 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
                 usize::from(config.retained),
             ),
             OrdinarySourceCase::Fill => ("fill", "examples/fill", None, &["fill"][..], 0, 1, 0),
+            OrdinarySourceCase::ReferenceFill => (
+                "reference-fill",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("reference-positive"),
+                &["fill"][..],
+                0,
+                1,
+                0,
+            ),
+            OrdinarySourceCase::ConditionalDescriptorPair => (
+                "conditional-descriptor-pair",
+                "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device",
+                Some("conditional-descriptor-pair"),
+                &["binding_first", "binding_second"][..],
+                0,
+                2,
+                0,
+            ),
             OrdinarySourceCase::Vecadd => {
                 ("vecadd", "examples/vecadd", None, &["vecadd"][..], 2, 1, 0)
             }
@@ -789,7 +766,10 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
         }
         // Qualify both real frontend shapes. This changes only rustc's test
         // invocation, never the fixed fe2o3 optimizer or its admission policy.
-        if matches!(case, OrdinarySourceCase::RetainedWrappedFill) {
+        if matches!(
+            case,
+            OrdinarySourceCase::RetainedWrappedFill | OrdinarySourceCase::ConditionalDescriptorPair
+        ) {
             args.push("-Zinline-mir=no".into());
         }
         if matches!(
@@ -831,7 +811,9 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
                 | OrdinarySourceCase::ScalarBorrowPolicy5Barrier
         );
         let checked_policy5 = policy5_case || fixed_facade;
-        let child_test = if checked_policy5 {
+        let child_test = if let Some(observer) = &observer {
+            observer.child_test
+        } else if checked_policy5 {
             policy5_source::CHILD_TEST
         } else {
             CHILD_TEST
@@ -880,7 +862,9 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
             | OrdinarySourceCase::PrivateUnitHelper
             | OrdinarySourceCase::RetainedPrivateUnitHelper => Some(simulation::Case::Fill),
             OrdinarySourceCase::Vecadd => Some(simulation::Case::Vecadd),
-            OrdinarySourceCase::SharedUnitHelper => None,
+            OrdinarySourceCase::SharedUnitHelper
+            | OrdinarySourceCase::ReferenceFill
+            | OrdinarySourceCase::ConditionalDescriptorPair => None,
             OrdinarySourceCase::F32Negate | OrdinarySourceCase::RetainedF32Negate => {
                 Some(simulation::Case::F32Negate)
             }
@@ -898,6 +882,15 @@ fn ordinary_rust_checked_output_cases_for_profile_with_fixed_facade(
         );
         let diagnostic_name = format!("{}-{name}", profile.cpu());
         snapshots::configure_child(&mut command, &diagnostic_name);
+        if let Some(observer) = &observer {
+            let child = output(&mut command);
+            eprintln!(
+                "actual-source observation {diagnostic_name}:\n{}",
+                String::from_utf8_lossy(&child.stdout),
+            );
+            (observer.check)(&response, roots);
+            continue;
+        }
         let (child, result) = match case {
             OrdinarySourceCase::ConstantShift(config) if config.dynamic => {
                 shift_source::expected_refusal_child(&mut command, &response)

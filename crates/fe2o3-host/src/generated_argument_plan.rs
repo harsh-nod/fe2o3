@@ -472,6 +472,7 @@ struct GeneratedArgumentPackingPlanSealV1;
 #[doc(hidden)]
 pub struct GeneratedPackedArgumentsV1<'allocation> {
     kernel_id: KernelId,
+    source_plan: Arc<GeneratedArgumentPackingPlanSealV1>,
     alignment: u32,
     bytes: Box<[u8]>,
     allocation: PhantomData<&'allocation ()>,
@@ -513,6 +514,24 @@ impl fmt::Debug for GeneratedPackedArgumentsV1<'_> {
             .field("byte_length", &self.bytes.len())
             .finish_non_exhaustive()
     }
+}
+
+/// Inert output-slice facts borrowed from one exact packed argument buffer.
+///
+/// The base is an encoded integer, possibly an address-free placeholder, not a
+/// validated allocation or pointer. Element layout comes from the plan's field.
+/// This binding carries no coverage, proof-satisfaction, or launch authority.
+#[derive(Debug, Eq, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "pending compiler-certified invocation requirement integration"
+)]
+pub(crate) struct GeneratedPackedOutputSliceBindingV1<'packed> {
+    pub(crate) base_address: u64,
+    pub(crate) length: u64,
+    pub(crate) element_size: u64,
+    pub(crate) element_alignment: u32,
+    packed: PhantomData<&'packed ()>,
 }
 
 /// Manifest-validated plan for packing one authenticated kernel ABI.
@@ -564,6 +583,113 @@ impl GeneratedArgumentPackingPlanV1 {
 
     pub fn component(&self, index: usize) -> Option<GeneratedPackingComponentV1> {
         self.components.get(index).copied()
+    }
+
+    /// Resolves both output-slice components from this exact kernel and plan's
+    /// packed bytes. `argument_index` is a generated ABI field ordinal, not an
+    /// original Rust source ordinal. The caller must join a certified source
+    /// argument through the generated ABI correspondence before this lookup.
+    /// This grants no coverage, runtime-predicate, or invocation authority.
+    #[allow(
+        dead_code,
+        reason = "pending compiler-certified invocation requirement integration"
+    )]
+    pub(crate) fn packed_output_slice_binding_v1<'packed>(
+        &self,
+        packed: &'packed GeneratedPackedArgumentsV1<'_>,
+        argument_index: usize,
+    ) -> Result<GeneratedPackedOutputSliceBindingV1<'packed>, GeneratedArgumentPackError> {
+        let field = self.fields.get(argument_index).ok_or(
+            GeneratedArgumentPackError::ArgumentIndexOutOfBounds {
+                argument_index,
+                argument_count: self.fields.len(),
+            },
+        )?;
+        if packed.kernel_id != self.kernel_id {
+            return Err(GeneratedArgumentPackError::SourceKernelMismatch { argument_index });
+        }
+        if !Arc::ptr_eq(&packed.source_plan, &self.seal)
+            || packed.alignment != self.kernarg_alignment
+            || usize::try_from(self.kernarg_size).ok() != Some(packed.bytes.len())
+        {
+            return Err(GeneratedArgumentPackError::SourcePlanMismatch { argument_index });
+        }
+        let AbiKind::Slice {
+            element_size,
+            element_alignment,
+        } = field.kind()
+        else {
+            return Err(GeneratedArgumentPackError::FieldMismatch {
+                argument_index,
+                property: GeneratedArgumentFieldProperty::Kind,
+            });
+        };
+        if self.pointer_width != PointerWidth::Bits64 {
+            return Err(GeneratedArgumentPackError::PointerWidthMismatch {
+                argument_index,
+                expected: PointerWidth::Bits64,
+                provided: self.pointer_width,
+            });
+        }
+        if !matches!(field.access(), Access::WriteOnly | Access::ReadWrite) {
+            return Err(GeneratedArgumentPackError::FieldMismatch {
+                argument_index,
+                property: GeneratedArgumentFieldProperty::Access,
+            });
+        }
+        validate_generated_field_v1(
+            self,
+            argument_index,
+            GeneratedFieldExpectationV1 {
+                kind: field.kind(),
+                size: 16,
+                alignment: 8,
+                type_identity: field.type_identity(),
+                mutability: Mutability::Mutable,
+                access: field.access(),
+                address_space: AddressSpace::Global,
+                ownership: ArgumentOwnership::UniqueBorrow,
+                alias_class: AliasClass::Exclusive,
+            },
+        )?;
+
+        let read_component = |kind, offset| {
+            let component = validate_exact_component(self, argument_index, kind, offset, 8)?;
+            let out_of_bounds = || GeneratedArgumentPackError::ComponentOutOfBounds {
+                argument_index,
+                component: kind,
+                offset: component.offset,
+                size: component.size,
+                kernarg_size: self.kernarg_size,
+            };
+            let end = component
+                .offset
+                .checked_add(component.size)
+                .filter(|end| *end <= self.kernarg_size)
+                .ok_or_else(out_of_bounds)?;
+            let start = usize::try_from(component.offset).map_err(|_| out_of_bounds())?;
+            let end = usize::try_from(end).map_err(|_| out_of_bounds())?;
+            let bytes = packed.bytes.get(start..end).ok_or_else(out_of_bounds)?;
+            <u64 as GeneratedDeviceScalarV1>::decode_le_bytes_v1(bytes).ok_or_else(out_of_bounds)
+        };
+        let base_address = read_component(
+            GeneratedPackingComponentKindV1::SlicePointer,
+            field.offset(),
+        )?;
+        let length_offset = field.offset().checked_add(8).ok_or(
+            GeneratedArgumentPackError::PhysicalComponentMismatch {
+                argument_index,
+                component: GeneratedPackingComponentKindV1::SliceLength,
+            },
+        )?;
+        let length = read_component(GeneratedPackingComponentKindV1::SliceLength, length_offset)?;
+        Ok(GeneratedPackedOutputSliceBindingV1 {
+            base_address,
+            length,
+            element_size,
+            element_alignment,
+            packed: PhantomData,
+        })
     }
 
     /// Binds a supported primitive to its exact canonical Rust argument type.
@@ -1729,6 +1855,7 @@ fn pack_arguments<'allocation>(
 
     Ok(GeneratedPackedArgumentsV1 {
         kernel_id: plan.kernel_id,
+        source_plan: Arc::clone(&plan.seal),
         alignment: plan.kernarg_alignment,
         bytes: bytes.into_boxed_slice(),
         allocation: PhantomData,
@@ -1788,6 +1915,7 @@ fn validate_input(
                 field.offset(),
                 field.size(),
             )
+            .map(|_| ())
         }
         (GeneratedArgumentValueV1::Scalar { .. }, AbiKind::Slice { .. }) => {
             Err(GeneratedArgumentPackError::KindMismatch {
@@ -1867,6 +1995,7 @@ fn validate_input(
                 field.offset() + width,
                 width,
             )
+            .map(|_| ())
         }
         (
             GeneratedArgumentValueV1::AddressFreeSlice {
@@ -1919,6 +2048,7 @@ fn validate_input(
                 field.offset() + width,
                 width,
             )
+            .map(|_| ())
         }
         (
             GeneratedArgumentValueV1::Slice { .. }
@@ -1947,10 +2077,18 @@ fn validate_exact_component(
     kind: GeneratedPackingComponentKindV1,
     offset: u64,
     size: u64,
-) -> Result<(), GeneratedArgumentPackError> {
+) -> Result<GeneratedPackingComponentV1, GeneratedArgumentPackError> {
+    let field = plan.fields.get(argument_index).ok_or(
+        GeneratedArgumentPackError::ArgumentIndexOutOfBounds {
+            argument_index,
+            argument_count: plan.fields.len(),
+        },
+    )?;
     let component = exact_component(plan, argument_index, kind)?;
     if component.offset != offset
         || component.size != size
+        || component.alignment != field.alignment()
+        || !component.alignment.is_power_of_two()
         || component.offset % u64::from(component.alignment) != 0
         || component.alignment > plan.kernarg_alignment
     {
@@ -1959,7 +2097,7 @@ fn validate_exact_component(
             component: kind,
         });
     }
-    Ok(())
+    Ok(component)
 }
 
 fn exact_component(
@@ -3609,6 +3747,8 @@ mod tests {
         );
     }
 
+    include!("generated_argument_plan_output_length_tests.rs");
+
     #[test]
     fn reordered_inputs_are_deterministic_and_padding_never_leaks() {
         let fields = vec![scalar("first", 0, 4, 1), scalar("second", 8, 4, 2)];
@@ -3690,6 +3830,9 @@ mod tests {
             &0x5555_6666_7777_8888_u64.to_le_bytes()
         );
         assert_eq!(&map.bytes()[32..40], &7_u64.to_le_bytes());
+        let map_binding = map_plan.packed_output_slice_binding_v1(&map, 2).unwrap();
+        assert_eq!(map_binding.base_address, 0x5555_6666_7777_8888);
+        assert_eq!(map_binding.length, 7);
 
         let accumulator = unsafe {
             reduce_plan.slice(
@@ -3710,6 +3853,11 @@ mod tests {
             ])
             .unwrap();
         assert_eq!(reduce.kernel_id(), KernelId::from_bytes([10; 32]));
+        let reduce_binding = reduce_plan
+            .packed_output_slice_binding_v1(&reduce, 1)
+            .unwrap();
+        assert_eq!(reduce_binding.base_address, 0x9999_aaaa_bbbb_cccc);
+        assert_eq!(reduce_binding.length, 3);
         assert_eq!(
             &reduce.bytes()[0..8],
             &0x0102_0304_0506_0708_u64.to_le_bytes()

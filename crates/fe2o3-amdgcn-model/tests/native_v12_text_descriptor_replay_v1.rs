@@ -707,6 +707,90 @@ fn storage_denial_keeps_prior_floor_and_failure_history_on_same_ledger_retry() {
     });
 }
 
+#[test]
+fn actual_native_replay_has_exact_nominal_work_storage_and_one_short_boundaries() {
+    use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        with_actual(profile, true, |_, output, catalog, owner_budget| {
+            let table = normal_table(profile, true);
+            let expected_prefix = prefix(output, profile);
+            let llvm = final_text(&expected_prefix, &table);
+            let floor = owner_budget.storage();
+            // Owners stay live on their original ledger. Each independent replay
+            // prepays the caller-owned input envelope on its own comparison ledger.
+            let run = |work_limit, storage_limit| {
+                let mut work = Work::new(work_limit);
+                let (result, used, peak, failed_storage) = {
+                    let mut budget = Budget::new(&mut work, storage_limit);
+                    budget.reserve_storage(floor).unwrap();
+                    budget.charge_work(PRIOR).unwrap();
+                    let ledger = budget.work_ledger_identity_v1();
+                    let result = check(
+                        output,
+                        catalog,
+                        output.canonical().canonical_bytes(),
+                        profile,
+                        &table,
+                        &llvm,
+                        &mut budget,
+                    )
+                    .map(|relation| {
+                        assert!(ptr::eq(relation.output(), output));
+                        assert!(ptr::eq(relation.catalog(), catalog));
+                        assert!(ptr::eq(relation.descriptors(), &table));
+                        assert!(ptr::eq(relation.final_llvm(), llvm.as_str()));
+                        assert_eq!(relation.pre_descriptor_llvm(), expected_prefix);
+                        assert_eq!(relation.final_llvm(), llvm);
+                        assert_eq!(relation.profile(), profile);
+                        assert!(!relation.grants_authority());
+                        (
+                            relation.pre_descriptor_llvm().len(),
+                            relation.storage().retained_storage(),
+                        )
+                    });
+                    assert_eq!(budget.storage(), floor);
+                    assert!(budget.work_ledger_identity_v1() == ledger);
+                    (
+                        result,
+                        budget.work(),
+                        budget.peak_storage(),
+                        budget.failed_storage(),
+                    )
+                };
+                (result, used, peak, failed_storage, work.failed_work())
+            };
+            let (first, used, peak, storage_denial, work_denial) = run(WORK, STORAGE);
+            let first = first.unwrap();
+            assert_eq!(first.0, expected_prefix.len());
+            assert_eq!(first.1, size_of::<Relation<'_, '_, '_, '_>>());
+            assert!(used > PRIOR && peak > floor);
+            assert_eq!((storage_denial, work_denial), (None, None));
+            for _ in 0..2 {
+                let (result, next_work, next_peak, storage_denial, work_denial) = run(used, peak);
+                assert_eq!(result.unwrap(), first);
+                assert_eq!((next_work, next_peak), (used, peak));
+                assert_eq!((storage_denial, work_denial), (None, None));
+            }
+            let (result, accepted, _, _, denial) = run(used - 1, peak);
+            let Err(E::Resource(Resource::Work(error))) = result else {
+                panic!("exact native work refusal required");
+            };
+            assert_eq!(error.limit(), used - 1);
+            assert_eq!(Some(error.actual()), denial);
+            assert!(accepted >= PRIOR && accepted < used);
+            let (result, accepted, high, denial, _) = run(used, peak - 1);
+            let Err(E::Resource(Resource::Storage(error))) = result else {
+                panic!("exact native storage refusal required");
+            };
+            assert_eq!(error.limit(), peak - 1);
+            assert_eq!(Some(error.actual()), denial);
+            assert!(accepted >= PRIOR && accepted <= used);
+            assert!(high < peak);
+        });
+    }
+}
+
 mod public_native_boundary_cases {
     use super::*;
     use fe2o3_amdgcn_model::LoweringDiagnosticCode;

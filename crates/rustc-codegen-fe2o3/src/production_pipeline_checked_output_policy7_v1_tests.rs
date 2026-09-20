@@ -90,6 +90,9 @@ fn check_artifacts(
         .verify_equivalence(profile, typed, budget)
         .unwrap();
     artifacts.test_execution_record_v1(budget);
+    crate::production_pipeline::checked_output_policy7_v1::semantic::tests::exercise(
+        artifacts, budget,
+    );
     budget
         .reserve_storage(dialect_amdgcn::MAX_COMPILER_MODULE_TEXT_BYTES * 3)
         .unwrap();

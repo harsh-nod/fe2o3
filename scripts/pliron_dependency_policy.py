@@ -11,7 +11,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PLIRON_REVISION = "7ebf6e6638c2a3bcec179423993b01211a9689b4"
+PLIRON_REVISION = "e054e5b2e53c7330470f9202c35c8c0e4e102092"
 PLIRON_VERSION = "0.17.0"
 PLIRON_REPOSITORY = "github.com/harsh-nod/pliron.git"
 KNOWN_PLIRON_REPOSITORIES = (

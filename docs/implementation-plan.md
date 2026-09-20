@@ -136,7 +136,7 @@ fe2o3 canonical V2 extraction, and fe2o3 deterministic LLVM assembly, not the
 upstream `pliron-llvm` LLVM-C exporter.
 
 The current D0 closure is Pliron v0.17.0 commit
-`7ebf6e6638c2a3bcec179423993b01211a9689b4`. `fe2o3-pliron` provides a real
+`e054e5b2e53c7330470f9202c35c8c0e4e102092`. `fe2o3-pliron` provides a real
 context, private identity anchor, explicit bounded registration, and bounded
 pass-plan validation. The reviewed fork carries context-owner provenance;
 production analysis and transformation remain owner-scoped, with raw context

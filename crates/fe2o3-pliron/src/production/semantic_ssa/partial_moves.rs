@@ -278,7 +278,7 @@ pub(super) fn projected_local_move_metrics_v1(
     Ok((count, maximum_depth))
 }
 
-fn visit_assert_operands_v1<E>(
+pub(super) fn visit_assert_operands_v1<E>(
     message: &SemanticAssertMessageV1,
     visitor: &mut impl FnMut(&SemanticOperandV1) -> Result<(), E>,
 ) -> Result<(), E> {

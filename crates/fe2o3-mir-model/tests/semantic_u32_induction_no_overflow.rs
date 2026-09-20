@@ -6,6 +6,12 @@ use fe2o3_mir_model::{
     analyze_semantic_u32_induction_no_overflow_with_limits_v1,
 };
 
+#[path = "semantic_u32_induction/legacy_contract.rs"]
+mod legacy_contract;
+
+#[path = "semantic_u32_induction/bound_snapshot.rs"]
+mod bound_snapshot;
+
 const UNIT: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(0);
 const U32: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(1);
 const BOOL: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(2);

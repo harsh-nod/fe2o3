@@ -174,10 +174,7 @@ fn private_array_multiroot_retained_helper_preserves_the_existing_purity_rejecti
     assert!(matches!(
         multiroot_array_owner(true),
         Err(ProductionPreRankedKirErrorV1::Lowering(
-            ProductionSemanticKirErrorV1::HelperEffectsUnavailable {
-                function: 0,
-                ..
-            }
+            ProductionSemanticKirErrorV1::HelperEffectsUnavailable { function: 0, .. }
         ))
     ));
 }
@@ -345,7 +342,7 @@ fn private_array_actual_prologue_reserves_slot_before_count_and_alloca() {
     let owner = array_owner(ArrayCase::Write { sparse: false });
     // This four-local/two-assignment source needs only13 inherited retained-
     // initialization work units. Both old constructor gates remain active.
-    for (limit, succeeds, accepted) in [(86, false, 85), (154, true, 154)] {
+    for (limit, succeeds, accepted) in [(87, false, 86), (155, true, 155)] {
         let mut lowering = actual_lowering(&owner, limit);
         assert_eq!(recorder_work(&lowering), 0);
         let original_value = lowering.next_value;
@@ -374,8 +371,8 @@ fn private_array_actual_prologue_reserves_slot_before_count_and_alloca() {
                 result,
                 Err(ProductionSemanticKirErrorV1::ResourceLimit {
                     resource: ProductionSemanticKirResourceV1::AnalysisWork,
-                    actual: 87,
-                    limit: 86,
+                    actual: 88,
+                    limit: 87,
                 })
             ));
             assert!(target.operations.is_empty());
@@ -395,8 +392,8 @@ fn private_array_actual_prologue_reserves_slot_before_count_and_alloca() {
             assert!(matches!(
                 lowering.private_arrays.work.charge_private_array_work(0),
                 Err(ProductionSemanticKirErrorV1::ResourceLimit {
-                    actual: 87,
-                    limit: 86,
+                    actual: 88,
+                    limit: 87,
                     ..
                 })
             ));

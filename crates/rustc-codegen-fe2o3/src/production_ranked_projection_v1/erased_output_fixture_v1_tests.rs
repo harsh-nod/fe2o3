@@ -30,6 +30,25 @@ fn erased_backend_materialized_stores_v1(
     fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
     Vec<ProductionRankedRootInputV1>,
 ) {
+    erased_backend_materialized_functions_v1(
+        expected,
+        root_count,
+        load_forwarding,
+        duplicate_store,
+        |_| {},
+    )
+}
+
+fn erased_backend_materialized_functions_v1(
+    expected: bool,
+    root_count: usize,
+    load_forwarding: bool,
+    duplicate_store: bool,
+    transform: impl FnOnce(&mut Vec<SemanticFunctionDeclV1>),
+) -> (
+    fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    Vec<ProductionRankedRootInputV1>,
+) {
     assert!((1..=2).contains(&root_count));
     let seed = materialized_unit_local_helper_v1();
     let semantic = seed.semantic_ssa().source_semantic();
@@ -258,6 +277,7 @@ fn erased_backend_materialized_stores_v1(
         inputs.push(ranked_root_input_1d(name, tag, 1));
     }
     functions.push(semantic.functions()[1].clone());
+    transform(&mut functions);
     let admitted = InertSemanticMirRequestV1::new(
         semantic.target(),
         types,
@@ -363,17 +383,42 @@ pub(crate) fn with_backend_erased_store_roster_v1(
         &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     ),
 ) {
+    with_backend_erased_functions_roster_v1(
+        expected,
+        roots,
+        profile,
+        load_forwarding,
+        duplicate_store,
+        |_| {},
+        next,
+    )
+}
+
+pub(super) fn with_backend_erased_functions_roster_v1(
+    expected: bool,
+    roots: usize,
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+    load_forwarding: bool,
+    duplicate_store: bool,
+    transform: impl FnOnce(&mut Vec<SemanticFunctionDeclV1>),
+    next: impl FnOnce(
+        fe2o3_lower_mir_kernel::ProductionUnitLocalErasedSourceOwnerV1,
+        fe2o3_kernel_ir::VerifiedCanonicalKernelIrModuleV12,
+        AuthenticatedRankedVerificationRosterV1,
+        &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ),
+) {
     use fe2o3_kernel_ir::{
         CanonicalKernelIrVerificationResourceBudgetV1 as B, CanonicalKernelIrWorkBudgetV1 as W,
         VerifiedCanonicalKernelIrModuleV12 as V,
     };
-    let (source, inputs) = if duplicate_store {
-        erased_backend_materialized_stores_v1(expected, roots, load_forwarding, true)
-    } else if load_forwarding {
-        erased_backend_materialized_mode_v1(expected, roots, true)
-    } else {
-        erased_backend_materialized_fixture_v1(expected, roots)
-    };
+    let (source, inputs) = erased_backend_materialized_functions_v1(
+        expected,
+        roots,
+        load_forwarding,
+        duplicate_store,
+        transform,
+    );
     let original = *source.executable().canonical().identity();
     let original_storage = source.unit_local_source_storage_floor_v1().unwrap();
     let program = project_and_verify_ranked_materialized_semantic_mir_v1(
