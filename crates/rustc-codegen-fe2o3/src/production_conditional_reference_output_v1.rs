@@ -487,10 +487,10 @@ fn check_constant_u32_operands_v1(
     // Terminal debit makes a one-short successful-path budget fail with Resource::Work.
     budget.charge_work(16)?;
     cpu_require(
-        selected && seen.into_iter().all(|found| found),
+        seen.into_iter().all(|found| found),
         "missing contract operand",
     )?;
-    Ok(())
+    cpu_require(selected, "missing required proof")
 }
 
 fn check_constant_point_effect<'a>(

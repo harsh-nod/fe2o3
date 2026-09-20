@@ -120,7 +120,7 @@ fn refusal(result: Result<(), Error>, expected: &'static str) {
 #[test]
 fn gpu_roles_reject_value_type_model_and_definition_substitutions() {
     for role in 0..4 {
-        for change in 0..6 {
+        for change in 0..7 {
             let mut operations = sample(17, 17);
             let Op::SemanticExpression {
                 expression,
@@ -167,15 +167,21 @@ fn gpu_roles_reject_value_type_model_and_definition_substitutions() {
                         operand: Box::new(expression.clone()),
                     }
                 }
-                5 => {}
+                5 | 6 => {}
                 _ => unreachable!(),
             }
             if change == 5 {
                 operations.insert(9, operations[role].clone());
+            } else if change == 6 {
+                operations[role] = Op::IndexUnknown {
+                    result: Id::new(role as u32),
+                };
             }
             refusal(
                 run(operations, 17, 100_000).0,
-                if change >= 4 {
+                if change == 6 {
+                    "missing contract operand"
+                } else if change >= 4 {
                     "GPU definition"
                 } else {
                     "GPU expression"
@@ -222,11 +228,11 @@ fn matching_operands_and_subjects_do_not_promote_an_unproved_request() {
     for bits in [0, 1, 17, u32::MAX] {
         let operations = sample(bits, bits);
         let (result, exact, failed) = run(operations.clone(), bits, 100_000);
-        refusal(result, "missing contract operand");
+        refusal(result, "missing required proof");
         assert_eq!(failed, None);
         refusal(
             run(operations.clone(), bits, exact).0,
-            "missing contract operand",
+            "missing required proof",
         );
         let (short, _, failed) = run(operations, bits, exact - 1);
         assert!(
