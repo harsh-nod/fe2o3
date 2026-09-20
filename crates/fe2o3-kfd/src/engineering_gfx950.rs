@@ -29,6 +29,8 @@ use crate::queue_linux::{
 };
 use crate::{CheckedGfx950XnackMinusDevice, DeviceSelector, OpenedKfd};
 
+#[path = "engineering_gfx950_dispatch_timestamps.rs"]
+mod dispatch_timestamps;
 #[path = "engineering_gfx950_ordered_batch.rs"]
 mod ordered_batch;
 #[path = "engineering_gfx950_peer.rs"]
@@ -1477,6 +1479,16 @@ pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Resu
                     // SAFETY: explicit engineering-only route, with the same
                     // dedicated owner, trusted code and terminal failure rules.
                     unsafe { context.dispatch_ordered_batch64(dispatches, payload, timeout_ms) }?
+                }
+                CommandV1::DispatchOrderedBatch64Profiled {
+                    dispatches,
+                    timeout_ms,
+                } => {
+                    // SAFETY: the explicit engineering command retains the
+                    // existing trusted-code and terminal-failure obligations.
+                    unsafe {
+                        context.dispatch_ordered_batch64_profiled(dispatches, payload, timeout_ms)
+                    }?
                 }
                 CommandV1::Allocate { bytes } => context.allocate(bytes)?,
                 CommandV1::Free { buffer } => {

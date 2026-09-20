@@ -166,6 +166,41 @@ This review changes only the inventory to six blocks/five unsafe functions in
 `engineering_gfx950_ordered_batch.rs`. The library, doctest and inventory
 commands above remain required; no runtime behavior is changed.
 
+### Engineering Dispatch Timestamp Diagnostics
+
+The explicit ordered64 profiling command adds one unsafe worker call and one
+private unsafe entry. The entry preserves the same trusted-machine-code and
+disposable-process obligations as ordinary ordered64; no safe launch authority
+is created. Five orchestration blocks delegate existing ordered execution and
+the four new raw-memory helpers under the exclusively borrowed queue owner.
+
+The raw-memory module has four unsafe functions and seven unsafe blocks. Safe
+byte slices cannot represent concurrently GPU-visible control/signal storage.
+These operations access only the reviewed aligned property word and signal
+timestamp words: enable/restore use CPU-owned properties only while idle;
+clearing requires no outstanding packet; reading follows acquired completion
+and forbids signal reuse. Every pointer retains extent/alignment checks. Any
+error poisons the owner; only fully successful capture restores properties.
+Ten test-only blocks exercise those same helpers on inert aligned owned bytes,
+including pending/wrong-kind signals and a rejected misaligned pointer. They
+perform no GPU operation. The orchestration/wire test module has no unsafe sites.
+
+The reviewed final inventory is eight blocks/five functions in
+`engineering_gfx950.rs`, five/one in its new timestamp module, seven/four in
+`memory_linux_dispatch_timestamps.rs`, and ten blocks in its test module.
+Of the engineering entry's change from the old baseline six to eight blocks,
+one already exists in d10f49bf's ordered64 worker route; only one is new here.
+Separately, d10f49bf's ordered-batch module already contains two unsafe blocks
+and three unsafe functions, while its older baseline lists only one function.
+Those existing ordered64 wrappers retain identical trusted-code obligations;
+this patch reconciles their inventory without changing their implementation.
+No unrelated inventory entries are refreshed.
+
+Run the existing full source-inventory gate and the engineering library,
+doctest and strict Clippy checks remotely. Inventory review and CPU tests do
+not qualify the profiling ABI on installed firmware, turn raw GPU clock ticks
+into nanoseconds, or establish shader-only execution time.
+
 ## Initial Reduction
 
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:

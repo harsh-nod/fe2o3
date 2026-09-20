@@ -156,6 +156,12 @@ pub enum CommandV1 {
         dispatches: Vec<OrderedBatchDispatchV1>,
         timeout_ms: u32,
     },
+    /// Diagnostic-only ordered64 execution. Returns raw GPU clock ticks, not
+    /// nanoseconds; never substitutes for an uninstrumented benchmark.
+    DispatchOrderedBatch64Profiled {
+        dispatches: Vec<OrderedBatchDispatchV1>,
+        timeout_ms: u32,
+    },
     Allocate {
         bytes: u64,
     },
@@ -200,6 +206,10 @@ impl CommandV1 {
                 return ordered_batch_payload_bytes(dispatches, *timeout_ms);
             }
             Self::DispatchOrderedBatch64 {
+                dispatches,
+                timeout_ms,
+            }
+            | Self::DispatchOrderedBatch64Profiled {
                 dispatches,
                 timeout_ms,
             } => {
@@ -298,8 +308,23 @@ pub struct ExplicitArgumentV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DispatchTimestampTicksV1 {
+    pub packet_id: u64,
+    pub kernel: u64,
+    pub start_tick: u64,
+    pub end_tick: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ResponseV1 {
+    DispatchOrderedBatch64ProfiledCompleted {
+        device_unique_id: u64,
+        queue_epoch: u64,
+        elapsed_ns: u64,
+        timestamps: Vec<DispatchTimestampTicksV1>,
+    },
     /// Every retained signal completed and the selected exit currentness/idle
     /// fence passed. Time is aggregate host wall time, not GPU/kernel time.
     DispatchOrderedBatchCompleted {

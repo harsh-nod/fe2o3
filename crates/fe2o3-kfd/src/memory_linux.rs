@@ -48,6 +48,10 @@ pub(super) type LinuxMemoryBackend = LinuxMemoryBackendFor<CheckedGfx942XnackMin
 pub(super) type LinuxGfx950MemoryBackend =
     LinuxMemoryBackendFor<crate::CheckedGfx950XnackMinusDevice>;
 
+#[cfg(feature = "engineering-gfx950")]
+#[path = "memory_linux_dispatch_timestamps.rs"]
+mod dispatch_timestamps;
+
 pub(super) struct LinuxMemoryBackendFor<D> {
     device: D,
 }
