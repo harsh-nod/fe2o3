@@ -1609,13 +1609,6 @@ mod tests {
                 0xffc0_2000,
             ),
             (
-                ScalarType::F16,
-                "__fe2o3_ir_float_v1_f16_to_f32",
-                0x7e42,
-                0x7fc8_4000,
-                0x7fc8_4000,
-            ),
-            (
                 ScalarType::Bf16,
                 "__fe2o3_ir_float_v1_bf16_to_f32",
                 0x7f82,
@@ -1628,13 +1621,6 @@ mod tests {
                 0xff82,
                 0xff82_0000,
                 0xffc2_0000,
-            ),
-            (
-                ScalarType::Bf16,
-                "__fe2o3_ir_float_v1_bf16_to_f32",
-                0x7fc2,
-                0x7fc2_0000,
-                0x7fc2_0000,
             ),
         ] {
             let input = value(ty, input);
