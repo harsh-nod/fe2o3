@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
@@ -28,6 +29,12 @@ const MAX_ID_BYTES: usize = 1024;
 const MAX_REQUEST_DATA_BYTES: usize = 4 * 1024 * 1024;
 const OUTPUT_BYTES: usize = 8192;
 const CPU_PREFLIGHT_RESIDENT_BYTES: usize = 64 * 1024 * 1024;
+const USAGE: &str = "usage: fe2o3-program-inspect KIR_PATH REQUEST_PATH";
+const HELP: &[u8] = b"usage: fe2o3-program-inspect KIR_PATH REQUEST_PATH\n\
+       fe2o3-program-inspect --text KIR_PATH REQUEST_PATH\n\
+Read-only diagnostic KIR V17 inspection: one gfx942 Wave64 ordered program.\n\
+Default output is JSON. --text lists declared syntax, not native disassembly.\n\
+Reports declared registers/instructions, not physical values or execution authority.\n";
 
 type InspectResult<T> = Result<T, &'static str>;
 
@@ -306,43 +313,49 @@ impl Serialize for StepInputs {
     }
 }
 struct DeclaredSteps<'a>(&'a Gfx942OrderedProgramV1);
+fn declared_step(
+    program: &Gfx942OrderedProgramV1,
+    instruction: Gfx942ProgramInstructionV1,
+) -> Step {
+    let registers = program.registers();
+    match instruction {
+        Gfx942ProgramInstructionV1::Move {
+            destination,
+            source,
+        } => Step {
+            instruction: "v_mov_b32_e32",
+            output: registers.binding(destination.role()),
+            inputs: StepInputs {
+                values: [registers.binding(source), 0],
+                count: 1,
+            },
+        },
+        Gfx942ProgramInstructionV1::Binary {
+            opcode,
+            destination,
+            left,
+            right,
+        } => Step {
+            instruction: match opcode {
+                Gfx942ProgramBinaryOpcodeV1::Add => "v_add_u32_e32",
+                Gfx942ProgramBinaryOpcodeV1::Subtract => "v_sub_u32_e32",
+                Gfx942ProgramBinaryOpcodeV1::And => "v_and_b32_e32",
+                Gfx942ProgramBinaryOpcodeV1::Or => "v_or_b32_e32",
+                Gfx942ProgramBinaryOpcodeV1::Xor => "v_xor_b32_e32",
+            },
+            output: registers.binding(destination.role()),
+            inputs: StepInputs {
+                values: [registers.binding(left), registers.binding(right)],
+                count: 2,
+            },
+        },
+    }
+}
 impl Serialize for DeclaredSteps<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let registers = self.0.registers();
         let mut sequence = serializer.serialize_seq(Some(usize::from(self.0.program().count())))?;
         for instruction in self.0.program().instructions() {
-            let step = match instruction {
-                Gfx942ProgramInstructionV1::Move {
-                    destination,
-                    source,
-                } => Step {
-                    instruction: "v_mov_b32_e32",
-                    output: registers.binding(destination.role()),
-                    inputs: StepInputs {
-                        values: [registers.binding(source), 0],
-                        count: 1,
-                    },
-                },
-                Gfx942ProgramInstructionV1::Binary {
-                    opcode,
-                    destination,
-                    left,
-                    right,
-                } => Step {
-                    instruction: match opcode {
-                        Gfx942ProgramBinaryOpcodeV1::Add => "v_add_u32_e32",
-                        Gfx942ProgramBinaryOpcodeV1::Subtract => "v_sub_u32_e32",
-                        Gfx942ProgramBinaryOpcodeV1::And => "v_and_b32_e32",
-                        Gfx942ProgramBinaryOpcodeV1::Or => "v_or_b32_e32",
-                        Gfx942ProgramBinaryOpcodeV1::Xor => "v_xor_b32_e32",
-                    },
-                    output: registers.binding(destination.role()),
-                    inputs: StepInputs {
-                        values: [registers.binding(left), registers.binding(right)],
-                        count: 2,
-                    },
-                },
-            };
+            let step = declared_step(self.0, instruction);
             sequence.serialize_element(&step)?;
         }
         sequence.end()
@@ -495,41 +508,150 @@ impl Write for FixedOutput {
     }
 }
 
-fn run() -> InspectResult<()> {
-    let mut args = std::env::args_os();
-    let _ = args.next();
-    let kir = args
-        .next()
-        .ok_or("usage: fe2o3-program-inspect KIR_PATH REQUEST_PATH")?;
-    let request = match args.next() {
-        None if kir == "--help" => {
-            return io::stdout()
-                .lock()
-                .write_all(
-                    b"usage: fe2o3-program-inspect KIR_PATH REQUEST_PATH\n\
-Read-only diagnostic KIR V17 inspection: one gfx942 Wave64 ordered program.\n\
-Reports declared registers/instructions, not physical values or execution authority.\n",
-                )
-                .map_err(|_| "inspection output write failed");
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OutputFormat {
+    Json,
+    Text,
+}
+#[derive(Debug, Eq, PartialEq)]
+enum InspectionCommand {
+    Help,
+    Inspect {
+        format: OutputFormat,
+        kir: OsString,
+        request: OsString,
+    },
+}
+fn parse_arguments(mut args: impl Iterator<Item = OsString>) -> InspectResult<InspectionCommand> {
+    // Inspect at most four arguments, without collecting an unbounded argv.
+    let (format, kir, request) = match (args.next(), args.next(), args.next(), args.next()) {
+        (Some(help), None, None, None) if help == "--help" => return Ok(InspectionCommand::Help),
+        // Preserve ALL existing two-path invocations, even option-looking paths.
+        (Some(kir), Some(request), None, None) => (OutputFormat::Json, kir, request),
+        (Some(flag), Some(kir), Some(request), None) if flag == "--text" => {
+            (OutputFormat::Text, kir, request)
         }
-        Some(request) => request,
-        None => return Err("usage: fe2o3-program-inspect KIR_PATH REQUEST_PATH"),
+        (Some(flag), Some(_), Some(_), _) if flag != "--text" => {
+            return Err("exactly two paths of at most 4096 bytes are required");
+        }
+        _ => return Err(USAGE),
     };
-    if args.next().is_some()
-        || kir.as_encoded_bytes().len() > 4096
-        || request.as_encoded_bytes().len() > 4096
-    {
+    if kir.as_encoded_bytes().len() > 4096 || request.as_encoded_bytes().len() > 4096 {
         return Err("exactly two paths of at most 4096 bytes are required");
     }
+    Ok(InspectionCommand::Inspect {
+        format,
+        kir,
+        request,
+    })
+}
+fn quoted_name(output: &mut FixedOutput, name: &str) -> io::Result<()> {
+    output.write_all(b"\"")?;
+    // ASCII-only escaped names cannot inject terminal controls or new lines.
+    // Expansion is charged directly to the same fixed output buffer.
+    for character in name.chars().flat_map(char::escape_default) {
+        write!(output, "{character}")?;
+    }
+    output.write_all(b"\"")
+}
+fn write_text(output: &mut FixedOutput, observed: &Report<'_>) -> io::Result<()> {
+    writeln!(
+        output,
+        "Declared ordered-program syntax (not native disassembly)"
+    )?;
+    write!(
+        output,
+        "canonical: V{} sha256=",
+        observed.canonical.wire_version
+    )?;
+    for byte in observed.canonical.sha256.0 {
+        write!(output, "{byte:02x}")?;
+    }
+    writeln!(output, " bytes={}", observed.canonical.bytes)?;
+    output.write_all(b"kernel: ")?;
+    quoted_name(output, observed.kernel)?;
+    output.write_all(b"\nfunction: ")?;
+    quoted_name(output, observed.function)?;
+    writeln!(
+        output,
+        "\ncoordinate: function={} block={} operation={} raw_block_id={}",
+        observed.coordinate.function_ordinal,
+        observed.coordinate.block_ordinal,
+        observed.coordinate.operation_ordinal,
+        observed.raw_block_id
+    )?;
+    writeln!(output, "declared target: gfx942:xnack-; wave=64")?;
+    writeln!(
+        output,
+        "logical SSA: inputs={:?} result={}",
+        observed.input_value_ids, observed.result_value_id
+    )?;
+    let registers = &observed.register_plan;
+    writeln!(
+        output,
+        "declared bindings: scratch=v{} out=v{} input0=v{} input1=v{} input2=v{}; high_water={} (not allocation)",
+        registers.scratch,
+        registers.output,
+        registers.inputs[0],
+        registers.inputs[1],
+        registers.inputs[2],
+        registers.vgpr_high_water
+    )?;
+    writeln!(
+        output,
+        "declared instructions ({}; all steps retained):",
+        observed.declared_program.count
+    )?;
+    let program = observed.declared_instruction_steps.0;
+    for (index, instruction) in program.program().instructions().enumerate() {
+        let step = declared_step(program, instruction);
+        write!(
+            output,
+            "  {index:02}: {} v{}",
+            step.instruction, step.output
+        )?;
+        for register in &step.inputs.values[..step.inputs.count] {
+            write!(output, ", v{register}")?;
+        }
+        output.write_all(b"\n")?;
+    }
+    output.write_all(b"ordered-region memory effect: NoMemory (not a whole-kernel effect)\n\
+logical observation: whole-program before/after; CPU preflight only, no execution\n\
+Unavailable: physical values, instruction microsteps, final allocation/lifetimes, source authentication, proof/artifact/resume/hardware authority.\n")
+}
+fn render_output(observed: &Report<'_>, format: OutputFormat) -> InspectResult<FixedOutput> {
+    let mut output = FixedOutput::new();
+    match format {
+        OutputFormat::Json => {
+            serde_json::to_writer(&mut output, observed)
+                .map_err(|_| "bounded inspection JSON serialization failed")?;
+            output
+                .write_all(b"\n")
+                .map_err(|_| "inspection output bound exceeded")?;
+        }
+        OutputFormat::Text => write_text(&mut output, observed)
+            .map_err(|_| "bounded inspection text serialization failed")?,
+    }
+    Ok(output)
+}
+fn run() -> InspectResult<()> {
+    let command = parse_arguments(std::env::args_os().skip(1))?;
+    let InspectionCommand::Inspect {
+        format,
+        kir,
+        request,
+    } = command
+    else {
+        return io::stdout()
+            .lock()
+            .write_all(HELP)
+            .map_err(|_| "inspection output write failed");
+    };
     let input = load_debug_simulation_input_v17(Path::new(&kir), Path::new(&request))
         .map_err(|_| "shared secure V17/request admission rejected the input")?;
     let view = inspect(&input)?;
-    let mut output = FixedOutput::new();
-    serde_json::to_writer(&mut output, &report(&input, &view))
-        .map_err(|_| "bounded inspection JSON serialization failed")?;
-    output
-        .write_all(b"\n")
-        .map_err(|_| "inspection output bound exceeded")?;
+    // Neither representation publishes any prefix if admission or rendering fails.
+    let output = render_output(&report(&input, &view), format)?;
     io::stdout()
         .lock()
         .write_all(output.as_bytes())
