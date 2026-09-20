@@ -1,6 +1,9 @@
 use super::*;
 use crate::production_semantic_kir_v1::scoped_slot_uses_v29;
 
+#[path = "production_scoped_defined_calls_v29_tests.rs"]
+mod defined_call_phases;
+
 const LIMIT: usize = 10_000_000;
 
 fn check_anchors(
@@ -10,6 +13,7 @@ fn check_anchors(
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     with_canonical_call_scratch_v1(budget, |budget| {
+        check_scoped_defined_call_phases_v29(instances, emitted, budget)?;
         for item in &slots.instances {
             check_scoped_memory_anchors_v29(
                 instances,

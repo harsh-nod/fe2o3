@@ -53,6 +53,9 @@ mod wave64_capture;
 #[cfg(feature = "scalar-borrow-policy5")]
 mod scalar_borrow_policy5;
 
+#[cfg(feature = "private-cell-native")]
+mod private_cell_native;
+
 #[cfg(feature = "defined-helper-reference")]
 mod defined_helper_reference;
 
@@ -153,6 +156,7 @@ mod ordered_program_v32;
     feature = "constant-shift",
     feature = "masked-shift",
     feature = "scalar-borrow-policy5",
+    feature = "private-cell-native",
     feature = "defined-helper-reference",
     feature = "f32-exp",
     feature = "f32-helper-exp",

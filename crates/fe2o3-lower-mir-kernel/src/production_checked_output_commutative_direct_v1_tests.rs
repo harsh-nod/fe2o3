@@ -1,5 +1,7 @@
 // Constructed genuine source through SSA/N/the complete prefix, not Rustc or native evidence.
 use super::*;
+#[path = "production_checked_output_private_cell_direct_v1_tests.rs"]
+mod private_cell_tests;
 use crate::{
     ProductionCommutativeContinuationErrorV1 as CError,
     ProductionOwnedRedundantStoreContinuationV1 as Prefix7,
