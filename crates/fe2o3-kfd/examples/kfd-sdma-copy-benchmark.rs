@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn balanced_shards_cover_every_item_once() {
-        assert_eq!(balanced_batch_lengths(0, 16), []);
+        assert!(balanced_batch_lengths(0, 16).is_empty());
         assert_eq!(balanced_batch_lengths(1, 16), [1]);
         assert_eq!(balanced_batch_lengths(16, 16), [1; 16]);
         assert_eq!(balanced_batch_lengths(17, 4), [5, 4, 4, 4]);
