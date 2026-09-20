@@ -4,6 +4,61 @@ use fe2o3_gfx950_gpt_oss_decode::{
 };
 
 #[test]
+fn selected_host_features_expose_the_generated_kernel_markers() {
+    use fe2o3_gfx950_gpt_oss_decode as kernels;
+
+    fn check<M: fe2o3_device::KernelMarkerV1>(name: &str) {
+        assert_eq!(M::LOGICAL_NAME, name);
+        assert_eq!(M::EXPORT_NAME, name);
+    }
+
+    const DECODE: &str = "gfx950_gpt_oss_120b_decode_megakernel_v1";
+    #[cfg(any(
+        feature = "kernel-gpt-oss-decode",
+        not(any(
+            feature = "kernel-gpt-oss-decode-router-serial",
+            feature = "kernel-gpt-oss-decode-held-fragments",
+            feature = "kernel-gpt-oss-decode-scalar-attention",
+            feature = "kernel-gpt-oss-decode-pipelined-attention",
+            feature = "kernel-gpt-oss-decode-interleaved-stores",
+        ))
+    ))]
+    check::<kernels::kernel::gfx950_gpt_oss_120b_decode_megakernel_v1_gpu::Marker>(DECODE);
+    #[cfg(feature = "kernel-gpt-oss-decode-router-serial")]
+    check::<kernels::kernel_router_serial::gfx950_gpt_oss_120b_decode_megakernel_v1_gpu::Marker>(
+        DECODE,
+    );
+    #[cfg(feature = "kernel-gpt-oss-decode-held-fragments")]
+    check::<kernels::kernel_held_fragments::gfx950_gpt_oss_120b_decode_megakernel_v1_gpu::Marker>(
+        DECODE,
+    );
+    #[cfg(feature = "kernel-gpt-oss-decode-scalar-attention")]
+    check::<kernels::kernel_scalar_attention::gfx950_gpt_oss_120b_decode_megakernel_v1_gpu::Marker>(
+        DECODE,
+    );
+    #[cfg(feature = "kernel-gpt-oss-decode-pipelined-attention")]
+    check::<
+        kernels::kernel_pipelined_attention::gfx950_gpt_oss_120b_decode_megakernel_v1_gpu::Marker,
+    >(DECODE);
+    #[cfg(feature = "kernel-gpt-oss-decode-interleaved-stores")]
+    check::<kernels::kernel_interleaved_stores::gfx950_gpt_oss_120b_decode_megakernel_v1_gpu::Marker>(
+        DECODE,
+    );
+    #[cfg(feature = "kernel-gpt-oss-router-component")]
+    check::<kernels::kernel_components::gfx950_gpt_oss_120b_router_v1_gpu::Marker>(
+        "gfx950_gpt_oss_120b_router_v1",
+    );
+    #[cfg(feature = "kernel-gpt-oss-attention-component")]
+    check::<kernels::kernel_components::gfx950_gpt_oss_120b_attention_v1_gpu::Marker>(
+        "gfx950_gpt_oss_120b_attention_v1",
+    );
+    #[cfg(feature = "kernel-gpt-oss-expert-component")]
+    check::<kernels::kernel_components::gfx950_gpt_oss_120b_expert_v1_gpu::Marker>(
+        "gfx950_gpt_oss_120b_expert_v1",
+    );
+}
+
+#[test]
 fn production_source_preserves_the_fixed_layer_tile_contract() {
     let source = include_str!("../src/kernel.rs");
     assert!(source.contains("gfx950_gpt_oss_120b_decode_megakernel_v1"));

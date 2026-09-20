@@ -9639,7 +9639,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9654,7 +9654,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "955e9b283051a4bfadb86ea23e3ba112f339dde053a6d57bb25156ad8cd4e056",
-        "contractSha256": "c79a424633bc66b4187c5195f23902d93bdde71fdbe939fc6dd258cfdaf4f6d1"
+        "contractSha256": "4dda5ec16ea1a91e041d9ba8ed10a7c9aec8cffbf30eaff71370ef11451a8df6"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -9688,7 +9688,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_held_fragments.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9703,7 +9703,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "955e9b283051a4bfadb86ea23e3ba112f339dde053a6d57bb25156ad8cd4e056",
-        "contractSha256": "330beb6087dc8225e195589e296dcf7a710dec0accefc71bf8b3ec7913bfdcd1"
+        "contractSha256": "94ec60c4ade62b4f9c6005d6ad49b2cc8ce611e57588a07de35ad9eca325aeef"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -9737,7 +9737,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_interleaved_stores.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9752,7 +9752,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "955e9b283051a4bfadb86ea23e3ba112f339dde053a6d57bb25156ad8cd4e056",
-        "contractSha256": "1f180819b0e9b5ce3341a664c02ce06eab551d8a6133be88c79b08c36e4930be"
+        "contractSha256": "95b41f12f013e31973d9bee6466dcd957daaddb64a5a22f3662c2a86ef35edc6"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -9786,7 +9786,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_components.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9801,7 +9801,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "955e9b283051a4bfadb86ea23e3ba112f339dde053a6d57bb25156ad8cd4e056",
-        "contractSha256": "fe2adb00d523ae3c16959475858133b4b5521d95771812c91fdedde129273188"
+        "contractSha256": "ca1706d2ec50b0c22190bb7440de5cb99e98b0149be92e3123a7c92026f2ac38"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-attention.request.json",
@@ -9835,7 +9835,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_components.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9850,7 +9850,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "955e9b283051a4bfadb86ea23e3ba112f339dde053a6d57bb25156ad8cd4e056",
-        "contractSha256": "ec79586ac87cf7ddaaef7ae0a9933b426ccc15ca3ac09a319c4140d6c8dd09ca"
+        "contractSha256": "a13dc6b116d5bc9d78db4f296a2a51aa9dc57f256822a134de0d245a9ac370e1"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-expert.request.json",
@@ -9884,7 +9884,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_components.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9899,7 +9899,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "955e9b283051a4bfadb86ea23e3ba112f339dde053a6d57bb25156ad8cd4e056",
-        "contractSha256": "981dd85e7e75a77e63bda962ff741d7bcf5407e24dea03de83ba9114da736f7e"
+        "contractSha256": "b04aaa9ff6fa03df86d295bd2225f2c0e5564a1d2fc3f208ae19fad742057801"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-router.request.json",
@@ -9933,7 +9933,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9948,7 +9948,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "955e9b283051a4bfadb86ea23e3ba112f339dde053a6d57bb25156ad8cd4e056",
-        "contractSha256": "78a425c17c65add33722fc228dcbfe6ef350db9315d7c1d866227fc0ddf1f3ad"
+        "contractSha256": "f1818ec44a8db1f4a0fae18819172a6acda294b914bd262b7bc352e37e2090de"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-pipelined-attention.request.json",
@@ -9982,7 +9982,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_scalar_attention.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9997,7 +9997,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "955e9b283051a4bfadb86ea23e3ba112f339dde053a6d57bb25156ad8cd4e056",
-        "contractSha256": "89fb8c21123664b913be838c688f218986864a7c304a9c092bbe86223f393329"
+        "contractSha256": "3eb796cbd62b25d5fb353a620d14e6d6ab1e163239f8c89480831cd735e8adf0"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-scalar-attention.request.json",
@@ -10031,7 +10031,7 @@
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_router_serial.rs"
         ],
-        "sourceClosureSha256": "238c776118c00728db2478b80d6d1bdcf94bbe51ed71ce52d42ddd5b0820e5fe",
+        "sourceClosureSha256": "6cb82b72163f3b06b939c43ed5a71b4db0047e34c4dc263be873149370532afd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -10046,7 +10046,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "955e9b283051a4bfadb86ea23e3ba112f339dde053a6d57bb25156ad8cd4e056",
-        "contractSha256": "6c318ca249e07095f9345716d8cd65940493cb5dd21852042d374b3dee3b75ee"
+        "contractSha256": "528c3566fae5c3bcf3d7fa71400e5fae3a10da29fbe0849b4e277fc84418b396"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
