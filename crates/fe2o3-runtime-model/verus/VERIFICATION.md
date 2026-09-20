@@ -1,12 +1,23 @@
 # Runtime model verification
 
+## R74 Ordered Peer Copy
+
+R74 adds ten parameterized ordered-cursor obligations and five standalone
+expected-negative controls. The authenticated runner inventory is now 691
+negative files. The accepted descriptor count is 1 through 4096, independently
+of the native simultaneous-ticket limit. Production uses the Rust admission and
+cursor guards, while Rust/Verus correspondence is reviewed rather than proved
+executable refinement. Native observation authenticity, mapping identity, DMA
+effects, deadlines and liveness remain external obligations. See
+`docs/runtime-ordered-peer-copy-v1.md` for the API, adapter and qualification scope.
+
 ## Issue 182 Local Control Extension
 
 R61 contributes eight abstract owner-custody obligations and eight negative
 mutations. R62 adds eight host-control obligations and eight targeted negatives:
 cancel/start exclusion, cancellation absorption, at-most-once start, no reopening,
 stop disposition, terminal absorption, started-path observation, and timeout/Drop
-identity and custody. The authenticated runner now expects 51 positive sources,
+identity and custody. At the R62 increment, the authenticated runner expected 51 positive sources,
 1,276 obligations, and 600 negative files. Counts do not imply whole-runtime proof.
 
 Production calls the shared Rust R62 transition table. Its finite table and short
@@ -39,7 +50,7 @@ invariant-certificate, R45 compute-dependency-publisher, and R46 gfx942
 striped-SDMA tail-wait, R48 retryable striped-SDMA tail-wait, R51 native
 compute-dependency lifecycle, R56 two-native-SDMA mux, R57 three-binding
 persistent-compute, and R60 ordinary fixed-dispatch pipeline models. The
-authenticated runner proves 1260 obligations and checks 584 pinned
+authenticated runner at the R60 increment proved 1260 obligations and checked 584 pinned
 expected-negative proof files over finite abstract values and traces. Each
 negative file must fail exactly one named postcondition. These standalone
 countermodels are not source transformations of the positive proofs. The

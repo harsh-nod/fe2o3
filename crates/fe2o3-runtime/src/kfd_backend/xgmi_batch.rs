@@ -18,7 +18,7 @@ const _: () = assert!(MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1 == GFX942_SDMA_
 #[cfg(test)]
 mod tests;
 
-fn finish_native_attempt<T>(result: std::thread::Result<T>, terminal: &mut bool) -> T {
+pub(super) fn finish_native_attempt<T>(result: std::thread::Result<T>, terminal: &mut bool) -> T {
     match result {
         Ok(result) => result,
         Err(_) => {
@@ -39,9 +39,9 @@ enum AdmissionError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Admission {
-    direction: usize,
-    published: bool,
+pub(super) struct Admission {
+    pub(super) direction: usize,
+    pub(super) published: bool,
 }
 
 fn admit(
@@ -70,6 +70,13 @@ fn admit_with_reservation(
     mut reserve: impl FnMut(&mut Vec<u64>, usize) -> Result<(), std::collections::TryReserveError>,
 ) -> Result<Admission, AdmissionError> {
     if requested.is_empty() || requested.len() > MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1 {
+        return Err(AdmissionError::Invalid);
+    }
+    if requested.iter().any(|id| {
+        active
+            .get(id)
+            .is_some_and(|record| record.sequence.is_some())
+    }) {
         return Err(AdmissionError::Invalid);
     }
     for (index, id) in requested.iter().enumerate() {
@@ -186,7 +193,7 @@ enum Input<R, T> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DependencyScratchCapacity;
+pub(super) struct DependencyScratchCapacity;
 
 struct DependencyUseCount {
     id: u64,
@@ -543,7 +550,7 @@ fn open_and_execute<const PROFILE: bool, const CURRENTNESS: bool>(
 }
 
 impl KfdNativeXgmiRuntimeBackendV1 {
-    fn batch_custody_is_valid(
+    pub(super) fn batch_custody_is_valid(
         &self,
         ids: &[u64],
         admission: Admission,
@@ -650,7 +657,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         Ok(true)
     }
 
-    fn batch_quarantine(&mut self, direction: usize) {
+    pub(super) fn batch_quarantine(&mut self, direction: usize) {
         self.terminal = true;
         if let Some(queue) = self.queues[direction].as_mut() {
             let (source, destination) = Self::session_pair(&mut self.sessions, direction);
@@ -658,7 +665,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         }
     }
 
-    fn restore_batch_pair(
+    pub(super) fn restore_batch_pair(
         &mut self,
         id: u64,
         source: Gfx942XgmiMappedDeviceMemoryV1,

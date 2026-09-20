@@ -246,6 +246,7 @@ fn record(id: u64, direction: usize) -> XgmiRuntimeSubmissionV1 {
         dependencies: Vec::new(),
         dependency_cursor: 0,
         ticket: None,
+        sequence: None,
     }
 }
 

@@ -20,6 +20,8 @@ mod generated_preparation;
 mod generated_shells;
 mod peer_batch;
 pub use peer_batch::*;
+mod peer_segments;
+pub use peer_segments::*;
 mod unpublished;
 mod versions;
 use allocation_admission::ContextAllocationAdmissionV1;
@@ -3018,6 +3020,35 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         destination: RuntimeMemoryRegionV1,
         dependencies: &[RuntimeEventIdV1],
     ) -> Result<RuntimeSubmissionV1<RuntimePeerCopyV1>, RuntimeErrorV1<B::Error>> {
+        let prepared =
+            self.prepare_context_peer_copy_v1(stream, source, destination, dependencies, true)?;
+        self.submit_context_operation_v1(
+            stream,
+            prepared.stream_record,
+            &[destination.allocation],
+            Some(PeerTransferMechanismV1::DeclaredPeerCopy {
+                contract_identity: peer_copy_contract_identity(stream, source, destination),
+            }),
+            &[prepared.journal_source],
+            |backend| {
+                backend.peer_copy_v1(
+                    prepared.stream_record.backend_stream,
+                    prepared.source,
+                    prepared.destination,
+                    &prepared.dependencies,
+                )
+            },
+        )
+    }
+
+    fn prepare_context_peer_copy_v1(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        dependencies: &[RuntimeEventIdV1],
+        equal_lengths: bool,
+    ) -> Result<peer_segments::PreparedPeerCopyV1, RuntimeErrorV1<B::Error>> {
         self.require_live()?;
         if self.submissions.len() >= MAX_RUNTIME_SUBMISSIONS_V1 {
             return Err(RuntimeValidationErrorV1::Capacity.into());
@@ -3031,8 +3062,6 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
         }
         let stream_record = *self.unheld_stream_v1(stream)?;
-        let peer_contract_identity = peer_copy_contract_identity(stream, source, destination);
-        let journal_destination = destination.allocation;
         let journal_source = ContextReadSourceV1 {
             region: source,
             record: *self
@@ -3076,7 +3105,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         ) {
             return Err(RuntimeValidationErrorV1::InvalidAccess.into());
         }
-        if stream_record.device != destination_device || source.byte_len != destination.byte_len {
+        if stream_record.device != destination_device
+            || equal_lengths && source.byte_len != destination.byte_len
+        {
             return Err(RuntimeValidationErrorV1::WrongDevice.into());
         }
         let source_capabilities = self.device(source_device)?.capabilities;
@@ -3102,23 +3133,13 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
             backend_dependencies.push(event.backend_event);
         }
-        self.submit_context_operation_v1(
-            stream,
+        Ok(peer_segments::PreparedPeerCopyV1 {
             stream_record,
-            &[journal_destination],
-            Some(PeerTransferMechanismV1::DeclaredPeerCopy {
-                contract_identity: peer_contract_identity,
-            }),
-            &[journal_source],
-            |backend| {
-                backend.peer_copy_v1(
-                    stream_record.backend_stream,
-                    source,
-                    destination,
-                    &backend_dependencies,
-                )
-            },
-        )
+            journal_source,
+            source,
+            destination,
+            dependencies: backend_dependencies,
+        })
     }
 
     /// Submits a same-device copy without waiting for completion.
@@ -3564,6 +3585,7 @@ mod tests {
     mod copy_source_lease_tests;
     mod kernel_read_lease_tests;
     mod peer_batch_tests;
+    mod peer_segments_tests;
     mod submission_identity_tests;
     mod version_journal_tests;
 
@@ -3685,6 +3707,7 @@ mod tests {
         cancel_before_publication: bool,
         deferred_copies: bool,
         pending_copies: HashMap<u64, (u64, BackendMemoryRegionV1, BackendMemoryRegionV1)>,
+        pending_peer_segments: HashMap<u64, peer_segments_tests::PendingSegments>,
         deferred_kernel_reads: bool,
         pending_kernel_reads: HashMap<u64, MockPendingKernelReads>,
         observed_kernel_reads: Vec<MockObservedKernelRead>,
@@ -3886,6 +3909,25 @@ mod tests {
         }
 
         fn finish_submission(&mut self, submission: u64, success: bool) {
+            if let Some(pending) = self.pending_peer_segments.remove(&submission)
+                && success
+            {
+                for segment in pending.segments {
+                    self.apply_copy(
+                        BackendMemoryRegionV1 {
+                            byte_offset: pending.source.byte_offset + segment.source_offset,
+                            byte_len: segment.byte_len,
+                            ..pending.source
+                        },
+                        BackendMemoryRegionV1 {
+                            byte_offset: pending.destination.byte_offset
+                                + segment.destination_offset,
+                            byte_len: segment.byte_len,
+                            ..pending.destination
+                        },
+                    );
+                }
+            }
             if let Some((_, source, destination)) = self.pending_copies.remove(&submission)
                 && success
             {
@@ -4211,6 +4253,7 @@ mod tests {
             submission: u64,
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
             assert!(!self.pending_copies.contains_key(&submission));
+            assert!(!self.pending_peer_segments.contains_key(&submission));
             assert!(!self.pending_kernel_reads.contains_key(&submission));
             self.cleanup_log
                 .push((MockCleanupKind::Submission, submission));

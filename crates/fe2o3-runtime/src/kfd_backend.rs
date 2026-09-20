@@ -95,6 +95,7 @@ mod directional_wait_diagnostic;
 mod drain_capture;
 mod xgmi_batch;
 mod xgmi_batch_diagnostic;
+mod xgmi_segments;
 #[cfg(feature = "hardware-diagnostic")]
 pub use directional_wait_diagnostic::KfdRuntimeDirectionalWaitObservationV1;
 #[cfg(feature = "hardware-diagnostic")]
@@ -7158,6 +7159,7 @@ struct XgmiRuntimeSubmissionV1 {
     dependencies: Vec<u64>,
     dependency_cursor: usize,
     ticket: Option<Gfx942SdmaCopyTicketV1>,
+    sequence: Option<xgmi_segments::Sequence>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -7754,6 +7756,7 @@ pub struct KfdNativeXgmiRuntimeBackendV1 {
     ready_by_direction: [VecDeque<u64>; 2],
     in_flight_by_direction: [Vec<u64>; 2],
     active_by_direction: [usize; 2],
+    sequence_by_direction: [Option<u64>; 2],
     completion_reservations: usize,
     events: HashMap<u64, EventRecordV1>,
     event_submission_retain_counts: HashMap<u64, usize>,
@@ -9299,6 +9302,7 @@ impl KfdNativeXgmiRuntimeBackendV1 {
             ready_by_direction: [VecDeque::new(), VecDeque::new()],
             in_flight_by_direction: [Vec::new(), Vec::new()],
             active_by_direction: [0, 0],
+            sequence_by_direction: [None, None],
             completion_reservations: 0,
             events: HashMap::new(),
             event_submission_retain_counts: HashMap::new(),
@@ -9694,6 +9698,11 @@ impl KfdNativeXgmiRuntimeBackendV1 {
     }
 
     fn remove_directional_indexes(&mut self, active: &XgmiRuntimeSubmissionV1) {
+        if active.sequence.is_some()
+            && self.sequence_by_direction[active.direction].take() != Some(active.id)
+        {
+            std::process::abort();
+        }
         let _ = remove_xgmi_progress_index_v1(
             &mut self.ready_by_direction[active.direction],
             &mut self.in_flight_by_direction[active.direction],
@@ -9840,6 +9849,12 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         direction: usize,
     ) -> Result<XgmiBatchPublicationOutcomeV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>
     {
+        if self.sequence_by_direction[direction].is_some() {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "ordered XGMI copy requires sequence progress",
+            ));
+        }
         if !self.in_flight_by_direction[direction].is_empty() {
             return Ok(XgmiBatchPublicationOutcomeV1::AlreadyInFlight);
         }
@@ -10225,7 +10240,9 @@ impl KfdNativeXgmiRuntimeBackendV1 {
         &mut self,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
-        if !self.logical_resource_counts().permits_shutdown() {
+        if self.sequence_by_direction.iter().any(Option::is_some)
+            || !self.logical_resource_counts().permits_shutdown()
+        {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
                 "native XGMI logical resources remain live",
@@ -10582,6 +10599,9 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
                 "unknown XGMI submission",
             )
         })?;
+        if active.sequence.is_some() {
+            return self.progress_peer_segments(submission, Instant::now(), true);
+        }
         if xgmi_submission_has_failed_dependency_v1(active, &self.submissions) {
             let active = self
                 .active
@@ -10604,6 +10624,15 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
         submission: u64,
         deadline: Instant,
     ) -> Result<BackendPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        if self
+            .active
+            .get(&submission)
+            .is_some_and(|active| active.sequence.is_some())
+        {
+            return wait_with_deadline_v1(deadline, || {
+                self.progress_peer_segments(submission, deadline, false)
+            });
+        }
         wait_with_deadline_v1(deadline, || self.poll_v1(submission))
     }
 
@@ -10754,6 +10783,12 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
                 "native XGMI peer-copy contract",
             ));
         };
+        if self.sequence_by_direction[direction].is_some() {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "ordered XGMI copy retains the directional submission domain",
+            ));
+        }
         let dependency_submissions = collect_xgmi_dependencies_v1(&self.events, dependencies)
             .map_err(|error| match error {
                 XgmiDependencyAdmissionErrorV1::TooMany
@@ -11059,6 +11094,7 @@ impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
             dependencies: dependency_submissions,
             dependency_cursor: 0,
             ticket: None,
+            sequence: None,
         };
         if xgmi_submission_is_ready_v1(&active, &self.submissions, direction) {
             enqueue_xgmi_ready_id_v1(&mut self.ready_by_direction[direction], id);
@@ -11148,6 +11184,15 @@ impl RuntimeFlushBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
         })?;
         let direction = xgmi_direction_for_destination_v1(destination)
             .ok_or_else(|| self.terminal_error("native XGMI stream lost destination binding"))?;
+        if let Some(id) = self.sequence_by_direction[direction] {
+            return match self.progress_peer_segments(id, Instant::now(), true)? {
+                BackendPollV1::Pending | BackendPollV1::Succeeded => Ok(()),
+                BackendPollV1::Failed { .. } => Err(Self::quiescent_error(
+                    KfdRuntimeBackendErrorKindV1::Native,
+                    "ordered XGMI flush completed with failure",
+                )),
+            };
+        }
         let failed = self
             .active_stream_owners
             .get(&stream)
@@ -11229,9 +11274,13 @@ impl RuntimeCancellationBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
     ) -> Result<crate::BackendCancellationV1, RuntimeBackendFailureV1<Self::Error>> {
         self.require_live()?;
         let disposition = xgmi_cancellation_disposition_v1(
-            self.active
-                .get(&submission)
-                .map(|active| active.ticket.is_some()),
+            self.active.get(&submission).map(|active| {
+                active.ticket.is_some()
+                    || active
+                        .sequence
+                        .as_ref()
+                        .is_some_and(xgmi_segments::Sequence::ever_published)
+            }),
             self.submissions.contains_key(&submission),
         );
         match disposition {
@@ -11246,10 +11295,13 @@ impl RuntimeCancellationBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
             }
             XgmiCancellationDispositionV1::CancelPrepublication => {}
         }
-        let active = self
+        let mut active = self
             .active
             .remove(&submission)
             .expect("prepublication XGMI submission remains active");
+        if let Some(sequence) = active.sequence.as_mut() {
+            sequence.cancel_before_publication();
+        }
         self.settle_submission(active, BackendPollV1::Failed { code: -2 });
         Ok(crate::BackendCancellationV1::Cancelled)
     }
@@ -11279,6 +11331,7 @@ impl Drop for KfdNativeXgmiRuntimeBackendV1 {
             || !self.allocations.is_empty()
             || !self.submissions.is_empty()
             || !self.active.is_empty()
+            || self.sequence_by_direction.iter().any(Option::is_some)
             || !self.active_stream_owners.is_empty()
             || !self.active_allocation_owners.is_empty()
             || !self.events.is_empty()
@@ -22971,6 +23024,7 @@ mod tests {
             dependencies,
             dependency_cursor: 0,
             ticket: None,
+            sequence: None,
         }
     }
 
