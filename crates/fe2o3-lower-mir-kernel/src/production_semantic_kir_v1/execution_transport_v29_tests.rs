@@ -623,7 +623,6 @@ fn ordinary_operands_without_a_cursor_still_require_the_exact_shared_work_budget
             }
             assert_eq!(budget.storage(), FLOOR);
             assert!(budget.work() <= limit);
-            drop(budget);
             assert_eq!(work.failed_work(), failed_work);
         }
     }
