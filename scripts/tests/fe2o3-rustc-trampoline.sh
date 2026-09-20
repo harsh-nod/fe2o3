@@ -145,7 +145,7 @@ compile_test_trampoline() {
   run_watchdog /usr/bin/cc \
     -std=c11 -O2 -fPIE -static-pie -march=x86-64 -mtune=generic \
     -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
-    -Wstack-protector -fstack-protector-strong -D_FORTIFY_SOURCE=3 \
+    -Wstack-protector -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 \
     -DFE2O3_RUSTC_TRAMPOLINE_TEST_ONLY=1 \
     -Wl,-z,relro,-z,now,-z,noexecstack,--fatal-warnings,--build-id=none \
     "${SOURCE}" -o "${TEST_TRAMPOLINE}"
@@ -789,7 +789,7 @@ compile_test_trampoline
 run_watchdog /usr/bin/cc \
   -std=c11 -O0 -fanalyzer -c -march=x86-64 -mtune=generic \
   -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
-  -Wstack-protector -fstack-protector-strong -D_FORTIFY_SOURCE=3 \
+  -Wstack-protector -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 \
   "${SOURCE}" -o "${TEST_ROOT}/analyzer.o"
 
 readonly SCENARIOS=(
