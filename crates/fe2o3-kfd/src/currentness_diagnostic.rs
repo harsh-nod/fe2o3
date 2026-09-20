@@ -298,11 +298,12 @@ pub(crate) mod tests {
             SharedGttMemorySessionV1 as Session,
         };
 
-        const _: for<'a> fn(
+        type BeginDiagnostic = for<'a> fn(
             &'a mut Queue,
             &'a mut Session,
             &'a mut Session,
-        ) -> Result<(Batch<'a>, Detail), Error> = Queue::begin_batch_currentness_diagnostic_v1;
+        ) -> Result<(Batch<'a>, Detail), Error>;
+        const _: BeginDiagnostic = Queue::begin_batch_currentness_diagnostic_v1;
         const _: for<'a> fn(Batch<'a>) -> Result<Detail, Error> =
             |batch| batch.finish_currentness_diagnostic_v1();
         const _: for<'a> fn(Batch<'a>) -> Result<Detail, Error> =

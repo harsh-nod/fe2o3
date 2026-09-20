@@ -60,6 +60,11 @@ impl Drop for TraceScope {
     }
 }
 
+pub(super) fn capture<T>(operation: impl FnOnce() -> T) -> (T, Vec<Event>) {
+    let trace = TraceScope::new(None);
+    (operation(), trace.events())
+}
+
 struct HostFixture {
     topology: Fixture,
     render: RenderFixture,
